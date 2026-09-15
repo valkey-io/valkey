@@ -105,7 +105,6 @@ sds keyspaceEventsFlagsToString(int flags) {
 void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     sds chan;
     robj *chanobj, *eventobj;
-    int len = -1;
     char buf[24];
     client *c = server.executing_client;
     debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
@@ -130,30 +129,40 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     /* If notifications for this class of events are off, return ASAP. */
     if (!(server.notify_keyspace_events & type)) return;
 
-    eventobj = createStringObject(event, strlen(event));
+    /* If neither keyspace nor keyevent notifications are enabled, or there
+     * are no clients subscribed to any channel or pattern, there is no point
+     * in building the event object and the channel names. */
+    if (!(server.notify_keyspace_events & (NOTIFY_KEYSPACE | NOTIFY_KEYEVENT))) return;
+    if (serverPubsubSubscriptionCount() == 0) return;
+
+    size_t eventlen = strlen(event);
+    int len = ll2string(buf, sizeof(buf), dbid);
 
     /* __keyspace@<db>__:<key> <event> notifications. */
     if (server.notify_keyspace_events & NOTIFY_KEYSPACE) {
-        chan = sdsnewlen("__keyspace@", 11);
-        len = ll2string(buf, sizeof(buf), dbid);
+        chan = sdsnewlen(SDS_NOINIT, 11 + len + 3 + sdslen(objectGetVal(key)));
+        sdsclear(chan);
+        chan = sdscatlen(chan, "__keyspace@", 11);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
         chan = sdscatsds(chan, objectGetVal(key));
         chanobj = createObject(OBJ_STRING, chan);
+        eventobj = createStringObject(event, eventlen);
         pubsubPublishMessage(chanobj, eventobj, 0);
         decrRefCount(chanobj);
+        decrRefCount(eventobj);
     }
 
     /* __keyevent@<db>__:<event> <key> notifications. */
     if (server.notify_keyspace_events & NOTIFY_KEYEVENT) {
-        chan = sdsnewlen("__keyevent@", 11);
-        if (len == -1) len = ll2string(buf, sizeof(buf), dbid);
+        chan = sdsnewlen(SDS_NOINIT, 11 + len + 3 + eventlen);
+        sdsclear(chan);
+        chan = sdscatlen(chan, "__keyevent@", 11);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
-        chan = sdscatsds(chan, objectGetVal(eventobj));
+        chan = sdscatlen(chan, event, eventlen);
         chanobj = createObject(OBJ_STRING, chan);
         pubsubPublishMessage(chanobj, key, 0);
         decrRefCount(chanobj);
     }
-    decrRefCount(eventobj);
 }

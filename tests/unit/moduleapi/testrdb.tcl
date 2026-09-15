@@ -225,6 +225,12 @@ tags "modules" {
                     $replica debug populate 200 slave 10
                     $master debug populate 1000 master 100000
                     $master config set rdbcompression no
+                    
+                    if {$testType eq "Aborted"} {
+                        # Set master with a slow rdb generation, so that we can easily intercept loading
+                        # 10ms per key, with 1000 keys is 10 seconds
+                        $master config set rdb-key-save-delay 10000
+                    }
 
                     # Force the replica to try another full sync (this time it will have matching master replid)
                     $master multi
@@ -238,10 +244,6 @@ tags "modules" {
 
                     switch $testType {
                         "Aborted" {
-                            # Set master with a slow rdb generation, so that we can easily intercept loading
-                            # 10ms per key, with 1000 keys is 10 seconds
-                            $master config set rdb-key-save-delay 10000
-
                             test {Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling: during loading, can keep module variable same as before} {
                                 # Wait for the replica to start reading the rdb and module for acknowledgement
                                 # We wanna abort only after the temp db was populated by REDISMODULE_AUX_BEFORE_RDB
@@ -300,5 +302,33 @@ tags "modules" {
             }
         }
         }
+    }
+}
+
+start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes save "" enable-debug-command yes enable-module-command yes}} {
+    test {MODULE LOAD is blocked during forkless save} {
+        r debug populate 100
+
+        # Start slow forkless save
+        r config set rdb-key-save-delay 200000
+        r config set bgsave-default-method forkless
+        r bgsave
+
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless save didn't start"
+        }
+
+        # Try to load a module - should fail during forkless save
+        catch {r module load $testmodule} err
+        assert_match "*Error*" $err
+
+        r bgsave cancel
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+
+        # After forkless save completes, module load should succeed
+        assert_equal {OK} [r module load $testmodule]
     }
 }

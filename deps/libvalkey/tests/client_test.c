@@ -872,6 +872,16 @@ static void test_reply_reader(void) {
     freeReplyObject(reply);
     valkeyReaderFree(reader);
 
+    /* RESP3 MAP/ATTR types double the element count being key-value pairs */
+    test("A RESP3 MAP/ATTR can't overflow: ");
+    reader = valkeyReaderCreate();
+    reader->maxelements = 0; /* Don't rely on default limit */
+    valkeyReaderFeed(reader, "%4611686018427387904\r\n", 22);
+    ret = valkeyReaderGetReply(reader, &reply);
+    test_cond(ret == VALKEY_ERR &&
+              strcasecmp(reader->errstr, "Multi-bulk length out of range") == 0);
+    valkeyReaderFree(reader);
+
     test("Can parse RESP3 attribute: ");
     reader = valkeyReaderCreate();
     valkeyReaderFeed(reader, "|2\r\n+foo\r\n:123\r\n+bar\r\n#t\r\n", 26);
@@ -1884,6 +1894,53 @@ void null_cb(valkeyAsyncContext *ac, void *r, void *privdata) {
     state->checkpoint++;
 }
 
+/* Test the command parsing, required for pub/sub in the async API. */
+void test_async_command_parsing(struct config config) {
+    test("Async command parsing: ");
+    valkeyOptions options = get_server_tcp_options(config);
+    valkeyAsyncContext *ac = valkeyAsyncConnectWithOptions(&options);
+    assert(ac);
+
+    /* Null ptr. */
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, NULL, 45));
+    /* Empty command. */
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "", 0));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, " $", 2));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*0\r\n", 4));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$-1\r\n", 9));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$-1\r\nUNSUBSCRIBE\r\n", 22));
+    /* Protocol error: erroneous bulkstring length and data. */
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$100000", 11));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$100000\r", 12));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$100000\r\n", 13));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$10HELP\r\n\r\n", 15));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$100000\r\nTO-SHORT\r\n", 23));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$1\r\nTO-LONG\r\n", 17));
+    assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$123456789\r\n", 11));
+
+    /* Faulty length given to function. */
+    for (int i = 0; i < 19; i++) {
+        assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*2\r\n$9\r\nSUBSCRIBE\r\n$7\r\nCHANNEL\r\n", i));
+    }
+    for (int i = 0; i < 21; i++) {
+        assert(VALKEY_ERR == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$11\r\nUNSUBSCRIBE\r\n", i));
+    }
+
+    /* Complete command. */
+    assert(VALKEY_OK == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*2\r\n$9\r\nSUBSCRIBE\r\n$7\r\nCHANNEL\r\n", 32));
+    assert(VALKEY_OK == valkeyAsyncFormattedCommand(ac, NULL, NULL, "*1\r\n$11\r\nUNSUBSCRIBE\r\n", 22));
+
+    // Heap allocate command without NULL terminator.
+    const char ping[] = "*1\r\n$4\r\nPING\r\n";
+    size_t len = sizeof(ping) - 1;
+    char *buf = vk_malloc_safe(len);
+    memcpy(buf, ping, len);
+    assert(VALKEY_OK == valkeyAsyncFormattedCommand(ac, NULL, NULL, buf, len));
+    free(buf);
+
+    valkeyAsyncFree(ac);
+}
+
 static void test_pubsub_handling(struct config config) {
     test("Subscribe, handle published message and unsubscribe: ");
     /* Setup event dispatcher with a testcase timeout */
@@ -2817,6 +2874,7 @@ int main(int argc, char **argv) {
     get_server_version(c, &major, NULL);
     disconnect(c, 0);
 
+    test_async_command_parsing(cfg);
     test_pubsub_handling(cfg);
     test_pubsub_multiple_channels(cfg);
     test_monitor(cfg);

@@ -7,16 +7,18 @@
 #include <valkey/valkey.h>
 #include "commands.h"
 #include "fuzzer_command_generator.h"
+#include "cli_common.h"
 #include "sds.h"
 #include "dict.h"
-#include "server.h"
-
+#include "zmalloc.h"
+#include "util.h"
 #include <assert.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <pthread.h>
@@ -102,7 +104,7 @@ typedef struct {
     dict *configDict;
     sds *aclCategories;
     size_t aclCategoriesCount;
-    int max_keys;
+    long long max_keys;
     int cluster_mode;
 } FuzzerContext;
 
@@ -296,21 +298,22 @@ static int sdsKeyCompare(const void *key1, const void *key2) {
 }
 
 static uint64_t sdsHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenHashFunction(key, sdslen(key));
 }
 
-static void sdsDestructor(void *val) {
-    sdsfree(val);
+static void dictEntryDestructorSdsKeyConfigVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetKey(de));
+    configDictValDestructor(dictGetVal(de));
+    zfree(de);
 }
 
 /* Dictionary type for config entries */
 static dictType configDictType = {
-    sdsHash,                 /* hash function */
-    NULL,                    /* key dup */
-    sdsKeyCompare,           /* key compare */
-    sdsDestructor,           /* key destructor */
-    configDictValDestructor, /* val destructor */
-    NULL                     /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = sdsHash,
+    .keyCompare = sdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyConfigVal,
 };
 
 dict *initConfigDict(void) {
@@ -325,7 +328,6 @@ static int isEnumConfig(const char *key) {
         "appendfsync",
         "oom-score-adj",
         "acl-pubsub-default",
-        "sanitize-dump-payload",
         "cluster-preferred-endpoint-type",
         "propagation-error-behavior",
         "shutdown-on-sigint",
@@ -447,9 +449,6 @@ void generateRandomEnumValue(FuzzerCommand *cmd, ConfigEntry *entry, const char 
     } else if (strcasecmp(config_name, "acl-pubsub-default") == 0) {
         static const char *options[] = {"allchannels", "resetchannels"};
         appendArg(cmd, sdsnew(options[rand() % 2]));
-    } else if (strcasecmp(config_name, "sanitize-dump-payload") == 0) {
-        static const char *options[] = {"no", "yes", "clients"};
-        appendArg(cmd, sdsnew(options[rand() % 3]));
     } else if (strcasecmp(config_name, "propagation-error-behavior") == 0) {
         static const char *options[] = {"ignore", "panic", "panic-on-replicas"};
         appendArg(cmd, sdsnew(options[rand() % 3]));
@@ -1046,10 +1045,12 @@ void initializeRandomSeed(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     srand(time(NULL) ^ (unsigned long)pthread_self() ^ tv.tv_usec);
+    /* rand62() uses random(), whose state is separate from rand(). */
+    srandom(time(NULL) ^ (unsigned long)pthread_self() ^ tv.tv_usec);
 }
 
 /* Initialize the fuzzer with a connected Valkey context */
-int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, int fuzz_flags) {
+int initFuzzer(valkeyContext *ctx, long long num_keys, int cluster_mode, int fuzz_flags) {
     int ret = -1;
     fuzz_ctx = zmalloc(sizeof(FuzzerContext));
     /* Set global configuration values */
@@ -1192,14 +1193,14 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
     }
 
     for (int i = 0; i < numkeys; i++) {
-        int keyNumber = rand() % fuzz_ctx->max_keys;
+        long long keyNumber = (long long)rand62() % fuzz_ctx->max_keys;
         sds keyName;
 
         /* In cluster mode, ensure all keys use the same slot tag to map to the same slot */
         if (fuzz_ctx->cluster_mode && client_ctx && client_ctx->current_slot_tag) {
-            keyName = sdscatprintf(sdsempty(), "%s%s:%d", client_ctx->current_slot_tag, keyPrefix, keyNumber);
+            keyName = sdscatprintf(sdsempty(), "%s%s:%lld", client_ctx->current_slot_tag, keyPrefix, keyNumber);
         } else {
-            keyName = sdscatprintf(sdsempty(), "%s:%d", keyPrefix, keyNumber);
+            keyName = sdscatprintf(sdsempty(), "%s:%lld", keyPrefix, keyNumber);
         }
 
         appendArg(cmd, keyName);
@@ -1547,8 +1548,6 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         appendArg(cmd, sdscatprintf(sdsempty(), "module-%d", rand() % 100));
     } else if (strcmp(argName, "arg") == 0 || strcmp(argName, "args") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "arg%d", rand() % 10));
-    } else if (strcmp(argName, "command") == 0) {
-        appendArg(cmd, sdsnew(commands[rand() % (sizeof(commands) / sizeof(commands[0]))]));
     } else if (strcmp(argName, "threshold") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 30));
     } else if (strcmp(argName, "metric") == 0) {
@@ -1657,7 +1656,7 @@ static void addArgumentToCommand(FuzzerCommand *cmd, CommandArgument *arg) {
             time_t currentTime = time(NULL);
             /* add a random number of seconds to the current time */
             currentTime += rand() % RANDOM_TIME_VARIANCE;
-            appendArg(cmd, sdscatprintf(sdsempty(), "%ld", currentTime));
+            appendArg(cmd, sdscatprintf(sdsempty(), "%jd", (intmax_t)currentTime));
         } else if (arg->type == ARG_TYPE_PATTERN) {
             appendArg(cmd, sdsnew("*"));
         } else if (arg->type == ARG_TYPE_KEY) {

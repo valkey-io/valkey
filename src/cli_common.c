@@ -395,28 +395,6 @@ void freeCliConnInfo(cliConnInfo connInfo) {
     if (connInfo.user) sdsfree(connInfo.user);
 }
 
-/*
- * Escape a Unicode string for JSON output (--json), following RFC 7159:
- * https://datatracker.ietf.org/doc/html/rfc7159#section-7
- */
-sds escapeJsonString(sds s, const char *p, size_t len) {
-    s = sdscatlen(s, "\"", 1);
-    while (len--) {
-        switch (*p) {
-        case '\\':
-        case '"': s = sdscatprintf(s, "\\%c", *p); break;
-        case '\n': s = sdscatlen(s, "\\n", 2); break;
-        case '\f': s = sdscatlen(s, "\\f", 2); break;
-        case '\r': s = sdscatlen(s, "\\r", 2); break;
-        case '\t': s = sdscatlen(s, "\\t", 2); break;
-        case '\b': s = sdscatlen(s, "\\b", 2); break;
-        default: s = sdscatprintf(s, *(unsigned char *)p <= 0x1f ? "\\u%04x" : "%c", *p);
-        }
-        p++;
-    }
-    return sdscatlen(s, "\"", 1);
-}
-
 sds cliVersion(void) {
     sds version = sdscatprintf(sdsempty(), "%s", VALKEY_VERSION);
 
@@ -468,4 +446,25 @@ valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip
     }
 
     return valkeyConnectWithOptions(&options);
+}
+
+/* 62-bit thread-local PRNG. glibc random() serializes every caller on a
+ * process-wide lock, which makes it a scalability bottleneck when called
+ * per command from many threads (valkey-benchmark placeholder replacement,
+ * fuzzer worker threads). Each thread runs an independent splitmix64
+ * stream instead, seeded on first use from the global (srandom() seedable)
+ * generator. With a fixed srandom() seed, per-thread streams are seeded
+ * deterministically, but which stream a given thread receives depends on
+ * the scheduling order of first use. */
+static _Thread_local uint64_t rand62_state = 0;
+
+uint64_t rand62(void) {
+    if (rand62_state == 0) {
+        rand62_state = ((uint64_t)random() << 31) ^ (uint64_t)random();
+        if (rand62_state == 0) rand62_state = 0x9E3779B97F4A7C15ULL;
+    }
+    uint64_t z = (rand62_state += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return (z ^ (z >> 31)) & ((1ULL << 62) - 1);
 }

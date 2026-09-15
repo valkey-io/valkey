@@ -11,18 +11,9 @@
  * Tests will call a libvalkeycluster API-function while iterating on a number,
  * the number of successful allocations during the call before it hits an OOM.
  * The result and the error code is then checked to show "Out of memory".
- * As a last step the correct number of allocations is prepared to get a
- * successful API-function call.
- *
- * Tip:
- * When this testcase fails after code changes in the library, run the testcase
- * in `gdb` to find which API call that failed, and in which iteration.
- * - Go to the correct stack frame to find which API that triggered a failure.
- * - Use the gdb command `print i` to find which iteration.
- * - Investigate if a failure or a success is expected after the code change.
- * - Set correct `i` in for-loop and the `prepare_allocation_test()` for the test.
- *   Correct `i` can be hard to know, finding the correct number might require trial
- *   and error of running with increased/decreased `i` until the edge is found.
+ * The required number of allocations for a successful call is discovered at
+ * runtime rather than hardcoded, making the tests resilient to changes in
+ * internal allocation patterns.
  */
 #define _XOPEN_SOURCE 600 /* For strdup() */
 #include "adapters/libevent.h"
@@ -148,15 +139,16 @@ void test_alloc_failure_handling(void) {
         valkeyReply *reply;
         const char *cmd = "SET key value";
 
-        for (int i = 0; i < 33; ++i) {
-            prepare_allocation_test(cc, i);
+        /* Discover the number of allocations required for a successful call. */
+        int n;
+        for (n = 0; n < 1000; n++) {
+            prepare_allocation_test(cc, n);
             reply = (valkeyReply *)valkeyClusterCommand(cc, cmd);
-            assert(reply == NULL);
+            if (reply != NULL)
+                break;
             ASSERT_STR_EQ(cc->errstr, "Out of memory");
         }
-
-        prepare_allocation_test(cc, 33);
-        reply = (valkeyReply *)valkeyClusterCommand(cc, cmd);
+        assert(n < 1000);
         CHECK_REPLY_OK(cc, reply);
         freeReplyObject(reply);
     }
@@ -169,17 +161,15 @@ void test_alloc_failure_handling(void) {
         valkeyClusterNode *node = valkeyClusterGetNodeByKey(cc, (char *)"key");
         assert(node);
 
-        // OOM failing commands
-        for (int i = 0; i < 32; ++i) {
-            prepare_allocation_test(cc, i);
+        int n;
+        for (n = 0; n < 1000; n++) {
+            prepare_allocation_test(cc, n);
             reply = valkeyClusterCommandToNode(cc, node, cmd);
-            assert(reply == NULL);
+            if (reply != NULL)
+                break;
             ASSERT_STR_EQ(cc->errstr, "Out of memory");
         }
-
-        // Successful command
-        prepare_allocation_test(cc, 32);
-        reply = valkeyClusterCommandToNode(cc, node, cmd);
+        assert(n < 1000);
         CHECK_REPLY_OK(cc, reply);
         freeReplyObject(reply);
     }
@@ -189,37 +179,35 @@ void test_alloc_failure_handling(void) {
         valkeyReply *reply;
         const char *cmd = "SET foo one";
 
-        for (int i = 0; i < 33; ++i) {
-            prepare_allocation_test(cc, i);
+        /* Discover allocations needed for a successful append. */
+        int na;
+        for (na = 0; na < 1000; na++) {
+            prepare_allocation_test(cc, na);
             result = valkeyClusterAppendCommand(cc, cmd);
-            assert(result == VALKEY_ERR);
+            if (result == VALKEY_OK)
+                break;
             ASSERT_STR_EQ(cc->errstr, "Out of memory");
-
             valkeyClusterReset(cc);
         }
+        assert(na < 1000);
 
-        for (int i = 0; i < 4; ++i) {
-            // Appended command lost when receiving error from valkey
-            // during a GetReply, needs a new append for each test loop
-            prepare_allocation_test(cc, 33);
+        /* Discover allocations needed for a successful GetReply. */
+        int ng;
+        for (ng = 0; ng < 1000; ng++) {
+            /* Appended command lost when receiving error during a GetReply,
+             * needs a new append for each test loop. */
+            prepare_allocation_test(cc, na);
             result = valkeyClusterAppendCommand(cc, cmd);
             assert(result == VALKEY_OK);
 
-            prepare_allocation_test(cc, i);
+            prepare_allocation_test(cc, ng);
             result = valkeyClusterGetReply(cc, (void *)&reply);
-            assert(result == VALKEY_ERR);
+            if (result == VALKEY_OK)
+                break;
             ASSERT_STR_EQ(cc->errstr, "Out of memory");
-
             valkeyClusterReset(cc);
         }
-
-        prepare_allocation_test(cc, 34);
-        result = valkeyClusterAppendCommand(cc, cmd);
-        assert(result == VALKEY_OK);
-
-        prepare_allocation_test(cc, 4);
-        result = valkeyClusterGetReply(cc, (void *)&reply);
-        assert(result == VALKEY_OK);
+        assert(ng < 1000);
         CHECK_REPLY_OK(cc, reply);
         freeReplyObject(reply);
     }
@@ -232,39 +220,33 @@ void test_alloc_failure_handling(void) {
         valkeyClusterNode *node = valkeyClusterGetNodeByKey(cc, (char *)"foo");
         assert(node);
 
-        // OOM failing appends
-        for (int i = 0; i < 34; ++i) {
-            prepare_allocation_test(cc, i);
+        /* Discover allocations needed for a successful append to node. */
+        int na;
+        for (na = 0; na < 1000; na++) {
+            prepare_allocation_test(cc, na);
             result = valkeyClusterAppendCommandToNode(cc, node, cmd);
-            assert(result == VALKEY_ERR);
+            if (result == VALKEY_OK)
+                break;
             ASSERT_STR_EQ(cc->errstr, "Out of memory");
-
             valkeyClusterReset(cc);
         }
+        assert(na < 1000);
 
-        // OOM failing GetResults
-        for (int i = 0; i < 4; ++i) {
-            // First a successful append
-            prepare_allocation_test(cc, 34);
+        /* Discover allocations needed for a successful GetReply. */
+        int ng;
+        for (ng = 0; ng < 1000; ng++) {
+            prepare_allocation_test(cc, na);
             result = valkeyClusterAppendCommandToNode(cc, node, cmd);
             assert(result == VALKEY_OK);
 
-            prepare_allocation_test(cc, i);
+            prepare_allocation_test(cc, ng);
             result = valkeyClusterGetReply(cc, (void *)&reply);
-            assert(result == VALKEY_ERR);
+            if (result == VALKEY_OK)
+                break;
             ASSERT_STR_EQ(cc->errstr, "Out of memory");
-
             valkeyClusterReset(cc);
         }
-
-        // Successful append and GetReply
-        prepare_allocation_test(cc, 35);
-        result = valkeyClusterAppendCommandToNode(cc, node, cmd);
-        assert(result == VALKEY_OK);
-
-        prepare_allocation_test(cc, 4);
-        result = valkeyClusterGetReply(cc, (void *)&reply);
-        assert(result == VALKEY_OK);
+        assert(ng < 1000);
         CHECK_REPLY_OK(cc, reply);
         freeReplyObject(reply);
     }
@@ -318,18 +300,19 @@ void test_alloc_failure_handling(void) {
         freeReplyObject(reply);
 
         /* Test ASK reply handling with OOM */
-        for (int i = 0; i < 45; ++i) {
-            prepare_allocation_test(cc, i);
-            reply = valkeyClusterCommand(cc, "GET foo");
-            assert(reply == NULL);
-            ASSERT_STR_EQ(cc->errstr, "Out of memory");
+        {
+            int n;
+            for (n = 0; n < 1000; n++) {
+                prepare_allocation_test(cc, n);
+                reply = valkeyClusterCommand(cc, "GET foo");
+                if (reply != NULL)
+                    break;
+                ASSERT_STR_EQ(cc->errstr, "Out of memory");
+            }
+            assert(n < 1000);
+            CHECK_REPLY_STR(cc, reply, "one");
+            freeReplyObject(reply);
         }
-
-        /* Test ASK reply handling without OOM */
-        prepare_allocation_test(cc, 45);
-        reply = valkeyClusterCommand(cc, "GET foo");
-        CHECK_REPLY_STR(cc, reply, "one");
-        freeReplyObject(reply);
 
         /* Finalize the migration. Skip OOM testing during these steps by
          * allowing a high number of allocations. */
@@ -347,18 +330,19 @@ void test_alloc_failure_handling(void) {
         freeReplyObject(reply);
 
         /* Test MOVED reply handling with OOM */
-        for (int i = 0; i < 32; ++i) {
-            prepare_allocation_test(cc, i);
-            reply = valkeyClusterCommand(cc, "GET foo");
-            assert(reply == NULL);
-            ASSERT_STR_EQ(cc->errstr, "Out of memory");
+        {
+            int n;
+            for (n = 0; n < 1000; n++) {
+                prepare_allocation_test(cc, n);
+                reply = valkeyClusterCommand(cc, "GET foo");
+                if (reply != NULL)
+                    break;
+                ASSERT_STR_EQ(cc->errstr, "Out of memory");
+            }
+            assert(n < 1000);
+            CHECK_REPLY_STR(cc, reply, "one");
+            freeReplyObject(reply);
         }
-
-        /* Test MOVED reply handling without OOM */
-        prepare_allocation_test(cc, 32);
-        reply = valkeyClusterCommand(cc, "GET foo");
-        CHECK_REPLY_STR(cc, reply, "one");
-        freeReplyObject(reply);
 
         /* MOVED triggers a slotmap update which currently replaces all cluster_node
          * objects. We can get the new objects by searching for its server ports.

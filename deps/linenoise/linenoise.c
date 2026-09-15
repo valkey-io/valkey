@@ -839,6 +839,9 @@ void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
  * when ctrl+d is typed.
  *
  * The function returns the length of the current buffer. */
+/* Max length for CSI escape sequence parameter buffer */
+#define SEQ_BUFFER_MAX_LENGTH 8
+
 static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt)
 {
     struct linenoiseState l;
@@ -964,14 +967,13 @@ static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
                 if (seq[1] >= '0' && seq[1] <= '9') {
                     /* Extended escape, read additional bytes.
                      * Examples: ESC [1;5C  ESC [3~ */
-                    const int seqBufferMaxLength = 8;
-                    char seqBuffer[seqBufferMaxLength];
+                    char seqBuffer[SEQ_BUFFER_MAX_LENGTH];
                     int i = 0;
                     seqBuffer[i++] = seq[1];
 
                     /* If first param is digit or ';', read more until we see a final in @~ */
                     char additionalChar;
-                    while (i < seqBufferMaxLength-1 && read(l.ifd, &additionalChar, 1) != -1) {
+                    while (i < SEQ_BUFFER_MAX_LENGTH-1 && read(l.ifd, &additionalChar, 1) != -1) {
                         seqBuffer[i++] = additionalChar;
                         if (additionalChar >= '@' && additionalChar <= '~') {    /* CSI final byte */
                             seqBuffer[i] = '\0';

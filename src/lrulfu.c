@@ -1,7 +1,7 @@
 #include "lrulfu.h"
-#include "server.h"
+#include <stdlib.h>
 
-#define LRULFU_MASK ((1 << LRULFU_BITS) - 1) /* Mask for LRU/LFU value */
+static const uint32_t LRULFU_MASK = (1 << LRULFU_BITS) - 1;
 
 /**************** LRU ****************/
 /* LRU uses a 24 bit timestamp of the last access time (in seconds)
@@ -12,24 +12,27 @@
 /* The LRU_CLOCK_RESOLUTION is used to support an older ruby program which tests
  * the LRU behavior.  This should be set to 1 if building Valkey to support this
  * ruby test.  Otherwise, the default of 1000 is expected. */
-#define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
+static const uint32_t LRU_CLOCK_RESOLUTION = 1000; /* LRU clock resolution in ms */
+
+int lfu_config_log_factor;
+int lfu_config_decay_time;
+
+static uint32_t lru_clock; // Normally seconds (unless LRU_CLOCK_RESOLUTION altered)
+static uint16_t lfu_clock_minutes;
+static bool is_using_lfu_policy;
 
 
 // Current time in seconds (24 least significant bits).  Designed to roll over.
 static uint32_t LRUGetClockTime(void) {
-#if LRU_CLOCK_RESOLUTION == 1000
-    return (uint32_t)(server.unixtime & LRULFU_MASK);
-#else
-    return (uint32_t)((server.mstime / LRU_CLOCK_RESOLUTION) & LRULFU_MASK);
-#endif
+    return lru_clock;
 }
 
 
 uint32_t lru_import(uint32_t idle_secs) {
     uint32_t now = LRUGetClockTime();
-#if LRU_CLOCK_RESOLUTION != 1000
-    idle_secs = (uint32_t)((long)idle_secs * 1000 / LRU_CLOCK_RESOLUTION);
-#endif
+    if (LRU_CLOCK_RESOLUTION != 1000) {
+        idle_secs = (uint32_t)((long)idle_secs * 1000 / LRU_CLOCK_RESOLUTION);
+    }
     idle_secs = idle_secs & LRULFU_MASK;
     // Underflow is ok/expected
     return (now - idle_secs) & LRULFU_MASK;
@@ -39,9 +42,9 @@ uint32_t lru_import(uint32_t idle_secs) {
 uint32_t lru_getIdleSecs(uint32_t lru) {
     // Underflow is ok/expected
     uint32_t seconds = (LRUGetClockTime() - lru) & LRULFU_MASK;
-#if LRU_CLOCK_RESOLUTION != 1000
-    seconds = (uint32_t)((long)seconds * LRU_CLOCK_RESOLUTION / 1000);
-#endif
+    if (LRU_CLOCK_RESOLUTION != 1000) {
+        seconds = (uint32_t)((long)seconds * LRU_CLOCK_RESOLUTION / 1000);
+    }
     return seconds;
 }
 
@@ -83,7 +86,7 @@ uint32_t lru_getIdleSecs(uint32_t lru) {
 
 // Current time in minutes (16 least significant bits).  Designed to roll over.
 static uint16_t LFUGetTimeInMinutes(void) {
-    return (uint16_t)(server.unixtime / 60);
+    return lfu_clock_minutes;
 }
 
 
@@ -98,7 +101,7 @@ static uint32_t LFUDecay(uint32_t lfu) {
     uint16_t prev_time = (uint16_t)(lfu >> 8);
     uint8_t freq = (uint8_t)lfu;
     uint16_t elapsed = now - prev_time; // Wrap-around expected/valid
-    uint16_t num_periods = server.lfu_decay_time ? elapsed / server.lfu_decay_time : 0;
+    uint16_t num_periods = lfu_config_decay_time ? elapsed / lfu_config_decay_time : 0;
     freq = (num_periods > freq) ? 0 : freq - num_periods;
     return ((uint32_t)now << 8) | freq;
 }
@@ -112,7 +115,7 @@ static uint8_t LFULogIncr(uint8_t freq) {
     double r = (double)rand() / RAND_MAX;
     double baseval = (int)freq - LFU_INIT_VAL;
     if (baseval < 0) baseval = 0;
-    double p = 1.0 / (baseval * server.lfu_log_factor + 1);
+    double p = 1.0 / (baseval * lfu_config_log_factor + 1);
     if (r < p) freq++;
     return freq;
 }
@@ -135,8 +138,15 @@ uint32_t lfu_getFrequency(uint32_t lfu, uint8_t *freq) {
 
 /**************** Generic API ****************/
 
+void lrulfu_updateClockAndPolicy(long long mstime, bool is_policy_lfu) {
+    lru_clock = (uint32_t)((mstime / LRU_CLOCK_RESOLUTION) & LRULFU_MASK);
+    lfu_clock_minutes = (uint16_t)(mstime / 60000);
+    is_using_lfu_policy = is_policy_lfu;
+}
+
+
 bool lrulfu_isUsingLFU(void) {
-    return (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) != 0;
+    return is_using_lfu_policy;
 }
 
 

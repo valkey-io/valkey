@@ -1,4 +1,5 @@
 #include "server.h"
+#include "ordered_index.h"
 #include "bio.h"
 #include "functions.h"
 #include "cluster.h"
@@ -68,7 +69,7 @@ void lazyFreeFunctionsCtx(void *args[]) {
     functionsLibCtx *functions_lib_ctx = args[0];
     list *engine_callbacks = args[1];
     size_t len = functionsLibCtxFunctionsLen(functions_lib_ctx);
-    functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
+    functionsLibCtxFree(functions_lib_ctx, engine_callbacks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -90,6 +91,15 @@ void lazyFreeReplicaKeysWithExpire(void *args[]) {
     dict *replica_keys_with_expire = args[0];
     size_t len = dictSize(replica_keys_with_expire);
     dictRelease(replica_keys_with_expire);
+    atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
+}
+
+/* Release the pending_repl_data.blocks list. */
+void lazyfreePendingReplDataBuf(void *args[]) {
+    list *pending_repl_data_blocks = args[0];
+    size_t len = listLength(pending_repl_data_blocks);
+    listRelease(pending_repl_data_blocks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -132,9 +142,9 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
-    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(obj);
-        return zs->zsl->length;
+        return orderedIndexLength(zs->oi);
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
@@ -255,7 +265,7 @@ void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx, list *engine_callbac
                                   memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 2, functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
+        functionsLibCtxFree(functions_lib_ctx, engine_callbacks);
     }
 }
 
@@ -270,7 +280,6 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
     }
 }
 
-
 /* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
 void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
     if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
@@ -278,5 +287,15 @@ void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
         bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire, 1, replica_keys_with_expire);
     } else {
         dictRelease(replica_keys_with_expire);
+    }
+}
+
+/* Free pending replication data buffer, if the buffer contains enough data, free it in async way. */
+void freePendingReplDataBufAsync(list *pending_repl_data_blocks) {
+    if (listLength(pending_repl_data_blocks) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, listLength(pending_repl_data_blocks), memory_order_relaxed);
+        bioCreateLazyFreeJob(lazyfreePendingReplDataBuf, 1, pending_repl_data_blocks);
+    } else {
+        listRelease(pending_repl_data_blocks);
     }
 }

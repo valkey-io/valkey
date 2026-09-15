@@ -556,8 +556,23 @@ static int processAggregateItem(valkeyReader *r) {
 
             moveToNextTask(r);
         } else {
-            if (cur->type == VALKEY_REPLY_MAP || cur->type == VALKEY_REPLY_ATTR)
+            if (cur->type == VALKEY_REPLY_MAP ||
+                cur->type == VALKEY_REPLY_ATTR) {
+
+                long long maxelements = LLONG_MAX / 2;
+                if (LLONG_MAX > SIZE_MAX &&
+                    maxelements > (long long)(SIZE_MAX / 2)) {
+                    maxelements = (long long)(SIZE_MAX / 2);
+                }
+
+                if (elements > maxelements) {
+                    valkeyReaderSetError(r, VALKEY_ERR_PROTOCOL,
+                                         "Multi-bulk length out of range");
+                    return VALKEY_ERR;
+                }
+
                 elements *= 2;
+            }
 
             if (r->fn && r->fn->createArray)
                 obj = r->fn->createArray(cur, elements);
@@ -732,36 +747,83 @@ void valkeyReaderFree(valkeyReader *r) {
 }
 
 int valkeyReaderFeed(valkeyReader *r, const char *buf, size_t len) {
-    sds newbuf;
-
     /* Return early when this reader is in an erroneous state. */
     if (r->err)
         return VALKEY_ERR;
 
-    /* Copy the provided buffer. */
     if (buf != NULL && len >= 1) {
-        /* Destroy internal buffer when it is empty and is quite large. */
-        if (r->len == 0 && r->maxbuf != 0 && sdsavail(r->buf) > r->maxbuf) {
-            sdsfree(r->buf);
-            r->buf = sdsempty();
-            if (r->buf == 0)
-                goto oom;
-
-            r->pos = 0;
-        }
-
-        newbuf = sdscatlen(r->buf, buf, len);
-        if (newbuf == NULL)
-            goto oom;
-
-        r->buf = newbuf;
-        r->len = sdslen(r->buf);
+        char *dest;
+        size_t cap;
+        if (valkeyReaderGetReadBuf(r, &dest, &cap, len) != VALKEY_OK)
+            return VALKEY_ERR;
+        memcpy(dest, buf, len);
+        valkeyReaderCommitRead(r, len);
     }
 
     return VALKEY_OK;
+}
+
+/* Prepare the reader's internal buffer for a direct read. This compacts
+ * consumed data, ensures at least 'minbytes' of writable space, and returns
+ * a pointer and available capacity. The caller can then read() directly into
+ * *buf and call valkeyReaderCommitRead() with the number of bytes read.
+ * Returns VALKEY_OK on success, VALKEY_ERR on allocation failure. */
+int valkeyReaderGetReadBuf(valkeyReader *r, char **buf, size_t *cap, size_t minbytes) {
+    if (r->err)
+        return VALKEY_ERR;
+
+    if (minbytes > SSIZE_MAX) {
+        valkeyReaderSetError(r, VALKEY_ERR_PROTOCOL,
+                             "Requested buffer size too large");
+        return VALKEY_ERR;
+    }
+
+    /* Destroy internal buffer when it is empty and is quite large. */
+    if (r->len == 0 && r->maxbuf != 0 && sdsavail(r->buf) > r->maxbuf) {
+        sdsfree(r->buf);
+        r->buf = sdsempty();
+        if (r->buf == NULL)
+            goto oom;
+        r->pos = 0;
+    }
+
+    /* Compact consumed data. */
+    if (r->pos > 0) {
+        if (sdslen(r->buf) > SSIZE_MAX) {
+            valkeyReaderSetError(r, VALKEY_ERR_PROTOCOL,
+                                 "Reader buffer is too large");
+            return VALKEY_ERR;
+        }
+        sdsrange(r->buf, r->pos, -1);
+        r->pos = 0;
+        r->len = sdslen(r->buf);
+    }
+
+    /* Ensure enough writable space. */
+    if (sdsavail(r->buf) < minbytes) {
+        sds newbuf = sdsMakeRoomFor(r->buf, minbytes);
+        if (newbuf == NULL)
+            goto oom;
+        r->buf = newbuf;
+    }
+
+    *buf = r->buf + sdslen(r->buf);
+    *cap = sdsavail(r->buf);
+    if (*cap > SSIZE_MAX)
+        *cap = SSIZE_MAX;
+    return VALKEY_OK;
+
 oom:
     valkeyReaderSetErrorOOM(r);
     return VALKEY_ERR;
+}
+
+/* Commit bytes that were written directly into the buffer obtained from
+ * valkeyReaderGetReadBuf(). */
+void valkeyReaderCommitRead(valkeyReader *r, size_t nread) {
+    assert(nread <= SSIZE_MAX);
+    sdsIncrLen(r->buf, (ssize_t)nread);
+    r->len = sdslen(r->buf);
 }
 
 int valkeyReaderGetReply(valkeyReader *r, void **reply) {
@@ -796,17 +858,6 @@ int valkeyReaderGetReply(valkeyReader *r, void **reply) {
     /* Return ASAP when an error occurred. */
     if (r->err)
         return VALKEY_ERR;
-
-    /* Discard part of the buffer when we've consumed at least 1k, to avoid
-     * doing unnecessary calls to memmove() in sds.c. */
-    if (r->pos >= 1024) {
-        /* No length check in Valkeys sdsrange() */
-        if (sdslen(r->buf) > SSIZE_MAX)
-            return VALKEY_ERR;
-        sdsrange(r->buf, r->pos, -1);
-        r->pos = 0;
-        r->len = sdslen(r->buf);
-    }
 
     /* Emit a reply when there is one. */
     if (r->ridx == -1) {

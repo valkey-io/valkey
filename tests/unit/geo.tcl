@@ -143,7 +143,7 @@ start_server {tags {"geo"}} {
         verify_geo_edge_response_generic "WRONGTYPE*"
     }
 
-    test {GEO with non existing src key} {
+    test {GEO with nonexistent src key} {
         r del src{t}
 
         verify_geo_edge_response_bylonlat {} 0
@@ -157,7 +157,7 @@ start_server {tags {"geo"}} {
         verify_geo_edge_response_bylonlat {} 0
     }
 
-    test {GEO BYMEMBER with non existing member} {
+    test {GEO BYMEMBER with nonexistent member} {
         r del src{t}
         r geoadd src{t} 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
 
@@ -507,6 +507,25 @@ start_server {tags {"geo"}} {
         assert {[lindex $res 3] > 166}
     }
 
+    test {GEORADIUS COMMAND GETKEYS extracts the last STORE destination} {
+        # Regression test for the duplicate-STORE ACL bypass: key extraction
+        # must report the LAST (effective) STORE/STOREDIST key, matching what
+        # the command implementation actually writes to.
+        assert_equal {src} [r command getkeys georadius src 0 0 1 km]
+        assert_equal {src dst} [r command getkeys georadius src 0 0 1 km STORE dst]
+        assert_equal {src dst} [r command getkeys georadius src 0 0 1 km STOREDIST dst]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STORE a STORE b]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STOREDIST a STOREDIST b]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STORE a STOREDIST b]
+    }
+
+    test {GEORADIUSBYMEMBER COMMAND GETKEYS extracts the last STORE destination} {
+        assert_equal {src} [r command getkeys georadiusbymember src member 1 km]
+        assert_equal {src dst} [r command getkeys georadiusbymember src member 1 km STORE dst]
+        assert_equal {src b} [r command getkeys georadiusbymember src member 1 km STORE a STORE b]
+        assert_equal {src b} [r command getkeys georadiusbymember src member 1 km STORE a STOREDIST b]
+    }
+
     test {GEOSEARCHSTORE STORE option: plain usage} {
         r geosearchstore points2{t} points{t} fromlonlat 13.361389 38.115556 byradius 500 km
         assert_equal [r zrange points{t} 0 -1] [r zrange points2{t} 0 -1]
@@ -559,6 +578,18 @@ start_server {tags {"geo"}} {
         r geoadd points -122.407107 37.794300 1
         r geoadd points -122.227336 37.794300 2
         assert_equal {{1 0.0001} {2 9.8182}} [r GEORADIUS points -122.407107 37.794300 30 mi ASC WITHDIST]
+    }
+
+    test {GEOSEARCH BYPOLYGON with invalid COUNT} {
+        r del points
+        r geoadd points 151.2093 -33.8688 "Sydney"
+
+        assert_error {ERR value is not an integer or out of range} {
+            r GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT notanumber
+        }
+        assert_error {ERR COUNT must be > 0} {
+            r GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT -1
+        }
     }
 
     test {GEOSEARCH BYPOLYGON standard operations} {

@@ -290,10 +290,10 @@ test {Migrate the last slot away from a node using valkey-cli} {
         # waiting for cluster_state to be okay is an independent check that all the
         # nodes actually believe each other are healthy, prevent cluster down error.
         wait_for_condition 1000 50 {
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
             [CI 0 cluster_state] eq {ok} &&
             [CI 1 cluster_state] eq {ok} &&
             [CI 2 cluster_state] eq {ok} &&
@@ -502,7 +502,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         # 4 batches to migrate 100 keys
         for {set i 0} {$i < 4} {incr i} {
             if {$use_atomic_slot_migration} {
-                exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
+                exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
                                     --cluster-to [$node3 cluster myid] \
                                     --cluster-from [$node1 cluster myid] \
                                     --cluster-pipeline 25 \
@@ -560,5 +560,132 @@ start_multiple_servers 3 [list overrides $base_conf] {
 }
 
 } ;# foreach use_atomic_slot_migration
+
+# Test valkey-cli --cluster del-node
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
+start_multiple_servers 3 [list overrides $base_conf] {
+
+    # Create cluster with 1 primary and 2 replicas for del-node tests
+    exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                    127.0.0.1:[srv 0 port] \
+                    127.0.0.1:[srv -1 port] \
+                    127.0.0.1:[srv -2 port] \
+                    --cluster-replicas 2
+
+    # Wait for the cluster to be ready
+    wait_for_cluster_state ok
+
+    test "del-node: Cannot delete node with slots" {
+        set node1 [srv 0 client]
+        set node1_id [$node1 CLUSTER MYID]
+
+        # Try to delete node with slots - should fail
+        catch {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster del-node \
+                         127.0.0.1:[srv -1 port] \
+                         $node1_id
+        } e
+        assert_match {*not empty*} $e
+        wait_for_cluster_size 3
+    }
+
+    test "del-node: Delete reachable node without slots" {
+        set node2 [srv -1 client]
+        set node2_id [$node2 CLUSTER MYID]
+
+        # Delete reachable node without slots
+        set result [catch {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster del-node \
+                         127.0.0.1:[srv 0 port] \
+                         $node2_id
+        } output]
+
+        # Should succeed without stderr
+        assert_equal $result 0
+        assert_match {*Sending CLUSTER RESET SOFT*} $output
+        assert_match {*\[OK\] Node*removed from the cluster*} $output
+
+        # Verify cluster state after deletion:
+        # - Node0 (primary): still in cluster, knows 2 nodes
+        # - Node1 (deleted): reset to standalone, knows only itself
+        # - Node2 (replica): still in cluster, knows 2 nodes
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_known_nodes] == 2 &&
+            [CI 1 cluster_known_nodes] == 1 &&
+            [CI 2 cluster_known_nodes] == 2
+        } else {
+            fail "Nodes don't have expected cluster state"
+        }
+    }
+
+    test "del-node: Delete unreachable node without slots" {
+        set node3 [srv -2 client]
+        set node3_id [$node3 CLUSTER MYID]
+
+        # Shutdown node 3 to make it unreachable
+        catch {$node3 SHUTDOWN NOSAVE}
+
+        # Wait for cluster to detect node 3 as failed
+        wait_node_marked_fail 0 $node3_id
+
+        # Delete the unreachable empty replica
+        set result [catch {
+            exec $::VALKEY_CLI_BIN -t 1 --cluster-yes --cluster del-node \
+                         127.0.0.1:[srv 0 port] \
+                         $node3_id
+        } output]
+
+        # Result should be 1 due to stderr output
+        assert_equal $result 1
+        assert_match {*unable to send CLUSTER RESET*} $output
+        assert_match {*Connection refused*} $output
+
+        # Check for success message
+        assert_match {*\[OK\] Node*removed from the cluster*} $output
+
+        # Verify cluster state after deletion:
+        # - Node0 (primary): only node left, knows only itself
+        # - Node1 (deleted in test 2): still standalone
+        # - Node2 (deleted in test 3): shutdown, can't check
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_known_nodes] == 1 &&
+            [CI 1 cluster_known_nodes] == 1
+        } else {
+            fail "Nodes don't have expected cluster state"
+        }
+    }
+} ;# stop servers
+
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
+start_multiple_servers 3 [list overrides $base_conf] {
+
+    test "del-node: Cannot delete unreachable primary with slots" {
+        # Create cluster with 3 primaries, no replicas
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
+
+        wait_for_cluster_state ok
+
+        set node3 [srv -2 client]
+        set node3_id [$node3 CLUSTER MYID]
+
+        # Shutdown node3 to make it unreachable
+        catch {$node3 SHUTDOWN NOSAVE}
+
+        # Wait for cluster to mark node3 as failed
+        wait_node_marked_fail 0 $node3_id
+
+        # Try to delete the unreachable primary that still owns slots
+        # This should fail with "not empty" error
+        catch {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster del-node \
+                         127.0.0.1:[srv 0 port] \
+                         $node3_id
+        } e
+        assert_match {*not empty*} $e
+    }
+} ;# stop servers
 
 }

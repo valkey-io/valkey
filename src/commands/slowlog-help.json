@@ -1,6 +1,6 @@
 {
     "HELP": {
-        "summary": "Show helpful text about the different subcommands",
+        "summary": "Shows helpful text about the different subcommands.",
         "complexity": "O(1)",
         "group": "server",
         "since": "6.2.0",

@@ -335,7 +335,7 @@ raxNode *raxAddChild(raxNode *n, unsigned char c, raxNode **childptr, raxNode **
     /* Move the pointers to the left of the insertion position as well. Often
      * we don't need to do anything if there was already some padding to use. In
      * that case the final destination of the pointers will be the same, however
-     * in our example there was no pre-existing padding, so we added one byte
+     * in our example there was no preexisting padding, so we added one byte
      * plus three bytes of padding. After the next memmove() things will look
      * like that:
      *
@@ -419,7 +419,7 @@ raxNode *raxCompressNode(raxNode *n, unsigned char *s, size_t len, raxNode **chi
  * zero or if simply we stopped in the middle of a compressed node, so that
  * 'splitpos' is non zero).
  *
- * Otherwise if the returned integer is not the same as 'len', there was an
+ * Otherwise, if the returned integer is not the same as 'len', there was an
  * early stop during the tree walk because of a character mismatch.
  *
  * The node where the search ended (because the full string was processed
@@ -457,13 +457,15 @@ raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode *
             }
             if (j != h->size) break;
         } else {
-            /* Even when h->size is large, linear scan provides good
-             * performances compared to other approaches that are in theory
-             * more sounding, like performing a binary search. */
-            for (j = 0; j < h->size; j++) {
-                if (v[j] == s[i]) break;
-            }
-            if (j == h->size) break;
+            /* Lookup the matching child edge. memchr() is used instead of an
+             * open-coded scalar loop because libc implementations on most
+             * platforms are SIMD-optimized (SSE2/AVX2 on x86, NEON on arm64),
+             * which is significantly faster than a byte-by-byte scan and also
+             * faster than binary search at the small fan-out sizes (<= 256)
+             * that rax nodes can have. */
+            unsigned char *p = memchr(v, s[i], h->size);
+            if (p == NULL) break;
+            j = (size_t)(p - v);
             i++;
         }
 
@@ -531,7 +533,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             return 0; /* Element already exists. */
         }
 
-        /* Otherwise set the node as a key. Note that raxSetData()
+        /* Otherwise, set the node as a key. Note that raxSetData()
          * will set h->iskey. */
         raxSetData(h, data);
         rax->numele++;
@@ -953,7 +955,7 @@ raxNode *raxRemoveChild(raxNode *parent, raxNode *child) {
         return parent;
     }
 
-    /* Otherwise we need to scan for the child pointer and memmove()
+    /* Otherwise, we need to scan for the child pointer and memmove()
      * accordingly.
      *
      * 1. To start we seek the first element in both the children
@@ -1297,7 +1299,7 @@ void raxIteratorDelChars(raxIterator *it, size_t count) {
  * lexicographically smaller children, and the current node is already assumed
  * to be the parent of the last key node, so the first operation to go back to
  * the parent will be skipped. This option is used by raxSeek() when
- * implementing seeking a non existing element with the ">" or "<" options:
+ * implementing seeking a nonexistent element with the ">" or "<" options:
  * the starting node is not a key in that particular case, so we start the scan
  * from a node that does not represent the key set.
  *
@@ -1678,7 +1680,7 @@ int raxPrev(raxIterator *it) {
 }
 
 /* Perform a random walk starting in the current position of the iterator.
- * Return 0 if the tree is empty or on out of memory. Otherwise 1 is returned
+ * Return 0 if the tree is empty or on out of memory. Otherwise, 1 is returned
  * and the iterator is set to the node reached after doing a random walk
  * of 'steps' steps. If the 'steps' argument is 0, the random walk is performed
  * using a random number of steps between 1 and two times the logarithm of

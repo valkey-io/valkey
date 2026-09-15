@@ -1,6 +1,6 @@
 {
     "HEXPIREAT": {
-        "summary": "Set expiry time on hash fields.",
+        "summary": "Sets expiry time on hash fields.",
         "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",

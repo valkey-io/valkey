@@ -157,22 +157,26 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica redirects key access in migrating slots" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         catch {[R 3 get aga]} e
         set port0 [srv 0 port]
         assert_equal "MOVED 609 127.0.0.1:$port0" $e
     }
 
     test "Replica of migrating node returns ASK redirect after READONLY" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         # Read missing key in readonly replica in migrating state.
         assert_equal OK [R 3 READONLY]
         set port1 [srv -1 port]
@@ -182,11 +186,13 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica of migrating node returns TRYAGAIN after READONLY" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         # Read some existing and some missing keys in readonly replica in
         # migrating state results in TRYAGAIN, just like its primary would do.
         assert_equal OK [R 3 READONLY]
@@ -196,11 +202,13 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         # A client follows an ASK redirect to a primary, but wants to read from a replica.
         # The replica returns TRYAGAIN just like a primary would do for two missing keys.
         assert_equal OK [R 4 READONLY]
@@ -419,6 +427,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         catch {R 0 CLUSTER SETSLOT 609 TIMEOUT 100 MIGRATING $R1_id} e
         assert_equal $e "ERR Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP"
     }
+
+    test "CLUSTER SETSLOT MIGRATING/IMPORTING should not be allowed to target self" {
+        assert_error {ERR Target node is myself} {R 0 CLUSTER SETSLOT 609 MIGRATING [R 0 CLUSTER MYID]}
+        assert_error {ERR Target node is myself} {R 1 CLUSTER SETSLOT 609 IMPORTING [R 1 CLUSTER MYID]}
+    }
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
@@ -624,7 +637,7 @@ start_cluster 3 3 {tags {external:skip cluster} } {
 start_cluster 3 3 {tags {external:skip cluster} } {
     test "Cross-DB COPY command should not be allow during slot migration" {
         set primary_id_src 0
-        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
         set primary_id_target 1
         set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
 
@@ -632,13 +645,13 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         R $primary_id_src set "{3560}key1" "value1_db1"
         R $primary_id_src set "{3560}key2" "value2_db1"
 
-    
+
         set slot [R $primary_id_src cluster keyslot "{3560}key1"]
 
         R $primary_id_target cluster setslot $slot importing $primary_id_src_nodeid
         R $primary_id_src cluster setslot $slot migrating $primary_id_target_nodeid
-        
-        # Cross slot should still fail                
+
+        # Cross slot should still fail
         set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3561}key1"]} err]
         assert_match "CROSSSLOT Keys in request don't hash to the same slot" $err
 
@@ -650,11 +663,24 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3560}key1" DB 7 REPLACE]} err]
         assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
 
-        # Both keys exist, should work, but both keys must exist. 
+        # A DB token with no value is a syntax error, not an out-of-range read.
+        assert_error "ERR syntax error" {R $primary_id_src COPY "{3560}key1" "{3560}key2" DB}
+        assert_error "ERR syntax error" {R $primary_id_src COPY "{3560}key1" "{3560}key2" REPLACE DB}
+        assert_equal {PONG} [R $primary_id_src PING]
+
+        # DB and REPLACE are order-independent, so a cross-DB COPY must be blocked
+        # no matter where the DB clause appears.
+        assert_error "TRYAGAIN*" {R $primary_id_src COPY "{3560}key1" "{3560}key2" REPLACE DB 7}
+        assert_error "TRYAGAIN*" {R $primary_id_src COPY "{3560}key1" "{3560}key2" DB 0 DB 7}
+
+        # Both keys exist, should work, but both keys must exist.
         R $primary_id_src COPY "{3560}key1" "{3560}key2"
         # And it should work if DB param is provided, as long as it matches the selected DB
         R $primary_id_src COPY "{3560}key1" "{3560}key2" DB 0 REPLACE
+        R $primary_id_src COPY "{3560}key1" "{3560}key2" REPLACE DB 0
 
     }
 
 }
+
+

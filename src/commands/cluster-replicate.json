@@ -1,6 +1,6 @@
 {
     "REPLICATE": {
-        "summary": "Configure a node as replica of a primary node or detach a replica from its primary.",
+        "summary": "Configures a node as replica of a primary node or detaches a replica from its primary.",
         "complexity": "O(1)",
         "group": "cluster",
         "since": "3.0.0",

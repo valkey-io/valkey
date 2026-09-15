@@ -32,6 +32,7 @@
 
 #include <stdio.h>
 #include "rio.h"
+#include "compression_stream.h"
 
 /* TBD: include only necessary headers. */
 #include "server.h"
@@ -171,19 +172,21 @@ enum RdbType {
 #define RDB_LOAD_SDS (1 << 2)
 
 /* flags on the purpose of rdb save or load */
-#define RDBFLAGS_NONE 0                /* No special RDB loading or saving. */
-#define RDBFLAGS_AOF_PREAMBLE (1 << 0) /* Load/save the RDB as AOF preamble. */
-#define RDBFLAGS_REPLICATION (1 << 1)  /* Load/save for SYNC. */
-#define RDBFLAGS_ALLOW_DUP (1 << 2)    /* Allow duplicated keys when loading.*/
-#define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
-#define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
-#define RDBFLAGS_EMPTY_DATA (1 << 5)   /* Flush the database after validating magic and rdb version*/
+#define RDBFLAGS_NONE 0                 /* No special RDB loading or saving. */
+#define RDBFLAGS_AOF_PREAMBLE (1 << 0)  /* Load/save the RDB as AOF preamble. */
+#define RDBFLAGS_REPLICATION (1 << 1)   /* Load/save for SYNC. */
+#define RDBFLAGS_ALLOW_DUP (1 << 2)     /* Allow duplicated keys when loading.*/
+#define RDBFLAGS_FEED_REPL (1 << 3)     /* Feed replication stream when loading.*/
+#define RDBFLAGS_KEEP_CACHE (1 << 4)    /* Don't reclaim cache after rdb file is generated */
+#define RDBFLAGS_EMPTY_DATA (1 << 5)    /* Flush the database after validating magic and rdb version*/
+#define RDBFLAGS_FORKLESS_SAVE (1 << 6) /* Save is performed by forkless save (background thread). */
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
-#define RDB_LOAD_ERR_EMPTY_KEY 1    /* Error of empty key */
-#define RDB_LOAD_ERR_UNKNOWN_TYPE 2 /* Unknown type in file */
-#define RDB_LOAD_ERR_OTHER 3        /* Any other errors */
+#define RDB_LOAD_ERR_EMPTY_KEY 1         /* Error of empty key */
+#define RDB_LOAD_ERR_UNKNOWN_TYPE 2      /* Unknown type in file */
+#define RDB_LOAD_ERR_OTHER 3             /* Any other errors */
+#define RDB_LOAD_ERR_ALL_ITEMS_EXPIRED 4 /* All fields expired */
 
 bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
@@ -199,13 +202,15 @@ int rdbGetObjectType(robj *o, int rdbver);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
+int rdbStartBgsave(int bgsave_type);
+int resolveBgsaveType(void);
 int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
 int rdbSaveToFile(const char *filename);
 int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char type);
 size_t rdbSavedObjectLen(robj *o, robj *key, int dbid);
-robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error);
+robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now);
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid, int rdbver);
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);
@@ -220,10 +225,35 @@ int rdbSaveBinaryFloatValue(rio *rdb, float val);
 int rdbLoadBinaryFloatValue(rio *rdb, float *val);
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+bool rdbRioHasCorruptCompressedInput(rio *rdb);
+bool rdbRioHasInternalStreamReaderError(rio *rdb);
+void rdbReportCorruptCompressedStream(const char *source);
+
+typedef enum {
+    RDB_STREAM_READER_INIT_ERROR = -1,
+    RDB_STREAM_READER_INIT_OK = 0,
+    RDB_STREAM_READER_INIT_INCOMPATIBLE = 1,
+} rdbStreamReaderInitResult;
+
+/* Attaches a probing stream reader that accepts both plain and VCS-wrapped
+ * RDB input. When non-NULL, algo receives the detected codec or ALGO_NONE for
+ * plain input. The caller must detach and release a successfully initialized
+ * reader with rdbFreeStreamReader. */
+rdbStreamReaderInitResult rdbInitStreamReader(rio *rdb,
+                                              streamReader *reader,
+                                              bool skip_codec_checksum_validation,
+                                              compressionAlgo *algo);
+void rdbFreeStreamReader(rio *rdb, streamReader *reader);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);
 int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 void replicationEmptyDbCallback(hashtable *ht);
+ssize_t rdbSaveDbSizeHints(rio *rdb, serverDb *db, int include_importing);
+int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi);
+int rdbWriteFooter(rio *rdb, int req);
+void rdbRecordStartMetrics(int bgsave_type);
+void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end);
+void rdbClearSaveState(time_t save_end);
 
 #endif

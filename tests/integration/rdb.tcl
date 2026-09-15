@@ -1011,14 +1011,22 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         set num_keys 100
         createComplexDatasetForVerification r $num_keys
         
-        # Set TTLs on all keys - key i expires in (i/10 + 1) seconds
-        set start_time [clock milliseconds]
+        # Set TTLs on all keys - key i expires (i/10 + 1) seconds after deadline_base.
+        # The deadlines are absolute so that the length of this loop, which issues
+        # num_keys * 12 round trips, cannot shift them. deadline_base is far enough
+        # ahead that every key is still alive when the save below starts, even on a
+        # runner slow enough to make the loop take seconds.
+        set deadline_base [expr {[clock milliseconds] + 3000}]
         for {set i 0} {$i < $num_keys} {incr i} {
             set ttl [expr {$i/10 + 1}]
             foreach prefix {before int lst set zset hash hll bits geo geo_set stream iset} {
-                r expire ${prefix}_${i} $ttl
+                r pexpireat ${prefix}_${i} [expr {$deadline_base + $ttl * 1000}]
             }
         }
+        # Had the loop overrun the budget, the shortest-lived keys would have been
+        # dropped here instead of expiring during the save, and the checks below
+        # would pass without testing anything. Fail loudly rather than silently.
+        assert {[clock milliseconds] < $deadline_base}
         
         # Start save and wait for completion
         r config set bgsave-default-method forkless
@@ -1039,11 +1047,14 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
         
         while {[llength $verified] > 0} {
-            set elapsed_time [expr {([clock milliseconds] - $start_time) / 1000.0}]
-            
             foreach i $verified {
+                # Re-read the clock per key: one pass issues up to num_keys * 12 round
+                # trips, so a single reading taken before the pass goes stale.
+                set elapsed_time [expr {([clock milliseconds] - $deadline_base) / 1000.0}]
+                set ttl [expr {$i/10 + 1}]
+
                 # If not yet expired, verify all data types exist
-                if {$elapsed_time < [expr {$i/10.0}]} {
+                if {$elapsed_time < [expr {$ttl - 1}]} {
                     assert_equal [r exists before_${i}] 1
                     assert_equal [r exists int_${i}] 1
                     assert_equal [r exists lst_${i}] 1
@@ -1058,8 +1069,8 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                     assert_equal [r exists iset_${i}] 1
                 }
                 
-                # If expired for more than 2 seconds, verify all data types are gone
-                if {$elapsed_time > [expr {$i/10.0 + 2}]} {
+                # If expired for more than a second, verify all data types are gone
+                if {$elapsed_time > [expr {$ttl + 1}]} {
                     assert_equal [r exists before_${i}] 0
                     assert_equal [r exists int_${i}] 0
                     assert_equal [r exists lst_${i}] 0
@@ -1115,6 +1126,12 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         # Resume save at normal speed
         r config set rdb-key-save-delay 0
         waitForBgsave r
+        
+        # Lift the memory cap before verifying. It was derived from a reading taken
+        # while the save was running, and the reload brings the whole dataset back; on
+        # allocators with higher per-allocation overhead the restored dataset alone
+        # exceeds the cap, and allkeys-lru evicts the keys we are about to read.
+        r config set maxmemory 0
         
         # Verify snapshot contains original keys
         catch {r debug reload nosave}

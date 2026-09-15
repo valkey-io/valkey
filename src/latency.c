@@ -234,6 +234,8 @@ sds createLatencyReport(void) {
         char *event = dictGetKey(de);
         struct latencyTimeSeries *ts = dictGetVal(de);
         struct latencyStats ls;
+        int last;
+        int32_t last_time;
 
         if (ts == NULL) continue;
         eventnum++;
@@ -242,11 +244,19 @@ sds createLatencyReport(void) {
         }
         analyzeLatencyForEvent(event, &ls);
 
-        report = sdscatprintf(report,
-                              "%d. %s: %d latency spikes (average %lums, mean deviation %lums, period %.2f sec). Worst "
-                              "all time event %lums.",
-                              eventnum, event, ls.samples, (unsigned long)ls.avg, (unsigned long)ls.mad,
-                              (double)ls.period / ls.samples, (unsigned long)ts->max);
+        last = (ts->idx + LATENCY_TS_LEN - 1) % LATENCY_TS_LEN;
+        last_time = ts->samples[last].time;
+
+        report = sdscatprintf(
+            report, "%d. %s: %d latency spikes (average %lums, mean deviation %lums, period %.2f sec).\n",
+            eventnum, event, ls.samples, (unsigned long)ls.avg, (unsigned long)ls.mad,
+            (double)ls.period / ls.samples);
+        if (last_time) {
+            report = sdscatprintf(report, "Last spike: %lds ago (%ld).\n",
+                                  (long)(time(NULL) - last_time), (long)last_time);
+        }
+        report = sdscatprintf(report, "Worst all time event: %lums.",
+                              (unsigned long)ts->max);
 
         /* Fork */
         if (!strcasecmp(event, "fork")) {

@@ -345,6 +345,7 @@ proc cleanup {} {
     catch {exec rm -rf {*}[glob tests/tmp/nodes.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/rdb-slot-import-*]}
     if {!$::quiet} {puts "OK"}
 }
 

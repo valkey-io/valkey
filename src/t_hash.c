@@ -124,7 +124,9 @@ bool hashTypeHasVolatileFields(robj *o) {
 
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         /* O(1): the aggregate header exists iff at least one field carries
-         * an expiry. */
+         * an expiry. The one exception is the RDB_TYPE_HASH_2 loader, which
+         * appends field expiries inside its loop and installs the header only
+         * after it, so do not reach this from inside that loop. */
         return lpIsMetadata(lpStart(objectGetVal(o)));
     }
 
@@ -995,7 +997,11 @@ void hashTypeConvertListpack(robj *o, int enc) {
 
     } else if (enc == OBJ_ENCODING_HASHTABLE) {
         hashTypeIterator hi;
-        bool has_volatile = hashTypeHasVolatileFields(o);
+        /* Whether any entry we actually carried over has an expiry. Derived
+         * from the entries themselves rather than from the aggregate header,
+         * which a half-built listpack does not have yet: the RDB loader
+         * installs it only after its listpack loop. */
+        bool has_volatile = false;
 
         hashtable *ht = hashtableCreate(&hashHashtableType);
 
@@ -1008,6 +1014,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
             sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
             /* Get expiry for this field from the metadata value */
             long long expiry = hashTypeCurrentExpiry(o, &hi);
+            if (expiry != EXPIRY_NONE) has_volatile = true;
             entry *entry = entryCreate(field, value, expiry);
             sdsfree(field);
             if (!hashtableAdd(ht, entry)) {
@@ -1707,7 +1714,7 @@ void hsetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1965,7 +1972,7 @@ void hgetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HGET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HGET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }

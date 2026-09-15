@@ -753,7 +753,9 @@ start_server {tags {"qos external:skip"}} {
         r config set maxclients-reserved 0
         r config rewrite
     }
+}
 
+start_server {tags {"qos external:skip cluster:skip needs:repl"}} {
     test {CONFIG SET priority-subnets does not demote replication link (Issue #4674)} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]

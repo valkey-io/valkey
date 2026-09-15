@@ -957,7 +957,7 @@ start_server {tags {"hash"}} {
 
     # On some platforms strtold("+inf") with valgrind returns a non-inf result
     test {HINCRBYFLOAT does not allow NaN or Infinity} {
-        assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
+        assert_error "*value is Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
 

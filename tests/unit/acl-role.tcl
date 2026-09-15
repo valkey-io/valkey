@@ -1,3 +1,14 @@
+# Return the `user <name> ...` line ACL LIST reports for the given user, or an
+# empty string if there is none.
+proc acl_list_entry {level name} {
+    foreach entry [r $level ACL LIST] {
+        if {[lindex $entry 0] eq "user" && [lindex $entry 1] eq $name} {
+            return $entry
+        }
+    }
+    return {}
+}
+
 start_server {tags {"acl external:skip"}} {
     test {ACL ROLES - initially empty} {
         r ACL ROLES
@@ -538,6 +549,43 @@ start_server {tags {"acl external:skip"}} {
         # Now delete all roles (no users hold them any more)
         foreach role [r ACL ROLES] {
             catch {r ACL DELROLE $role}
+        }
+    }
+}
+
+# Two servers fed the same ACL commands must end up with the same ACL state.
+# Nine roles on purpose: up to ENTRIES_PER_BUCKET entries share a single
+# hashtable bucket and happen to come back in insertion order, so a smaller
+# role count would not notice an unordered role list.
+start_server {tags {"acl external:skip"}} {
+    start_server {} {
+        test {Two servers given identical ACLs agree on ACL DIGEST} {
+            # Same commands, same order, on two freshly started servers.
+            for {set i 1} {$i <= 9} {incr i} {
+                r -1 ACL SETROLE r$i ~r$i:* +get
+                r    ACL SETROLE r$i ~r$i:* +get
+            }
+            r -1 ACL SETUSER alice on >p role=r1,r2,r3,r4,r5,r6,r7,r8,r9
+            r    ACL SETUSER alice on >p role=r1,r2,r3,r4,r5,r6,r7,r8,r9
+
+            # Sanity: the two nodes really do grant the same access.
+            assert_equal [r -1 ACL DRYRUN alice GET r5:k] [r ACL DRYRUN alice GET r5:k]
+            assert_equal [lsort [r -1 ACL ROLES]] [lsort [r ACL ROLES]]
+
+            set list_a [acl_list_entry -1 alice]
+            set list_b [acl_list_entry 0 alice]
+            set dig_a [r -1 ACL DIGEST]
+            set dig_b [r ACL DIGEST]
+
+            assert_equal $list_a $list_b
+            assert_equal $dig_a $dig_b
+        }
+
+        test {A user's role list is reported in the order it was set} {
+            r ACL SETUSER bob on >p role=r9,r8,r7,r6,r5,r4,r3,r2,r1
+            set info [r ACL GETUSER bob]
+            assert_equal {r9 r8 r7 r6 r5 r4 r3 r2 r1} [lindex $info [expr {[lsearch $info "roles"] + 1}]]
+            assert_match {*role=r9,r8,r7,r6,r5,r4,r3,r2,r1*} [acl_list_entry 0 bob]
         }
     }
 }

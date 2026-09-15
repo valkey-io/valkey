@@ -1,11 +1,11 @@
 {
-    "RAXMSET": {
+    "PHMSET": {
         "summary": "Atomically sets fields across multiple radix-tree paths.",
         "complexity": "O(sum(L) + M*U), where M is the total number of fields across all path groups.",
         "group": "radix",
         "since": "9.2.0",
         "arity": -7,
-        "function": "raxmsetCommand",
+        "function": "phmsetCommand",
         "command_flags": ["WRITE", "DENYOOM", "FAST"],
         "acl_categories": ["RADIX", "WRITE", "FAST"],
         "key_specs": [{

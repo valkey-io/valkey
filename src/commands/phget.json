@@ -1,11 +1,11 @@
 {
-    "RAXGET": {
+    "PHGET": {
         "summary": "Returns one or more fields from an exact radix-tree path.",
         "complexity": "O(L + F*U).",
         "group": "radix",
         "since": "9.2.0",
         "arity": -4,
-        "function": "raxgetCommand",
+        "function": "phgetCommand",
         "command_flags": ["READONLY", "FAST"],
         "acl_categories": ["RADIX", "READ", "FAST"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],

@@ -1,11 +1,11 @@
 {
-    "RAXEXISTS": {
+    "PHEXISTS": {
         "summary": "Tests whether an exact logical path exists in a radix tree.",
         "complexity": "O(L), where L is the path length.",
         "group": "radix",
         "since": "9.2.0",
         "arity": 3,
-        "function": "raxexistsCommand",
+        "function": "phexistsCommand",
         "command_flags": ["READONLY", "FAST"],
         "acl_categories": ["RADIX", "READ", "FAST"],
         "key_specs": [{

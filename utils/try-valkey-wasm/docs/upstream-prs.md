@@ -46,7 +46,7 @@ Verification: since the branch is not compiled on Linux, I compared the new comp
 
 ## PR #4677 -- after valkey-review-bot's comment (2026-09-14)
 
-Branch head: `3b800f0a5` (5 commits; squash-merge collapses them).
+Branch head: `279f56a55` (6 commits; squash-merge collapses them).
 
 **Reply to the bot's inline comment on `src/util.c` (paste as a thread reply):**
 
@@ -64,6 +64,6 @@ Review of the first version showed the underlying model was also wrong on Linux:
 
 This PR replaces the `(timezone, daylight_active)` pair with one cached `server.utc_offset`: the actual offset of local time east of UTC, computed by `utcOffsetFromLocaltime()` from `localtime_r`/`gmtime_r` of the same instant (POSIX only, no `tm_gmtoff`/`timegm`), refreshed once per second in `updateCachedTime()` where the DST flag used to be refreshed. `nolocks_localtime()` and `formatTimezone()` take the offset directly. The Linux-only `timezone` global is no longer used, so the platform `#if` disappears.
 
-Testing: new `UtilTest.TestUtcOffsetFromLocaltime` asserts actual offsets for 14 zones (half-hour and 45-minute offsets, both hemispheres' DST, negative DST, 30-minute DST, the extremes) at four instants (January, July, and two instants straddling a year boundary), and that `nolocks_localtime()` with the cached offset reproduces `localtime_r`'s wall clock; zones unknown to the runner's tzdata are skipped. Live: with `TZ=Europe/Dublin` and `TZ=Australia/Lord_Howe` the server's ISO-8601 log timestamps match the C library's. Full unit suite 855/855.
+Testing: `UtilTest.TestUtcOffsetFromLocaltime` pins the seasonal cases at fixed instants (Dublin winter `+00:00`, Lord Howe summer `+10:30`, and the year-boundary straddles), since the log line always stamps *now* and an end-to-end test cannot choose the season; the new `logging.tcl` cases start the server under those zones and check the ISO 8601 line itself. Both zones' bugs reproduce against `unstable` on this host's tzdata (2026c) once their DST seasons begin, which CI will not show before late October.
 
 Behavior change: `INFO`/logs show the same timestamps as before on zones with ordinary one-hour DST; Dublin and Lord Howe are corrected. `getTimeZone()` is removed (no external users).

@@ -270,3 +270,52 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
         } ;# stop Node 0
     } ;# test
 } ;# stop cluster
+
+start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 2000 cluster-replica-no-failover yes}} {
+    test "Automatic MEET is not armed for a paused peer with no inbound link" {
+        # Node 0 observer, node 1 victim.
+        # start_cluster 2 0: R 0 == [srv 0] (last started), R 1 == [srv -1].
+        set victim_id [dict get [get_myself 1] id]
+
+        wait_for_cluster_state ok
+        wait_for_condition 50 100 {
+            [llength [R 0 CLUSTER LINKS]] == 2
+        } else {
+            fail "Observer never established inbound+outbound links with the victim"
+        }
+
+        set meet_before [count_log_message 0 "Sending MEET packet"]
+        set meet_sent_before [CI 0 cluster_stats_messages_meet_sent]
+
+        # pause_process SIGSTOPs the victim: TCP still accepts, nobody answers.
+        # That opens the two-clock window without a SYN blackhole.
+        # inbound_link_freed_time starts on CLUSTERLINK KILL FROM; PFAIL waits
+        # for ping_sent. Pause first so the victim cannot re-open the inbound link.
+        pause_process [srv -1 pid]
+        R 0 DEBUG CLUSTERLINK KILL FROM $victim_id
+
+        # Wait past cluster-node-timeout + handshake timeout slack (both 2000ms).
+        after 6000
+
+        set meet_after [count_log_message 0 "Sending MEET packet"]
+        set meet_sent_after [CI 0 cluster_stats_messages_meet_sent]
+        set victim [cluster_get_node_by_id 0 $victim_id]
+        set has_pfail [cluster_has_flag $victim {fail?}]
+        set has_fail [cluster_has_flag $victim fail]
+
+        resume_process [srv -1 pid]
+
+        assert_equal $meet_before $meet_after
+        # clusterLinkConnectHandler sends MEET with no NOTICE log; stats catch that path.
+        assert_equal $meet_sent_before $meet_sent_after
+        # 2 voting primaries, so PFAIL does not escalate to FAIL.
+        assert {$has_pfail || $has_fail}
+
+        wait_for_condition 50 200 {
+            [CI 0 cluster_state] eq {ok} && [CI 1 cluster_state] eq {ok} &&
+            [cluster_nodes_all_know_each_other 2]
+        } else {
+            fail "Cluster did not reconverge after resuming the paused peer"
+        }
+    }
+} ;# stop cluster

@@ -23,7 +23,6 @@ import argparse
 import hashlib
 import os
 import subprocess
-import sys
 
 import wrapper_util
 from wrapper_util import find_wrapper_functions_in_header
@@ -94,10 +93,15 @@ def wrap_object(args, methods, object_file, output_file):
     temp_object = output_file + ".tmp.o"
 
     if is_bitcode(object_file):
-        if not args.llc:
-            print("Error: '{}' is LLVM bitcode but llc was not found".format(object_file), file=sys.stderr)
-            sys.exit(1)
-        subprocess.run([args.llc, object_file, "-filetype=obj", "-o", temp_object], check=True)
+        # The C compiler turns the bitcode into a real object file. We must use
+        # the compiler that produced the bitcode, not llc from Homebrew LLVM: the
+        # bitcode carries the version of whichever clang wrote it, and an llc of a
+        # different version cannot read it. It fails with "error: Invalid record"
+        # or "LLVM ERROR: Unsupported stack probing method".
+        #
+        # No -O flag is passed. The IR is already optimized, so this step only
+        # needs code generation.
+        subprocess.run([args.cc, "-c", "-x", "ir", object_file, "-o", temp_object], check=True)
         source = temp_object
 
     syms_file = output_file + "-wrap-syms"
@@ -123,7 +127,7 @@ def main():
     parser.add_argument("--nm", required=True, help="path to llvm-nm")
     parser.add_argument("--objcopy", required=True, help="path to llvm-objcopy")
     parser.add_argument("--ar", required=True, help="path to ar")
-    parser.add_argument("--llc", default="", help="path to llc (only needed for LTO builds)")
+    parser.add_argument("--cc", required=True, help="path to the C compiler that built the objects")
     parser.add_argument("--wrappers", required=True, help="path to wrappers.h")
     parser.add_argument("--output-dir", required=True, help="directory for the wrapped object files")
     parser.add_argument("--archive", required=True, help="static library to create from the wrapped objects")

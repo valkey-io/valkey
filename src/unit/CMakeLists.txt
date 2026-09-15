@@ -48,7 +48,6 @@ if (APPLE)
     set(LLVM_TOOLS_PATHS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin)
     find_program(LLVM_NM NAMES llvm-nm PATHS ${LLVM_TOOLS_PATHS})
     find_program(LLVM_OBJCOPY NAMES llvm-objcopy PATHS ${LLVM_TOOLS_PATHS})
-    find_program(LLVM_LLC NAMES llc PATHS ${LLVM_TOOLS_PATHS})
     if (NOT LLVM_NM OR NOT LLVM_OBJCOPY)
         message(FATAL_ERROR "llvm-nm and llvm-objcopy are required to build the unit tests. "
                             "Install them via: brew install llvm")
@@ -272,10 +271,12 @@ if (APPLE)
         --nm "${LLVM_NM}"
         --objcopy "${LLVM_OBJCOPY}"
         --ar "${CMAKE_AR}"
+        # An LTO build writes the objects as LLVM bitcode, and wrap-objects.py
+        # needs a compiler to turn those into real object files. It must be the
+        # same compiler that produced them, so we pass CMAKE_C_COMPILER and not
+        # llc from Homebrew LLVM.
+        --cc "${CMAKE_C_COMPILER}"
         --wrappers "${CMAKE_CURRENT_LIST_DIR}/wrappers.h")
-    if (LLVM_LLC)
-        list(APPEND WRAP_OBJECTS_ARGS --llc "${LLVM_LLC}")
-    endif ()
     set(WRAP_OBJECTS_DEPS
         "${WRAP_OBJECTS_SCRIPT}"
         "${CMAKE_CURRENT_LIST_DIR}/wrapper_util.py"

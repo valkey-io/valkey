@@ -107,10 +107,12 @@ void commandlogInit(void) {
  * configured max length. */
 static void commandlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long value, int type) {
     if (server.commandlog[type].threshold < 0 || server.commandlog[type].max_len == 0) return; /* The corresponding commandlog disabled */
-    if (value >= server.commandlog[type].threshold)
-        listAddNodeHead(server.commandlog[type].entries, commandlogCreateEntry(c, argv, argc, value, type));
+    if (value < server.commandlog[type].threshold) return;
+    listAddNodeHead(server.commandlog[type].entries, commandlogCreateEntry(c, argv, argc, value, type));
 
-    /* Remove old entries if needed. */
+    /* Remove old entries if needed. The list can only exceed max_len right
+     * after a push, so trimming here keeps the invariant without touching
+     * the list on the fast path. */
     while (listLength(server.commandlog[type].entries) > server.commandlog[type].max_len) listDelNode(server.commandlog[type].entries, listLast(server.commandlog[type].entries));
 }
 
@@ -147,10 +149,25 @@ static void commandlogGetReply(client *c, int type, long count) {
 }
 
 /* Log the last command a client executed into the commandlog. */
+/* Returns 1 if the given value would be logged into the command log of the
+ * given type. Kept inline and branch-light for the per-command fast path. */
+static inline int commandlogWouldLog(long long value, int type) {
+    return server.commandlog[type].threshold >= 0 && server.commandlog[type].max_len != 0 &&
+           value >= server.commandlog[type].threshold;
+}
+
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     /* Some commands may contain sensitive data that should not be available in the commandlog.
      */
     if (cmd->flags & CMD_SKIP_COMMANDLOG) return;
+
+    /* Fast path: on a healthy server virtually no command crosses any of the
+     * thresholds, so bail out before touching the argv/original_argv and
+     * script state below. */
+    if (!commandlogWouldLog(c->duration, COMMANDLOG_TYPE_SLOW) &&
+        !commandlogWouldLog(c->net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST) &&
+        !commandlogWouldLog(c->net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY))
+        return;
 
     /* If command argument vector was rewritten, use the original
      * arguments. */

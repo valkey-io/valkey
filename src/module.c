@@ -12173,8 +12173,11 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
  *      ValkeyModule_CloseKey(key);
  *      ValkeyModule_ScanCursorDestroy(c);
  *
- * The function will return 1 if there are more elements to scan and 0 otherwise,
- * possibly setting errno if the call failed.
+ * The function will return 1 if there are more elements to scan and 0 otherwise.
+ * On a return value of 0, errno is set to distinguish the cases:
+ *   - 0       - the scan completed successfully.
+ *   - EINVAL  - the key is NULL or not a hash, set or sorted set.
+ *   - ENOENT  - the cursor is already exhausted (a previous call returned 0).
  * It is also possible to restart an existing cursor using VM_ScanCursorRestart.
  *
  * NOTE: Certain operations are unsafe while iterating the object. For instance
@@ -12314,14 +12317,8 @@ static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entr
  * To keep a field or value beyond the callback, copy it (for example into a
  * ValkeyModuleString with ValkeyModule_CreateString).
  *
- * The function returns 1 if there are more elements to scan and 0 otherwise. On
- * a return value of 0, errno is set to distinguish the cases:
- *   - 0       - the scan completed successfully.
- *   - EINVAL  - the key is NULL or not a hash, set or sorted set.
- *   - ENOENT  - the cursor is already exhausted (a previous call returned 0).
- *
- * The usage pattern and iteration-safety notes are identical to
- * ValkeyModule_ScanKey. */
+ * The usage pattern, return value, errno semantics and iteration-safety notes
+ * are identical to ValkeyModule_ScanKey. */
 int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModuleScanKeyRawBorrowedCB fn, void *privdata) {
     if (key == NULL || key->value == NULL) {
         errno = EINVAL;

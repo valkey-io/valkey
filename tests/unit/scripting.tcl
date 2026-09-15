@@ -2036,14 +2036,14 @@ start_server {tags {"scripting external:skip"}} {
         }
 
         set used [s used_memory]
-        set limit [expr {$used + 1*1024*1024}]
+        set limit [expr {$used + 1*1024}]
         r config set maxmemory $limit
 
         set padding [string repeat x 100000]
         for {set j 1} {$j <= 500} {incr j} {
             catch {r script load "--$padding\nreturn $j"}
         }
-        assert_error {OOM command not allowed*} {r script load "--$padding\nreturn 1"}
+        assert_error {OOM command not allowed*} {r script load "--$padding\nreturn 0"}
         assert_morethan [s evicted_keys] 0
         assert_equal 0 [s evicted_scripts]
         assert_morethan [s number_of_cached_scripts] 0

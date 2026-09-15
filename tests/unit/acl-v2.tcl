@@ -628,6 +628,37 @@ start_server {tags {"acl external:skip"}} {
         r del v1 mylist
     }
     
+    test {Test SORT STORE destination that is named like an option} {
+        # Every decoy destination below is permitted, so the only reason to
+        # reject a command is the real destination the server writes to.
+        r ACL setuser test-sort-store on nopass ~allowed:* ~by ~get ~limit ~alpha +@all
+        r rpush allowed:src c b a
+
+        # A dedicated client, because deleting the user below kills it.
+        set r3 [valkey_client]
+        $r3 auth test-sort-store nopass
+
+        # A destination spelling an option that takes arguments hides the later
+        # STORE clause that SORT actually uses.
+        foreach keyword {by get limit} {
+            assert_equal "User test-sort-store has no permissions to access the 'forbidden:dst' key" \
+                [r ACL DRYRUN test-sort-store SORT allowed:src ALPHA STORE $keyword STORE forbidden:dst]
+            assert_error "*NOPERM*key*" {$r3 sort allowed:src ALPHA STORE $keyword STORE forbidden:dst}
+            assert_equal 0 [r exists forbidden:dst]
+        }
+
+        # A destination spelling STORE reports whatever follows it instead.
+        assert_equal "User test-sort-store has no permissions to access the 'store' key" \
+            [r ACL DRYRUN test-sort-store SORT allowed:src STORE store alpha]
+        assert_error "*NOPERM*key*" {$r3 sort allowed:src STORE store alpha}
+        assert_equal 0 [r exists store]
+
+        # cleanup
+        $r3 close
+        r ACL deluser test-sort-store
+        r del allowed:src
+    }
+
     test {Test DRYRUN with wrong number of arguments} {
         r ACL setuser test-dry-run +@all ~v*
         

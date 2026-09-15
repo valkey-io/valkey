@@ -17,6 +17,7 @@
 extern "C" {
 #include "config.h"
 #include "fmacros.h"
+#include "server.h"
 #include "util.h"
 
 extern bool valgrind;
@@ -437,4 +438,62 @@ TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
     else
         unsetenv("TZ");
     tzset();
+}
+
+extern "C" void formatTimezone(char *buf, size_t buflen, long utc_offset);
+
+/* The ISO 8601 log suffix must render the offset's minutes, not just whole hours. */
+TEST_F(UtilTest, TestFormatTimezone) {
+    struct Case {
+        long utc_offset;
+        const char *expected;
+    };
+    const Case cases[] = {
+        {0, "+00:00"},
+        {3600, "+01:00"},
+        {-5 * 3600, "-05:00"},
+        {10 * 3600 + 1800, "+10:30"},   /* Lord Howe summer */
+        {-(3 * 3600 + 1800), "-03:30"}, /* Newfoundland */
+        {5 * 3600 + 2700, "+05:45"},    /* Nepal */
+        {12 * 3600 + 2700, "+12:45"},   /* Chatham */
+        {14 * 3600, "+14:00"},          /* Kiritimati */
+        {-12 * 3600, "-12:00"},         /* Etc/GMT+12 */
+    };
+    for (const Case &c : cases) {
+        char buf[7];
+        formatTimezone(buf, sizeof(buf), c.utc_offset);
+        EXPECT_STREQ(buf, c.expected) << "offset " << c.utc_offset;
+    }
+}
+
+/* updateCachedTime(1) must publish the offset the logger reads: for the cached
+ * unixtime, the lock-free converter fed with server.utc_offset must agree with
+ * libc's localtime_r under the current TZ. */
+TEST_F(UtilTest, TestUpdateCachedTimeRefreshesUtcOffset) {
+    const char *zones[] = {"UTC", "America/St_Johns", "Europe/Dublin", "Australia/Lord_Howe"};
+    const char *saved_tz = getenv("TZ");
+    std::string saved = saved_tz ? saved_tz : "";
+
+    for (const char *tz : zones) {
+        setenv("TZ", tz, 1);
+        tzset();
+        updateCachedTime(1);
+        time_t now = server.unixtime;
+        long cached = server.utc_offset; /* plain read: the test build maps _Atomic(T) to T */
+
+        struct tm expected, got;
+        localtime_r(&now, &expected);
+        nolocks_localtime(&got, now, cached);
+        EXPECT_EQ(cached, utcOffsetFromLocaltime(now)) << tz;
+        EXPECT_EQ(got.tm_yday, expected.tm_yday) << tz;
+        EXPECT_EQ(got.tm_hour, expected.tm_hour) << tz;
+        EXPECT_EQ(got.tm_min, expected.tm_min) << tz;
+    }
+
+    if (saved_tz)
+        setenv("TZ", saved.c_str(), 1);
+    else
+        unsetenv("TZ");
+    tzset();
+    updateCachedTime(1);
 }

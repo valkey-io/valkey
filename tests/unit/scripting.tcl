@@ -2043,6 +2043,7 @@ start_server {tags {"scripting external:skip"}} {
         for {set j 1} {$j <= 500} {incr j} {
             catch {r script load "--$padding\nreturn $j"}
         }
+        r config set maxmemory 1
         assert_error {OOM command not allowed*} {r script load "--$padding\nreturn 0"}
         assert_morethan [s evicted_keys] 0
         assert_equal 0 [s evicted_scripts]

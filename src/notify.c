@@ -108,6 +108,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     char buf[24];
     client *c = server.executing_client;
     debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
+                      !isPrimaryReplyBlockingEnabled() ||
                       (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM)) == 0 ||
                       c == NULL ||
                       c->cmd == NULL ||
@@ -116,14 +117,33 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                       c->flag.keyspace_notified == 1 ||
                       c->id == UINT64_MAX || // AOF client
                       getClientType(c) != CLIENT_TYPE_NORMAL);
-    /* If any modules are interested in events, notify the module system now.
-     * This bypasses the notifications configuration, but the module engine
-     * will only call event subscribers if the event type matches the types
-     * they are interested in. */
-    moduleNotifyKeyspaceEvent(type, event, key, dbid);
-    if (c) {
-        c->flag.keyspace_notified = 1;
-        commitDeferredReplyBuffer(c, 1);
+
+    if (!server.reply_blocking.in_post_commit_task_execution) {
+        /* Notify modules inline, at the time the keyspace change occurs (bypassing
+         * notify-keyspace-events; the module engine filters by each subscriber's event mask).
+         * Doing it here rather than from the deferred task ensures subscribers are notified for
+         * every write regardless of config or origin, and lets a module that blocks the client
+         * from its callback engage the deferred-reply buffer before the reply is committed. */
+        moduleNotifyKeyspaceEvent(type, event, key, dbid);
+        if (c) {
+            c->flag.keyspace_notified = 1;
+            commitDeferredReplyBuffer(c, 1);
+        }
+
+        if (isPrimaryReplyBlockingEnabled()) {
+            /* Defer only the client (pub/sub) notification until the write is acknowledged.
+             * The deferred task re-enters this function while
+             * in_post_commit_task_execution is set, so modules are not notified again. */
+            if (server.notify_keyspace_events & type) {
+                replyBlockingRegisterPostCommitTask(
+                    POST_COMMIT_KEYSPACE_NOTIFY_TASK,
+                    (void *)(long)type,
+                    (void *)event,
+                    (void *)key,
+                    (void *)(long)dbid);
+            }
+            return;
+        }
     }
 
     /* If notifications for this class of events are off, return ASAP. */

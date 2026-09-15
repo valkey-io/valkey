@@ -202,6 +202,13 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
             return C_ERR;
         }
 
+        /* check if sync replication would want to stop the execution. */
+        const char *pre_script_err = validateScriptForReplyBlocking(caller);
+        if (pre_script_err != NULL) {
+            addReplyError(caller, pre_script_err);
+            return C_ERR;
+        }
+
     } else {
         /* Special handling for backwards compatibility (no shebang eval[sha]) mode */
         if (running_stale) {

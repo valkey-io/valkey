@@ -261,7 +261,7 @@ start_server {tags {"geo"}} {
     test {GEOSEARCH BYRADIUS and BYBOX one must exist} {
         catch {r geosearch nyc fromlonlat -73.9798091 40.7598464 asc desc withhash withdist withcoord} e
         set e
-    } {ERR *exactly one of BYRADIUS, BYBOX and BYPOLYGON*}
+    } {ERR *exactly one of BYRADIUS, BYBOX, BYPOLYGON and BYPATH*}
 
     test {GEOSEARCH with STOREDIST option} {
         catch {r geosearch nyc fromlonlat -73.9798091 40.7598464 bybox 6 6 km asc storedist} e
@@ -665,6 +665,304 @@ start_server {tags {"geo"}} {
         assert_equal {{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia}} [r GEOSEARCH points BYPOLYGON  5 151.2154285314146 -33.867438205607186 151.20024487595015 -33.88138572784347 151.2374118848648 -33.87601765283626 151.19695829592922 -33.87272872054441 151.2278336546125 -33.88345323146266]
     }
 
+    test {GEOSEARCH BYPATH with invalid arguments} {
+        r del pathtest
+        r geoadd pathtest -73.9857 40.7484 "EmpireState"
+
+        # Error: less than 2 points
+        catch {r GEOSEARCH pathtest BYPATH 1 -73.9857 40.7484 500 m} e
+        assert_match {*BYPATH must have at least 2 points*} $e
+
+        # Error: zero points
+        catch {r GEOSEARCH pathtest BYPATH 0 500 m} e
+        assert_match {*ERR*} $e
+
+        # Error: too many points (over 256)
+        catch {r GEOSEARCH pathtest BYPATH 257 500 m} e
+        assert_match {*ERR*} $e
+
+        # Error: missing unit (only distance provided, no m/km/ft/mi)
+        catch {r GEOSEARCH pathtest BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500} e
+        assert_match {*ERR*} $e
+
+        # Error: invalid token where distance is expected
+        catch {r GEOSEARCH pathtest BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 RADIUS 500 m} e
+        assert_match {*ERR*} $e
+
+        # Error: negative distance (caught by extractDistanceOrReply)
+        catch {r GEOSEARCH pathtest BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 -1 m} e
+        assert_match {*ERR*} $e
+
+        # Error: invalid longitude
+        catch {r GEOSEARCH pathtest BYPATH 2 -181.0 40.7484 -73.9712 40.7614 500 m} e
+        assert_match {*ERR*} $e
+
+        # Error: invalid latitude
+        catch {r GEOSEARCH pathtest BYPATH 2 -73.9857 91.0 -73.9712 40.7614 500 m} e
+        assert_match {*ERR*} $e
+
+        # Error: not enough coordinates for declared num_points
+        catch {r GEOSEARCH pathtest BYPATH 3 -73.9857 40.7484 -73.9712 40.7614 500 m} e
+        assert_match {*ERR*not enough*} $e
+
+        # Error: cannot combine BYPATH with BYRADIUS
+        catch {r GEOSEARCH pathtest FROMLONLAT -73.9857 40.7484 BYRADIUS 1 km BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m} e
+        assert_match {*ERR*} $e
+
+        # Error: cannot combine BYPATH with FROMMEMBER
+        catch {r GEOSEARCH pathtest FROMMEMBER EmpireState BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m} e
+        assert_match {*ERR*} $e
+    }
+
+    test {GEOSEARCH BYPATH standard operations} {
+        r del routes
+        r geoadd routes -73.9857 40.7484 "EmpireState"
+        r geoadd routes -73.9712 40.7614 "Rockefeller"
+        r geoadd routes -73.9855 40.7580 "TimesSquare"
+        r geoadd routes -74.0060 40.7128 "WallStreet"
+        r geoadd routes -73.9680 40.7851 "CentralPark"
+        r geoadd routes -73.9934 40.7505 "PennStation"
+
+        # Search along a path from Empire State to Rockefeller with 500m buffer.
+        # Only endpoints (distance 0 from path) should be included with a tight buffer.
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m]
+        assert_equal 1 [expr {"EmpireState" in $result}]
+        assert_equal 1 [expr {"Rockefeller" in $result}]
+        # TimesSquare is ~1km perpendicular from the path, should NOT be in 500m buffer
+        assert_equal 0 [expr {"TimesSquare" in $result}]
+        # WallStreet is far south, should not be included
+        assert_equal 0 [expr {"WallStreet" in $result}]
+
+        # With a larger buffer (1500m), TimesSquare should be included
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m]
+        assert_equal 1 [expr {"TimesSquare" in $result}]
+
+        # Search with a very small buffer - only points exactly on path endpoints
+        set result [r GEOSEARCH routes BYPATH 2 -74.0060 40.7128 -74.0060 40.7140 50 m]
+        assert_equal 1 [expr {"WallStreet" in $result}]
+        assert_equal 0 [expr {"EmpireState" in $result}]
+
+        # Multi-segment path
+        set result [r GEOSEARCH routes BYPATH 3 -73.9857 40.7484 -73.9712 40.7614 -73.9680 40.7851 200 m]
+        assert_equal 1 [expr {"EmpireState" in $result}]
+        assert_equal 1 [expr {"Rockefeller" in $result}]
+        assert_equal 1 [expr {"CentralPark" in $result}]
+    }
+
+    test {GEOSEARCH BYPATH with options} {
+        r del routes
+        r geoadd routes -73.9857 40.7484 "EmpireState"
+        r geoadd routes -73.9712 40.7614 "Rockefeller"
+        r geoadd routes -73.9855 40.7580 "TimesSquare"
+        r geoadd routes -73.9934 40.7505 "PennStation"
+
+        # COUNT limits results
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1 km COUNT 2 ASC]
+        assert_equal 2 [llength $result]
+
+        # WITHCOORD returns coordinates
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m WITHCOORD]
+        # Each result should be a list with name and coord pair
+        foreach item $result {
+            assert_equal 2 [llength $item]
+            assert_equal 2 [llength [lindex $item 1]]
+        }
+
+        # WITHDIST returns distance from point to nearest path segment
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m WITHDIST]
+        foreach item $result {
+            assert_equal 2 [llength $item]
+            # Distance should be a valid number
+            assert_morethan_equal [lindex $item 1] 0
+        }
+
+        # Different units work
+        set result_m [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1000 m]
+        set result_km [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1 km]
+        assert_equal $result_m $result_km
+    }
+
+    test {GEOSEARCH BYPATH WITHPATHDIST} {
+        r del routes
+        # Path from A to B, with a point on the start, one midway perpendicular, one at end
+        r geoadd routes -73.9857 40.7484 "Start"
+        r geoadd routes -73.9712 40.7614 "End"
+        r geoadd routes -73.9845 40.7590 "Midway"
+
+        # WITHPATHDIST returns along-path distance
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m WITHPATHDIST]
+        # Start should have pathdist ~0
+        set start_item [lindex $result 0]
+        assert_equal "Start" [lindex $start_item 0]
+        assert_morethan_equal [lindex $start_item 1] 0
+        assert_lessthan [lindex $start_item 1] 1
+
+        # End should have pathdist close to the full path length (~1893m)
+        set end_item [lindex $result 2]
+        assert_equal "End" [lindex $end_item 0]
+        assert_morethan [lindex $end_item 1] 1800
+
+        # WITHDIST returns cross-track distance (buffdist)
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m WITHDIST]
+        # Start and End are on the path endpoints, dist ~0
+        set start_item [lindex $result 0]
+        assert_equal "Start" [lindex $start_item 0]
+        assert_lessthan [lindex $start_item 1] 1
+
+        # Midway point has non-zero dist (perpendicular offset from path)
+        set mid_item [lindex $result 1]
+        assert_equal "Midway" [lindex $mid_item 0]
+        assert_morethan [lindex $mid_item 1] 100
+
+        # Mutual exclusivity: WITHDIST + WITHPATHDIST is an error
+        catch {r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m WITHDIST WITHPATHDIST} e
+        assert_match {*mutually exclusive*} $e
+
+        # WITHPATHDIST not valid with BYRADIUS
+        catch {r GEOSEARCH routes FROMLONLAT -73.9857 40.7484 BYRADIUS 1500 m WITHPATHDIST} e
+        assert_match {*only valid with BYPATH*} $e
+    }
+
+    test {GEOSEARCH BYPATH distance correctness} {
+        r del routes
+        r geoadd routes -73.9857 40.7484 "EmpireState"
+        r geoadd routes -73.9712 40.7614 "Rockefeller"
+        r geoadd routes -73.9855 40.7580 "TimesSquare"
+        r geoadd routes -73.9934 40.7505 "PennStation"
+
+        # WITHDIST: verify perpendicular distances with ±5m tolerance
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m WITHDIST ASC]
+        # EmpireState is on the path endpoint -> ~0m
+        assert_lessthan [lindex [lindex $result 0] 1] 1.0
+        # Rockefeller is on the other endpoint -> ~0m
+        assert_lessthan [lindex [lindex $result 1] 1] 1.0
+        # TimesSquare is ~676m perpendicular from path
+        set ts_dist [lindex [lindex $result 2] 1]
+        assert_morethan $ts_dist 670
+        assert_lessthan $ts_dist 685
+        # PennStation is ~690m perpendicular from path
+        set ps_dist [lindex [lindex $result 3] 1]
+        assert_morethan $ps_dist 684
+        assert_lessthan $ps_dist 695
+
+        # WITHPATHDIST: verify along-path distances with ±5m tolerance
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m WITHPATHDIST ASC]
+        # EmpireState is at path start -> pathdist 0
+        assert_lessthan [lindex [lindex $result 0] 1] 1.0
+        # PennStation projects near the start -> pathdist ~0
+        assert_lessthan [lindex [lindex $result 1] 1] 1.0
+        # TimesSquare is ~827m along path
+        set ts_pathdist [lindex [lindex $result 2] 1]
+        assert_morethan $ts_pathdist 820
+        assert_lessthan $ts_pathdist 835
+        # Rockefeller is at the end -> pathdist ~1893m
+        set rock_pathdist [lindex [lindex $result 3] 1]
+        assert_morethan $rock_pathdist 1888
+        assert_lessthan $rock_pathdist 1898
+    }
+
+    test {GEOSEARCH BYPATH with empty key} {
+        r del emptykey
+        set result [r GEOSEARCH emptykey BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m]
+        assert_equal {} $result
+    }
+
+    test {GEOSEARCH BYPATH with all identical points degrades to circular} {
+        r del pathtest
+        r geoadd pathtest 0.0 0.0 "at_origin"
+        r geoadd pathtest 0.001 0.0 "near_origin"
+        r geoadd pathtest 1.0 1.0 "far_away"
+
+        # All path points are the same coordinate - degrades to a circle
+        # centered at that point with DIST as radius.
+        set result [r GEOSEARCH pathtest BYPATH 3 0.0 0.0 0.0 0.0 0.0 0.0 200 m]
+        assert_equal 1 [expr {"at_origin" in $result}]
+        assert_equal 1 [expr {"near_origin" in $result}]
+        assert_equal 0 [expr {"far_away" in $result}]
+
+        # Verify it matches BYRADIUS from the same point
+        set result_path [lsort [r GEOSEARCH pathtest BYPATH 2 0.0 0.0 0.0 0.0 200 m]]
+        set result_radius [lsort [r GEOSEARCH pathtest FROMLONLAT 0.0 0.0 BYRADIUS 200 m]]
+        assert_equal $result_path $result_radius
+    }
+
+    test {GEOSEARCHSTORE BYPATH when line path walks search space} {
+        r del routes{t} dest{t}
+        r geoadd routes{t} -73.9857 40.7484 "EmpireState"
+        r geoadd routes{t} -73.9712 40.7614 "Rockefeller"
+        r geoadd routes{t} -73.9855 40.7580 "TimesSquare"
+        r geoadd routes{t} -74.0060 40.7128 "WallStreet"
+
+        set count [r GEOSEARCHSTORE dest{t} routes{t} BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m]
+        assert {$count >= 2}
+        # Verify stored members exist in destination
+        set members [r ZRANGE dest{t} 0 -1]
+        assert_equal 1 [expr {"EmpireState" in $members}]
+        assert_equal 1 [expr {"Rockefeller" in $members}]
+        assert_equal 0 [expr {"WallStreet" in $members}]
+    }
+
+    test {GEOSEARCH BYPATH across hemispheres} {
+        r del global
+        r geoadd global 0.0 0.0 "origin"
+        r geoadd global 0.1 0.1 "near_origin"
+        r geoadd global 10.0 10.0 "far_away"
+
+        # Path crossing the equator/prime meridian
+        set result [r GEOSEARCH global BYPATH 2 -0.05 -0.05 0.05 0.05 10000 m]
+        assert_equal 1 [expr {"origin" in $result}]
+        assert_equal 0 [expr {"far_away" in $result}]
+    }
+
+    test {GEOSEARCH BYPATH across antimeridian} {
+        r del ampath
+        # Points near the antimeridian (±180° longitude)
+        r geoadd ampath 179.5 45.0 "west_of_line"
+        r geoadd ampath -179.5 45.0 "east_of_line"
+        r geoadd ampath 179.95 45.0 "near_line"
+        r geoadd ampath 170.0 45.0 "far_west"
+
+        # Path crossing the antimeridian: from 179° to -179° (a short 2° crossing)
+        set result [r GEOSEARCH ampath BYPATH 2 179.0 45.0 -179.0 45.0 100 km]
+        # Points within 1° of the path should be found
+        assert_equal 1 [expr {"west_of_line" in $result}]
+        assert_equal 1 [expr {"east_of_line" in $result}]
+        assert_equal 1 [expr {"near_line" in $result}]
+        # Point 9° away should not be found with a 100km buffer
+        assert_equal 0 [expr {"far_west" in $result}]
+    }
+
+    test {GEOSEARCH BYPATH closed path is corridor not filled area} {
+        r del loop
+        # Create a large square (~20km sides) around a center point.
+        # Place one point at the center and others on the edges.
+        # Center: 0.0, 0.0 (on equator/prime meridian)
+        # Square corners at roughly ±0.1 degrees (~11km from center)
+        r geoadd loop 0.0 0.0 "center"
+        r geoadd loop 0.1 0.0 "east_edge"
+        r geoadd loop 0.0 0.1 "north_edge"
+        r geoadd loop -0.05 0.05 "near_nw_edge"
+        r geoadd loop 0.0 0.05 "halfway_north"
+
+        # Closed path forming a square: SW -> SE -> NE -> NW -> SW
+        # With a 500m buffer, only points within 500m of the square's edges are included.
+        set result [r GEOSEARCH loop BYPATH 5 -0.1 -0.1 0.1 -0.1 0.1 0.1 -0.1 0.1 -0.1 -0.1 500 m]
+
+        # "center" is ~11km from the nearest edge - should NOT be included
+        assert_equal 0 [expr {"center" in $result}]
+        # "halfway_north" is ~11km from the nearest edge - should NOT be included
+        assert_equal 0 [expr {"halfway_north" in $result}]
+
+        # With a much larger buffer (15km), center should now be included
+        set result [r GEOSEARCH loop BYPATH 5 -0.1 -0.1 0.1 -0.1 0.1 0.1 -0.1 0.1 -0.1 -0.1 15 km]
+        assert_equal 1 [expr {"center" in $result}]
+
+        # Contrast with BYPOLYGON: same shape includes the center point
+        set result [r GEOSEARCH loop BYPOLYGON 4 -0.1 -0.1 0.1 -0.1 0.1 0.1 -0.1 0.1]
+        assert_equal 1 [expr {"center" in $result}]
+        assert_equal 1 [expr {"halfway_north" in $result}]
+    }
+
     test {GEOSEARCH with exact zero distances} {
         r del points
         # These are full precision coordinates, so the distance should 0.0000
@@ -888,4 +1186,5 @@ start_server {tags {"geo"}} {
             unset -nocomplain debuginfo
         }
     }
+
 }

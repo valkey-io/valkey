@@ -144,6 +144,66 @@ start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval
     test_same_epoch 0
 } ;# start_cluster
 
+# Tests to verify scenarios where failover is not possible and verify faster availability
+# of primary once the network partition heals.
+foreach type {"primary-only" "primary-with-replicas"} {
+    set ::node_timeout 5000
+    if {$type eq "primary-only"} {
+        set ::primary_count 6
+        set ::replica_count 0
+    } else {
+        set ::primary_count 3
+        set ::replica_count 3
+    }
+
+    set options [list \
+    tags {external:skip cluster} \
+    overrides [list \
+        cluster-ping-interval 1000 \
+        cluster-node-timeout $::node_timeout \
+        cluster-replica-no-failover yes \
+    ]]
+
+    start_cluster $::primary_count $::replica_count $options {
+        # Killing one primary node.
+        pause_process [srv 0 pid]
+
+        if {$::replica_count > 0} {
+            test "no failover - verify replica is not promoted if failover has been disabled" {
+                # Observe no failover
+                wait_for_log_messages -3 {"*Currently unable to failover: Failover has been disabled*"} 0 200 50
+            }
+        } else {
+            # wait for node failure detection
+            after $::node_timeout
+        }
+
+        test "no failover - cluster is in failed state" {
+            for {set j 0} {$j < [llength $::servers]} {incr j} {                
+                if {[process_is_paused [srv -$j pid]]} continue
+                wait_for_condition 100 25 {
+                    [CI $j cluster_state] eq "fail"
+                } else {
+                    set ts [clock format [clock seconds] -format %H:%M:%S]
+                    fail "Cluster node $j cluster_state:[r -1 CLUSTER NODES]"
+                }
+            }
+        }
+
+        resume_process [srv 0 pid]
+
+        test "no failover - cluster is in healthy state" {
+            for {set j 0} {$j < [llength $::servers]} {incr j} {
+                wait_for_condition 100 50 {
+                    [CI $j cluster_state] eq "ok"
+                } else {
+                    fail "Cluster node $j cluster_state:[CI $j cluster_state]"
+                }
+            }
+        }
+    } ;# start_cluster
+}
+
 run_solo {cluster} {
     start_cluster 32 15 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
         test "Multiple primary nodes are down, rank them based on the failed primary" {

@@ -233,21 +233,27 @@ foreach command {SORT SORT_RO} {
     }
 
     foreach command {SORT SORT_RO} {
-        test "$command does not change the encoding of a listpack sorted set" {
-            r del zset
-            r zadd zset 1 a 5 b 2 c 10 d 3 e
-            assert_encoding listpack zset
-            assert_equal [r $command zset alpha desc] {e d c b a}
-            assert_encoding listpack zset
-            assert_equal [r $command zset by nosort asc] {a c e b d}
-            assert_encoding listpack zset
-            assert_equal [r $command zset by nosort desc limit 1 2] {b e}
-            assert_encoding listpack zset
-            r mset w_a 3 w_b 1 w_c 2 w_d 5 w_e 4
-            assert_equal [r $command zset by w_*] {b c a e d}
-            assert_encoding listpack zset
-            assert_equal [r $command zset by nosort get w_*] {3 2 4 1 5}
-            assert_encoding listpack zset
+        test "$command does not change the encoding of a sorted set" {
+            foreach {maxentries enc} {128 listpack 0 btree} {
+                with_config zset-max-ziplist-entries $maxentries {
+                    r del zset
+                    r zadd zset 1 a 5 b 2 c 10 d 3 e
+                    assert_encoding $enc zset
+                    assert_equal [r $command zset alpha desc] {e d c b a}
+                    assert_encoding $enc zset
+                    assert_equal [r $command zset by nosort asc] {a c e b d}
+                    assert_encoding $enc zset
+                    assert_equal [r $command zset by nosort desc limit 1 2] {b e}
+                    assert_encoding $enc zset
+                    r mset w_a 3 w_b 1 w_c 2 w_d 5 w_e 4
+                    assert_equal [r $command zset by w_*] {b c a e d}
+                    assert_encoding $enc zset
+                    assert_equal [r $command zset by nosort get w_*] {3 2 4 1 5}
+                    assert_encoding $enc zset
+                    assert_equal [r $command zset by w_* get # get w_*] {b 1 c 2 a 3 e 4 d 5}
+                    assert_encoding $enc zset
+                }
+            }
         }
 
         test "$command sorted set with integer members (listpack and btree)" {
@@ -269,31 +275,37 @@ foreach command {SORT SORT_RO} {
         }
     }
 
-    test "SORT sorted set: listpack and btree encodings produce identical results" {
-        array unset sres
-        foreach {maxentries enc} {128 listpack 0 btree} {
-            with_config zset-max-ziplist-entries $maxentries {
-                r del zset
-                set args {}
-                for {set i 0} {$i < 50} {incr i} {
-                    lappend args [expr {($i * 37) % 101}] "m[expr {($i * 53) % 97}]"
+    foreach command {SORT SORT_RO} {
+        test "$command sorted set: listpack and btree encodings produce identical results" {
+            array unset sres
+            foreach {maxentries enc} {128 listpack 0 btree} {
+                with_config zset-max-ziplist-entries $maxentries {
+                    r del zset
+                    set args {}
+                    for {set i 0} {$i < 50} {incr i} {
+                        lappend args [expr {($i * 37) % 101}] "m[expr {($i * 53) % 97}]"
+                    }
+                    r zadd zset {*}$args
+                    assert_encoding $enc zset
+                    set sres($enc,alpha) [r $command zset alpha]
+                    set sres($enc,alpha_desc) [r $command zset alpha desc]
+                    set sres($enc,nosort) [r $command zset by nosort]
+                    set sres($enc,nosort_desc) [r $command zset by nosort desc]
+                    set sres($enc,limit) [r $command zset by nosort limit 7 13]
+                    set sres($enc,limit_desc) [r $command zset by nosort desc limit 7 13]
+                    set sres($enc,edge_limit) [r $command zset by nosort limit 49 5]
+                    set sres($enc,over_limit) [r $command zset by nosort limit 60 5]
+                    assert_encoding $enc zset
                 }
-                r zadd zset {*}$args
-                assert_encoding $enc zset
-                set sres($enc,alpha) [r sort zset alpha]
-                set sres($enc,nosort) [r sort zset by nosort]
-                set sres($enc,nosort_desc) [r sort zset by nosort desc]
-                set sres($enc,limit) [r sort zset by nosort limit 7 13]
-                set sres($enc,limit_desc) [r sort zset by nosort desc limit 7 13]
-                set sres($enc,edge_limit) [r sort zset by nosort limit 49 5]
-                set sres($enc,over_limit) [r sort zset by nosort limit 60 5]
-                assert_encoding $enc zset
             }
+            foreach k {alpha alpha_desc nosort nosort_desc limit limit_desc edge_limit over_limit} {
+                assert_equal $sres(listpack,$k) $sres(btree,$k) "mismatch for $k"
+            }
+            assert_equal 50 [llength $sres(listpack,alpha)]
+            assert_equal 13 [llength $sres(listpack,limit)]
+            assert_equal 1 [llength $sres(listpack,edge_limit)]
+            assert_equal 0 [llength $sres(listpack,over_limit)]
         }
-        foreach k {alpha nosort nosort_desc limit limit_desc edge_limit over_limit} {
-            assert_equal $sres(listpack,$k) $sres(btree,$k) "mismatch for $k"
-        }
-        assert_equal 50 [llength $sres(listpack,alpha)]
     }
 
     test "SORT sorted set BY nosort works as expected from scripts" {

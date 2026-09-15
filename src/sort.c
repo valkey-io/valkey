@@ -325,11 +325,10 @@ void sortCommandGeneric(client *c, int readonly) {
 
     /* Obtain the length of the object to sort.
      *
-     * Note: SORT must not modify the object being sorted. Historically a
-     * listpack-encoded sorted set was destructively converted here, but a
-     * read command that rewrites value memory is unsafe while a background
-     * iterator (forkless save) may be reading the same object. Both
-     * encodings are handled directly below instead. */
+     * SORT must not modify the object being sorted: a background iterator
+     * (forkless save) may be reading its value memory concurrently, and
+     * only commands classified as writes are blocked from touching in-use
+     * keys. Every encoding is therefore consumed in place below. */
     switch (sortval->type) {
     case OBJ_LIST: vectorlen = listTypeLength(sortval); break;
     case OBJ_SET: vectorlen = setTypeSize(sortval); break;

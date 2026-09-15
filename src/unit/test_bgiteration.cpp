@@ -1073,7 +1073,9 @@ TEST_F(BgIterationTest, createAndCleanup) {
     EXPECT_EQ(status.queue_length, 0u);
     EXPECT_GT(status.queue_length_target, 0u);
 
-    EXPECT_LT(status.runtime_ms, 5u);
+    // Generous bound: runtime_ms is wall-clock time since iterator creation, and
+    // slow environments (valgrind) can burn tens of milliseconds getting here.
+    EXPECT_LT(status.runtime_ms, 1000u);
     EXPECT_EQ(status.current_item_ms, 0u);
 
     expectAnythingCleanup(it);

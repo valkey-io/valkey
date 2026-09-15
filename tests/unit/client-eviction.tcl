@@ -19,6 +19,18 @@ proc client_exists {name} {
     return true
 }
 
+# Block-wait until the named client's query buffer reaches exactly
+# the given size. The fill is monotonic and settles at exactly this
+# value, so a generous budget cannot hide a stall or a wrong value;
+# it only tolerates slow CLIENT LIST polling on loaded CI runners.
+proc wait_for_qbuf_size {name size} {
+    wait_for_condition 500 100 {
+        [client_field $name qbuf] == $size
+    } else {
+        fail "Failed to fill qbuf for $name"
+    }
+}
+
 proc gen_client {} {
     set rr [valkey_client]
     set name "tst_[randstring 4 4 simplealpha]"
@@ -315,11 +327,7 @@ start_server {} {
             if {[catch {
                 $rr write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
                 $rr flush
-                wait_for_condition 200 10 {
-                    [client_field $cname qbuf] == $qbsize
-                } else {
-                    fail "Failed to fill qbuf for test"
-                }
+                wait_for_qbuf_size $cname $qbsize
             } e] && $no_evict == off} {
                 assert {![client_exists $cname]}
             } elseif {$no_evict == on} {
@@ -358,12 +366,8 @@ start_server {} {
         set qbsize [expr {$maxmemory_clients - $obuf_size}]
         $rr1 write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
         $rr1 flush
-        # Wait for qbuff to be as expected
-        wait_for_condition 200 10 {
-            [client_field qbuf-client qbuf] == $qbsize
-        } else {
-            fail "Failed to fill qbuf for test"
-        }
+        # Wait for qbuf to be as expected.
+        wait_for_qbuf_size qbuf-client $qbsize
 
         # Make the other two obuf-clients pass obuf limit and also pass maxmemory-clients
         # We use two obuf-clients to make sure that even if client eviction is attempted

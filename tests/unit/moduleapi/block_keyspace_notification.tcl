@@ -66,19 +66,42 @@ start_server {tags {"modules"}} {
     test {Blocking keyspace notif during multi} {
         wait_for_blocked_clients_count 0
         r b_keyspace.clear
-        r multi
-        r hset d e f
-        r hset e f g
-        assert_equal "1 1" [r exec]
-        # Nothing should be blocked inside the transaction
-        assert_equal [s 0 blocked_clients] 0
-        assert_equal [r b_keyspace.events] ""
-        # In the background, the work should still occur
+        set rd1 [valkey_deferring_client]
+        $rd1 multi
+        $rd1 hset d e f
+        $rd1 hset e f g
+        $rd1 exec
+        # Mutations inside EXEC still cannot block; the EXEC-end event can.
+        wait_for_blocked_clients_count 1
+        wait_for_blocked_clients_count 0 300 10
+        assert_equal {OK} [$rd1 read]
+        assert_equal {QUEUED} [$rd1 read]
+        assert_equal {QUEUED} [$rd1 read]
+        assert_equal {1 1} [$rd1 read]
         wait_for_condition 1000 50 {
-            [string match "{event hset key *} {event hset key *}" [set latest [r b_keyspace.events]]]
+            [string match "*{event exec key*}" [r b_keyspace.events]]
         } else {
-            fail "Keyspace event not propagated within 5 seconds"
+            fail "EXEC-end keyspace event not seen: [r b_keyspace.events]"
         }
+        $rd1 close
+    }
+    test {Blocking EXEC-end notification holds pipelined commands} {
+        wait_for_blocked_clients_count 0
+        r b_keyspace.clear
+        set rd1 [valkey_deferring_client]
+        pause_process [srv 0 pid]
+        $rd1 multi
+        $rd1 hset pipe_key f v
+        $rd1 exec
+        $rd1 ping
+        resume_process [srv 0 pid]
+        wait_for_blocked_clients_count 1
+        wait_for_blocked_clients_count 0 300 10
+        assert_equal {OK} [$rd1 read]
+        assert_equal {QUEUED} [$rd1 read]
+        assert_equal {1} [$rd1 read]
+        assert_equal {PONG} [$rd1 read]
+        $rd1 close
     }
     test {Event that fires twice} {
         wait_for_blocked_clients_count 0

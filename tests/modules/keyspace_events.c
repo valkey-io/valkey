@@ -316,6 +316,20 @@ static int cmdGetDels(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     return ValkeyModule_ReplyWithLongLong(ctx, dels);
 }
 
+/* Same pattern as KeySpace_NotificationExpired: count via a real key. */
+static int KeySpace_NotificationExec(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
+    VALKEYMODULE_NOT_USED(type);
+    VALKEYMODULE_NOT_USED(event);
+    VALKEYMODULE_NOT_USED(key);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "INCR", "c!", "testkeyspace:exec");
+    ValkeyModule_FreeCallReply(rep);
+    if (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_MULTI) {
+        rep = ValkeyModule_Call(ctx, "INCR", "c!", "testkeyspace:exec_in_multi");
+        ValkeyModule_FreeCallReply(rep);
+    }
+    return VALKEYMODULE_OK;
+}
+
 /* This function must be present on each module. It is used in order to
  * register the commands into the server. */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -330,6 +344,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (!(keySpaceAll & VALKEYMODULE_NOTIFY_LOADED)) {
         // VALKEYMODULE_NOTIFY_LOADED event are not supported we can not start
+        return VALKEYMODULE_ERR;
+    }
+
+    if (!(keySpaceAll & VALKEYMODULE_NOTIFY_EXEC)) {
         return VALKEYMODULE_ERR;
     }
 
@@ -358,6 +376,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     if(ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING, KeySpace_NotificationModuleStringPostNotificationJob) != VALKEYMODULE_OK){
+        return VALKEYMODULE_ERR;
+    }
+
+    if(ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_EXEC, KeySpace_NotificationExec) != VALKEYMODULE_OK){
         return VALKEYMODULE_ERR;
     }
 

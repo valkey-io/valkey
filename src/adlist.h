@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __ADLIST_H__
-#define __ADLIST_H__
+#ifndef ADLIST_H
+#define ADLIST_H
 
 /* Node, List, and Iterator are the only data structures used currently. */
 
@@ -98,4 +98,4 @@ void listUnlinkNode(list *list, listNode *node);
 #define AL_START_HEAD 0
 #define AL_START_TAIL 1
 
-#endif /* __ADLIST_H__ */
+#endif /* ADLIST_H */

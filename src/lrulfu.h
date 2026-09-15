@@ -1,5 +1,5 @@
-#ifndef __LRULFU_H__
-#define __LRULFU_H__
+#ifndef LRULFU_H
+#define LRULFU_H
 
 /*
  * Important: include fmacros.h before any system header

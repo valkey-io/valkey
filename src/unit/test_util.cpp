@@ -7,13 +7,17 @@
 #include "generated_wrappers.hpp"
 
 #include <climits>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <string>
 #include <sys/mman.h>
 #include <unistd.h>
 
 extern "C" {
 #include "config.h"
 #include "fmacros.h"
+#include "server.h"
 #include "util.h"
 
 extern bool valgrind;
@@ -362,4 +366,134 @@ TEST_F(UtilTest, TestWritePointerWithPadding) {
     for (size_t i = ptr_size; i < sizeof(buf); i++) {
         ASSERT_EQ(buf[i], 0u);
     }
+}
+
+extern "C" void nolocks_localtime(struct tm *tmp, time_t t, long utc_offset);
+
+/* utcOffsetFromLocaltime() must return the actual offset of local time east of
+ * UTC, with whatever daylight-saving shape tzdata applies. The zones below cover
+ * the cases a "standard offset + 3600 * tm_isdst" model gets wrong: Europe/Dublin
+ * (tzdata models winter as negative DST: tm_isdst=1 with offset 0) and Lord Howe
+ * Island (30-minute DST), alongside ordinary zones in both hemispheres,
+ * half-hour and 45-minute offsets, and the extremes.
+ *
+ * Instants: 2026-01-15 03:00Z, 2026-07-15 03:00Z (opposite DST states per
+ * hemisphere), 2026-12-31 23:30Z and 2026-01-01 00:30Z (local and UTC dates
+ * straddle a year boundary). */
+TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
+    const time_t jan15 = 1768446000, jul15 = 1784084400, dec31 = 1798759800, jan1 = 1767227400;
+    struct Case {
+        const char *tz;
+        long jul_east; /* offset at 2026-07-15 */
+        long jan_east; /* offset at 2026-01-15, 2026-12-31 and 2026-01-01 (same season, both hemispheres) */
+    };
+    const Case cases[] = {
+        {"UTC", 0, 0},
+        {"America/Los_Angeles", -7 * 3600, -8 * 3600},
+        {"America/New_York", -4 * 3600, -5 * 3600},
+        {"America/St_Johns", -(2 * 3600 + 1800), -(3 * 3600 + 1800)},
+        {"Europe/Stockholm", 2 * 3600, 1 * 3600},
+        {"Europe/Dublin", 1 * 3600, 0}, /* negative DST in tzdata: winter is the "DST" period at +00:00 */
+        {"Asia/Kolkata", 5 * 3600 + 1800, 5 * 3600 + 1800},
+        {"Asia/Kathmandu", 5 * 3600 + 2700, 5 * 3600 + 2700},
+        {"Australia/Adelaide", 9 * 3600 + 1800, 10 * 3600 + 1800}, /* southern: DST in January */
+        {"Australia/Lord_Howe", 10 * 3600 + 1800, 11 * 3600},      /* 30-minute DST, in January */
+        {"Pacific/Auckland", 12 * 3600, 13 * 3600},
+        {"Pacific/Chatham", 12 * 3600 + 2700, 13 * 3600 + 2700},
+        {"Pacific/Kiritimati", 14 * 3600, 14 * 3600},
+        {"Etc/GMT+12", -12 * 3600, -12 * 3600},
+    };
+
+    const char *saved_tz = getenv("TZ");
+    std::string saved = saved_tz ? saved_tz : "";
+
+    for (const Case &c : cases) {
+        setenv("TZ", c.tz, 1);
+        tzset();
+        /* Skip zones this system's tz database does not know: localtime would silently fall back to UTC,
+         * and none of the non-UTC zones above is at +00:00 on 2026-07-15. */
+        struct tm probe;
+        localtime_r(&jul15, &probe);
+        if (strcmp(c.tz, "UTC") != 0 && probe.tm_hour == 3 && probe.tm_min == 0) continue;
+
+        EXPECT_EQ(utcOffsetFromLocaltime(jan15), c.jan_east) << c.tz << " at 2026-01-15";
+        EXPECT_EQ(utcOffsetFromLocaltime(jul15), c.jul_east) << c.tz << " at 2026-07-15";
+        EXPECT_EQ(utcOffsetFromLocaltime(dec31), c.jan_east) << c.tz << " at 2026-12-31T23:30Z";
+        EXPECT_EQ(utcOffsetFromLocaltime(jan1), c.jan_east) << c.tz << " at 2026-01-01T00:30Z";
+
+        /* The lock-free converter fed with that offset must reproduce libc's wall clock. */
+        for (time_t t : {jan15, jul15, dec31, jan1}) {
+            struct tm expected, got;
+            localtime_r(&t, &expected);
+            nolocks_localtime(&got, t, utcOffsetFromLocaltime(t));
+            EXPECT_EQ(got.tm_year, expected.tm_year) << c.tz << " at " << t;
+            EXPECT_EQ(got.tm_yday, expected.tm_yday) << c.tz << " at " << t;
+            EXPECT_EQ(got.tm_hour, expected.tm_hour) << c.tz << " at " << t;
+            EXPECT_EQ(got.tm_min, expected.tm_min) << c.tz << " at " << t;
+        }
+    }
+
+    if (saved_tz)
+        setenv("TZ", saved.c_str(), 1);
+    else
+        unsetenv("TZ");
+    tzset();
+}
+
+extern "C" void formatTimezone(char *buf, size_t buflen, long utc_offset);
+
+/* The ISO 8601 log suffix must render the offset's minutes, not just whole hours. */
+TEST_F(UtilTest, TestFormatTimezone) {
+    struct Case {
+        long utc_offset;
+        const char *expected;
+    };
+    const Case cases[] = {
+        {0, "+00:00"},
+        {3600, "+01:00"},
+        {-5 * 3600, "-05:00"},
+        {10 * 3600 + 1800, "+10:30"},   /* Lord Howe summer */
+        {-(3 * 3600 + 1800), "-03:30"}, /* Newfoundland */
+        {5 * 3600 + 2700, "+05:45"},    /* Nepal */
+        {12 * 3600 + 2700, "+12:45"},   /* Chatham */
+        {14 * 3600, "+14:00"},          /* Kiritimati */
+        {-12 * 3600, "-12:00"},         /* Etc/GMT+12 */
+    };
+    for (const Case &c : cases) {
+        char buf[7];
+        formatTimezone(buf, sizeof(buf), c.utc_offset);
+        EXPECT_STREQ(buf, c.expected) << "offset " << c.utc_offset;
+    }
+}
+
+/* updateCachedTime(1) must publish the offset the logger reads: for the cached
+ * unixtime, the lock-free converter fed with server.utc_offset must agree with
+ * libc's localtime_r under the current TZ. */
+TEST_F(UtilTest, TestUpdateCachedTimeRefreshesUtcOffset) {
+    const char *zones[] = {"UTC", "America/St_Johns", "Europe/Dublin", "Australia/Lord_Howe"};
+    const char *saved_tz = getenv("TZ");
+    std::string saved = saved_tz ? saved_tz : "";
+
+    for (const char *tz : zones) {
+        setenv("TZ", tz, 1);
+        tzset();
+        updateCachedTime(1);
+        time_t now = server.unixtime;
+        long cached = server.utc_offset; /* plain read: the test build maps _Atomic(T) to T */
+
+        struct tm expected, got;
+        localtime_r(&now, &expected);
+        nolocks_localtime(&got, now, cached);
+        EXPECT_EQ(cached, utcOffsetFromLocaltime(now)) << tz;
+        EXPECT_EQ(got.tm_yday, expected.tm_yday) << tz;
+        EXPECT_EQ(got.tm_hour, expected.tm_hour) << tz;
+        EXPECT_EQ(got.tm_min, expected.tm_min) << tz;
+    }
+
+    if (saved_tz)
+        setenv("TZ", saved.c_str(), 1);
+    else
+        unsetenv("TZ");
+    tzset();
+    updateCachedTime(1);
 }

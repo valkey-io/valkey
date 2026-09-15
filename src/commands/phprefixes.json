@@ -2,7 +2,7 @@
     "PHPREFIXES": {
         "summary": "Returns every stored radix path that prefixes a query.",
         "complexity": "O(L + O).",
-        "group": "radix",
+        "group": "path-hash",
         "since": "9.2.0",
         "arity": -3,
         "function": "phprefixesCommand",

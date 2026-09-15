@@ -67,10 +67,10 @@
                                     "const": "module"
                                 },
                                 {
-                                    "const": "pubsub"
+                                    "const": "path-hash"
                                 },
                                 {
-                                    "const": "radix"
+                                    "const": "pubsub"
                                 },
                                 {
                                     "const": "scripting"

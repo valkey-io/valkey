@@ -2,7 +2,7 @@
     "PHSCAN": {
         "summary": "Incrementally traverses radix-tree paths in lexicographic order.",
         "complexity": "O(L + C + O) per call.",
-        "group": "radix",
+        "group": "path-hash",
         "since": "9.2.0",
         "arity": -3,
         "function": "phscanCommand",

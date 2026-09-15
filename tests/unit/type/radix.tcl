@@ -341,14 +341,14 @@ start_server {tags {radix}} {
         assert_equal $commands [lsort [r command list filterby aclcat radix]]
         foreach command $commands {
             assert_equal $command [lindex [lindex [r command info $command] 0] 0]
-            assert_equal radix [dict get [dict get [r command docs $command] $command] group]
+            assert_equal path-hash [dict get [dict get [r command docs $command] $command] group]
             set old_command "rax[string range $command 2 end]"
             assert_equal {{}} [r command info $old_command]
         }
     }
 
     test {Command metadata, ACL category, RESP3, and transactions expose the native type} {
-        assert_equal radix [dict get [dict get [r command docs phset] phset] group]
+        assert_equal path-hash [dict get [dict get [r command docs phset] phset] group]
         assert_equal 9.2.0 [dict get [dict get [r command docs phset] phset] since]
         assert {[lsearch -exact [r command list filterby aclcat radix] phset] >= 0}
         assert {[lsearch -exact [r acl cat radix] phprefixes] >= 0}

@@ -2,7 +2,7 @@
     "PHCARD": {
         "summary": "Returns the number of logical paths in a radix tree.",
         "complexity": "O(1).",
-        "group": "radix",
+        "group": "path-hash",
         "since": "9.2.0",
         "arity": 2,
         "function": "phcardCommand",

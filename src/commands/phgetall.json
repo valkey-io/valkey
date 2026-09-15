@@ -2,7 +2,7 @@
     "PHGETALL": {
         "summary": "Returns all field-value pairs at an exact radix-tree path.",
         "complexity": "O(L + O).",
-        "group": "radix",
+        "group": "path-hash",
         "since": "9.2.0",
         "arity": 3,
         "function": "phgetallCommand",

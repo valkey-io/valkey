@@ -13,27 +13,40 @@
 #define LZ4F_STATIC_LINKING_ONLY
 #include <lz4frame.h>
 
+/* The codec contexts allocate internal staging buffers lazily, so the memory
+ * they hold cannot be derived from the opaque context pointer alone. Each
+ * allocator callback receives a pointer to the owning stream's ctx_memory
+ * counter and keeps it equal to the usable bytes currently held by the
+ * context, exposing the total for memory accounting. */
 static void *lz4Zmalloc(void *opaque, size_t size) {
-    (void)opaque;
-    return zmalloc(size);
+    void *ptr = zmalloc(size);
+    *(size_t *)opaque += zmalloc_size(ptr);
+    return ptr;
 }
 
 static void *lz4Zcalloc(void *opaque, size_t size) {
-    (void)opaque;
-    return zcalloc(size);
+    void *ptr = zcalloc(size);
+    *(size_t *)opaque += zmalloc_size(ptr);
+    return ptr;
 }
 
 static void lz4Zfree(void *opaque, void *address) {
-    (void)opaque;
+    if (address == NULL) return;
+    *(size_t *)opaque -= zmalloc_size(address);
     zfree(address);
 }
 
-static const LZ4F_CustomMem lz4f_mem = {
-    .customAlloc = lz4Zmalloc,
-    .customCalloc = lz4Zcalloc,
-    .customFree = lz4Zfree,
-    .opaqueState = NULL,
-};
+/* The counter's address is captured by the context for its whole lifetime, so
+ * the owning stream struct must not move between init and free. */
+static LZ4F_CustomMem lz4CustomMem(size_t *ctx_memory) {
+    LZ4F_CustomMem mem = {
+        .customAlloc = lz4Zmalloc,
+        .customCalloc = lz4Zcalloc,
+        .customFree = lz4Zfree,
+        .opaqueState = ctx_memory,
+    };
+    return mem;
+}
 
 /* Shared bound-calc preferences. The actual compress level and checksum mode
  * are overridden per stream before LZ4F_compressBegin. */
@@ -50,7 +63,7 @@ static const LZ4F_preferences_t lz4f_prefs = {
 /* ===== Compressor ===== */
 
 int compressionLz4CompressorInit(streamCompressor *compressor) {
-    compressor->ctx = LZ4F_createCompressionContext_advanced(lz4f_mem, LZ4F_VERSION);
+    compressor->ctx = LZ4F_createCompressionContext_advanced(lz4CustomMem(&compressor->ctx_memory), LZ4F_VERSION);
     return compressor->ctx != NULL ? C_OK : C_ERR;
 }
 
@@ -128,7 +141,7 @@ void compressionLz4CompressorFree(streamCompressor *compressor) {
 /* ===== Decompressor ===== */
 
 int compressionLz4DecompressorInit(streamDecompressor *decompressor) {
-    decompressor->ctx = LZ4F_createDecompressionContext_advanced(lz4f_mem, LZ4F_VERSION);
+    decompressor->ctx = LZ4F_createDecompressionContext_advanced(lz4CustomMem(&decompressor->ctx_memory), LZ4F_VERSION);
     if (decompressor->ctx == NULL) return C_ERR;
     decompressor->input_hint = LZ4F_HEADER_SIZE_MIN;
     return C_OK;

@@ -157,6 +157,22 @@ tags "modules" {
             assert_equal {} [r get testkeyspace:exec]
         }
 
+        test {AOF load does not fire exec notification} {
+            r config set appendonly yes
+            r config set auto-aof-rewrite-percentage 0
+            waitForBgrewriteaof r
+
+            r del testkeyspace:exec
+            r multi
+            r set execnotify 1
+            assert_equal {OK} [r exec]
+            assert_equal 1 [r get testkeyspace:exec]
+
+            r debug loadaof
+            # Replay must not deliver a second exec notification.
+            assert_equal 1 [r get testkeyspace:exec]
+        } {} {needs:debug}
+
         test {COPY restores client DB after module keyspace notification} {
             # COPY fires a copy_to notification on the destination DB. The
             # module subscribes to NOTIFY_GENERIC, and the bug left the client

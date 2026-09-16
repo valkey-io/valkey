@@ -9460,7 +9460,7 @@ void moduleReleaseGIL(void) {
  *                             delivered during the transaction. Unlike those
  *                             in-transaction notifications, the client may be
  *                             blocked from this callback. DISCARD, EXECABORT,
- *                             and WATCH failures do not emit this event.
+ *                             WATCH failures, and AOF replay do not emit this event.
  *
  * We do not distinguish between key events and keyspace events, and it is up
  * to the module to filter the actions taken based on the key.

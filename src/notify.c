@@ -171,6 +171,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
 void notifyModulesExecEnded(client *c) {
     robj *key;
 
+    if (c->id == CLIENT_ID_AOF) return;
     if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
 
     /* Dummy key: the notification callback always takes one. */

@@ -63,7 +63,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Client-side tracking no longer records routing-only tokens such as the CLUSTERSCAN cursor as tracked keys by @nmvk (#3699)
 * Reject malformed slot entries in the cluster config file as a corrupt config instead of asserting or invoking undefined behavior by @enjoy-binbin (#4100)
 * Fix a TLS busy loop that consumed 100% CPU when a connection's read or write handler was removed while OpenSSL was waiting for the opposite event by @yairgott (#3510)
-* Fix SCAN in cluster mode skipping keys in the next slot after a previously scanned slot's hash table is emptied mid-iteration by @JimB123 (#4322)
 * Client eviction no longer disconnects extra clients when a large client's close is deferred but its memory is already scheduled to be freed by @dhruv2x (#4152)
 * Fix a crash caused by a NULL pointer dereference when all timer events in an event loop are pending deletion by @royenheart (#4351)
 * Rework iteration over clients blocked on ready keys to simplify and harden an earlier use-after-free fix by @enjoy-binbin (#4472)

@@ -69,7 +69,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Fix a race in RDB string compression that could produce corrupt, unloadable RDB files when compression runs concurrently, without increasing copy-on-write by @dubey02 (#4539)
 * Fix dropped field TTLs and a possible crash when loading a hash with field expiration converts it to a hashtable mid-load (e.g. via RESTORE) by @madolson (#4669)
 * Reject a repeated `CLUSTER SYNCSLOTS ESTABLISH` on the same connection, which could lead to a use-after-free crash on disconnect by @Pyolar (#4670)
-* Fix a crash in replication throttling caused by incorrect throttle-check ordering when clients are blocked and later unblocked by @harrylin98 (#4612)
 * Fix wrong `ZCOUNT` results and incorrect `ZREMRANGEBYSCORE` deletions when members sharing a boundary score span multiple btree leaves by @rainsupreme (#4554)
 * Fix `SORT` key extraction so a `STORE` destination named like an option can no longer bypass ACL checks and write to an unauthorized key by @madolson (#4665)
 

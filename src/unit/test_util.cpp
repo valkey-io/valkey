@@ -369,6 +369,19 @@ TEST_F(UtilTest, TestWritePointerWithPadding) {
 
 extern "C" void nolocks_localtime(struct tm *tmp, time_t t, long utc_offset);
 
+/* Whether this host's tz database knows the zone TZ is currently set to. An
+ * unknown zone makes localtime_r() fall back to UTC silently, so a test that
+ * compares two libc-derived values would pass without covering the zone. Every
+ * non-UTC zone used by the tests below is away from UTC at 2026-07-15 03:00Z
+ * (Dublin is at +01:00 in July), so a wall clock of 03:00 there means UTC. */
+static int tzKnownToHost(const char *tz) {
+    const time_t jul15 = 1784084400;
+    if (strcmp(tz, "UTC") == 0) return 1;
+    struct tm probe;
+    localtime_r(&jul15, &probe);
+    return !(probe.tm_hour == 3 && probe.tm_min == 0);
+}
+
 /* utcOffsetFromLocaltime() must return the actual offset of local time east of
  * UTC, with whatever daylight-saving shape tzdata applies. The zones below cover
  * the cases a "standard offset + 3600 * tm_isdst" model gets wrong: Europe/Dublin
@@ -407,16 +420,14 @@ TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
 
     const char *saved_tz = getenv("TZ");
     sds saved = saved_tz ? sdsnew(saved_tz) : NULL;
+    int zones_covered = 0;
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         const Case *c = &cases[i];
         setenv("TZ", c->tz, 1);
         tzset();
-        /* Skip zones this system's tz database does not know: localtime would silently fall back to UTC,
-         * and none of the non-UTC zones above is at +00:00 on 2026-07-15. */
-        struct tm probe;
-        localtime_r(&jul15, &probe);
-        if (strcmp(c->tz, "UTC") != 0 && probe.tm_hour == 3 && probe.tm_min == 0) continue;
+        if (!tzKnownToHost(c->tz)) continue;
+        zones_covered++;
 
         EXPECT_EQ(utcOffsetFromLocaltime(jan15), c->jan_east) << c->tz << " at 2026-01-15";
         EXPECT_EQ(utcOffsetFromLocaltime(jul15), c->jul_east) << c->tz << " at 2026-07-15";
@@ -442,6 +453,8 @@ TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
         unsetenv("TZ");
     tzset();
     sdsfree(saved);
+    /* UTC alone proves nothing about daylight-saving handling. */
+    if (zones_covered <= 1) GTEST_SKIP() << "host tz database has none of the zones under test";
 }
 
 extern "C" void formatTimezone(char *buf, size_t buflen, long utc_offset);
@@ -477,11 +490,14 @@ TEST_F(UtilTest, TestUpdateCachedTimeRefreshesUtcOffset) {
     const char *zones[] = {"UTC", "America/St_Johns", "Europe/Dublin", "Australia/Lord_Howe"};
     const char *saved_tz = getenv("TZ");
     sds saved = saved_tz ? sdsnew(saved_tz) : NULL;
+    int zones_covered = 0;
 
     for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
         const char *tz = zones[i];
         setenv("TZ", tz, 1);
         tzset();
+        if (!tzKnownToHost(tz)) continue;
+        zones_covered++;
         updateCachedTime(1);
         time_t now = server.unixtime;
         long cached = server.utc_offset; /* plain read: the test build maps _Atomic(T) to T */
@@ -502,4 +518,5 @@ TEST_F(UtilTest, TestUpdateCachedTimeRefreshesUtcOffset) {
     tzset();
     updateCachedTime(1);
     sdsfree(saved);
+    if (zones_covered <= 1) GTEST_SKIP() << "host tz database has none of the zones under test";
 }

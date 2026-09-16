@@ -57,6 +57,7 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -867,6 +868,8 @@ typedef struct {
     time_t ca_cert_dir_mtime;
     ino_t key_file_inode;
     time_t key_file_mtime;
+    ino_t alt_key_file_inode;
+    time_t alt_key_file_mtime;
     ino_t client_key_file_inode;
     time_t client_key_file_mtime;
 } tlsMaterialsMetadata;
@@ -930,6 +933,10 @@ static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMeta
         metadata->key_file_inode = st.st_ino;
         metadata->key_file_mtime = st.st_mtime;
     }
+    if (ctx_config->alt_key_file && stat(ctx_config->alt_key_file, &st) == 0) {
+        metadata->alt_key_file_inode = st.st_ino;
+        metadata->alt_key_file_mtime = st.st_mtime;
+    }
     if (ctx_config->client_key_file && stat(ctx_config->client_key_file, &st) == 0) {
         metadata->client_key_file_inode = st.st_ino;
         metadata->client_key_file_mtime = st.st_mtime;
@@ -964,6 +971,9 @@ static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMe
         return 1;
     }
     if (old->key_file_inode != new->key_file_inode || old->key_file_mtime != new->key_file_mtime) {
+        return 1;
+    }
+    if (old->alt_key_file_inode != new->alt_key_file_inode || old->alt_key_file_mtime != new->alt_key_file_mtime) {
         return 1;
     }
     if (old->client_key_file_inode != new->client_key_file_inode || old->client_key_file_mtime != new->client_key_file_mtime) {

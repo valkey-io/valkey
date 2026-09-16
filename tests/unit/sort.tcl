@@ -245,7 +245,17 @@ foreach command {SORT SORT_RO} {
                     assert_encoding $enc zset
                     assert_equal [r $command zset by nosort desc limit 1 2] {b e}
                     assert_encoding $enc zset
+                }
+            }
+        }
+
+        test "$command with BY and GET patterns does not change the encoding of a sorted set" {
+            foreach {maxentries enc} {128 listpack 0 btree} {
+                with_config zset-max-ziplist-entries $maxentries {
+                    r del zset
+                    r zadd zset 1 a 5 b 2 c 10 d 3 e
                     r mset w_a 3 w_b 1 w_c 2 w_d 5 w_e 4
+                    assert_encoding $enc zset
                     assert_equal [r $command zset by w_*] {b c a e d}
                     assert_encoding $enc zset
                     assert_equal [r $command zset by nosort get w_*] {3 2 4 1 5}
@@ -254,7 +264,7 @@ foreach command {SORT SORT_RO} {
                     assert_encoding $enc zset
                 }
             }
-        }
+        } {} {cluster:skip}
 
         test "$command sorted set with integer members (listpack and btree)" {
             foreach {maxentries enc} {128 listpack 0 btree} {

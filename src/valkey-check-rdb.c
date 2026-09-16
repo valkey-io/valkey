@@ -392,9 +392,9 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         streamIteratorStop(&si);
         statsRecordCount(streamLength(o), stats);
     } else if (o->type == OBJ_PATH_HASH) {
-        radixObject *radix = objectGetVal(o);
+        pathHashObject *path_hash = objectGetVal(o);
         raxIterator paths;
-        raxStart(&paths, radix->index);
+        raxStart(&paths, path_hash->index);
         raxSeek(&paths, "^", NULL, 0);
         while (raxNext(&paths)) {
             size_t element_size = paths.key_len;
@@ -411,7 +411,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
             statsRecordElementSize(element_size, 1, stats);
         }
         raxStop(&paths);
-        statsRecordCount(raxSize(radix->index), stats);
+        statsRecordCount(raxSize(path_hash->index), stats);
     } else if (o->type == OBJ_MODULE) {
         statsRecordCount(1, stats);
     } else {

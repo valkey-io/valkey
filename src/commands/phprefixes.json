@@ -7,7 +7,7 @@
         "arity": -3,
         "function": "phprefixesCommand",
         "command_flags": ["READONLY"],
-        "acl_categories": ["PATH-HASH", "READ", "SLOW"],
+        "acl_categories": ["PATHHASH", "READ", "SLOW"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {
             "description": "Matching ancestor paths in shortest-to-longest order, optionally with values.",
@@ -43,7 +43,7 @@
                 ]}
             ]},
             {"name": "count", "summary": "Hard limit on the number of deepest matches, from 1 to LONG_MAX of the server build. Out-of-range values return an error.", "type": "integer", "token": "COUNT", "optional": true},
-            {"name": "max-path-bytes", "summary": "Maximum path length in bytes, from 0 to LONG_MAX of the server build, applied before COUNT. Out-of-range values return an error.", "type": "integer", "token": "MAXLEN", "optional": true}
+            {"name": "max-path-bytes", "summary": "Maximum path length in bytes, from 0 to LONG_MAX of the server build, applied before COUNT. Out-of-range values return an error.", "type": "integer", "token": "MAXPATHLEN", "optional": true}
         ]
     }
 }

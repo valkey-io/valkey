@@ -7,7 +7,7 @@
         "arity": 3,
         "function": "phexistsCommand",
         "command_flags": ["READONLY", "FAST"],
-        "acl_categories": ["PATH-HASH", "READ", "FAST"],
+        "acl_categories": ["PATHHASH", "READ", "FAST"],
         "key_specs": [{
             "flags": ["RO", "ACCESS"],
             "begin_search": {"index": {"pos": 1}},

@@ -780,7 +780,7 @@ void decrRefCount(robj *o) {
             case OBJ_HASH: freeHashObject(o); break;
             case OBJ_MODULE: freeModuleObject(o); break;
             case OBJ_STREAM: freeStreamObject(o); break;
-            case OBJ_PATH_HASH: freeRadixObject(o); break;
+            case OBJ_PATH_HASH: freePathHashObject(o); break;
             default: serverPanic("Unknown object type"); break;
             }
         }
@@ -1494,7 +1494,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
         }
     } else if (objectGetType(o) == OBJ_PATH_HASH) {
-        asize += radixTypeMemUsage(o, sample_size);
+        asize += pathHashTypeMemUsage(o, sample_size);
     } else if (objectGetType(o) == OBJ_MODULE) {
         asize += moduleGetMemUsage(key, o, sample_size, dbid);
     } else {

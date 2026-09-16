@@ -6,61 +6,61 @@
 
 #include "server.h"
 
-typedef enum radixReplyMode {
-    RADIX_REPLY_PATH,
-    RADIX_REPLY_LENGTH,
-} radixReplyMode;
+typedef enum pathHashReplyMode {
+    PATH_HASH_REPLY_PATH,
+    PATH_HASH_REPLY_LENGTH,
+} pathHashReplyMode;
 
-typedef enum radixValueMode {
-    RADIX_VALUES_NONE,
-    RADIX_VALUES_ALL,
-    RADIX_VALUES_FIELDS,
-} radixValueMode;
+typedef enum pathHashValueMode {
+    PATH_HASH_VALUES_NONE,
+    PATH_HASH_VALUES_ALL,
+    PATH_HASH_VALUES_FIELDS,
+} pathHashValueMode;
 
-typedef struct radixMatch {
+typedef struct pathHashMatch {
     size_t path_len;
     robj *payload;
-} radixMatch;
+} pathHashMatch;
 
-typedef struct radixMatchList {
-    radixMatch *items;
+typedef struct pathHashMatchList {
+    pathHashMatch *items;
     size_t len;
     size_t cap;
     size_t head;
     size_t limit;
     size_t max_path_len;
-} radixMatchList;
+} pathHashMatchList;
 
-typedef struct radixScanEntry {
+typedef struct pathHashScanEntry {
     sds path;
     robj *payload;
-} radixScanEntry;
+} pathHashScanEntry;
 
-#define RADIX_DELETE_CHUNK_SIZE 256
+#define PATH_HASH_DELETE_CHUNK_SIZE 256
 
-static void freeRadixPayload(void *data) {
+static void freePathHashPayload(void *data) {
     decrRefCount(data);
 }
 
-robj *createRadixObject(void) {
-    radixObject *radix = zmalloc(sizeof(*radix));
-    radix->index = raxNew();
-    radix->num_fields = 0;
-    robj *o = createObject(OBJ_PATH_HASH, radix);
+robj *createPathHashObject(void) {
+    pathHashObject *path_hash = zmalloc(sizeof(*path_hash));
+    path_hash->index = raxNew();
+    path_hash->num_fields = 0;
+    robj *o = createObject(OBJ_PATH_HASH, path_hash);
     objectSetEncoding(o, OBJ_ENCODING_PATH_HASH);
     return o;
 }
 
-void freeRadixObject(robj *o) {
-    radixObject *radix = objectGetVal(o);
-    raxFreeWithCallback(radix->index, freeRadixPayload);
-    zfree(radix);
+void freePathHashObject(robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
+    raxFreeWithCallback(path_hash->index, freePathHashPayload);
+    zfree(path_hash);
 }
 
-robj *radixTypeDup(robj *o) {
-    radixObject *source = objectGetVal(o);
-    robj *copy = createRadixObject();
-    radixObject *target = objectGetVal(copy);
+robj *pathHashTypeDup(robj *o) {
+    pathHashObject *source = objectGetVal(o);
+    robj *copy = createPathHashObject();
+    pathHashObject *target = objectGetVal(copy);
     raxIterator iter;
 
     raxStart(&iter, source->index);
@@ -74,29 +74,29 @@ robj *radixTypeDup(robj *o) {
     return copy;
 }
 
-size_t radixTypeMemUsage(robj *o, size_t sample_size) {
-    radixObject *radix = objectGetVal(o);
-    size_t size = sizeof(*radix) + raxAllocSize(radix->index);
+size_t pathHashTypeMemUsage(robj *o, size_t sample_size) {
+    pathHashObject *path_hash = objectGetVal(o);
+    size_t size = sizeof(*path_hash) + raxAllocSize(path_hash->index);
     size_t payload_size = 0;
     size_t samples = 0;
     raxIterator iter;
 
-    raxStart(&iter, radix->index);
+    raxStart(&iter, path_hash->index);
     raxSeek(&iter, "^", NULL, 0);
     while (samples < sample_size && raxNext(&iter)) {
         payload_size += objectComputeSize(NULL, iter.data, sample_size, -1);
         samples++;
     }
     raxStop(&iter);
-    if (samples) size += (double)payload_size / samples * raxSize(radix->index);
+    if (samples) size += (double)payload_size / samples * raxSize(path_hash->index);
     return size;
 }
 
-void radixTypeDigest(unsigned char *digest, robj *o) {
-    radixObject *radix = objectGetVal(o);
+void pathHashTypeDigest(unsigned char *digest, robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
     raxIterator paths;
 
-    raxStart(&paths, radix->index);
+    raxStart(&paths, path_hash->index);
     raxSeek(&paths, "^", NULL, 0);
     while (raxNext(&paths)) {
         hashTypeIterator fields;
@@ -117,16 +117,16 @@ void radixTypeDigest(unsigned char *digest, robj *o) {
     raxStop(&paths);
 }
 
-static robj *radixLookupPayload(robj *o, robj *path) {
+static robj *pathHashLookupPayload(robj *o, robj *path) {
     if (o == NULL) return NULL;
-    radixObject *radix = objectGetVal(o);
+    pathHashObject *path_hash = objectGetVal(o);
     void *payload = NULL;
     sds pathstr = objectGetVal(path);
-    if (!raxFind(radix->index, (unsigned char *)pathstr, sdslen(pathstr), &payload)) return NULL;
+    if (!raxFind(path_hash->index, (unsigned char *)pathstr, sdslen(pathstr), &payload)) return NULL;
     return payload;
 }
 
-static void radixReplyPayload(client *c, robj *payload) {
+static void pathHashReplyPayload(client *c, robj *payload) {
     /* A payload is a field/value map, so reply like HGETALL does: a map in
      * RESP3 and a flat array in RESP2. */
     addReplyMapLen(c, hashTypeLength(payload));
@@ -139,7 +139,7 @@ static void radixReplyPayload(client *c, robj *payload) {
     hashTypeResetIterator(&iter);
 }
 
-static void radixReplyField(client *c, robj *payload, robj *field) {
+static void pathHashReplyField(client *c, robj *payload, robj *field) {
     robj *value = payload ? hashTypeGetValueObject(payload, objectGetVal(field)) : NULL;
     if (value) {
         addReplyBulk(c, value);
@@ -149,42 +149,40 @@ static void radixReplyField(client *c, robj *payload, robj *field) {
     }
 }
 
-static void radixReplyFields(client *c, robj *payload, robj **fields, long numfields) {
+static void pathHashReplyFields(client *c, robj *payload, robj **fields, long numfields) {
     addReplyArrayLen(c, numfields);
-    for (long i = 0; i < numfields; i++) radixReplyField(c, payload, fields[i]);
+    for (long i = 0; i < numfields; i++) pathHashReplyField(c, payload, fields[i]);
 }
 
-static void radixReplyMatch(client *c,
-                            robj *query,
-                            size_t path_len,
-                            robj *payload,
-                            radixReplyMode reply_mode,
-                            radixValueMode value_mode,
-                            robj **fields,
-                            long numfields) {
-    if (value_mode != RADIX_VALUES_NONE) addReplyArrayLen(c, 2);
-    if (reply_mode == RADIX_REPLY_LENGTH)
+static void pathHashReplyMatch(client *c,
+                               robj *query,
+                               size_t path_len,
+                               robj *payload,
+                               pathHashReplyMode reply_mode,
+                               pathHashValueMode value_mode,
+                               robj **fields,
+                               long numfields) {
+    if (value_mode != PATH_HASH_VALUES_NONE) addReplyArrayLen(c, 2);
+    if (reply_mode == PATH_HASH_REPLY_LENGTH)
         addReplyLongLong(c, path_len);
     else
         addReplyBulkCBuffer(c, objectGetVal(query), path_len);
 
-    if (value_mode == RADIX_VALUES_ALL)
-        radixReplyPayload(c, payload);
-    else if (value_mode == RADIX_VALUES_FIELDS)
-        radixReplyFields(c, payload, fields, numfields);
+    if (value_mode == PATH_HASH_VALUES_ALL)
+        pathHashReplyPayload(c, payload);
+    else if (value_mode == PATH_HASH_VALUES_FIELDS)
+        pathHashReplyFields(c, payload, fields, numfields);
 }
 
-static robj *radixCreatePayload(radixObject *radix, robj *path) {
+static robj *pathHashCreatePayload(pathHashObject *path_hash, robj *path) {
     robj *payload = createHashObject();
     sds pathstr = objectGetVal(path);
-    if (!raxInsert(radix->index, (unsigned char *)pathstr, sdslen(pathstr), payload, NULL)) {
-        decrRefCount(payload);
-        return NULL;
-    }
+    /* The caller has already checked that this path does not exist. */
+    serverAssert(raxInsert(path_hash->index, (unsigned char *)pathstr, sdslen(pathstr), payload, NULL));
     return payload;
 }
 
-static void radixSetField(radixObject *radix, robj *payload, robj *field, robj *value) {
+static void pathHashSetField(pathHashObject *path_hash, robj *payload, robj *field, robj *value) {
     bool expired_overwritten = false;
     int updated = hashTypeSet(payload,
                               objectGetVal(field),
@@ -193,7 +191,7 @@ static void radixSetField(radixObject *radix, robj *payload, robj *field, robj *
                               HASH_SET_COPY,
                               &expired_overwritten);
     serverAssert(!expired_overwritten);
-    if (!updated) radix->num_fields++;
+    if (!updated) path_hash->num_fields++;
 }
 
 /* Validate one or more groups in the following form before the caller emits
@@ -202,7 +200,7 @@ static void radixSetField(radixObject *radix, robj *payload, robj *field, robj *
  *     path FIELDS numfields field [value] [field [value] ...]
  *
  * Values are present for PHMSET and omitted for PHMGET. */
-static int radixValidateFieldGroups(client *c, int with_values, long long *total_fields) {
+static int pathHashValidateFieldGroups(client *c, int with_values, long long *total_fields) {
     int stride = with_values ? 2 : 1;
     int argpos = 2;
     *total_fields = 0;
@@ -253,7 +251,7 @@ void phsetCommand(client *c) {
 
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
-    robj *payload = radixLookupPayload(o, c->argv[2]);
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
     if (fnx || fxx) {
         for (long i = 0; i < numfields; i++) {
             int field_exists = payload && hashTypeExists(payload, objectGetVal(c->argv[fields_index + i * 2]));
@@ -264,24 +262,18 @@ void phsetCommand(client *c) {
         }
     }
 
-    /* Build the tree before publishing it in the keyspace, so a failed path
-     * insertion cannot leave subscribers with a key that never existed. */
+    /* Build the payload before publishing the tree to keyspace subscribers. */
     int created_tree = 0;
     if (o == NULL) {
-        o = createRadixObject();
+        o = createPathHashObject();
         created_tree = 1;
     }
-    radixObject *radix = objectGetVal(o);
+    pathHashObject *path_hash = objectGetVal(o);
     if (payload == NULL) {
-        payload = radixCreatePayload(radix, c->argv[2]);
-        if (payload == NULL) {
-            if (created_tree) decrRefCount(o);
-            addReplyError(c, "failed to allocate path-hash path");
-            return;
-        }
+        payload = pathHashCreatePayload(path_hash, c->argv[2]);
     }
     for (long i = 0; i < numfields; i++)
-        radixSetField(radix, payload, c->argv[fields_index + i * 2], c->argv[fields_index + i * 2 + 1]);
+        pathHashSetField(path_hash, payload, c->argv[fields_index + i * 2], c->argv[fields_index + i * 2 + 1]);
 
     /* Publish the key only now that it carries the field: dbAdd() fires the
      * "new" keyspace event and module subscribers run synchronously. */
@@ -295,31 +287,26 @@ void phsetCommand(client *c) {
 
 void phmsetCommand(client *c) {
     long long assignments;
-    if (radixValidateFieldGroups(c, 1, &assignments) != C_OK) return;
+    if (pathHashValidateFieldGroups(c, 1, &assignments) != C_OK) return;
 
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
     int created_tree = 0;
     if (o == NULL) {
-        o = createRadixObject();
+        o = createPathHashObject();
         created_tree = 1;
     }
-    radixObject *radix = objectGetVal(o);
+    pathHashObject *path_hash = objectGetVal(o);
     for (int argpos = 2; argpos < c->argc;) {
         long long numfields;
         serverAssert(getLongLongFromObject(c->argv[argpos + 2], &numfields) == C_OK);
         int fields_index = argpos + 3;
-        robj *payload = radixLookupPayload(o, c->argv[argpos]);
+        robj *payload = pathHashLookupPayload(o, c->argv[argpos]);
         if (payload == NULL) {
-            payload = radixCreatePayload(radix, c->argv[argpos]);
-            if (payload == NULL) {
-                if (created_tree) decrRefCount(o);
-                addReplyError(c, "failed to allocate path-hash path");
-                return;
-            }
+            payload = pathHashCreatePayload(path_hash, c->argv[argpos]);
         }
         for (long long i = 0; i < numfields; i++)
-            radixSetField(radix, payload, c->argv[fields_index + i * 2], c->argv[fields_index + i * 2 + 1]);
+            pathHashSetField(path_hash, payload, c->argv[fields_index + i * 2], c->argv[fields_index + i * 2 + 1]);
         argpos = fields_index + numfields * 2;
     }
     if (created_tree) dbAdd(c->db, c->argv[1], &o);
@@ -332,16 +319,13 @@ void phmsetCommand(client *c) {
 void phgetCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
-    robj *payload = radixLookupPayload(o, c->argv[2]);
-    if (c->argc == 4)
-        radixReplyField(c, payload, c->argv[3]);
-    else
-        radixReplyFields(c, payload, c->argv + 3, c->argc - 3);
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
+    pathHashReplyFields(c, payload, c->argv + 3, c->argc - 3);
 }
 
 void phmgetCommand(client *c) {
     long long total_fields;
-    if (radixValidateFieldGroups(c, 0, &total_fields) != C_OK) return;
+    if (pathHashValidateFieldGroups(c, 0, &total_fields) != C_OK) return;
 
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
@@ -350,8 +334,8 @@ void phmgetCommand(client *c) {
         long long numfields;
         serverAssert(getLongLongFromObject(c->argv[argpos + 2], &numfields) == C_OK);
         int fields_index = argpos + 3;
-        robj *payload = radixLookupPayload(o, c->argv[argpos]);
-        for (long long i = 0; i < numfields; i++) radixReplyField(c, payload, c->argv[fields_index + i]);
+        robj *payload = pathHashLookupPayload(o, c->argv[argpos]);
+        for (long long i = 0; i < numfields; i++) pathHashReplyField(c, payload, c->argv[fields_index + i]);
         argpos = fields_index + numfields;
     }
 }
@@ -359,9 +343,9 @@ void phmgetCommand(client *c) {
 void phgetallCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
-    robj *payload = radixLookupPayload(o, c->argv[2]);
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
     if (payload)
-        radixReplyPayload(c, payload);
+        pathHashReplyPayload(c, payload);
     else
         addReply(c, shared.emptymap[c->resp]);
 }
@@ -369,7 +353,7 @@ void phgetallCommand(client *c) {
 void phexistsCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
-    addReplyLongLong(c, radixLookupPayload(o, c->argv[2]) != NULL);
+    addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);
 }
 
 void phdelCommand(client *c) {
@@ -379,8 +363,8 @@ void phdelCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    radixObject *radix = objectGetVal(o);
-    robj *payload = radixLookupPayload(o, c->argv[2]);
+    pathHashObject *path_hash = objectGetVal(o);
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
     if (payload == NULL) {
         addReply(c, shared.czero);
         return;
@@ -389,19 +373,19 @@ void phdelCommand(client *c) {
     long long deleted = 0;
     if (c->argc == 3) {
         deleted = 1;
-        radix->num_fields -= hashTypeLength(payload);
+        path_hash->num_fields -= hashTypeLength(payload);
     } else {
         for (int i = 3; i < c->argc; i++) {
             if (hashTypeDelete(payload, objectGetVal(c->argv[i]))) {
                 deleted++;
-                radix->num_fields--;
+                path_hash->num_fields--;
             }
         }
     }
     if (c->argc == 3 || hashTypeLength(payload) == 0) {
         sds path = objectGetVal(c->argv[2]);
         void *removed = NULL;
-        serverAssert(raxRemove(radix->index, (unsigned char *)path, sdslen(path), &removed));
+        serverAssert(raxRemove(path_hash->index, (unsigned char *)path, sdslen(path), &removed));
         decrRefCount(removed);
     }
     if (deleted) {
@@ -412,40 +396,40 @@ void phdelCommand(client *c) {
     addReplyLongLong(c, deleted);
 }
 
-static int radixParseMatchOptions(client *c,
-                                  int start,
-                                  int plural_length,
-                                  int allow_limits,
-                                  radixReplyMode *reply_mode,
-                                  radixValueMode *value_mode,
-                                  robj ***fields,
-                                  long *numfields,
-                                  long *count,
-                                  long *maxlen) {
-    *reply_mode = RADIX_REPLY_PATH;
-    *value_mode = RADIX_VALUES_NONE;
+static int pathHashParseMatchOptions(client *c,
+                                     int start,
+                                     int plural_length,
+                                     int allow_limits,
+                                     pathHashReplyMode *reply_mode,
+                                     pathHashValueMode *value_mode,
+                                     robj ***fields,
+                                     long *numfields,
+                                     long *count,
+                                     long *maxpathlen) {
+    *reply_mode = PATH_HASH_REPLY_PATH;
+    *value_mode = PATH_HASH_VALUES_NONE;
     *fields = NULL;
     *numfields = 0;
     *count = -1;
-    *maxlen = -1;
+    *maxpathlen = -1;
     for (int i = start; i < c->argc;) {
         char *arg = objectGetVal(c->argv[i]);
         if ((!plural_length && !strcasecmp(arg, "length")) ||
             (plural_length && !strcasecmp(arg, "lengths"))) {
-            if (*reply_mode == RADIX_REPLY_LENGTH) goto syntax;
-            *reply_mode = RADIX_REPLY_LENGTH;
+            if (*reply_mode == PATH_HASH_REPLY_LENGTH) goto syntax;
+            *reply_mode = PATH_HASH_REPLY_LENGTH;
             i++;
         } else if (!strcasecmp(arg, "withvalues")) {
-            if (*value_mode != RADIX_VALUES_NONE) goto syntax;
-            *value_mode = RADIX_VALUES_ALL;
+            if (*value_mode != PATH_HASH_VALUES_NONE) goto syntax;
+            *value_mode = PATH_HASH_VALUES_ALL;
             i++;
         } else if (!strcasecmp(arg, "fields")) {
-            if (*value_mode != RADIX_VALUES_NONE || i + 1 >= c->argc) goto syntax;
+            if (*value_mode != PATH_HASH_VALUES_NONE || i + 1 >= c->argc) goto syntax;
             long field_count;
             if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, &field_count, NULL) != C_OK)
                 return C_ERR;
             if (field_count > c->argc - i - 2) goto syntax;
-            *value_mode = RADIX_VALUES_FIELDS;
+            *value_mode = PATH_HASH_VALUES_FIELDS;
             *numfields = field_count;
             *fields = c->argv + i + 2;
             i += 2 + field_count;
@@ -454,9 +438,9 @@ static int radixParseMatchOptions(client *c,
             if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, count, NULL) != C_OK)
                 return C_ERR;
             i += 2;
-        } else if (allow_limits && !strcasecmp(arg, "maxlen")) {
-            if (*maxlen != -1 || i + 1 >= c->argc) goto syntax;
-            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 0, LONG_MAX, maxlen, NULL) != C_OK)
+        } else if (allow_limits && !strcasecmp(arg, "maxpathlen")) {
+            if (*maxpathlen != -1 || i + 1 >= c->argc) goto syntax;
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 0, LONG_MAX, maxpathlen, NULL) != C_OK)
                 return C_ERR;
             i += 2;
         } else {
@@ -471,12 +455,12 @@ syntax:
 }
 
 void phlongestCommand(client *c) {
-    radixReplyMode reply_mode;
-    radixValueMode value_mode;
+    pathHashReplyMode reply_mode;
+    pathHashValueMode value_mode;
     robj **fields;
     long numfields;
-    long count, maxlen;
-    if (radixParseMatchOptions(c, 3, 0, 0, &reply_mode, &value_mode, &fields, &numfields, &count, &maxlen) !=
+    long count, maxpathlen;
+    if (pathHashParseMatchOptions(c, 3, 0, 0, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen) !=
         C_OK)
         return;
 
@@ -486,11 +470,11 @@ void phlongestCommand(client *c) {
         addReplyNull(c);
         return;
     }
-    radixObject *radix = objectGetVal(o);
+    pathHashObject *path_hash = objectGetVal(o);
     sds query = objectGetVal(c->argv[2]);
     size_t matched_len;
     void *payload;
-    if (!raxFindLongestPrefix(radix->index,
+    if (!raxFindLongestPrefix(path_hash->index,
                               (unsigned char *)query,
                               sdslen(query),
                               &matched_len,
@@ -498,11 +482,11 @@ void phlongestCommand(client *c) {
         addReplyNull(c);
         return;
     }
-    radixReplyMatch(c, c->argv[2], matched_len, payload, reply_mode, value_mode, fields, numfields);
+    pathHashReplyMatch(c, c->argv[2], matched_len, payload, reply_mode, value_mode, fields, numfields);
 }
 
-static int radixCollectMatch(size_t path_len, void *data, void *context) {
-    radixMatchList *matches = context;
+static int pathHashCollectMatch(size_t path_len, void *data, void *context) {
+    pathHashMatchList *matches = context;
     if (path_len > matches->max_path_len) return 0;
     if (matches->len == matches->cap) {
         if (matches->cap < matches->limit) {
@@ -512,24 +496,24 @@ static int radixCollectMatch(size_t path_len, void *data, void *context) {
             matches->items = zrealloc(matches->items, matches->cap * sizeof(*matches->items));
         } else {
             /* COUNT retains the deepest matches in this circular buffer. */
-            matches->items[matches->head] = (radixMatch){path_len, data};
+            matches->items[matches->head] = (pathHashMatch){path_len, data};
             matches->head = (matches->head + 1) % matches->cap;
             return 1;
         }
     }
     size_t index = (matches->head + matches->len) % matches->cap;
-    matches->items[index] = (radixMatch){path_len, data};
+    matches->items[index] = (pathHashMatch){path_len, data};
     matches->len++;
     return 1;
 }
 
 void phprefixesCommand(client *c) {
-    radixReplyMode reply_mode;
-    radixValueMode value_mode;
+    pathHashReplyMode reply_mode;
+    pathHashValueMode value_mode;
     robj **fields;
     long numfields;
-    long count, maxlen;
-    if (radixParseMatchOptions(c, 3, 1, 1, &reply_mode, &value_mode, &fields, &numfields, &count, &maxlen) !=
+    long count, maxpathlen;
+    if (pathHashParseMatchOptions(c, 3, 1, 1, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen) !=
         C_OK)
         return;
 
@@ -539,36 +523,36 @@ void phprefixesCommand(client *c) {
         addReply(c, shared.emptyarray);
         return;
     }
-    radixObject *radix = objectGetVal(o);
+    pathHashObject *path_hash = objectGetVal(o);
     sds query = objectGetVal(c->argv[2]);
-    radixMatchList matches = {
+    pathHashMatchList matches = {
         .items = NULL,
         .len = 0,
         .cap = 0,
         .head = 0,
         .limit = count == -1 ? SIZE_MAX : (size_t)count,
-        .max_path_len = maxlen == -1 ? SIZE_MAX : (size_t)maxlen,
+        .max_path_len = maxpathlen == -1 ? SIZE_MAX : (size_t)maxpathlen,
     };
-    raxForEachPrefix(radix->index, (unsigned char *)query, sdslen(query), radixCollectMatch, &matches);
+    raxForEachPrefix(path_hash->index, (unsigned char *)query, sdslen(query), pathHashCollectMatch, &matches);
     addReplyArrayLen(c, matches.len);
     for (size_t i = 0; i < matches.len; i++) {
         size_t index = (matches.head + i) % matches.cap;
-        radixReplyMatch(c,
-                        c->argv[2],
-                        matches.items[index].path_len,
-                        matches.items[index].payload,
-                        reply_mode,
-                        value_mode,
-                        fields,
-                        numfields);
+        pathHashReplyMatch(c,
+                           c->argv[2],
+                           matches.items[index].path_len,
+                           matches.items[index].payload,
+                           reply_mode,
+                           value_mode,
+                           fields,
+                           numfields);
     }
     zfree(matches.items);
 }
 
-static int radixPathHasPrefix(const unsigned char *path,
-                              size_t path_len,
-                              const unsigned char *prefix,
-                              size_t prefix_len) {
+static int pathHashPathHasPrefix(const unsigned char *path,
+                                 size_t path_len,
+                                 const unsigned char *prefix,
+                                 size_t prefix_len) {
     return path_len >= prefix_len && memcmp(path, prefix, prefix_len) == 0;
 }
 
@@ -579,20 +563,16 @@ void phdelprefixCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    radixObject *radix = objectGetVal(o);
+    pathHashObject *path_hash = objectGetVal(o);
     sds prefix = objectGetVal(c->argv[2]);
     size_t prefix_len = sdslen(prefix);
     if (prefix_len == 0) {
-        long long deleted = raxSize(radix->index);
+        long long deleted = raxSize(path_hash->index);
         if (deleted) {
             rax *empty = raxNew();
-            if (empty == NULL) {
-                addReplyError(c, "failed to allocate empty path hash");
-                return;
-            }
-            raxFreeWithCallback(radix->index, freeRadixPayload);
-            radix->index = empty;
-            radix->num_fields = 0;
+            raxFreeWithCallback(path_hash->index, freePathHashPayload);
+            path_hash->index = empty;
+            path_hash->num_fields = 0;
             signalModifiedKey(c, c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
             server.dirty += deleted;
@@ -606,13 +586,13 @@ void phdelprefixCommand(client *c) {
      * complete matching subtree is still deleted synchronously by this command. */
     long long deleted = 0;
     while (1) {
-        sds paths[RADIX_DELETE_CHUNK_SIZE];
+        sds paths[PATH_HASH_DELETE_CHUNK_SIZE];
         size_t chunk_len = 0;
         raxIterator iter;
-        raxStart(&iter, radix->index);
+        raxStart(&iter, path_hash->index);
         raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
-        while (chunk_len < RADIX_DELETE_CHUNK_SIZE && raxNext(&iter) &&
-               radixPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) {
+        while (chunk_len < PATH_HASH_DELETE_CHUNK_SIZE && raxNext(&iter) &&
+               pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) {
             paths[chunk_len++] = sdsnewlen(iter.key, iter.key_len);
         }
         raxStop(&iter);
@@ -620,8 +600,8 @@ void phdelprefixCommand(client *c) {
 
         for (size_t i = 0; i < chunk_len; i++) {
             void *payload = NULL;
-            serverAssert(raxRemove(radix->index, (unsigned char *)paths[i], sdslen(paths[i]), &payload));
-            radix->num_fields -= hashTypeLength(payload);
+            serverAssert(raxRemove(path_hash->index, (unsigned char *)paths[i], sdslen(paths[i]), &payload));
+            path_hash->num_fields -= hashTypeLength(payload);
             decrRefCount(payload);
             sdsfree(paths[i]);
         }
@@ -635,14 +615,14 @@ void phdelprefixCommand(client *c) {
     addReplyLongLong(c, deleted);
 }
 
-static int radixHexDigit(unsigned char byte) {
+static int pathHashHexDigit(unsigned char byte) {
     if (byte >= '0' && byte <= '9') return byte - '0';
     if (byte >= 'a' && byte <= 'f') return byte - 'a' + 10;
     if (byte >= 'A' && byte <= 'F') return byte - 'A' + 10;
     return -1;
 }
 
-static sds radixDecodeCursor(client *c, robj *cursor, int *initial) {
+static sds pathHashDecodeCursor(client *c, robj *cursor, int *initial) {
     sds encoded = objectGetVal(cursor);
     size_t len = sdslen(encoded);
     if (len == 1 && encoded[0] == '0') {
@@ -653,8 +633,8 @@ static sds radixDecodeCursor(client *c, robj *cursor, int *initial) {
     if (len < 2 || encoded[0] != '1' || encoded[1] != ':' || ((len - 2) & 1)) goto invalid;
     sds decoded = sdsnewlen(NULL, (len - 2) / 2);
     for (size_t i = 2; i < len; i += 2) {
-        int high = radixHexDigit(encoded[i]);
-        int low = radixHexDigit(encoded[i + 1]);
+        int high = pathHashHexDigit(encoded[i]);
+        int low = pathHashHexDigit(encoded[i + 1]);
         if (high < 0 || low < 0) {
             sdsfree(decoded);
             goto invalid;
@@ -668,7 +648,7 @@ invalid:
     return NULL;
 }
 
-static sds radixEncodeCursor(const unsigned char *path, size_t len) {
+static sds pathHashEncodeCursor(const unsigned char *path, size_t len) {
     static const char hex[] = "0123456789abcdef";
     sds cursor = sdsnewlen(NULL, 2 + len * 2);
     cursor[0] = '1';
@@ -704,12 +684,12 @@ void phscanCommand(client *c) {
     }
 
     int initial;
-    sds previous = radixDecodeCursor(c, c->argv[2], &initial);
+    sds previous = pathHashDecodeCursor(c, c->argv[2], &initial);
     if (previous == NULL) return;
     sds prefix = prefix_arg ? objectGetVal(prefix_arg) : NULL;
     size_t prefix_len = prefix ? sdslen(prefix) : 0;
     if (!initial && prefix &&
-        !radixPathHasPrefix((unsigned char *)previous, sdslen(previous), (unsigned char *)prefix, prefix_len)) {
+        !pathHashPathHasPrefix((unsigned char *)previous, sdslen(previous), (unsigned char *)prefix, prefix_len)) {
         sdsfree(previous);
         addReplyError(c, "cursor does not belong to the requested prefix");
         return;
@@ -728,9 +708,9 @@ void phscanCommand(client *c) {
         return;
     }
 
-    radixObject *radix = objectGetVal(o);
+    pathHashObject *path_hash = objectGetVal(o);
     raxIterator iter;
-    raxStart(&iter, radix->index);
+    raxStart(&iter, path_hash->index);
     if (!initial)
         raxSeek(&iter, ">", (unsigned char *)previous, sdslen(previous));
     else if (prefix)
@@ -738,10 +718,10 @@ void phscanCommand(client *c) {
     else
         raxSeek(&iter, "^", NULL, 0);
 
-    radixScanEntry *entries = NULL;
+    pathHashScanEntry *entries = NULL;
     size_t returned = 0, cap = 0;
     while (returned < (size_t)count && raxNext(&iter)) {
-        if (prefix && !radixPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) break;
+        if (prefix && !pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) break;
         if (returned == cap) {
             cap = cap ? cap * 2 : 16;
             if (cap > (size_t)count) cap = count;
@@ -756,9 +736,9 @@ void phscanCommand(client *c) {
      * traversal with an extra empty call. */
     int has_more = 0;
     if (returned == (size_t)count && raxNext(&iter))
-        has_more = !prefix || radixPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len);
-    sds next_cursor = has_more ? radixEncodeCursor((unsigned char *)entries[returned - 1].path,
-                                                   sdslen(entries[returned - 1].path))
+        has_more = !prefix || pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len);
+    sds next_cursor = has_more ? pathHashEncodeCursor((unsigned char *)entries[returned - 1].path,
+                                                      sdslen(entries[returned - 1].path))
                                : sdsnew("0");
     raxStop(&iter);
     sdsfree(previous);
@@ -769,7 +749,7 @@ void phscanCommand(client *c) {
     for (size_t i = 0; i < returned; i++) {
         if (withvalues) addReplyArrayLen(c, 2);
         addReplyBulkCBuffer(c, entries[i].path, sdslen(entries[i].path));
-        if (withvalues) radixReplyPayload(c, entries[i].payload);
+        if (withvalues) pathHashReplyPayload(c, entries[i].payload);
         sdsfree(entries[i].path);
     }
     zfree(entries);
@@ -781,14 +761,14 @@ void phcardCommand(client *c) {
     if (o == NULL)
         addReply(c, shared.czero);
     else
-        addReplyLongLong(c, raxSize(((radixObject *)objectGetVal(o))->index));
+        addReplyLongLong(c, raxSize(((pathHashObject *)objectGetVal(o))->index));
 }
 
-int rewriteRadixObject(rio *r, robj *key, robj *o) {
-    radixObject *radix = objectGetVal(o);
+int rewritePathHashObject(rio *r, robj *key, robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
     raxIterator paths;
 
-    if (raxSize(radix->index) == 0) {
+    if (raxSize(path_hash->index) == 0) {
         /* As with XADD MAXLEN 0 for an empty stream, create a temporary
          * logical path and remove it again to reconstruct an empty path hash. */
         if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "PHSET", 5) ||
@@ -801,7 +781,7 @@ int rewriteRadixObject(rio *r, robj *key, robj *o) {
         return 1;
     }
 
-    raxStart(&paths, radix->index);
+    raxStart(&paths, path_hash->index);
     raxSeek(&paths, "^", NULL, 0);
     while (raxNext(&paths)) {
         hashTypeIterator fields;

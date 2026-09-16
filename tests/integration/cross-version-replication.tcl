@@ -146,7 +146,7 @@ start_server {tags {"repl needs:other-server external:skip"}} {
                 $new_replica replicaof $primary_host $primary_port
                 wait_for_sync $new_replica 500 100
                 wait_for_log_messages -2 [list {*Can't store key 'path-hash'*}] 0 50 100
-                assert_equal value [$new_replica phget path-hash path field]
+                assert_equal [list value] [$new_replica phget path-hash path field]
                 assert_match {*master_link_status:up*} [$new_replica info replication]
                 assert_match {*master_link_status:down*} [$old_replica info replication]
             }
@@ -163,7 +163,7 @@ start_server {tags {"repl needs:other-server external:skip"}} {
             set old_replica [srv 0 client]
             $old_replica replicaof $primary_host $primary_port
             wait_for_sync $old_replica 500 100
-            assert_equal value [$old_replica phget path-hash path field]
+            assert_equal [list value] [$old_replica phget path-hash path field]
         }
     }
 }

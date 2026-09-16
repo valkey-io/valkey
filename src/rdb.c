@@ -1205,12 +1205,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             raxStop(&ri);
         }
     } else if (objectGetType(o) == OBJ_PATH_HASH) {
-        radixObject *radix = objectGetVal(o);
-        if ((n = rdbSaveLen(rdb, raxSize(radix->index))) == -1) return -1;
+        pathHashObject *path_hash = objectGetVal(o);
+        if ((n = rdbSaveLen(rdb, raxSize(path_hash->index))) == -1) return -1;
         nwritten += n;
 
         raxIterator paths;
-        raxStart(&paths, radix->index);
+        raxStart(&paths, path_hash->index);
         raxSeek(&paths, "^", NULL, 0);
         while (raxNext(&paths)) {
             robj *payload = paths.data;
@@ -2592,8 +2592,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     } else if (rdbtype == RDB_TYPE_PATH_HASH) {
         uint64_t path_count = rdbLoadLen(rdb, NULL);
         if (path_count == RDB_LENERR) return NULL;
-        o = createRadixObject();
-        radixObject *radix = objectGetVal(o);
+        o = createPathHashObject();
+        pathHashObject *path_hash = objectGetVal(o);
 
         while (path_count--) {
             sds path = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
@@ -2609,8 +2609,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             robj *payload = createHashObject();
-            if (!raxTryInsert(radix->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
-                rdbReportCorruptRDB("Duplicate path-hash path or out of memory");
+            if (!raxTryInsert(path_hash->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
+                rdbReportCorruptRDB("Duplicate path-hash path");
                 sdsfree(path);
                 decrRefCount(payload);
                 decrRefCount(o);
@@ -2646,7 +2646,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     decrRefCount(o);
                     return NULL;
                 }
-                radix->num_fields++;
+                path_hash->num_fields++;
             }
         }
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST || rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {

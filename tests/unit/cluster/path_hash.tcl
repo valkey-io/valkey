@@ -8,7 +8,7 @@ start_cluster 1 1 {tags {path-hash external:skip cluster}} {
         set replica [srv -1 client]
         wait_for_ofs_sync $primary $replica
         $replica readonly
-        assert_equal generation-1 [$replica phget $key ab worker-a]
+        assert_equal [list generation-1] [$replica phget $key ab worker-a]
         assert_equal 2 [$replica phcard $key]
     }
 }

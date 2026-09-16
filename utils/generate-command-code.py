@@ -509,7 +509,7 @@ class Command(object):
         def _acl_categories_code():
             s = ""
             for cat in self.desc.get("acl_categories", []):
-                s += "ACL_CATEGORY_%s|" % cat.replace("-", "_")
+                s += "ACL_CATEGORY_%s|" % cat
             return s[:-1] if s else 0
 
         def _doc_flags_code():

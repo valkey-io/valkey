@@ -91,7 +91,7 @@ struct ACLCategoryItem {
     {"connection", ACL_CATEGORY_CONNECTION},
     {"transaction", ACL_CATEGORY_TRANSACTION},
     {"scripting", ACL_CATEGORY_SCRIPTING},
-    {"path-hash", ACL_CATEGORY_PATH_HASH},
+    {"pathhash", ACL_CATEGORY_PATHHASH},
     {NULL, 0} /* Terminator. */
 };
 

@@ -7,8 +7,8 @@ start_server {tags {path-hash}} {
         assert_equal path-hash [r type tree]
         assert_equal path-hash [r object encoding tree]
         assert_equal 1 [r phcard tree]
-        assert_equal $value [r phget tree $path $field]
-        assert_equal {} [r phget tree $path missing]
+        assert_equal [list $value] [r phget tree $path $field]
+        assert_equal [list {}] [r phget tree $path missing]
         assert_equal [list $value {}] [r phget tree $path $field missing]
         assert_equal 0 [r phcard missing]
     }
@@ -19,28 +19,28 @@ start_server {tags {path-hash}} {
         assert_equal 0 [r exists tree]
         assert_equal OK [r phset tree path fnx fields 2 f v second two]
         assert_equal {} [r phset tree path fnx fields 2 f replacement missing added]
-        assert_equal v [r phget tree path f]
-        assert_equal {} [r phget tree path missing]
+        assert_equal [list v] [r phget tree path f]
+        assert_equal [list {}] [r phget tree path missing]
         assert_equal OK [r phset tree path fnx fields 1 third three]
-        assert_equal three [r phget tree path third]
+        assert_equal [list three] [r phget tree path third]
         assert_equal {} [r phset tree path fxx fields 2 f replacement missing added]
-        assert_equal v [r phget tree path f]
-        assert_equal {} [r phget tree path missing]
+        assert_equal [list v] [r phget tree path f]
+        assert_equal [list {}] [r phget tree path missing]
         assert_equal OK [r phset tree path fxx fields 2 f replacement second updated]
-        assert_equal replacement [r phget tree path f]
-        assert_equal updated [r phget tree path second]
+        assert_equal [list replacement] [r phget tree path f]
+        assert_equal [list updated] [r phget tree path second]
         assert_equal OK [r phset tree path fields 2 duplicate first duplicate last]
-        assert_equal last [r phget tree path duplicate]
+        assert_equal [list last] [r phget tree path duplicate]
         assert_equal 1 [r phcard tree]
     }
 
     test {Exact path operations do not confuse ancestors and descendants} {
         r del tree
         r phmset tree a fields 1 f one ab fields 1 f two abc fields 1 f three
-        assert_equal one [r phget tree a f]
-        assert_equal two [r phget tree ab f]
-        assert_equal three [r phget tree abc f]
-        assert_equal {} [r phget tree abcd f]
+        assert_equal [list one] [r phget tree a f]
+        assert_equal [list two] [r phget tree ab f]
+        assert_equal [list three] [r phget tree abc f]
+        assert_equal [list {}] [r phget tree abcd f]
         assert_equal 3 [r phcard tree]
     }
 
@@ -111,27 +111,27 @@ start_server {tags {path-hash}} {
         assert_equal 0 [r phlongest tree zzz length]
     }
 
-    test {PHPREFIXES orders ancestors and applies MAXLEN before deepest COUNT} {
+    test {PHPREFIXES orders ancestors and applies MAXPATHLEN before deepest COUNT} {
         r del tree
         foreach path {{} a ab abc abcd} {
             r phset tree $path fields 1 f "value:$path"
         }
         assert_equal {0 1 2 3 4} [r phprefixes tree abcde lengths]
-        assert_equal {2 3} [r phprefixes tree abcde lengths count 2 maxlen 3]
+        assert_equal {2 3} [r phprefixes tree abcde lengths count 2 maxpathlen 3]
         assert_equal [list [list 2 [list value:ab]] [list 3 [list value:abc]]] \
-            [r phprefixes tree abcde lengths fields 1 f count 2 maxlen 3]
-        assert_equal [list {}] [r phprefixes tree zzz maxlen 0]
+            [r phprefixes tree abcde lengths fields 1 f count 2 maxpathlen 3]
+        assert_equal [list {}] [r phprefixes tree zzz maxpathlen 0]
         assert_equal [list {}] [r phprefixes tree zzz]
     }
 
-    test {PHPREFIXES validates COUNT and MAXLEN against the server long range} {
+    test {PHPREFIXES validates COUNT and MAXPATHLEN against the server long range} {
         r del tree
         r del missing
         foreach path {{} a ab} {
             r phset tree $path fields 1 f v
         }
         set long_max [expr {(1 << ([s arch_bits] - 1)) - 1}]
-        foreach option {count maxlen} {
+        foreach option {count maxpathlen} {
             assert_equal {0 1 2} [r phprefixes tree abc lengths $option $long_max]
             foreach value [list -1 [expr {$long_max + 1}] 9223372036854775808] {
                 foreach key {tree missing} {
@@ -153,8 +153,9 @@ start_server {tags {path-hash}} {
             assert_error ERR*syntax* {r phprefixes tree abc $option}
         }
         assert_error ERR*range* {r phprefixes tree abc count 0}
+        assert_error ERR*syntax* {r phprefixes tree abc maxlen 1}
         assert_equal {2} [r phprefixes tree abc lengths count 1]
-        assert_equal {0} [r phprefixes tree abc lengths maxlen 0]
+        assert_equal {0} [r phprefixes tree abc lengths maxpathlen 0]
         assert_equal {0 1 2} [r phprefixes tree abc lengths]
         assert_equal PONG [r ping]
     }
@@ -183,7 +184,7 @@ start_server {tags {path-hash}} {
         assert_equal {{} v2} [r phget tree a f1 f2]
         assert_equal 1 [r phdel tree a f2]
         assert_equal 1 [r phcard tree]
-        assert_equal child [r phget tree ab f]
+        assert_equal [list child] [r phget tree ab f]
         assert_equal 1 [r phdel tree ab]
         assert_equal 1 [r exists tree]
         assert_equal path-hash [r type tree]
@@ -330,7 +331,7 @@ start_server {tags {path-hash}} {
         assert_error ERR*syntax* {r phprefixes tree p length}
         assert_error ERR*range* {r phprefixes tree p fields 0}
         assert_error ERR*value*out*range* {r phprefixes tree p count 0}
-        assert_error ERR*value*out*range* {r phprefixes tree p maxlen -1}
+        assert_error ERR*value*out*range* {r phprefixes tree p maxpathlen -1}
         assert_error ERR*syntax* {r phprefixes tree p fields 2 only-one}
         assert_error ERR*invalid*cursor* {r phscan tree invalid}
         assert_error ERR*syntax* {r phscan tree 0 count 1 count 2}
@@ -339,14 +340,15 @@ start_server {tags {path-hash}} {
 
     test {Path Hash commands are registered with the PH prefix} {
         set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
-        assert_equal $commands [lsort [r command list filterby aclcat path-hash]]
+        assert_equal $commands [lsort [r command list filterby aclcat pathhash]]
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
             assert_equal $command [lindex [lindex [r command info $command] 0] 0]
             assert_equal path-hash [dict get [dict get [r command docs $command] $command] group]
             assert_match {*path hash*} [dict get [dict get [r command docs $command] $command] summary]
             set categories [lindex [lindex [r command info $command] 0] 6]
-            assert {"@path-hash" in $categories}
+            assert {"@pathhash" in $categories}
+            assert {"@path-hash" ni $categories}
             assert {"@radix" ni $categories}
             set old_command "rax[string range $command 2 end]"
             assert_equal {{}} [r command info $old_command]
@@ -355,14 +357,15 @@ start_server {tags {path-hash}} {
 
     test {Path Hash ACL category grants and revokes access to PH commands} {
         with_cleanup {
-            assert_equal OK [r acl setuser ph-user reset on nopass ~* +@path-hash]
+            assert_equal OK [r acl setuser ph-user reset on nopass ~* +@pathhash]
             assert_equal OK [r acl dryrun ph-user phset tree a fields 1 f v]
             assert_equal OK [r acl dryrun ph-user phget tree a f]
             assert_equal OK [r acl dryrun ph-user phscan tree 0]
             assert_match {*no permissions*} [r acl dryrun ph-user set tree value]
-            assert_equal OK [r acl setuser ph-user -@path-hash]
+            assert_equal OK [r acl setuser ph-user -@pathhash]
             assert_match {*no permissions*} [r acl dryrun ph-user phset tree a fields 1 f v]
             assert_error {*Unknown category*} {r acl cat radix}
+            assert_error {*Unknown category*} {r acl cat path-hash}
         } {
             r acl deluser ph-user
         }
@@ -371,10 +374,10 @@ start_server {tags {path-hash}} {
     test {Command metadata, ACL category, RESP3, and transactions expose the native type} {
         assert_equal path-hash [dict get [dict get [r command docs phset] phset] group]
         assert_equal 9.2.0 [dict get [dict get [r command docs phset] phset] since]
-        assert {[lsearch -exact [r command list filterby aclcat path-hash] phset] >= 0}
-        assert {[lsearch -exact [r acl cat path-hash] phprefixes] >= 0}
-        assert {[lsearch -exact [r acl cat path-hash] phmset] >= 0}
-        assert {[lsearch -exact [r acl cat path-hash] phexists] >= 0}
+        assert {[lsearch -exact [r command list filterby aclcat pathhash] phset] >= 0}
+        assert {[lsearch -exact [r acl cat pathhash] phprefixes] >= 0}
+        assert {[lsearch -exact [r acl cat pathhash] phmset] >= 0}
+        assert {[lsearch -exact [r acl cat pathhash] phexists] >= 0}
         assert {[lsearch -exact [r command list filterby aclcat slow] phdel] >= 0}
         assert {[lsearch -exact [r command list filterby aclcat fast] phdel] < 0}
         r del tree
@@ -389,7 +392,7 @@ start_server {tags {path-hash}} {
         assert_error {*unknown type name*} {r scan 0 type radix}
         r hello 3
         assert_equal {1 2} [r phprefixes tree abc lengths]
-        assert_equal two [r phget tree ab f]
+        assert_equal [list two] [r phget tree ab f]
         r hello 2
     }
 
@@ -398,6 +401,8 @@ start_server {tags {path-hash}} {
         r del missing
         r phset tree a fields 1 f1 v1
         foreach protocol {2 3} {
+            # The harness overrides HELLO 2 when RESP3 is forced.
+            if {$::force_resp3 && $protocol == 2} {continue}
             r hello $protocol
             set payload [list {*2} {$2} f1 {$2} v1]
             set empty {*0}
@@ -412,14 +417,28 @@ start_server {tags {path-hash}} {
             r readraw 1
             r deferred 1
             foreach {command expected} [list \
+                {phget tree a f1} [list {*1} {$2} v1] \
+                {phget tree a missing} [list {*1} $null] \
+                {phget tree missing f1} [list {*1} $null] \
+                {phget missing a f1} [list {*1} $null] \
+                {phget tree a f1 missing f1} [list {*3} {$2} v1 $null {$2} v1] \
+                {phmget tree a fields 1 f1} [list {*1} {$2} v1] \
+                {phmget missing a fields 1 f1} [list {*1} $null] \
                 {phgetall tree a} $payload \
                 {phgetall tree missing} [list $empty] \
                 {phgetall missing a} [list $empty] \
+                {phlongest tree a} [list {$1} a] \
+                {phlongest tree a length} [list {:1}] \
+                {phprefixes tree a} [list {*1} {$1} a] \
+                {phprefixes tree a lengths count 1 maxpathlen 1} [list {*1} {:1}] \
+                {phscan tree 0 count 1} [list {*2} {$1} 0 {*1} {$1} a] \
                 {phlongest tree a withvalues} $match \
                 {phlongest tree a length withvalues} [concat [list {*2} {:1}] $payload] \
                 {phprefixes tree a withvalues} [concat [list {*1}] $match] \
                 {phprefixes tree a lengths withvalues} [concat [list {*1} {*2} {:1}] $payload] \
                 {phscan tree 0 withvalues} [concat [list {*2} {$1} 0 {*1}] $match] \
+                {phlongest tree a fields 1 f1} [list {*2} {$1} a {*1} {$2} v1] \
+                {phprefixes tree a fields 1 f1} [list {*1} {*2} {$1} a {*1} {$2} v1] \
                 {phlongest tree a fields 2 f1 missing} $fields \
                 {phprefixes tree a fields 2 f1 missing} [concat [list {*1}] $fields] \
                 {phlongest tree z withvalues} [list $null] \
@@ -439,6 +458,29 @@ start_server {tags {path-hash}} {
             r hello 2
         }
         assert_equal {f1 v1} [r phgetall tree a]
+    } {} {resp3}
+
+    test {PHGET distinguishes empty strings from missing fields inside arrays} {
+        r del tree
+        r phset tree a fields 1 f {}
+        foreach protocol {2 3} {
+            if {$::force_resp3 && $protocol == 2} {continue}
+            r hello $protocol
+            set null {$-1}
+            if {$protocol == 3} {set null {_}}
+            r readraw 1
+            r deferred 1
+            foreach {command expected} [list \
+                {phget tree a f} [list {*1} {$0} {}] \
+                {phget tree a f missing} [list {*2} {$0} {} $null]] {
+                r {*}$command
+                foreach line $expected {assert_equal $line [r read]}
+            }
+            r readraw 0
+            r deferred 0
+        }
+        if {$::force_resp3} {r hello 3} else {r hello 2}
+        assert_equal [list {} {}] [r phget tree a f missing]
     } {} {resp3}
 
     test {Path hash keyspace notifications use the p class} {
@@ -506,17 +548,34 @@ start_server {tags {path-hash}} {
         r phset $tree {} fields 1 root value
         r phset $tree abc fields 2 f1 v1 f2 v2
         assert_match {*encoding:path-hash*} [r debug object $tree]
+        # DIGEST-VALUE includes whether a key has a TTL. Compare persistent
+        # values below, while testing COPY's TTL preservation separately.
+        set digest_before [r debug digest-value $tree]
         r pexpire $tree 60000
-        set digest_before [r debug digest]
         assert {[r memory usage $tree] > 0}
         assert_equal 1 [r copy $tree $tree_copy]
         assert {[r pttl $tree_copy] > 0}
+        assert_equal 1 [r persist $tree_copy]
         assert_equal {root value} [r phgetall $tree_copy {}]
         assert_equal 2 [r phcard $tree_copy]
         set dumped [r dump $tree]
         assert_equal OK [r restore $tree_restored 0 $dumped]
         assert_equal [r phprefixes $tree abc withvalues] [r phprefixes $tree_restored abc withvalues]
-        assert {$digest_before ne ""}
+        assert_equal $digest_before [r debug digest-value $tree_copy]
+        assert_equal $digest_before [r debug digest-value $tree_restored]
+
+        # The digest must ignore insertion order, but include every path,
+        # field and value. These changes preserve the number of entries.
+        r del $tree_copy
+        r phset $tree_copy abc fields 2 f2 v2 f1 v1
+        r phset $tree_copy {} fields 1 root value
+        assert_equal $digest_before [r debug digest-value $tree_copy]
+        foreach {path field value} {abc f1 changed abc other v1 abcd f1 v1} {
+            r restore $tree_restored 0 $dumped replace
+            r phdel $tree_restored abc f1
+            r phset $tree_restored $path fields 1 $field $value
+            assert {$digest_before ne [r debug digest-value $tree_restored]}
+        }
     } {} {needs:debug}
 
     test {Empty Path Hash survives COPY, DUMP/RESTORE, and RDB reload} {
@@ -562,8 +621,8 @@ start_server {tags {path-hash}} {
         r pexpire tree 60000
         r debug reload
         assert_equal path-hash [r type tree]
-        assert_equal root-value [r phget tree {} root]
-        assert_equal $binary_value [r phget tree $binary_path field]
+        assert_equal [list root-value] [r phget tree {} root]
+        assert_equal [list $binary_value] [r phget tree $binary_path field]
         assert_equal 2 [r phcard tree]
         assert {[r pttl tree] > 0}
     } {} {needs:debug}
@@ -606,10 +665,10 @@ start_server {tags {path-hash}} {
             r phset tree path fields 1 "field:$i" "value:$i"
         }
         assert_equal 1 [r phcard tree]
-        assert_equal value:599 [r phget tree path field:599]
+        assert_equal [list value:599] [r phget tree path field:599]
         r debug reload
-        assert_equal value:0 [r phget tree path field:0]
-        assert_equal value:599 [r phget tree path field:599]
+        assert_equal [list value:0] [r phget tree path field:0]
+        assert_equal [list value:599] [r phget tree path field:599]
         assert_equal 1200 [llength [r phgetall tree path]]
     } {} {needs:debug}
 
@@ -639,9 +698,9 @@ start_server {tags {path-hash needs:debug} overrides {appendonly yes aof-use-rdb
         waitForBgrewriteaof r
         r debug loadaof
         assert_equal 3 [r phcard tree]
-        assert_equal value [r phget tree {} root]
+        assert_equal [list value] [r phget tree {} root]
         assert_equal {{} v2} [r phget tree abc f1 f2]
-        assert_equal v3 [r phget tree abcd child]
+        assert_equal [list v3] [r phget tree abcd child]
         assert_equal 1 [r exists empty-tree]
         assert_equal path-hash [r type empty-tree]
         assert_equal 0 [r phcard empty-tree]
@@ -671,8 +730,8 @@ start_server {tags {path-hash external:skip}} {
             $primary phdel empty-tree path
             wait_for_ofs_sync $primary $replica
             assert_equal 1 [$replica phcard tree]
-            assert_equal one [$replica phget tree a f]
-            assert_equal {} [$replica phget tree ab f]
+            assert_equal [list one] [$replica phget tree a f]
+            assert_equal [list {}] [$replica phget tree ab f]
             assert_equal 1 [$replica exists empty-tree]
             assert_equal path-hash [$replica type empty-tree]
             assert_equal 0 [$replica phcard empty-tree]

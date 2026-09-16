@@ -7,7 +7,7 @@
         "arity": -3,
         "function": "phscanCommand",
         "command_flags": ["READONLY"],
-        "acl_categories": ["PATH-HASH", "READ", "SLOW"],
+        "acl_categories": ["PATHHASH", "READ", "SLOW"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {
             "description": "Opaque cursor and path-hash entries.",

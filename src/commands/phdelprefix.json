@@ -7,7 +7,7 @@
         "arity": 3,
         "function": "phdelprefixCommand",
         "command_flags": ["WRITE"],
-        "acl_categories": ["PATH-HASH", "WRITE", "SLOW"],
+        "acl_categories": ["PATHHASH", "WRITE", "SLOW"],
         "key_specs": [{"flags": ["RW", "ACCESS", "DELETE"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {"type": "integer"},
         "arguments": [

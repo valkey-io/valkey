@@ -7,7 +7,7 @@
         "arity": -7,
         "function": "phmsetCommand",
         "command_flags": ["WRITE", "DENYOOM", "FAST"],
-        "acl_categories": ["PATH-HASH", "WRITE", "FAST"],
+        "acl_categories": ["PATHHASH", "WRITE", "FAST"],
         "key_specs": [{
             "flags": ["RW", "UPDATE"],
             "begin_search": {"index": {"pos": 1}},

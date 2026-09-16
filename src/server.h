@@ -270,7 +270,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define ACL_CATEGORY_CONNECTION (1ULL << 18)
 #define ACL_CATEGORY_TRANSACTION (1ULL << 19)
 #define ACL_CATEGORY_SCRIPTING (1ULL << 20)
-#define ACL_CATEGORY_PATH_HASH (1ULL << 21)
+#define ACL_CATEGORY_PATHHASH (1ULL << 21)
 
 /* Key-spec flags *
  * -------------- */
@@ -2776,7 +2776,7 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  * See valkey.conf for the exact meaning of each.
  *
  * @keyspace, @read, @write, @set, @sortedset, @list, @hash, @string, @bitmap,
- * @hyperloglog, @stream, @path-hash, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,
+ * @hyperloglog, @stream, @pathhash, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,
  * @connection, @transaction, @scripting, @geo.
  *
  * Note that:
@@ -3300,7 +3300,7 @@ robj *createSetObject(void);
 robj *createIntsetObject(void);
 robj *createSetListpackObject(void);
 robj *createHashObject(void);
-robj *createRadixObject(void);
+robj *createPathHashObject(void);
 robj *createZsetObject(void);
 robj *createZsetListpackObject(void);
 robj *createStreamObject(void);
@@ -3770,16 +3770,16 @@ int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len);
 bool hashTypeHasStringRef(robj *o, sds field);
 
 /* Path hash data type */
-typedef struct radixObject {
+typedef struct pathHashObject {
     rax *index;
     uint64_t num_fields;
-} radixObject;
+} pathHashObject;
 
-void freeRadixObject(robj *o);
-robj *radixTypeDup(robj *o);
-size_t radixTypeMemUsage(robj *o, size_t sample_size);
-void radixTypeDigest(unsigned char *digest, robj *o);
-int rewriteRadixObject(rio *r, robj *key, robj *o);
+void freePathHashObject(robj *o);
+robj *pathHashTypeDup(robj *o);
+size_t pathHashTypeMemUsage(robj *o, size_t sample_size);
+void pathHashTypeDigest(unsigned char *digest, robj *o);
+int rewritePathHashObject(rio *r, robj *key, robj *o);
 void phsetCommand(client *c);
 void phmsetCommand(client *c);
 void phgetCommand(client *c);

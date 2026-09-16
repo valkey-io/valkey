@@ -18,12 +18,11 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 
 ### Behavior Changes
 * Active expiration of keys and hash fields now increments the dirty counter, so save points (and thus BGSAVE) may trigger more often by @enjoy-binbin (#3118)
-* Large sorted sets are now backed by a B+ tree instead of a skiplist; OBJECT ENCODING reports `btree` instead of `skiplist` by @ranshid (#4359)
 
 ### New Features and Enhanced Behavior
 * Add ACL DIGEST command that returns a fingerprint of the ACL rules currently in effect, useful to verify what ACL LOAD applied by @melancholictheory (#4446)
 * Add forkless RDB snapshots, opt-in via the new `forkless-infrastructure-enabled` and `bgsave-default-method` configs, with new INFO persistence fields reporting the save method and progress by @JimB123 (#4460)
-* Add the `XACKDEL` and `XDELEX` stream commands with `KEEPREF`, `DELREF` and `ACKED` modes to acknowledge and delete messages once consumer groups no longer need them, matching Redis semantics by @nickiaq (#4629)
+* Add the `XACKDEL` and `XDELEX` stream commands with `KEEPREF`, `DELREF` and `ACKED` modes to acknowledge and delete messages once consumer groups no longer need them by @nickiaq (#4629)
 * Support a secondary server certificate via `tls-alt-cert-file`, `tls-alt-key-file` and `tls-alt-key-file-pass`, e.g. a post-quantum certificate alongside RSA, with matching INFO TLS fields by @pkhartsk (#3717)
 * Add ACL roles: named, reusable sets of ACL selectors managed with `ACL SETROLE`/`DELROLE`/`GETROLE`/`ROLES` and assigned to users with `role:<name>`, in commands, the ACL file and valkey.conf by @yang-z-o (#3967)
 * Add a `maxmemory-scripts` config to limit memory used by cached `EVAL` scripts, and mark `SCRIPT LOAD` as DENYOOM so it respects the global maxmemory limit by @enjoy-binbin (#866)
@@ -31,19 +30,19 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Support whole-stream LZ4 compression of RDB files via the new `rdbcompression lz4` option; the default per-string LZF behavior is unchanged by @sarthakaggarwal97 (#3531)
 * Add server-side hot key detection with new `HOTKEYS GET`/`RESET` commands, enabled by setting `hotkeys-top-k` by @alon-arenberg (#3708)
 * Add optional replication throttling (`repl-throttling-enabled`) that slows client writes when a replica falls behind, avoiding disconnects and full syncs by @harrylin98 (#4356)
-* Prioritize system-critical events (cluster heartbeats, replication, slot migration) over heavy client traffic, tunable via the new `preemptive-poll-interval-us` config by @satheeshaGowda (#4076)
-* Connections from configured trusted CIDR ranges are tagged as prioritized admin connections by @satheeshaGowda (#4005)
+* Prioritize system-critical events (cluster heartbeats, replication, slot migration) over heavy client traffic, tunable via the new `priority-preemptive-poll-interval-us` config by @satheeshaGowda (#4076)
+* Reserve connection slots for administrative clients: connections from the CIDR ranges listed in the new `priority-subnets` config are tagged as prioritized, `maxclients-reserved` caps normal clients at `maxclients` minus that many slots, and `INFO clients` reports `connected_priority_clients` by @satheeshaGowda (#4005)
 * Add `INCREX` command to atomically increment a key by an integer or float while setting its expiration, with `NX`/`XX` conditions by @GavinDmello (#3253)
 
 ### Performance and Efficiency Improvements
 * Speed up radix tree lookups and inserts by using SIMD-optimized memchr() for child-edge search by @charsyam (#3472)
 * Improve replica processing speed by parsing multiple commands from the replication stream at once by @enjoy-binbin (#3597)
 * Reduce memory usage by sharing pubsub pattern and WATCH key objects across clients subscribing to or watching the same name by @enjoy-binbin (#4072)
+* Large sorted sets are now backed by a B+ tree instead of a skiplist; OBJECT ENCODING reports `btree` instead of `skiplist` by @ranshid (#4359)
 * Save the cluster config file from a background thread when `cluster-config-save-behavior` is best-effort, avoiding main-thread latency spikes from slow disk I/O by @enjoy-binbin (#2555)
 * Speed up `HMGET`, `SMISMEMBER` and `ZMSCORE` on large hashtable-encoded keys with batched lookups that overlap memory accesses by @chzhoo (#4017)
 * Extend memory prefetching to hash, set and sorted set member lookups when io-threads are enabled, improving performance for 30 field/member commands on large keys by @roshkhatri (#3940)
 * `MEMORY PURGE` now also releases free pages from the glibc main arena back to the OS, reclaiming memory held by libc-internal allocations by @webbsssss (#3640)
-* Fix an undersized madvise range when dismissing hashtable memory after fork, so the whole bucket array is hinted and copy-on-write overhead during background saves drops by @charsyam (#3533)
 * Speed up command propagation to replicas by batching each command's RESP frame into a single replication buffer write by @hpatro (#4044)
 * Reduce lseek system calls during disk-based replication by seeking only when a write blocks or is partial by @enjoy-binbin (#4053)
 * Reduce event-loop overhead by refreshing cached daylight-saving info once per second instead of on every wakeup by @hpatro (#4086)
@@ -59,7 +58,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Fix a crash when processing a heartbeat from a cluster node whose role is locally unknown, such as after loading an incomplete nodes.conf by @enjoy-binbin (#4091)
 * Fix wrong results or debug-build assertions in cluster mode when the server inspects keys outside the executing command's slot, such as WATCHed keys checked during EXEC by @nitaicaro (#4380)
 * Fix stream commands that mutate consumer-group or PEL state (`XGROUP`, `XSETID`, `XREADGROUP`, `XACK`, `XCLAIM`, `XAUTOCLAIM`) not triggering `WATCH` and client-side tracking invalidation by @Tarte12 (#3459)
-* Guard hashtable iterators against out-of-bounds access when iteration continues after exhaustion by @rainsupreme (#3551)
 * Fix a server crash on FUNCTION DELETE or FUNCTION LOAD REPLACE after loading a library with function names differing only in case by @madolson (#3925)
 * Client-side tracking no longer records routing-only tokens such as the CLUSTERSCAN cursor as tracked keys by @nmvk (#3699)
 * Reject malformed slot entries in the cluster config file as a corrupt config instead of asserting or invoking undefined behavior by @enjoy-binbin (#4100)
@@ -148,7 +146,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * valkey-cli reads the `VALKEYCLI_HOST` and `VALKEYCLI_PORT` environment variables to set the default host and port by @Dietr1ch (#3402)
 * valkey-benchmark can load CSV/TSV datasets and inject their fields into commands via `__field:name__` placeholders by @VoletiRam (#2823)
 * valkey-cli supports the VALKEYCLI_USER environment variable as an alternative to the --user option by @jdheyburn (#4126)
-* valkey-cli cluster manager now spreads uncovered slots randomly across primaries instead of assigning them all to one node by @abmathur-ie (#3586)
 * `valkey-cli --rdb` now exits with an error instead of reporting success when trimming the RDB EOF marker fails, avoiding a silently corrupt file by @gluxier (#3945)
 * Fix valkey-benchmark crash (out-of-bounds read) when a repeat count is given with no command following it by @lightsigma96 (#4142)
 * valkey-benchmark -r now accepts keyspace sizes above INT_MAX (up to 999,999,999,999) with proper input validation by @michellee-10 (#4252)

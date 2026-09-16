@@ -1545,6 +1545,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "CLUSTER SYNCSLOTS ESTABLISH rejects a repeated establish on the same connection" {
+        assert_does_not_resync {
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 10923 10923
+            }
+        }
+    }
+
     test "CLUSTER SYNCSLOTS ESTABLISH command interface" {
         assert_does_not_resync {
             # No arguments

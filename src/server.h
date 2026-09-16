@@ -466,11 +466,11 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
-#define REPLICA_CAPA_LZ4 (1 << 4)               /* Can decode LZ4 streaming-compressed payloads. */
+#define REPLICA_CAPA_LZ4 (1 << 4)               /* Accepts LZ4 streaming-compressed replication payloads. */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
-#define REPLICA_CAPA_LZ4_STR "lz4"                             /* Can decode LZ4 streaming-compressed payloads. */
+#define REPLICA_CAPA_LZ4_STR "lz4"                             /* Accepts LZ4 streaming-compressed replication payloads. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -626,6 +626,14 @@ typedef enum {
     RDB_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
 } rdb_compression_mode;
 
+typedef enum {
+    REPL_COMPRESSION_NO = 0, /* Disable replication compression. */
+    REPL_COMPRESSION_YES,    /* Use the default compression algorithm (currently LZ4). */
+    REPL_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
+} repl_compression_mode;
+
+#define REPL_COMPRESSION_CAPA_UNKNOWN -1
+
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
  * will not free the buffer. */
@@ -680,6 +688,13 @@ typedef enum {
     RDB_BGSAVE_TYPE_FORK = 1,    /* Fork-based bgsave. */
     RDB_BGSAVE_TYPE_FORKLESS = 2 /* Forkless bgsave. */
 } rdbBgsaveType;
+
+/* Replica failover policy for server.cluster_replica_no_failover. */
+typedef enum {
+    CLUSTER_REPLICA_NO_FAILOVER_NO = 0,   /* Allow automatic failover (default). */
+    CLUSTER_REPLICA_NO_FAILOVER_YES,      /* Never start a failover; sets CLUSTER_NODE_NOFAILOVER. */
+    CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY, /* Refuse automatic failover only while the replica is empty. */
+} cluster_replica_no_failover_policy;
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -763,6 +778,8 @@ typedef enum {
 #define ARGS_SET_FNX (1 << 11)  /* Set if key item not exists. */
 #define ARGS_SET_FXX (1 << 12)  /* Set if key item exists. */
 #define ARGS_SET_IFNE (1 << 13) /* Set only if values are not equal */
+#define ARGS_BYINT (1 << 14)    /* Set if the value needs to be incremented by an integer. */
+#define ARGS_BYFLOAT (1 << 15)  /* Set if the value needs to be incremented by a float. */
 
 #define ARGS_SET_CONDITIONAL \
     (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
@@ -1065,6 +1082,9 @@ typedef struct readyList {
                                         no AUTH is needed, and every         \
                                         connection is immediately            \
                                         authenticated. */
+#define USER_FLAG_ROLE (1 << 3)      /* This user entry represents a role, \
+                                        not a regular user. Stored in the  \
+                                        Roles rax instead of Users. */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */
@@ -1078,10 +1098,15 @@ typedef struct readyList {
 typedef struct user {
     sds name;         /* The username as an SDS string. */
     uint32_t flags;   /* See USER_FLAG_* */
-    list *passwords;  /* A list of SDS valid passwords for this user. */
+    list *passwords;  /* A list of SDS valid passwords for this user (NULL for roles). */
     list *selectors;  /* A list of selectors this user validates commands
                          against. This list will always contain at least
                          one selector for backwards compatibility. */
+    list *roles;      /* For users: the roles held by the user, kept in the
+                         order they were assigned. Elements are `user *`
+                         pointers owned by the Roles rax (NULL for roles). */
+    dict *members;    /* For roles: the users holding this role, keyed by their
+                         `user *` pointer (NULL for users). */
     robj *acl_string; /* cached string represent of ACLs */
 } user;
 
@@ -1261,6 +1286,20 @@ typedef struct ClientPubSubData {
                                       context of client side caching. */
 } ClientPubSubData;
 
+/* Max decoded bytes processed before yielding to the event loop. This is
+ * shared by steady-state and dual-channel replication paths. */
+#define REPL_DECODE_EVENT_BUDGET (1024 * 1024)
+
+/* Primary-side compression state for one replica link. */
+typedef struct replicaCompressionState {
+    streamCompressor compressor;     /* The frame stays open for the lifetime of the link. */
+    sds out_buf;                     /* Compressed bytes waiting for the socket. */
+    size_t out_buf_pos;              /* Next byte to send from out_buf. */
+    size_t batch_uncompressed_bytes; /* Backlog bytes represented by out_buf. */
+    long long compressed_bytes;      /* Completed batches, for INFO replication. */
+    long long uncompressed_bytes;    /* Completed batches, for INFO replication. */
+} replicaCompressionState;
+
 typedef struct ClientReplicationData {
     int repl_state;                      /* Replication state if this is a replica. */
     int repl_start_cmd_stream_on_ack;    /* Install replica write handler on first ACK. */
@@ -1292,6 +1331,8 @@ typedef struct ClientReplicationData {
     size_t ref_block_pos;                /* Access position of referenced buffer block,
                                            i.e. the next offset to send. */
     sds replica_nodeid;                  /* Node id in cluster mode. */
+
+    replicaCompressionState *repl_compression; /* Primary-side compression state for this link, or NULL for plaintext. */
 } ClientReplicationData;
 
 typedef struct ClientModuleData {
@@ -1711,7 +1752,7 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
-    char *alt_cert_file;        /* Secondary server side cert file name */
+    char *alt_cert_file;        /* Alternate server side cert file name */
     char *alt_key_file;         /* Private key filename for alt_cert_file */
     char *alt_key_file_pass;    /* Optional password for alt_key_file */
     int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */
@@ -1816,32 +1857,32 @@ struct valkeyServer {
     hashtable *commands;                              /* Command table */
     hashtable *orig_commands;                         /* Command table before command renaming. */
     sds command_response_cache[RESP_CACHE_INDEX_MAX]; /* Cached COMMAND response: [0]=RESP2, [1]=RESP3 */
-    aeEventLoop *el;
-    _Atomic(AeIoState) io_poll_state;    /* Indicates the state of the IO polling. */
-    int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
-    rax *errors;                         /* Errors table */
-    volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
-    mstime_t shutdown_mstime;            /* Timestamp to limit graceful shutdown. */
-    int last_sig_received;               /* Indicates the last SIGNAL received, if any (e.g., SIGINT or SIGTERM). */
-    int shutdown_flags;                  /* Flags passed to prepareForShutdown(). */
-    int activerehashing;                 /* Incremental rehash in serverCron() */
-    int active_defrag_cpu_percent;       /* Current desired CPU percentage for active defrag */
-    char *pidfile;                       /* PID file path */
-    int arch_bits;                       /* 32 or 64 depending on sizeof(long) */
-    int cronloops;                       /* Number of times the cron function run */
-    char runid[CONFIG_RUN_ID_SIZE + 1];  /* ID always different at every exec. */
-    int sentinel_mode;                   /* True if this instance is a Sentinel. */
-    size_t initial_memory_usage;         /* Bytes used after initialization. */
-    int always_show_logo;                /* Show logo even for non-stdout logging. */
-    int in_exec;                         /* Are we inside EXEC? */
-    int in_call;                         /* Nesting level within the call() function. */
-    int busy_module_yield_flags;         /* Are we inside a busy module? (triggered by RM_Yield). see BUSY_MODULE_YIELD_ flags. */
-    const char *busy_module_yield_reply; /* When non-null, we are inside RM_Yield. */
-    char *ignore_warnings;               /* Config: warnings that should be ignored. */
-    int client_pause_in_transaction;     /* Was a client pause executed during this Exec? */
-    int server_del_keys_in_slot;         /* The server is deleting the keys in the dirty slot. */
-    int thp_enabled;                     /* If true, THP is enabled. */
-    size_t page_size;                    /* The page size of OS. */
+    aeEventLoop *el;                                  /* Main event loop */
+    _Atomic(AeIoState) io_poll_state;                 /* Indicates the state of the IO polling. */
+    int io_ae_fired_events;                           /* Number of poll events received by the IO thread. */
+    rax *errors;                                      /* Errors table */
+    volatile sig_atomic_t shutdown_asap;              /* Shutdown ordered by signal handler. */
+    mstime_t shutdown_mstime;                         /* Timestamp to limit graceful shutdown. */
+    int last_sig_received;                            /* Indicates the last SIGNAL received, if any (e.g., SIGINT or SIGTERM). */
+    int shutdown_flags;                               /* Flags passed to prepareForShutdown(). */
+    int activerehashing;                              /* Incremental rehash in serverCron() */
+    int active_defrag_cpu_percent;                    /* Current desired CPU percentage for active defrag */
+    char *pidfile;                                    /* PID file path */
+    int arch_bits;                                    /* 32 or 64 depending on sizeof(long) */
+    int cronloops;                                    /* Number of times the cron function run */
+    char runid[CONFIG_RUN_ID_SIZE + 1];               /* ID always different at every exec. */
+    int sentinel_mode;                                /* True if this instance is a Sentinel. */
+    size_t initial_memory_usage;                      /* Bytes used after initialization. */
+    int always_show_logo;                             /* Show logo even for non-stdout logging. */
+    int in_exec;                                      /* Are we inside EXEC? */
+    int in_call;                                      /* Nesting level within the call() function. */
+    int busy_module_yield_flags;                      /* Are we inside a busy module? (triggered by RM_Yield). see BUSY_MODULE_YIELD_ flags. */
+    const char *busy_module_yield_reply;              /* When non-null, we are inside RM_Yield. */
+    char *ignore_warnings;                            /* Config: warnings that should be ignored. */
+    int client_pause_in_transaction;                  /* Was a client pause executed during this Exec? */
+    int server_del_keys_in_slot;                      /* The server is deleting the keys in the dirty slot. */
+    int thp_enabled;                                  /* If true, THP is enabled. */
+    size_t page_size;                                 /* The page size of OS. */
     /* Modules */
     dict *moduleapi;                   /* Exported core APIs dictionary for modules. */
     dict *sharedapi;                   /* Like moduleapi but containing the APIs that
@@ -1955,6 +1996,8 @@ struct valkeyServer {
     double stat_fork_rate;                         /* Fork rate in GB/sec. */
     long long stat_total_forks;                    /* Total count of fork. */
     long long stat_rejected_conn;                  /* Clients rejected because of maxclients */
+    long long stat_rejected_priority_conn;         /* Prioritized clients rejected because of maxclients */
+    long long stat_num_active_priority_clients;    /* Number of active prioritized clients */
     long long stat_sync_full;                      /* Number of full resyncs with replicas. */
     long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
@@ -2018,6 +2061,9 @@ struct valkeyServer {
      * Note that commands in transactions are also counted. */
     long long el_cmd_cnt_start;
     long long el_cmd_cnt_max;
+    /* Record the previous baseline and peak number of priority commands executed in one priority cycle. */
+    long long priority_el_cmd_cnt_prev;
+    long long priority_el_cmd_cnt_max;
     /* The sum of active-expire, active-defrag and all other tasks done by cron and beforeSleep,
        but excluding read, write and AOF, which are counted by other sets of metrics. */
     monotime el_cron_duration;
@@ -2061,9 +2107,10 @@ struct valkeyServer {
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
-                                                 invocation of the event loop. */
+                                                    invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
-                                                 invocation of the event loop. */
+                                                    invocation of the event loop. */
+    int priority_preemptive_poll_interval_us; /* Priority event loop preemptive poll interval in microseconds */
     /* AOF persistence */
     int aof_enabled;                    /* AOF configuration */
     int aof_state;                      /* AOF_(ON|OFF|WAIT_REWRITE) */
@@ -2113,6 +2160,7 @@ struct valkeyServer {
     int saveparamslen;                    /* Number of saving points */
     char *rdb_filename;                   /* Name of RDB file */
     int rdb_compression;                  /* RDB compression mode */
+    int repl_compression;                 /* Replication compression mode */
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
                                              the instance does not use persistence. */
@@ -2260,6 +2308,10 @@ struct valkeyServer {
     int repl_ignore_disk_write_error;     /* Configures whether replicas panic when unable to
                                            * persist writes to AOF. */
 
+    int repl_compression_advertised;             /* Whether this replica advertised LZ4 in the current upstream
+                                                  * handshake, or REPL_COMPRESSION_CAPA_UNKNOWN before REPLCONF capa. */
+    struct streamPushReader *repl_stream_reader; /* Decoder for the upstream command stream, or NULL for plaintext. */
+
     /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->primary client structure. */
@@ -2275,8 +2327,13 @@ struct valkeyServer {
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
+    unsigned int maxclients_reserved;           /* Client connection slots reserved for priority subnets */
+    char *priority_subnets;                     /* Raw priority-subnets string config */
+    anetSubnet *priority_subnets_array;         /* Compiled priority subnets array */
+    int priority_subnets_count;                 /* Count of compiled priority subnets */
     unsigned long long maxmemory;               /* Max number of memory bytes to use */
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
+    ssize_t maxmemory_scripts;                  /* Memory limit for cached EVAL scripts */
     int maxmemory_policy;                       /* Policy for key eviction */
     int maxmemory_samples;                      /* Precision of random sampling */
     int maxmemory_eviction_tenacity;            /* Aggressiveness of eviction processing */
@@ -2347,8 +2404,7 @@ struct valkeyServer {
     int cluster_replica_validity_factor;                   /* Replica max data age for failover. */
     int cluster_require_full_coverage;                     /* If true, put the cluster down if
                                                               there is at least an uncovered slot.*/
-    int cluster_replica_no_failover;                       /* Prevent replica from starting a failover
-                                                            if the primary is in failure state. */
+    int cluster_replica_no_failover;                       /* Replica failover policy (NO/YES/IF_EMPTY). */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
     char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
     char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */
@@ -3015,6 +3071,9 @@ void dictVanillaFree(void *val);
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
+/* Unlike a retryable socket write error, a compression error is fatal. The IO
+ * thread reports it here for the main thread to disconnect the replica. */
+#define WRITE_FLAGS_COMPRESSION_ERROR (1 << 2)
 
 client *createClient(connection *conn);
 int freeClient(client *c);
@@ -3039,6 +3098,8 @@ void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
 int processInputBuffer(client *c);
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip);
+int validatePrioritySubnets(const char *subnets_str, const char **err);
+int updatePrioritySubnets(const char *subnets_str);
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
 writePreparedClient *prepareClientForFutureWrites(client *c);
@@ -3160,7 +3221,7 @@ void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 int clientConnPostponeMask(client *c);
 
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);
@@ -3185,6 +3246,7 @@ void trackingRememberKeys(client *tracking, client *executing);
 void trackingInvalidateKey(client *c, robj *keyobj, int bcast);
 void trackingScheduleKeyInvalidation(uint64_t client_id, robj *keyobj);
 void trackingHandlePendingKeyInvalidations(void);
+bool trackingHasPendingKeyInvalidations(void);
 void trackingInvalidateKeysOnFlush(int async);
 void freeTrackingRadixTree(rax *rt);
 void freeTrackingRadixTreeAsync(rax *rt);
@@ -3235,6 +3297,7 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with);
 void discardTransaction(client *c);
 void flagTransaction(client *c);
 void execCommandAbort(client *c, sds error);
+int execGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 /* Object implementation */
 void decrRefCount(robj *o);
@@ -3374,11 +3437,12 @@ sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
 int replicaRdbVersion(client *replica);
 /* Full-sync compression policy: select the codec and gate replica eligibility on capability. */
-compressionAlgo replSelectFullSyncCompression(int replica_capa);
-bool replicaCanUseFullSyncFormat(int replica_capa, compressionAlgo compression_algo);
+compressionAlgo replSelectFullSyncCompression(int replica_capa, bool socket_target);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
+ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_len, size_t output_budget);
+bool replStreamHasPendingDecode(void);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
 sds replicationSendAuth(connection *conn, const char *user, size_t user_len, const char *pass, size_t pass_len);
 sds receiveSynchronousResponse(connection *conn);
@@ -3445,6 +3509,7 @@ int isMutuallyExclusiveChildType(int type);
 
 /* acl.c -- Authentication related prototypes. */
 extern rax *Users;
+extern rax *Roles;
 extern user *DefaultUser;
 void ACLInit(void);
 int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out);
@@ -3493,7 +3558,7 @@ uint64_t ACLGetCommandCategoryFlagByName(const char *name);
 int ACLAddCommandCategory(const char *name, uint64_t flag);
 void ACLCleanupCategoriesOnFailure(size_t num_acl_categories_added);
 int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err);
-const char *ACLSetUserStringError(void);
+const char *ACLSetStringError(void);
 robj *ACLDescribeUser(user *u);
 void ACLLoadUsersAtStartup(void);
 void addReplyCommandCategories(client *c, struct serverCommand *cmd);
@@ -3504,6 +3569,8 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
 void ACLUpdateDefaultUserPassword(sds password);
 sds genValkeyInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
+user *ACLGetRoleByName(const char *name, size_t namelen);
+int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err);
 
 /* Sorted sets data type */
 
@@ -3998,8 +4065,10 @@ void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_ca
 void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
-dict *evalScriptsDict(void);
-unsigned long evalScriptsMemory(void);
+dict *evalCtxScriptsDict(void);
+unsigned long scriptsMemoryOverhead(void);
+unsigned long evalScriptsMemoryOverhead(void);
+void startScriptsEvictionTimeProc(void);
 uint64_t evalGetCommandFlags(client *c, uint64_t orig_flags);
 uint64_t fcallGetCommandFlags(client *c, uint64_t orig_flags);
 int isInsideYieldingLongCommand(void);
@@ -4118,6 +4187,7 @@ void decrCommand(client *c);
 void incrbyCommand(client *c);
 void decrbyCommand(client *c);
 void incrbyfloatCommand(client *c);
+void increxCommand(client *c);
 void selectCommand(client *c);
 void swapdbCommand(client *c);
 void randomkeyCommand(client *c);

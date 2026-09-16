@@ -18,6 +18,7 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 
 ### Behavior Changes
 * Active expiration of keys and hash fields now increments the dirty counter, so save points (and thus BGSAVE) may trigger more often by @enjoy-binbin (#3118)
+* Unify the internal dict and hashtable implementations; the configured hash seed now applies only to data hashtables by @zuiderkwast (#3366)
 
 ### New Features and Enhanced Behavior
 * Add ACL DIGEST command that returns a fingerprint of the ACL rules currently in effect, useful to verify what ACL LOAD applied by @melancholictheory (#4446)
@@ -43,6 +44,7 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Speed up `HMGET`, `SMISMEMBER` and `ZMSCORE` on large hashtable-encoded keys with batched lookups that overlap memory accesses by @chzhoo (#4017)
 * Extend memory prefetching to hash, set and sorted set member lookups when io-threads are enabled, improving performance for 30 field/member commands on large keys by @roshkhatri (#3940)
 * `MEMORY PURGE` now also releases free pages from the glibc main arena back to the OS, reclaiming memory held by libc-internal allocations by @webbsssss (#3640)
+* Make the ranged memory-release helper a no-op on non-jemalloc builds, matching existing behavior by @enjoy-binbin (#3791)
 * Speed up command propagation to replicas by batching each command's RESP frame into a single replication buffer write by @hpatro (#4044)
 * Reduce lseek system calls during disk-based replication by seeking only when a write blocks or is partial by @enjoy-binbin (#4053)
 * Reduce event-loop overhead by refreshing cached daylight-saving info once per second instead of on every wakeup by @hpatro (#4086)
@@ -159,10 +161,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Use PRIVATE link dependencies in CMake so Valkey's CMake files can be safely integrated into other projects by @eifrah-aws (#3658)
 * Pass `CPPFLAGS` to bundled dependencies and the src Makefile so packaging hardening flags apply to the whole build by @Vonng (#4318)
 * Raise the minimum required CMake version to 3.24 to match features already used by the build by @Baraa-Hasheesh (#4232)
-
-### Other Changes
-* Unify the internal dict and hashtable implementations; the configured hash seed now applies only to data hashtables by @zuiderkwast (#3366)
-* Make the ranged memory-release helper a no-op on non-jemalloc builds, matching existing behavior by @enjoy-binbin (#3791)
 
 ### Contributors
 * Abhishek Kumar @dubey02

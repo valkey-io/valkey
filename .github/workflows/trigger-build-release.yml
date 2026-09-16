@@ -1,6 +1,5 @@
-# Do NOT add a run-name to this workflow: the release controller correlates
-# the release-event run by its default display title (the bare tag), and a
-# custom run-name would make release runs invisible to the controller.
+# The release controller locates release runs by the default title (the tag),
+# so this workflow must not set run-name.
 name: Trigger Build Release
 
 permissions:
@@ -28,9 +27,6 @@ jobs:
     steps:
       - name: Determine version and environment
         id: determine-vars
-        # Untrusted values (a release tag name, manual inputs) enter only
-        # through env, never interpolated into shell source, and the
-        # version is validated before anything downstream consumes it.
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -56,11 +52,6 @@ jobs:
 
       - name: Resolve version tag to its commit
         id: resolve-sha
-        # The build pipeline pins its checkout to source_sha instead of
-        # trusting the moving tag at build time, so resolve the tag to the
-        # exact commit it points at. Annotated tags are peeled to the
-        # underlying commit SHA via the object.type check. Untrusted values
-        # enter only through env, never interpolated into shell source.
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
@@ -75,7 +66,6 @@ jobs:
             obj_type=$(jq -r '.object.type' <<< "$ref_json")
             obj_sha=$(jq -r '.object.sha' <<< "$ref_json")
             if [[ "$obj_type" == "tag" ]]; then
-              # Annotated tag: peel to the commit it points at.
               obj_json=$(gh api "repos/${REPO}/git/tags/${obj_sha}") || return 1
               obj_type=$(jq -r '.object.type' <<< "$obj_json")
               obj_sha=$(jq -r '.object.sha' <<< "$obj_json")
@@ -87,24 +77,15 @@ jobs:
             printf '%s' "$obj_sha"
           }
           if [[ "$EVENT_NAME" == "release" ]]; then
-            # A published release ALWAYS has a resolvable tag, so any API
-            # failure here is a real fault: fail closed rather than
-            # dispatching an unpinned build.
             SOURCE_SHA=$(resolve_tag "$VERSION" error)
           elif [[ "$ENVIRONMENT" == "prod" ]]; then
-            # A prod dispatch must build a pinned, existing tag. ANY
-            # resolve failure (including a 404: a prod dispatch for a
-            # nonexistent tag is an operator error) fails the job rather
-            # than silently reintroducing the moving-tag build.
+            # Production builds require an existing tag.
             if ! SOURCE_SHA=$(resolve_tag "$VERSION" error); then
               echo "::error::Could not resolve tag ${VERSION} to a commit; a prod dispatch requires an existing, resolvable tag."
               exit 1
             fi
           else
-            # Dev dispatch: the version may not be tagged (yet), or may
-            # be 'unstable'. Resolve when the tag exists, else send empty;
-            # anything resolve_tag reports on this tolerated path is a
-            # warning, not an error.
+            # Development builds may use an untagged version.
             SOURCE_SHA=$(resolve_tag "$VERSION" warning) || SOURCE_SHA=""
           fi
           if [[ -n "$SOURCE_SHA" && ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -115,8 +96,6 @@ jobs:
 
       - name: Compose dispatch payload
         id: compose-payload
-        # jq builds the JSON so every value is properly quoted; nothing is
-        # spliced into a JSON literal by expression interpolation.
         env:
           VERSION: ${{ steps.determine-vars.outputs.version }}
           ENVIRONMENT: ${{ steps.determine-vars.outputs.environment }}

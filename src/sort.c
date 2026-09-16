@@ -191,6 +191,18 @@ int sortCompare(const void *s1, const void *s2) {
     return server.sort_desc ? -cmp : cmp;
 }
 
+/* Create a string object for the member stored at a sorted set listpack entry.
+ * Integer-encoded members become integer-encoded objects, which every SORT
+ * consumer (numeric scoring, comparison, pattern substitution) accepts. */
+static robj *zsetListpackEntryToObject(unsigned char *eptr) {
+    unsigned char *vstr;
+    unsigned int vlen;
+    long long vlong;
+
+    vstr = lpGetValue(eptr, &vlen, &vlong);
+    return vstr ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLong(vlong);
+}
+
 /* The SORT command is the most complex command in Valkey. Warning: this code
  * is optimized for speed and a bit less for readability */
 void sortCommandGeneric(client *c, int readonly) {
@@ -417,14 +429,10 @@ void sortCommandGeneric(client *c, int readonly) {
          * Note that in this case we also handle LIMIT here in a direct
          * way, just getting the required range, as an optimization. */
         int rangelen = vectorlen;
-        long zsetlen = zsetLength(sortval);
 
         if (sortval->encoding == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(sortval);
             unsigned char *eptr = NULL, *sptr = NULL;
-            unsigned char *vstr;
-            unsigned int vlen;
-            long long vlong;
 
             /* Each element occupies two listpack entries (member, score). */
             if (rangelen > 0) {
@@ -438,8 +446,7 @@ void sortCommandGeneric(client *c, int readonly) {
 
             while (rangelen--) {
                 serverAssertWithInfo(c, sortval, eptr != NULL && sptr != NULL);
-                vstr = lpGetValue(eptr, &vlen, &vlong);
-                vector[j].obj = vstr ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLong(vlong);
+                vector[j].obj = zsetListpackEntryToObject(eptr);
                 vector[j].u.score = 0;
                 vector[j].u.cmpobj = NULL;
                 j++;
@@ -456,7 +463,7 @@ void sortCommandGeneric(client *c, int readonly) {
 
             /* Check if starting point is trivial, before doing log(N) lookup. */
             if (desc) {
-                orderedIndexSeekToIndex(&iter, zsetlen - start);
+                orderedIndexSeekToIndex(&iter, zsetLength(sortval) - start);
                 ln = orderedIndexPrev(&iter);
             } else {
                 if (start > 0) {
@@ -485,15 +492,11 @@ void sortCommandGeneric(client *c, int readonly) {
     } else if (sortval->type == OBJ_ZSET && sortval->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(sortval);
         unsigned char *eptr = lpSeek(zl, 0), *sptr = NULL;
-        unsigned char *vstr;
-        unsigned int vlen;
-        long long vlong;
 
         if (eptr != NULL) sptr = lpNext(zl, eptr);
         while (eptr != NULL) {
             serverAssertWithInfo(c, sortval, sptr != NULL);
-            vstr = lpGetValue(eptr, &vlen, &vlong);
-            vector[j].obj = vstr ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLong(vlong);
+            vector[j].obj = zsetListpackEntryToObject(eptr);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;

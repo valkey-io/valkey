@@ -179,35 +179,31 @@ start_server {tags {"qos"}} {
         $p2 ping
         assert_equal {PONG} [$p2 read]
 
-        # Verify INFO clients metrics: all 4 clients (r, c1, p1, p2) are prioritized
+        # Verify INFO clients metrics: 2 clients (p1, p2) admitted as prioritized;
+        # r and c1 were admitted before priority-subnets was configured, so they remain normal.
         set info_clients [r info clients]
-        assert_match "*connected_priority_clients:4*" $info_clients
+        assert_match "*connected_priority_clients:2*" $info_clients
 
-        # Close p1 and verify active prioritized count decrements to 3
+        # Close p1 and verify active prioritized count decrements to 1
         $p1 close
-        wait_for_condition 50 100 {
-            [string match "*connected_priority_clients:3*" [r info clients]]
-        } else {
-            fail "connected_priority_clients did not decrement to 3 after closing p1"
-        }
-
-        # Close p2 and verify active prioritized count decrements to 2
-        $p2 close
-        wait_for_condition 50 100 {
-            [string match "*connected_priority_clients:2*" [r info clients]]
-        } else {
-            fail "connected_priority_clients did not decrement to 2 after closing p2"
-        }
-
-        # Close c1 and verify active prioritized count decrements to 1 (only r remains)
-        catch {$c1 close}
         wait_for_condition 50 100 {
             [string match "*connected_priority_clients:1*" [r info clients]]
         } else {
-            fail "connected_priority_clients did not decrement to 1 after closing c1"
+            fail "connected_priority_clients did not decrement to 1 after closing p1"
         }
 
-        # Clearing priority-subnets dynamically demotes r to normal
+        # Close p2 and verify active prioritized count decrements to 0
+        $p2 close
+        wait_for_condition 50 100 {
+            [string match "*connected_priority_clients:0*" [r info clients]]
+        } else {
+            fail "connected_priority_clients did not decrement to 0 after closing p2"
+        }
+
+        # Close normal client c1
+        catch {$c1 close}
+
+        # Clearing priority-subnets dynamically does not affect already-zero prioritized counter
         r config set priority-subnets ""
         set info_clients [r info clients]
         assert_match "*connected_priority_clients:0*" $info_clients
@@ -309,8 +305,8 @@ start_server {tags {"qos"}} {
         $p1 ping
         assert_equal {PONG} [$p1 read]
         
-        # r (1) + p1 (1) = 2 prioritized clients due to dynamic re-classification
-        assert_match "*connected_priority_clients:2*" [r info clients]
+        # p1 (1) is admitted as prioritized (r was admitted before config change, so remains normal)
+        assert_match "*connected_priority_clients:1*" [r info clients]
 
         catch {$p1 close}
         
@@ -323,7 +319,7 @@ start_server {tags {"qos"}} {
         $p2 ping
         assert_equal {PONG} [$p2 read]
         
-        assert_match "*connected_priority_clients:2*" [r info clients]
+        assert_match "*connected_priority_clients:1*" [r info clients]
         
         catch {$p2 close}
         r config set maxclients-reserved 0
@@ -341,8 +337,8 @@ start_server {tags {"qos"}} {
         $p1 ping
         assert_equal {PONG} [$p1 read]
         
-        # r (1) + p1 (1) = 2 prioritized clients
-        assert_match "*connected_priority_clients:2*" [r info clients]
+        # p1 (1) is admitted as prioritized
+        assert_match "*connected_priority_clients:1*" [r info clients]
 
         catch {$p1 close}
         r config set maxclients-reserved 0
@@ -392,7 +388,7 @@ start_server {tags {"qos"}} {
         r config set priority-subnets ""
     }
 
-    test {Dynamic Re-Classification of connected clients on priority-subnets change} {
+    test {Admission-time priority enforcement on priority-subnets change} {
         if {[can_bind_loopback_ip "127.0.0.2"]} {
             r config set maxclients 10
             r config set maxclients-reserved 3
@@ -411,42 +407,56 @@ start_server {tags {"qos"}} {
             assert_match "*connected_priority_clients:0*" [r info clients]
 
             # Step 2: Configure priority-subnets to 127.0.0.2/32
-            # Dynamic re-classification immediately promotes c_alt to prioritized;
-            # r and c_normal remain normal.
+            # Admission-time policy: existing connections are not reclassified.
             r config set priority-subnets "127.0.0.2/32"
-            assert_match "*connected_priority_clients:1*" [r info clients]
-
-            # Step 3: Switch priority-subnets to 127.0.0.1/32
-            # Dynamic re-classification immediately promotes r and c_normal to prioritized,
-            # and demotes c_alt back to normal.
-            r config set priority-subnets "127.0.0.1/32"
-            assert_match "*connected_priority_clients:2*" [r info clients]
-
-            # Step 4: Include both subnets in priority-subnets
-            # Dynamic re-classification promotes all 3 clients to prioritized.
-            r config set priority-subnets "127.0.0.1/32 127.0.0.2/32"
-            assert_match "*connected_priority_clients:3*" [r info clients]
-
-            # Step 5: Disconnect c_alt; prioritized count decrements to 2
-            $c_alt close
-            wait_for_condition 50 100 {
-                [string match "*connected_priority_clients:2*" [r info clients]]
-            } else {
-                fail "connected_priority_clients did not decrement to 2 after closing c_alt"
-            }
-
-            # Step 6: Clear priority-subnets; remaining clients demoted to normal
-            r config set priority-subnets ""
             assert_match "*connected_priority_clients:0*" [r info clients]
 
-            # Step 7: Disconnect c_normal; ensures no underflow desync
-            $c_normal close
+            # Step 3: A new connection from 127.0.0.2 is admitted as prioritized
+            set c_prio [valkey_deferring_client_from_ip "127.0.0.2"]
+            $c_prio ping
+            assert_equal {PONG} [$c_prio read]
+            assert_match "*connected_priority_clients:1*" [r info clients]
+
+            # Step 4: A new connection from 127.0.0.1 is admitted as normal
+            set c_norm2 [valkey_deferring_client]
+            $c_norm2 ping
+            assert_equal {PONG} [$c_norm2 read]
+            assert_match "*connected_priority_clients:1*" [r info clients]
+
+            # Step 5: Switch priority-subnets to 127.0.0.1/32
+            # Existing clients retain their priority status
+            r config set priority-subnets "127.0.0.1/32"
+            assert_match "*connected_priority_clients:1*" [r info clients]
+
+            # A new connection from 127.0.0.1 is admitted as prioritized
+            set c_prio2 [valkey_deferring_client]
+            $c_prio2 ping
+            assert_equal {PONG} [$c_prio2 read]
+            assert_match "*connected_priority_clients:2*" [r info clients]
+
+            # Close c_prio; prioritized count decrements to 1
+            $c_prio close
+            wait_for_condition 50 100 {
+                [string match "*connected_priority_clients:1*" [r info clients]]
+            } else {
+                fail "connected_priority_clients did not decrement to 1 after closing c_prio"
+            }
+
+            # Step 6: Clear priority-subnets; existing prioritized client c_prio2 is not demoted
+            r config set priority-subnets ""
+            assert_match "*connected_priority_clients:1*" [r info clients]
+
+            # Step 7: Close c_prio2; ensures count decrements to 0 without underflow
+            $c_prio2 close
             wait_for_condition 50 100 {
                 [string match "*connected_priority_clients:0*" [r info clients]]
             } else {
-                fail "connected_priority_clients did not remain 0 after closing c_normal"
+                fail "connected_priority_clients did not reach 0 after closing c_prio2"
             }
 
+            $c_normal close
+            $c_alt close
+            $c_norm2 close
             r config set maxclients-reserved 0
         }
     }
@@ -755,7 +765,7 @@ start_server {tags {"qos external:skip"}} {
     }
 }
 
-start_server {tags {"qos external:skip cluster:skip needs:repl"}} {
+start_server {tags {"qos repl needs:repl external:skip cluster:skip"}} {
     test {CONFIG SET priority-subnets does not demote replication link (Issue #4674)} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
@@ -794,7 +804,7 @@ start_server {tags {"qos external:skip cluster:skip needs:repl"}} {
         }
     }
 
-    test {Replication link included in priority-subnets preserves high priority and updates client stats} {
+    test {Replication link included in priority-subnets preserves high priority and new clients get priority} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
@@ -832,26 +842,172 @@ start_server {tags {"qos external:skip cluster:skip needs:repl"}} {
             # Reconfigure priority-subnets on primary to INCLUDE the replica's subnet
             $primary config set priority-subnets $replica_subnet
 
-            # Both the test client ($primary) and the replica connection originate from this subnet
+            # Replica retains flags=H, but existing connections are not reclassified into connected_priority_clients
             assert_match "*flags=*H*" [$primary client list flags H]
-            assert_match "*connected_priority_clients:2*" [$primary info clients]
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+            # A new connection from this subnet is admitted as prioritized
+            set new_prio [valkey_client_by_addr $primary_host $primary_port]
+            assert_match "*connected_priority_clients:1*" [$primary info clients]
 
             # Reconfigure priority-subnets to a subnet that does NOT include the replica
             $primary config set priority-subnets "192.0.2.0/24"
 
-            # Replica still retains high priority flags, but priority client count is now 0
+            # Replica still retains high priority flags, and new_prio is not demoted
             assert_match "*flags=*H*" [$primary client list flags H]
-            assert_match "*connected_priority_clients:0*" [$primary info clients]
+            assert_match "*connected_priority_clients:1*" [$primary info clients]
 
-            # Reconfigure priority-subnets BACK to include replica's subnet
-            $primary config set priority-subnets $replica_subnet
-            assert_match "*flags=*H*" [$primary client list flags H]
-            assert_match "*connected_priority_clients:2*" [$primary info clients]
+            # Disconnect new_prio; prioritized count decrements to 0
+            $new_prio close
+            wait_for_condition 50 100 {
+                [string match "*connected_priority_clients:0*" [$primary info clients]]
+            } else {
+                fail "connected_priority_clients did not decrement to 0 after closing new_prio"
+            }
 
-            # Clear priority-subnets completely
+            # Clear priority-subnets completely and re-verify replica flags=H
             $primary config set priority-subnets ""
             assert_match "*flags=*H*" [$primary client list flags H]
             assert_match "*connected_priority_clients:0*" [$primary info clients]
+        }
+    }
+
+    test {Priority flags in client list and no stat_num_active_priority_clients counter drift with and without priority-subnets} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        # Case 1: Without priority-subnets configured
+        $primary config set priority-subnets ""
+        assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+        # Normal test client connection
+        set normal_client [valkey_client_by_addr $primary_host $primary_port]
+        $normal_client ping
+
+        # Verify normal client does NOT have 'H' flag and "client list flags H" is empty
+        assert_equal "" [$primary client list flags H]
+        assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+        # Connect a replica
+        start_server {} {
+            set replica [srv 0 client]
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [string match "*role:slave*master_link_status:up*" [$replica info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            # Verify replica client on primary has flags=H and matches "client list flags H"
+            assert_match "*flags=*H*" [$primary client list flags H]
+            assert_match "*flags=*S*H*" [$primary client list flags H]
+
+            # System-critical replica MUST NOT be counted in stat_num_active_priority_clients
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+            # Disconnect replica using "replicaof no one"
+            $replica replicaof no one
+            wait_for_condition 50 100 {
+                [string match "*connected_slaves:0*" [$primary info replication]]
+            } else {
+                fail "Replica failed to disconnect from primary"
+            }
+
+            # Verify no counter drift (stays 0, no underflow) and flags H list is now empty
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+            assert_equal "" [$primary client list flags H]
+        }
+
+        $normal_client close
+        assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+        # Case 2: With priority-subnets configured
+        if {[can_bind_loopback_ip "127.0.0.2"]} {
+            # Configure priority-subnets to 127.0.0.2/32 (replica connects from 127.0.0.1)
+            $primary config set priority-subnets "127.0.0.2/32"
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+            # Prioritized client connects from 127.0.0.2
+            set prio_client [valkey_from_ip "127.0.0.2" $primary_host $primary_port 1]
+            $prio_client ping
+            assert_equal {PONG} [$prio_client read]
+
+            # Verify prioritized client has 'H' flag and is counted in connected_priority_clients
+            assert_match "*flags=*H*" [$primary client list flags H]
+            assert_match "*connected_priority_clients:1*" [$primary info clients]
+
+            # Connect replica (from 127.0.0.1) while priority-subnets is active
+            start_server {} {
+                set replica [srv 0 client]
+                $replica replicaof $primary_host $primary_port
+                wait_for_condition 50 100 {
+                    [string match "*role:slave*master_link_status:up*" [$replica info replication]]
+                } else {
+                    fail "Can't turn the instance into a replica"
+                }
+
+                # Both prio_client and replica have 'H' flag in client list
+                set prio_clients_h [$primary client list flags H]
+                assert_match "*flags=*H*" $prio_clients_h
+                assert_match "*flags=*S*H*" $prio_clients_h
+
+                # Crucial invariant: stat_num_active_priority_clients ONLY counts subnet clients,
+                # NOT system-critical connections like replicas. Thus count remains 1, NOT 2!
+                assert_match "*connected_priority_clients:1*" [$primary info clients]
+
+                # Disconnect replica
+                $replica replicaof no one
+                wait_for_condition 50 100 {
+                    [string match "*connected_slaves:0*" [$primary info replication]]
+                } else {
+                    fail "Replica failed to disconnect from primary"
+                }
+
+                # Counter must NOT decrement when replica disconnects (must remain 1)
+                assert_match "*connected_priority_clients:1*" [$primary info clients]
+            }
+
+            # Disconnect prioritized client
+            $prio_client close
+            wait_for_condition 50 100 {
+                [string match "*connected_priority_clients:0*" [$primary info clients]]
+            } else {
+                fail "connected_priority_clients did not decrement to 0"
+            }
+
+            # Final verification: counter is exactly 0, zero drift
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+            assert_equal "" [$primary client list flags H]
+            $primary config set priority-subnets ""
+        } else {
+            # Single loopback fallback: configure subnet not matching replica
+            $primary config set priority-subnets "192.0.2.0/24"
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+            start_server {} {
+                set replica [srv 0 client]
+                $replica replicaof $primary_host $primary_port
+                wait_for_condition 50 100 {
+                    [string match "*role:slave*master_link_status:up*" [$replica info replication]]
+                } else {
+                    fail "Can't turn the instance into a replica"
+                }
+
+                assert_match "*flags=*S*H*" [$primary client list flags H]
+                assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+                $replica replicaof no one
+                wait_for_condition 50 100 {
+                    [string match "*connected_slaves:0*" [$primary info replication]]
+                } else {
+                    fail "Replica failed to disconnect from primary"
+                }
+
+                assert_match "*connected_priority_clients:0*" [$primary info clients]
+                assert_equal "" [$primary client list flags H]
+            }
+            $primary config set priority-subnets ""
         }
     }
 }

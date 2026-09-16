@@ -1948,66 +1948,6 @@ static int parseSubnetList(const char *raw_sources, anetSubnet **subnets, int *c
     return C_OK;
 }
 
-/* Re-evaluate connection priority for all currently connected clients when
- * priority-subnets is updated dynamically at runtime via CONFIG SET.
- *
- * 1. Immediate dynamic reclassification: Existing clients connecting before a
- *    subnet update that match the new configuration are immediately promoted
- *    to priority status without requiring a reconnect. Similarly, clients that
- *    no longer match are demoted to normal priority.
- * 2. Strict counter reconciliation: Accurately recomputes
- *    server.stat_num_active_priority_clients to reflect the exact
- *    ground truth of active priority connections, preventing telemetry drift
- *    or underflow/overflow desync across dynamic config changes.
- * 3. Safe transport handling: Fake clients (c->conn == NULL) and non-IP
- *    connections (such as UNIX domain sockets or unresolved peers) are safely
- *    classified as normal (non-priority) connections. */
-static void reclassifyClientsPriority(void) {
-    if (!server.clients) return;
-
-    long long count = 0;
-    listIter li;
-    listNode *ln;
-    listRewind(server.clients, &li);
-
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        if (!c->conn) continue;
-
-        int type = getClientType(c);
-        /* Outbound system connections do not participate in inbound priority admission. */
-        if (type == CLIENT_TYPE_PRIMARY || type == CLIENT_TYPE_SLOT_EXPORT) {
-            continue;
-        }
-
-        char ip[CONN_ADDR_STR_LEN];
-        int port = 0;
-        if (connAddrPeerName(c->conn, ip, sizeof(ip), &port) != C_OK) {
-            c->flag.priority_source = 0;
-            /* Demote only normal and pubsub clients; system connections retain transport priority. */
-            if (type == CLIENT_TYPE_NORMAL || type == CLIENT_TYPE_PUBSUB) {
-                connSetPriority(c->conn, false);
-            }
-            continue;
-        }
-
-        bool is_prio = (server.priority_subnets_count > 0 &&
-                        anetMatchIpSubnet(ip, server.priority_subnets_array, server.priority_subnets_count));
-        c->flag.priority_source = is_prio;
-        if (is_prio) {
-            connSetPriority(c->conn, true);
-            count++;
-        } else {
-            /* Demote only normal and pubsub clients; system connections (e.g. replicas) retain transport priority. */
-            if (type == CLIENT_TYPE_NORMAL || type == CLIENT_TYPE_PUBSUB) {
-                connSetPriority(c->conn, false);
-            }
-        }
-    }
-
-    server.stat_num_active_priority_clients = count;
-}
-
 /* Validate priority-subnets configuration string.
  * Returns C_OK if valid, C_ERR otherwise and sets *err if provided. */
 int validatePrioritySubnets(const char *subnets_str, const char **err) {
@@ -2021,7 +1961,7 @@ int validatePrioritySubnets(const char *subnets_str, const char **err) {
     return C_OK;
 }
 
-/* Update compiled priority-subnets from configuration string and reclassify clients.
+/* Update compiled priority-subnets from configuration string.
  * Returns C_OK on success, C_ERR on parsing failure. */
 int updatePrioritySubnets(const char *subnets_str) {
     anetSubnet *new_subnets = NULL;
@@ -2032,7 +1972,6 @@ int updatePrioritySubnets(const char *subnets_str) {
     zfree(server.priority_subnets_array);
     server.priority_subnets_array = new_subnets;
     server.priority_subnets_count = new_count;
-    reclassifyClientsPriority();
     return C_OK;
 }
 
@@ -2121,7 +2060,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
 
     /* Record priority status for connections admitted via priority-subnets.
      * This flag ensures exact 1:1 symmetry for stat_num_active_priority_clients
-     * during reclassification and on disconnection in unlinkClient(). */
+     * on disconnection in unlinkClient(). */
     if (is_prioritized) {
         c->flag.priority_source = 1;
         server.stat_num_active_priority_clients++;

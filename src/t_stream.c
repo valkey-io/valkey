@@ -542,7 +542,12 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         if (new_node) {
             /* Shrink extra pre-allocated memory */
             lp = lpShrinkToFit(lp);
-            if (ri.data != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+            if (ri.data != lp) {
+                raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+                /* It's possible that a future allocation/reallocation might land on the same old address,
+                 * so we clear it here to avoid not writing new data in the followup "ri.data != lp" checks. */
+                ri.data = NULL;
+            }
             lp = NULL;
         }
     }
@@ -570,7 +575,6 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
             lp = lpAppend(lp, (unsigned char *)field, sdslen(field));
         }
         lp = lpAppendInteger(lp, 0); /* primary entry zero terminator. */
-        raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
         /* The first entry we insert, has obviously the same fields of the
          * primary entry. */
         flags |= STREAM_ITEM_FLAG_SAMEFIELDS;

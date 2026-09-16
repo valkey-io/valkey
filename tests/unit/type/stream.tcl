@@ -1976,6 +1976,42 @@ start_server {tags {"stream"}} {
         r XADD x 1-18446744073709551615 f1 v1
         assert_error {*The ID specified in XADD is equal or smaller*} {r XADD x 1-* f2 v2}
     }
+
+}
+
+start_server {tags {"stream"}} {
+    test {XADD across macro nodes persists every entry (stream-node-max-bytes)} {
+        r DEL k
+        set a100 [string repeat a 100]
+        set a1200 [string repeat a 1200]
+        set fields [list f1 $a100 f2 $a1200 f3 aaaa f4 a f5 $a1200 f6 $a1200]
+
+        r XADD k 2-2 f1 gd f2 bmljhyqvch
+        assert_equal {2-2} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+
+        # Force every subsequent XADD into its own new macro node.
+        r CONFIG SET stream-node-max-bytes 1
+        r XADD k 2-3 {*}$fields
+        assert_equal {2-2 2-3} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+        assert_equal {2-2 2-3} [lmap e [r XRANGE k - +] {lindex $e 0}]
+
+        # Allow nodes to grow again and keep appending.
+        r CONFIG SET stream-node-max-bytes 4096
+        r XADD k 2-4 {*}$fields
+        assert_equal {2-2 2-3 2-4} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+        assert_equal {2-2 2-3 2-4} [lmap e [r XRANGE k - +] {lindex $e 0}]
+
+        r XADD k 2-5 {*}$fields
+        assert_equal {2-2 2-3 2-4 2-5} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+        assert_equal {2-2 2-3 2-4 2-5} [lmap e [r XRANGE k - +] {lindex $e 0}]
+        assert_equal {2-5 2-4 2-3 2-2} [lmap e [r XREVRANGE k + -] {lindex $e 0}]
+
+        assert_equal 4 [r XLEN k]
+
+        # Field payloads must round-trip intact.
+        assert_equal {f1 gd f2 bmljhyqvch} [lindex [lindex [r XRANGE k 2-2 2-2] 0] 1]
+        assert_equal $fields [lindex [lindex [r XRANGE k 2-5 2-5] 0] 1]
+    }
 }
 
 start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {

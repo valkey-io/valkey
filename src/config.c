@@ -193,6 +193,11 @@ configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILO
                                                  {"if-empty", CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY},
                                                  {NULL, 0}};
 
+configEnum repl_compression_enum[] = {{"no", REPL_COMPRESSION_NO},
+                                      {"yes", REPL_COMPRESSION_YES},
+                                      {"lz4", REPL_COMPRESSION_LZ4},
+                                      {NULL, 0}};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0},                                 /* normal */
@@ -2735,6 +2740,9 @@ static int updateMaxmemory(const char **err) {
         }
         startEvictionTimeProc();
     }
+    /* maxmemory-scripts can be a percentage of maxmemory, in that case the
+     * scripts eviction limit changed together with maxmemory. */
+    if (server.maxmemory_scripts < 0) startScriptsEvictionTimeProc();
     return 1;
 }
 
@@ -3396,6 +3404,12 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+static int updateMaxmemoryScripts(const char **err) {
+    UNUSED(err);
+    startScriptsEvictionTimeProc();
+    return 1;
+}
+
 #define HASH_SEED_MAX_LEN 256
 static int isValidDbHashSeed(sds val, const char **err) {
     if (sdslen(val) > HASH_SEED_MAX_LEN) {
@@ -3523,6 +3537,7 @@ standardConfig static_configs[] = {
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
     createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
     createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
+    createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3633,6 +3648,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("maxmemory-scripts", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_scripts, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, updateMaxmemoryScripts),
     createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */

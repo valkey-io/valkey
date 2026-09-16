@@ -49,6 +49,7 @@
 #include "threads_mngr.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "compression.h"
 #include "tls.h"
 #include "sds.h"
 #include "module.h"
@@ -1901,6 +1902,21 @@ static void sendGetackToReplicas(void) {
 
 extern int ProcessingEventsWhileBlocked;
 
+/* Process one buffered decompression slice before the event loop sleeps.
+ * Returning true lets processEventsWhileBlocked count the slice as progress. */
+static bool processPendingReplStreamDecode(void) {
+    client *primary = server.primary;
+    if (!primary || primary->flag.close_asap || !replStreamHasPendingDecode()) return false;
+    /* streamReplDataBufToDb owns the reader while replaying dual-channel
+     * buffers. Resuming it here could read newer socket bytes before the
+     * remaining buffered blocks. */
+    if (server.pending_repl_data.blocks) return false;
+    if (primary->io_write_state != CLIENT_IDLE || primary->io_read_state != CLIENT_IDLE) return false;
+
+    readQueryFromClient(primary->conn);
+    return true;
+}
+
 /* This function gets called every time the server is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors.
@@ -1933,6 +1949,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         uint64_t processed = 0;
         processed += processIOThreadsResponses();
         processed += connTypeProcessPendingData();
+        /* Keep an online compressed primary draining when a long-running
+         * command yields to the event loop. */
+        processed += processPendingReplStreamDecode();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
         int last_processed = 0;
@@ -1956,6 +1975,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
     int dont_sleep = connTypeHasPendingData();
+    if (processPendingReplStreamDecode()) {
+        server.el_iteration_active = true;
+        if (replStreamHasPendingDecode()) dont_sleep = 1;
+    }
 
     /* Call the Cluster before sleep function. Note that this function
      * may change the state of Cluster (from ok to fail or vice versa),
@@ -2489,6 +2512,7 @@ void initServerConfig(void) {
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;
+    server.repl_compression_advertised = REPL_COMPRESSION_CAPA_UNKNOWN;
     server.repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     server.repl_down_since = 0; /* Never connected, repl is down since EVER. */
     server.primary_repl_offset = 0;
@@ -6653,7 +6677,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "used_memory_vm_eval:%lld\r\n", memory_lua,
                 "used_memory_lua_human:%s\r\n", used_memory_lua_hmem, /* deprecated */
                 "used_memory_scripts_eval:%lld\r\n", (long long)mh->lua_caches,
-                "number_of_cached_scripts:%zu\r\n", dictSize(evalScriptsDict()),
+                "number_of_cached_scripts:%zu\r\n", dictSize(evalCtxScriptsDict()),
                 "number_of_functions:%lu\r\n", functionsNum(),
                 "number_of_libraries:%lu\r\n", functionsLibNum(),
                 "used_memory_vm_functions:%lld\r\n", memory_functions,
@@ -6994,12 +7018,22 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
-                                    "offset=%lld,lag=%ld,type=%s\r\n",
+                                    "offset=%lld,lag=%ld,type=%s",
                                     replica_id, replica_ip, replica->repl_data->replica_listening_port, state,
                                     replica->repl_data->repl_ack_off, lag,
                                     replica->flag.repl_rdb_channel                                ? "rdb-channel"
                                     : replica->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
                                                                                                   : "replica");
+                if (replica->repl_data->repl_compression) {
+                    info = sdscatprintf(info,
+                                        ",repl_compression=%s"
+                                        ",repl_compressed_bytes=%lld"
+                                        ",repl_uncompressed_bytes=%lld",
+                                        compressionAlgoName(replica->repl_data->repl_compression->compressor.algo),
+                                        replica->repl_data->repl_compression->compressed_bytes,
+                                        replica->repl_data->repl_compression->uncompressed_bytes);
+                }
+                info = sdscat(info, "\r\n");
                 replica_id++;
             }
         }

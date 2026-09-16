@@ -5148,30 +5148,30 @@ start_server {tags {"hash expire listpack"}} {
         r DEBUG SET-ACTIVE-EXPIRE 0
         r config set hash-max-listpack-value $original_max_value
         r config set hash-max-listpack-entries 16
-        r del victimhash otherhash
-        r hset victimhash g1 v1 g2 v2
-        r hpexpire victimhash 1 FIELDS 1 g1
+        r del victimhash{t} otherhash{t}
+        r hset victimhash{t} g1 v1 g2 v2
+        r hpexpire victimhash{t} 1 FIELDS 1 g1
         wait_for_condition 100 10 {
-            [r hexists victimhash g1] == 0
+            [r hexists victimhash{t} g1] == 0
         } else {
             fail "Field g1 was never logically expired"
         }
-        assert_encoding listpack victimhash
+        assert_encoding listpack victimhash{t}
 
         # Convert an unrelated hash by crossing hash-max-listpack-entries. That
         # conversion is the last statement of hashTypeSet()'s listpack branch,
         # which returns without running the ignore-TTL reset its hashtable
         # branch ends with, so a conversion that leaves the ignore-TTL state set
         # leaks it to every later listpack hash in the server.
-        for {set i 1} {$i <= 16} {incr i} { r hset otherhash f$i v$i }
-        assert_encoding listpack otherhash
-        r hset otherhash f17 v17
-        assert_encoding hashtable otherhash
+        for {set i 1} {$i <= 16} {incr i} { r hset otherhash{t} f$i v$i }
+        assert_encoding listpack otherhash{t}
+        r hset otherhash{t} f17 v17
+        assert_encoding hashtable otherhash{t}
 
-        # victimhash was never touched, so g1 must still be hidden
-        assert_equal 0 [r hexists victimhash g1]
-        assert_equal {} [r hget victimhash g1]
-        assert_equal {g2 v2} [r hgetall victimhash]
+        # victimhash{t} was never touched, so g1 must still be hidden
+        assert_equal 0 [r hexists victimhash{t} g1]
+        assert_equal {} [r hget victimhash{t} g1]
+        assert_equal {g2 v2} [r hgetall victimhash{t}]
 
         r config set hash-max-listpack-entries 128
         r DEBUG SET-ACTIVE-EXPIRE 1

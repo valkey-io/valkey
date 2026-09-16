@@ -137,7 +137,7 @@ start_server {tags {"repl needs:other-server external:skip"}} {
             skip "Replica $old_replica_version does support Path Hash"
         }
         r flushall
-        r phset path-hash path fields 1 field value
+        r phset pathhash path fields 1 field value
         start_server {start-other-server 1 config "minimal.conf"} {
             set old_replica [srv 0 client]
             start_server {} {
@@ -145,8 +145,8 @@ start_server {tags {"repl needs:other-server external:skip"}} {
                 $old_replica replicaof $primary_host $primary_port
                 $new_replica replicaof $primary_host $primary_port
                 wait_for_sync $new_replica 500 100
-                wait_for_log_messages -2 [list {*Can't store key 'path-hash'*}] 0 50 100
-                assert_equal [list value] [$new_replica phget path-hash path field]
+                wait_for_log_messages -2 [list {*Can't store key 'pathhash'*}] 0 50 100
+                assert_equal [list value] [$new_replica phget pathhash path field]
                 assert_match {*master_link_status:up*} [$new_replica info replication]
                 assert_match {*master_link_status:down*} [$old_replica info replication]
             }
@@ -158,12 +158,12 @@ start_server {tags {"repl needs:other-server external:skip"}} {
             skip "Replica $old_replica_version doesn't support Path Hash"
         }
         r flushall
-        r phset path-hash path fields 1 field value
+        r phset pathhash path fields 1 field value
         start_server {start-other-server 1 config "minimal.conf"} {
             set old_replica [srv 0 client]
             $old_replica replicaof $primary_host $primary_port
             wait_for_sync $old_replica 500 100
-            assert_equal [list value] [$old_replica phget path-hash path field]
+            assert_equal [list value] [$old_replica phget pathhash path field]
         }
     }
 }

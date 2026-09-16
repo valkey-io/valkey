@@ -2,7 +2,7 @@
     "PHSET": {
         "summary": "Atomically sets one or more fields at a path in a path hash.",
         "complexity": "O(L + F*U), where L is the path length, F is the number of fields, and U is the payload field lookup cost.",
-        "group": "path-hash",
+        "group": "pathhash",
         "since": "9.2.0",
         "arity": -7,
         "function": "phsetCommand",

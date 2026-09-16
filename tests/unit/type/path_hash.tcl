@@ -1,11 +1,11 @@
-start_server {tags {path-hash}} {
+start_server {tags {pathhash}} {
     test {PHSET creates a native path hash object and exact reads are binary safe} {
         set path [binary format H* 0001ff]
         set field [binary format H* 660069656c64]
         set value [binary format H* 7600616c7565ff]
         assert_equal OK [r phset tree $path fields 1 $field $value]
-        assert_equal path-hash [r type tree]
-        assert_equal path-hash [r object encoding tree]
+        assert_equal pathhash [r type tree]
+        assert_equal pathhash [r object encoding tree]
         assert_equal 1 [r phcard tree]
         assert_equal [list $value] [r phget tree $path $field]
         assert_equal [list {}] [r phget tree $path missing]
@@ -187,7 +187,7 @@ start_server {tags {path-hash}} {
         assert_equal [list child] [r phget tree ab f]
         assert_equal 1 [r phdel tree ab]
         assert_equal 1 [r exists tree]
-        assert_equal path-hash [r type tree]
+        assert_equal pathhash [r type tree]
         assert_equal 0 [r phcard tree]
         assert_equal 0 [r phdel tree ab]
     }
@@ -201,7 +201,7 @@ start_server {tags {path-hash}} {
         assert_equal {a ac b ba} [lindex $result 1]
         assert_equal 4 [r phdelprefix tree {}]
         assert_equal 1 [r exists tree]
-        assert_equal path-hash [r type tree]
+        assert_equal pathhash [r type tree]
         assert_equal 0 [r phcard tree]
         assert_equal 0 [r phdelprefix tree anything]
     }
@@ -290,20 +290,20 @@ start_server {tags {path-hash}} {
     }
 
     test {Path Hash commands return WRONGTYPE consistently} {
-        r set not-path-hash value
+        r set not-pathhash value
         foreach command {
-            {phset not-path-hash p fields 1 f v}
-            {phmset not-path-hash p fields 1 f v}
-            {phget not-path-hash p f}
-            {phmget not-path-hash p fields 1 f}
-            {phgetall not-path-hash p}
-            {phexists not-path-hash p}
-            {phdel not-path-hash p}
-            {phlongest not-path-hash p}
-            {phprefixes not-path-hash p}
-            {phdelprefix not-path-hash p}
-            {phscan not-path-hash 0}
-            {phcard not-path-hash}
+            {phset not-pathhash p fields 1 f v}
+            {phmset not-pathhash p fields 1 f v}
+            {phget not-pathhash p f}
+            {phmget not-pathhash p fields 1 f}
+            {phgetall not-pathhash p}
+            {phexists not-pathhash p}
+            {phdel not-pathhash p}
+            {phlongest not-pathhash p}
+            {phprefixes not-pathhash p}
+            {phdelprefix not-pathhash p}
+            {phscan not-pathhash 0}
+            {phcard not-pathhash}
         } {
             assert_error WRONGTYPE* {r {*}$command}
         }
@@ -344,7 +344,7 @@ start_server {tags {path-hash}} {
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
             assert_equal $command [lindex [lindex [r command info $command] 0] 0]
-            assert_equal path-hash [dict get [dict get [r command docs $command] $command] group]
+            assert_equal pathhash [dict get [dict get [r command docs $command] $command] group]
             assert_match {*path hash*} [dict get [dict get [r command docs $command] $command] summary]
             set categories [lindex [lindex [r command info $command] 0] 6]
             assert {"@pathhash" in $categories}
@@ -372,7 +372,7 @@ start_server {tags {path-hash}} {
     }
 
     test {Command metadata, ACL category, RESP3, and transactions expose the native type} {
-        assert_equal path-hash [dict get [dict get [r command docs phset] phset] group]
+        assert_equal pathhash [dict get [dict get [r command docs phset] phset] group]
         assert_equal 9.2.0 [dict get [dict get [r command docs phset] phset] since]
         assert {[lsearch -exact [r command list filterby aclcat pathhash] phset] >= 0}
         assert {[lsearch -exact [r acl cat pathhash] phprefixes] >= 0}
@@ -385,10 +385,10 @@ start_server {tags {path-hash}} {
         r phset tree a fields 1 f one
         r phset tree ab fields 1 f two
         assert_equal {OK OK} [r exec]
-        assert_equal path-hash [r type tree]
-        set scan [r scan 0 type path-hash count 100]
+        assert_equal pathhash [r type tree]
+        set scan [r scan 0 type pathhash count 100]
         assert {[lsearch -exact [lindex $scan 1] tree] >= 0}
-        assert_equal $scan [r scan 0 type PATH-HASH count 100]
+        assert_equal $scan [r scan 0 type PATHHASH count 100]
         assert_error {*unknown type name*} {r scan 0 type radix}
         r hello 3
         assert_equal {1 2} [r phprefixes tree abc lengths]
@@ -541,13 +541,13 @@ start_server {tags {path-hash}} {
     }
 
     test {COPY, DUMP/RESTORE, TTL, MEMORY USAGE, and DEBUG DIGEST support path hash values} {
-        set tree {tree:{path-hash-copy}}
-        set tree_copy {tree-copy:{path-hash-copy}}
-        set tree_restored {tree-restored:{path-hash-copy}}
+        set tree {tree:{pathhash-copy}}
+        set tree_copy {tree-copy:{pathhash-copy}}
+        set tree_restored {tree-restored:{pathhash-copy}}
         r del $tree $tree_copy $tree_restored
         r phset $tree {} fields 1 root value
         r phset $tree abc fields 2 f1 v1 f2 v2
-        assert_match {*encoding:path-hash*} [r debug object $tree]
+        assert_match {*encoding:pathhash*} [r debug object $tree]
         # DIGEST-VALUE includes whether a key has a TTL. Compare persistent
         # values below, while testing COPY's TTL preservation separately.
         set digest_before [r debug digest-value $tree]
@@ -579,29 +579,29 @@ start_server {tags {path-hash}} {
     } {} {needs:debug}
 
     test {Empty Path Hash survives COPY, DUMP/RESTORE, and RDB reload} {
-        set empty_tree {empty-tree:{path-hash-empty}}
-        set empty_copy {empty-copy:{path-hash-empty}}
-        set empty_restored {empty-restored:{path-hash-empty}}
+        set empty_tree {empty-tree:{pathhash-empty}}
+        set empty_copy {empty-copy:{pathhash-empty}}
+        set empty_restored {empty-restored:{pathhash-empty}}
         r del $empty_tree $empty_copy $empty_restored
         r phset $empty_tree path fields 1 field value
         assert_equal 1 [r phdel $empty_tree path]
         assert_equal 1 [r exists $empty_tree]
-        assert_equal path-hash [r type $empty_tree]
+        assert_equal pathhash [r type $empty_tree]
         assert_equal 0 [r phcard $empty_tree]
 
         assert_equal 1 [r copy $empty_tree $empty_copy]
-        assert_equal path-hash [r type $empty_copy]
+        assert_equal pathhash [r type $empty_copy]
         assert_equal 0 [r phcard $empty_copy]
 
         set dumped [r dump $empty_tree]
         assert_equal OK [r restore $empty_restored 0 $dumped]
-        assert_equal path-hash [r type $empty_restored]
+        assert_equal pathhash [r type $empty_restored]
         assert_equal 0 [r phcard $empty_restored]
 
         r debug reload
         foreach key [list $empty_tree $empty_copy $empty_restored] {
             assert_equal 1 [r exists $key]
-            assert_equal path-hash [r type $key]
+            assert_equal pathhash [r type $key]
             assert_equal 0 [r phcard $key]
             assert_equal {0 {}} [r phscan $key 0]
         }
@@ -620,7 +620,7 @@ start_server {tags {path-hash}} {
         r phset tree $binary_path fields 1 field $binary_value
         r pexpire tree 60000
         r debug reload
-        assert_equal path-hash [r type tree]
+        assert_equal pathhash [r type tree]
         assert_equal [list root-value] [r phget tree {} root]
         assert_equal [list $binary_value] [r phget tree $binary_path field]
         assert_equal 2 [r phcard tree]
@@ -681,12 +681,12 @@ start_server {tags {path-hash}} {
         set filename [lindex [r config get dbfilename] 1]
         set output [exec $::VALKEY_CHECK_RDB_BIN [file join $dir $filename] --stats --format info]
         assert_match {*RDB looks OK*} $output
-        assert_match {*path-hash*} $output
+        assert_match {*pathhash*} $output
         assert_no_match {*radix*} [string tolower $output]
     } {} {external:skip}
 }
 
-start_server {tags {path-hash needs:debug} overrides {appendonly yes aof-use-rdb-preamble no}} {
+start_server {tags {pathhash needs:debug} overrides {appendonly yes aof-use-rdb-preamble no}} {
     test {AOF rewrite and reload preserve populated and empty Path Hash values} {
         r phset tree {} fields 1 root value
         r phset tree abc fields 2 f1 v1 f2 v2
@@ -702,13 +702,13 @@ start_server {tags {path-hash needs:debug} overrides {appendonly yes aof-use-rdb
         assert_equal {{} v2} [r phget tree abc f1 f2]
         assert_equal [list v3] [r phget tree abcd child]
         assert_equal 1 [r exists empty-tree]
-        assert_equal path-hash [r type empty-tree]
+        assert_equal pathhash [r type empty-tree]
         assert_equal 0 [r phcard empty-tree]
     }
 }
 
-start_server {tags {path-hash external:skip}} {
-    start_server {tags {path-hash external:skip}} {
+start_server {tags {pathhash external:skip}} {
+    start_server {tags {pathhash external:skip}} {
         set primary [srv -1 client]
         set primary_host [srv -1 host]
         set primary_port [srv -1 port]
@@ -733,7 +733,7 @@ start_server {tags {path-hash external:skip}} {
             assert_equal [list one] [$replica phget tree a f]
             assert_equal [list {}] [$replica phget tree ab f]
             assert_equal 1 [$replica exists empty-tree]
-            assert_equal path-hash [$replica type empty-tree]
+            assert_equal pathhash [$replica type empty-tree]
             assert_equal 0 [$replica phcard empty-tree]
         }
     }

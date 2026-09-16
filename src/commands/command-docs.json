@@ -67,7 +67,7 @@
                                     "const": "module"
                                 },
                                 {
-                                    "const": "path-hash"
+                                    "const": "pathhash"
                                 },
                                 {
                                     "const": "pubsub"

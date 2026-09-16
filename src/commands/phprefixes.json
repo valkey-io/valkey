@@ -2,7 +2,7 @@
     "PHPREFIXES": {
         "summary": "Returns every stored path in a path hash that prefixes a query.",
         "complexity": "O(L + O).",
-        "group": "path-hash",
+        "group": "pathhash",
         "since": "9.2.0",
         "arity": -3,
         "function": "phprefixesCommand",

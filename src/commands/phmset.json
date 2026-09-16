@@ -2,7 +2,7 @@
     "PHMSET": {
         "summary": "Atomically sets fields across multiple paths in a path hash.",
         "complexity": "O(sum(L) + M*U), where M is the total number of fields across all path groups.",
-        "group": "path-hash",
+        "group": "pathhash",
         "since": "9.2.0",
         "arity": -7,
         "function": "phmsetCommand",

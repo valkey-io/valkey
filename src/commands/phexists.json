@@ -2,7 +2,7 @@
     "PHEXISTS": {
         "summary": "Tests whether an exact logical path exists in a path hash.",
         "complexity": "O(L), where L is the path length.",
-        "group": "path-hash",
+        "group": "pathhash",
         "since": "9.2.0",
         "arity": 3,
         "function": "phexistsCommand",

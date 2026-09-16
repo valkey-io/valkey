@@ -2610,7 +2610,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
             robj *payload = createHashObject();
             if (!raxTryInsert(path_hash->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
-                rdbReportCorruptRDB("Duplicate path-hash path");
+                rdbReportCorruptRDB("Duplicate pathhash path");
                 sdsfree(path);
                 decrRefCount(payload);
                 decrRefCount(o);
@@ -2642,7 +2642,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                                           &expired_overwritten);
                 serverAssert(!expired_overwritten);
                 if (updated) {
-                    rdbReportCorruptRDB("Duplicate path-hash payload field");
+                    rdbReportCorruptRDB("Duplicate pathhash payload field");
                     decrRefCount(o);
                     return NULL;
                 }

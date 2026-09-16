@@ -218,7 +218,7 @@ static CommandGroupType mapGroupType(const sds groupStr) {
         {"hyperloglog", CMD_GROUP_HYPERLOGLOG},
         {"geo", CMD_GROUP_GEO},
         {"bitmap", CMD_GROUP_BITMAP},
-        {"path-hash", CMD_GROUP_PATH_HASH},
+        {"pathhash", CMD_GROUP_PATH_HASH},
         {"pubsub", CMD_GROUP_PUBSUB},
         {"generic", CMD_GROUP_GENERIC},
         {NULL, CMD_GROUP_UNKNOWN}};
@@ -1180,7 +1180,7 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
             keyPrefix = "bitmap";
             break;
         case CMD_GROUP_PATH_HASH:
-            keyPrefix = "path-hash";
+            keyPrefix = "pathhash";
             break;
         case CMD_GROUP_PUBSUB:
             keyPrefix = "channel";

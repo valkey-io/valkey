@@ -1320,7 +1320,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
-    case OBJ_ENCODING_PATH_HASH: return "path-hash";
+    case OBJ_ENCODING_PATH_HASH: return "pathhash";
     default: return "unknown";
     }
 }

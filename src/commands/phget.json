@@ -2,7 +2,7 @@
     "PHGET": {
         "summary": "Returns one or more fields from an exact path in a path hash.",
         "complexity": "O(L + F*U).",
-        "group": "path-hash",
+        "group": "pathhash",
         "since": "9.2.0",
         "arity": -4,
         "function": "phgetCommand",

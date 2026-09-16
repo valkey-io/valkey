@@ -129,7 +129,7 @@ enum RdbType {
     RDB_TYPE_STREAM_LISTPACKS_2 = 19,
     RDB_TYPE_SET_LISTPACK = 20, /* Added in RDB 11 (7.2) */
     RDB_TYPE_STREAM_LISTPACKS_3 = 21,
-    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration, RDB 80 (9.0) */
+    RDB_TYPE_HASH_2 = 22,    /* Hash with field-level expiration, RDB 80 (9.0) */
     RDB_TYPE_PATH_HASH = 23, /* Path hash paths with field/value payloads, RDB 81 (9.2) */
     RDB_TYPE_LAST
 };

@@ -1725,6 +1725,8 @@ static void resetDeferredReplyBuffer(client *c) {
  * in the pending write queue. */
 void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
     if (skip_if_blocked && c->flag.blocked) return;
+    /* During EXEC, inner notifications must not commit; EXEC-end may still block. */
+    if (skip_if_blocked && server.in_exec) return;
 
     if (!isDeferredReplyEnabled(c) || (c->deferred_reply && listLength(c->deferred_reply) == 0)) {
         resetDeferredReplyBuffer(c);

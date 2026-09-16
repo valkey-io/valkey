@@ -252,11 +252,12 @@ This flag should not be used directly by the module.
 #define VALKEYMODULE_NOTIFY_LOADED (1 << 12)   /* module only key space notification, indicate a key loaded from rdb */
 #define VALKEYMODULE_NOTIFY_MODULE (1 << 13)   /* d, module key space notification */
 #define VALKEYMODULE_NOTIFY_NEW (1 << 14)      /* n, new key notification */
+#define VALKEYMODULE_NOTIFY_EXEC (1 << 15)     /* module only, MULTI/EXEC finished executing queued commands */
 
 /* Next notification flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
  * Use ValkeyModule_GetKeyspaceNotificationFlagsAll instead. */
-#define _VALKEYMODULE_NOTIFY_NEXT (1 << 15)
+#define _VALKEYMODULE_NOTIFY_NEXT (1 << 16)
 
 #define VALKEYMODULE_NOTIFY_ALL                                                                                        \
     (VALKEYMODULE_NOTIFY_GENERIC | VALKEYMODULE_NOTIFY_STRING | VALKEYMODULE_NOTIFY_LIST | VALKEYMODULE_NOTIFY_SET |   \

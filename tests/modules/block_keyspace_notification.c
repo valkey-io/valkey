@@ -124,6 +124,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         // VALKEYMODULE_NOTIFY_LOADED event are not supported we can not start
         return VALKEYMODULE_ERR;
     }
+    if (!(keySpaceAll & VALKEYMODULE_NOTIFY_EXEC)) {
+        return VALKEYMODULE_ERR;
+    }
     if (ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_LOADED,
                                                KeySpace_NotificationGeneric) !=
             VALKEYMODULE_OK ||
@@ -143,6 +146,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                                KeySpace_NotificationGeneric) !=
             VALKEYMODULE_OK ||
         ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_HASH,
+                                               KeySpace_NotificationGeneric) !=
+            VALKEYMODULE_OK ||
+        ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_EXEC,
                                                KeySpace_NotificationGeneric) !=
             VALKEYMODULE_OK ||
         ValkeyModule_CreateCommand(ctx, "b_keyspace.events", cmdGetEvents, "",

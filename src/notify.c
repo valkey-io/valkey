@@ -166,3 +166,17 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
         decrRefCount(chanobj);
     }
 }
+
+/* Module-only EXEC-end event. Caller must have cleared in_exec (BlockClient). */
+void notifyModulesExecEnded(client *c) {
+    robj *key;
+
+    if (c->id == CLIENT_ID_AOF) return;
+    if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
+
+    /* Dummy key: the notification callback always takes one. */
+    key = createStringObject("", 0);
+    moduleNotifyKeyspaceEvent(NOTIFY_EXEC, "exec", key, c->db->id);
+    decrRefCount(key);
+    c->flag.keyspace_notified = 1;
+}

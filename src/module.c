@@ -9454,6 +9454,14 @@ void moduleReleaseGIL(void) {
  *                               Notice, when this event fires, the given key
  *                               can not be retained, use VM_CreateStringFromString
  *                               instead.
+ *  - VALKEYMODULE_NOTIFY_EXEC: A special notification available only for modules,
+ *                             fired after MULTI/EXEC has finished executing the
+ *                             queued commands. The event name is "exec" and the
+ *                             key is empty: per-key mutations were already
+ *                             delivered during the transaction. Unlike those
+ *                             in-transaction notifications, the client may be
+ *                             blocked from this callback. DISCARD, EXECABORT,
+ *                             WATCH failures, and AOF replay do not emit this event.
  *
  * We do not distinguish between key events and keyspace events, and it is up
  * to the module to filter the actions taken based on the key.

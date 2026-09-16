@@ -112,6 +112,67 @@ tags "modules" {
             assert_match {*db=0*} [r client info]
         } {} {singledb:skip}
 
+        test {EXEC fires a module-only exec notification} {
+            r del testkeyspace:exec testkeyspace:exec_in_multi
+            r multi
+            r set execnotify 1
+            assert_equal {OK} [r exec]
+            assert_equal 1 [r get testkeyspace:exec]
+            # Transaction state is already cleared when the event is delivered.
+            assert_equal {} [r get testkeyspace:exec_in_multi]
+        }
+
+        test {Empty EXEC still fires exec notification} {
+            r del testkeyspace:exec
+            r multi
+            assert_equal {} [r exec]
+            assert_equal 1 [r get testkeyspace:exec]
+        }
+
+        test {DISCARD does not fire exec notification} {
+            r del testkeyspace:exec
+            r multi
+            r set execnotify 1
+            assert_equal {OK} [r discard]
+            assert_equal {} [r get testkeyspace:exec]
+        }
+
+        test {EXECABORT does not fire exec notification} {
+            r del testkeyspace:exec
+            r multi
+            r set execnotify 1
+            catch {r non-existing-command}
+            assert_error {EXECABORT*} {r exec}
+            assert_equal {} [r get testkeyspace:exec]
+        }
+
+        test {WATCH failure does not fire exec notification} {
+            r del testkeyspace:exec
+            r set watched 1
+            r watch watched
+            r set watched 2
+            r multi
+            r incr watched
+            assert_equal {} [r exec]
+            assert_equal {} [r get testkeyspace:exec]
+        }
+
+        test {AOF load does not fire exec notification} {
+            r config set appendonly yes
+            r config set auto-aof-rewrite-percentage 0
+            waitForBgrewriteaof r
+
+            r del testkeyspace:exec
+            r multi
+            r set execnotify 1
+            assert_equal {OK} [r exec]
+            assert_equal 1 [r get testkeyspace:exec]
+
+            r debug loadaof
+            # Replay must not deliver a second exec notification.
+            assert_equal 1 [r get testkeyspace:exec]
+        } {} {needs:debug}
+
         test {COPY restores client DB after module keyspace notification} {
             # COPY fires a copy_to notification on the destination DB. The
             # module subscribes to NOTIFY_GENERIC, and the bug left the client

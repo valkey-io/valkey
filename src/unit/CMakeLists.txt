@@ -271,12 +271,11 @@ if (APPLE)
         --nm "${LLVM_NM}"
         --objcopy "${LLVM_OBJCOPY}"
         --ar "${CMAKE_AR}"
-        # An LTO build writes the objects as LLVM bitcode, and wrap-objects.py
-        # needs a compiler to turn those into real object files. It must be the
-        # same compiler that produced them, so we pass CMAKE_C_COMPILER and not
-        # llc from Homebrew LLVM.
-        --cc "${CMAKE_C_COMPILER}"
         --wrappers "${CMAKE_CURRENT_LIST_DIR}/wrappers.h")
+    # An LTO build writes the objects as LLVM bitcode, and wrap-objects.py needs
+    # a compiler to turn those into real object files. It must be the compiler
+    # that produced them, and not llc from Homebrew LLVM, so the server objects
+    # get the C compiler and the test objects get the C++ one.
     set(WRAP_OBJECTS_DEPS
         "${WRAP_OBJECTS_SCRIPT}"
         "${CMAKE_CURRENT_LIST_DIR}/wrapper_util.py"
@@ -285,6 +284,7 @@ if (APPLE)
     add_custom_command(
         OUTPUT "${WRAPPED_VALKEY_LIB}"
         COMMAND python3 "${WRAP_OBJECTS_SCRIPT}" ${WRAP_OBJECTS_ARGS}
+                --cc "${CMAKE_C_COMPILER}"
                 --output-dir "${WRAPPED_DIR}/valkeylib"
                 --archive "${WRAPPED_VALKEY_LIB}"
                 $<TARGET_OBJECTS:valkeylib-gtest>
@@ -296,6 +296,7 @@ if (APPLE)
     add_custom_command(
         OUTPUT "${WRAPPED_TESTS_LIB}"
         COMMAND python3 "${WRAP_OBJECTS_SCRIPT}" ${WRAP_OBJECTS_ARGS}
+                --cc "${CMAKE_CXX_COMPILER}"
                 --output-dir "${WRAPPED_DIR}/tests"
                 --archive "${WRAPPED_TESTS_LIB}"
                 $<TARGET_OBJECTS:valkey-unit-gtests-objs>

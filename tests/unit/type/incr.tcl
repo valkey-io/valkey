@@ -151,12 +151,12 @@ start_server {tags {"incr"}} {
             # perform divisions.
     } {ERR *would produce*} {valgrind:skip}
 
-    test {INCRBYFLOAT NaN increment is rejected by the parser} {
+    test {INCRBYFLOAT rejects a NaN increment} {
         r set foo 0
         assert_error "*value is not a valid float*" {r incrbyfloat foo nan}
     }
 
-    test {INCRBYFLOAT reaches the NaN result check via inf + -inf} {
+    test {INCRBYFLOAT with an infinite field value} {
         r set foo inf
         assert_error "*would produce NaN or Infinity*" {r incrbyfloat foo -inf}
         assert_equal inf [r get foo]

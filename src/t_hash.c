@@ -1281,7 +1281,7 @@ void hincrbyfloatCommand(client *c) {
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if (isinf(incr)) {
-        addReplyError(c, "value is Infinity");
+        addReplyError(c, "value is NaN or Infinity");
         return;
     }
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;

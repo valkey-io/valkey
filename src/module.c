@@ -2693,7 +2693,8 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  *   the VALKEYMODULE_AUX_BEFORE_RDB section, and it must export only limited
  *   data (this function runs on the main thread and blocks it during a forkless
  *   operation).
- * If any loaded module does not set this flag, forkless operations are blocked.
+ * When forkless background saving is configured, if any loaded module does not
+ * set this flag, the server falls back to fork-based saving.
  */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;

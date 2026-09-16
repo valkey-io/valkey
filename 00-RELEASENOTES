@@ -68,7 +68,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Fix a crash caused by a NULL pointer dereference when all timer events in an event loop are pending deletion by @royenheart (#4351)
 * Rework iteration over clients blocked on ready keys to simplify and harden an earlier use-after-free fix by @enjoy-binbin (#4472)
 * Fix a race in RDB string compression that could produce corrupt, unloadable RDB files when compression runs concurrently, without increasing copy-on-write by @dubey02 (#4539)
-* Fix a duplicate error reply when `FLUSHDB`/`FLUSHALL` is called with invalid arguments during forkless background iteration by @JimB123 (#4610)
 * Fix dropped field TTLs and a possible crash when loading a hash with field expiration converts it to a hashtable mid-load (e.g. via RESTORE) by @madolson (#4669)
 * Reject a repeated `CLUSTER SYNCSLOTS ESTABLISH` on the same connection, which could lead to a use-after-free crash on disconnect by @Pyolar (#4670)
 * Fix a crash in replication throttling caused by incorrect throttle-check ordering when clients are blocked and later unblocked by @harrylin98 (#4612)

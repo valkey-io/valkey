@@ -1008,6 +1008,9 @@ void hashTypeConvertListpack(robj *o, int enc) {
         /* Presize the hashtable to avoid rehashing */
         hashtableExpand(ht, hashTypeLength(o));
 
+        /* Iterate with TTLs ignored so logically-expired fields survive the
+         * conversion and are reaped normally. */
+        hashTypeIgnoreTTL(o, true);
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
@@ -1028,6 +1031,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
             }
         }
         hashTypeResetIterator(&hi);
+        hashTypeIgnoreTTL(o, false);
         zfree(objectGetVal(o));
         objectSetEncoding(o, OBJ_ENCODING_HASHTABLE);
         objectSetVal(o, ht);

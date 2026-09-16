@@ -53,7 +53,7 @@
             },
             {
                 "name": "member",
-                "type": "string"
+                "type": "member"
             }
         ]
     }

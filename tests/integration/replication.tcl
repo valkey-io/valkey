@@ -85,6 +85,71 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [$A debug digest] [$B debug digest]
         }
 
+        test {INCREX replication, should not remove expire} {
+            r set test 1 EX 100
+            r increx test byint 1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT replication, should not remove expire} {
+            r set test 1 EX 100
+            r increx test byfloat 0.1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX byint with EX propagates the correct TTL to replica} {
+            r del test
+            r increx test ex 100 byint 1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_range [$B ttl test] 1 100
+        }
+
+        test {INCREX byfloat with EX propagates the correct TTL to replica} {
+            r del test
+            r increx test ex 100 byfloat 1.1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_range [$B ttl test] 1 100
+        }
+
+        test {INCREX BYFLOAT without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1
+            r increx test byfloat 0.2
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with NX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1 NX
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with XX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1
+            r increx test byfloat 0.1 XX
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
         test {GETSET replication} {
             $A config resetstat
             $A config set loglevel debug
@@ -309,6 +374,75 @@ start_server {tags {"repl external:skip"}} {
                 {flushall}
                 {flushall}
                 {incr x}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX with expire propagates as SET with PXAT} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo ex 100 byint 5
+            assert_replication_stream $repl {
+                {set foo 5 PXAT *}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX BYFLOAT propagates as SET, not literal command} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byfloat 0.1
+            assert_replication_stream $repl {
+                {set foo *}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX BYINT without expire propagates verbatim} {
+            # BYINT-only increments are deterministic, so unlike BYFLOAT they
+            # don't need rewriting to SET for replication safety.
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5
+            assert_replication_stream $repl {
+                {increx foo byint 5}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX NX no-op does not propagate} {
+            r -1 set foo 1
+            set repl [attach_to_replication_stream]
+            r -1 increx foo nx byint 1
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX XX no-op does not propagate} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo xx byint 1
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX BYFLOAT arithmetic overflow does not propagate} {
+            set big [ldbl_overflow_operand -1]
+            r -1 del foo
+            r -1 set foo $big
+            set repl [attach_to_replication_stream]
+            # Overflows to infinity; no change to DB, should not propagate
+            r -1 increx foo byfloat $big
+            assert_equal $big [r -1 get foo]
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
             }
             close_replication_stream $repl
         }
@@ -1114,6 +1248,69 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     }
 }
 
+# Compressed sibling of the drop-during-pipe family above. Compression finishes
+# the transfer too quickly for the size-based throttling used there, so a
+# per-key save delay keeps the compressed diskless transfer in flight while one
+# replica is killed. The primary's RDB child must complete without crashing and
+# the surviving replica must converge.
+start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4 repl-compression lz4}} {
+    set master [srv 0 client]
+    $master config set repl-diskless-sync yes
+    $master config set repl-diskless-sync-delay 5
+    $master config set repl-diskless-sync-max-replicas 2
+    $master config set dual-channel-replication-enabled "no"; # dual-channel-replication doesn't use pipe
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    $master debug populate 4000 test 1000
+    # 1ms per key over 4k keys keeps the compressed transfer in flight for
+    # about 4 seconds; resetting the delay later does not speed up the
+    # already-forked child, so the kill below always lands mid-transfer.
+    $master config set rdb-key-save-delay 1000
+
+    test "diskless replica drops during compressed rdb pipe" {
+        start_server {overrides {save "" rdbcompression lz4 repl-compression lz4 repl-diskless-load swapdb}} {
+            set survivor [srv 0 client]
+            start_server {overrides {save "" rdbcompression lz4 repl-compression lz4}} {
+                set loglines [count_log_lines -2]
+                $survivor replicaof $master_host $master_port
+                [srv 0 client] replicaof $master_host $master_port
+
+                # Wait for a compressed transfer to be in flight: the cohort
+                # negotiated compression and the survivor began the socket load.
+                wait_for_log_messages -2 {"*Diskless full sync with compression: lz4*"} $loglines 1500 10
+                wait_for_log_messages -1 {"*Loading DB in memory*"} 0 1500 10
+
+                # Kill one replica mid-transfer.
+                exec kill [srv 0 pid]
+
+                wait_for_condition 2400 100 {
+                    [s -2 rdb_bgsave_in_progress] == 0
+                } else {
+                    fail "rdb child didn't terminate"
+                }
+                wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1000 10
+                $master config set rdb-key-save-delay 0
+
+                # Verify the surviving replica converged on the compressed sync.
+                wait_for_condition 600 100 {
+                    [lindex [$survivor role] 3] eq {connected}
+                } else {
+                    fail "surviving replica still not connected after some time"
+                }
+                wait_for_condition 50 100 {
+                    [$master dbsize] == [$survivor dbsize]
+                } else {
+                    fail "Different number of keys between master and surviving replica after too long time."
+                }
+                set digest [$master debug digest]
+                set digest0 [$survivor debug digest]
+                assert {$digest ne 0000000000000000000000000000000000000000}
+                assert {$digest eq $digest0}
+            }
+        }
+    }
+}
+
 test "diskless replication child being killed is collected" {
     # when diskless master is waiting for the replica to become writable
     # it removes the read event from the rdb pipe so if the child gets killed
@@ -1682,6 +1879,90 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
+# Verify that after a diskless (socket) replication sync, save metrics
+# are correctly reset and rdb_last_bgsave_time_sec is a plausible duration.
+start_server {tags {"repl external:skip"}} {
+    start_server {} {
+        test {diskless sync: save metrics are plausible after socket transfer} {
+            set master [srv -1 client]
+            set master_host [srv -1 host]
+            set master_port [srv -1 port]
+            set replica [srv 0 client]
+
+            $master config set repl-diskless-sync yes
+            $master config set repl-diskless-sync-delay 0
+            $master config set save ""
+            $replica config set save ""
+
+            $master debug populate 100
+
+            $replica replicaof $master_host $master_port
+
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "Replica didn't complete sync"
+            }
+
+            # After diskless sync, master metrics should be sane
+            set time_sec [$master info persistence]
+            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+
+            # Save state should be cleared
+            assert_equal [getInfoProperty $time_sec rdb_bgsave_in_progress] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_processed] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_total] "0"
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
+    start_server {} {
+        test {diskless sync: save metrics are plausible after failed socket transfer} {
+            set master [srv -1 client]
+            set master_host [srv -1 host]
+            set master_port [srv -1 port]
+            set replica [srv 0 client]
+
+            $master config set repl-diskless-sync yes
+            $master config set repl-diskless-sync-delay 0
+            $master config set save ""
+            $replica config set save ""
+
+            $master debug populate 1000
+            $master config set rdb-key-save-delay 100000
+
+            $replica replicaof $master_host $master_port
+
+            # Wait for bgsave to start on master
+            wait_for_condition 100 100 {
+                [getInfoProperty [$master info persistence] rdb_bgsave_in_progress] == 1
+            } else {
+                fail "diskless bgsave didn't start"
+            }
+
+            # Kill the replica connection to abort the transfer
+            $replica replicaof no one
+
+            # Wait for bgsave to finish on master
+            wait_for_condition 100 100 {
+                [getInfoProperty [$master info persistence] rdb_bgsave_in_progress] == 0
+            } else {
+                fail "diskless bgsave didn't stop after replica disconnect"
+            }
+
+            # Metrics should still be sane after failure
+            set time_sec [$master info persistence]
+            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+            assert_equal [getInfoProperty $time_sec current_save_keys_processed] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_total] "0"
+
+            $master config set rdb-key-save-delay 0
+        }
+    }
+}
 start_server {tags {"repl external:skip"}} {
     set replica [srv 0 client]
     $replica config set repl-diskless-load disabled

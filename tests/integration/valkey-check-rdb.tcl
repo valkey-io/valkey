@@ -124,6 +124,35 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             }
         }
 
+        test "valkey-check-rdb rejects a compressed RDB truncated mid-frame" {
+            r config set rdbcompression lz4
+            set dir [lindex [r config get dir] 1]
+            set midframe_rdb [file join $dir midframe-vcs.rdb]
+            with_cleanup {
+                r flushall
+                r set lz4:midframe [string repeat "payload " 200]
+                r save
+
+                set dump_rdb [file join $dir dump.rdb]
+                set data [read_binary_file $dump_rdb]
+                # Cut mid-frame rather than dropping the trailer: a file has no
+                # more bytes coming, so this is corruption.
+                set keep [expr {[string length $data] * 6 / 10}]
+                write_binary_file $midframe_rdb [string range $data 0 [expr {$keep - 1}]]
+
+                set failed [catch {
+                    exec $::VALKEY_CHECK_RDB_BIN $midframe_rdb
+                } result]
+
+                assert_equal 1 $failed
+                assert_match {*Corrupt compressed RDB stream*} $result
+                assert_no_match {*RDB looks OK*} $result
+            } {
+                file delete -force $midframe_rdb
+                catch {r config set rdbcompression yes}
+            }
+        }
+
         test "valkey-check-rdb ignores trailing data after a compressed RDB" {
             r config set rdbcompression lz4
             set dir [lindex [r config get dir] 1]

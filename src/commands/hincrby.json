@@ -49,7 +49,7 @@
             },
             {
                 "name": "field",
-                "type": "string"
+                "type": "field"
             },
             {
                 "name": "increment",

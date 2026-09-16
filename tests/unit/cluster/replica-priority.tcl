@@ -1,4 +1,4 @@
-start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000 cluster-replica-validity-factor 0}} {
     test "Replica can do a better ranking in auto failover based on the priority" {
         # primary R 0, replica1 R 3, replica2 R 6
 

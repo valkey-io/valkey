@@ -273,7 +273,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             }
         }
         streamIteratorStop(&si);
-    } else if (objectGetType(o) == OBJ_RADIX) {
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
         radixTypeDigest(digest, o);
     } else if (objectGetType(o) == OBJ_MODULE) {
         ValkeyModuleDigest md = {{0}, {0}, keyobj, db->id};
@@ -1264,7 +1264,7 @@ void serverLogObjectDebugInfo(const robj *o) {
         }
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
-    } else if (objectGetType(o) == OBJ_RADIX) {
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
         serverLog(LL_WARNING, "Path hash path count: %llu",
                   (unsigned long long)raxSize(((radixObject *)objectGetVal(o))->index));
     }

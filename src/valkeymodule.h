@@ -253,7 +253,7 @@ This flag should not be used directly by the module.
 #define VALKEYMODULE_NOTIFY_LOADED (1 << 12)    /* module only key space notification, indicate a key loaded from rdb */
 #define VALKEYMODULE_NOTIFY_MODULE (1 << 13)    /* d, module key space notification */
 #define VALKEYMODULE_NOTIFY_NEW (1 << 14)       /* n, new key notification */
-#define VALKEYMODULE_NOTIFY_PATH_HASH (1 << 15) /* r */
+#define VALKEYMODULE_NOTIFY_PATH_HASH (1 << 15) /* p */
 
 /* Next notification flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.

@@ -391,7 +391,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         }
         streamIteratorStop(&si);
         statsRecordCount(streamLength(o), stats);
-    } else if (o->type == OBJ_RADIX) {
+    } else if (o->type == OBJ_PATH_HASH) {
         radixObject *radix = objectGetVal(o);
         raxIterator paths;
         raxStart(&paths, radix->index);

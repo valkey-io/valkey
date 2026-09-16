@@ -1,6 +1,6 @@
-start_cluster 1 1 {tags {radix external:skip cluster}} {
-    test {Radix commands use the top-level key slot and replicate in cluster mode} {
-        set key {radix:{model-a}:placement}
+start_cluster 1 1 {tags {path-hash external:skip cluster}} {
+    test {Path Hash commands use the top-level key slot and replicate in cluster mode} {
+        set key {path-hash:{model-a}:placement}
         assert_equal OK [R 0 phset $key a fields 1 worker-a generation-1]
         assert_equal OK [R 0 phset $key ab fields 1 worker-a generation-1]
         assert_equal {1 2} [R 0 phprefixes $key abc lengths]

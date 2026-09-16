@@ -1730,7 +1730,7 @@ void copyCommand(client *c) {
     case OBJ_ZSET: newobj = zsetDup(o); break;
     case OBJ_HASH: newobj = hashTypeDup(o); break;
     case OBJ_STREAM: newobj = streamDup(o); break;
-    case OBJ_RADIX: newobj = radixTypeDup(o); break;
+    case OBJ_PATH_HASH: newobj = radixTypeDup(o); break;
     case OBJ_MODULE:
         newobj = moduleTypeDupOrReply(c, key, newkey, dst->id, o);
         if (!newobj) return;

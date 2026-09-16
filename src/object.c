@@ -780,7 +780,7 @@ void decrRefCount(robj *o) {
             case OBJ_HASH: freeHashObject(o); break;
             case OBJ_MODULE: freeModuleObject(o); break;
             case OBJ_STREAM: freeStreamObject(o); break;
-            case OBJ_RADIX: freeRadixObject(o); break;
+            case OBJ_PATH_HASH: freeRadixObject(o); break;
             default: serverPanic("Unknown object type"); break;
             }
         }
@@ -1320,7 +1320,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
-    case OBJ_ENCODING_RADIX: return "radix";
+    case OBJ_ENCODING_PATH_HASH: return "path-hash";
     default: return "unknown";
     }
 }
@@ -1493,7 +1493,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             raxStop(&ri);
             if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
         }
-    } else if (objectGetType(o) == OBJ_RADIX) {
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
         asize += radixTypeMemUsage(o, sample_size);
     } else if (objectGetType(o) == OBJ_MODULE) {
         asize += moduleGetMemUsage(key, o, sample_size, dbid);

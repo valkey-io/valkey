@@ -783,9 +783,9 @@ int rdbGetObjectType(robj *o, int rdbver) {
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) return RDB_TYPE_HASH;
         serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;
-    case OBJ_RADIX:
+    case OBJ_PATH_HASH:
         if (rdbver >= 81)
-            return RDB_TYPE_RADIX;
+            return RDB_TYPE_PATH_HASH;
         else
             return -1; /* can't be stored in old RDB */
     case OBJ_MODULE: return RDB_TYPE_MODULE_2;
@@ -1204,7 +1204,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             }
             raxStop(&ri);
         }
-    } else if (objectGetType(o) == OBJ_RADIX) {
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
         radixObject *radix = objectGetVal(o);
         if ((n = rdbSaveLen(rdb, raxSize(radix->index))) == -1) return -1;
         nwritten += n;
@@ -2589,7 +2589,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (error) *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
             return NULL;
         }
-    } else if (rdbtype == RDB_TYPE_RADIX) {
+    } else if (rdbtype == RDB_TYPE_PATH_HASH) {
         uint64_t path_count = rdbLoadLen(rdb, NULL);
         if (path_count == RDB_LENERR) return NULL;
         o = createRadixObject();

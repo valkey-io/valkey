@@ -1,11 +1,11 @@
-start_server {tags {radix}} {
-    test {PHSET creates a native radix object and exact reads are binary safe} {
+start_server {tags {path-hash}} {
+    test {PHSET creates a native path hash object and exact reads are binary safe} {
         set path [binary format H* 0001ff]
         set field [binary format H* 660069656c64]
         set value [binary format H* 7600616c7565ff]
         assert_equal OK [r phset tree $path fields 1 $field $value]
         assert_equal path-hash [r type tree]
-        assert_equal radix [r object encoding tree]
+        assert_equal path-hash [r object encoding tree]
         assert_equal 1 [r phcard tree]
         assert_equal $value [r phget tree $path $field]
         assert_equal {} [r phget tree $path missing]
@@ -219,7 +219,7 @@ start_server {tags {radix}} {
         assert_equal {keep:a keep:b keep:c} [lindex [r phscan tree 0 count 100] 1]
     }
 
-    test {Radix write commands account server dirty by logical mutations} {
+    test {Path Hash write commands account server dirty by logical mutations} {
         r del dirty-tree
         r del empty-dirty-tree
         r save
@@ -288,27 +288,27 @@ start_server {tags {radix}} {
         assert_equal 0 [lindex $page 0]
     }
 
-    test {Radix commands return WRONGTYPE consistently} {
-        r set notradix value
+    test {Path Hash commands return WRONGTYPE consistently} {
+        r set not-path-hash value
         foreach command {
-            {phset notradix p fields 1 f v}
-            {phmset notradix p fields 1 f v}
-            {phget notradix p f}
-            {phmget notradix p fields 1 f}
-            {phgetall notradix p}
-            {phexists notradix p}
-            {phdel notradix p}
-            {phlongest notradix p}
-            {phprefixes notradix p}
-            {phdelprefix notradix p}
-            {phscan notradix 0}
-            {phcard notradix}
+            {phset not-path-hash p fields 1 f v}
+            {phmset not-path-hash p fields 1 f v}
+            {phget not-path-hash p f}
+            {phmget not-path-hash p fields 1 f}
+            {phgetall not-path-hash p}
+            {phexists not-path-hash p}
+            {phdel not-path-hash p}
+            {phlongest not-path-hash p}
+            {phprefixes not-path-hash p}
+            {phdelprefix not-path-hash p}
+            {phscan not-path-hash 0}
+            {phcard not-path-hash}
         } {
             assert_error WRONGTYPE* {r {*}$command}
         }
     }
 
-    test {Radix option syntax rejects ambiguous and invalid inputs} {
+    test {Path Hash option syntax rejects ambiguous and invalid inputs} {
         r del tree
         assert_error ERR*syntax* {r phset tree p fnx fxx fields 1 f v}
         assert_error ERR*syntax* {r phset tree p fnx fnx fields 1 f v}
@@ -341,6 +341,7 @@ start_server {tags {radix}} {
         set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
         assert_equal $commands [lsort [r command list filterby aclcat path-hash]]
         foreach command $commands {
+            assert_no_match {*radix*} [string tolower [r command docs $command]]
             assert_equal $command [lindex [lindex [r command info $command] 0] 0]
             assert_equal path-hash [dict get [dict get [r command docs $command] $command] group]
             assert_match {*path hash*} [dict get [dict get [r command docs $command] $command] summary]
@@ -440,13 +441,14 @@ start_server {tags {radix}} {
         assert_equal {f1 v1} [r phgetall tree a]
     } {} {resp3}
 
-    test {Radix keyspace notifications use the radix class} {
-        r config set notify-keyspace-events Kr
+    test {Path hash keyspace notifications use the p class} {
+        assert_error {*Invalid event class character*} {r config set notify-keyspace-events Kr}
+        r config set notify-keyspace-events Kp
         r del notify-tree
         set rd1 [valkey_deferring_client]
         with_cleanup {
             assert_equal {1} [psubscribe $rd1 *]
-            assert_equal rK [lindex [r config get notify-keyspace-events] 1]
+            assert_equal pK [lindex [r config get notify-keyspace-events] 1]
             r phset notify-tree a fields 1 f one
             r phmset notify-tree ab fields 1 f two
             r phdel notify-tree a
@@ -456,8 +458,8 @@ start_server {tags {radix}} {
             assert_match "pmessage * __keyspace@*__:notify-tree phdel" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phdelprefix" [$rd1 read]
 
-            r config set notify-keyspace-events Krg
-            assert_equal grK [lindex [r config get notify-keyspace-events] 1]
+            r config set notify-keyspace-events Kpg
+            assert_equal gpK [lindex [r config get notify-keyspace-events] 1]
             r phset notify-tree a fields 1 f one
             r phdel notify-tree a
             assert_equal 1 [r exists notify-tree]
@@ -481,7 +483,7 @@ start_server {tags {radix}} {
         }
     }
 
-    test {UNLINK asynchronously frees a large radix object} {
+    test {UNLINK asynchronously frees a large path hash object} {
         r del tree
         for {set i 0} {$i < 100} {incr i} {
             r phset tree "path:$i" fields 1 field "value:$i"
@@ -492,17 +494,18 @@ start_server {tags {radix}} {
         wait_for_condition 100 10 {
             [getInfoProperty [r info memory] lazyfree_pending_objects] == 0
         } else {
-            fail "Radix object was not reclaimed by lazy free"
+            fail "Path Hash object was not reclaimed by lazy free"
         }
     }
 
-    test {COPY, DUMP/RESTORE, TTL, MEMORY USAGE, and DEBUG DIGEST support radix values} {
-        set tree {tree:{radix-copy}}
-        set tree_copy {tree-copy:{radix-copy}}
-        set tree_restored {tree-restored:{radix-copy}}
+    test {COPY, DUMP/RESTORE, TTL, MEMORY USAGE, and DEBUG DIGEST support path hash values} {
+        set tree {tree:{path-hash-copy}}
+        set tree_copy {tree-copy:{path-hash-copy}}
+        set tree_restored {tree-restored:{path-hash-copy}}
         r del $tree $tree_copy $tree_restored
         r phset $tree {} fields 1 root value
         r phset $tree abc fields 2 f1 v1 f2 v2
+        assert_match {*encoding:path-hash*} [r debug object $tree]
         r pexpire $tree 60000
         set digest_before [r debug digest]
         assert {[r memory usage $tree] > 0}
@@ -516,10 +519,10 @@ start_server {tags {radix}} {
         assert {$digest_before ne ""}
     } {} {needs:debug}
 
-    test {Empty Radix survives COPY, DUMP/RESTORE, and RDB reload} {
-        set empty_tree {empty-tree:{radix-empty}}
-        set empty_copy {empty-copy:{radix-empty}}
-        set empty_restored {empty-restored:{radix-empty}}
+    test {Empty Path Hash survives COPY, DUMP/RESTORE, and RDB reload} {
+        set empty_tree {empty-tree:{path-hash-empty}}
+        set empty_copy {empty-copy:{path-hash-empty}}
+        set empty_restored {empty-restored:{path-hash-empty}}
         r del $empty_tree $empty_copy $empty_restored
         r phset $empty_tree path fields 1 field value
         assert_equal 1 [r phdel $empty_tree path]
@@ -550,7 +553,7 @@ start_server {tags {radix}} {
         assert_equal 1 [r exists $empty_restored]
     } {} {needs:debug}
 
-    test {RDB reload restores radix paths, binary data, root payload, and TTL} {
+    test {RDB reload restores path hash paths, binary data, root payload, and TTL} {
         r del tree
         set binary_path [binary format H* 000102ff]
         set binary_value [binary format H* 7600616cff]
@@ -565,7 +568,7 @@ start_server {tags {radix}} {
         assert {[r pttl tree] > 0}
     } {} {needs:debug}
 
-    test {RESTORE rejects malformed radix payloads without destabilizing the server} {
+    test {RESTORE rejects malformed path hash payloads without destabilizing the server} {
         r debug set-skip-checksum-validation 1
 
         r del source
@@ -610,7 +613,7 @@ start_server {tags {radix}} {
         assert_equal 1200 [llength [r phgetall tree path]]
     } {} {needs:debug}
 
-    test {valkey-check-rdb validates and reports the native radix type} {
+    test {valkey-check-rdb validates and reports the native path hash type} {
         r del tree
         r phset tree {} fields 1 root value
         r phset tree abc fields 1 f v
@@ -620,11 +623,12 @@ start_server {tags {radix}} {
         set output [exec $::VALKEY_CHECK_RDB_BIN [file join $dir $filename] --stats --format info]
         assert_match {*RDB looks OK*} $output
         assert_match {*path-hash*} $output
+        assert_no_match {*radix*} [string tolower $output]
     } {} {external:skip}
 }
 
-start_server {tags {radix needs:debug} overrides {appendonly yes aof-use-rdb-preamble no}} {
-    test {AOF rewrite and reload preserve populated and empty Radix values} {
+start_server {tags {path-hash needs:debug} overrides {appendonly yes aof-use-rdb-preamble no}} {
+    test {AOF rewrite and reload preserve populated and empty Path Hash values} {
         r phset tree {} fields 1 root value
         r phset tree abc fields 2 f1 v1 f2 v2
         r phset tree abcd fields 1 child v3
@@ -644,14 +648,14 @@ start_server {tags {radix needs:debug} overrides {appendonly yes aof-use-rdb-pre
     }
 }
 
-start_server {tags {radix external:skip}} {
-    start_server {tags {radix external:skip}} {
+start_server {tags {path-hash external:skip}} {
+    start_server {tags {path-hash external:skip}} {
         set primary [srv -1 client]
         set primary_host [srv -1 host]
         set primary_port [srv -1 port]
         set replica [srv 0 client]
 
-        test {Radix writes, conditional no-ops, and subtree deletes replicate} {
+        test {Path Hash writes, conditional no-ops, and subtree deletes replicate} {
             $replica replicaof $primary_host $primary_port
             wait_for_condition 50 100 {
                 [s 0 master_link_status] eq {up}

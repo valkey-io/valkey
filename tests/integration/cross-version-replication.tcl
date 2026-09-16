@@ -132,12 +132,12 @@ start_server {tags {"repl needs:other-server external:skip"}} {
         }
     }
 
-    test "Old pre-Radix replica can't sync but doesn't prevent new replica from sync" {
+    test "Old pre-Path Hash replica can't sync but doesn't prevent new replica from sync" {
         if {[version_greater_or_equal $old_replica_version 9.2.0]} {
-            skip "Replica $old_replica_version does support Radix"
+            skip "Replica $old_replica_version does support Path Hash"
         }
         r flushall
-        r phset radix path fields 1 field value
+        r phset path-hash path fields 1 field value
         start_server {start-other-server 1 config "minimal.conf"} {
             set old_replica [srv 0 client]
             start_server {} {
@@ -145,25 +145,25 @@ start_server {tags {"repl needs:other-server external:skip"}} {
                 $old_replica replicaof $primary_host $primary_port
                 $new_replica replicaof $primary_host $primary_port
                 wait_for_sync $new_replica 500 100
-                wait_for_log_messages -2 [list {*Can't store key 'radix'*}] 0 50 100
-                assert_equal value [$new_replica phget radix path field]
+                wait_for_log_messages -2 [list {*Can't store key 'path-hash'*}] 0 50 100
+                assert_equal value [$new_replica phget path-hash path field]
                 assert_match {*master_link_status:up*} [$new_replica info replication]
                 assert_match {*master_link_status:down*} [$old_replica info replication]
             }
         }
     }
 
-    test "Replica with Radix support can full sync" {
+    test "Replica with Path Hash support can full sync" {
         if {![version_greater_or_equal $old_replica_version 9.2.0]} {
-            skip "Replica $old_replica_version doesn't support Radix"
+            skip "Replica $old_replica_version doesn't support Path Hash"
         }
         r flushall
-        r phset radix path fields 1 field value
+        r phset path-hash path fields 1 field value
         start_server {start-other-server 1 config "minimal.conf"} {
             set old_replica [srv 0 client]
             $old_replica replicaof $primary_host $primary_port
             wait_for_sync $old_replica 500 100
-            assert_equal value [$old_replica phget radix path field]
+            assert_equal value [$old_replica phget path-hash path field]
         }
     }
 }

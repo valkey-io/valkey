@@ -172,7 +172,7 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
             raxStop(&ri);
         }
         return effort;
-    } else if (obj->type == OBJ_RADIX) {
+    } else if (obj->type == OBJ_PATH_HASH) {
         radixObject *radix = objectGetVal(obj);
         return radix->index->numnodes + radix->num_fields;
     } else if (obj->type == OBJ_MODULE) {

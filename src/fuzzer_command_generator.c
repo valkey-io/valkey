@@ -1180,7 +1180,7 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
             keyPrefix = "bitmap";
             break;
         case CMD_GROUP_PATH_HASH:
-            keyPrefix = "radix";
+            keyPrefix = "path-hash";
             break;
         case CMD_GROUP_PUBSUB:
             keyPrefix = "channel";

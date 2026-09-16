@@ -46,8 +46,8 @@ robj *createRadixObject(void) {
     radixObject *radix = zmalloc(sizeof(*radix));
     radix->index = raxNew();
     radix->num_fields = 0;
-    robj *o = createObject(OBJ_RADIX, radix);
-    objectSetEncoding(o, OBJ_ENCODING_RADIX);
+    robj *o = createObject(OBJ_PATH_HASH, radix);
+    objectSetEncoding(o, OBJ_ENCODING_PATH_HASH);
     return o;
 }
 
@@ -252,7 +252,7 @@ void phsetCommand(client *c) {
     }
 
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     robj *payload = radixLookupPayload(o, c->argv[2]);
     if (fnx || fxx) {
         for (long i = 0; i < numfields; i++) {
@@ -288,7 +288,7 @@ void phsetCommand(client *c) {
     if (created_tree) dbAdd(c->db, c->argv[1], &o);
 
     signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_RADIX, "phset", c->argv[1], c->db->id);
+    notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phset", c->argv[1], c->db->id);
     server.dirty += numfields;
     addReply(c, shared.ok);
 }
@@ -298,7 +298,7 @@ void phmsetCommand(client *c) {
     if (radixValidateFieldGroups(c, 1, &assignments) != C_OK) return;
 
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     int created_tree = 0;
     if (o == NULL) {
         o = createRadixObject();
@@ -324,14 +324,14 @@ void phmsetCommand(client *c) {
     }
     if (created_tree) dbAdd(c->db, c->argv[1], &o);
     signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_RADIX, "phmset", c->argv[1], c->db->id);
+    notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phmset", c->argv[1], c->db->id);
     server.dirty += assignments;
     addReply(c, shared.ok);
 }
 
 void phgetCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     robj *payload = radixLookupPayload(o, c->argv[2]);
     if (c->argc == 4)
         radixReplyField(c, payload, c->argv[3]);
@@ -344,7 +344,7 @@ void phmgetCommand(client *c) {
     if (radixValidateFieldGroups(c, 0, &total_fields) != C_OK) return;
 
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     addReplyArrayLen(c, total_fields);
     for (int argpos = 2; argpos < c->argc;) {
         long long numfields;
@@ -358,7 +358,7 @@ void phmgetCommand(client *c) {
 
 void phgetallCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     robj *payload = radixLookupPayload(o, c->argv[2]);
     if (payload)
         radixReplyPayload(c, payload);
@@ -368,13 +368,13 @@ void phgetallCommand(client *c) {
 
 void phexistsCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     addReplyLongLong(c, radixLookupPayload(o, c->argv[2]) != NULL);
 }
 
 void phdelCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     if (o == NULL) {
         addReply(c, shared.czero);
         return;
@@ -406,7 +406,7 @@ void phdelCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_RADIX, "phdel", c->argv[1], c->db->id);
+        notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -481,7 +481,7 @@ void phlongestCommand(client *c) {
         return;
 
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     if (o == NULL) {
         addReplyNull(c);
         return;
@@ -534,7 +534,7 @@ void phprefixesCommand(client *c) {
         return;
 
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     if (o == NULL) {
         addReply(c, shared.emptyarray);
         return;
@@ -574,7 +574,7 @@ static int radixPathHasPrefix(const unsigned char *path,
 
 void phdelprefixCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     if (o == NULL) {
         addReply(c, shared.czero);
         return;
@@ -594,7 +594,7 @@ void phdelprefixCommand(client *c) {
             radix->index = empty;
             radix->num_fields = 0;
             signalModifiedKey(c, c->db, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_RADIX, "phdelprefix", c->argv[1], c->db->id);
+            notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
             server.dirty += deleted;
         }
         addReplyLongLong(c, deleted);
@@ -629,7 +629,7 @@ void phdelprefixCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_RADIX, "phdelprefix", c->argv[1], c->db->id);
+        notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -716,7 +716,7 @@ void phscanCommand(client *c) {
     }
 
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) {
+    if (checkType(c, o, OBJ_PATH_HASH)) {
         sdsfree(previous);
         return;
     }
@@ -777,7 +777,7 @@ void phscanCommand(client *c) {
 
 void phcardCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_RADIX)) return;
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
     if (o == NULL)
         addReply(c, shared.czero);
     else
@@ -790,7 +790,7 @@ int rewriteRadixObject(rio *r, robj *key, robj *o) {
 
     if (raxSize(radix->index) == 0) {
         /* As with XADD MAXLEN 0 for an empty stream, create a temporary
-         * logical path and remove it again to reconstruct an empty Radix. */
+         * logical path and remove it again to reconstruct an empty path hash. */
         if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "PHSET", 5) ||
             !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0) ||
             !rioWriteBulkString(r, "FIELDS", 6) || !rioWriteBulkLongLong(r, 1) ||

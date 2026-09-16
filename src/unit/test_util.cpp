@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <string>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -404,40 +403,45 @@ TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
         {"Etc/GMT+12", -12 * 3600, -12 * 3600},
     };
 
-    const char *saved_tz = getenv("TZ");
-    std::string saved = saved_tz ? saved_tz : "";
+    const time_t instants[] = {jan15, jul15, dec31, jan1};
 
-    for (const Case &c : cases) {
-        setenv("TZ", c.tz, 1);
+    const char *saved_tz = getenv("TZ");
+    sds saved = saved_tz ? sdsnew(saved_tz) : NULL;
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const Case *c = &cases[i];
+        setenv("TZ", c->tz, 1);
         tzset();
         /* Skip zones this system's tz database does not know: localtime would silently fall back to UTC,
          * and none of the non-UTC zones above is at +00:00 on 2026-07-15. */
         struct tm probe;
         localtime_r(&jul15, &probe);
-        if (strcmp(c.tz, "UTC") != 0 && probe.tm_hour == 3 && probe.tm_min == 0) continue;
+        if (strcmp(c->tz, "UTC") != 0 && probe.tm_hour == 3 && probe.tm_min == 0) continue;
 
-        EXPECT_EQ(utcOffsetFromLocaltime(jan15), c.jan_east) << c.tz << " at 2026-01-15";
-        EXPECT_EQ(utcOffsetFromLocaltime(jul15), c.jul_east) << c.tz << " at 2026-07-15";
-        EXPECT_EQ(utcOffsetFromLocaltime(dec31), c.jan_east) << c.tz << " at 2026-12-31T23:30Z";
-        EXPECT_EQ(utcOffsetFromLocaltime(jan1), c.jan_east) << c.tz << " at 2026-01-01T00:30Z";
+        EXPECT_EQ(utcOffsetFromLocaltime(jan15), c->jan_east) << c->tz << " at 2026-01-15";
+        EXPECT_EQ(utcOffsetFromLocaltime(jul15), c->jul_east) << c->tz << " at 2026-07-15";
+        EXPECT_EQ(utcOffsetFromLocaltime(dec31), c->jan_east) << c->tz << " at 2026-12-31T23:30Z";
+        EXPECT_EQ(utcOffsetFromLocaltime(jan1), c->jan_east) << c->tz << " at 2026-01-01T00:30Z";
 
         /* The lock-free converter fed with that offset must reproduce libc's wall clock. */
-        for (time_t t : {jan15, jul15, dec31, jan1}) {
+        for (size_t j = 0; j < sizeof(instants) / sizeof(instants[0]); j++) {
+            time_t t = instants[j];
             struct tm expected, got;
             localtime_r(&t, &expected);
             nolocks_localtime(&got, t, utcOffsetFromLocaltime(t));
-            EXPECT_EQ(got.tm_year, expected.tm_year) << c.tz << " at " << t;
-            EXPECT_EQ(got.tm_yday, expected.tm_yday) << c.tz << " at " << t;
-            EXPECT_EQ(got.tm_hour, expected.tm_hour) << c.tz << " at " << t;
-            EXPECT_EQ(got.tm_min, expected.tm_min) << c.tz << " at " << t;
+            EXPECT_EQ(got.tm_year, expected.tm_year) << c->tz << " at " << t;
+            EXPECT_EQ(got.tm_yday, expected.tm_yday) << c->tz << " at " << t;
+            EXPECT_EQ(got.tm_hour, expected.tm_hour) << c->tz << " at " << t;
+            EXPECT_EQ(got.tm_min, expected.tm_min) << c->tz << " at " << t;
         }
     }
 
-    if (saved_tz)
-        setenv("TZ", saved.c_str(), 1);
+    if (saved)
+        setenv("TZ", saved, 1);
     else
         unsetenv("TZ");
     tzset();
+    sdsfree(saved);
 }
 
 extern "C" void formatTimezone(char *buf, size_t buflen, long utc_offset);
@@ -459,10 +463,10 @@ TEST_F(UtilTest, TestFormatTimezone) {
         {14 * 3600, "+14:00"},          /* Kiritimati */
         {-12 * 3600, "-12:00"},         /* Etc/GMT+12 */
     };
-    for (const Case &c : cases) {
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         char buf[7];
-        formatTimezone(buf, sizeof(buf), c.utc_offset);
-        EXPECT_STREQ(buf, c.expected) << "offset " << c.utc_offset;
+        formatTimezone(buf, sizeof(buf), cases[i].utc_offset);
+        EXPECT_STREQ(buf, cases[i].expected) << "offset " << cases[i].utc_offset;
     }
 }
 
@@ -472,9 +476,10 @@ TEST_F(UtilTest, TestFormatTimezone) {
 TEST_F(UtilTest, TestUpdateCachedTimeRefreshesUtcOffset) {
     const char *zones[] = {"UTC", "America/St_Johns", "Europe/Dublin", "Australia/Lord_Howe"};
     const char *saved_tz = getenv("TZ");
-    std::string saved = saved_tz ? saved_tz : "";
+    sds saved = saved_tz ? sdsnew(saved_tz) : NULL;
 
-    for (const char *tz : zones) {
+    for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
+        const char *tz = zones[i];
         setenv("TZ", tz, 1);
         tzset();
         updateCachedTime(1);
@@ -490,10 +495,11 @@ TEST_F(UtilTest, TestUpdateCachedTimeRefreshesUtcOffset) {
         EXPECT_EQ(got.tm_min, expected.tm_min) << tz;
     }
 
-    if (saved_tz)
-        setenv("TZ", saved.c_str(), 1);
+    if (saved)
+        setenv("TZ", saved, 1);
     else
         unsetenv("TZ");
     tzset();
     updateCachedTime(1);
+    sdsfree(saved);
 }

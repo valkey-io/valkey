@@ -18,7 +18,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 
 ### Behavior Changes
 * Active expiration of keys and hash fields now increments the dirty counter, so save points (and thus BGSAVE) may trigger more often by @enjoy-binbin (#3118)
-* MODULE LOAD is now rejected during async replication loading and atomic slot migration to avoid unexpected module behavior by @KIvanow (#3039)
 
 ### New Features and Enhanced Behavior
 * Add ACL DIGEST command that returns a fingerprint of the ACL rules currently in effect, useful to verify what ACL LOAD applied by @melancholictheory (#4446)
@@ -54,6 +53,7 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Reduce per-command overhead by skipping post-command bookkeeping when no propagation, module, or invalidation work is pending by @ahmetalicc (#4257)
 
 ### Bug Fixes
+* MODULE LOAD is now rejected during async replication loading and atomic slot migration to avoid unexpected module behavior by @KIvanow (#3039)
 * Reject CLUSTER ADDSLOTS/DELSLOTS/ADDSLOTSRANGE/DELSLOTSRANGE/FLUSHSLOTS on replicas, preventing an assertion failure on a later CLUSTER REPLICATE by @enjoy-binbin (#4020)
 * Fix a crash when processing a heartbeat from a cluster node whose role is locally unknown, such as after loading an incomplete nodes.conf by @enjoy-binbin (#4091)
 * Fix wrong results or debug-build assertions in cluster mode when the server inspects keys outside the executing command's slot, such as WATCHed keys checked during EXEC by @nitaicaro (#4380)

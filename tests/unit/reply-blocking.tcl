@@ -956,6 +956,77 @@ foreach provider_mode {aof} {
                 $rd close
             }
 
+            test "($provider_mode) Pipelined QUIT behind a held reply closes only after all replies are sent" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # PING is sendable, SET is held, QUIT sets close_after_reply.
+                # The connection must stay open until the held replies are sent.
+                set rd [valkey_deferring_client -1]
+                $rd write "[format_command ping][format_command set pipe:quit-key val1][format_command quit]"
+                $rd flush
+
+                after 100
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set partial [read $fd]
+                # A second read is needed to observe EOF if the server has closed
+                read $fd
+                set closed [eof $fd]
+                fconfigure $fd -blocking 1
+
+                assert_equal "+PONG\r\n" $partial
+                assert_equal 0 $closed
+
+                unblock_with_provider
+
+                # SET and QUIT replies arrive, then the server closes the connection
+                assert_equal "OK" [$rd read]
+                assert_equal "OK" [$rd read]
+                catch {$rd read} err
+                assert_match {*I/O error*} $err
+                $rd close
+            }
+
+            test "($provider_mode) PSYNC is refused while a reply is held for durability" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # A held reply is unsent output: PSYNC must be refused, otherwise
+                # the client becomes a replica with a non-empty reply buffer.
+                set rd [valkey_deferring_client -1]
+                $rd write "[format_command set pipe:psync-key val1][format_command psync ? -1]"
+                $rd flush
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                assert_error {*invalid with pending output*} {$rd read}
+                $rd close
+
+                assert_equal "PONG" [$primary ping]
+            }
+
+            test "($provider_mode) SCRIPT DEBUG is refused while a reply is held for durability" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # A held reply still counts as being in a pipeline.
+                set rd [valkey_deferring_client -1]
+                $rd write "[format_command set pipe:ldb-key val1][format_command script debug yes]"
+                $rd flush
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                assert_error {*must be called outside a pipeline*} {$rd read}
+                $rd close
+            }
+
             # ==================== Client disconnect stats ====================
 
             test "($provider_mode) Client disconnect while blocked updates stats" {

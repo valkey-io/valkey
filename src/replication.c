@@ -1360,8 +1360,9 @@ void syncCommand(client *c) {
     /* SYNC can't be issued when the server has pending data to send to
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
-     * dataset, so that we can copy to other replicas if needed. */
-    if (clientHasPendingReplies(c)) {
+     * dataset, so that we can copy to other replicas if needed. A reply held
+     * by reply blocking counts too: a replica must have empty buffers. */
+    if (clientHasUnsentOutput(c)) {
         addReplyError(c, "SYNC and PSYNC are invalid with pending output");
         return;
     }

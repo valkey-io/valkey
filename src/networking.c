@@ -1815,6 +1815,14 @@ void copyReplicaOutputBuffer(client *dst, client *src) {
     ((replBufBlock *)listNodeValue(dst->repl_data->ref_repl_buf_node))->refcount++;
 }
 
+/* Return true if the client has any unsent output, sendable or not.
+ * Unlike clientHasPendingReplies(), this also counts bytes held behind a
+ * reply-blocking boundary. Use it where the buffers must be truly empty. */
+int clientHasUnsentOutput(client *c) {
+    if (c->bufpos || listLength(c->reply)) return 1;
+    return clientHasPendingReplies(c);
+}
+
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
 int clientHasPendingReplies(client *c) {
@@ -3548,13 +3556,16 @@ int postWriteToClient(client *c) {
         if (!isReplicatedClient(c)) c->last_interaction = server.unixtime;
     }
     if (!clientHasPendingReplies(c)) {
-        if (c->bufpos == 0 && listLength(c->reply) == 0) resetLastWrittenBuf(c);
+        /* A reply-blocked client may have unsent bytes behind the boundary:
+         * keep the write cursor and the connection until they are delivered. */
+        int drained = !clientHasUnsentOutput(c);
+        if (drained) resetLastWrittenBuf(c);
         if (connHasWriteHandler(c->conn)) {
             connSetWriteHandler(c->conn, NULL);
         }
 
         /* Close connection after entire reply has been sent. */
-        if (c->flag.close_after_reply) {
+        if (drained && c->flag.close_after_reply) {
             freeClientAsync(c);
             return C_ERR;
         }

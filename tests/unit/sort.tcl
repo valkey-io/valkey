@@ -238,22 +238,22 @@ foreach command {SORT SORT_RO} {
             # slot, so the pattern assertions also run in cluster mode.
             foreach {maxentries enc} {128 listpack 0 btree} {
                 with_config zset-max-ziplist-entries $maxentries {
-                    r del {s}zset
-                    r zadd {s}zset 1 a 5 b 2 c 10 d 3 e
-                    r mset {s}w_a 3 {s}w_b 1 {s}w_c 2 {s}w_d 5 {s}w_e 4
-                    assert_encoding $enc {s}zset
-                    assert_equal [r $command {s}zset alpha desc] {e d c b a}
-                    assert_encoding $enc {s}zset
-                    assert_equal [r $command {s}zset by nosort asc] {a c e b d}
-                    assert_encoding $enc {s}zset
-                    assert_equal [r $command {s}zset by nosort desc limit 1 2] {b e}
-                    assert_encoding $enc {s}zset
-                    assert_equal [r $command {s}zset by {s}w_*] {b c a e d}
-                    assert_encoding $enc {s}zset
-                    assert_equal [r $command {s}zset by nosort get {s}w_*] {3 2 4 1 5}
-                    assert_encoding $enc {s}zset
-                    assert_equal [r $command {s}zset by {s}w_* get # get {s}w_*] {b 1 c 2 a 3 e 4 d 5}
-                    assert_encoding $enc {s}zset
+                    r del "{s}zset"
+                    r zadd "{s}zset" 1 a 5 b 2 c 10 d 3 e
+                    r mset "{s}w_a" 3 "{s}w_b" 1 "{s}w_c" 2 "{s}w_d" 5 "{s}w_e" 4
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" alpha desc] {e d c b a}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by nosort asc] {a c e b d}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by nosort desc limit 1 2] {b e}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by "{s}w_*"] {b c a e d}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by nosort get "{s}w_*"] {3 2 4 1 5}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by "{s}w_*" get # get "{s}w_*"] {b 1 c 2 a 3 e 4 d 5}
+                    assert_encoding $enc "{s}zset"
                 }
             }
         }

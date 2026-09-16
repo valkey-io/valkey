@@ -232,7 +232,7 @@ def process_file(docs, path):
                 print(f"argv: {req.argv}")
                 try:
                     print(f"Response: {res}")
-                except UnicodeDecodeError as err:
+                except UnicodeDecodeError:
                    print("Response: (unprintable)")
                 print(f"Schema: {json.dumps(req.schema, indent=2)}")
                 print(traceback.format_exc())

@@ -1953,6 +1953,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
          * command yields to the event loop. */
         processed += processPendingReplStreamDecode();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
+        /* Durability of not-yet-fsynced replies is enforced per-client by the
+         * reply-blocking boundary (disallowed_byte_offset) and the write cap in
+         * _writeToClient()/writevToClient(), so we can flush unconditionally here
+         * just like the main beforeSleep path: durable/clean replies go out now
+         * while blocked bytes stay capped until the fsync completes. */
         processed += handleClientsWithPendingWrites();
         int last_processed = 0;
         do {
@@ -2066,6 +2071,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
          * wake them up ASAP. */
         if (listLength(server.clients_waiting_acks) && prev_fsynced_reploff != server.fsynced_reploff) dont_sleep = 1;
     }
+    notifyReplyBlockingProgress();
 
     /* Handle writes with pending output buffers. */
     int client_writes = handleClientsWithPendingWrites();
@@ -2450,7 +2456,11 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
+    atomic_store_explicit(&server.aof_bio_flush_state, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+    server.bio_aof_offload_enabled = 0;
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
     server.aof_lastbgrewrite_status = C_OK;
@@ -3044,6 +3054,8 @@ serverDb *createDatabase(int id) {
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
+
+    replyBlockingInitDatabase(db);
     resetDbExpiryState(db);
     return db;
 }
@@ -3252,6 +3264,14 @@ void initServer(void) {
         serverPanic("Error registering the readable event for the module pipe.");
     }
 
+    /* Create pipe for BIO AOF flush completion wakeup. */
+    if (anetPipe(server.aof_pipe, O_CLOEXEC | O_NONBLOCK, O_CLOEXEC | O_NONBLOCK) == -1) {
+        serverPanic("Error creating the AOF pipe: %s", strerror(errno));
+    }
+    if (aeCreateFileEvent(server.el, server.aof_pipe[0], AE_READABLE, aofPipeReadable, NULL) == AE_ERR) {
+        serverPanic("Error registering the readable event for the AOF pipe.");
+    }
+
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
     aeSetBeforeSleepProc(server.el, beforeSleep);
@@ -3292,6 +3312,8 @@ void initServer(void) {
 
     /* Initialize the EVAL scripting component. */
     evalInit();
+
+    replyBlockingInit();
 
     applyWatchdogPeriod();
 
@@ -4038,7 +4060,8 @@ static void propagatePendingCommands(void) {
  * Must stay an OR of every condition below - never drop one as an
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
-    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags ||
+           (server.bio_aof_offload_enabled && hasBackgroundModifiedKeys());
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4075,6 +4098,12 @@ void postExecutionUnitOperations(void) {
         /* If we are at the top-most call() and not inside an active module
          * context (e.g. within a module timer) we can propagate what we accumulated. */
         propagatePendingCommands();
+
+        /* Apply the final offset to keys dirtied by background writes (expiry/eviction)
+         * in this unit. Must run after propagatePendingCommands() so the offset is final.
+         * hasPostExecutionUnitPendingWork() accounts for these keys, so this is never
+         * skipped by the gate above. */
+        if (server.bio_aof_offload_enabled) drainBackgroundModifiedKeys(server.primary_repl_offset);
 
         /* Module subsystem post-execution-unit logic */
         modulePostExecutionUnitOperations();
@@ -4153,6 +4182,7 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
+    if (server.bio_aof_offload_enabled) recordReplOffsetBaseline(c);
     client *prev_client = server.executing_client;
     server.executing_client = c;
 
@@ -4409,6 +4439,11 @@ void call(client *c, int flags) {
 
     /* Do some maintenance job and cleanup */
     afterCommand(c);
+    /* Track replication offset for reply-blocking. This must stay
+     * here rather than inside afterCommand() because afterCommand() is
+     * also invoked from nested call() contexts (e.g. propagatePendingCommands)
+     * where the client argv may no longer be valid. */
+    if (server.bio_aof_offload_enabled) computeCommandBlockingOffset(c);
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */
@@ -5019,8 +5054,12 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
+        if (server.bio_aof_offload_enabled && beginCommandReplyBlocking(c) == CMD_FILTER_REJECT) {
+            return C_OK;
+        }
         int flags = CMD_CALL_FULL;
         call(c, flags);
+        if (server.bio_aof_offload_enabled) finalizeCommandReplyBlocking(c);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;
@@ -5310,6 +5349,9 @@ int finishShutdown(void) {
 
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
+
+    /* Cleanup reply-blocking tracking resources. */
+    replyBlockingCleanup();
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {
@@ -7221,6 +7263,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
         info = forkless_catDebugInfo(info);
         info = throttleRepl_sdscatInfoDebugMetrics(info);
+        /* Reply-blocking only exposes internal observability for now, so its
+         * fields are reported under the hidden Debug section instead of a
+         * customer-facing INFO section until the field set is finalized. */
+        info = genReplyBlockingInfoString(info);
     }
 
     return info;

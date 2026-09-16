@@ -56,7 +56,7 @@ static bool getDbIdFromRobj(robj *obj, int *db_id) {
 
 /* Parse the parameters of the COPY command, extracting the target DBID.
  * Returns FALSE if the command would not run. */
-static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *target_dbid) {
+bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *target_dbid) {
     const int COPY_COMMAND_OPTIONAL_ARG_START_INDEX = 3;
 
     *target_dbid = selected_dbid;

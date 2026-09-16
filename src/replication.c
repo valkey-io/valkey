@@ -1360,8 +1360,9 @@ void syncCommand(client *c) {
     /* SYNC can't be issued when the server has pending data to send to
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
-     * dataset, so that we can copy to other replicas if needed. */
-    if (clientHasPendingReplies(c)) {
+     * dataset, so that we can copy to other replicas if needed. A reply held
+     * by reply blocking counts too: a replica must have empty buffers. */
+    if (clientHasUnsentOutput(c)) {
         addReplyError(c, "SYNC and PSYNC are invalid with pending output");
         return;
     }
@@ -4914,6 +4915,7 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
         freeClient(server.primary);
     }
 
+    replyBlockingClearPrimaryState();
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */

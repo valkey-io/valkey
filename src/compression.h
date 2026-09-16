@@ -36,6 +36,7 @@ typedef struct {
     compressionAlgo algo;
     int level; /* 0 selects the codec default. */
     void *ctx;
+    size_t ctx_memory; /* Bytes held by ctx via the codec's custom allocator, for memory accounting. */
     bool stream_started;
     uint8_t checksum_flags;
 } streamCompressor;
@@ -57,6 +58,7 @@ typedef struct {
     bool frame_done;
     bool skip_codec_checksum_validation;
     void *ctx;
+    size_t ctx_memory; /* Bytes held by ctx via the codec's custom allocator, for memory accounting. */
     size_t input_hint; /* Preferred compressed bytes for next feed, 0 if unknown. */
 } streamDecompressor;
 

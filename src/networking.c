@@ -3548,7 +3548,7 @@ int postWriteToClient(client *c) {
         if (!isReplicatedClient(c)) c->last_interaction = server.unixtime;
     }
     if (!clientHasPendingReplies(c)) {
-        resetLastWrittenBuf(c);
+        if (c->bufpos == 0 && listLength(c->reply) == 0) resetLastWrittenBuf(c);
         if (connHasWriteHandler(c->conn)) {
             connSetWriteHandler(c->conn, NULL);
         }

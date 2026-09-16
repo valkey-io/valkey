@@ -234,8 +234,10 @@ foreach provider_mode {aof} {
                 pause_provider
 
                 set rd [valkey_deferring_client -1]
-                $rd get durable:committed2
-                $rd set durable:pending2 y
+                # One write, so the multi-block GET reply and the blocked SET reply
+                # are built into the same reply list before the first flush.
+                $rd write "[format_command get durable:committed2][format_command set durable:pending2 y]"
+                $rd flush
 
                 # Allowed prefix (the multi-block GET reply) must be released in full.
                 assert_equal $bigval [$rd read]
@@ -927,9 +929,12 @@ foreach provider_mode {aof} {
                 # The PING reply is allowed to be sent, but the SET reply must be held.
                 # Without proper write boundary capping, _writeToClient would send
                 # both replies since they share the same c->buf.
+                # Send both commands in ONE write so they are always processed from
+                # the same read and their replies land in the same c->buf, regardless
+                # of how the loopback happens to coalesce packets on this platform.
                 set rd [valkey_deferring_client -1]
-                $rd ping
-                $rd set pipe:boundary-key val1
+                $rd write "[format_command ping][format_command set pipe:boundary-key val1]"
+                $rd flush
 
                 # Give the server time to process both commands and attempt the write
                 after 100
@@ -940,9 +945,9 @@ foreach provider_mode {aof} {
                 set partial [read $fd]
                 fconfigure $fd -blocking 1
 
-                # PING reply should be "+PONG\r\n" — no "+OK\r\n" from SET
-                assert_match "*PONG*" $partial
-                assert {![string match "*OK*" $partial]}
+                # Exactly one "+PONG\r\n": no "+OK\r\n" from SET, and no re-sent PONG
+                # (the write cursor must survive the capped write).
+                assert_equal "+PONG\r\n" $partial
 
                 unblock_with_provider
 

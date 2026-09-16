@@ -236,7 +236,11 @@ def process_file(docs, path):
                    print("Response: (unprintable)")
                 print(f"Schema: {json.dumps(req.schema, indent=2)}")
                 print(traceback.format_exc())
-                raise
+                # jsonschema exceptions hold a reference to a TypeChecker lambda in
+                # jsonschema._types, which cannot be pickled. process_file runs in a
+                # multiprocessing pool worker, so re-raising one makes the parent report
+                # MaybeEncodingError/PicklingError instead of the validation failure.
+                raise RuntimeError(f"JSON schema validation error on {path}: {err}")
 
     return command_counter
 

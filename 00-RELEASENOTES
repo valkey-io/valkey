@@ -107,7 +107,6 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Persist non-default cluster-replica-priority to nodes.conf so it survives restarts instead of waiting for the next gossip round by @enjoy-binbin (#4454)
 * Clear a stale primary-failure gossip flag on replicas so later failovers don't incorrectly skip the election delay by @charsyam (#4533)
 * Fix a node staying stuck in PFAIL when its PING is lost while the peer's own traffic keeps the cluster link alive by @enjoy-binbin (#4171)
-* Tear down the replication throttler immediately when the last replica disconnects instead of ramping back gradually by @harrylin98 (#4595)
 * `CLUSTER SYNCSLOTS FINISH` now rejects clients outside the slot migration stream, preventing misuse of the import state machine by @enjoy-binbin (#4330)
 
 ### Configuration

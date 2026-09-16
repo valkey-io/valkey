@@ -957,22 +957,22 @@ start_server {tags {"hash"}} {
 
     # On some platforms strtold("+inf") with valgrind returns a non-inf result
     test {HINCRBYFLOAT does not allow NaN or Infinity} {
-        assert_error "*value is Infinity*" {r hincrbyfloat hfoo field +inf}
+        assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
 
-    test {HINCRBYFLOAT NaN increment is rejected by the parser, not the NaN check} {
+    test {HINCRBYFLOAT rejects a NaN increment} {
         r del hfoo
         assert_error "*value is not a valid float*" {r hincrbyfloat hfoo field nan}
     }
 
-    test {HINCRBYFLOAT cannot reach a NaN result} {
+    test {HINCRBYFLOAT with an infinite field value} {
         r del hfoo
         r hset hfoo field inf
         assert_error "*would produce Infinity*" {r hincrbyfloat hfoo field 1}
         assert_equal inf [r hget hfoo field]
         # An infinite increment is dropped before the result is ever computed.
-        assert_error "*value is Infinity*" {r hincrbyfloat hfoo field -inf}
+        assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field -inf}
         assert_equal inf [r hget hfoo field]
     } {} {valgrind:skip}
 }

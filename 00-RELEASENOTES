@@ -18,7 +18,7 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 
 ### Behavior Changes
 * Active expiration of keys and hash fields now increments the dirty counter, so save points (and thus BGSAVE) may trigger more often by @enjoy-binbin (#3118)
-* Unify the internal dict and hashtable implementations; the configured hash seed now applies only to data hashtables by @zuiderkwast (#3366)
+* Large sorted sets are now backed by a B+ tree instead of a skiplist; OBJECT ENCODING reports `btree` instead of `skiplist` by @ranshid (#4359)
 
 ### New Features and Enhanced Behavior
 * Add ACL DIGEST command that returns a fingerprint of the ACL rules currently in effect, useful to verify what ACL LOAD applied by @melancholictheory (#4446)
@@ -39,12 +39,11 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Speed up radix tree lookups and inserts by using SIMD-optimized memchr() for child-edge search by @charsyam (#3472)
 * Improve replica processing speed by parsing multiple commands from the replication stream at once by @enjoy-binbin (#3597)
 * Reduce memory usage by sharing pubsub pattern and WATCH key objects across clients subscribing to or watching the same name by @enjoy-binbin (#4072)
-* Large sorted sets are now backed by a B+ tree instead of a skiplist; OBJECT ENCODING reports `btree` instead of `skiplist` by @ranshid (#4359)
 * Save the cluster config file from a background thread when `cluster-config-save-behavior` is best-effort, avoiding main-thread latency spikes from slow disk I/O by @enjoy-binbin (#2555)
 * Speed up `HMGET`, `SMISMEMBER` and `ZMSCORE` on large hashtable-encoded keys with batched lookups that overlap memory accesses by @chzhoo (#4017)
 * Extend memory prefetching to hash, set and sorted set member lookups when io-threads are enabled, improving performance for 30 field/member commands on large keys by @roshkhatri (#3940)
 * `MEMORY PURGE` now also releases free pages from the glibc main arena back to the OS, reclaiming memory held by libc-internal allocations by @webbsssss (#3640)
-* Make the ranged memory-release helper a no-op on non-jemalloc builds, matching existing behavior by @enjoy-binbin (#3791)
+* Fix an undersized madvise range when dismissing hashtable memory after fork, so the whole bucket array is hinted and copy-on-write overhead during background saves drops by @charsyam (#3533)
 * Speed up command propagation to replicas by batching each command's RESP frame into a single replication buffer write by @hpatro (#4044)
 * Reduce lseek system calls during disk-based replication by seeking only when a write blocks or is partial by @enjoy-binbin (#4053)
 * Reduce event-loop overhead by refreshing cached daylight-saving info once per second instead of on every wakeup by @hpatro (#4086)
@@ -141,6 +140,7 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Add `total_cluster_links_established_inbound`/`outbound` counters to `CLUSTER INFO` to help detect cluster link flapping by @enjoy-binbin (#4169)
 * RDMA connection and resource setup failures are now logged with detailed system error information by @quanyeyang (#4586)
 * Include the LRU list's duplicated script SHA copies in EVAL script memory reporting (`used_memory_scripts_eval`) by @enjoy-binbin (#4587)
+* Log the module version alongside the module name when a module is loaded, so the loaded version is visible in the log by @enjoy-binbin (#4566)
 * Detect changes to the alternate TLS key file (`tls-alt-key-file`) so certificate auto-reload picks them up by @pkhartsk (#4663)
 * Report `tls_server_cert_serial` and expiry INFO fields for the certificate actually loaded from `tls-cert-file` instead of whichever one OpenSSL slots first by @madolson (#4664)
 

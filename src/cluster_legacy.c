@@ -5961,6 +5961,11 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
      * be rescheduled on the auth_retry_time cadence, keeping fast-fail for the
      * rejections that carry split-vote information. */
     if (!clusterNackIsPerRoundReason(request->data.failover_nack.nack.reason)) {
+        serverLog(LL_NOTICE,
+                  "Ignoring failover auth NACK [%s] from %.40s (%s) for epoch %llu: "
+                  "a new election would draw the same answer.",
+                  clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
+                  humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch);
         return;
     }
 

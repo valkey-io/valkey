@@ -10,6 +10,7 @@
 #include "serverassert.h"
 #include <string.h>
 
+/* Returns a static algorithm name for logs and config output. */
 const char *compressionAlgoName(compressionAlgo algo) {
     switch (algo) {
     case ALGO_NONE:
@@ -25,14 +26,18 @@ const char *compressionAlgoName(compressionAlgo algo) {
 
 /* ===== Compressor ===== */
 
+/* Compressor lifecycle. Codec dispatch used by streamWriter and by the
+ * replication write path; callers own sticky error state while these
+ * functions manage only codec state. checksum_flags is a bitwise combination
+ * of STREAM_CHECKSUM_* values. */
 int streamCompressorInit(streamCompressor *compressor,
                          compressionAlgo algo,
                          int level,
-                         bool codec_checksum) {
+                         uint8_t checksum_flags) {
     memset(compressor, 0, sizeof(*compressor));
     compressor->algo = algo;
     compressor->level = level;
-    compressor->codec_checksum = codec_checksum;
+    compressor->checksum_flags = checksum_flags;
 
     switch (algo) {
     case ALGO_LZ4:
@@ -51,6 +56,12 @@ size_t streamCompressorOutputBound(const streamCompressor *compressor, size_t in
     }
 }
 
+/* Feeds raw input into the compressor and writes compressed bytes to output.
+ * Called repeatedly to build a complete frame: COMPRESS_FLUSH_CONTINUE keeps
+ * buffering, COMPRESS_FLUSH_SYNC drains buffered bytes but leaves the frame
+ * open, and COMPRESS_FLUSH_END closes it. output must be at least
+ * streamCompressorOutputBound(compressor, input_len) bytes. Returns bytes
+ * written, or -1 on error. */
 ssize_t streamCompressorFeed(streamCompressor *compressor,
                              uint8_t *output,
                              size_t output_capacity,
@@ -77,6 +88,7 @@ void streamCompressorFree(streamCompressor *compressor) {
 
 /* ===== Decompressor ===== */
 
+/* Codec dispatch shared by the pull and push stream readers. */
 int streamDecompressorInit(streamDecompressor *decompressor,
                            compressionAlgo algo,
                            bool skip_codec_checksum_validation) {

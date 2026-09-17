@@ -465,5 +465,12 @@ tags "modules" {
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-jobname] $job_name
         }
+
+        test {Test cluster topology change hook} {
+            # Slot assignment and node membership during cluster formation fire the event.
+            for {set i 0} {$i < 6} {incr i} {
+                assert {[R $i hooks.event_count cluster-topology-change] > 0}
+            }
+        }
     }
 }

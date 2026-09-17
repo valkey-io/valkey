@@ -273,8 +273,8 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         # The voters really answer NO_PRIMARY and the candidate logs each
         # rejection as ignored rather than counting it.
-        wait_for_log_messages -3 {*Ignoring failover auth NACK *no-primary} from $voter1_id *" 0 2000 10
-        wait_for_log_messages -3 {*Ignoring failover auth NACK *no-primary} from $voter2_id *" 0 2000 10
+        wait_for_log_messages -3 [list "*Ignoring failover auth NACK *no-primary* from $voter1_id *"] 0 2000 10
+        wait_for_log_messages -3 [list "*Ignoring failover auth NACK *no-primary* from $voter2_id *"] 0 2000 10
         wait_for_log_messages -3 {"*Failover attempt expired*"} 0 2000 10
 
         # None of them was counted: no accounting line, hence no reset. That is

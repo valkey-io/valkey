@@ -59,19 +59,19 @@ static long long mock_entry_get_expiry(const void *entry) {
     return mockGetExpiry(entry);
 }
 
-static int mock_entry_expire(void *entry, void *ctx) {
-    mock_entry *e = (mock_entry *)entry;
+static void mock_entry_expire(void **entries, size_t count, void *ctx) {
     long long now = *(long long *)ctx;
-    (void)now;
-    serverAssert(mock_entry_get_expiry(entry) <= now);
-    for (int i = 0; i < mock_entry_count; i++) {
-        if (mock_entries[i] == e) {
-            mockFreeEntry(e);
-            mock_entries[i] = mock_entries[--mock_entry_count];
-            return 1;
+    for (size_t j = 0; j < count; j++) {
+        mock_entry *e = (mock_entry *)entries[j];
+        serverAssert(mock_entry_get_expiry(e) <= now);
+        for (int i = 0; i < mock_entry_count; i++) {
+            if (mock_entries[i] == e) {
+                mockFreeEntry(e);
+                mock_entries[i] = mock_entries[--mock_entry_count];
+                break;
+            }
         }
     }
-    return 0;
 }
 
 /* --------- Helper Functions --------- */

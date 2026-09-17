@@ -122,6 +122,39 @@
   .hand #frame{width:min(var(--colw, 52vw), 80vh)}   /* never taller than ~44vh (900:500), so the terminal keeps its room */
   @media (max-width: 1150px){ .hand #termbar{top:14px;bottom:auto} }   /* thin margins: the replay button moves off the column, to the top-right */
   #bgcover{transition:opacity 1.4s cubic-bezier(.4,0,.2,1)} .hand #bgcover{opacity:1}   /* the picture's navy gradient goes to the page's black as it shrinks */
+  /* silent fast path: no picture, no shrink transition, terminal appears at once (no fades) */
+  .nofx #frame{transition:none}
+  .nofx.termon #term{opacity:1;transition:none}
+  .fast #art, .fast #streams{display:none} .fast #bgcover{opacity:1;transition:none}
+  /* SHUTDOWN easter egg: the neon sign dies. ONE hard blink (on-off-on, ~1.5 opposing pairs, well under the
+     3-flashes/sec WCAG 2.3.1 line), then the tube is dead: fills gone, a dim unfilled outline of the mark and
+     wordmark left behind. The tagline stays lit -- open source, forever. Only the logo blinks, never the page.
+     Sparks burst from a few vertices of the hexagon like a shorting tube (tiny points, zero strobe risk). */
+  @keyframes neonblink{
+    0%{opacity:1} 42%{opacity:.06}                          /* the tube cuts out */
+    62%{opacity:.85} 100%{opacity:1}                        /* catches once more -- by now the ghost styles are in */
+  }
+  .lightsout #art{animation:neonblink .6s steps(1,end) forwards}
+  .lightsout #streams{opacity:0;transition:opacity .4s}
+  /* the dead sign: no fill anywhere, just a faint trace of where the light used to be (!important so any
+     leftover forwards-fill intro animation cannot win the cascade over these) */
+  .dead #flood{opacity:0 !important}
+  .dead #wire{opacity:1 !important;stroke:#44548f !important;filter:none !important;animation:none !important}
+  .dead #word text{opacity:0 !important}
+  .dead #word text:last-of-type{opacity:1 !important;fill:none !important;stroke:#44548f;stroke-width:1.3;filter:none}
+  #sparks{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+  #sparks i{position:absolute;width:2px;height:2px;border-radius:50%;background:#eaf0ff;
+    box-shadow:0 0 5px 1px rgba(155,176,255,.95);opacity:0;
+    animation:sparkburst var(--dur,.6s) cubic-bezier(.15,.6,.45,1) var(--dly,0s) forwards}
+  @keyframes sparkburst{
+    0%{opacity:1;transform:translate(0,0)}
+    35%{opacity:1;transform:translate(var(--mx,0px),var(--my,0px))}
+    100%{opacity:0;transform:translate(var(--dx,0px),var(--dy,80px))}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .lightsout #art{animation:none}                         /* no blink: straight to the dead sign */
+    #sparks i{animation:none;opacity:0}
+  }
   svg#art{width:100%;height:auto;display:block}
   /* CONNECT mode: the client streams live on a canvas over the SVG, screen-blended so the additive glow reads as light */
   #streams{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:screen}
@@ -146,7 +179,8 @@
   #tin{position:absolute;opacity:0;left:0;top:0;width:1px;height:1px;border:0;padding:0;font-size:16px}  /* >=16px: iOS does not zoom the page on focus */
   #termscan{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px)}
   #termbar{position:fixed;right:18px;bottom:14px;font-size:11px;letter-spacing:.25em;color:#3a4a8a;display:none;gap:14px}
-  .hand #termbar{display:flex} #termbar button{background:none;border:1px solid #1a2244;color:#3a4a8a;font:inherit;letter-spacing:inherit;padding:6px 12px;cursor:pointer}
+  .hand #termbar{display:flex} #termbar button{background:rgba(105,131,255,.12);border:1px solid #6983ff;color:#9fb0ff;font:inherit;letter-spacing:inherit;padding:8px 14px;cursor:pointer;text-shadow:0 0 8px rgba(105,131,255,.45);box-shadow:0 0 12px rgba(105,131,255,.25);transition:background .2s,color .2s,box-shadow .2s}
+  #termbar button:hover{background:#6983ff;color:#000;text-shadow:none;box-shadow:0 0 18px rgba(105,131,255,.5)}
   #skip{position:fixed;left:18px;bottom:14px;font-size:11px;letter-spacing:.25em;color:#3a4a8a;background:none;border:1px solid #1a2244;padding:6px 12px;cursor:pointer;opacity:0;transition:opacity .4s}
   .started #skip{opacity:1;transition-delay:.6s} .hand #skip{display:none}
   .mono{font-family:'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace}
@@ -330,7 +364,7 @@
   <div id="termscan"></div>
 </div>
 </div>
-<div id="termbar" class="mono"><button id="replay2">REPLAY INTRO</button></div>
+<div id="termbar" class="mono"><button id="replay2" title="Play the sign-on intro again (with or without sound)">♪ REPLAY INTRO</button></div>
 <button id="skip" class="mono">SKIP  [ESC]</button>
 
 <div id="ui" class="mono">
@@ -1189,8 +1223,91 @@ function printReply(text) {                                                  // 
   }
 }
 let termBusy = false;
+// ---- Easter egg: you asked for it. SHUTDOWN (and the classic self-destruct DEBUG commands) really do stop the
+// server -- in a real valkey-server the CLI would then just hang / refuse to connect. Here we make that moment fun,
+// and (unlike a real box) offer a way back.
+let serverDead = false;
+const tomb = verb => {
+  const mid = s => { const w = 18, l = (w - s.length) >> 1; return `      |${' '.repeat(l)}${s}${' '.repeat(w - s.length - l)}|    `; };
+  return [
+    '        .-------------.       ',
+    '       /   R  I  P     \\      ',
+    '      /                 \\     ',
+    mid('here lies the'),
+    mid('valkey-server'),
+    mid('you just told'),
+    mid('to ' + verb),
+    mid(''),
+    mid('6379 - 6379'),
+    '    ,\\|__________________|/,. ',
+  ];
+};
+function lightsOut() {                                                      // the neon sign dies with the server
+  const art = document.getElementById('art'), frame = document.getElementById('frame');
+  if (!art || !frame || document.body.classList.contains('fast')) return;   // fast path shows no sign to kill
+  document.body.classList.add('lightsout');
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {             // no blink, no sparks: cut to the dead sign
+    document.body.classList.add('dead');
+    return;
+  }
+  setTimeout(() => document.body.classList.add('dead'), 300);               // swap in the ghost while the blink is dark
+  // spark clusters burst from a few vertices of the hexagon, like a shorting tube
+  const fr = frame.getBoundingClientRect(), ar = art.getBoundingClientRect();
+  const P = [[5.8, 44.1], [5.8, 19.1], [28.8, 6], [51.1, 19.1], [51.1, 45.4], [28.4, 58.2]] // outer corners, mark units
+    .map(([x, y]) => [                                                      // mark units -> viewBox -> frame px
+      (ar.left - fr.left) + (450 + 3.4026 * (x - 28.45)) / 900 * ar.width,
+      (ar.top - fr.top) + (225 + 3.4026 * (y - 32.45)) / 500 * ar.height]);
+  const sp = document.createElement('div'); sp.id = 'sparks'; sp.setAttribute('aria-hidden', 'true');
+  for (const [vx, vy] of P.sort(() => Math.random() - .5).slice(0, 3)) {    // 3 random vertices, one cluster each
+    const n = 6 + (Math.random() * 3 | 0), base = Math.random() * .25;
+    for (let i = 0; i < n; i++) {
+      const s = document.createElement('i');
+      const a = Math.random() * 2 * Math.PI, r = 8 + Math.random() * 22;    // radial burst, then gravity droops it
+      s.style.left = vx.toFixed(1) + 'px'; s.style.top = vy.toFixed(1) + 'px';
+      s.style.setProperty('--mx', (Math.cos(a) * r).toFixed(0) + 'px');
+      s.style.setProperty('--my', (Math.sin(a) * r).toFixed(0) + 'px');
+      s.style.setProperty('--dx', (Math.cos(a) * r * 2.2).toFixed(0) + 'px');
+      s.style.setProperty('--dy', (Math.sin(a) * r * 2.2 + 30 + Math.random() * 40).toFixed(0) + 'px');
+      s.style.setProperty('--dur', (.35 + Math.random() * .4).toFixed(2) + 's');
+      s.style.setProperty('--dly', (base + Math.random() * .12).toFixed(2) + 's');
+      sp.appendChild(s);
+    }
+  }
+  frame.appendChild(sp);
+  setTimeout(() => sp.remove(), 1800);                                      // electric sparks are brief
+}
+function killServer(how, verb) {
+  serverDead = true;
+  lightsOut();
+  tprint('<span class="d">&nbsp;</span>');
+  for (const l of tomb(verb)) tprint(`<span class="o">${esc(l)}</span>`);
+  tprint('<span class="d">&nbsp;</span>');
+  tprint(`<span class="e">${esc(how)}</span>`);
+  tprint('<span class="d">(type <b>REVIVE</b> to spin up a fresh one, or just reload the tab)</span>');
+  tprompt.textContent = 'not connected> ';
+}
+// Which lines are a "please end this process" request? Returns [message, epitaph-verb] or null.
+function selfDestruct(a) {
+  if (!a.length) return null;
+  const cmd = a[0].toUpperCase(), sub = (a[1] || '').toUpperCase();
+  if (cmd === 'SHUTDOWN') return ['valkey-server shutting down (SHUTDOWN' + (a[1] ? ' ' + a.slice(1).join(' ').toUpperCase() : '') + ')...', 'SHUTDOWN'];
+  if (cmd === 'DEBUG' && (sub === 'SEGFAULT' || sub === 'PANIC' || sub === 'OOM' || sub === 'SIGALRM'))
+    return ['=== VALKEY BUG REPORT START === the server crashed on purpose (DEBUG ' + sub + ')', 'DEBUG ' + sub];
+  return null;
+}
 async function run(line) {
   tprint(`<span class="p">${esc(promptText())}</span>${esc(line)}`);
+  if (serverDead) {                                                          // in memoriam: nothing answers until you reload / REVIVE
+    const c = line.trim().toLowerCase();
+    if (c === 'clear') { tout.innerHTML = ''; return; }
+    if (c === 'revive') { location.reload(); return; }
+    tprint('<span class="e">Could not connect to Valkey at 127.0.0.1:6379: Connection refused</span>');
+    return;
+  }
+  {
+    const dead = selfDestruct(tokenize(line));
+    if (dead) { killServer(dead[0], dead[1]); return; }
+  }
   if (tv) {                                                                  // the real server
     const c = line.trim().toLowerCase();
     if (!c) return;
@@ -1264,7 +1381,7 @@ const stage = document.getElementById('stage'), ui = document.getElementById('ui
 const LOOKAHEAD = .3;
 const LOAD_MIN = 2.5;                                        // the tape loader is on screen at least this long, however fast the download
 const nowS = () => performance.now() / 1000;
-let phase = 'idle', score = null, sound = false, handed = false, skipReq = false;
+let phase = 'idle', score = null, sound = false, handed = false, skipReq = false, fast = false;
 let loadStart = 0, signonStart = 0, audioAt = null;          // audioAt(wallSeconds) -> AudioContext time
 let loadBar = 0, loadStopAt = null, holdBar = 0, holdDecided = -1, popped = [false, false, false, false];
 const stageT = () => nowS() - signonStart;
@@ -1285,6 +1402,7 @@ function startAll() {
     if (document.getElementById('tape').checked) noise(ctx.currentTime + .05, T.end, {gain: .045, lp: 2400, hp: 120, attack: .4, release: 1.2, color: 'pink'});
     score = SCORES[name]();
   } else { sound = false; score = null; }
+  if (fast) return startFast();
   if (REAL) startRealLoader(...loaderParams()); else startLoader(...loaderParams());
   phase = 'load'; loadStart = nowS() + .12; vamp.classList.remove('hold'); vampShow(true); document.body.classList.add('started');
   requestAnimationFrame(loaderTick);
@@ -1343,14 +1461,17 @@ function stopAudio(fadeSecs) {
   try { m.gain.setValueAtTime(m.gain.value, c.currentTime); m.gain.linearRampToValueAtTime(0, c.currentTime + fadeSecs); } catch (e) {}
   setTimeout(() => { if (ctx === c) { c.close(); ctx = null; } }, fadeSecs * 1000 + 100);
 }
-function handoff() {
+function handoff(instant = false) {
   if (handed) return; handed = true; phase = 'done'; HAND.at = stageT(); vampShow(false); netLastT = HAND.at;
-  document.body.classList.add('hand'); fitColumn(); stopAudio(1.8);
-  // the picture shrinks (CSS transition on #frame width); the terminal fades in as it lands
-  setTimeout(() => {
+  netRunning = false; netStop();
+  // instant (silent fast path): no picture-shrink transition, no boot lines, terminal appears at once.
+  // normal path: the picture shrinks (CSS transition on #frame width); the terminal fades in as it lands.
+  if (instant) { document.body.classList.add('hand', 'nofx'); } else { document.body.classList.add('hand'); }
+  fitColumn(); stopAudio(1.8);
+  const reveal = () => {
     document.body.classList.add('termon'); bootWall = performance.now();
     if (tv) {
-      for (const l of loader.lines.filter(l => /Server initialized|Ready to accept connections/.test(l))) tprint(`<span class="d">${esc(l.replace(/^\d+:M \d+ \w+ \d+ [\d:.]+ /, '1:M '))}</span>`);
+      if (!instant) for (const l of loader.lines.filter(l => /Server initialized|Ready to accept connections/.test(l))) tprint(`<span class="d">${esc(l.replace(/^\d+:M \d+ \w+ \d+ [\d:.]+ /, '1:M '))}</span>`);
       tprompt.textContent = promptText();
       initHints();
       const pushes = outs => { if (outs.length) { outs.forEach(printReply); } };
@@ -1358,7 +1479,16 @@ function handoff() {
       setInterval(() => pushes(tv.tick()), 50);                              // serverCron, expiry, blocking timeouts, pub/sub
     } else { tprint('<span class="d">1:M * Server initialized</span>'); tprint('<span class="d">1:M * Ready to accept connections tcp</span>'); }
     tprint('&nbsp;'); tin.focus();
-  }, 900);
+  };
+  if (instant) reveal(); else setTimeout(reveal, 900);
+}
+// Silent fast path: no tape loader, no sign-on animation. Start the real download/compile at once and hand
+// off to the terminal the instant the server accepts connections -- the only genuine wait is the WASM boot.
+function startFast() {
+  document.body.classList.add('fast');
+  if (REAL) startRealLoader(...loaderParams()); else startLoader(...loaderParams());
+  const waitReady = () => { if (loader.ready) handoff(true); else setTimeout(waitReady, 16); };
+  waitReady();
 }
 function skipIntro() {                                   // skip = get to the terminal as soon as the server allows
   if (handed) return; skipReq = true; stopAudio(.5);
@@ -1369,12 +1499,23 @@ function skipIntro() {                                   // skip = get to the te
 const q = new URLSearchParams(location.search);
 const dlIn = document.getElementById('dl'), bootIn = document.getElementById('boot');
 function loaderParams() { return [parseFloat(q.get('dl') ?? dlIn.value), parseFloat(q.get('boot') ?? bootIn.value)]; }
-document.getElementById('start').onclick = () => { ui.classList.add('hidden'); document.getElementById('sound').checked = false; startAll(); };
-document.getElementById('startsound').onclick = () => { ui.classList.add('hidden'); document.getElementById('sound').checked = true; startAll(); };
+// The intro plays once per browser. First visit: START (straight to the prompt) or START WITH SOUND (the intro).
+// Later visits: no start screen at all -- the server boots and the prompt appears. REPLAY INTRO reopens the start
+// screen in intro mode (?intro=1), where both buttons play the animation, with or without sound.
+const SEEN_KEY = 'tryvalkey.seen';
+const introMode = q.get('intro') === '1';
+const seenBefore = (() => { try { return localStorage.getItem(SEEN_KEY) === '1'; } catch (e) { return false; } })();
+const markSeen = () => { try { localStorage.setItem(SEEN_KEY, '1'); } catch (e) {} };
+const clearSeen = () => { try { localStorage.removeItem(SEEN_KEY); } catch (e) {} };
+const dropIntroParam = () => { if (introMode) { const u = new URL(location.href); u.searchParams.delete('intro'); history.replaceState(null, '', u); } };
+if (introMode) { document.getElementById('start').textContent = 'PLAY INTRO'; document.getElementById('startsound').textContent = 'PLAY INTRO WITH SOUND'; }
+document.getElementById('start').onclick = () => { ui.classList.add('hidden'); document.getElementById('sound').checked = false; fast = seenBefore && !introMode; markSeen(); dropIntroParam(); startAll(); };
+document.getElementById('startsound').onclick = () => { ui.classList.add('hidden'); document.getElementById('sound').checked = true; markSeen(); dropIntroParam(); startAll(); };
 document.getElementById('skip').onclick = skipIntro;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') skipIntro(); });
-document.getElementById('replay').onclick = () => location.reload();
-document.getElementById('replay2').onclick = () => location.reload();
+const replayIntro = () => { clearSeen(); const u = new URL(location.href); u.searchParams.set('intro', '1'); location.href = u.toString(); };
+document.getElementById('replay').onclick = replayIntro;
+document.getElementById('replay2').onclick = replayIntro;
 // presets <-> number inputs
 document.querySelectorAll('input[name=preset]').forEach(r => r.addEventListener('change', () => { const [d, b] = r.value.split(','); dlIn.value = d; bootIn.value = b; }));
 { const [d, b] = document.querySelector('input[name=preset]:checked').value.split(','); dlIn.value = q.get('dl') ?? d; bootIn.value = q.get('boot') ?? b; }
@@ -1388,6 +1529,7 @@ const OPTS = {
   boot:  {desc: 'minimum boot seconds (holds before the server starts; 0 = real)'},
   mock:  {desc: '1 = the v2 mock loader + mock CLI instead of the real server'},
   run:   {desc: '1 = start without pressing a button (audio stays suspended)'},
+  intro: {desc: '1 = show the start screen and offer the intro again (it plays once per browser; REPLAY INTRO sets this)'},
 };
 if (q.get('sound') && OPTS.sound.values.includes(q.get('sound'))) document.querySelector(`input[name=score][value=${q.get('sound')}]`).checked = true;
 if (q.get('mode') && OPTS.mode.values.includes(q.get('mode'))) document.querySelector(`input[name=mode][value=${q.get('mode')}]`).checked = true;
@@ -1405,6 +1547,7 @@ window.tryvalkey = {
     location.href = u.toString();
   },
   reset() { location.href = location.pathname; },
+  forget() { try { localStorage.removeItem(SEEN_KEY); } catch (e) {} location.href = location.pathname; },   // first-visit experience again
   get server() { return tv; },                         // the CLI engine: tryvalkey.server.exec('PING').then(console.log)
 };
 console.info('%ctry-valkey%c  a real valkey-server compiled to WebAssembly is running in this tab.  Type tryvalkey.help() for options.', 'color:#6983ff;font-weight:bold', '');
@@ -1416,6 +1559,12 @@ if (q.get('run')) {
   ui.classList.add('hidden');
   if (q.get('sound') && q.get('sound') !== 'mute') document.getElementById('sound').checked = true;
   try { startAll(); console.log('started', MODE, sound ? document.querySelector('input[name=score]:checked').value : 'silent'); } catch (e) { console.error('START ERROR', e); }
+}
+// Repeat visit (or a reduced-motion preference): no start screen, no intro -- boot and show the prompt. The silent
+// path needs no user gesture. REPLAY INTRO (?intro=1) is still there for anyone who wants the show.
+else if (q.get('t') === null && !introMode && (seenBefore || matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+  ui.classList.add('hidden'); document.getElementById('sound').checked = false; fast = true; markSeen();
+  try { startAll(); } catch (e) { console.error('START ERROR', e); }
 }
 if (q.get('t') !== null) {
   const seek = parseFloat(q.get('t')), uAt = parseFloat(q.get('unlock_at') || T.holdMin);

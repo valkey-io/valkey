@@ -136,7 +136,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/configure-pages@v5   # switches the site source to GitHub Actions on first use
+      - uses: actions/configure-pages@v5 # switches the site source to GitHub Actions on first use
       - id: deploy
         uses: actions/deploy-pages@v4
 

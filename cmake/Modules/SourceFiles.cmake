@@ -120,6 +120,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/commands.c
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/connection.c
+    ${CMAKE_SOURCE_DIR}/src/connmem.c
     ${CMAKE_SOURCE_DIR}/src/unix.c
     ${CMAKE_SOURCE_DIR}/src/server.c
     ${CMAKE_SOURCE_DIR}/src/logreqres.c

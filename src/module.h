@@ -117,6 +117,8 @@ typedef struct ValkeyModule {
     int blocked_clients;                  /* Count of ValkeyModuleBlockedClient in this module. */
     ValkeyModuleInfoFunc info_cb;         /* Callback for module to add INFO fields. */
     ValkeyModuleDefragFunc defrag_cb;     /* Callback for global data defrag. */
+    ValkeyModuleKeyMetaDumpFunc key_meta_dump_cb;       /* Callback to emit per-key metadata on dump. */
+    ValkeyModuleKeyMetaRestoreFunc key_meta_restore_cb; /* Callback to consume per-key metadata on restore. */
     struct moduleLoadQueueEntry *loadmod; /* Module load arguments for config rewrite. */
     int num_commands_with_acl_categories; /* Number of commands in this module included in acl categories */
     int onload;                           /* Flag to identify if the call is being made from Onload (0 or 1) */
@@ -232,6 +234,9 @@ int moduleAllModulesHandleForkless(void);
 int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c);
 sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections);
 void moduleFireServerEvent(uint64_t eid, int subid, void *data);
+int moduleAnyKeyMetadataRegistered(void);
+list *moduleGatherKeyMetadata(robj *key);
+int moduleRestoreKeyMetadata(const char *modulename, robj *key, robj *metadata);
 void processModuleLoadingProgressEvent(int is_aof);
 int moduleTryServeClientBlockedOnKey(client *c, robj *key);
 void moduleUnblockClient(client *c);

@@ -8610,6 +8610,73 @@ void VM_RegisterAuthCallback(ValkeyModuleCtx *ctx, ValkeyModuleAuthCallback cb) 
     listAddNodeHead(moduleAuthCallbacks, auth_ctx);
 }
 
+/* Register callbacks to attach and consume per-key metadata during the
+ * DUMP/RESTORE (and, in the future, slot migration and RDB) machinery. The
+ * dump callback returns an owned string of metadata for a key, or NULL for
+ * none; the restore callback consumes metadata that arrived tagged with this
+ * module's name. Passing NULL for a callback disables it. The callbacks live
+ * on the module and are cleared automatically when the module is unloaded. */
+int VM_RegisterKeyMetadata(ValkeyModuleCtx *ctx,
+                           ValkeyModuleKeyMetaDumpFunc dump_func,
+                           ValkeyModuleKeyMetaRestoreFunc restore_func) {
+    ctx->module->key_meta_dump_cb = dump_func;
+    ctx->module->key_meta_restore_cb = restore_func;
+    return VALKEYMODULE_OK;
+}
+
+/* Return 1 if any loaded module has registered a key-metadata dump callback. */
+int moduleAnyKeyMetadataRegistered(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(modules, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModule *module = listNodeValue(ln);
+        if (module->key_meta_dump_cb) return 1;
+    }
+    return 0;
+}
+
+/* Invoke every registered dump callback for 'key' and gather the results into a
+ * newly-allocated list of robj as alternating (module-name, metadata-value)
+ * pairs, or NULL if no module produced metadata. The caller owns the returned
+ * list and each element (decrRefCount + listRelease). */
+list *moduleGatherKeyMetadata(robj *key) {
+    list *result = NULL;
+    listIter li;
+    listNode *ln;
+    listRewind(modules, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModule *module = listNodeValue(ln);
+        if (!module->key_meta_dump_cb) continue;
+
+        ValkeyModuleCtx ctx;
+        moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+        robj *value = module->key_meta_dump_cb(&ctx, key);
+        moduleFreeContext(&ctx);
+        if (value == NULL) continue;
+
+        if (result == NULL) result = listCreate();
+        listAddNodeTail(result, createStringObject(module->name, strlen(module->name)));
+        listAddNodeTail(result, value);
+    }
+    return result;
+}
+
+/* Dispatch a single restore metadata pair to the named module. Ownership of
+ * 'metadata' is transferred to the module when it is handled. Returns 1 if a
+ * module consumed it, 0 if the module is unknown or has no restore callback
+ * (caller drops the value), or -1 if the module rejected the metadata. */
+int moduleRestoreKeyMetadata(const char *modulename, robj *key, robj *metadata) {
+    ValkeyModule *module = moduleLookupByName(modulename);
+    if (module == NULL || module->key_meta_restore_cb == NULL) return 0;
+
+    ValkeyModuleCtx ctx;
+    moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+    int ret = module->key_meta_restore_cb(&ctx, key, metadata);
+    moduleFreeContext(&ctx);
+    return ret == VALKEYMODULE_OK ? 1 : -1;
+}
+
 /* Helper function to invoke the free private data callback of a Module blocked client. */
 void moduleInvokeFreePrivDataCallback(client *c, ValkeyModuleBlockedClient *bc) {
     if (bc->privdata && bc->free_privdata) {
@@ -15915,6 +15982,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterEnumConfig);
     REGISTER_API(LoadConfigs);
     REGISTER_API(RegisterAuthCallback);
+    REGISTER_API(RegisterKeyMetadata);
     REGISTER_API(RdbStreamCreateFromFile);
     REGISTER_API(RdbStreamFree);
     REGISTER_API(RdbLoad);

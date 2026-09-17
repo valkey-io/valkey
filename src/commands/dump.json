@@ -4,7 +4,7 @@
         "complexity": "O(1) to access the key and additional O(N*M) to serialize it, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1).",
         "group": "generic",
         "since": "2.6.0",
-        "arity": 2,
+        "arity": -2,
         "function": "dumpCommand",
         "command_flags": [
             "READONLY"
@@ -54,6 +54,23 @@
                 "name": "key",
                 "type": "key",
                 "key_spec_index": 0
+            },
+            {
+                "name": "format",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "restore",
+                        "token": "RESTORE",
+                        "type": "pure-token"
+                    },
+                    {
+                        "name": "restore-asking",
+                        "token": "RESTORE-ASKING",
+                        "type": "pure-token"
+                    }
+                ]
             }
         ]
     }

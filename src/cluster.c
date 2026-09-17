@@ -181,9 +181,30 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
 /* DUMP keyname
  * DUMP is actually not used by Cluster but it is the obvious
  * complement of RESTORE and can be useful for different applications. */
+/* DUMP key [RESTORE | RESTORE-ASKING]
+ *
+ * Without a keyword the reply is the serialized value. With RESTORE or
+ * RESTORE-ASKING the reply is instead an array of bulk strings forming a fully
+ * populated RESTORE / RESTORE-ASKING command (including any per-module key
+ * metadata), which can be replayed verbatim to reconstruct the key. */
 void dumpCommand(client *c) {
     robj *o;
     rio payload;
+    const char *restore_cmd = NULL;
+
+    if (c->argc == 3) {
+        if (!strcasecmp(objectGetVal(c->argv[2]), "restore")) {
+            restore_cmd = "RESTORE";
+        } else if (!strcasecmp(objectGetVal(c->argv[2]), "restore-asking")) {
+            restore_cmd = "RESTORE-ASKING";
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    } else if (c->argc != 2) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
 
     /* Check if the key is here. */
     if ((o = lookupKeyRead(c->db, c->argv[1])) == NULL) {
@@ -194,17 +215,69 @@ void dumpCommand(client *c) {
     /* Create the DUMP encoded representation. */
     createDumpPayload(&payload, o, c->argv[1], c->db->id);
 
-    /* Transfer to the client */
-    addReplyBulkSds(c, payload.io.buffer.ptr);
-    return;
+    if (restore_cmd == NULL) {
+        addReplyBulkSds(c, payload.io.buffer.ptr);
+        return;
+    }
+
+    /* Build a full RESTORE command: cmd key ttl payload REPLACE [ABSTTL] [METADATA ...]. */
+    long long expire = getExpire(c->db, c->argv[1]);
+    list *metadata = moduleGatherKeyMetadata(c->argv[1]);
+    long len = 5 + (expire != -1 ? 1 : 0) + (metadata ? 1 + listLength(metadata) : 0);
+
+    addReplyArrayLen(c, len);
+    addReplyBulkCString(c, restore_cmd);
+    addReplyBulk(c, c->argv[1]);
+    addReplyBulkLongLong(c, expire != -1 ? expire : 0);
+    addReplyBulkCBuffer(c, payload.io.buffer.ptr, sdslen(payload.io.buffer.ptr));
+    addReplyBulkCString(c, "REPLACE");
+    if (expire != -1) addReplyBulkCString(c, "ABSTTL");
+    if (metadata) {
+        addReplyBulkCString(c, "METADATA");
+        listIter li;
+        listNode *ln;
+        listRewind(metadata, &li);
+        while ((ln = listNext(&li))) {
+            addReplyBulk(c, listNodeValue(ln));
+            decrRefCount(listNodeValue(ln));
+        }
+        listRelease(metadata);
+    }
+    sdsfree(payload.io.buffer.ptr);
 }
 
-/* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
+/* Count of module metadata fields dropped on RESTORE because no matching module
+ * was loaded. The first unknown name is logged; the rest are only counted. */
+static long long restore_metadata_dropped = 0;
+
+/* Dispatch the (module-name, value) metadata pairs starting at argv[meta_start]
+ * to their modules. Returns C_OK if all pairs were consumed or harmlessly
+ * dropped, or C_ERR (after replying an error) if a module rejected its
+ * metadata, in which case the caller must fail the restore. */
+static int restoreDispatchKeyMetadata(client *c, robj *key, int meta_start) {
+    for (int j = meta_start; j + 1 < c->argc; j += 2) {
+        robj *value = c->argv[j + 1];
+        incrRefCount(value); /* Ownership passes to the module when handled. */
+        int r = moduleRestoreKeyMetadata(objectGetVal(c->argv[j]), key, value);
+        if (r == 0) {
+            decrRefCount(value); /* Unknown module: drop it. */
+            if (restore_metadata_dropped++ == 0)
+                serverLog(LL_NOTICE, "RESTORE dropped metadata for unknown module '%s'",
+                          (char *)objectGetVal(c->argv[j]));
+        } else if (r < 0) {
+            addReplyError(c, "Module rejected key metadata during RESTORE");
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+/* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] [METADATA [name value]*] */
 void restoreCommand(client *c) {
     long long ttl, lfu_freq = -1, lru_idle = -1;
     uint16_t rdbver = 0;
     rio payload;
-    int j, type, replace = 0, absttl = 0;
+    int j, type, replace = 0, absttl = 0, meta_start = -1;
     robj *obj;
 
     /* Parse additional options */
@@ -228,6 +301,14 @@ void restoreCommand(client *c) {
                 return;
             }
             j++; /* Consume additional arg. */
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "metadata")) {
+            /* Remaining args are (module-name, value) pairs. */
+            meta_start = j + 1;
+            if (additional % 2 != 0) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+            break;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -308,6 +389,10 @@ void restoreCommand(client *c) {
         }
     }
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
+    if (meta_start != -1 && restoreDispatchKeyMetadata(c, key, meta_start) != C_OK) {
+        dbDelete(c->db, key);
+        return;
+    }
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);
     addReply(c, shared.ok);

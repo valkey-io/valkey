@@ -299,7 +299,6 @@ start_server {tags {"expire"}} {
         catch {r GETEX foo EX -9999999999999999} e
         set e
     } {ERR invalid expire time in 'getex' command}
-    
 
     test {GETEX with error expiration time} {
         r del foo

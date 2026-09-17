@@ -142,22 +142,24 @@ bool hashTypeHasVolatileFields(robj *o) {
  * encoding hangs this state on the object itself (by swapping the hashtable
  * type, see below); a listpack has nowhere to put it, so we use a file-scope
  * flag consulted by hashTypeListpackFieldIsValid(). This is safe because
- * command execution is single threaded and every ignore-bracket is a tight
- * set(true)/.../set(false) pair that does not span commands. */
+ * command execution is single threaded and every ignore-bracket is tight and
+ * does not span commands. A bracket that can run with another already open
+ * closes by restoring the state it found rather than clearing unconditionally
+ * (see hashTypeConvertListpack). */
 static bool listpack_ttl_ignored = false;
 
-/* Read the flag above, so a listpack->hashtable conversion can restore the
- * ignore-TTL bracket it was called in instead of assuming there was none. */
-static inline bool hashTypeListpackTTLIsIgnored(void) {
-    return listpack_ttl_ignored;
-}
-
-/* make any access to the hash object elements ignore the specific elements expiration.
- * This is mainly in order to be able to access hash elements which are already expired. */
-static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
+/* Make any access to the hash object elements ignore the specific elements expiration.
+ * This is mainly in order to be able to access hash elements which are already expired.
+ * Returns the ignore state in effect before this call so the caller can restore
+ * it. That state lives in the file-scope flag for a listpack and in the hashtable
+ * type for a hashtable; since the type doubles as a steady-state optimization for
+ * hashes with no volatile fields, the result is meant for restoring, not for
+ * asking whether a bracket was open. */
+static inline bool hashTypeIgnoreTTL(robj *o, bool ignore) {
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        bool was_ignored = listpack_ttl_ignored;
         listpack_ttl_ignored = ignore;
-        return;
+        return was_ignored;
     }
     /* Clearing is done regardless of encoding so that a bracket whose object
      * was converted listpack->hashtable in between cannot leak the flag.
@@ -170,8 +172,10 @@ static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
         if (!ignore && hashTypeGetVolatileSet(o) == NULL) {
             ignore = true;
         }
-        hashtableSetType(objectGetVal(o), ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
+        hashtableType *old = hashtableSetType(objectGetVal(o), ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
+        return old == &hashHashtableType;
     }
+    return false;
 }
 
 static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
@@ -1016,8 +1020,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
 
         /* Iterate with TTLs ignored so logically-expired fields survive the
          * conversion and are reaped normally. */
-        bool state = hashTypeListpackTTLIsIgnored();
-        hashTypeIgnoreTTL(o, true);
+        bool prev_state = hashTypeIgnoreTTL(o, true);
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
@@ -1061,7 +1064,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
         /* Restore the scope we were called in. By now the object is hashtable
          * encoded, so this sets the hashtable type rather than the listpack
          * flag, which is what an enclosing ignore bracket needs. */
-        hashTypeIgnoreTTL(o, state);
+        hashTypeIgnoreTTL(o, prev_state);
     } else {
         serverPanic("Unknown hash encoding");
     }

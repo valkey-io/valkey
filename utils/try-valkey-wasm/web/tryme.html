@@ -125,7 +125,11 @@
   /* silent fast path: no picture, no shrink transition, terminal appears at once (no fades) */
   .nofx #frame{transition:none}
   .nofx.termon #term{opacity:1;transition:none}
-  .fast #art, .fast #streams{display:none} .fast #bgcover{opacity:1;transition:none}
+  .fast #streams{display:none} .fast #bgcover{opacity:1;transition:none}
+  /* fast path: the sign appears already lit -- every intro animation is longhand with fill-mode:both, so zeroing
+     durations+delays lands each element on its exact end state without playing a frame. (.hand already kills the
+     one infinite animation, the tagline cursor.) */
+  .instant .anim{animation-duration:0s !important;animation-delay:0s !important}
   /* SHUTDOWN easter egg: the neon sign dies. ONE hard blink (on-off-on, ~1.5 opposing pairs, well under the
      3-flashes/sec WCAG 2.3.1 line), then the tube is dead: fills gone, a dim unfilled outline of the mark and
      wordmark left behind. The tagline stays lit -- open source, forever. Only the logo blinks, never the page.
@@ -142,13 +146,14 @@
   .dead #wire{opacity:1 !important;stroke:#44548f !important;filter:none !important;animation:none !important}
   .dead #word text{opacity:0 !important}
   .dead #word text:last-of-type{opacity:1 !important;fill:none !important;stroke:#44548f;stroke-width:1.3;filter:none}
-  #sparks{position:absolute;inset:0;pointer-events:none;overflow:hidden}
-  #sparks i{position:absolute;width:2px;height:2px;border-radius:50%;background:#eaf0ff;
-    box-shadow:0 0 5px 1px rgba(155,176,255,.95);opacity:0;
-    animation:sparkburst var(--dur,.6s) cubic-bezier(.15,.6,.45,1) var(--dly,0s) forwards}
+  #sparks{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:9}
+  #sparks i{position:absolute;width:var(--sz,3px);height:var(--sz,3px);border-radius:50%;background:#ffffff;
+    box-shadow:0 0 8px 2px rgba(190,205,255,1),0 0 20px 6px rgba(130,160,255,.6);opacity:0;
+    animation:sparkburst var(--dur,.9s) cubic-bezier(.15,.6,.45,1) var(--dly,0s) forwards}
   @keyframes sparkburst{
     0%{opacity:1;transform:translate(0,0)}
-    35%{opacity:1;transform:translate(var(--mx,0px),var(--my,0px))}
+    30%{opacity:1;transform:translate(var(--mx,0px),var(--my,0px))}
+    75%{opacity:.9}
     100%{opacity:0;transform:translate(var(--dx,0px),var(--dy,80px))}
   }
   @media (prefers-reduced-motion: reduce){
@@ -1244,37 +1249,39 @@ const tomb = verb => {
 };
 function lightsOut() {                                                      // the neon sign dies with the server
   const art = document.getElementById('art'), frame = document.getElementById('frame');
-  if (!art || !frame || document.body.classList.contains('fast')) return;   // fast path shows no sign to kill
+  if (!art || !frame) return;
   document.body.classList.add('lightsout');
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) {             // no blink, no sparks: cut to the dead sign
     document.body.classList.add('dead');
     return;
   }
   setTimeout(() => document.body.classList.add('dead'), 300);               // swap in the ghost while the blink is dark
-  // spark clusters burst from a few vertices of the hexagon, like a shorting tube
-  const fr = frame.getBoundingClientRect(), ar = art.getBoundingClientRect();
+  // spark clusters burst from a few vertices of the hexagon, like a shorting tube, and shower down the page
+  const ar = art.getBoundingClientRect();
   const P = [[5.8, 44.1], [5.8, 19.1], [28.8, 6], [51.1, 19.1], [51.1, 45.4], [28.4, 58.2]] // outer corners, mark units
-    .map(([x, y]) => [                                                      // mark units -> viewBox -> frame px
-      (ar.left - fr.left) + (450 + 3.4026 * (x - 28.45)) / 900 * ar.width,
-      (ar.top - fr.top) + (225 + 3.4026 * (y - 32.45)) / 500 * ar.height]);
+    .map(([x, y]) => [                                                      // mark units -> viewBox -> viewport px
+      ar.left + (450 + 3.4026 * (x - 28.45)) / 900 * ar.width,
+      ar.top + (225 + 3.4026 * (y - 32.45)) / 500 * ar.height]);
   const sp = document.createElement('div'); sp.id = 'sparks'; sp.setAttribute('aria-hidden', 'true');
-  for (const [vx, vy] of P.sort(() => Math.random() - .5).slice(0, 3)) {    // 3 random vertices, one cluster each
-    const n = 6 + (Math.random() * 3 | 0), base = Math.random() * .25;
+  for (const [vx, vy] of P.sort(() => Math.random() - .5).slice(0, 4)) {    // 4 random vertices, one cluster each
+    const n = 10 + (Math.random() * 5 | 0), base = Math.random() * .25;
     for (let i = 0; i < n; i++) {
       const s = document.createElement('i');
-      const a = Math.random() * 2 * Math.PI, r = 8 + Math.random() * 22;    // radial burst, then gravity droops it
+      const a = Math.random() * 2 * Math.PI, r = 10 + Math.random() * 28;   // radial burst, then gravity takes over
+      const fall = 120 + Math.random() * Math.max(120, innerHeight - vy - 140); // most of the way down the page
       s.style.left = vx.toFixed(1) + 'px'; s.style.top = vy.toFixed(1) + 'px';
+      s.style.setProperty('--sz', (2.5 + Math.random() * 2.5).toFixed(1) + 'px');
       s.style.setProperty('--mx', (Math.cos(a) * r).toFixed(0) + 'px');
       s.style.setProperty('--my', (Math.sin(a) * r).toFixed(0) + 'px');
-      s.style.setProperty('--dx', (Math.cos(a) * r * 2.2).toFixed(0) + 'px');
-      s.style.setProperty('--dy', (Math.sin(a) * r * 2.2 + 30 + Math.random() * 40).toFixed(0) + 'px');
-      s.style.setProperty('--dur', (.35 + Math.random() * .4).toFixed(2) + 's');
-      s.style.setProperty('--dly', (base + Math.random() * .12).toFixed(2) + 's');
+      s.style.setProperty('--dx', (Math.cos(a) * r * 2.2 + (Math.random() - .5) * 90).toFixed(0) + 'px');
+      s.style.setProperty('--dy', fall.toFixed(0) + 'px');
+      s.style.setProperty('--dur', (.7 + Math.random() * .9).toFixed(2) + 's');
+      s.style.setProperty('--dly', (base + Math.random() * .15).toFixed(2) + 's');
       sp.appendChild(s);
     }
   }
-  frame.appendChild(sp);
-  setTimeout(() => sp.remove(), 1800);                                      // electric sparks are brief
+  document.body.appendChild(sp);
+  setTimeout(() => sp.remove(), 3200);                                      // gone once the last ember lands
 }
 function killServer(how, verb) {
   serverDead = true;
@@ -1486,6 +1493,7 @@ function handoff(instant = false) {
 // off to the terminal the instant the server accepts connections -- the only genuine wait is the WASM boot.
 function startFast() {
   document.body.classList.add('fast');
+  stage.classList.add('play', 'unlock', 'instant');       // all clocks running at 0s duration: the sign jumps to its lit end state
   if (REAL) startRealLoader(...loaderParams()); else startLoader(...loaderParams());
   const waitReady = () => { if (loader.ready) handoff(true); else setTimeout(waitReady, 16); };
   waitReady();

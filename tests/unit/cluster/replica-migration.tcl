@@ -129,11 +129,14 @@ proc test_migrated_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+# The replica rank delay scales with cluster-node-timeout. Use the default
+# timeout so the freshest replica can finish its election and propagate the
+# result before a stale replica starts another one. Keep frequent heartbeats.
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 15000 cluster-ping-interval 500 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 15000 cluster-ping-interval 500 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
@@ -220,11 +223,11 @@ proc test_nonempty_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 15000 cluster-ping-interval 500 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 15000 cluster-ping-interval 500 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
@@ -344,11 +347,11 @@ proc test_sub_replica {type} {
     }
 }
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 15000 cluster-ping-interval 500 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 15000 cluster-ping-interval 500 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 

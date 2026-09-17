@@ -73,7 +73,7 @@ proc teardown_throttle_replication {primary replica} {
     catch {$replica replicaof no one}
 }
 
-start_server {tags {"throttle repl external:skip"}} {
+start_server {tags {"throttle repl external:skip valgrind:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
@@ -183,7 +183,6 @@ start_server {tags {"throttle repl external:skip"}} {
 
         test {Throttling not protect a replica above the hard COB limit} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
-            $primary config set client-output-buffer-limit "replica 10mb 1mb 0"
 
             set writer [valkey_deferring_client]
             $writer CLIENT ID
@@ -205,6 +204,9 @@ start_server {tags {"throttle repl external:skip"}} {
                 resume_process $replica_pid
                 fail "throttler never began queueing clients"
             }
+
+            # tighten the hard limit, the following 100MB write blows past it.
+            $primary config set client-output-buffer-limit "replica 10mb 1mb 0"
 
             # Write 100MB total (100 x 1MB values). This is well above the 10mb
             # hard limit, so the replica will be disconnected.
@@ -264,6 +266,8 @@ start_server {tags {"throttle repl external:skip"}} {
 
             $writer close
             resume_process $replica_pid
+            # Promote the new primary to break the replicaof cycle between the two nodes.
+            $replica replicaof no one
             teardown_throttle_replication $replica $primary
         }
 

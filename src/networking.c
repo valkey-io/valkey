@@ -6625,7 +6625,16 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_compression &&
         c->io_write_state != CLIENT_PENDING_IO) {
         replicaCompressionState *compression = c->repl_data->repl_compression;
-        mem += zmalloc_size(compression) + sdsAllocSize(compression->out_buf);
+        mem += zmalloc_size(compression) + sdsAllocSize(compression->out_buf) + compression->compressor.ctx_memory;
+    }
+    /* The stream decoder for a compressed upstream link hangs off the server
+     * struct, but it exists for exactly this link, so attribute it to the
+     * primary client. Reads are not offloaded to IO threads while the decoder
+     * is active, so its buffers are stable here. */
+    if (c->flag.primary && server.repl_stream_reader) {
+        streamPushReader *reader = server.repl_stream_reader;
+        mem += zmalloc_size(reader) + reader->decompressor.ctx_memory;
+        mem += reader->pending_input ? sdsAllocSize(reader->pending_input) : 0;
     }
     /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to

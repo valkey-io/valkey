@@ -198,6 +198,13 @@ start_server {tags {"incr"}} {
         assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
         assert_equal "pmessage * __keyspace@${db}__:foo persist" [$rd read]
         assert_equal "pmessage * __keyevent@${db}__:persist foo" [$rd read]
+        # PERSIST on a key without TTL does not emit a persist event.
+        r increx foo byint 1 persist
+        assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
+        r del foo
+        assert_equal "pmessage * __keyspace@${db}__:foo del" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:del foo" [$rd read]
         $rd close
         r config set notify-keyspace-events ""
     }

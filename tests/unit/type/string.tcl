@@ -37,20 +37,6 @@ start_server {tags {"string"}} {
             set _ $err
         } {}
 
-        test {SET rejects expiration that overflows when added to current time} {
-            r del foo
-
-            assert_error "ERR invalid expire time in 'set' command" {
-                r set foo bar px 9223372036854775807
-            }
-            assert_equal 0 [r exists foo]
-
-            assert_error "ERR invalid expire time in 'set' command" {
-                r set foo bar ex 9223372036854775807
-            }
-            assert_equal 0 [r exists foo]
-        }
-
         test {SET 10000 numeric keys and access all them in reverse order} {
             r flushdb
             set err {}

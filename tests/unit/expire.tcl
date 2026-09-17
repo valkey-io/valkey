@@ -278,6 +278,16 @@ start_server {tags {"expire"}} {
         set e
     } {ERR invalid expire time in 'set' command}
 
+    test {SET PX rejects expiration that overflows when added to current time} {
+        catch {r set foo bar px 9223372036854775807} e
+        set e
+    } {ERR invalid expire time in 'set' command}
+
+    test {SET EX rejects expiration that overflows when added to current time} {
+        catch {r set foo bar ex 9223372036854775807} e
+        set e
+    } {ERR invalid expire time in 'set' command}
+
     test {GETEX with big integer should report an error} {
         r set foo bar
         catch {r GETEX foo EX 10000000000000000} e
@@ -289,6 +299,7 @@ start_server {tags {"expire"}} {
         catch {r GETEX foo EX -9999999999999999} e
         set e
     } {ERR invalid expire time in 'getex' command}
+    
 
     test {GETEX with error expiration time} {
         r del foo

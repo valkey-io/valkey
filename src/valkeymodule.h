@@ -96,6 +96,7 @@ typedef long long ustime_t;
 #define VALKEYMODULE_KEYTYPE_ZSET 5
 #define VALKEYMODULE_KEYTYPE_MODULE 6
 #define VALKEYMODULE_KEYTYPE_STREAM 7
+#define VALKEYMODULE_KEYTYPE_PATH_HASH 8
 
 /* Reply types. */
 #define VALKEYMODULE_REPLY_UNKNOWN -1
@@ -237,31 +238,32 @@ This flag should not be used directly by the module.
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes.
  * NOTE: These have to be in sync with NOTIFY_* in server.h */
-#define VALKEYMODULE_NOTIFY_KEYSPACE (1 << 0)  /* K */
-#define VALKEYMODULE_NOTIFY_KEYEVENT (1 << 1)  /* E */
-#define VALKEYMODULE_NOTIFY_GENERIC (1 << 2)   /* g */
-#define VALKEYMODULE_NOTIFY_STRING (1 << 3)    /* $ */
-#define VALKEYMODULE_NOTIFY_LIST (1 << 4)      /* l */
-#define VALKEYMODULE_NOTIFY_SET (1 << 5)       /* s */
-#define VALKEYMODULE_NOTIFY_HASH (1 << 6)      /* h */
-#define VALKEYMODULE_NOTIFY_ZSET (1 << 7)      /* z */
-#define VALKEYMODULE_NOTIFY_EXPIRED (1 << 8)   /* x */
-#define VALKEYMODULE_NOTIFY_EVICTED (1 << 9)   /* e */
-#define VALKEYMODULE_NOTIFY_STREAM (1 << 10)   /* t */
-#define VALKEYMODULE_NOTIFY_KEY_MISS (1 << 11) /* m (Note: This one is excluded from VALKEYMODULE_NOTIFY_ALL on purpose) */
-#define VALKEYMODULE_NOTIFY_LOADED (1 << 12)   /* module only key space notification, indicate a key loaded from rdb */
-#define VALKEYMODULE_NOTIFY_MODULE (1 << 13)   /* d, module key space notification */
-#define VALKEYMODULE_NOTIFY_NEW (1 << 14)      /* n, new key notification */
+#define VALKEYMODULE_NOTIFY_KEYSPACE (1 << 0)   /* K */
+#define VALKEYMODULE_NOTIFY_KEYEVENT (1 << 1)   /* E */
+#define VALKEYMODULE_NOTIFY_GENERIC (1 << 2)    /* g */
+#define VALKEYMODULE_NOTIFY_STRING (1 << 3)     /* $ */
+#define VALKEYMODULE_NOTIFY_LIST (1 << 4)       /* l */
+#define VALKEYMODULE_NOTIFY_SET (1 << 5)        /* s */
+#define VALKEYMODULE_NOTIFY_HASH (1 << 6)       /* h */
+#define VALKEYMODULE_NOTIFY_ZSET (1 << 7)       /* z */
+#define VALKEYMODULE_NOTIFY_EXPIRED (1 << 8)    /* x */
+#define VALKEYMODULE_NOTIFY_EVICTED (1 << 9)    /* e */
+#define VALKEYMODULE_NOTIFY_STREAM (1 << 10)    /* t */
+#define VALKEYMODULE_NOTIFY_KEY_MISS (1 << 11)  /* m (Note: This one is excluded from VALKEYMODULE_NOTIFY_ALL on purpose) */
+#define VALKEYMODULE_NOTIFY_LOADED (1 << 12)    /* module only key space notification, indicate a key loaded from rdb */
+#define VALKEYMODULE_NOTIFY_MODULE (1 << 13)    /* d, module key space notification */
+#define VALKEYMODULE_NOTIFY_NEW (1 << 14)       /* n, new key notification */
+#define VALKEYMODULE_NOTIFY_PATH_HASH (1 << 15) /* p */
 
 /* Next notification flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
  * Use ValkeyModule_GetKeyspaceNotificationFlagsAll instead. */
-#define _VALKEYMODULE_NOTIFY_NEXT (1 << 15)
+#define _VALKEYMODULE_NOTIFY_NEXT (1 << 16)
 
 #define VALKEYMODULE_NOTIFY_ALL                                                                                        \
     (VALKEYMODULE_NOTIFY_GENERIC | VALKEYMODULE_NOTIFY_STRING | VALKEYMODULE_NOTIFY_LIST | VALKEYMODULE_NOTIFY_SET |   \
      VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_ZSET | VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED | \
-     VALKEYMODULE_NOTIFY_STREAM | VALKEYMODULE_NOTIFY_MODULE) /* A */
+     VALKEYMODULE_NOTIFY_STREAM | VALKEYMODULE_NOTIFY_MODULE | VALKEYMODULE_NOTIFY_PATH_HASH) /* A */
 
 /* A special pointer that we can use between the core and the module to signal
  * field deletion, and that is impossible to be a valid pointer. */
@@ -2187,7 +2189,7 @@ VALKEYMODULE_API size_t (*ValkeyModule_MallocUsableSize)(void *ptr) VALKEYMODULE
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeString)(ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeDict)(ValkeyModuleDict *dict) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleUser *(*ValkeyModule_CreateModuleUser)(const char *name)VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_FreeModuleUser)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_FreeModuleUser)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetContextUser)(ValkeyModuleCtx *ctx,
                                                      const ValkeyModuleUser *user) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_SetModuleUserACL)(ValkeyModuleUser *user, const char *acl) VALKEYMODULE_ATTR;
@@ -2212,14 +2214,14 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckPermissions)(ValkeyModuleUser *user,
                                                          int argc,
                                                          int dbid,
                                                          ValkeyModuleACLLogEntryReason *denial_reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
-                                                     ValkeyModuleUser *user,
-                                                     ValkeyModuleString *object,
-                                                     ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntryByUserName)(ValkeyModuleCtx *ctx,
-                                                               ValkeyModuleString *user,
-                                                               ValkeyModuleString *object,
-                                                               ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
+                                                    ValkeyModuleUser *user,
+                                                    ValkeyModuleString *object,
+                                                    ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLAddLogEntryByUserName)(ValkeyModuleCtx *ctx,
+                                                              ValkeyModuleString *user,
+                                                              ValkeyModuleString *object,
+                                                              ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_AuthenticateClientWithACLUser)(ValkeyModuleCtx *ctx,
                                                                    const char *name,
                                                                    size_t len,

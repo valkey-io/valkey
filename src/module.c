@@ -2679,6 +2679,22 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * atomic slot migration and CLUSTER MIGRATESLOTS will return an error. Modules
  * should set this flag if they understand keys may be loaded during the
  * migration but before ownership is transferred.
+ *
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS:
+ * When set, this option indicates that the module is capable of handling
+ * forkless operations (such as a forkless background save). Opting in has the
+ * following implications the module must acknowledge:
+ * - While a forkless operation is running, opening a key for write with
+ *   VM_OpenKey() may return NULL when the key is in use by the operation; the
+ *   module must handle that NULL return.
+ * - A module that registers a data type also declares that its RDB save
+ *   callbacks are thread-safe.
+ * - A module that registers an aux_save/aux_save2 function must run it only in
+ *   the VALKEYMODULE_AUX_BEFORE_RDB section, and it must export only limited
+ *   data (this function runs on the main thread and blocks it during a forkless
+ *   operation).
+ * When forkless background saving is configured, if any loaded module does not
+ * set this flag, the server falls back to fork-based saving.
  */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
@@ -4337,7 +4353,7 @@ static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
  * Valkey 9.2+: When opening a key with VALKEYMODULE_WRITE, NULL will be returned
  * if the key is currently write-locked (i.e. if forkless operations are operating
  * on the key).  This change is non-breaking as:
- * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE
+ * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS
  * * Module write commands are blocked (before execution), if a declared key is write-locked
  * The risk is only for a module that performs VM_OpenKey() on a key which was NOT
  * declared in the current command OR arbitrarily opens keys during a timer event.
@@ -4432,6 +4448,7 @@ int VM_KeyType(ValkeyModuleKey *key) {
     case OBJ_HASH: return VALKEYMODULE_KEYTYPE_HASH;
     case OBJ_MODULE: return VALKEYMODULE_KEYTYPE_MODULE;
     case OBJ_STREAM: return VALKEYMODULE_KEYTYPE_STREAM;
+    case OBJ_PATH_HASH: return VALKEYMODULE_KEYTYPE_PATH_HASH;
     default: return VALKEYMODULE_KEYTYPE_EMPTY;
     }
 }
@@ -4450,6 +4467,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
     case OBJ_ZSET: return zsetLength(key->value);
     case OBJ_HASH: return hashTypeLength(key->value);
     case OBJ_STREAM: return streamLength(key->value);
+    case OBJ_PATH_HASH: return raxSize(((pathHashObject *)objectGetVal(key->value))->index);
     default: return 0;
     }
 }
@@ -10474,7 +10492,9 @@ ValkeyModuleUser *VM_CreateModuleUser(const char *name) {
 }
 
 /* Frees a given user and disconnects all of the clients that have been
- * authenticated with it. See VM_CreateModuleUser for detailed usage.*/
+ * authenticated with it. See VM_CreateModuleUser for detailed usage.
+ *
+ * Returns VALKEYMODULE_OK. */
 int VM_FreeModuleUser(ValkeyModuleUser *user) {
     if (user->free_user) ACLFreeUserAndKillClients(user->user);
     zfree(user);

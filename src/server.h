@@ -169,7 +169,8 @@ struct ValkeyModule;
 #define CONFIG_BGSAVE_RETRY_DELAY 5              /* Wait a few secs before trying again. */
 #define CONFIG_DEFAULT_PID_FILE "/var/run/valkey.pid"
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
-#define CONFIG_DEFAULT_BINDADDR {"*", "-::*"}
+#define CONFIG_DEFAULT_BINDADDR \
+    {"*", "-::*"}
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
@@ -269,6 +270,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define ACL_CATEGORY_CONNECTION (1ULL << 18)
 #define ACL_CATEGORY_TRANSACTION (1ULL << 19)
 #define ACL_CATEGORY_SCRIPTING (1ULL << 20)
+#define ACL_CATEGORY_PATHHASH (1ULL << 21)
 
 /* Key-spec flags *
  * -------------- */
@@ -698,24 +700,25 @@ typedef enum {
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
-#define NOTIFY_KEYSPACE (1 << 0)  /* K */
-#define NOTIFY_KEYEVENT (1 << 1)  /* E */
-#define NOTIFY_GENERIC (1 << 2)   /* g */
-#define NOTIFY_STRING (1 << 3)    /* $ */
-#define NOTIFY_LIST (1 << 4)      /* l */
-#define NOTIFY_SET (1 << 5)       /* s */
-#define NOTIFY_HASH (1 << 6)      /* h */
-#define NOTIFY_ZSET (1 << 7)      /* z */
-#define NOTIFY_EXPIRED (1 << 8)   /* x */
-#define NOTIFY_EVICTED (1 << 9)   /* e */
-#define NOTIFY_STREAM (1 << 10)   /* t */
-#define NOTIFY_KEY_MISS (1 << 11) /* m (Note: This one is excluded from NOTIFY_ALL on purpose) */
-#define NOTIFY_LOADED (1 << 12)   /* module only key space notification, indicate a key loaded from rdb */
-#define NOTIFY_MODULE (1 << 13)   /* d, module key space notification */
-#define NOTIFY_NEW (1 << 14)      /* n, new key notification */
+#define NOTIFY_KEYSPACE (1 << 0)   /* K */
+#define NOTIFY_KEYEVENT (1 << 1)   /* E */
+#define NOTIFY_GENERIC (1 << 2)    /* g */
+#define NOTIFY_STRING (1 << 3)     /* $ */
+#define NOTIFY_LIST (1 << 4)       /* l */
+#define NOTIFY_SET (1 << 5)        /* s */
+#define NOTIFY_HASH (1 << 6)       /* h */
+#define NOTIFY_ZSET (1 << 7)       /* z */
+#define NOTIFY_EXPIRED (1 << 8)    /* x */
+#define NOTIFY_EVICTED (1 << 9)    /* e */
+#define NOTIFY_STREAM (1 << 10)    /* t */
+#define NOTIFY_KEY_MISS (1 << 11)  /* m (Note: This one is excluded from NOTIFY_ALL on purpose) */
+#define NOTIFY_LOADED (1 << 12)    /* module only key space notification, indicate a key loaded from rdb */
+#define NOTIFY_MODULE (1 << 13)    /* d, module key space notification */
+#define NOTIFY_NEW (1 << 14)       /* n, new key notification */
+#define NOTIFY_PATH_HASH (1 << 15) /* p */
 #define NOTIFY_ALL                                                                                            \
     (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | \
-     NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE) /* A flag */
+     NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE | NOTIFY_PATH_HASH) /* A flag */
 
 /* Period in milliseconds between successive clusterCron() executions */
 #define CLUSTER_CRON_PERIOD_MS 100
@@ -804,9 +807,10 @@ typedef enum {
  * by a 64 bit module type ID, which has a 54 bits module-specific signature
  * in order to dispatch the loading to the right module, plus a 10 bits
  * encoding version. */
-#define OBJ_MODULE 5   /* Module object. */
-#define OBJ_STREAM 6   /* Stream object. */
-#define OBJ_TYPE_MAX 7 /* Maximum number of object types */
+#define OBJ_MODULE 5    /* Module object. */
+#define OBJ_STREAM 6    /* Stream object. */
+#define OBJ_PATH_HASH 7 /* Path hash object. */
+#define OBJ_TYPE_MAX 8  /* Maximum number of object types */
 
 typedef struct ValkeyModuleType moduleType;
 
@@ -829,6 +833,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
 #define OBJ_ENCODING_LISTPACK2 12 /* Encoded as a listpack with metadata tag */
+#define OBJ_ENCODING_PATH_HASH 13 /* Path hash backed by a radix tree */
 
 #define OBJ_REFCOUNT_BITS 29
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
@@ -1752,7 +1757,7 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
-    char *alt_cert_file;        /* Secondary server side cert file name */
+    char *alt_cert_file;        /* Alternate server side cert file name */
     char *alt_key_file;         /* Private key filename for alt_cert_file */
     char *alt_key_file_pass;    /* Optional password for alt_key_file */
     int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */
@@ -2697,6 +2702,7 @@ typedef enum {
     COMMAND_GROUP_GEO,
     COMMAND_GROUP_STREAM,
     COMMAND_GROUP_BITMAP,
+    COMMAND_GROUP_PATH_HASH,
     COMMAND_GROUP_MODULE,
 } serverCommandGroup;
 
@@ -2808,7 +2814,7 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  * See valkey.conf for the exact meaning of each.
  *
  * @keyspace, @read, @write, @set, @sortedset, @list, @hash, @string, @bitmap,
- * @hyperloglog, @stream, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,
+ * @hyperloglog, @stream, @pathhash, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,
  * @connection, @transaction, @scripting, @geo.
  *
  * Note that:
@@ -3309,6 +3315,7 @@ void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
 void dismissObject(robj *o, size_t dump_size);
+size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);
 robj *createStringObject(const char *ptr, size_t len);
@@ -3334,6 +3341,7 @@ robj *createSetObject(void);
 robj *createIntsetObject(void);
 robj *createSetListpackObject(void);
 robj *createHashObject(void);
+robj *createPathHashObject(void);
 robj *createZsetObject(void);
 robj *createZsetListpackObject(void);
 robj *createStreamObject(void);
@@ -3805,6 +3813,30 @@ robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len);
 bool hashTypeHasStringRef(robj *o, sds field);
+
+/* Path hash data type */
+typedef struct pathHashObject {
+    rax *index;
+    uint64_t num_fields;
+} pathHashObject;
+
+void freePathHashObject(robj *o);
+robj *pathHashTypeDup(robj *o);
+size_t pathHashTypeMemUsage(robj *o, size_t sample_size);
+void pathHashTypeDigest(unsigned char *digest, robj *o);
+int rewritePathHashObject(rio *r, robj *key, robj *o);
+void phsetCommand(client *c);
+void phmsetCommand(client *c);
+void phgetCommand(client *c);
+void phmgetCommand(client *c);
+void phgetallCommand(client *c);
+void phexistsCommand(client *c);
+void phdelCommand(client *c);
+void phlongestCommand(client *c);
+void phprefixesCommand(client *c);
+void phdelprefixCommand(client *c);
+void phscanCommand(client *c);
+void phcardCommand(client *c);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);

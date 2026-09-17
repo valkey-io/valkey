@@ -5008,8 +5008,9 @@ start_server {tags {"hashexpire"}} {
 }
 
 start_server {tags {"hash expire listpack"}} {
-    r config set hash-max-listpack-entries 128
     set original_max_value [lindex [r config get hash-max-listpack-value] 1]
+    set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+    r config set hash-max-listpack-entries 128
 
     test "Volatile-count header tracks listpack expiry transitions" {
         r del myhash
@@ -5109,7 +5110,7 @@ start_server {tags {"hash expire listpack"}} {
         r DEBUG SET-ACTIVE-EXPIRE 0
         # Earlier tests in this block leave hash-max-listpack-value at 1
         r config set hash-max-listpack-value $original_max_value
-        r config set hash-max-listpack-entries 128
+        r config set hash-max-listpack-entries $original_max_entries
         r del myhash
         r hset myhash f1 v1 f2 v2
         r hpexpire myhash 1 FIELDS 1 f1
@@ -5173,11 +5174,12 @@ start_server {tags {"hash expire listpack"}} {
         assert_equal {} [r hget victimhash{t} g1]
         assert_equal {g2 v2} [r hgetall victimhash{t}]
 
-        r config set hash-max-listpack-entries 128
+        r config set hash-max-listpack-entries $original_max_entries
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
 
     r config set hash-max-listpack-value $original_max_value
+    r config set hash-max-listpack-entries $original_max_entries
 }
 
 start_server {tags {"hashexpire"}} {

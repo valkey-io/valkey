@@ -177,8 +177,8 @@ start_cluster 3 1 {tags {external:skip cluster tls:skip}} {
 # A voter that NACKs and is then marked FAIL in the same election must be
 # excluded from the achievable votes once, not twice (see #4626). Five voters,
 # quorum 3: after V1 NACKs and fails and V2 NACKs, V3, V4 and V5 can still
-# vote, so the election is still winnable and must not be reset. A bound of
-# size - size_fail - nack_count counts V1 in both size_fail and nack_count and
+# vote, so the election is still winnable and must not be reset. A bound that
+# subtracts every FAIL voter and every NACK from size counts V1 twice and
 # resets it. The FAIL is delivered as a crafted FAIL packet, which the
 # candidate applies to its own view immediately without re-broadcasting it.
 start_cluster 5 1 {tags {external:skip cluster tls:skip}} {

@@ -139,6 +139,11 @@ static_assert(CLUSTER_NODE_MAX <= UINT16_MAX, "cluster node flags must fit in 16
 #define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
 #define nodeSupportsFailoverAuthNack(n) ((n)->flags & CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED)
 
+/* Response of a voter to our current failover election (clusterNode.failover_auth_response). */
+#define CLUSTER_FAILOVER_AUTH_RESPONSE_NONE 0
+#define CLUSTER_FAILOVER_AUTH_RESPONSE_ACK 1
+#define CLUSTER_FAILOVER_AUTH_RESPONSE_NACK 2
+
 /* Cluster messages header */
 
 /* Message types.
@@ -500,10 +505,9 @@ struct _clusterNode {
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
     unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
-    /* Response of this voter to our current election (failover_auth_epoch).
-     * Both are cleared when we send a new FAILOVER_AUTH_REQUEST. */
-    uint8_t failover_auth_acked_in_current_election : 1;
-    uint8_t failover_auth_nacked_in_current_election : 1;
+    /* Response of this voter to our current election (failover_auth_epoch), one
+     * of CLUSTER_FAILOVER_AUTH_RESPONSE_*. Reset when we send a new request. */
+    uint8_t failover_auth_response : 2;
 };
 
 /* Struct used for storing slot statistics. */
@@ -521,15 +525,15 @@ typedef struct slotRange {
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
-    int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
-    int fail_reason;        /* Why the cluster state changes to fail. */
-    int safe_to_join;       /* Can the restarted node safely join the cluster? */
-    int size;               /* Num of primary nodes with at least one slot */
-    int size_fail;          /* Voting primaries in FAIL state that have not replied to our current
-                               election (subset of size). */
-    dict *nodes;            /* Hash table of name -> clusterNode structures */
-    dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
-    dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
+    int state;                          /* CLUSTER_OK, CLUSTER_FAIL, ... */
+    int fail_reason;                    /* Why the cluster state changes to fail. */
+    int safe_to_join;                   /* Can the restarted node safely join the cluster? */
+    int size;                           /* Num of primary nodes with at least one slot */
+    int failed_voters_without_response; /* Voting primaries in FAIL state that have not responded to our
+                                           current election. */
+    dict *nodes;                        /* Hash table of name -> clusterNode structures */
+    dict *shards;                       /* Hash table of shard_id -> list (of nodes) structures */
+    dict *nodes_black_list;             /* Nodes we don't re-add for a few seconds. */
     dict *migrating_slots_to;
     dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];

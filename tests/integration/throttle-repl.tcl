@@ -73,7 +73,7 @@ proc teardown_throttle_replication {primary replica} {
     catch {$replica replicaof no one}
 }
 
-start_server {tags {"throttle repl external:skip"}} {
+start_server {tags {"throttle repl external:skip valgrind:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
@@ -129,7 +129,7 @@ start_server {tags {"throttle repl external:skip"}} {
 
         test {Throttling protects a replica above the soft COB limit} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
-            $primary config set client-output-buffer-limit "replica [expr {1024 * 1024 * 1024}] [expr {1 * 1024 * 1024}] 0"
+            $primary config set client-output-buffer-limit "replica [expr {1024 * 1024 * 1024}] [expr {1 * 1024 * 1024}] 1"
 
             set writer [valkey_deferring_client]
             $writer CLIENT ID
@@ -183,7 +183,7 @@ start_server {tags {"throttle repl external:skip"}} {
 
         test {Throttling not protect a replica above the hard COB limit} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
-            $primary config set client-output-buffer-limit "replica 10mb 1mb 0"
+            $primary config set client-output-buffer-limit "replica 10mb 1mb 60"
 
             set writer [valkey_deferring_client]
             $writer CLIENT ID
@@ -264,6 +264,8 @@ start_server {tags {"throttle repl external:skip"}} {
 
             $writer close
             resume_process $replica_pid
+            # Promote the new primary to break the replicaof cycle between the two nodes.
+            $replica replicaof no one
             teardown_throttle_replication $replica $primary
         }
 

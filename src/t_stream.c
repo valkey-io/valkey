@@ -476,10 +476,10 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     raxSeek(&ri, "$", NULL, 0);
 
     size_t lp_bytes = 0;      /* Total bytes in the tail listpack. */
+    unsigned char *lp = NULL; /* Tail listpack pointer. */
     /* What the rax holds for the key this call writes, NULL if it holds nothing.
      * Only used to skip a raxInsert storing a pointer the rax already has. */
     unsigned char *rax_lp = NULL;
-    unsigned char *lp = NULL; /* Tail listpack pointer. */
 
     if (!raxEOF(&ri)) {
         /* Get a reference to the tail node listpack. */

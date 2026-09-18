@@ -1978,12 +1978,13 @@ start_server {tags {"stream"}} {
     }
 
     test {XADD across macro nodes persists every entry (stream-node-max-bytes)} {
-        # Regression test for a use-after-free in streamAppendItem() when a
-        # new macro node's listpack is reallocated to the address just freed
-        # by the previous node's lpShrinkToFit(). The specific field payload
-        # sizes below and the XADD sequence drive jemalloc into that address
-        # reuse; without this exact shape the aliasing does not occur
-        # and the test silently loses coverage.
+        # Regression test for a use-after-free in streamAppendItem() when a new
+        # macro node's listpack is reallocated to the address just freed by the
+        # previous node's lpShrinkToFit(). The specific field payload sizes
+        # below and the XADD sequence drive jemalloc into that address reuse;
+        # without this exact shape the aliasing does not occur and the test
+        # silently loses coverage. The bug is allocator-agnostic, but this
+        # shape only reliably reproduces it under jemalloc.
         r DEL k
         set a100 [string repeat a 100]
         set a1200 [string repeat a 1200]

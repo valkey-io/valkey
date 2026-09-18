@@ -1,6 +1,6 @@
 {
     "XNACK": {
-        "summary": "Remove stream message(s) from a consumer group's Pending Entries List, allowing another consumer to claim it immediately.",
+        "summary": "Releases stream message(s) in a consumer group's Pending Entries List for immediate reclaim by another consumer.",
         "complexity": "O(1) for each stream message NACK'd, regardless of the stream size",
         "group": "stream",
         "since": "9.2.0",
@@ -94,7 +94,7 @@
             }
         ],
         "reply_schema": {
-            "description": "The number of messages removed from the consumer's PEL.",
+            "description": "The number of messages that were successfully released.",
             "type": "integer",
             "minimum": 0
         }

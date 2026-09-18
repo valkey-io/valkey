@@ -35,6 +35,7 @@
 
 /* Stable wire codec identifier. */
 #define VCS_CODEC_LZ4 0x01
+#define VCS_CODEC_ZSTD 0x02
 
 /* Identifies an RDB payload in the envelope. */
 #define VCS_STREAM_RDB 0x01
@@ -145,9 +146,7 @@ int streamReaderInit(streamReader *reader, const streamReaderConfig *cfg, stream
  * output is reported on the next call. */
 ssize_t streamReaderRead(streamReader *reader, void *buf, size_t len);
 /* Completes and validates a compressed frame after the logical parser has
- * consumed its payload. It stops at the frame boundary without requiring
- * physical EOF, matching the plain RDB loader's treatment of trailing bytes.
- * Returns C_OK/C_ERR. */
+ * consumed its payload. Returns C_OK/C_ERR. */
 int streamReaderFinish(streamReader *reader);
 void streamReaderFree(streamReader *reader);
 

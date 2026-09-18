@@ -58,6 +58,10 @@ for all functions (including static functions), use libbacktrace:
 
     % make USE_LIBBACKTRACE=yes
 
+Streaming RDB and replication compression can use Zstandard 1.4.7 or newer.
+Its static archive is required to track codec allocations in Valkey's memory
+accounting. Use `make BUILD_ZSTD=yes` to enable Zstandard support.
+
 To build Valkey without the Lua engine:
 
     % make BUILD_LUA=no
@@ -333,6 +337,7 @@ Other options supported by Valkey's `CMake` build system:
 
 - `-DBUILD_TLS=<yes|no>` enable TLS build for Valkey. Default: `no`
 - `-DBUILD_RDMA=<no|module>` enable RDMA module build (only module mode supported). Default: `no`
+- `-DBUILD_ZSTD=<yes|no>` configure Zstandard streaming compression support. Default: `no`
 - `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
 - `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled. Default: disabled (no sanitizer)
 - `-DBUILD_UNIT_GTESTS=[yes|no]`  when set, the build will produce unit tests executable `valkey-unit-gtests`. Default: `no`

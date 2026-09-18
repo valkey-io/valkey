@@ -31,6 +31,9 @@ int vcsBuildEnvelope(uint8_t *buf, compressionAlgo algo, uint8_t stream_kind) {
     case ALGO_LZ4:
         codec = VCS_CODEC_LZ4;
         break;
+    case ALGO_ZSTD:
+        codec = VCS_CODEC_ZSTD;
+        break;
     default:
         return C_ERR;
     }
@@ -63,6 +66,13 @@ static int readVcsEnvelope(const uint8_t *buf, uint8_t expected_stream_kind, com
     case VCS_CODEC_LZ4:
         *algo = ALGO_LZ4;
         break;
+    case VCS_CODEC_ZSTD:
+#ifdef HAVE_ZSTD
+        *algo = ALGO_ZSTD;
+        break;
+#else
+        return C_ERR;
+#endif
     default:
         return C_ERR;
     }
@@ -485,9 +495,23 @@ streamPushReaderFeedCodec(streamPushReader *reader, const uint8_t *in, size_t le
             *budget -= (size_t)produced;
         }
         off += consumed;
-        /* Report the frame end; for a long-lived stream this means the
-         * source ended it unexpectedly. */
+        /* Zstd replication uses bounded checksummed frames that may span
+         * multiple output batches. Continue at the next concatenated frame
+         * without re-reading a VCS envelope. Other live codecs keep one frame
+         * open, so an end marker remains a protocol error for them. */
         if (reader->decompressor.frame_done) {
+            if (reader->expected_stream_kind == VCS_STREAM_REPL &&
+                reader->decompressor.algo == ALGO_ZSTD) {
+                if (streamDecompressorReset(&reader->decompressor) != C_OK) {
+                    *input_consumed = off;
+                    return STREAM_PUSH_READER_ERR;
+                }
+                if (off == len) {
+                    *input_consumed = off;
+                    return STREAM_PUSH_READER_OK;
+                }
+                continue;
+            }
             *input_consumed = off;
             return STREAM_PUSH_READER_FRAME_DONE;
         }

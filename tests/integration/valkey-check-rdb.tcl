@@ -71,6 +71,32 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             }
         }
 
+        test "valkey-check-rdb validates the contents of a ZSTD-compressed RDB" {
+            if {![config_value_supported r rdbcompression zstd]} {
+                skip "zstd is not supported by this build"
+            }
+
+            r config set rdbcompression zstd
+            with_cleanup {
+                r flushall
+                r set zstd:key [string repeat "payload " 200]
+                r save
+
+                set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
+                set failed [catch {
+                    exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
+                } result]
+
+                assert_equal 0 $failed
+                assert_match {*RDB looks OK!*} $result
+                assert_match {*Logical RDB CRC64 skipped for streaming-compressed input*} $result
+                assert_match {*type.string.keys.total:1*} $result
+                assert_no_match {*Checksum OK*} $result
+            } {
+                catch {r config set rdbcompression yes}
+            }
+        }
+
         test "valkey-check-rdb rejects an incompatible VCS envelope" {
             r config set rdbcompression lz4
             set dir [lindex [r config get dir] 1]

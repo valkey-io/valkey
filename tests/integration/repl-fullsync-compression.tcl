@@ -457,33 +457,40 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
 
+    set diskless_compression_modes {lz4}
+    if {$::fullsync_zstd_supported} {
+        lappend diskless_compression_modes zstd
+    }
+
     # disabled: replica copies the payload to a temp file, then rdbLoad() auto-decompresses.
-    test {Disk-receive (repl-diskless-load disabled) + diskless compressed save loads correctly} {
-        set primary_loglines [count_log_lines 0]
-        populate_compressible_dataset $primary "diskrecv"
+    foreach mode $diskless_compression_modes {
+        test "[string toupper $mode] disk-receive (repl-diskless-load disabled) loads a diskless compressed save" {
+            $primary config set repl-compression $mode
+            set primary_loglines [count_log_lines 0]
+            populate_compressible_dataset $primary "$mode-diskrecv"
 
-        start_server {overrides {save "" repl-compression lz4 repl-diskless-load disabled}} {
-            set replica [srv 0 client]
-            set replica_loglines [count_log_lines 0]
-            $replica replicaof $primary_host $primary_port
+            start_server [list overrides [list save "" repl-compression $mode repl-diskless-load disabled]] {
+                set replica [srv 0 client]
+                set replica_loglines [count_log_lines 0]
+                $replica replicaof $primary_host $primary_port
 
-            assert_replica_synced $primary $replica "(disk-receive default load)"
+                assert_replica_synced $primary $replica "($mode disk-receive)"
 
-            wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
-            wait_for_log_messages -1 {"*Diskless full sync with compression: lz4*"} $primary_loglines 50 100
-            # Path B: disabled load reads from the received file; match "from <file>.rdb", not "from primary".
-            wait_for_log_messages 0 {"*Loading compressed RDB (algo=lz4) from *.rdb*"} $replica_loglines 50 100
+                wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
+                wait_for_log_messages -1 [list "*Diskless full sync with compression: $mode*"] \
+                    $primary_loglines 50 100
+                # Path B: disabled load reads from the received file; match
+                # "from <file>.rdb", not "from primary".
+                wait_for_log_messages 0 [list "*Loading compressed RDB (algo=$mode) from *.rdb*"] \
+                    $replica_loglines 50 100
 
-            $replica replicaof no one
+                $replica replicaof no one
+            }
         }
     }
 
     # The VCS payload uses the selected codec while the $EOF:<mark> framing
     # stays uncompressed, so transfer boundaries are unchanged.
-    set diskless_compression_modes {lz4}
-    if {$::fullsync_zstd_supported} {
-        lappend diskless_compression_modes zstd
-    }
     foreach mode $diskless_compression_modes {
         test "[string toupper $mode] diskless full sync loads directly from the socket" {
             $primary config set repl-compression $mode

@@ -1,10 +1,16 @@
 tags {"repl external:skip"} {
 
-# repl_uncompressed_bytes= from the replica line of the primary's INFO replication.
-proc replica_line_uncompressed_bytes {primary} {
+# repl_compressed_bytes= and repl_uncompressed_bytes= from the replica line of
+# the primary's INFO replication.
+proc replica_line_compression_bytes {primary} {
     set info [$primary info replication]
-    assert {[regexp {repl_uncompressed_bytes=([0-9]+)} $info -> uncompressed_bytes]}
-    return $uncompressed_bytes
+    assert {[regexp {repl_compressed_bytes=([0-9]+),repl_uncompressed_bytes=([0-9]+)} \
+        $info -> compressed_bytes uncompressed_bytes]}
+    return [list $compressed_bytes $uncompressed_bytes]
+}
+
+proc replica_line_uncompressed_bytes {primary} {
+    return [lindex [replica_line_compression_bytes $primary] 1]
 }
 
 set ::replcompression_zstd_supported 0
@@ -166,6 +172,34 @@ start_server {tags {"repl"} overrides {save ""}} {
                         [$primary info replication]]
                 } else {
                     fail "$mode replication compression not established"
+                }
+
+                if {$mode eq "zstd"} {
+                    # Repeating an individually incompressible value across
+                    # small write batches requires the frame history to span
+                    # SYNC flushes. Ending one frame per batch stays near the
+                    # uncompressed size instead.
+                    expr {srand(8675309)}
+                    set history_payload ""
+                    for {set i 0} {$i < 512} {incr i} {
+                        append history_payload [format %c [expr {33 + int(rand() * 90)}]]
+                    }
+                    lassign [replica_line_compression_bytes $primary] compressed_before uncompressed_before
+                    for {set i 0} {$i < 32} {incr i} {
+                        set key "zstd:history:$i"
+                        $primary set $key $history_payload
+                        wait_for_condition 50 100 {
+                            [$replica get $key] eq $history_payload
+                        } else {
+                            fail "ZSTD replication did not deliver small write batch $i"
+                        }
+                    }
+                    lassign [replica_line_compression_bytes $primary] compressed_after uncompressed_after
+                    set compressed_delta [expr {$compressed_after - $compressed_before}]
+                    set uncompressed_delta [expr {$uncompressed_after - $uncompressed_before}]
+                    if {$uncompressed_delta <= 0 || $compressed_delta * 2 >= $uncompressed_delta} {
+                        fail "ZSTD did not retain compression history across write batches: $compressed_delta compressed bytes for $uncompressed_delta uncompressed bytes"
+                    }
                 }
 
                 # This spans several 1 MiB raw batches. For Zstd it also

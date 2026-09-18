@@ -1610,6 +1610,40 @@ TEST(replCompression, pushReaderReturnsConcatenatedFrameBoundaries) {
     }
 }
 
+TEST(replCompression, zstdReplicationRejectsCorruptFrameChecksum) {
+#ifndef HAVE_ZSTD
+    GTEST_SKIP() << "Zstandard support is not compiled in";
+#else
+    const char first_payload[] = "first replication batch";
+    const char second_payload[] = "second replication batch";
+    ReplTestStream test_stream;
+    ASSERT_EQ(initReplTestStreamWithAlgo(&test_stream, ALGO_ZSTD,
+                                         streamCodecIntegrityChecksumFlags(ALGO_ZSTD)),
+              C_OK);
+    ASSERT_EQ(compressReplTestStream(&test_stream, first_payload, sizeof(first_payload),
+                                     COMPRESS_FLUSH_CONTINUE),
+              C_OK);
+    ASSERT_EQ(compressReplTestStream(&test_stream, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK);
+    ASSERT_EQ(compressReplTestStream(&test_stream, second_payload, sizeof(second_payload),
+                                     COMPRESS_FLUSH_CONTINUE),
+              C_OK);
+    ASSERT_EQ(compressReplTestStream(&test_stream, NULL, 0, COMPRESS_FLUSH_END), C_OK);
+    ASSERT_GT(sdslen(test_stream.output), (size_t)VCS_ENVELOPE_SIZE);
+    test_stream.output[sdslen(test_stream.output) - 1] ^= 1;
+
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    EXPECT_EQ(streamPushReaderFeed(&reader, test_stream.output, sdslen(test_stream.output), &out,
+                                   1024 * 1024),
+              STREAM_PUSH_READER_ERR);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+    freeReplTestStream(&test_stream);
+#endif
+}
+
 TEST(replCompression, pushReaderOutputLimitIsResumable) {
     ReplTestStream test_stream;
     ASSERT_EQ(initReplTestStream(&test_stream), C_OK);

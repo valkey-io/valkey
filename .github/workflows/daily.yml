@@ -565,8 +565,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes BUILD_ZSTD=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -725,8 +727,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes BUILD_ZSTD=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -1968,7 +1972,7 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          apk add build-base git zstd-dev
+          apk add build-base git zstd-dev zstd-static
           cd libbacktrace && ./configure && make && make install
       - name: make
         run: make SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes

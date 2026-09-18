@@ -438,7 +438,7 @@ static void clusterClearStaleSlotMigrationStates(void) {
     dictReleaseIterator(di);
 
     if (changed) {
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
     }
 }
 

@@ -408,7 +408,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-start_cluster 2 1 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R0_id [R 0 CLUSTER MYID]
     set R1_id [R 1 CLUSTER MYID]
 
@@ -416,10 +416,13 @@ start_cluster 2 1 {tags {external:skip cluster} overrides {cluster-allow-replica
         migrate_slot 1 0 9000
         wait_for_slot_state 2 "\[9000-<-$R1_id\]"
 
+        R 0 CONFIG SET min-replicas-to-write 0
         R 0 CONFIG SET repl-backlog-size 1024
         R 0 CONFIG SET repl-diskless-sync yes
         R 0 CONFIG SET repl-diskless-sync-delay 0
-        R 0 CONFIG SET rdb-key-save-delay 1000
+        R 2 CONFIG SET key-load-delay 1000
+        R 2 CONFIG SET loading-process-events-interval-bytes 1024
+        R 2 CONFIG REWRITE
 
         pause_process [srv -2 pid]
         set value [string repeat A 1024]
@@ -436,9 +439,9 @@ start_cluster 2 1 {tags {external:skip cluster} overrides {cluster-allow-replica
             fail "Replica did not start a full sync"
         }
 
-        pause_process [srv -2 pid]
         assert_equal {OK} [R 0 CLUSTER SETSLOT 9000 NODE $R0_id]
-        resume_process [srv -2 pid]
+        wait_for_slot_state 2 "\[9000-<-$R1_id\]"
+        assert_equal 1 [s -2 master_sync_in_progress]
 
         wait_for_condition 1000 10 {
             [s -2 master_sync_in_progress] eq 0

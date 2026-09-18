@@ -399,6 +399,49 @@ static void setImportingSlotSource(int slot, clusterNode *node) {
     }
 }
 
+/* Replicas can miss SETSLOT NODE while a full sync keeps them offline.
+ * Reconcile legacy migration state against the authoritative slot owner so
+ * stale IMPORTING/MIGRATING markers cannot survive indefinitely. */
+static void clusterClearStaleSlotMigrationStates(void) {
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    dictIterator *di = dictGetSafeIterator(server.cluster->importing_slots_from);
+    dictEntry *de;
+    int changed = 0;
+
+    while ((de = dictNext(di)) != NULL) {
+        int slot = (int)(intptr_t)dictGetKey(de);
+        if (server.cluster->slots[slot] == my_primary) {
+            clusterNode *source = dictGetVal(de);
+            serverLog(LL_NOTICE,
+                      "Clearing stale importing state for slot %d from node %.40s (%s); "
+                      "the slot is already owned by my shard.",
+                      slot, source->name, humanNodename(source));
+            dictDelete(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
+            changed = 1;
+        }
+    }
+    dictReleaseIterator(di);
+
+    di = dictGetSafeIterator(server.cluster->migrating_slots_to);
+    while ((de = dictNext(di)) != NULL) {
+        int slot = (int)(intptr_t)dictGetKey(de);
+        if (server.cluster->slots[slot] != my_primary) {
+            clusterNode *target = dictGetVal(de);
+            serverLog(LL_NOTICE,
+                      "Clearing stale migrating state for slot %d to node %.40s (%s); "
+                      "the slot is no longer owned by my shard.",
+                      slot, target->name, humanNodename(target));
+            dictDelete(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
+            changed = 1;
+        }
+    }
+    dictReleaseIterator(di);
+
+    if (changed) {
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+    }
+}
+
 /* Aux fields were introduced in Redis OSS 7.2 to support the persistence
  * of various important node properties, such as shard id, in nodes.conf.
  * Aux fields take an explicit format of name=value pairs and have no
@@ -6802,6 +6845,7 @@ void clusterCron(void) {
 
     /* Drive in progress slot import/export links. */
     clusterSlotMigrationCron();
+    clusterClearStaleSlotMigrationStates();
 
     /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
     server.cluster->stats_pfail_nodes = 0;

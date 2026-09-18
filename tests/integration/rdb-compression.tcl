@@ -10,10 +10,11 @@ proc read_dump_rdb_header_bytes {client} {
     return [read_binary_file_prefix [dump_rdb_path $client] 8]
 }
 
-proc assert_lz4_rdb_envelope {client} {
+proc assert_rdb_envelope {client mode} {
     binary scan [read_binary_file_prefix [dump_rdb_path $client] 7] cu* bytes
-    # V C S / envelope version / LZ4 codec / reserved / RDB stream kind.
-    assert_equal [list 86 67 83 1 1 0 1] $bytes
+    set codec [dict get {lz4 1 zstd 2} $mode]
+    # V C S / envelope version / codec / reserved / RDB stream kind.
+    assert_equal [list 86 67 83 1 $codec 0 1] $bytes
 }
 
 proc assert_lz4_rdb_checksum_flags {client expected} {
@@ -31,24 +32,17 @@ proc assert_lz4_rdb_checksum_flags {client expected} {
     assert_equal $expected $has_content_checksum
 }
 
-proc assert_zstd_rdb_envelope {client} {
-    binary scan [read_binary_file_prefix [dump_rdb_path $client] 7] cu* bytes
-    # V C S / envelope version / ZSTD codec / reserved / RDB stream kind.
-    assert_equal [list 86 67 83 1 2 0 1] $bytes
-}
-
 set ::rdbcompression_zstd_supported 0
+set ::rdbcompression_modes {lz4}
 
 start_server {overrides {save "" enable-debug-command local}} {
     set ::rdbcompression_zstd_supported [config_value_supported r rdbcompression zstd]
+    if {$::rdbcompression_zstd_supported} {
+        lappend ::rdbcompression_modes zstd
+    }
 
-    test {RDB save and load round-trip with LZ4 compression} {
+    test {DUMP and RESTORE remain independent of whole-RDB compression} {
         r config set rdbcompression lz4
-        r flushall
-        createComplexDataset r 1000
-
-        # DUMP/RESTORE uses its existing value encoding rather than wrapping
-        # individual values in the whole-RDB compression envelope.
         set dump_value [string repeat "dump-restore-value " 100]
         r set dump-restore:key $dump_value
         set serialized [r dump dump-restore:key]
@@ -56,83 +50,57 @@ start_server {overrides {save "" enable-debug-command local}} {
         r del dump-restore:key
         assert_equal "OK" [r restore dump-restore:key 0 $serialized]
         assert_equal $dump_value [r get dump-restore:key]
-
-        set digest [debug_digest]
-
-        assert_equal "OK" [r save]
-        assert_lz4_rdb_envelope r
-        assert_lz4_rdb_checksum_flags r 1
-        set loglines [count_log_lines 0]
-        assert_equal "OK" [r debug reload nosave]
-        verify_log_message 0 "*Logical RDB CRC64 skipped for streaming-compressed input*" $loglines
-        r config rewrite
-        restart_server 0 true false
-
-        assert_equal "lz4" [lindex [r config get rdbcompression] 1]
-        set newdigest [debug_digest]
-        assert {$digest eq $newdigest}
     }
 
-    test {RDB save and load round-trip with ZSTD compression} {
-        if {!$::rdbcompression_zstd_supported} {
-            skip "zstd is not supported by this build"
+    foreach mode $::rdbcompression_modes {
+        test "RDB save and load round-trip with [string toupper $mode] compression" {
+            r config set rdbcompression $mode
+            r flushall
+            createComplexDataset r 1000
+
+            set digest [debug_digest]
+            assert_equal "OK" [r save]
+            assert_rdb_envelope r $mode
+            if {$mode eq "lz4"} {
+                assert_lz4_rdb_checksum_flags r 1
+            }
+            set loglines [count_log_lines 0]
+            assert_equal "OK" [r debug reload nosave]
+            verify_log_message 0 "*Logical RDB CRC64 skipped for streaming-compressed input*" $loglines
+            r config rewrite
+            restart_server 0 true false
+
+            assert_equal $mode [lindex [r config get rdbcompression] 1]
+            assert_equal $digest [debug_digest]
         }
 
-        r config set rdbcompression zstd
-        r flushall
-        createComplexDataset r 1000
-        set digest [debug_digest]
+        test "Empty [string toupper $mode]-compressed RDB saves and loads correctly" {
+            r config set rdbcompression $mode
+            r flushall
 
-        assert_equal "OK" [r save]
-        assert_zstd_rdb_envelope r
-        r config rewrite
-        restart_server 0 true false
+            assert_equal 0 [r dbsize]
+            assert_equal "OK" [r save]
+            r config rewrite
+            assert_rdb_envelope r $mode
 
-        assert_equal "zstd" [lindex [r config get rdbcompression] 1]
-        assert_equal $digest [debug_digest]
-    }
+            restart_server 0 true false
 
-    test {Empty LZ4-compressed RDB saves and loads correctly} {
-        r config set rdbcompression lz4
-        r flushall
-
-        assert_equal 0 [r dbsize]
-        assert_equal "OK" [r save]
-        r config rewrite
-        assert_lz4_rdb_envelope r
-
-        restart_server 0 true false
-
-        assert_equal "lz4" [lindex [r config get rdbcompression] 1]
-        assert_equal 0 [r dbsize]
-    }
-
-    test {Empty ZSTD-compressed RDB saves and loads correctly} {
-        if {!$::rdbcompression_zstd_supported} {
-            skip "zstd is not supported by this build"
+            assert_equal $mode [lindex [r config get rdbcompression] 1]
+            assert_equal 0 [r dbsize]
         }
-
-        r config set rdbcompression zstd
-        r flushall
-
-        assert_equal 0 [r dbsize]
-        assert_equal "OK" [r save]
-        r config rewrite
-        assert_zstd_rdb_envelope r
-
-        restart_server 0 true false
-
-        assert_equal "zstd" [lindex [r config get rdbcompression] 1]
-        assert_equal 0 [r dbsize]
     }
 
     test {RDB files load across compression configuration modes} {
-        foreach {save_mode load_mode expected_header} {
+        set compression_cases {
             yes yes VALKEY
             no no VALKEY
             lz4 lzf VCS
             lzf lz4 VALKEY
-        } {
+        }
+        if {$::rdbcompression_zstd_supported} {
+            lappend compression_cases zstd lz4 VCS
+        }
+        foreach {save_mode load_mode expected_header} $compression_cases {
             set detail "RDB saved with $save_mode and loaded with $load_mode"
             r config set rdbcompression $save_mode
             r flushall
@@ -178,7 +146,7 @@ start_server {overrides {save "" enable-debug-command local}} {
             r config set rdb-key-save-delay 0
 
             assert_equal "yes" [lindex [r config get rdbcompression] 1]
-            assert_lz4_rdb_envelope r
+            assert_rdb_envelope r lz4
 
             assert_equal "OK" [r save]
             assert_equal "VALKEY" [string range [read_dump_rdb_header_bytes r] 0 5]
@@ -205,11 +173,7 @@ start_server {overrides {save "" enable-debug-command local}} {
         }
     }
 
-    set truncation_modes {lz4}
-    if {$::rdbcompression_zstd_supported} {
-        lappend truncation_modes zstd
-    }
-    foreach mode $truncation_modes {
+    foreach mode $::rdbcompression_modes {
         test "Truncated $mode frame is rejected on load even when checksum validation is bypassed" {
             r config set rdbcompression $mode
             r flushall
@@ -220,11 +184,7 @@ start_server {overrides {save "" enable-debug-command local}} {
 
             assert_equal "OK" [r save]
             set rdbfile [dump_rdb_path r]
-            if {$mode eq "zstd"} {
-                assert_zstd_rdb_envelope r
-            } else {
-                assert_lz4_rdb_envelope r
-            }
+            assert_rdb_envelope r $mode
             set original [read_binary_file $rdbfile]
 
             with_cleanup {
@@ -245,72 +205,39 @@ start_server {overrides {save "" enable-debug-command local}} {
         }
     }
 
-    test {LZ4 compressed RDB detects a content checksum mismatch} {
-        r config set rdbcompression lz4
-        assert_equal "yes" [lindex [r config get rdbchecksum] 1]
-        r flushall
-        for {set i 0} {$i < 100} {incr i} {
-            r set "footer:$i" [string repeat "payload$i " 100]
-        }
+    foreach mode $::rdbcompression_modes {
+        test "[string toupper $mode] compressed RDB detects a content checksum mismatch and allows bypass" {
+            r config set rdbcompression $mode
+            assert_equal "yes" [lindex [r config get rdbchecksum] 1]
+            r flushall
+            for {set i 0} {$i < 100} {incr i} {
+                r set "$mode-footer:$i" [string repeat "payload$i " 100]
+            }
 
-        r save
-        set rdbfile [dump_rdb_path r]
-        set original [read_binary_file $rdbfile]
+            r save
+            set rdbfile [dump_rdb_path r]
+            set original [read_binary_file $rdbfile]
 
-        with_cleanup {
-            set checksum_offset [expr {[string length $original] - 1}]
-            binary scan [string index $original $checksum_offset] cu checksum_byte
-            set mutated [string replace $original $checksum_offset $checksum_offset \
-                [binary format c [expr {$checksum_byte ^ 1}]]]
-            write_binary_file $rdbfile $mutated
+            with_cleanup {
+                set checksum_offset [expr {[string length $original] - 1}]
+                binary scan [string index $original $checksum_offset] cu checksum_byte
+                set mutated [string replace $original $checksum_offset $checksum_offset \
+                    [binary format c [expr {$checksum_byte ^ 1}]]]
+                write_binary_file $rdbfile $mutated
 
-            set failed [catch {r debug reload nosave} err]
-            assert_equal 1 $failed
-            assert_match "*Error trying to load the RDB*" $err
+                set failed [catch {r debug reload nosave} err]
+                assert_equal 1 $failed
+                assert_match "*Error trying to load the RDB*" $err
 
-            set loglines [count_log_lines 0]
-            r debug set-skip-checksum-validation 1
-            assert_equal "OK" [r debug reload nosave]
-            verify_log_message 0 "*Logical RDB CRC64 skipped for streaming-compressed input*" $loglines
-        } {
-            catch {r debug set-skip-checksum-validation 0}
-            write_binary_file $rdbfile $original
-        }
-    }
-
-    test {ZSTD compressed RDB detects a content checksum mismatch and allows bypass} {
-        if {!$::rdbcompression_zstd_supported} {
-            skip "zstd is not supported by this build"
-        }
-
-        r config set rdbcompression zstd
-        assert_equal "yes" [lindex [r config get rdbchecksum] 1]
-        r flushall
-        for {set i 0} {$i < 100} {incr i} {
-            r set "zstd-footer:$i" [string repeat "payload$i " 100]
-        }
-
-        r save
-        set rdbfile [dump_rdb_path r]
-        set original [read_binary_file $rdbfile]
-
-        with_cleanup {
-            set checksum_offset [expr {[string length $original] - 1}]
-            binary scan [string index $original $checksum_offset] cu checksum_byte
-            set mutated [string replace $original $checksum_offset $checksum_offset \
-                [binary format c [expr {$checksum_byte ^ 1}]]]
-            write_binary_file $rdbfile $mutated
-
-            set failed [catch {r debug reload nosave} err]
-            assert_equal 1 $failed
-            assert_match "*Error trying to load the RDB*" $err
-
-            r debug set-skip-checksum-validation 1
-            assert_equal "OK" [r debug reload nosave]
-            assert_equal [string repeat "payload10 " 100] [r get zstd-footer:10]
-        } {
-            catch {r debug set-skip-checksum-validation 0}
-            write_binary_file $rdbfile $original
+                set loglines [count_log_lines 0]
+                r debug set-skip-checksum-validation 1
+                assert_equal "OK" [r debug reload nosave]
+                verify_log_message 0 "*Logical RDB CRC64 skipped for streaming-compressed input*" $loglines
+                assert_equal [string repeat "payload10 " 100] [r get "$mode-footer:10"]
+            } {
+                catch {r debug set-skip-checksum-validation 0}
+                write_binary_file $rdbfile $original
+            }
         }
     }
 
@@ -401,7 +328,7 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
         }
 
         r save
-        assert_lz4_rdb_envelope r
+        assert_rdb_envelope r lz4
         assert_lz4_rdb_checksum_flags r 0
         set rdbfile [dump_rdb_path r]
         set digest [debug_digest]
@@ -414,28 +341,23 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
         assert {$digest eq $newdigest}
         assert_equal [string repeat "data10 " 100] [r get nocksum:10]
     }
-
 }
 
-foreach mode {lz4 zstd} {
-    if {$mode eq "zstd" && !$::rdbcompression_zstd_supported} continue
+start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
+    test {AOF rewrite RDB preamble remains plain with LZ4 stream snapshots} {
+        r set aof-lz4:key [string repeat "aof-lz4-value " 100]
+        set digest [debug_digest]
 
-    start_server [list overrides [list save "" appendonly yes aof-use-rdb-preamble yes rdbcompression $mode]] {
-        test "AOF rewrite RDB preamble remains plain with $mode stream snapshots" {
-            r set "aof-$mode:key" [string repeat "aof-$mode-value " 100]
-            set digest [debug_digest]
+        r bgrewriteaof
+        waitForBgrewriteaof r
 
-            r bgrewriteaof
-            waitForBgrewriteaof r
+        set base_aof [get_base_aof_path r]
+        assert {[file exists $base_aof]}
+        assert_equal "VALKEY" [string range [read_binary_file_prefix $base_aof 7] 0 5]
 
-            set base_aof [get_base_aof_path r]
-            assert {[file exists $base_aof]}
-            assert_equal "VALKEY" [string range [read_binary_file_prefix $base_aof 7] 0 5]
-
-            restart_server 0 true false
-            assert_equal $digest [debug_digest]
-            assert_equal [string repeat "aof-$mode-value " 100] [r get "aof-$mode:key"]
-        }
+        restart_server 0 true false
+        assert_equal $digest [debug_digest]
+        assert_equal [string repeat "aof-lz4-value " 100] [r get aof-lz4:key]
     }
 }
 

@@ -83,7 +83,8 @@ int vcsBuildEnvelope(uint8_t *buf, compressionAlgo algo, uint8_t stream_kind);
 
 /* Default decompressed-output buffer size. Tiny caller values are clamped up
  * so the reader can always make forward progress without growing internal
- * state. The compressed-input buffer only needs to hold one LZ4 block. */
+ * state. Compressed input is consumed incrementally through a fixed-size
+ * staging buffer. */
 #define STREAM_READER_BUFFER_SIZE_DEFAULT (1024 * 1024)
 #define STREAM_READER_BUFFER_SIZE_MIN (128 * 1024)
 #define STREAM_READER_COMPRESSED_BUFFER_SIZE (128 * 1024)
@@ -146,7 +147,9 @@ int streamReaderInit(streamReader *reader, const streamReaderConfig *cfg, stream
  * output is reported on the next call. */
 ssize_t streamReaderRead(streamReader *reader, void *buf, size_t len);
 /* Completes and validates a compressed frame after the logical parser has
- * consumed its payload. Returns C_OK/C_ERR. */
+ * consumed its payload. It stops at the frame boundary without requiring
+ * physical EOF, matching the plain RDB loader's treatment of trailing bytes.
+ * Returns C_OK/C_ERR. */
 int streamReaderFinish(streamReader *reader);
 void streamReaderFree(streamReader *reader);
 
@@ -159,7 +162,7 @@ void streamReaderFree(streamReader *reader);
  * bytes are forwarded verbatim. Output is appended to a caller-provided sds. */
 
 /* OK and ERR intentionally match C_OK and C_ERR. The additional results
- * distinguish a closed live frame from resumable output backpressure. */
+ * distinguish a completed frame from resumable output backpressure. */
 typedef enum {
     STREAM_PUSH_READER_OK = 0,          /* Input consumed; output (possibly 0 bytes) appended. */
     STREAM_PUSH_READER_ERR = -1,        /* Envelope or codec error. */
@@ -190,6 +193,8 @@ typedef struct streamPushReader {
 void streamPushReaderInit(streamPushReader *reader, uint8_t expected_stream_kind);
 void streamPushReaderFree(streamPushReader *reader);
 bool streamPushReaderHasPendingDecode(const streamPushReader *reader);
+/* Resume after FRAME_DONE without expecting another VCS envelope. */
+int streamPushReaderStartNextFrame(streamPushReader *reader);
 streamPushReaderResult streamPushReaderFeed(streamPushReader *reader, const void *src, size_t len, sds *out, size_t output_budget);
 
 #endif /* COMPRESSION_STREAM_H */

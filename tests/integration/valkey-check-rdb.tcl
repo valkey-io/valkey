@@ -49,51 +49,31 @@ tags {"check-rdb external:skip logreqres:skip"} {
 
 tags {"check-rdb network external:skip logreqres:skip"} {
     start_server {} {
-        test "valkey-check-rdb validates the contents of an LZ4-compressed RDB" {
-            r config set rdbcompression lz4
-            with_cleanup {
-                r flushall
-                r set lz4:key [string repeat "payload " 200]
-                r save
+        foreach mode {lz4 zstd} {
+            test "valkey-check-rdb validates the contents of a [string toupper $mode]-compressed RDB" {
+                if {$mode eq "zstd" && ![config_value_supported r rdbcompression zstd]} {
+                    skip "zstd is not supported by this build"
+                }
 
-                set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
-                set failed [catch {
-                    exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
-                } result]
+                r config set rdbcompression $mode
+                with_cleanup {
+                    r flushall
+                    r set "$mode:key" [string repeat "payload " 200]
+                    r save
 
-                assert_equal 0 $failed
-                assert_match {*RDB looks OK!*} $result
-                assert_match {*\[logical offset *, physical offset *\] Logical RDB CRC64 skipped for streaming-compressed input*} $result
-                assert_match {*type.string.keys.total:1*} $result
-                assert_no_match {*Checksum OK*} $result
-            } {
-                catch {r config set rdbcompression yes}
-            }
-        }
+                    set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
+                    set failed [catch {
+                        exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
+                    } result]
 
-        test "valkey-check-rdb validates the contents of a ZSTD-compressed RDB" {
-            if {![config_value_supported r rdbcompression zstd]} {
-                skip "zstd is not supported by this build"
-            }
-
-            r config set rdbcompression zstd
-            with_cleanup {
-                r flushall
-                r set zstd:key [string repeat "payload " 200]
-                r save
-
-                set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
-                set failed [catch {
-                    exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
-                } result]
-
-                assert_equal 0 $failed
-                assert_match {*RDB looks OK!*} $result
-                assert_match {*Logical RDB CRC64 skipped for streaming-compressed input*} $result
-                assert_match {*type.string.keys.total:1*} $result
-                assert_no_match {*Checksum OK*} $result
-            } {
-                catch {r config set rdbcompression yes}
+                    assert_equal 0 $failed
+                    assert_match {*RDB looks OK!*} $result
+                    assert_match {*\[logical offset *, physical offset *\] Logical RDB CRC64 skipped for streaming-compressed input*} $result
+                    assert_match {*type.string.keys.total:1*} $result
+                    assert_no_match {*Checksum OK*} $result
+                } {
+                    catch {r config set rdbcompression yes}
+                }
             }
         }
 

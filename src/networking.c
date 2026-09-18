@@ -2668,9 +2668,6 @@ client *lookupClientByID(uint64_t id) {
     return c;
 }
 
-/* Bound compression work and staging memory for one write dispatch. */
-#define REPL_COMPRESSION_BATCH_SIZE (1024 * 1024)
-
 /* Advance the replica's replication-buffer cursor (ref_repl_buf_node /
  * ref_block_pos) past consumed raw bytes, releasing the reference on each
  * fully-sent block. Shared by the compressed and plaintext post-write paths. */
@@ -2846,12 +2843,12 @@ static void writeToReplicaCompressed(client *c) {
 
     if (batch_uncompressed_bytes == 0) return;
 
-    /* Drain codec-buffered bytes so the whole batch lands in out_buf. Zstd
-     * retains history across small write batches and closes a checksummed
-     * frame after accumulating at least one batch budget of raw input. */
+    /* Drain codec-buffered bytes so the whole batch lands in out_buf. Codecs
+     * that need bounded frames for integrity retain history across small write
+     * batches and close after reaching the configured raw-byte threshold. */
     compressFlushMode flush_mode = COMPRESS_FLUSH_SYNC;
-    if (compression->compressor.algo == ALGO_ZSTD &&
-        compression->frame_uncompressed_bytes + batch_uncompressed_bytes >= REPL_COMPRESSION_BATCH_SIZE) {
+    if (compression->frame_max_bytes &&
+        compression->frame_uncompressed_bytes + batch_uncompressed_bytes >= compression->frame_max_bytes) {
         flush_mode = COMPRESS_FLUSH_END;
     }
     if (compressReplicaDataToOutputBuffer(compression, NULL, 0, flush_mode) != C_OK) {
@@ -2859,7 +2856,7 @@ static void writeToReplicaCompressed(client *c) {
         return;
     }
 
-    if (compression->compressor.algo == ALGO_ZSTD) {
+    if (compression->frame_max_bytes) {
         if (flush_mode == COMPRESS_FLUSH_END) {
             compression->frame_uncompressed_bytes = 0;
         } else {

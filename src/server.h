@@ -1300,6 +1300,9 @@ typedef struct ClientPubSubData {
  * shared by steady-state and dual-channel replication paths. */
 #define REPL_DECODE_EVENT_BUDGET (1024 * 1024)
 
+/* Bound compression work and staging memory for one write dispatch. */
+#define REPL_COMPRESSION_BATCH_SIZE (1024 * 1024)
+
 /* Primary-side compression state for one replica link. */
 typedef struct replicaCompressionState {
     streamCompressor compressor;     /* Codec state retained across replication write batches. */
@@ -1308,6 +1311,7 @@ typedef struct replicaCompressionState {
     size_t out_buf_pos;              /* Next byte to send from out_buf. */
     size_t batch_uncompressed_bytes; /* Backlog bytes represented by out_buf. */
     size_t frame_uncompressed_bytes; /* Raw bytes accumulated in the current codec frame. */
+    size_t frame_max_bytes;          /* Close a frame at this raw-byte threshold, or 0 to keep it open. */
     long long compressed_bytes;      /* Completed batches, for INFO replication. */
     long long uncompressed_bytes;    /* Completed batches, for INFO replication. */
 } replicaCompressionState;

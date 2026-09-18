@@ -67,15 +67,12 @@ static int readVcsEnvelope(const uint8_t *buf, uint8_t expected_stream_kind, com
         *algo = ALGO_LZ4;
         break;
     case VCS_CODEC_ZSTD:
-#ifdef HAVE_ZSTD
         *algo = ALGO_ZSTD;
         break;
-#else
-        return C_ERR;
-#endif
     default:
         return C_ERR;
     }
+    if (!streamCodecIsSupported(*algo)) return C_ERR;
     if (buf[VCS_OFFSET_RESERVED] != 0) return C_ERR;
     if (buf[VCS_OFFSET_STREAM_KIND] != expected_stream_kind) return C_ERR;
     return C_OK;
@@ -495,23 +492,7 @@ streamPushReaderFeedCodec(streamPushReader *reader, const uint8_t *in, size_t le
             *budget -= (size_t)produced;
         }
         off += consumed;
-        /* Zstd replication uses bounded checksummed frames that may span
-         * multiple output batches. Continue at the next concatenated frame
-         * without re-reading a VCS envelope. Other live codecs keep one frame
-         * open, so an end marker remains a protocol error for them. */
         if (reader->decompressor.frame_done) {
-            if (reader->expected_stream_kind == VCS_STREAM_REPL &&
-                reader->decompressor.algo == ALGO_ZSTD) {
-                if (streamDecompressorReset(&reader->decompressor) != C_OK) {
-                    *input_consumed = off;
-                    return STREAM_PUSH_READER_ERR;
-                }
-                if (off == len) {
-                    *input_consumed = off;
-                    return STREAM_PUSH_READER_OK;
-                }
-                continue;
-            }
             *input_consumed = off;
             return STREAM_PUSH_READER_FRAME_DONE;
         }
@@ -594,6 +575,11 @@ bool streamPushReaderHasPendingDecode(const streamPushReader *reader) {
     return reader->codec_needs_drain || reader->pending_input != NULL;
 }
 
+int streamPushReaderStartNextFrame(streamPushReader *reader) {
+    if (reader->state != STREAM_PUSH_READER_COMPRESSED || !reader->decompressor.frame_done) return C_ERR;
+    return streamDecompressorReset(&reader->decompressor);
+}
+
 streamPushReaderResult streamPushReaderFeed(streamPushReader *reader, const void *src, size_t len, sds *out, size_t output_budget) {
     bool resuming = streamPushReaderHasPendingDecode(reader);
     serverAssert(len == 0 || !resuming);
@@ -619,7 +605,8 @@ streamPushReaderResult streamPushReaderFeed(streamPushReader *reader, const void
             reader->pending_input = NULL;
             reader->pending_input_pos = 0;
         }
-    } else if (result == STREAM_PUSH_READER_NEED_OUTPUT && consumed < input_len) {
+    } else if ((result == STREAM_PUSH_READER_NEED_OUTPUT || result == STREAM_PUSH_READER_FRAME_DONE) &&
+               consumed < input_len) {
         reader->pending_input = sdsnewlen(input + consumed, input_len - consumed);
     }
     reader->codec_needs_drain = result == STREAM_PUSH_READER_NEED_OUTPUT && consumed == input_len;

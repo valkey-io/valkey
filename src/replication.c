@@ -95,9 +95,11 @@ static compressionAlgo replCompressionAlgorithm(void) {
 }
 
 /* Append the capabilities advertised for a configured compression mode.
- * Zstd-capable replicas also advertise LZ4 so an LZ4 primary can use the
- * cheaper fallback instead of dropping to plaintext. */
-static int appendReplCompressionCapabilities(char **argv, size_t *lens, int argc, compressionAlgo algo) {
+ * argv and lens must have room for four entries beyond argc. Zstd-capable
+ * replicas also advertise LZ4 so an LZ4 primary can use the compatible codec
+ * instead of dropping to plaintext. */
+static int appendReplCompressionCapabilities(char **argv, size_t *lens, size_t argv_capacity, int argc, compressionAlgo algo) {
+    serverAssert(argv_capacity >= (size_t)argc + 4);
     switch (algo) {
     case ALGO_NONE: return argc;
     case ALGO_ZSTD:
@@ -181,6 +183,11 @@ static void reconcileUpstreamCompression(void) {
     compressionAlgo advertised_algo = (compressionAlgo)server.repl_compression_advertised;
     if (configured_algo == advertised_algo) return;
 
+    /* A retired reader means the live stream was classified as plaintext.
+     * Disabling compression then needs no reconnect; a future handshake will
+     * advertise the new setting. */
+    if (configured_algo == ALGO_NONE && !server.repl_stream_reader) return;
+
     serverLog(LL_NOTICE, "Disconnecting from primary to renegotiate replication compression (now %s)",
               compressionAlgoName(configured_algo));
     server.repl_compression_advertised = REPL_COMPRESSION_CAPA_UNKNOWN;
@@ -201,13 +208,16 @@ static int replicaEnableCompressionIfNegotiated(client *replica) {
     serverAssert(replica->io_write_state == CLIENT_IDLE);
 
     replicaCompressionState *compression = zcalloc(sizeof(*compression));
-    uint8_t checksum_flags = algo == ALGO_ZSTD ? STREAM_CHECKSUM_CONTENT : STREAM_CHECKSUM_BLOCK;
+    bool want_integrity = !connIsIntegrityChecked(replica->conn);
+    uint8_t checksum_flags = want_integrity ? streamCodecIntegrityChecksumFlags(algo) : 0;
     if (streamCompressorInit(&compression->compressor, algo, 0, checksum_flags) != C_OK) {
         zfree(compression);
         serverLog(LL_WARNING, "Failed to initialize compression for replica %s", replicationGetReplicaName(replica));
         return C_ERR;
     }
     compression->out_buf = sdsempty();
+    if (want_integrity && streamCodecNeedsBoundedFramesForIntegrity(algo))
+        compression->frame_max_bytes = REPL_COMPRESSION_BATCH_SIZE;
 
     replica->repl_data->repl_compression = compression;
 
@@ -260,12 +270,23 @@ ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_
     if (primary->querybuf == NULL) primary->querybuf = sdsempty();
 
     size_t before = sdslen(primary->querybuf);
-    streamPushReaderResult result = streamPushReaderFeed(reader, wire_buf, wire_len, &primary->querybuf, output_budget);
-    if (result == STREAM_PUSH_READER_ERR || result == STREAM_PUSH_READER_FRAME_DONE) {
-        if (result == STREAM_PUSH_READER_FRAME_DONE)
-            serverLog(LL_WARNING, "Primary closed compressed replication frame unexpectedly");
-        return -1;
-    }
+    const void *input = wire_buf;
+    size_t input_len = wire_len;
+    streamPushReaderResult result;
+    do {
+        size_t produced = sdslen(primary->querybuf) - before;
+        result = streamPushReaderFeed(reader, input, input_len, &primary->querybuf, output_budget - produced);
+        if (result == STREAM_PUSH_READER_ERR) return -1;
+        input = NULL;
+        input_len = 0;
+        if (result == STREAM_PUSH_READER_FRAME_DONE &&
+            streamPushReaderStartNextFrame(reader) != C_OK) {
+            return -1;
+        }
+    } while (result == STREAM_PUSH_READER_FRAME_DONE &&
+             streamPushReaderHasPendingDecode(reader) &&
+             sdslen(primary->querybuf) - before < output_budget);
+
     size_t produced = sdslen(primary->querybuf) - before;
     if (primary->querybuf_peak < sdslen(primary->querybuf)) primary->querybuf_peak = sdslen(primary->querybuf);
 
@@ -3474,7 +3495,8 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     for (int i = 0; i < argc; i++) {
         lens[i] = strlen(argv[i]);
     }
-    argc = appendReplCompressionCapabilities(argv, lens, argc, replCompressionAlgorithm());
+    argc = appendReplCompressionCapabilities(argv, lens, sizeof(argv) / sizeof(*argv), argc,
+                                             replCompressionAlgorithm());
     *err = sendCommandArgv(conn, argc, argv, lens);
     sdsfree(portstr);
     if (*err) {
@@ -4338,7 +4360,8 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         argc++;
     }
     compressionAlgo advertised_algo = replCompressionAlgorithm();
-    argc = appendReplCompressionCapabilities(argv, lens, argc, advertised_algo);
+    argc = appendReplCompressionCapabilities(argv, lens, sizeof(argv) / sizeof(*argv), argc,
+                                             advertised_algo);
     err = sendCommandArgv(conn, argc, argv, lens);
     if (err) goto err;
     server.repl_compression_advertised = advertised_algo;

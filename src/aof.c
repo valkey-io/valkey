@@ -1573,8 +1573,9 @@ int loadSingleAppendOnlyFile(char *filename) {
     /* Check if the AOF file is in RDB format (it may be RDB encoded base AOF
      * or old style RDB-preamble AOF). In that case we need to load the RDB file
      * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
-    char sig[6]; /* "REDIS" or "VALKEY" */
-    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS0", 6) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
+    char sig[6]; /* "REDIS", "VALKEY", or the VCS envelope magic. */
+    size_t siglen = fread(sig, 1, sizeof(sig), fp);
+    if (!rdbHasFileSignature(sig, siglen)) {
         /* Not in RDB format, seek back at 0 offset. */
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {
@@ -1588,7 +1589,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != RDB_OK) {
+        if (rdbLoadRioWithAutoDecompression(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL, aof_filepath) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -2557,7 +2558,8 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        if (rdbSaveRioWithConfiguredCompression(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
+                                                RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }

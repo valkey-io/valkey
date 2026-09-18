@@ -436,7 +436,9 @@ start_cluster 2 1 {tags {external:skip cluster} overrides {cluster-allow-replica
             fail "Replica did not start a full sync"
         }
 
+        pause_process [srv -2 pid]
         assert_equal {OK} [R 0 CLUSTER SETSLOT 9000 NODE $R0_id]
+        resume_process [srv -2 pid]
 
         wait_for_condition 1000 10 {
             [s -2 master_sync_in_progress] eq 0

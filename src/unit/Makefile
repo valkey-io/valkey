@@ -117,6 +117,13 @@ endif
 ZSTD_LD_LIBS :=
 
 ifeq ($(BUILD_ZSTD),yes)
+ifdef ZSTD_PREFIX
+	ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+	    $(ZSTD_PREFIX)/lib/libzstd.a \
+	    $(ZSTD_PREFIX)/lib64/libzstd.a))
+	TEST_CFLAGS += -DHAVE_ZSTD -I$(ZSTD_PREFIX)/include
+	ZSTD_LD_LIBS := $(ZSTD_STATIC_ARCHIVE)
+else
 	ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
 	ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
 	ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
@@ -124,6 +131,7 @@ ifeq ($(BUILD_ZSTD),yes)
 	    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
 	TEST_CFLAGS += -DHAVE_ZSTD $(shell $(PKG_CONFIG) --cflags libzstd)
 	ZSTD_LD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
+endif
 endif
 
 # On Darwin (macOS), the linker does not support -Wl,--wrap,

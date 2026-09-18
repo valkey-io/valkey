@@ -157,9 +157,6 @@ target_link_libraries(
     GTest::gmock
     pthread
     ${VALKEY_SERVER_LDFLAGS})
-if (USE_ZSTD)
-    target_link_libraries(valkey-unit-gtests PRIVATE valkey_zstd)
-endif ()
 
 if (USE_TLS)
     # Add required libraries needed for TLS

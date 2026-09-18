@@ -59,8 +59,10 @@ for all functions (including static functions), use libbacktrace:
     % make USE_LIBBACKTRACE=yes
 
 Streaming RDB and replication compression can use Zstandard 1.4.7 or newer.
-Its static archive is required to track codec allocations in Valkey's memory
-accounting. Use `make BUILD_ZSTD=yes` to enable Zstandard support.
+Its static archive is required because Valkey uses Zstandard's
+static-linking-only custom allocator APIs to include codec allocations in
+memory accounting. Use `make BUILD_ZSTD=yes` to enable Zstandard support, and
+optionally set `ZSTD_PREFIX` for a custom installation.
 
 To build Valkey without the Lua engine:
 

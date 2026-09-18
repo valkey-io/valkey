@@ -10,6 +10,14 @@
 #include "zmalloc.h"
 #include <limits.h>
 
+bool compressionZstdIsSupported(void) {
+#ifdef HAVE_ZSTD
+    return true;
+#else
+    return false;
+#endif
+}
+
 #ifdef HAVE_ZSTD
 
 #define ZSTD_STATIC_LINKING_ONLY
@@ -153,6 +161,8 @@ ssize_t compressionZstdDecompressFeed(streamDecompressor *sd,
                                       size_t input_len,
                                       size_t *input_consumed) {
     assert(sd->ctx != NULL);
+    *input_consumed = 0;
+    if (sd->frame_done) return 0;
 
     ZSTD_DCtx *dctx = (ZSTD_DCtx *)sd->ctx;
     uint8_t empty_sentinel = 0;

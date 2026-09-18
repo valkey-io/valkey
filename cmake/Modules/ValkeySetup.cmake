@@ -286,7 +286,7 @@ include_directories("${CMAKE_SOURCE_DIR}/deps/lz4")
 
 string(TOLOWER "${BUILD_ZSTD}" BUILD_ZSTD_LOWER)
 if (NOT "${BUILD_ZSTD_LOWER}" MATCHES "^(yes|no|on|off|1|0)$")
-    message(FATAL_ERROR "BUILD_ZSTD can be one of: [yes | no], but '${BUILD_ZSTD}' was provided")
+    message(FATAL_ERROR "BUILD_ZSTD can be one of: [yes | no | on | off | 1 | 0], but '${BUILD_ZSTD}' was provided")
 endif ()
 
 set(USE_ZSTD 0)

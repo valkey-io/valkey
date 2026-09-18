@@ -9,6 +9,7 @@
 
 #include "compression.h"
 
+bool compressionZstdIsSupported(void);
 int compressionZstdCompressorInit(streamCompressor *sc);
 void compressionZstdCompressorFree(streamCompressor *sc);
 int compressionZstdDecompressorInit(streamDecompressor *sd);

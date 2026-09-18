@@ -27,6 +27,39 @@ const char *compressionAlgoName(compressionAlgo algo) {
     }
 }
 
+bool streamCodecIsSupported(compressionAlgo algo) {
+    switch (algo) {
+    case ALGO_LZ4:
+        return true;
+    case ALGO_ZSTD:
+        return compressionZstdIsSupported();
+    default:
+        return false;
+    }
+}
+
+uint8_t streamCodecIntegrityChecksumFlags(compressionAlgo algo) {
+    switch (algo) {
+    case ALGO_LZ4:
+        return STREAM_CHECKSUM_BLOCK;
+    case ALGO_ZSTD:
+        return STREAM_CHECKSUM_CONTENT;
+    default:
+        panic("Unsupported stream compression algorithm: %d", algo);
+    }
+}
+
+bool streamCodecNeedsBoundedFramesForIntegrity(compressionAlgo algo) {
+    switch (algo) {
+    case ALGO_LZ4:
+        return false;
+    case ALGO_ZSTD:
+        return true;
+    default:
+        panic("Unsupported stream compression algorithm: %d", algo);
+    }
+}
+
 /* ===== Compressor ===== */
 
 /* Compressor lifecycle. Codec dispatch used by streamWriter and by the
@@ -141,6 +174,8 @@ ssize_t streamDecompressorFeed(streamDecompressor *decompressor,
 
 int streamDecompressorReset(streamDecompressor *decompressor) {
     switch (decompressor->algo) {
+    case ALGO_LZ4:
+        return compressionLz4DecompressorReset(decompressor);
     case ALGO_ZSTD:
         return compressionZstdDecompressorReset(decompressor);
     default:

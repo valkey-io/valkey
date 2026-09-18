@@ -33,6 +33,7 @@ ifneq ($(OPTIMIZATION),-O0)
 endif
 DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4
 NODEPS:=clean distclean
+CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out $(NODEPS),$(MAKECMDGOALS)),,yes))
 
 # Default settings
 STD=-pedantic
@@ -260,16 +261,22 @@ FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_his
 
 # Zstandard support is disabled by default.
 BUILD_ZSTD ?= no
-ZSTD_CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out clean distclean,$(MAKECMDGOALS)),,yes))
 
-ifneq ($(ZSTD_CLEAN_ONLY),yes)
+ifneq ($(CLEAN_ONLY),yes)
 ifneq ($(filter $(BUILD_ZSTD),yes no),$(BUILD_ZSTD))
 $(error BUILD_ZSTD must be yes or no)
 endif
 endif
 
 ifeq ($(BUILD_ZSTD),yes)
-ifneq ($(ZSTD_CLEAN_ONLY),yes)
+ifneq ($(CLEAN_ONLY),yes)
+ifdef ZSTD_PREFIX
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(ZSTD_PREFIX)/lib/libzstd.a \
+    $(ZSTD_PREFIX)/lib64/libzstd.a))
+	ZSTD_CFLAGS := -I$(ZSTD_PREFIX)/include
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE)
+else
 ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
 ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
 # Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while installing the
@@ -283,6 +290,10 @@ $(error BUILD_ZSTD=yes requires static Zstandard 1.4.7 or newer)
 endif
 	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd)
 	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
+endif
+ifeq ($(ZSTD_STATIC_ARCHIVE),)
+$(error BUILD_ZSTD=yes requires a static Zstandard library)
+endif
 	FINAL_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
 	FINAL_LIBS += $(ZSTD_LIBS)
 endif
@@ -725,6 +736,7 @@ persist-settings: distclean
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
 	echo BUILD_ZSTD=$(BUILD_ZSTD) >> .make-settings
+	echo ZSTD_PREFIX=$(ZSTD_PREFIX) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings

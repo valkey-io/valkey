@@ -2508,15 +2508,10 @@ static int isValidActiveDefrag(int val, const char **err) {
 }
 
 static int isValidZstdCompression(int uses_zstd, const char **err) {
-#ifndef HAVE_ZSTD
-    if (uses_zstd) {
+    if (uses_zstd && !streamCodecIsSupported(ALGO_ZSTD)) {
         *err = "Zstandard compression is not available in this build";
         return 0;
     }
-#else
-    UNUSED(uses_zstd);
-    UNUSED(err);
-#endif
     return 1;
 }
 

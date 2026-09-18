@@ -27,6 +27,10 @@ typedef enum {
 } compressFlushMode;
 
 const char *compressionAlgoName(compressionAlgo algo);
+bool streamCodecIsSupported(compressionAlgo algo);
+/* Codec facts used by callers that request periodic stream integrity. */
+uint8_t streamCodecIntegrityChecksumFlags(compressionAlgo algo);
+bool streamCodecNeedsBoundedFramesForIntegrity(compressionAlgo algo);
 
 /* ===== Compressor ===== */
 
@@ -72,8 +76,7 @@ ssize_t streamDecompressorFeed(streamDecompressor *decompressor,
                                const uint8_t *input,
                                size_t input_len,
                                size_t *input_consumed);
-/* Start the next frame while retaining codec allocations. Only codecs whose
- * wire format permits concatenated frames implement this operation. */
+/* Start the next concatenated frame while retaining codec allocations. */
 int streamDecompressorReset(streamDecompressor *decompressor);
 void streamDecompressorFree(streamDecompressor *decompressor);
 

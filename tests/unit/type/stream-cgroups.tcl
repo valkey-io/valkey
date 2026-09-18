@@ -1969,8 +1969,10 @@ start_server {
             assert_equal 2 [expr {[get_replica_calls $replica xnack] - $xnack_before}]
 
             # Check replicated state
-            set pend [$replica XPENDING stream grp - + 1]
-            assert_equal 1 [lindex $pend 0 3]
+            set pend [$replica XPENDING stream grp - + 10]
+            assert_equal 2 [llength $pend]
+            assert_equal {1-0 1} [list [lindex $pend 0 0] [lindex $pend 0 3]]
+            assert_equal {2-0 1} [list [lindex $pend 1 0] [lindex $pend 1 3]]
         }
     }
 

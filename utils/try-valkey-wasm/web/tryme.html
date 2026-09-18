@@ -1228,9 +1228,10 @@ function printReply(text) {                                                  // 
   }
 }
 let termBusy = false;
-// ---- Easter egg: you asked for it. SHUTDOWN (and the classic self-destruct DEBUG commands) really do stop the
-// server -- in a real valkey-server the CLI would then just hang / refuse to connect. Here we make that moment fun,
-// and (unlike a real box) offer a way back.
+// ---- Easter egg: nothing is intercepted -- commands flow to the real server, which really denies SHUTDOWN and
+// DEBUG via its boot ACL (see DEFAULT_ARGS in tryvalkey.mjs). Grant yourself permission (ACL SETUSER default
+// +shutdown) and the server really dies: the death surfaces as an exception out of the wasm runtime, and the
+// last command becomes the epitaph. Unlike a real box, we make that moment fun -- and offer a way back.
 let serverDead = false;
 const tomb = verb => {
   const mid = s => { const w = 18, l = (w - s.length) >> 1; return `      |${' '.repeat(l)}${s}${' '.repeat(w - s.length - l)}|    `; };
@@ -1293,14 +1294,21 @@ function killServer(how, verb) {
   tprint('<span class="d">(type <b>REVIVE</b> to spin up a fresh one, or just reload the tab)</span>');
   tprompt.textContent = 'not connected> ';
 }
-// Which lines are a "please end this process" request? Returns [message, epitaph-verb] or null.
-function selfDestruct(a) {
-  if (!a.length) return null;
-  const cmd = a[0].toUpperCase(), sub = (a[1] || '').toUpperCase();
-  if (cmd === 'SHUTDOWN') return ['valkey-server shutting down (SHUTDOWN' + (a[1] ? ' ' + a.slice(1).join(' ').toUpperCase() : '') + ')...', 'SHUTDOWN'];
-  if (cmd === 'DEBUG' && (sub === 'SEGFAULT' || sub === 'PANIC' || sub === 'OOM' || sub === 'SIGALRM'))
-    return ['=== VALKEY BUG REPORT START === the server crashed on purpose (DEBUG ' + sub + ')', 'DEBUG ' + sub];
-  return null;
+// The server actually died: an engine call threw out of the wasm runtime. A clean exit (SHUTDOWN) surfaces as
+// ExitStatus; a crash (DEBUG SEGFAULT and friends) as a RuntimeError trap. Blame the last command.
+let lastCmd = '', tickTimer = null;
+function serverDied(e, line) {
+  if (serverDead) return;
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  const a = tokenize(line || lastCmd) || [];
+  let verb = (a[0] || '???').toUpperCase();
+  if ((verb === 'DEBUG' || verb === 'SHUTDOWN') && a[1]) verb += ' ' + a[1].toUpperCase();
+  if (verb.length > 15) verb = verb.slice(0, 14) + '~';
+  const clean = e === 'unwind' || e?.name === 'ExitStatus';
+  const how = clean
+    ? `valkey-server shutting down (${verb})...`
+    : `=== VALKEY BUG REPORT START === the server crashed (${verb}: ${esc(String(e?.message || e).slice(0, 60))})`;
+  killServer(how, verb);
 }
 async function run(line) {
   tprint(`<span class="p">${esc(promptText())}</span>${esc(line)}`);
@@ -1311,18 +1319,17 @@ async function run(line) {
     tprint('<span class="e">Could not connect to Valkey at 127.0.0.1:6379: Connection refused</span>');
     return;
   }
-  {
-    const dead = selfDestruct(tokenize(line));
-    if (dead) { killServer(dead[0], dead[1]); return; }
-  }
   if (tv) {                                                                  // the real server
     const c = line.trim().toLowerCase();
     if (!c) return;
     if (c === 'clear') { tout.innerHTML = ''; return; }
     if (c === 'quit' || c === 'exit') { tprint('<span class="d">(this is a browser tab -- just close it)</span>'); return; }
     if (c === 'help' || c === '?') { tprint('<span class="d">A real valkey-server is running in this tab. Try: SET k v · GET k · INCR n · HSET h f v · HGETALL h · LPUSH l a b · LRANGE l 0 -1 · ZADD z 1 a · HELLO 3 · COMMAND DOCS GET</span>'); return; }
+    lastCmd = line;
     termBusy = true;
-    try { printReply(await tv.exec(line)); } finally { termBusy = false; tprompt.textContent = promptText(); }
+    try { printReply(await tv.exec(line)); }
+    catch (e) { serverDied(e, line); }
+    finally { termBusy = false; tprompt.textContent = promptText(); }
     return;
   }
   const a = tokenize(line); if (!a.length) return;
@@ -1483,7 +1490,7 @@ function handoff(instant = false) {
       initHints();
       const pushes = outs => { if (outs.length) { outs.forEach(printReply); } };
       tv.exec.onUnsolicited = pushes;
-      setInterval(() => pushes(tv.tick()), 50);                              // serverCron, expiry, blocking timeouts, pub/sub
+      tickTimer = setInterval(() => { try { pushes(tv.tick()); } catch (e) { serverDied(e, ''); } }, 50); // serverCron, expiry, blocking timeouts, pub/sub
     } else { tprint('<span class="d">1:M * Server initialized</span>'); tprint('<span class="d">1:M * Ready to accept connections tcp</span>'); }
     tprint('&nbsp;'); tin.focus();
   };

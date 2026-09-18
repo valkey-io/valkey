@@ -1067,6 +1067,81 @@ start_server {tags {"acl external:skip"}} {
         assert_error "*wrong number of arguments for 'acl|digest' command" {r ACL DIGEST extra}
     }
 
+    test {ACL DIGEST follows the rules of a role} {
+        # A user only names the roles it holds, so an edit to a role does not
+        # change any user line. The role has to be hashed on its own.
+        set before [r ACL DIGEST]
+        r ACL setrole digestrole ~role:a* +get
+        r ACL setuser digestmember on >digestpass role=digestrole
+        set created [r ACL DIGEST]
+        assert {$created ne $before}
+
+        r ACL setrole digestrole resetkeys ~role:b*
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setrole digestrole resetkeys ~role:a*
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestmember
+        r ACL delrole digestrole
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST does not cancel out a role and a user sharing a name} {
+        # Role names are only checked for valid characters, so a role and a
+        # user can carry the same name. Their lines must not cancel out.
+        set before [r ACL DIGEST]
+        r ACL setrole digesttwin ~twin:* +get
+        r ACL setuser digesttwin on >twinpass ~twin:* +get
+
+        set both [r ACL DIGEST]
+        assert {$both ne $before}
+        r ACL deluser digesttwin
+        set one [r ACL DIGEST]
+        assert {$one ne $both}
+        assert {$one ne $before}
+
+        r ACL delrole digesttwin
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    # SHA256 of an arbitrary string, computed by the server itself: a password
+    # is stored as its SHA256 hex digest.
+    proc acl_sha256_hex {s} {
+        r ACL setuser digestprobe reset >$s
+        set hash [lindex [dict get [r ACL getuser digestprobe] passwords] 0]
+        r ACL deluser digestprobe
+        return $hash
+    }
+
+    proc acl_hex_xor {a b} {
+        set out ""
+        for {set i 0} {$i < [string length $a]} {incr i 2} {
+            scan [string range $a $i [expr {$i + 1}]] %x x
+            scan [string range $b $i [expr {$i + 1}]] %x y
+            append out [format %02x [expr {$x ^ $y}]]
+        }
+        return $out
+    }
+
+    test {ACL DIGEST is the XOR of the SHA256 of every ACL LIST line} {
+        # The two tests above still pass if the leading user and role keywords
+        # are dropped from what gets hashed, because a user line always carries
+        # flags and passwords that a role line does not. This pins the whole
+        # hashed content instead, keywords included.
+        r ACL setrole digestcontract ~c:* +get
+        r ACL setuser digestcontract on >digestpass ~c:* +get
+
+        set lines [r ACL LIST]
+        set expected [string repeat 0 64]
+        foreach line $lines {
+            set expected [acl_hex_xor $expected [acl_sha256_hex $line]]
+        }
+        assert_equal $expected [r ACL DIGEST]
+
+        r ACL deluser digestcontract
+        r ACL delrole digestcontract
+    }
+
     test {ACL DIGEST needs permission to run} {
         r ACL setuser digestnoperm on >digestpass ~* +acl|whoami
         r AUTH digestnoperm digestpass

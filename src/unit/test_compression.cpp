@@ -147,6 +147,56 @@ static ssize_t decompressAll(streamDecompressor *decompressor,
  * Streaming compression/decompression tests
  * =================================================================== */
 
+/* ctx_memory must track every byte the codec context holds through the custom
+ * allocator: nonzero after init, growing when streaming state is set up, and
+ * exactly zero once the context is freed. */
+TEST(CompressionTest, codecContextMemoryIsTracked) {
+    const size_t input_len = 64 * 1024;
+    uint8_t *input = (uint8_t *)zmalloc(input_len);
+    for (size_t i = 0; i < input_len; i++) input[i] = (uint8_t)(i % 251);
+
+    streamCompressor compressor;
+    ASSERT_EQ(streamCompressorInit(&compressor, ALGO_LZ4, 0, 0), C_OK);
+    EXPECT_GT(compressor.ctx_memory, 0u);
+    size_t after_init = compressor.ctx_memory;
+
+    size_t bound = streamCompressorOutputBound(&compressor, input_len);
+    uint8_t *compressed = (uint8_t *)zmalloc(bound);
+    ssize_t compressed_len = streamCompressorFeed(&compressor, compressed, bound,
+                                                  input, input_len, COMPRESS_FLUSH_END);
+    ASSERT_GT(compressed_len, 0);
+    /* Streaming staging buffers are allocated on first use. */
+    EXPECT_GT(compressor.ctx_memory, after_init);
+
+    streamCompressorFree(&compressor);
+    EXPECT_EQ(compressor.ctx_memory, 0u);
+
+    streamDecompressor decompressor;
+    ASSERT_EQ(streamDecompressorInit(&decompressor, ALGO_LZ4, false), C_OK);
+    EXPECT_GT(decompressor.ctx_memory, 0u);
+
+    uint8_t *decoded = (uint8_t *)zmalloc(input_len);
+    size_t consumed = 0;
+    size_t in_pos = 0, out_pos = 0;
+    while (in_pos < (size_t)compressed_len) {
+        ssize_t n = streamDecompressorFeed(&decompressor, decoded + out_pos, input_len - out_pos,
+                                           compressed + in_pos, (size_t)compressed_len - in_pos, &consumed);
+        ASSERT_GE(n, 0);
+        ASSERT_GT(consumed + (size_t)n, 0u);
+        in_pos += consumed;
+        out_pos += (size_t)n;
+    }
+    ASSERT_EQ(out_pos, input_len);
+    EXPECT_EQ(memcmp(decoded, input, input_len), 0);
+
+    streamDecompressorFree(&decompressor);
+    EXPECT_EQ(decompressor.ctx_memory, 0u);
+
+    zfree(decoded);
+    zfree(compressed);
+    zfree(input);
+}
+
 TEST(CompressionTest, streamCompressorOutputBound) {
     const size_t input_sizes[] = {0, 1, 1024, 64 * 1024};
     const compressFlushMode flush_modes[] = {

@@ -182,6 +182,7 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {"yes", RDB_COMPRESSION_YES},
                                      {"lzf", RDB_COMPRESSION_LZF},
                                      {"lz4", RDB_COMPRESSION_LZ4},
+                                     {"zstd", RDB_COMPRESSION_ZSTD},
                                      {NULL, 0}};
 
 configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
@@ -196,6 +197,7 @@ configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILO
 configEnum repl_compression_enum[] = {{"no", REPL_COMPRESSION_NO},
                                       {"yes", REPL_COMPRESSION_YES},
                                       {"lz4", REPL_COMPRESSION_LZ4},
+                                      {"zstd", REPL_COMPRESSION_ZSTD},
                                       {NULL, 0}};
 
 /* Output buffer limits presets. */
@@ -2505,6 +2507,22 @@ static int isValidActiveDefrag(int val, const char **err) {
     return 1;
 }
 
+static int isValidZstdCompression(int uses_zstd, const char **err) {
+    if (uses_zstd && !streamCodecIsSupported(ALGO_ZSTD)) {
+        *err = "Zstandard compression is not available in this build";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidRdbCompression(int val, const char **err) {
+    return isValidZstdCompression(val == RDB_COMPRESSION_ZSTD, err);
+}
+
+static int isValidReplCompression(int val, const char **err) {
+    return isValidZstdCompression(val == REPL_COMPRESSION_ZSTD, err);
+}
+
 static int isValidClusterConfigFile(char *val, const char **err) {
     if (!strcmp(val, "")) {
         *err = "cluster-config-file can't be empty";
@@ -3535,9 +3553,9 @@ standardConfig static_configs[] = {
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
-    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
+    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, isValidRdbCompression, NULL),
     createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
-    createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, NULL, NULL),
+    createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, isValidReplCompression, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),

@@ -49,6 +49,7 @@ static mpscQueue io_shared_outbox[JOB_PRIORITY_COUNT] = {0};
 static spscQueue io_private_inbox[IO_THREADS_MAX_NUM] = {0};
 static size_t io_jobs_submitted;
 static _Atomic(size_t) io_jobs_finished;
+static _Atomic int io_threads_final_shutdown;
 static size_t cluster_io_pending_responses;
 static int io_threads_initialized = 0;
 _Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
@@ -111,6 +112,26 @@ void drainIOThreadsQueue(void) {
     while (getPendingIOThreadsJobs()) {
         atomic_thread_fence(memory_order_acquire);
     }
+}
+
+/* Drain outstanding I/O work during shutdown while worker threads are still
+ * alive, then park them so no new work is offloaded before they are killed.
+ * Unlike drainIOThreadsQueue(), this also consumes worker responses on the main
+ * thread to avoid deadlocking if an I/O response queue fills up. */
+void prepareIOThreadsForShutdown(void) {
+    if (server.io_threads_num == 1) return;
+    serverAssert(inMainThread());
+
+    commitIOJobs();
+    while (getPendingIOThreadsJobs() || getPendingIOResponsesCount()) {
+        processIOThreadsResponses();
+        atomic_thread_fence(memory_order_acquire);
+    }
+
+    for (int i = 1; i < server.active_io_threads_num; i++) {
+        pthread_mutex_lock(&io_threads_mutex[i]);
+    }
+    server.active_io_threads_num = 1;
 }
 
 /* Returns if there is an IO operation in progress for the given client. */
@@ -304,8 +325,12 @@ static void flushPendingIOResponses(int blocking) {
 void cleanupThreadResources(void *dummy) {
     UNUSED(dummy);
 
-    /* Blocking flush: ensure all pending jobs are sent before thread dies */
-    flushPendingIOResponses(1);
+    /* Blocking flush: ensure all pending jobs are sent before thread dies.
+     * During final shutdown there is no main-thread consumer left for those
+     * responses, so only free thread-local resources. */
+    if (!atomic_load_explicit(&io_threads_final_shutdown, memory_order_acquire)) {
+        flushPendingIOResponses(1);
+    }
 
     /* Free the shared query buffer */
     freeSharedQueryBuf();
@@ -362,6 +387,8 @@ static void *IOThreadMain(void *myid) {
     int processed = 0;
     monotime work_start_time = 0;
     while (1) {
+        if (atomic_load_explicit(&io_threads_final_shutdown, memory_order_acquire)) break;
+
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
         size_t batch_count = 0;
@@ -426,7 +453,7 @@ static void *IOThreadMain(void *myid) {
             }
         }
     }
-    pthread_cleanup_pop(0);
+    pthread_cleanup_pop(1);
     return NULL;
 }
 
@@ -480,6 +507,7 @@ static void shutdownIOThread(int id) {
 }
 
 void killIOThreads(void) {
+    atomic_store_explicit(&io_threads_final_shutdown, 1, memory_order_release);
     for (int j = 1; j < server.io_threads_num; j++) { /* We don't kill thread 0, which is the main thread. */
         shutdownIOThread(j);
     }

@@ -21,15 +21,20 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 # some automatic defaults are added to it. To specify optimization flags
 # explicitly without any defaults added, pass the OPT variable instead.
 OPTIMIZATION?=-O3
+
+# LTO is enabled automatically at -O3. Using a separate variable avoids the
+# issue where passing OPTIMIZATION=-O3 on the command line causes GNU Make to
+# ignore += assignments to OPTIMIZATION (command-line variables take precedence).
+LTO_FLAGS=
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
-		OPTIMIZATION+=-flto
+		LTO_FLAGS=-flto
 	else
-		OPTIMIZATION+=-flto=auto -ffat-lto-objects
+		LTO_FLAGS=-flto=auto -ffat-lto-objects
 	endif
 endif
 ifneq ($(OPTIMIZATION),-O0)
-	OPTIMIZATION+=-fno-omit-frame-pointer
+	FRAME_POINTER=-fno-omit-frame-pointer
 endif
 DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4
 NODEPS:=clean distclean
@@ -47,7 +52,7 @@ ifneq (,$(findstring FreeBSD,$(uname_S)))
 endif
 endif
 WARN=-Wall -W -Wno-missing-field-initializers -Werror=deprecated-declarations -Wstrict-prototypes -Werror=undef
-OPT=$(OPTIMIZATION)
+OPT=$(OPTIMIZATION) $(LTO_FLAGS) $(FRAME_POINTER)
 
 # Detect if the compiler supports C11 _Atomic.
 # NUMBER_SIGN_CHAR is a workaround to support both GNU Make 4.3 and older versions.

@@ -1,5 +1,5 @@
-#ifndef __CLUSTER_H
-#define __CLUSTER_H
+#ifndef CLUSTER_H
+#define CLUSTER_H
 
 #include <stdbool.h>
 /*-----------------------------------------------------------------------------
@@ -160,4 +160,4 @@ int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
 
-#endif /* __CLUSTER_H */
+#endif /* CLUSTER_H */

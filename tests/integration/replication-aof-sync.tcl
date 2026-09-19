@@ -169,7 +169,7 @@ tags {"repl external:skip"} {
     # cannot be reused as an AOF base, so the replica falls back to BGREWRITEAOF.
     # Inverse of the plaintext RDB-reuse tests above.
     test "Disk-based full sync with rdbcompression lz4 falls back to BGREWRITEAOF for AOF base" {
-        start_server {overrides {repl-diskless-sync no rdbcompression lz4 save ""}} {
+        start_server {overrides {repl-diskless-sync no rdbcompression lz4 repl-compression lz4 save ""}} {
             set primary [srv 0 client]
             set primary_host [srv 0 host]
             set primary_port [srv 0 port]

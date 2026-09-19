@@ -2161,7 +2161,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     node->replica_priority = 0;
-    node->failover_auth_response = CLUSTER_FAILOVER_AUTH_RESPONSE_NONE;
+    node->voter_election_state = VOTER_CAN_RESPOND;
     return node;
 }
 
@@ -2752,6 +2752,9 @@ int clusterBlacklistExists(char *nodeid, size_t len) {
 void markNodeAsFailing(clusterNode *node) {
     /* Mark the node as FAIL. */
     node->flags |= CLUSTER_NODE_FAIL;
+    if (node->voter_election_state == VOTER_CAN_RESPOND) {
+        node->voter_election_state = VOTER_FAILED_WITHOUT_RESPONSE;
+    }
     node->fail_time = mstime();
     /* Remove the PFAIL flag. */
     node->flags &= ~CLUSTER_NODE_PFAIL;
@@ -2830,6 +2833,9 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   humanNodename(node), nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) {
+            node->voter_election_state = VOTER_CAN_RESPOND;
+        }
         if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -2845,6 +2851,9 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
             node->name, humanNodename(node));
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) {
+            node->voter_election_state = VOTER_CAN_RESPOND;
+        }
         if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -5926,24 +5935,6 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
               (unsigned long long)server.cluster->currentEpoch);
 }
 
-/* While our FAILOVER_AUTH_REQUEST is outstanding, every voting primary is in
- * exactly one of these states. A voter that responded keeps its state if it is
- * later marked FAIL, so no voter is counted twice. */
-typedef enum {
-    VOTER_CAN_RESPOND,            /* Has not responded and may still ACK or NACK. */
-    VOTER_ACKED,                  /* Counted in failover_auth_count. */
-    VOTER_NACKED,                 /* Counted in failover_auth_nack_count. */
-    VOTER_FAILED_WITHOUT_RESPONSE /* Counted in failed_voters_without_response, will never respond. */
-} voterElectionState;
-
-static voterElectionState clusterVoterElectionState(clusterNode *voter) {
-    switch (voter->failover_auth_response) {
-    case CLUSTER_FAILOVER_AUTH_RESPONSE_ACK: return VOTER_ACKED;
-    case CLUSTER_FAILOVER_AUTH_RESPONSE_NACK: return VOTER_NACKED;
-    default: return nodeFailed(voter) ? VOTER_FAILED_WITHOUT_RESPONSE : VOTER_CAN_RESPOND;
-    }
-}
-
 /* Forget the responses of the previous election. Called when we send a new
  * FAILOVER_AUTH_REQUEST, so every reply we count from then on belongs to the
  * election we are now running. */
@@ -5953,7 +5944,7 @@ static void clusterResetFailoverAuthResponses(void) {
 
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        node->failover_auth_response = CLUSTER_FAILOVER_AUTH_RESPONSE_NONE;
+        node->voter_election_state = VOTER_CAN_RESPOND;
     }
     dictReleaseIterator(di);
 }
@@ -5967,7 +5958,10 @@ void clusterProcessFailoverAuthAck(clusterNode *sender) {
      * carried into the next epoch as a vote that was never cast there. */
     if (!server.cluster->failover_auth_time || !server.cluster->failover_auth_sent) return;
 
-    sender->failover_auth_response = CLUSTER_FAILOVER_AUTH_RESPONSE_ACK;
+    /* Exclude ineligible voters (FAIL or already voted) */
+    if (sender->voter_election_state != VOTER_CAN_RESPOND) return;
+
+    sender->voter_election_state = VOTER_ACKED;
     server.cluster->failover_auth_count++;
     serverLog(LL_NOTICE, "Failover auth ACK from %.40s (%s) for epoch %llu (ACKs %d, quorum %d)", sender->name,
               humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
@@ -5979,14 +5973,11 @@ void clusterProcessFailoverAuthAck(clusterNode *sender) {
 
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
-    /* Ignore NACKs from FAIL nodes to avoid double-counting: FAIL nodes are
-     * already accounted for in failed_voters_without_response, and they will never
-     * ACK, so including their NACK would undercount achievable votes. */
-    if (nodeFailed(sender)) {
-        return;
-    }
 
-    sender->failover_auth_response = CLUSTER_FAILOVER_AUTH_RESPONSE_NACK;
+    /* Exclude ineligible voters */
+    if (sender->voter_election_state != VOTER_CAN_RESPOND) return;
+
+    sender->voter_election_state = VOTER_NACKED;
     server.cluster->failover_auth_nack_count++;
 
     /* The ACKs we can still end up with are the ACKED and CAN_RESPOND voters,
@@ -7360,7 +7351,7 @@ void clusterUpdateState(void) {
 
             if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
-                if (clusterVoterElectionState(node) == VOTER_FAILED_WITHOUT_RESPONSE) server.cluster->failed_voters_without_response++;
+                if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) server.cluster->failed_voters_without_response++;
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
             }
         }

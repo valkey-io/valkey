@@ -2271,13 +2271,15 @@ struct valkeyServer {
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */
     /* Replication (replica) */
-    char *primary_user;     /* AUTH with this user and primary_auth with primary */
-    sds primary_auth;       /* AUTH with this password with primary */
-    char *primary_host;     /* Hostname of primary */
-    int primary_port;       /* Port of primary */
-    int repl_timeout;       /* Timeout after N seconds of primary idle */
-    client *primary;        /* Client that is primary for this replica */
-    uint64_t rdb_client_id; /* Rdb client id as it defined at primary side */
+    char *primary_user;              /* AUTH with this user and primary_auth with primary */
+    sds primary_auth;                /* AUTH with this password with primary */
+    char *primary_host;              /* Hostname of primary */
+    int primary_port;                /* Port of primary */
+    int repl_timeout;                /* Timeout after N seconds of primary idle */
+    int repl_sync_backoff_base_time; /* Base delay in seconds after a failed full sync. */
+    int repl_sync_backoff_max_time;  /* Maximum delay in seconds after a failed full sync. */
+    client *primary;                 /* Client that is primary for this replica */
+    uint64_t rdb_client_id;          /* Rdb client id as it defined at primary side */
     struct {
         connection *conn;
         char replid[CONFIG_RUN_ID_SIZE + 1];
@@ -2325,6 +2327,9 @@ struct valkeyServer {
     int repl_replica_lazy_flush;                   /* Lazy FLUSHALL before loading DB? */
     monotime repl_full_sync_start_time;            /* Monotonic time when full sync started. */
     long long repl_full_sync_complete_duration_ms; /* Duration of the last successful full sync in ms. */
+    int repl_full_sync_in_progress;                /* A full sync has started but did not finish yet. */
+    unsigned int repl_full_sync_failures;          /* Consecutive failed full syncs. */
+    monotime repl_sync_retry_at;                   /* Monotonic deadline for retrying a failed full sync. */
     /* Import Mode */
     int import_mode; /* If true, server is in import mode and forbid expiration and eviction. */
     /* Synchronous replication. */
@@ -3406,6 +3411,7 @@ void freeReplicaReferencedReplBuffer(client *replica);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
 void updateReplicasWaitingBgsave(int bgsaveerr, int type);
 void replicationCron(void);
+int replicationUpdateSyncBackoff(const char **err);
 void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);
 void replicationCachePrimary(client *c);

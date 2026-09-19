@@ -899,6 +899,7 @@ test {diskless loading short read} {
             $master config set repl-diskless-sync yes
             $master config set rdbcompression no
             $replica config set repl-diskless-load swapdb
+            $replica config set repl-sync-backoff-max-time 0
             $master config set hz 500
             $replica config set hz 500
             # Try to fill the master with all types of data types / encodings

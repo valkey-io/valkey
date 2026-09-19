@@ -328,22 +328,26 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
 
             if (num > keys_per_loop) num = keys_per_loop;
 
-            /* Here we access the low level representation of the hash table
-             * for speed concerns: this makes this code coupled with dict.c,
-             * but it hardly changed in ten years.
-             *
-             * Note that certain places of the hash table may be empty,
+            /* Scale the sampling target by entries-per-bucket so the
+             * cursor advances through a comparable number of bucket
+             * positions as the old dict (single entry per bucket).
+             * Without this, the bucketed hashtable (7 entries/bucket
+             * on 64-bit) fills the sample in ~num/7 buckets, causing
+             * the cursor to crawl ~7x slower through the keyspace. */
+            unsigned long num_keys = num * hashtableEntriesPerBucket();
+
+            /* Note that certain places of the hash table may be empty,
              * so we want also a stop condition about the number of
              * buckets that we scanned. However scanning for free buckets
              * is very fast: we are in the cache line scanning a sequential
              * array of NULL pointers, so we can scan a lot more buckets
              * than keys in the same time. */
-            long max_buckets = num * 10;
+            long max_buckets = num_keys * 10;
             long checked_buckets = 0;
 
             int origin_ttl_samples = data.ttl_samples;
 
-            while (data.sampled < num && checked_buckets < max_buckets) {
+            while (data.sampled < num_keys && checked_buckets < max_buckets) {
                 unsigned long cursor = db->expiry[jobType].cursor;
                 cursor = kvstoreScan(kvs, cursor, -1, -1, scan_cb,
                                      expireShouldSkipTableForSamplingCb, &data);

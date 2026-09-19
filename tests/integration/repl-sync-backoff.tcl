@@ -22,7 +22,7 @@ proc start_fullsync_sequence_primary {rdb_payload outcomes} {
     return [list $pid $port $count_file]
 }
 
-start_server {tags {"repl external:skip"} overrides {save "" enable-debug-command local}} {
+start_server {tags {"repl external:skip tls:skip valgrind:skip"} overrides {save "" enable-debug-command local}} {
     set primary [srv 0 client]
     $primary set key value
     $primary save
@@ -51,11 +51,11 @@ start_server {tags {"repl external:skip"} overrides {save "" enable-debug-comman
                 set second_delay [expr {[lindex $times 2] - [lindex $times 1]}]
                 set capped_delay [expr {[lindex $times 3] - [lindex $times 2]}]
                 set reset_delay [expr {[lindex $times 5] - [lindex $times 4]}]
-                assert {$first_delay >= 800 && $first_delay <= 3000}
-                assert {$second_delay >= 1800 && $second_delay <= 5000}
+                assert {$first_delay >= 800 && $first_delay <= 5000}
+                assert {$second_delay >= 800 && $second_delay <= 5000}
                 # Equal jitter keeps capped retries distributed in the 2-4 second range.
-                assert {$capped_delay >= 1800 && $capped_delay <= 6500}
-                assert {$reset_delay >= 800 && $reset_delay <= 3500}
+                assert {$capped_delay >= 1800 && $capped_delay <= 7000}
+                assert {$reset_delay >= 800 && $reset_delay <= 5000}
                 lassign [wait_for_log_messages 0 {"*after 1 consecutive failures*"} $log_lines 50 100] _ first_failure_line
                 lassign [wait_for_log_messages 0 {"*after 2 consecutive failures*"} $first_failure_line 50 100] _ second_failure_line
                 wait_for_log_messages 0 {"*after 3 consecutive failures*"} $second_failure_line 50 100

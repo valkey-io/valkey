@@ -2677,16 +2677,10 @@ static void scheduleReplFullSyncRetry(void) {
     }
     if (delay > server.repl_sync_backoff_max_time) delay = server.repl_sync_backoff_max_time;
 
-    if (delay == server.repl_sync_backoff_max_time) {
-        /* Keep replicas desynchronized even after exponential growth reaches
-         * its cap. */
-        jitter = (delay + 1) / 2;
-        delay = jitter + random() % (delay - jitter + 1);
-    } else {
-        jitter = random() % ((unsigned long)server.repl_sync_backoff_base_time + 1);
-        if (jitter > server.repl_sync_backoff_max_time - delay) jitter = server.repl_sync_backoff_max_time - delay;
-        delay += jitter;
-    }
+    /* Equal jitter at every step keeps replicas that failed together from
+     * retrying together, including before exponential growth reaches its cap. */
+    jitter = (delay + 1) / 2;
+    delay = jitter + random() % (delay - jitter + 1);
     server.repl_sync_retry_at = getMonotonicUs() + delay * 1000000ULL;
     serverLog(LL_NOTICE, "Delaying next full sync attempt for %lld seconds after %u consecutive failures", delay,
               server.repl_full_sync_failures);
@@ -4221,6 +4215,7 @@ int dualChannelReplMainConnRecvPsyncReply(connection *conn, sds *err) {
             serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
+        if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_STATE_NONE) resetReplFullSyncBackoff();
         replResetStreamReader();
         dualChannelSyncHandlePsync();
         return C_OK;
@@ -4761,6 +4756,7 @@ void syncWithPrimary(connection *conn) {
             serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
+        resetReplFullSyncBackoff();
         replResetStreamReader();
         return;
     }

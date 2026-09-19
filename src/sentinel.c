@@ -2107,9 +2107,19 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* rewriteConfigMarkAsProcessed is handled after the loop */
 
         /* sentinel known-replica */
+        /* Track the addresses we have already emitted, so we never write two
+         * identical "sentinel known-replica" lines for the same address. A
+         * primary can legitimately know several replicas whose addresses
+         * collapse onto the same host:port (e.g. multiple DNS names that
+         * resolve to the same instance, or unresolved hostnames whose ip is
+         * left as an empty string). Emitting the address twice would produce
+         * a config file that is rejected on the next startup with
+         * "Duplicate hostname and port for replica." */
+        dict *written_replicas = dictCreate(&stringSetDictType);
         di2 = dictGetIterator(primary->replicas);
         while ((de = dictNext(di2)) != NULL) {
             sentinelAddr *replica_addr;
+            sds replica_key;
 
             ri = dictGetVal(de);
             replica_addr = ri->addr;
@@ -2120,6 +2130,15 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
              * already successfully promoted. So as the address of this replica
              * we use the old primary address instead. */
             if (sentinelAddrOrHostnameEqual(replica_addr, primary_addr)) replica_addr = primary->addr;
+
+            /* Skip addresses already written for this primary. */
+            replica_key = announceSentinelAddrAndPort(replica_addr);
+            if (dictFind(written_replicas, replica_key) != NULL) {
+                sdsfree(replica_key);
+                continue;
+            }
+            dictAdd(written_replicas, replica_key, NULL);
+
             line = sdscatprintf(sdsempty(), "sentinel known-replica %s %s %d", primary->name,
                                 announceSentinelAddr(replica_addr), replica_addr->port);
             /* try to replace any known-replica option first if found */
@@ -2131,6 +2150,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
         dictReleaseIterator(di2);
+        dictRelease(written_replicas);
 
         /* sentinel known-sentinel */
         di2 = dictGetIterator(primary->sentinels);

@@ -960,6 +960,21 @@ start_server {tags {"hash"}} {
         assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
+
+    test {HINCRBYFLOAT rejects a NaN increment} {
+        r del hfoo
+        assert_error "*value is not a valid float*" {r hincrbyfloat hfoo field nan}
+    }
+
+    test {HINCRBYFLOAT with an infinite field value} {
+        r del hfoo
+        r hset hfoo field inf
+        assert_error "*would produce Infinity*" {r hincrbyfloat hfoo field 1}
+        assert_equal inf [r hget hfoo field]
+        # An infinite increment is dropped before the result is ever computed.
+        assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field -inf}
+        assert_equal inf [r hget hfoo field]
+    } {} {valgrind:skip}
 }
 
 start_server {config "minimal.conf" tags {"hash" "external:skip"} overrides {io-threads 4 io-threads-always-active yes hash-max-listpack-entries 0}} {

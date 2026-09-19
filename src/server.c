@@ -6540,6 +6540,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = getListensInfoString(info);
     }
 
+#ifdef USE_RDMA
+    if (all_sections || (dictFind(section_dict, "rdma") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = genRdmaInfoString(info);
+    }
+#endif
+
     /* TLS */
     if (all_sections || (dictFind(section_dict, "tls") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
@@ -7635,8 +7642,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;

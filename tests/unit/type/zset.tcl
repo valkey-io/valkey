@@ -127,6 +127,80 @@ start_server {tags {"zset"}} {
             assert_equal {y x z} [r zrange ztmp 0 -1]
         }
 
+        if {$encoding == "listpack"} {
+            test "ZADD in-place update handles listpack head, tail, and single element edge cases - $encoding" {
+                r del ztmp
+                r zadd ztmp 1 a 2 b 3 c
+                assert_encoding listpack ztmp
+
+                r zadd ztmp 0.5 a
+                r zadd ztmp 4 c
+                assert_encoding listpack ztmp
+                assert_equal {a 0.5 b 2 c 4} [r zrange ztmp 0 -1 withscores]
+
+                r del ztmp
+                r zadd ztmp 1 a
+                assert_encoding listpack ztmp
+                r zadd ztmp 2 a
+                assert_encoding listpack ztmp
+                assert_equal {a 2} [r zrange ztmp 0 -1 withscores]
+            }
+
+            test "ZADD in-place update handles listpack tie ordering - $encoding" {
+                r del ztmp
+                r zadd ztmp 1 a 2 b 2 c 3 d
+                assert_encoding listpack ztmp
+                r zadd ztmp 2 a
+                assert_equal {a 2 b 2 c 2 d 3} [r zrange ztmp 0 -1 withscores]
+
+                r del ztmp
+                r zadd ztmp 1 c 2 a 2 b 3 d
+                assert_encoding listpack ztmp
+                r zadd ztmp 2 c
+                assert_equal {a 2 b 2 c 2 d 3} [r zrange ztmp 0 -1 withscores]
+
+                r del ztmp
+                r zadd ztmp 1 a 1 b 2 c 3 d
+                assert_encoding listpack ztmp
+                r zadd ztmp 1 c
+                assert_equal {a 1 b 1 c 1 d 3} [r zrange ztmp 0 -1 withscores]
+
+                r del ztmp
+                r zadd ztmp 1 b 1 c 2 a 3 d
+                assert_encoding listpack ztmp
+                r zadd ztmp 1 a
+                assert_equal {a 1 b 1 c 1 d 3} [r zrange ztmp 0 -1 withscores]
+            }
+
+            test "ZADD in-place update handles listpack score encoding transitions - $encoding" {
+                r del ztmp
+                r zadd ztmp 42 a
+                assert_encoding listpack ztmp
+
+                r zadd ztmp 42.5 a
+                assert_encoding listpack ztmp
+                assert_equal 42.5 [r zscore ztmp a]
+
+                r zadd ztmp 42 a
+                assert_encoding listpack ztmp
+                assert_equal {a 42} [r zrange ztmp 0 -1 withscores]
+            }
+
+            test "ZADD in-place update reorders listpack on adjacent boundary violation - $encoding" {
+                r del ztmp
+                r zadd ztmp 1 a 2 b 3 c
+                assert_encoding listpack ztmp
+                r zadd ztmp 2.5 a
+                assert_equal {b 2 a 2.5 c 3} [r zrange ztmp 0 -1 withscores]
+
+                r del ztmp
+                r zadd ztmp 1 a 2 b 3 c
+                assert_encoding listpack ztmp
+                r zadd ztmp 1.5 c
+                assert_equal {a 1 c 1.5 b 2} [r zrange ztmp 0 -1 withscores]
+            }
+        }
+
         test "ZSET element can't be set to NaN with ZADD - $encoding" {
             assert_error "*not*float*" {r zadd myzset nan abc}
         }

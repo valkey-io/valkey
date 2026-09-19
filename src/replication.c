@@ -2649,6 +2649,71 @@ static void captureReplFullSyncCompleteDuration(void) {
     }
 }
 
+static void resetReplFullSyncBackoff(void) {
+    server.repl_full_sync_in_progress = 0;
+    server.repl_full_sync_failures = 0;
+    server.repl_sync_retry_at = 0;
+}
+
+/* Schedule the next attempt only when an already-started full sync failed.
+ * This keeps regular connection failures and successful partial syncs on their
+ * existing fast reconnect path. */
+static void scheduleReplFullSyncRetry(void) {
+    long long delay, jitter;
+
+    if (!server.repl_full_sync_in_progress) return;
+    server.repl_full_sync_in_progress = 0;
+
+    if (server.repl_sync_backoff_max_time == 0) return;
+
+    if (server.repl_full_sync_failures != UINT_MAX) server.repl_full_sync_failures++;
+    delay = server.repl_sync_backoff_base_time;
+    for (unsigned int i = 1; i < server.repl_full_sync_failures; i++) {
+        if (delay > server.repl_sync_backoff_max_time / 2) {
+            delay = server.repl_sync_backoff_max_time;
+            break;
+        }
+        delay *= 2;
+    }
+    if (delay > server.repl_sync_backoff_max_time) delay = server.repl_sync_backoff_max_time;
+
+    if (delay == server.repl_sync_backoff_max_time) {
+        /* Keep replicas desynchronized even after exponential growth reaches
+         * its cap. */
+        jitter = (delay + 1) / 2;
+        delay = jitter + random() % (delay - jitter + 1);
+    } else {
+        jitter = random() % ((unsigned long)server.repl_sync_backoff_base_time + 1);
+        if (jitter > server.repl_sync_backoff_max_time - delay) jitter = server.repl_sync_backoff_max_time - delay;
+        delay += jitter;
+    }
+    server.repl_sync_retry_at = getMonotonicUs() + delay * 1000000ULL;
+    serverLog(LL_NOTICE, "Delaying next full sync attempt for %lld seconds after %u consecutive failures", delay,
+              server.repl_full_sync_failures);
+}
+
+static int replSyncRetryDue(void) {
+    return server.repl_sync_backoff_max_time == 0 || server.repl_sync_retry_at == 0 ||
+           getMonotonicUs() >= server.repl_sync_retry_at;
+}
+
+/* Apply a lowered maximum immediately, rather than retaining a retry that was
+ * scheduled under an older, larger cap. */
+int replicationUpdateSyncBackoff(const char **err) {
+    monotime max_retry_at;
+
+    UNUSED(err);
+    if (server.repl_sync_backoff_max_time == 0) {
+        server.repl_sync_retry_at = 0;
+        return 1;
+    }
+
+    if (server.repl_sync_retry_at == 0) return 1;
+    max_retry_at = getMonotonicUs() + server.repl_sync_backoff_max_time * 1000000ULL;
+    if (server.repl_sync_retry_at > max_retry_at) server.repl_sync_retry_at = max_retry_at;
+    return 1;
+}
+
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
@@ -2665,6 +2730,7 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         /* Finalize full sync duration here for single channel replication.
          * Exclude backlog draining/streaming time for simplicity. */
         captureReplFullSyncCompleteDuration();
+        resetReplFullSyncBackoff();
     }
 
     /* Fire the primary link modules event. */
@@ -3628,6 +3694,7 @@ error:
         connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;
     }
+    scheduleReplFullSyncRetry();
     replicationAbortDualChannelSyncTransfer();
     server.repl_state = REPL_STATE_CONNECT;
 }
@@ -3819,6 +3886,7 @@ void dualChannelSyncSuccess(void) {
         dualChannelServerLog(LL_WARNING, "Failed to stream local replication buffer into memory");
         /* Verify sync is still in progress */
         if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
+            scheduleReplFullSyncRetry();
             replicationAbortDualChannelSyncTransfer();
             freeClientAsync(server.primary);
         }
@@ -3831,6 +3899,7 @@ void dualChannelSyncSuccess(void) {
     replicationSendAck(); /* Send ACK to notify primary that replica is synced */
     server.rdb_client_id = -1;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
+    resetReplFullSyncBackoff();
 }
 
 /* Replication: Replica side.
@@ -4446,6 +4515,7 @@ int syncWithPrimaryHandleSendPsyncState(connection *conn) {
 }
 
 void syncWithPrimaryHandleError(connection **conn) {
+    scheduleReplFullSyncRetry();
     connClose(*conn);
     *conn = NULL;
     server.repl_transfer_s = NULL;
@@ -4697,6 +4767,7 @@ void syncWithPrimary(connection *conn) {
 
     /* Mark the beginning of the full sync */
     elapsedStart(&server.repl_full_sync_start_time);
+    server.repl_full_sync_in_progress = 1;
 
     /* Fall back to SYNC if needed. Otherwise, psync_result == PSYNC_FULLRESYNC
      * and the server.primary_replid and primary_initial_offset are
@@ -4875,6 +4946,7 @@ int cancelReplicationHandshake(int reconnect) {
         server.replica_bio_abort_save = 0;
     }
     resetBioRDBSaveState();
+    if (reconnect) scheduleReplFullSyncRetry();
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         replicationAbortDualChannelSyncTransfer();
     }
@@ -4890,10 +4962,12 @@ int cancelReplicationHandshake(int reconnect) {
 
     if (!reconnect) return 1;
 
-    /* try to re-connect without waiting for replicationCron, this is needed
-     * for the "diskless loading short read" test. */
-    serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d after failure", server.primary_host, server.primary_port);
-    connectWithPrimary();
+    /* Try to re-connect without waiting for replicationCron, unless a failed
+     * full sync scheduled a backoff. */
+    if (replSyncRetryDue()) {
+        serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d after failure", server.primary_host, server.primary_port);
+        connectWithPrimary();
+    }
 
     return 1;
 }
@@ -4902,6 +4976,7 @@ int cancelReplicationHandshake(int reconnect) {
 void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked) {
     int was_primary = server.primary_host == NULL;
 
+    resetReplFullSyncBackoff();
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) {
@@ -4963,6 +5038,8 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
 void replicationUnsetPrimary(void) {
     if (server.primary_host == NULL) return; /* Nothing to do. */
 
+    resetReplFullSyncBackoff();
+
     /* Fire the primary link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
@@ -5023,6 +5100,8 @@ void replicationUnsetPrimary(void) {
 /* This function is called when the replica lose the connection with the
  * primary into an unexpected way. */
 void replicationHandlePrimaryDisconnection(void) {
+    scheduleReplFullSyncRetry();
+
     /* Fire the primary link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
@@ -5058,7 +5137,7 @@ void replicationHandlePrimaryDisconnection(void) {
 
     /* Try to re-connect immediately rather than wait for replicationCron
      * waiting 1 second may risk backlog being recycled. */
-    if (server.repl_state == REPL_STATE_CONNECT && server.primary_host) {
+    if (server.repl_state == REPL_STATE_CONNECT && server.primary_host && replSyncRetryDue()) {
         serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
         connectWithPrimary();
     }
@@ -5772,7 +5851,7 @@ void replicationCron(void) {
     }
 
     /* Check if we should connect to a PRIMARY */
-    if (server.repl_state == REPL_STATE_CONNECT) {
+    if (server.repl_state == REPL_STATE_CONNECT && replSyncRetryDue()) {
         serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
         connectWithPrimary();
     }

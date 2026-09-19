@@ -2607,9 +2607,19 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
         *usemark = true;
         *repl_transfer_size = 0;
     } else {
-        /* Size-based transfer: parse the size */
+        /* Size-based transfer: parse the size. The whole field must be a
+         * valid non-negative integer, so garbage or overflowing values sent
+         * by the primary are rejected instead of being trusted. */
         *usemark = false;
-        *repl_transfer_size = strtol(buf + 1, NULL, 10);
+        long long size;
+        if (!string2ll(buf + 1, strlen(buf + 1), &size) || size < 0) {
+            serverLog(LL_WARNING,
+                      "Bad protocol from PRIMARY, invalid RDB transfer size "
+                      "(we received '%s')",
+                      buf);
+            return C_ERR;
+        }
+        *repl_transfer_size = size;
     }
 
     return C_OK;

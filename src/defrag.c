@@ -286,9 +286,9 @@ static void activeDefragDictCallback(void *privdata, void *entry_ref) {
     }
 }
 
-/* Defrag a dict with sds key and optional value (either ptr, sds or robj string) */
-static void activeDefragSdsDict(dict *d, int val_type) {
-    unsigned long cursor = 0;
+/* Perform a single scan step on a dict with sds key and optional value (either ptr, sds or robj
+ * string), returning the cursor for the next step (0 when the dict has been fully scanned) */
+static unsigned long activeDefragSdsDictStep(dict *d, unsigned long cursor, int val_type) {
     dictDefragFunctions defragfns = {
         .defragKey = (dictDefragAllocFunction *)activeDefragSds,
         .defragVal = (val_type == DEFRAG_SDS_DICT_VAL_IS_SDS       ? (dictDefragAllocFunction *)activeDefragSds
@@ -296,10 +296,8 @@ static void activeDefragSdsDict(dict *d, int val_type) {
                       : val_type == DEFRAG_SDS_DICT_VAL_VOID_PTR   ? (dictDefragAllocFunction *)activeDefragAlloc
                       : val_type == DEFRAG_SDS_DICT_VAL_LUA_SCRIPT ? (dictDefragAllocFunction *)evalActiveDefragScript
                                                                    : NULL)};
-    do {
-        cursor = hashtableScanDefrag(d, cursor, activeDefragDictCallback,
-                                     &defragfns, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-    } while (cursor != 0);
+    return hashtableScanDefrag(d, cursor, activeDefragDictCallback,
+                               &defragfns, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 static void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
@@ -966,11 +964,36 @@ static doneStatus defragStagePubsubKvstore(monotime endtime, void *target, void 
 static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdata) {
     UNUSED(target);
     UNUSED(privdata);
-    if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
+    static int index;            // STATIC - this persists
+    static unsigned long cursor; // STATIC - this persists
+    if (endtime == 0) {
+        // Starting the stage, set up the state information for this stage
+        index = 0;
+        cursor = 0;
+        return DEFRAG_NOT_DONE; // required initialization
+    }
     /* In case we are in the process of eval some script we do not want to replace the script being run
      * so we just bail out without really defragging here. */
     if (scriptIsRunning()) return DEFRAG_DONE;
-    activeDefragSdsDict(evalCtxScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+
+    /* With script-cache-per-db enabled there's one dict per database, so scan them incrementally,
+     * yielding when we run out of time and resuming from the same dict and cursor next time. */
+    unsigned int iterations = 0;
+    long long prev_defragged = server.stat_active_defrag_hits;
+    unsigned long long prev_scanned = server.stat_active_defrag_scanned;
+    int count = evalScriptsDictCount();
+    while (index < count) {
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged ||
+            server.stat_active_defrag_scanned - prev_scanned > 64) {
+            if (getMonotonicUs() >= endtime) return DEFRAG_NOT_DONE;
+            iterations = 0;
+            prev_defragged = server.stat_active_defrag_hits;
+            prev_scanned = server.stat_active_defrag_scanned;
+        }
+
+        cursor = activeDefragSdsDictStep(evalScriptsDictAt(index), cursor, DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+        if (cursor == 0) index++; // This dict is done, continue with the next one
+    }
     return DEFRAG_DONE;
 }
 

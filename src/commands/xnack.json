@@ -1,0 +1,102 @@
+{
+    "XNACK": {
+        "summary": "Releases stream message(s) in a consumer group's Pending Entries List for immediate reclaim by another consumer.",
+        "complexity": "O(1) for each stream message NACK'd, regardless of the stream size",
+        "group": "stream",
+        "since": "9.2.0",
+        "arity": -7,
+        "function": "xnackCommand",
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "WRITE",
+            "STREAM"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "group",
+                "type": "string"
+            },
+            {
+                "name": "mode",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "silent",
+                        "type": "pure-token",
+                        "token": "SILENT"
+                    },
+                    {
+                        "name": "fail",
+                        "type": "pure-token",
+                        "token": "FAIL"
+                    },
+                    {
+                        "name": "fatal",
+                        "type": "pure-token",
+                        "token": "FATAL"
+                    }
+                ]
+            },
+            {
+                "name": "ids",
+                "type": "pure-token",
+                "token": "IDS"
+            },
+            {
+                "name": "numids",
+                "type": "integer"
+            },
+            {
+                "name": "id",
+                "type": "string",
+                "multiple": true
+            },
+            {
+                "name": "retrycount",
+                "type": "integer",
+                "token": "RETRYCOUNT",
+                "optional": true
+            },
+            {
+                "name": "force",
+                "type": "pure-token",
+                "token": "FORCE",
+                "optional": true
+            }
+        ],
+        "reply_schema": {
+            "description": "The number of messages that were successfully released.",
+            "type": "integer",
+            "minimum": 0
+        }
+    }
+}

@@ -57,8 +57,10 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
             # ping total calls are 2*issued commands per test due to PING_INLINE and PING_MBULK
             assert_match  {*calls=200,*} [cmdstat ping]
-            assert_match  {*calls=100,*} [cmdstat set]
+            # set total calls are 2*issued commands per test due to the PXAT test
+            assert_match  {*calls=200,*} [cmdstat set]
             assert_match  {*calls=100,*} [cmdstat get]
+            assert_match  {*calls=100,*} [cmdstat getpxt]
             assert_match  {*calls=100,*} [cmdstat incr]
             # lpush total calls are 2*issued commands per test due to the lrange tests
             assert_match  {*calls=200,*} [cmdstat lpush]
@@ -74,6 +76,8 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {*calls=100,*} [cmdstat mset]
             # assert one of the non benchmarked commands is not present
             assert_match {} [cmdstat rpoplpush]
+            # getpxt_simulated is not part of the default suite
+            assert_match {} [cmdstat pexpiretime]
         }
 
         test {benchmark: multi-thread set,get} {

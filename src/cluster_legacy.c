@@ -175,6 +175,14 @@ static void clusterMsgSetCRC(clusterMsg *hdr, uint32_t totlen) {
     hdr->crc = htonu64(computed);
 }
 
+/* Returns 1 if the transport underlying this cluster link already provides
+ * integrity checks of its own (TLS, whose AEAD tag is a cryptographically
+ * strong integrity check), in which case the cluster-level CRC64 is redundant
+ * and is neither computed by the sender nor verified by the receiver. */
+static int clusterLinkIsIntegrityChecked(clusterLink *link) {
+    return link && link->conn && connIsIntegrityChecked(link->conn);
+}
+
 /* Verify the CRC64 checksum of a received cluster message.
  *
  * Returns 1 if the CRC is valid or verification is not applicable, 0 if a
@@ -4199,9 +4207,13 @@ int clusterProcessPacket(clusterLink *link) {
     /* CRC64 integrity check for non-light cluster bus messages. Light messages
      * use a compact header without a CRC field and are skipped. A CRC mismatch
      * means the packet is corrupted (e.g. a network bit-flip) and must be
-     * treated as invalid so the packet is dropped to protect cluster state. */
+     * treated as invalid so the packet is dropped to protect cluster state.
+     *
+     * Skipped when the transport already carries its own integrity check (TLS):
+     * the AEAD tag is orders of magnitude stronger than CRC64, so checking here
+     * would only burn CPU without protecting anything. */
     clusterMsg *msg = toClusterMsg(link->rcvbuf);
-    if (totlen >= CLUSTERMSG_MIN_LEN && !clusterMsgVerifyCRC(msg, totlen)) {
+    if (!clusterLinkIsIntegrityChecked(link) && totlen >= CLUSTERMSG_MIN_LEN && !clusterMsgVerifyCRC(msg, totlen)) {
         if (server.mstime - crc_mismatch_last_log >= CLUSTER_CRC_MISMATCH_LOG_INTERVAL) {
             crc_mismatch_last_log = server.mstime;
             char ip[NET_IP_STR_LEN];
@@ -5252,8 +5264,12 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
         return;
     }
 
-    /* Finalize the cluster CRC before sending. */
-    clusterMsgFinalizeCRC(msgblock);
+    /* Finalize the cluster CRC before sending.
+     *
+     * Skipped when the transport already carries its own integrity check (TLS):
+     * the AEAD tag is orders of magnitude stronger than CRC64, so checking here
+     * would only burn CPU without protecting anything. */
+    if (!clusterLinkIsIntegrityChecked(link)) clusterMsgFinalizeCRC(msgblock);
 
     if (listLength(link->send_msg_queue) == 0 && getMessageFromSendBlock(msgblock)->totlen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);

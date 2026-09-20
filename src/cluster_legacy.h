@@ -355,7 +355,8 @@ typedef struct {
     uint16_t extensions;       /* Number of extensions sent along with this packet. */
     uint64_t crc;              /* CRC64 checksum of the entire message. A non-zero value
                                 * indicates the sender has computed the checksum; zero
-                                * means no checksum is present (backward compatible). */
+                                * means no checksum is present (backward compatible, or
+                                * the transport already checks integrity, e.g. TLS). */
     char notused1[22];         /* 22 bytes reserved for future usage. */
     uint16_t pport;            /* Secondary port number: if primary port is TCP port, this is
                                   TLS port, and if primary port is TLS port, this is TCP port.*/

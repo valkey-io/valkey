@@ -103,6 +103,56 @@ int scan_key(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     return VALKEYMODULE_OK;
 }
 
+typedef struct {
+    ValkeyModuleCtx *ctx;
+    size_t nreplies;
+} scan_key_raw_pd;
+
+void scan_key_raw_callback(ValkeyModuleKey *key, const char* field, size_t field_len, const char* value, size_t value_len, void *privdata) {
+    VALKEYMODULE_NOT_USED(key);
+    scan_key_raw_pd* pd = privdata;
+    ValkeyModule_ReplyWithArray(pd->ctx, 2);
+
+    // The callback delivers borrowed (const char*, size_t) byte ranges instead of
+    // a ValkeyModuleString, so we reply with the raw buffers directly.
+    ValkeyModule_ReplyWithStringBuffer(pd->ctx, field, field_len);
+    if(value){
+        ValkeyModule_ReplyWithStringBuffer(pd->ctx, value, value_len);
+    } else {
+        ValkeyModule_ReplyWithNull(pd->ctx);
+    }
+
+    pd->nreplies++;
+}
+
+int scan_key_raw(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+{
+    if (argc != 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+    scan_key_raw_pd pd = {
+        .ctx = ctx,
+        .nreplies = 0,
+    };
+
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    if (!key) {
+        ValkeyModule_ReplyWithError(ctx, "not found");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+
+    ValkeyModuleScanCursor* cursor = ValkeyModule_ScanCursorCreate();
+    while(ValkeyModule_ScanKeyRawBorrowed(key, cursor, scan_key_raw_callback, &pd));
+    ValkeyModule_ScanCursorDestroy(cursor);
+
+    ValkeyModule_ReplySetArrayLength(ctx, pd.nreplies);
+    ValkeyModule_CloseKey(key);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -113,6 +163,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "scan.scan_key", scan_key, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "scan.scan_key_raw", scan_key_raw, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

@@ -1306,6 +1306,34 @@ const_sds fbtreePrev(fbtreeIterator *iterator) {
     return NULL;
 }
 
+const_sds fbtreePeekNext(fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt || it->state == ITER_PAST_END) return NULL;
+
+    leafNode *leaf = it->current_leaf ? it->current_leaf : it->fbt->leftmost_leaf;
+    int index = it->current_leaf ? it->current_index : 0;
+    while (leaf) {
+        if (index < leaf->header.num_items) return leaf->values[index];
+        leaf = leaf->next;
+        index = 0;
+    }
+    return NULL;
+}
+
+const_sds fbtreePeekPrev(fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt || it->state == ITER_BEFORE_START) return NULL;
+
+    leafNode *leaf = it->current_leaf ? it->current_leaf : it->fbt->rightmost_leaf;
+    int index = it->current_leaf ? it->current_index : (leaf ? leaf->header.num_items : 0);
+    while (leaf) {
+        if (index > 0) return leaf->values[index - 1];
+        leaf = leaf->prev;
+        index = leaf ? leaf->header.num_items : 0;
+    }
+    return NULL;
+}
+
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
     iter *it = iteratorFromOpaque(iterator);
     if (!it->fbt || !it->fbt->root) {

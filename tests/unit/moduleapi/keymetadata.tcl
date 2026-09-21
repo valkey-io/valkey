@@ -74,3 +74,37 @@ start_server {tags {"modules"}} {
         assert_match {*syntax*} $e
     }
 }
+
+start_server {tags {"modules"} overrides {appendonly yes}} {
+    r module load $testmodule
+
+    test {RESTORE with a relative TTL and METADATA propagates a replayable command} {
+        r flushall
+        r set src hello
+        set payload [r dump src]
+        r del src
+        assert_equal [r restore src 100000 $payload METADATA keymetadata payload-abc] {OK}
+        assert {[r pttl src] > 0}
+
+        # ABSTTL must be inserted before METADATA, otherwise the propagated
+        # command has an odd trailing pair count and fails to reload.
+        r debug loadaof
+        assert_equal [r get src] {hello}
+        assert {[r pttl src] > 0}
+    }
+
+    test {RESTORE REPLACE rollback on rejected metadata is propagated} {
+        r flushall
+        r set src hello
+        set payload [r dump src]
+        r set src old-value
+        catch {r restore src 0 $payload REPLACE METADATA keymetadata REJECT} e
+        assert_match {*rejected*} $e
+        assert_equal [r exists src] {0}
+
+        # The rollback deleted a pre-existing value, so it has to propagate or
+        # a reload resurrects it.
+        r debug loadaof
+        assert_equal [r exists src] {0}
+    }
+}

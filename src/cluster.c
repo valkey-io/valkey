@@ -385,12 +385,28 @@ void restoreCommand(client *c) {
             robj *ttl_obj = createStringObjectFromLongLong(ttl);
             rewriteClientCommandArgument(c, 2, ttl_obj);
             decrRefCount(ttl_obj);
-            rewriteClientCommandArgument(c, c->argc, shared.absttl);
+            if (meta_start == -1) {
+                rewriteClientCommandArgument(c, c->argc, shared.absttl);
+            } else {
+                /* METADATA consumes every remaining argument, so ABSTTL has to
+                 * go before it: shift the METADATA block one slot to the right. */
+                int meta_token = meta_start - 1, old_argc = c->argc;
+                rewriteClientCommandArgument(c, old_argc, c->argv[old_argc - 1]);
+                for (int i = old_argc - 1; i > meta_token; i--) rewriteClientCommandArgument(c, i, c->argv[i - 1]);
+                rewriteClientCommandArgument(c, meta_token, shared.absttl);
+            }
         }
     }
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     if (meta_start != -1 && restoreDispatchKeyMetadata(c, key, meta_start) != C_OK) {
+        /* A REPLACE already removed any previous value, so the rollback has to be
+         * propagated as a deletion rather than silently dropped. */
         dbDelete(c->db, key);
+        robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
+        rewriteClientCommandVector(c, 2, aux, key);
+        signalModifiedKey(c, c->db, key);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+        server.dirty++;
         return;
     }
     signalModifiedKey(c, c->db, key);

@@ -4575,8 +4575,7 @@ uint64_t getCommandFlags(client *c) {
  * processing, including looking up the command, checking arity and calculating
  * cluster slot. This should be done before calling processCommand() and can be
  * done by I/O threads to offload the main-thread. */
-static void prepareCommandGeneric(client *c, robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot, aclVerdictTag *acl_tag, int *acl_stop) {
-    acl_tag->valid = 0;
+static void prepareCommandGeneric(client *c, robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot, int *acl_stop) {
     if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
     /* Make sure we don't do this twice. */
     debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
@@ -4593,9 +4592,10 @@ static void prepareCommandGeneric(client *c, robj **argv, int argc, int *read_fl
     }
     /* acl-offload: only IO threads tag (main would just duplicate its own
      * check). Stop tagging for the rest of the batch after a command that
-     * changes the identity/db the following commands run under. */
-    if (!inMainThread() && !*acl_stop) {
-        aclOffloadTagCommand(c, *cmd, argv, argc, *read_flags, acl_tag);
+     * changes the identity/db the following commands run under. With the
+     * feature off this costs one predictable branch per command. */
+    if (server.acl_offload && !inMainThread() && !*acl_stop) {
+        aclOffloadTagCommand(c, *cmd, argv, argc, read_flags);
         if (*cmd && aclOffloadShouldStopTagging(*cmd)) *acl_stop = 1;
     }
 }
@@ -4603,27 +4603,29 @@ static void prepareCommandGeneric(client *c, robj **argv, int argc, int *read_fl
 /* Prepare the client's current command. See prepareCommandGeneric(). */
 void prepareCommand(client *c) {
     int acl_stop = 0;
-    prepareCommandGeneric(c, c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot, &c->acl_tag, &acl_stop);
+    aclOffloadBeginBatch(c);
+    prepareCommandGeneric(c, c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot, &acl_stop);
 }
 
 /* Prepare all parsed commands in the client's queue. See prepareCommand(). */
 void prepareCommandQueue(client *c) {
     int acl_stop = 0;
+    aclOffloadBeginBatch(c);
     /* First AKA current command (c->argv). */
-    prepareCommandGeneric(c, c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot, &c->acl_tag, &acl_stop);
+    prepareCommandGeneric(c, c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot, &acl_stop);
 
     /* Commands in client's command queue. */
     for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
         parsedCommand *p = &c->cmd_queue.cmds[i];
-        prepareCommandGeneric(c, p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot, &p->acl_tag, &acl_stop);
+        prepareCommandGeneric(c, p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot, &acl_stop);
     }
 }
 
 /* Undo prepareCommand(), to allow prepareCommand() again after applying command filters. */
 void unprepareCommand(client *c) {
     c->parsed_cmd = NULL;
-    c->acl_tag.valid = 0; /* argv may have been rewritten by a filter. */
-    c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
+    c->read_flags &= ~(READ_FLAGS_ACL_ALLOWED | /* argv may have been rewritten by a filter. */
+                       READ_FLAGS_COMMAND_NOT_FOUND |
                        READ_FLAGS_BAD_ARITY |
                        READ_FLAGS_CROSSSLOT |
                        READ_FLAGS_NO_KEYS);

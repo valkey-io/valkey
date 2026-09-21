@@ -2601,14 +2601,15 @@ static int ACLUserHasAllChannels(user *u) {
 
 /* ============================== ACL offload ==============================
  *
- * IO threads evaluate a command's ACL permissions at parse time and attach a
- * verdict tag {retval, errpos, epoch}. The main thread consumes the verdict iff
- * the tag's epoch equals the global ACL epoch at execution time; otherwise it
+ * IO threads evaluate a command's ACL permissions at parse time and record an
+ * ALLOW verdict as a bit in the command's read flags, together with the ACL
+ * epoch the read job observed. The main thread consumes the verdict iff that
+ * epoch equals the global ACL epoch at execution time; otherwise it
  * re-evaluates on the stock path. Every mutation of ACL rules visible to a
- * client (SETUSER/LOAD/DELUSER, client rebinding while commands are pending)
- * bumps the epoch, so a verdict computed under old rules is never consumed
- * after those rules changed -- this is what closes the check-then-use window
- * (deny Y; write secret; Y's pre-parsed GET must not return the secret).
+ * client (SETUSER/SETROLE/LOAD/DELUSER, client rebinding while commands are
+ * pending) bumps the epoch, so a verdict computed under old rules is never
+ * consumed after those rules changed -- this is what closes the check-then-use
+ * window (deny Y; write secret; Y's pre-parsed GET must not return the secret).
  *
  * Memory safety: user->selectors is replaced by atomic pointer swap, never
  * mutated in place while linked (ACLCopyUser), and the old list -- or a whole
@@ -2628,6 +2629,21 @@ static inline int aclOffloadActive(void) {
 
 void aclOffloadBumpEpoch(void) {
     atomic_fetch_add_explicit(&acl_epoch, 1, memory_order_release);
+}
+
+/* True if rebinding this client to another user could leave a verdict
+ * evaluated under the old user waiting to be consumed: a parsed command
+ * (current or queued) already carries the ALLOW bit, or a read job is in
+ * flight and may be tagging right now. Main-thread only; the scan is bounded
+ * by the client's pending queue and runs only on the rare rebinding path. */
+int aclOffloadClientHasPendingVerdicts(client *c) {
+    if (!aclOffloadActive()) return 0;
+    if (c->io_read_state != CLIENT_IDLE) return 1;
+    if (c->read_flags & READ_FLAGS_ACL_ALLOWED) return 1;
+    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
+        if (c->cmd_queue.cmds[i].read_flags & READ_FLAGS_ACL_ALLOWED) return 1;
+    }
+    return 0;
 }
 
 /* A user object is reachable from IO threads once a client has been bound to
@@ -2693,37 +2709,48 @@ int aclOffloadShouldStopTagging(struct serverCommand *cmd) {
            p == multiCommand;
 }
 
+/* IO-thread side, once per read job: record the ACL epoch every verdict in
+ * this job will be evaluated under. Must happen-before the evaluations
+ * (acquire), so a mutation that publishes a new rule set and bumps the epoch
+ * either is seen here (and the verdicts use the new rules) or is not (and
+ * main rejects the verdicts on the epoch compare). A read job is never
+ * submitted while the client still has unconsumed parsed commands
+ * (parseInputBuffer asserts an empty queue), so one snapshot per client is
+ * enough. Only the low 32 bits are kept: a stale verdict could then only be
+ * accepted after exactly 2^32 ACL mutations while its commands sit queued,
+ * and every one of those mutations drains the IO backlog first. */
+void aclOffloadBeginBatch(client *c) {
+    if (!aclOffloadActive() || inMainThread()) return;
+    c->acl_epoch_seen = (uint32_t)atomic_load_explicit(&acl_epoch, memory_order_acquire);
+}
+
 /* IO-thread side: evaluate and tag. Never touches main-thread-owned state
- * except plain reads the read-job protocol already permits. */
-void aclOffloadTagCommand(client *c, struct serverCommand *cmd, robj **argv, int argc, int read_flags, aclVerdictTag *tag) {
-    tag->valid = 0;
+ * except plain reads the read-job protocol already permits. Only an ALLOW
+ * verdict is recorded, as a bit in the command's read flags; a denial leaves
+ * the bit clear so main runs the stock check and produces the exact error
+ * position itself. Denials are rare, and this keeps the offload strictly an
+ * accelerator for the permitted path. */
+void aclOffloadTagCommand(client *c, struct serverCommand *cmd, robj **argv, int argc, int *read_flags) {
     if (!aclOffloadActive()) return;
     if (cmd == NULL || argc == 0) return;
-    if (!(read_flags & READ_FLAGS_PARSING_COMPLETED) || (read_flags & (READ_FLAGS_COMMAND_NOT_FOUND | READ_FLAGS_BAD_ARITY)))
+    if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || (*read_flags & (READ_FLAGS_COMMAND_NOT_FOUND | READ_FLAGS_BAD_ARITY)))
         return;
     /* Inside MULTI the check runs against the transaction db; leave it to main. */
     if (c->flag.multi) return;
     user *u = c->user;
     if (u == NULL) return; /* No ACL: main's check is a no-op anyway. */
 
-    uint64_t epoch = atomic_load_explicit(&acl_epoch, memory_order_acquire);
     int errpos = 0;
-    int retval = ACLCheckAllUserCommandPerm(u, cmd, argv, argc, c->db->id, &errpos);
-    tag->epoch = epoch;
-    tag->retval = retval;
-    tag->errpos = errpos;
-    tag->valid = 1;
+    if (ACLCheckAllUserCommandPerm(u, cmd, argv, argc, c->db->id, &errpos) == ACL_OK) *read_flags |= READ_FLAGS_ACL_ALLOWED;
 }
 
-/* Main-thread side: consume a fresh verdict or fall back to evaluation. */
+/* Main-thread side: consume a fresh ALLOW verdict or fall back to evaluation. */
 int aclOffloadConsume(client *c, int *idxptr) {
-    aclVerdictTag *tag = &c->acl_tag;
-    if (tag->valid) {
-        tag->valid = 0;
-        if (!c->flag.multi && tag->epoch == atomic_load_explicit(&acl_epoch, memory_order_relaxed)) {
+    if (c->read_flags & READ_FLAGS_ACL_ALLOWED) {
+        c->read_flags &= ~READ_FLAGS_ACL_ALLOWED;
+        if (!c->flag.multi && c->acl_epoch_seen == (uint32_t)atomic_load_explicit(&acl_epoch, memory_order_relaxed)) {
             server.stat_acl_offload_hits++;
-            *idxptr = tag->errpos;
-            return tag->retval;
+            return ACL_OK;
         }
         server.stat_acl_offload_punts++;
     }

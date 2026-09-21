@@ -1365,16 +1365,6 @@ typedef struct ClientModuleData {
 } ClientModuleData;
 
 /* Parser state and parse result of a command from a client's input buffer. */
-/* ACL verdict computed off the main thread (acl-offload). A verdict is only
- * consumed by the main thread if its epoch still matches the global ACL epoch;
- * otherwise the main thread re-evaluates (stock path). See acl.c. */
-typedef struct aclVerdictTag {
-    uint64_t epoch;     /* Global ACL epoch observed BEFORE evaluating. */
-    int retval;         /* ACL_OK or ACL_DENIED_*. */
-    int errpos;         /* argv index that caused a denial. */
-    unsigned valid : 1; /* 0: no verdict, main must evaluate. */
-} aclVerdictTag;
-
 typedef struct parsedCommand {
     int read_flags; /* complete, error or 0 (parsing not complete) */
     int argc;
@@ -1384,7 +1374,6 @@ typedef struct parsedCommand {
     size_t argv_len_sum;
     unsigned long long input_bytes;
     struct serverCommand *cmd;
-    aclVerdictTag acl_tag; /* acl-offload verdict for this command, if any. */
 } parsedCommand;
 
 /* Queue of parsed commands. */
@@ -1431,7 +1420,6 @@ typedef struct client {
     struct serverCommand *lastcmd;    /* Last command executed. */
     struct serverCommand *realcmd;    /* The original command that was executed by the client */
     struct serverCommand *parsed_cmd; /* The command that was parsed. */
-    aclVerdictTag acl_tag;            /* acl-offload verdict for the current command. */
     time_t last_interaction;          /* Time of the last interaction, used for timeout */
     serverDb *db;                     /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
@@ -1455,6 +1443,11 @@ typedef struct client {
     int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
     uint32_t redact_arg_bitmap; /* Bitmap of argument indexes that should be redacted in logs. */
+    uint32_t acl_epoch_seen;    /* acl-offload: low 32 bits of the ACL epoch an IO thread observed
+                                 * before evaluating the commands of the current read job. Main
+                                 * honours a READ_FLAGS_ACL_ALLOWED verdict only while the epoch
+                                 * still matches. Fills a padding hole on a line the read-job
+                                 * protocol already shares between IO threads and main. */
     /* Client flags and state indicators */
     union {
         struct {
@@ -2056,11 +2049,6 @@ struct valkeyServer {
     long long stat_dump_payload_sanitizations;         /* Number deep dump payloads integrity validations. */
     long long stat_io_reads_processed;                 /* Number of read events processed by IO threads */
     long long stat_io_reads_pending;                   /* Number of read events pending in IO threads */
-    long long stat_acl_offload_hits;                   /* acl-offload: verdicts consumed without main-thread evaluation */
-    long long stat_acl_offload_punts;                  /* acl-offload: tagged verdicts rejected (epoch mismatch), re-evaluated on main */
-    long long stat_acl_offload_quiesce_count;          /* acl-offload: waits for in-flight IO jobs before freeing ACL memory */
-    long long stat_acl_offload_quiesce_total_us;       /* acl-offload: total time spent in those waits */
-    long long stat_acl_offload_quiesce_max_us;         /* acl-offload: longest single wait */
     long long stat_io_writes_processed;                /* Number of write events processed by IO threads */
     long long stat_io_writes_pending;                  /* Number of write events pending in IO threads */
     long long stat_io_freed_objects;                   /* Number of objects freed by IO threads */
@@ -2559,6 +2547,13 @@ struct valkeyServer {
     int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
     int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkeys_manager;
+    /* acl-offload counters. Kept at the tail of the struct so adding them does
+     * not shift the offsets of existing fields (and their cache-line grouping). */
+    long long stat_acl_offload_hits;             /* acl-offload: verdicts consumed without main-thread evaluation */
+    long long stat_acl_offload_punts;            /* acl-offload: tagged verdicts rejected (epoch mismatch), re-evaluated on main */
+    long long stat_acl_offload_quiesce_count;    /* acl-offload: waits for in-flight IO jobs before freeing ACL memory */
+    long long stat_acl_offload_quiesce_total_us; /* acl-offload: total time spent in those waits */
+    long long stat_acl_offload_quiesce_max_us;   /* acl-offload: longest single wait */
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3097,6 +3092,9 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_CROSSSLOT (1 << 20)
 #define READ_FLAGS_PREFETCHED (1 << 21)
 #define READ_FLAGS_ERROR_INVALID_CRLF (1 << 22)
+#define READ_FLAGS_ACL_ALLOWED (1 << 23) /* acl-offload: an IO thread evaluated this command's ACL  \
+                                            permissions under client->acl_epoch_seen and it passed. \
+                                            Denials are never recorded; main re-checks them. */
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -3584,10 +3582,12 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags);
 int ACLCheckAllPerm(client *c, int *idxptr);
-void aclOffloadTagCommand(client *c, struct serverCommand *cmd, robj **argv, int argc, int read_flags, aclVerdictTag *tag);
+void aclOffloadBeginBatch(client *c);
+void aclOffloadTagCommand(client *c, struct serverCommand *cmd, robj **argv, int argc, int *read_flags);
 int aclOffloadShouldStopTagging(struct serverCommand *cmd);
 int aclOffloadConsume(client *c, int *idxptr);
 void aclOffloadBumpEpoch(void);
+int aclOffloadClientHasPendingVerdicts(client *c);
 void aclMarkUserBound(user *u);
 void aclOffloadQuiesce(void);
 int ACLSetUser(user *u, const char *op, ssize_t oplen);

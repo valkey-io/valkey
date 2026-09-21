@@ -387,9 +387,8 @@ tags "modules" {
 
     start_cluster 3 3 [list tags [list logreqres:skip external:skip cluster] overrides [list loadmodule "$testmodule"]] {
         test {Test cluster topology change hook fires on cluster formation} {
-            # Runs before any slot migration below so the count is attributable
-            # to formation: assigning the 16384 slots and adding the six nodes
-            # fires the coalesced event on every node.
+            # Runs before any slot migration so the count is attributable to
+            # formation: assigning slots and adding nodes fires the event.
             for {set i 0} {$i < 6} {incr i} {
                 assert {[R $i hooks.event_count cluster-topology-change] > 0}
             }
@@ -476,9 +475,9 @@ tags "modules" {
         }
 
         test {Test cluster topology change hook fires when a replica reparents} {
-            # Reparenting changes no slot owner or node membership; capture the
-            # per-node baseline, then assert every node fires a fresh event once
-            # it learns the new replication relationship via gossip.
+            # Reparenting changes no slot owner or node membership; baseline
+            # each node, then assert it fires a fresh event on the relationship
+            # change learned via gossip.
             set base {}
             for {set i 0} {$i < 6} {incr i} {
                 lappend base [R $i hooks.event_count cluster-topology-change]

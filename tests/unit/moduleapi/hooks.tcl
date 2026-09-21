@@ -386,6 +386,15 @@ tags "modules" {
     }
 
     start_cluster 3 3 [list tags [list logreqres:skip external:skip cluster] overrides [list loadmodule "$testmodule"]] {
+        test {Test cluster topology change hook fires on cluster formation} {
+            # Runs before any slot migration below so the count is attributable
+            # to formation: assigning the 16384 slots and adding the six nodes
+            # fires the coalesced event on every node.
+            for {set i 0} {$i < 6} {incr i} {
+                assert {[R $i hooks.event_count cluster-topology-change] > 0}
+            }
+        }
+
         test {Test atomic slot migration hooks} {
             assert_match "OK" [R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1]
             set node0_id [R 0 CLUSTER MYID]
@@ -466,10 +475,24 @@ tags "modules" {
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-jobname] $job_name
         }
 
-        test {Test cluster topology change hook} {
-            # Slot assignment and node membership during cluster formation fire the event.
+        test {Test cluster topology change hook fires when a replica reparents} {
+            # Reparenting changes no slot owner or node membership; capture the
+            # per-node baseline, then assert every node fires a fresh event once
+            # it learns the new replication relationship via gossip.
+            set base {}
             for {set i 0} {$i < 6} {incr i} {
-                assert {[R $i hooks.event_count cluster-topology-change] > 0}
+                lappend base [R $i hooks.event_count cluster-topology-change]
+            }
+
+            set node0_id [R 0 CLUSTER MYID]
+            assert_match "OK" [R 4 CLUSTER REPLICATE $node0_id]
+
+            for {set i 0} {$i < 6} {incr i} {
+                wait_for_condition 50 100 {
+                    [R $i hooks.event_count cluster-topology-change] > [lindex $base $i]
+                } else {
+                    fail "topology-change event not fired on node $i after reparent"
+                }
             }
         }
     }

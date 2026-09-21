@@ -2337,6 +2337,7 @@ int clusterNodeRemoveReplica(clusterNode *primary, clusterNode *replica) {
             }
             primary->num_replicas--;
             if (primary->num_replicas == 0) primary->flags &= ~CLUSTER_NODE_MIGRATE_TO;
+            clusterDoBeforeSleep(CLUSTER_TODO_FIRE_MODULE_TOPOLOGY_EVENT);
             return C_OK;
         }
     }
@@ -2354,6 +2355,7 @@ int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica) {
     primary->num_replicas++;
     qsort(primary->replicas, primary->num_replicas, sizeof(clusterNode *), clusterNodeNameComparator);
     primary->flags |= CLUSTER_NODE_MIGRATE_TO;
+    clusterDoBeforeSleep(CLUSTER_TODO_FIRE_MODULE_TOPOLOGY_EVENT);
     return C_OK;
 }
 

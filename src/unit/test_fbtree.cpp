@@ -556,6 +556,87 @@ TEST_F(FbtreeTest, PrevSingle) {
     EXPECT_EQ(pos = fbtreePrev(&it), nullptr);
 }
 
+TEST_F(FbtreeTest, PeekEmpty) {
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
+}
+
+TEST_F(FbtreeTest, PeekDoesNotMoveIterator) {
+    const int total = NODE_SIZE * 7 / 2;
+    char first[8], last[8], buf[8];
+    for (int i = 0; i < total; i++) {
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        insert(buf);
+    }
+    snprintf(first, sizeof(first), "k%03d", 0);
+    snprintf(last, sizeof(last), "k%03d", total - 1);
+    expectValid();
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    /* A fresh iterator sees both ends. */
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, first, 5), 0);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, last, 5), 0);
+
+    /* Forward across every leaf: a repeated peek is stable and the step that
+     * follows returns the peeked element. */
+    int count = 0;
+    while ((pos = fbtreePeekNext(&it)) != nullptr) {
+        EXPECT_EQ(fbtreePeekNext(&it), pos);
+        EXPECT_EQ(fbtreeNext(&it), pos);
+        count++;
+    }
+    EXPECT_EQ(count, total);
+    EXPECT_EQ(fbtreeNext(&it), nullptr);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, last, 5), 0);
+
+    /* And backward. */
+    count = 0;
+    while ((pos = fbtreePeekPrev(&it)) != nullptr) {
+        EXPECT_EQ(fbtreePrev(&it), pos);
+        count++;
+    }
+    EXPECT_EQ(count, total);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, first, 5), 0);
+
+    /* After a seek the peeks are the cursor's two neighbours. */
+    const int rank = NODE_SIZE + 3;
+    char before[8], at[8];
+    snprintf(before, sizeof(before), "k%03d", rank - 1);
+    snprintf(at, sizeof(at), "k%03d", rank);
+    fbtreeSeekToRank(&it, rank);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, before, 5), 0);
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, at, 5), 0);
+    ASSERT_NE(pos = fbtreeNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, at, 5), 0);
+
+    fbtreeSeekToRank(&it, 0);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, first, 5), 0);
+
+    fbtreeSeekToRank(&it, total);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, last, 5), 0);
+
+    fbtreeResetIterator(&it);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
+}
+
 TEST_F(FbtreeTest, IteratorExhaustedStaysInvalid) {
     insert("x");
     expectValid();
@@ -2012,6 +2093,48 @@ TEST_F(FbtreeTest, LongPrefixDelete) {
     for (int i = 1; i < count; i += 2) {
         EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
+
+    zfree(inserted);
+}
+
+/* Empty a multilevel tree whose inner nodes hold a spilled prefix through
+ * each path that can empty a tree. The fixture's memory check catches any
+ * prefix buffer an inner node leaves behind on the way out. */
+TEST_F(FbtreeTest, LongPrefixDeleteAll) {
+    const size_t prefix_len = EMBED_PREFIX_LEN + 8;
+    const int count = NODE_SIZE * 3;
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    char suffix[8];
+
+    auto build = [&]() {
+        for (int i = 0; i < count; i++) {
+            snprintf(suffix, sizeof(suffix), "e%03d", i);
+            inserted[i] = fbtreeInsert(fbt, createPrefixString("E", prefix_len, suffix));
+        }
+        expectValid();
+        ASSERT_FALSE(fbt->root->is_leaf);
+        ASSERT_GT(((innerNode *)fbt->root)->prefix_len, (size_t)EMBED_PREFIX_LEN);
+    };
+    auto expectEmpty = [&]() {
+        EXPECT_EQ(fbtreeLength(fbt), 0UL);
+        EXPECT_EQ(fbt->root, nullptr);
+        expectValid();
+    };
+
+    /* Single deletes in both directions: the root collapses onto its
+     * surviving child before it can empty. */
+    build();
+    for (int i = 0; i < count; i++) EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    expectEmpty();
+
+    build();
+    for (int i = count - 1; i >= 0; i--) EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    expectEmpty();
+
+    /* A range covering everything takes the delete-all path. */
+    build();
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, count - 1, NULL, NULL), (unsigned long)count);
+    expectEmpty();
 
     zfree(inserted);
 }

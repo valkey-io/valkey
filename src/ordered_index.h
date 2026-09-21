@@ -20,6 +20,10 @@
  * designed to be used alongside a companion hashtable that provides O(1)
  * membership testing when uniqueness is required (as in Valkey's ZSET).
  *
+ * NaN is never a valid stored score, since it has no position in a total
+ * order; callers must not insert or set one. A NaN range bound is valid and
+ * denotes an empty range, matching IEEE comparison against every score.
+ *
  * The interface is implementation-agnostic. It is currently implemented as a
  * feature B+ tree (fbtree); see ordered_index.c. */
 

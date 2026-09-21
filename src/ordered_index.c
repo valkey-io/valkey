@@ -23,8 +23,6 @@ static_assert(sizeof(OrderedIndexIterator) >= sizeof(fbtreeIterator),
 #define SCORE_SIZE 8 /* Normalized score prefix size */
 
 /* Forward declarations for range seek helpers. */
-static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int inclusive);
-static void skipElements(fbtreeIterator *fbt_iter, long count, int reverse);
 static sds packLexBound(uint64_t score_prefix, const_sds element);
 
 /* ==========================================================================
@@ -34,6 +32,9 @@ static sds packLexBound(uint64_t score_prefix, const_sds element);
  * ========================================================================== */
 
 static inline uint64_t scoreToSortable(double score) {
+    /* NaN has no position in a total order and would map past one of the
+     * infinities; every entry point rejects it before it gets here. */
+    serverAssert(!isnan(score));
     /* Collapse IEEE negative zero into positive zero: the two compare equal
      * numerically but differ in bit pattern, and equal scores must map to a
      * single tree key for score-range comparisons to match. */
@@ -340,15 +341,16 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
  *     that is in range (<= max, honoring inclusive/exclusive).
  *
  * 'packed' is the [score][element] boundary to seek to; 'inclusive' means the
- * boundary element itself is in range.
+ * boundary element itself is in range. Returns the cursor position, the number
+ * of elements before it.
  *
  * fbtreeSeekToValue lands the cursor on the first element >= packed, i.e. the
  * element fbtreeNext() would return. Two of the four (direction, inclusivity)
  * cases need a one-element nudge from there; the other two are already correct.
  * The nudge peeks the boundary element with fbtreeNext, then either keeps it
  * consumed (exact match) or steps back O(1) with fbtreePrev (no re-seek). */
-static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int inclusive) {
-    fbtreeSeekToValue(packed, fbt_iter);
+static long seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int inclusive) {
+    long rank = fbtreeSeekToValue(packed, fbt_iter);
 
     if (!reverse && !inclusive) {
         /* Forward + exclusive: peek the first element >= bound. If it IS the
@@ -356,30 +358,28 @@ static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int 
          * (the bound is excluded). If it is already past the bound, step back so
          * fbtreeNext() returns it. */
         const_sds pos = fbtreeNext(fbt_iter);
-        if (pos != NULL && sdscmp(pos, packed) != 0) fbtreePrev(fbt_iter);
+        if (pos != NULL && sdscmp(pos, packed) != 0) {
+            fbtreePrev(fbt_iter);
+        } else if (pos != NULL) {
+            rank++;
+        }
     } else if (reverse && inclusive) {
         /* Reverse + inclusive: peek the first element >= bound. If it IS the
          * bound, leave it consumed so fbtreePrev() returns the bound. If it is
          * past the bound (bound absent), step back so fbtreePrev() returns the
          * last element < bound. */
         const_sds pos = fbtreeNext(fbt_iter);
-        if (pos != NULL && sdscmp(pos, packed) != 0) fbtreePrev(fbt_iter);
+        if (pos != NULL && sdscmp(pos, packed) != 0) {
+            fbtreePrev(fbt_iter);
+        } else if (pos != NULL) {
+            rank++;
+        }
     }
     /* Forward + inclusive: cursor already on the first element >= bound, which is
      * exactly what fbtreeNext() should return. No adjustment needed. */
     /* Reverse + exclusive: cursor on the first element >= bound, so fbtreePrev()
      * returns the element just before it -- the last element < bound. No adjustment. */
-}
-
-/* Skip N elements in the given direction. */
-static void skipElements(fbtreeIterator *fbt_iter, long count, int reverse) {
-    for (long i = 0; i < count; i++) {
-        if (reverse) {
-            if (fbtreePrev(fbt_iter) == NULL) return;
-        } else {
-            if (fbtreeNext(fbt_iter) == NULL) return;
-        }
-    }
+    return rank;
 }
 
 /* Pack a lex element with a score prefix for seeking. */
@@ -490,7 +490,6 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
 
     /* Get score prefix from first element (all share same score in lex zsets) */
     const_sds first = fbtreePeekMin(fbt);
-    if (!first) return;
     uint64_t score_prefix;
     memcpy(&score_prefix, first, SCORE_SIZE);
 
@@ -499,35 +498,66 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
 
     /* A crossed sentinel bound (min is the positively infinite string or max
      * is the negatively infinite string) admits no elements; the sentinels
-     * are identity values whose bytes must never be packed as an element.
-     * Park the iterator where the first step in the iteration direction
-     * yields nothing. */
+     * are identity values whose bytes must never be packed as an element. */
     if (min == shared.maxstring || max == shared.minstring) {
-        fbtreeSeekToRank(fbt_iter, reverse ? 0 : len);
+        fbtreeResetIterator(fbt_iter);
         return;
     }
 
+    /* The offset is applied as rank arithmetic from the bound's position, so a
+     * large LIMIT offset costs one more descent rather than a walk; offsets 0
+     * and -1 leave the cursor where the bound seek put it. */
     if (!reverse) {
         /* Forward: seek to min bound */
+        long pos = 0;
         if (min == shared.minstring) {
             fbtreeSeekToRank(fbt_iter, 0);
         } else {
             sds packed = packLexBound(score_prefix, min);
-            seekForBound(fbt_iter, packed, 0, !min_ex);
+            pos = seekForBound(fbt_iter, packed, 0, !min_ex);
             sdsfree(packed);
         }
-        skipElements(fbt_iter, offset, 0);
+        /* next() must yield rank pos + offset. */
+        if ((unsigned long)pos + offset >= len) {
+            fbtreeResetIterator(fbt_iter);
+            return;
+        }
+        if (offset > 0) fbtreeSeekToRank(fbt_iter, pos + offset);
     } else {
         /* Reverse: seek to max bound */
+        long pos = len;
         if (max == shared.maxstring) {
             fbtreeSeekToRank(fbt_iter, len);
         } else {
             sds packed = packLexBound(score_prefix, max);
-            seekForBound(fbt_iter, packed, 1, !max_ex);
+            pos = seekForBound(fbt_iter, packed, 1, !max_ex);
             sdsfree(packed);
         }
-        skipElements(fbt_iter, -(offset + 1), 1);
+        /* prev() must yield rank pos - 1 - back; -(offset + 1) does not
+         * overflow for LONG_MIN. */
+        long back = -(offset + 1);
+        if (pos <= back) {
+            fbtreeResetIterator(fbt_iter);
+            return;
+        }
+        if (back > 0) fbtreeSeekToRank(fbt_iter, pos - back);
     }
+
+    /* The seek above honoured the near bound only. Like the score seek, detach
+     * when the first element the caller would get lies outside the far bound. */
+    const_sds item = reverse ? fbtreePeekPrev(fbt_iter) : fbtreePeekNext(fbt_iter);
+    bool in_range = false;
+    if (item != NULL) {
+        size_t ele_len;
+        const char *ele = unpackElement(item, &ele_len);
+        zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
+        if (reverse) {
+            in_range = zsetLexGteMin(ele, ele_len, &range);
+        } else {
+            in_range = zsetLexLteMax(ele, ele_len, &range);
+        }
+    }
+    if (!in_range) fbtreeResetIterator(fbt_iter);
 }
 
 /* ==========================================================================

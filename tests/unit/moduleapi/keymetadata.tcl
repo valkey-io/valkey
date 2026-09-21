@@ -65,6 +65,21 @@ start_server {tags {"modules"}} {
         assert_equal [r exists src] {0}
     }
 
+    test {DUMP RESTORE and RESTORE carry metadata on a non-zero DB} {
+        r select 5
+        r flushall
+        r keymetadata.arm db5-meta
+        r set k hello
+        set cmd [r dump k RESTORE]
+        assert {[lsearch $cmd METADATA] != -1}
+
+        r del k
+        assert_equal [r {*}$cmd] {OK}
+        assert_equal [r get k] {hello}
+        assert_equal [r keymetadata.lastdb] {5}
+        r select 9
+    }
+
     test {RESTORE METADATA with an odd number of arguments is a syntax error} {
         r flushall
         r set src hello

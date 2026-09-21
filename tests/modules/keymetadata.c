@@ -10,6 +10,7 @@ static int armed = 0;
 static char armed_value[256];
 static char last_meta[256];
 static char last_key[256];
+static int last_db = -1;
 
 static ValkeyModuleString *dumpMeta(ValkeyModuleCtx *ctx, ValkeyModuleString *key) {
     VALKEYMODULE_NOT_USED(key);
@@ -23,6 +24,7 @@ static int restoreMeta(ValkeyModuleCtx *ctx, ValkeyModuleString *key, ValkeyModu
     const char *m = ValkeyModule_StringPtrLen(metadata, &mlen);
     snprintf(last_key, sizeof(last_key), "%.*s", (int)klen, k);
     snprintf(last_meta, sizeof(last_meta), "%.*s", (int)mlen, m);
+    last_db = ValkeyModule_GetSelectedDb(ctx);
     int reject = (mlen == 6 && !memcmp(m, "REJECT", 6));
     ValkeyModule_FreeString(ctx, metadata);
     return reject ? VALKEYMODULE_ERR : VALKEYMODULE_OK;
@@ -56,6 +58,12 @@ static int LastKey(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithCString(ctx, last_key);
 }
 
+static int LastDb(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    return ValkeyModule_ReplyWithLongLong(ctx, last_db);
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -70,6 +78,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "keymetadata.lastmeta", LastMeta, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "keymetadata.lastkey", LastKey, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "keymetadata.lastdb", LastDb, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     return VALKEYMODULE_OK;
 }

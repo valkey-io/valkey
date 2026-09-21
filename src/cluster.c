@@ -222,7 +222,7 @@ void dumpCommand(client *c) {
 
     /* Build a full RESTORE command: cmd key ttl payload REPLACE [ABSTTL] [METADATA ...]. */
     long long expire = getExpire(c->db, c->argv[1]);
-    list *metadata = moduleGatherKeyMetadata(c->argv[1]);
+    list *metadata = moduleGatherKeyMetadata(c->argv[1], c->db->id);
     long len = 5 + (expire != -1 ? 1 : 0) + (metadata ? 1 + listLength(metadata) : 0);
 
     addReplyArrayLen(c, len);
@@ -258,12 +258,19 @@ static int restoreDispatchKeyMetadata(client *c, robj *key, int meta_start) {
     for (int j = meta_start; j + 1 < c->argc; j += 2) {
         robj *value = c->argv[j + 1];
         incrRefCount(value); /* Ownership passes to the module when handled. */
-        int r = moduleRestoreKeyMetadata(objectGetVal(c->argv[j]), key, value);
+        int r = moduleRestoreKeyMetadata(objectGetVal(c->argv[j]), key, value, c->db->id);
         if (r == 0) {
             decrRefCount(value); /* Unknown module: drop it. */
-            if (restore_metadata_dropped++ == 0)
-                serverLog(LL_NOTICE, "RESTORE dropped metadata for unknown module '%s'",
-                          (char *)objectGetVal(c->argv[j]));
+            if (restore_metadata_dropped++ == 0) {
+                /* The name comes from the client, so quote it and honour
+                 * hide-user-data-from-log rather than logging it verbatim. */
+                sds name = server.hide_user_data_from_log
+                               ? sdsnew("*redacted*")
+                               : sdscatrepr(sdsempty(), objectGetVal(c->argv[j]),
+                                            sdslen(objectGetVal(c->argv[j])));
+                serverLog(LL_NOTICE, "RESTORE dropped metadata for unknown module %s", name);
+                sdsfree(name);
+            }
         } else if (r < 0) {
             addReplyError(c, "Module rejected key metadata during RESTORE");
             return C_ERR;

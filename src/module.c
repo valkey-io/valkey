@@ -2486,6 +2486,8 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->options = 0;
     module->info_cb = 0;
     module->defrag_cb = 0;
+    module->key_meta_dump_cb = NULL;
+    module->key_meta_restore_cb = NULL;
     module->loadmod = NULL;
     module->num_commands_with_acl_categories = 0;
     module->onload = 1;
@@ -8640,7 +8642,7 @@ int moduleAnyKeyMetadataRegistered(void) {
  * newly-allocated list of robj as alternating (module-name, metadata-value)
  * pairs, or NULL if no module produced metadata. The caller owns the returned
  * list and each element (decrRefCount + listRelease). */
-list *moduleGatherKeyMetadata(robj *key) {
+list *moduleGatherKeyMetadata(robj *key, int dbid) {
     list *result = NULL;
     listIter li;
     listNode *ln;
@@ -8651,7 +8653,11 @@ list *moduleGatherKeyMetadata(robj *key) {
 
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+        selectDb(ctx.client, dbid);
         robj *value = module->key_meta_dump_cb(&ctx, key);
+        /* The callback may have enabled auto memory and created the reply with
+         * this context, so take it off the release queue before the teardown. */
+        if (value != NULL) autoMemoryFreed(&ctx, VALKEYMODULE_AM_STRING, value);
         moduleFreeContext(&ctx);
         if (value == NULL) continue;
 
@@ -8666,12 +8672,13 @@ list *moduleGatherKeyMetadata(robj *key) {
  * 'metadata' is transferred to the module when it is handled. Returns 1 if a
  * module consumed it, 0 if the module is unknown or has no restore callback
  * (caller drops the value), or -1 if the module rejected the metadata. */
-int moduleRestoreKeyMetadata(const char *modulename, robj *key, robj *metadata) {
+int moduleRestoreKeyMetadata(const char *modulename, robj *key, robj *metadata, int dbid) {
     ValkeyModule *module = moduleLookupByName(modulename);
     if (module == NULL || module->key_meta_restore_cb == NULL) return 0;
 
     ValkeyModuleCtx ctx;
     moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+    selectDb(ctx.client, dbid);
     int ret = module->key_meta_restore_cb(&ctx, key, metadata);
     moduleFreeContext(&ctx);
     return ret == VALKEYMODULE_OK ? 1 : -1;

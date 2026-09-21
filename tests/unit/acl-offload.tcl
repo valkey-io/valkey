@@ -201,6 +201,90 @@ start_server {config "minimal.conf" tags {"acl external:skip valgrind:skip"} ove
         $admin close
     }
 
+    test {acl-offload (b''): TOCTOU probe via role -- revoke role's key access then write secret, member never sees it} {
+        # Permission comes from a ROLE, not the user's own selectors. The IO
+        # thread walks role->selectors when tagging a member's command, so
+        # ACL SETROLE on a live role must invalidate pending verdicts exactly
+        # like ACL SETUSER does.
+        r acl setrole keyrole ~* +@all
+        r acl setuser member on nopass role=keyrole
+        r acl setuser roleadmin on nopass ~* +@all
+        r set rolesecret public
+        set admin [valkey_deferring_client]
+        $admin auth roleadmin ""
+        assert_equal OK [$admin read]
+        set readers {}
+        for {set i 0} {$i < 8} {incr i} {
+            set rd [valkey_deferring_client]
+            $rd auth member ""
+            assert_equal OK [$rd read]
+            lappend readers $rd
+        }
+        set leaked 0
+        set denied 0
+        for {set round 0} {$round < 100} {incr round} {
+            $admin write [resp ACL SETROLE keyrole ~*]
+            $admin write [resp SET rolesecret public]
+            $admin flush
+            $admin read; $admin read
+            foreach rd $readers {
+                for {set j 0} {$j < 64} {incr j} { $rd write [resp GET rolesecret] }
+            }
+            $admin write [resp ACL SETROLE keyrole resetkeys]
+            $admin write [resp SET rolesecret secret]
+            foreach rd $readers { $rd flush }
+            $admin flush
+            $admin read; $admin read
+            foreach rd $readers {
+                for {set j 0} {$j < 64} {incr j} {
+                    if {[catch {$rd read} v]} {
+                        incr denied
+                    } elseif {$v eq "secret"} {
+                        incr leaked
+                    }
+                }
+            }
+        }
+        if {$::verbose} { puts "role TOCTOU probe: leaked=$leaked denied=$denied" }
+        assert_equal 0 $leaked
+        foreach rd $readers { $rd close }
+        $admin close
+        r acl deluser member
+        r acl delrole keyrole
+    }
+
+    test {acl-offload (b): SETROLE churn on a live role under member load is stable} {
+        # Each SETROLE on a role with members is a COW swap + epoch bump +
+        # drain; the old selector list must outlive every in-flight read job.
+        r acl setrole churnrole ~* +@all
+        r acl setuser rolemember on nopass role=churnrole
+        set readers {}
+        for {set i 0} {$i < 4} {incr i} {
+            set rd [valkey_deferring_client]
+            $rd auth rolemember ""
+            assert_equal OK [$rd read]
+            lappend readers $rd
+        }
+        set admin [valkey_client]
+        for {set round 0} {$round < 40} {incr round} {
+            foreach rd $readers {
+                for {set j 0} {$j < 32} {incr j} { $rd write [resp GET k] }
+                $rd flush
+            }
+            $admin acl setrole churnrole resetkeys ~zzz:* ~yyy:*
+            $admin acl setrole churnrole ~*
+            foreach rd $readers {
+                for {set j 0} {$j < 32} {incr j} { catch {$rd read} }
+            }
+        }
+        assert_equal PONG [r ping]
+        foreach rd $readers { catch {$rd close} }
+        $admin acl deluser rolemember
+        $admin acl delrole churnrole
+        assert_equal PONG [r ping]
+        $admin close
+    }
+
     test {acl-offload: punts are counted when the epoch moves} {
         r acl setuser p on nopass ~* +@all
         set rd [valkey_client]
@@ -226,5 +310,96 @@ start_server {config "minimal.conf" tags {"acl external:skip valgrind:skip"} ove
         for {set i 0} {$i < 50} {incr i} { $rd get alice:$i }
         assert_equal 0 [acl_offload_hits]
         $rd close
+    }
+}
+
+# Structural guard, source level. The offload invariant is: a rule-set list
+# (user->selectors, user->roles, role->selectors) reachable from a client is
+# never mutated in place or freed while an IO job may be reading it; it is
+# replaced by pointer swap, the epoch is bumped, and the old list is freed
+# only after the IO job backlog drains. The runtime half of the guard is
+# aclOffloadAssertNoReaders() in acl.c. This half makes adding a NEW writer of
+# those fields a conscious act: every raw store must live in a function listed
+# here with its justification, or this test fails and tells the author why.
+# (First time this bit for real: upstream's ACL roles added ACL SETROLE, which
+# swapped a live role's selectors with no bump and no drain -- 11,200 leaked
+# secrets in 100 probe rounds before the fix.)
+set acl_src [file join [pwd] src acl.c]
+if {[file readable $acl_src]} {
+    start_server {config "minimal.conf" tags {"acl external:skip"}} {
+        test {acl-offload: every writer of selectors/roles fields is a known, justified site} {
+            set allowed {
+                ACLCreateUser              "object not yet linked; unreachable from IO threads"
+                ACLCreateRole              "object not yet linked; unreachable from IO threads"
+                ACLCopyUser                "publish funnel: atomic swap + epoch bump + drain, then free"
+                ACLStringSetRole           "staging copy, then publish funnel on a live role"
+                ACLUserClearRoles          "guarded by aclOffloadAssertNoReaders when the user is published"
+                ACLSetUser                 "in-place mutator; entry guarded by aclOffloadAssertNoReaders"
+                ACLSetUserRoles            "called only from ACLSetUser (same guard)"
+                ACLAppendRoleForLoading    "stack-allocated fake role for validation"
+            }
+            set fh [open $acl_src r]
+            set src [read $fh]
+            close $fh
+            set fn "<file scope>"
+            set lineno 0
+            set violations {}
+            set seen [dict create]
+            foreach line [split $src "\n"] {
+                incr lineno
+                # One-line C function header: return type, name, argument list, opening brace.
+                if {[regexp {^[A-Za-z_][A-Za-z0-9_ \*]*[ \*]([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*\{\s*$} $line -> name]} {
+                    set fn $name
+                    continue
+                }
+                set is_store [regexp {(->|\.)(selectors|roles)\s*=[^=]} $line]
+                set is_swap  [regexp {atomic_store_explicit\s*\(\s*\(_Atomic\(list \*\) \*\)\s*&\w+->(selectors|roles)} $line]
+                if {!$is_store && !$is_swap} continue
+                dict set seen $fn 1
+                if {![dict exists $allowed $fn]} {
+                    lappend violations "src/acl.c:$lineno in $fn: [string trim $line]"
+                }
+            }
+            if {[llength $violations]} {
+                fail "New writer(s) of a rule-set field outside the acl-offload allowlist.\n\
+                      Either route the change through ACLCopyUser/ACLStringSetRole (swap + bump + drain),\n\
+                      or add the function to the allowlist in tests/unit/acl-offload.tcl with a justification\n\
+                      and a call to aclOffloadAssertNoReaders() at the mutation:\n  [join $violations "\n  "]"
+            }
+            # Keep the allowlist honest: every entry must still have a writer.
+            foreach {name why} $allowed {
+                if {![dict exists $seen $name]} {
+                    fail "Allowlist entry '$name' no longer writes a rule-set field; remove it."
+                }
+            }
+        }
+    }
+}
+
+# CONFIG SET requirepass mutates the live default user in place. It now
+# quiesces first (uniform rule), so the ACLSetUser guard must hold under load.
+start_server {config "minimal.conf" tags {"acl external:skip valgrind:skip"} overrides {io-threads 4 io-threads-always-active yes acl-offload yes}} {
+    test {acl-offload: requirepass changes under pipelined load are quiesced, not asserted} {
+        set readers {}
+        for {set i 0} {$i < 4} {incr i} {
+            set rd [valkey_deferring_client]
+            lappend readers $rd
+        }
+        set before [getInfoProperty [r info stats] acl_offload_quiesce_count]
+        for {set round 0} {$round < 20} {incr round} {
+            foreach rd $readers {
+                for {set j 0} {$j < 32} {incr j} { $rd write [resp GET k] }
+                $rd flush
+            }
+            r config set requirepass secret$round
+            r auth secret$round
+            r config set requirepass ""
+            foreach rd $readers {
+                for {set j 0} {$j < 32} {incr j} { catch {$rd read} }
+            }
+        }
+        assert_equal PONG [r ping]
+        assert {[getInfoProperty [r info stats] acl_offload_quiesce_count] > $before}
+        foreach rd $readers { catch {$rd close} }
     }
 }

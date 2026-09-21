@@ -1090,6 +1090,12 @@ typedef struct readyList {
 #define USER_FLAG_ROLE (1 << 3)      /* This user entry represents a role, \
                                         not a regular user. Stored in the  \
                                         Roles rax instead of Users. */
+#define USER_FLAG_BOUND (1 << 4)     /* A client has been bound to this user \
+                                        (or to a member of this role) at     \
+                                        least once, so an IO thread may have \
+                                        read its rule set. Set once, never   \
+                                        cleared; main-thread only. Used by   \
+                                        the acl-offload lifetime guard.      */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */
@@ -3582,6 +3588,7 @@ void aclOffloadTagCommand(client *c, struct serverCommand *cmd, robj **argv, int
 int aclOffloadShouldStopTagging(struct serverCommand *cmd);
 int aclOffloadConsume(client *c, int *idxptr);
 void aclOffloadBumpEpoch(void);
+void aclMarkUserBound(user *u);
 void aclOffloadQuiesce(void);
 int ACLSetUser(user *u, const char *op, ssize_t oplen);
 sds ACLStringSetUser(user *u, sds username, sds *argv, int argc);

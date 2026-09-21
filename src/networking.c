@@ -264,6 +264,11 @@ void clientSetUser(client *c, user *u, int authenticated) {
      * only fires for server/module-initiated rebinding -- rare. */
     if (c->user != u && (c->cmd_queue.off < c->cmd_queue.len || c->io_read_state != CLIENT_IDLE))
         aclOffloadBumpEpoch();
+    /* acl-offload: from here on an IO thread may read u's rule set (and the
+     * rule sets of u's roles). Record that once; the guard in acl.c keys off
+     * it. Write only on the first bind so steady-state binds never dirty the
+     * cache line the IO threads are reading. */
+    if (u) aclMarkUserBound(u);
     c->user = u;
     c->flag.authenticated = authenticated;
     if (authenticated)

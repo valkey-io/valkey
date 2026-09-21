@@ -3462,7 +3462,7 @@ void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
 ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_len, size_t output_budget);
 bool replStreamHasPendingDecode(void);
-void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
+void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel, compressionAlgo target_algo);
 sds replicationSendAuth(connection *conn, const char *user, size_t user_len, const char *pass, size_t pass_len);
 sds receiveSynchronousResponse(connection *conn);
 ConnectionType *connTypeOfReplication(void);

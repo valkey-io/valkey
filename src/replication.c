@@ -3191,7 +3191,7 @@ static int replicaRDBDiskWrite(void *ctx, const uint8_t *data, size_t len) {
  * The payload is either size-prefixed ($<len>) or EOF-marked ($EOF:<mark>). It is
  * persisted through a transcoder so the file lands in the replica's own
  * rdbcompression codec regardless of the wire codec. */
-void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
+void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel, compressionAlgo target_algo) {
     int usemark;
     char lastbytes[RDB_EOF_MARK_SIZE];
     size_t lastbytes_len = 0;
@@ -3203,8 +3203,7 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
     int ret = 0;
     replicaRDBDiskWriteCtx disk_write = {.fd = server.repl_transfer_fd, .written = 0};
     rdbTranscoder transcoder;
-    rdbTranscoderInit(&transcoder, rdbStreamCompressionAlgorithm(), server.rdb_checksum, replicaRDBDiskWrite,
-                      &disk_write);
+    rdbTranscoderInit(&transcoder, target_algo, server.rdb_checksum, replicaRDBDiskWrite, &disk_write);
 
     /* There is currently only a background thread implementation for replica disk-based sync */
     debugServerAssert(inBioThread());
@@ -3473,7 +3472,9 @@ void receiveRDBinBioThread(bool is_dual_channel) {
         server.repl_transfer_s = NULL;
     }
     connSetReadHandler(conn, NULL);
-    bioCreateSaveRDBToDiskJob(conn, is_dual_channel);
+    /* Resolve the on-disk target codec now, on the main thread, so a runtime
+     * CONFIG SET rdbcompression cannot retarget an already-started transfer. */
+    bioCreateSaveRDBToDiskJob(conn, is_dual_channel, rdbStreamCompressionAlgorithm());
 }
 
 void receiveRDBinBioThreadSingleChannel(connection *conn) {

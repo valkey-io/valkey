@@ -3221,11 +3221,12 @@ static int writevToClient(client *c) {
 
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
-    if (bufpos > 0) {
+    if (c->bufpos > 0) {
+        size_t buflen = lastblock ? (size_t)c->bufpos : bufpos;
         if (c->flag.buf_encoded) {
-            trackBufReferences(c->buf, bufpos, c);
+            trackBufReferences(c->buf, buflen, c);
         }
-        addBufferToReplyIOV(c->flag.buf_encoded, c->buf, bufpos, &reply, &buf_metadata[bufcnt++]);
+        addBufferToReplyIOV(c->flag.buf_encoded, c->buf, buflen, &reply, &buf_metadata[bufcnt++]);
     /* NITAI this was in threadsave sync 
     if (c->bufpos > 0) {
         ssize_t offset = lastblock ? c->bufpos : bufpos;

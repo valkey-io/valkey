@@ -1197,7 +1197,6 @@ typedef struct ClientFlags {
     uint64_t script : 1;                   /* This is a non connected client used by Lua */
     uint64_t asking : 1;                   /* Client issued the ASKING command */
     uint64_t close_asap : 1;               /* Close this client ASAP */
-    uint64_t forkless_managed : 1;       /* Client is owned by forkless save, don't free */
     uint64_t unix_socket : 1;              /* Client connected via Unix domain socket */
     uint64_t dirty_exec : 1;               /* EXEC will fail for errors while queueing */
     uint64_t primary_force_reply : 1;      /* Queue replies even if is primary */
@@ -1273,6 +1272,7 @@ typedef struct ClientFlags {
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
+    uint64_t forkless_managed : 1;         /* Client is owned by forkless save, don't free */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */

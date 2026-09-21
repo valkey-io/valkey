@@ -2507,8 +2507,8 @@ static int isValidActiveDefrag(int val, const char **err) {
     return 1;
 }
 
-static int isValidZstdCompression(int uses_zstd, const char **err) {
-    if (uses_zstd && !streamCodecIsSupported(ALGO_ZSTD)) {
+static int isZstdCompressionAvailable(const char **err) {
+    if (!streamCodecIsSupported(ALGO_ZSTD)) {
         *err = "Zstandard compression is not available in this build";
         return 0;
     }
@@ -2516,11 +2516,13 @@ static int isValidZstdCompression(int uses_zstd, const char **err) {
 }
 
 static int isValidRdbCompression(int val, const char **err) {
-    return isValidZstdCompression(val == RDB_COMPRESSION_ZSTD, err);
+    if (val == RDB_COMPRESSION_ZSTD) return isZstdCompressionAvailable(err);
+    return 1;
 }
 
 static int isValidReplCompression(int val, const char **err) {
-    return isValidZstdCompression(val == REPL_COMPRESSION_ZSTD, err);
+    if (val == REPL_COMPRESSION_ZSTD) return isZstdCompressionAvailable(err);
+    return 1;
 }
 
 static int isValidClusterConfigFile(char *val, const char **err) {

@@ -257,6 +257,13 @@ static void clientSetDefaultAuth(client *c) {
  * it will also set the ever_authenticated flag on the client in order to avoid low level
  * limiting of the client output buffer.*/
 void clientSetUser(client *c, user *u, int authenticated) {
+    /* acl-offload: if this client already has parsed commands carrying
+     * verdicts (or a read job in flight), those verdicts were computed under
+     * the OLD binding. AUTH/HELLO/RESET from the client itself never reach
+     * here with tagged commands (workers stop tagging after them), so this
+     * only fires for server/module-initiated rebinding -- rare. */
+    if (c->user != u && (c->cmd_queue.off < c->cmd_queue.len || c->io_read_state != CLIENT_IDLE))
+        aclOffloadBumpEpoch();
     c->user = u;
     c->flag.authenticated = authenticated;
     if (authenticated)
@@ -3786,6 +3793,7 @@ void resetClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
+    c->acl_tag.valid = 0;
     c->redact_arg_bitmap = 0;
     c->cur_script = NULL;
     c->net_input_bytes_curr_cmd = 0;
@@ -4513,6 +4521,7 @@ static bool consumeCommandQueue(client *c) {
     c->net_input_bytes_curr_cmd = p->input_bytes;
     c->parsed_cmd = p->cmd;
     c->slot = p->slot;
+    c->acl_tag = p->acl_tag;
     c->qb_applied += p->input_bytes;
     if (queue->off == queue->len) {
         /* The queue is empty. Don't free it here, because if parsing is done in

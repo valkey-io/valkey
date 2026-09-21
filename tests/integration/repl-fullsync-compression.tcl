@@ -399,7 +399,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
             set primary_loglines [count_log_lines 0]
             populate_compressible_dataset $primary "dc-$load_mode"
 
-            start_server [list overrides [list save "" repl-compression lz4 repl-diskless-load $load_mode dual-channel-replication-enabled yes]] {
+            start_server [list overrides [list save "" rdbcompression lz4 repl-compression lz4 repl-diskless-load $load_mode dual-channel-replication-enabled yes]] {
                 set replica [srv 0 client]
                 set replica_loglines [count_log_lines 0]
                 $replica replicaof $primary_host $primary_port
@@ -499,7 +499,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
             set primary_loglines [count_log_lines 0]
             populate_compressible_dataset $primary "$mode-diskrecv"
 
-            start_server [list overrides [list save "" repl-compression $mode repl-diskless-load disabled]] {
+            start_server [list overrides [list save "" rdbcompression $mode repl-compression $mode repl-diskless-load disabled]] {
                 set replica [srv 0 client]
                 set replica_loglines [count_log_lines 0]
                 $replica replicaof $primary_host $primary_port
@@ -548,6 +548,89 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
 
 }
 
+# The replica persists dump.rdb in its own rdbcompression codec: the received
+# full-sync stream is transcoded in the BIO thread when the wire codec differs
+# from the replica's on-disk codec. A successful sync proves the transcoded file
+# loaded (and, when decoding to plaintext, that the recomputed CRC64 trailer
+# verified). A non-empty save point keeps the synced dump.rdb (persistence not
+# disabled) so its on-disk format can be inspected.
+
+proc assert_replica_dump_plaintext {client} {
+    set path [file join [lindex [$client config get dir] 1] dump.rdb]
+    assert_equal "VALKEY" [string range [read_binary_file_prefix $path 6] 0 5]
+}
+
+proc assert_replica_dump_lz4 {client} {
+    set path [file join [lindex [$client config get dir] 1] dump.rdb]
+    binary scan [read_binary_file_prefix $path 7] cu* bytes
+    # V C S / version / LZ4 codec / reserved / RDB stream kind.
+    assert_equal {86 67 83 1 1 0 1} $bytes
+}
+
+# EOF-framed wire: a compressed wire is decoded to a plaintext dump.rdb.
+start_server {tags {"repl external:skip"} overrides {save "" repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test {Disk-receive transcodes an EOF-framed compressed wire to a plaintext dump.rdb} {
+        populate_compressible_dataset $primary "xcode-decode"
+        $primary set xcode:key value
+        start_server {overrides {save "3600 1000000000" rdbcompression no repl-compression lz4 repl-diskless-load disabled}} {
+            set replica [srv 0 client]
+            $replica replicaof $primary_host $primary_port
+            assert_replica_synced $primary $replica "(decode)"
+            assert_replica_dump_plaintext $replica
+            assert_equal [$primary dbsize] [$replica dbsize]
+            assert_equal value [$replica get xcode:key]
+            $replica replicaof no one
+        }
+    }
+}
+
+# EOF-framed wire: a plaintext wire is encoded to a compressed dump.rdb.
+start_server {tags {"repl external:skip"} overrides {save "" repl-compression no repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test {Disk-receive transcodes an EOF-framed plaintext wire to a compressed dump.rdb} {
+        populate_compressible_dataset $primary "xcode-encode"
+        $primary set xcode:key value
+        start_server {overrides {save "3600 1000000000" rdbcompression lz4 repl-diskless-load disabled}} {
+            set replica [srv 0 client]
+            $replica replicaof $primary_host $primary_port
+            assert_replica_synced $primary $replica "(encode)"
+            assert_replica_dump_lz4 $replica
+            assert_equal [$primary dbsize] [$replica dbsize]
+            assert_equal value [$replica get xcode:key]
+            $replica replicaof no one
+        }
+    }
+}
+
+# Size-framed wire: a compressed wire is decoded to a plaintext dump.rdb,
+# exercising the non-mark receive path.
+start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4 repl-compression lz4 repl-diskless-sync no}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test {Disk-receive transcodes a size-framed compressed wire to a plaintext dump.rdb} {
+        populate_compressible_dataset $primary "xcode-sizeframed"
+        $primary set xcode:key value
+        start_server {overrides {save "3600 1000000000" rdbcompression no repl-compression lz4 repl-diskless-load disabled}} {
+            set replica [srv 0 client]
+            $replica replicaof $primary_host $primary_port
+            assert_replica_synced $primary $replica "(size-framed decode)"
+            assert_replica_dump_plaintext $replica
+            assert_equal [$primary dbsize] [$replica dbsize]
+            assert_equal value [$replica get xcode:key]
+            $replica replicaof no one
+        }
+    }
+}
+
 # Checksum interaction: a compressed diskless full sync loads under rdbchecksum no.
 # Isolated because rdbchecksum is an immutable startup-only override.
 
@@ -561,7 +644,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
         set primary_loglines [count_log_lines 0]
         populate_compressible_dataset $primary "cksum-off"
 
-        start_server {overrides {save "" repl-compression lz4 repl-diskless-load disabled}} {
+        start_server {overrides {save "" rdbcompression lz4 repl-compression lz4 repl-diskless-load disabled}} {
             set replica [srv 0 client]
             set replica_loglines [count_log_lines 0]
             $replica replicaof $primary_host $primary_port

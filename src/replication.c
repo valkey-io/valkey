@@ -44,6 +44,7 @@
 #include "cluster_migrateslots.h"
 #include "io_threads.h"
 #include "compression_stream.h"
+#include "rdb_transcoder.h"
 
 #include <memory.h>
 #include <stddef.h>
@@ -3158,15 +3159,52 @@ int tryReadBulkPayload(connection *conn, char *buf, int usemark, ssize_t *nread_
     return C_OK;
 }
 
+/* Emit callback + context for the RDB transcoder: append transcoded bytes to the
+ * temp file and track the file offset (which differs from the wire offset once
+ * the codec changes). */
+typedef struct {
+    int fd;
+    off_t written;
+} replicaRDBDiskWriteCtx;
+
+static int replicaRDBDiskWrite(void *ctx, const uint8_t *data, size_t len) {
+    replicaRDBDiskWriteCtx *w = ctx;
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(w->fd, data + off, len - off);
+        if (n <= 0) {
+            if (n == -1 && errno == EINTR) continue;
+            return C_ERR;
+        }
+        off += (size_t)n;
+    }
+    w->written += (off_t)len;
+    return C_OK;
+}
+
+/* Receive the full-sync RDB payload from the primary and write it to the
+ * temporary RDB file, used when the replica loads via disk rather than diskless
+ * load. This always runs in a BIO thread with the connection in blocking mode;
+ * on completion the main thread (watching server.replica_bio_disk_save_state)
+ * renames the temp file to the RDB file and loads it.
+ *
+ * The payload is either size-prefixed ($<len>) or EOF-marked ($EOF:<mark>). It is
+ * persisted through a transcoder so the file lands in the replica's own
+ * rdbcompression codec regardless of the wire codec. */
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
     int usemark;
     char lastbytes[RDB_EOF_MARK_SIZE];
+    size_t lastbytes_len = 0;
     char buf[PROTO_IOBUF_LEN];
     char eofmark[RDB_EOF_MARK_SIZE];
-    ssize_t nread, nwritten;
+    ssize_t nread;
     off_t repl_transfer_last_fsync_off = 0;
     bool error = 0, eof_reached = 0;
     int ret = 0;
+    replicaRDBDiskWriteCtx disk_write = {.fd = server.repl_transfer_fd, .written = 0};
+    rdbTranscoder transcoder;
+    rdbTranscoderInit(&transcoder, rdbStreamCompressionAlgorithm(), server.rdb_checksum, replicaRDBDiskWrite,
+                      &disk_write);
 
     /* There is currently only a background thread implementation for replica disk-based sync */
     debugServerAssert(inBioThread());
@@ -3221,51 +3259,52 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
             goto done;
         }
 
-        /* When a mark is used, we want to detect EOF asap in order to avoid
-         * writing the EOF mark into the file... */
-        if (usemark) {
-            if (nread >= RDB_EOF_MARK_SIZE) {
-                memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
-            } else {
-                int rem = RDB_EOF_MARK_SIZE - nread;
-                memmove(lastbytes, lastbytes + nread, rem);
-                memcpy(lastbytes + rem, buf, nread);
-            }
-            eof_reached = (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0);
-        }
-
         /* Update the last I/O time for the replication transfer (used in
          * order to detect timeouts during replication). */
         server.repl_transfer_lastio = server.unixtime;
-
-        /* Write what we got from the socket to the dump file on disk */
-        if ((nwritten = write(server.repl_transfer_fd, buf, nread)) != nread) {
-            replicaBioSaveServerLog(LL_WARNING,
-                                    "Write error or short write writing to the DB dump file "
-                                    "needed for PRIMARY <-> REPLICA synchronization: %s",
-                                    (nwritten == -1) ? strerror(errno) : "short write");
-            error = 1;
-            goto done;
-        }
         server.bio_repl_transfer_read += nread;
 
-        /* Delete the last 40 bytes from the file if we reached EOF. */
-        if (usemark && eof_reached) {
-            if (ftruncate(server.repl_transfer_fd, server.bio_repl_transfer_read - RDB_EOF_MARK_SIZE) == -1) {
-                replicaBioSaveServerLog(LL_WARNING,
-                                        "Error truncating the RDB file received from the primary "
-                                        "for SYNC: %s",
-                                        strerror(errno));
-                error = 1;
-                goto done;
+        /* Persist the received body through the transcoder. When a mark is used,
+         * hold back the trailing RDB_EOF_MARK_SIZE bytes so the $EOF mark is never
+         * persisted: feed only the bytes that scroll out of the trailing window and
+         * keep the newest RDB_EOF_MARK_SIZE in lastbytes, which doubles as the EOF
+         * detection window. Size-framed transfers carry no mark, so everything is fed. */
+        if (!usemark) {
+            rdbTranscoderWrite(&transcoder, buf, nread);
+        } else {
+            size_t total = lastbytes_len + (size_t)nread;
+            if (total <= RDB_EOF_MARK_SIZE) {
+                memcpy(lastbytes + lastbytes_len, buf, nread);
+                lastbytes_len = total;
+            } else {
+                size_t emit = total - RDB_EOF_MARK_SIZE;
+                size_t from_win = emit < lastbytes_len ? emit : lastbytes_len;
+                size_t from_buf = emit - from_win;
+                if (from_win) rdbTranscoderWrite(&transcoder, lastbytes, from_win);
+                if (from_buf) rdbTranscoderWrite(&transcoder, buf, from_buf);
+                size_t rem = lastbytes_len - from_win;
+                if (rem) memmove(lastbytes, lastbytes + from_win, rem);
+                memcpy(lastbytes + rem, buf + from_buf, (size_t)nread - from_buf);
+                lastbytes_len = RDB_EOF_MARK_SIZE;
             }
+            /* A partial window can't be the mark, so gate on a full window. */
+            eof_reached = lastbytes_len == RDB_EOF_MARK_SIZE && memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0;
+        }
+        /* Transcoder errors are sticky, so one check after the feed suffices. */
+        if (transcoder.failed) {
+            replicaBioSaveServerLog(LL_WARNING,
+                                    "Error writing the received RDB to the DB dump file "
+                                    "needed for PRIMARY <-> REPLICA synchronization");
+            error = 1;
+            goto done;
         }
 
         /* Sync data on disk from time to time, otherwise at the end of the
          * transfer we may suffer a big delay as the memory buffers are copied
-         * into the actual disk. */
-        if (server.bio_repl_transfer_read >= repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC) {
-            off_t sync_size = server.bio_repl_transfer_read - repl_transfer_last_fsync_off;
+         * into the actual disk. Keyed on the file offset, which the transcoder
+         * advances (it differs from the wire offset once the codec changes). */
+        if (disk_write.written >= repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC) {
+            off_t sync_size = disk_write.written - repl_transfer_last_fsync_off;
             rdb_fsync_range(server.repl_transfer_fd, repl_transfer_last_fsync_off, sync_size);
             repl_transfer_last_fsync_off += sync_size;
         }
@@ -3276,7 +3315,18 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
         }
     } while (!eof_reached);
 
+    /* Finalize the on-disk stream: close the codec frame or write the recomputed
+     * plaintext CRC64 trailer. The held-back bytes (the $EOF mark) are dropped. */
+    if (rdbTranscoderFinish(&transcoder) == C_ERR) {
+        replicaBioSaveServerLog(LL_WARNING, "Error finalizing the received RDB on disk during PRIMARY <-> REPLICA sync");
+        error = 1;
+    } else if (disk_write.written > repl_transfer_last_fsync_off) {
+        rdb_fsync_range(server.repl_transfer_fd, repl_transfer_last_fsync_off,
+                        disk_write.written - repl_transfer_last_fsync_off);
+    }
+
 done:
+    rdbTranscoderFree(&transcoder);
     /* Restore the socket to the original state to continue
      * with normal replication. */
     connNonBlock(conn);

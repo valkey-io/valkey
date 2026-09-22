@@ -3897,8 +3897,10 @@ void parseInlineBuffer(client *c) {
     size_t querylen;
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
-    /* Search for end of line */
-    newline = strchr(c->querybuf + c->qb_pos, '\n');
+    /* Search for end of line. Use memchr rather than strchr: an embedded NUL
+     * byte would otherwise stop the scan before any newline, so the client
+     * would never make progress on this line. */
+    newline = memchr(c->querybuf + c->qb_pos, '\n', sdslen(c->querybuf) - c->qb_pos);
 
     /* Nothing to do without a \r\n */
     if (newline == NULL) {

@@ -99,6 +99,19 @@ start_server {tags {"protocol network"}} {
         assert_error "*unbalanced*" {r read}
     }
 
+    test "Inline command with embedded NUL byte does not stall the connection" {
+        reconnect
+        # The NUL terminates argument parsing; the rest of the line up to the
+        # newline is discarded and the following command is still processed.
+        r write "set foo bar\x00 ex 100\r\n"
+        r write "ping\r\n"
+        r flush
+        assert_equal "OK" [r read]
+        assert_equal "PONG" [r read]
+        assert_equal "bar" [r get foo]
+        assert_equal -1 [r ttl foo]
+    }
+
     test "Check CRLF when parsing the querybuf" {
         # Command) SET key value
         # RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n

@@ -103,59 +103,56 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
     $primary config set rdbcompression lz4
     $primary config set rdb-del-sync-files no
 
-    set disk_compression_modes {lz4}
-    if {$::fullsync_zstd_supported} {
-        lappend disk_compression_modes zstd
+    # Routing matrix: the primary serves a full sync disk-based when the negotiated
+    # wire codec equals its on-disk (rdbcompression) whole-stream codec, sending
+    # dump.rdb verbatim in that codec; otherwise it diverts to diskless in the wire
+    # codec, leaving dump.rdb untouched (no-clobber is asserted in
+    # rdb-compression.tcl). The wire codec is pinned via repl-compression on both
+    # ends (negotiation itself is covered in repl-compression.tcl; the replica-side
+    # handling of the received stream by the transcode matrix below). A swapdb
+    # replica keeps the assertions on the primary's decision and dump.rdb.
+    #   {rdbcompression wire target}
+    set routing_matrix {
+        {no   no   disk}
+        {lz4  lz4  disk}
+        {zstd zstd disk}
+        {no   lz4  diskless}
+        {lz4  no   diskless}
+        {lz4  zstd diskless}
+        {zstd lz4  diskless}
     }
-    foreach mode $disk_compression_modes {
-        start_server [list overrides [list save "" enable-debug-command local rdbcompression $mode repl-compression $mode]] {
-            set replica [srv 0 client]
+    foreach case $routing_matrix {
+        lassign $case rdbcompr wire target
+        if {($rdbcompr eq "zstd" || $wire eq "zstd") && !$::fullsync_zstd_supported} continue
+        test "Full sync with rdbcompression $rdbcompr + wire $wire routes to $target" {
+            $primary config set rdbcompression $rdbcompr
+            $primary config set repl-compression $wire
+            populate_compressible_dataset $primary "route-$rdbcompr-$wire"
 
-            test "[string toupper $mode] disk full sync produces and loads a compressed RDB" {
-                $primary config set rdbcompression $mode
-                $primary config set repl-compression $mode
-                populate_compressible_dataset $primary "$mode-disk"
+            start_server [list overrides [list save "" enable-debug-command local \
+                                              repl-compression $wire repl-diskless-load swapdb]] {
+                set replica [srv 0 client]
                 set primary_loglines [count_log_lines -1]
-                set replica_loglines [count_log_lines 0]
-
                 $replica replicaof $primary_host $primary_port
-                assert_replica_synced $primary $replica "($mode disk)"
+                assert_replica_synced $primary $replica "($rdbcompr/$wire -> $target)"
 
-                assert {[file exists [server_rdb_path $primary]]}
-                assert_equal 1 [rdb_is_compressed $primary]
-                assert_equal [dict get {lz4 1 zstd 2} $mode] [rdb_compression_codec $primary]
-                wait_for_log_messages -1 [list "*Disk-based full sync with compression: $mode*"] \
-                    $primary_loglines 50 100
-                wait_for_log_messages 0 [list "*Loading compressed RDB (algo=$mode) from *.rdb*"] \
-                    $replica_loglines 50 100
-
-                $primary set "$mode-disk:post" after
-                wait_for_value_to_propagate_to_replica $primary $replica "$mode-disk:post"
+                if {$target eq "disk"} {
+                    wait_for_log_messages -1 {"*Starting BGSAVE for SYNC with target: disk*"} \
+                        $primary_loglines 50 100
+                    # dump.rdb was produced by the disk-based sync, in rdbcompression.
+                    if {$rdbcompr eq "no"} {
+                        assert_equal 0 [rdb_is_compressed $primary]
+                    } else {
+                        assert_equal 1 [rdb_is_compressed $primary]
+                        assert_equal [dict get {lz4 1 zstd 2} $rdbcompr] [rdb_compression_codec $primary]
+                    }
+                } else {
+                    wait_for_log_messages -1 {"*Starting BGSAVE for SYNC with target: replicas sockets*"} \
+                        $primary_loglines 50 100
+                }
                 $replica replicaof no one
             }
         }
-    }
-
-    start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
-        set replica [srv 0 client]
-
-        test {Disk full sync: matching plaintext codecs yield a plaintext RDB that loads} {
-            $primary config set rdbcompression yes
-            $primary config set repl-compression no
-            populate_compressible_dataset $primary "plain"
-            set primary_loglines [count_log_lines -1]
-
-            $replica replicaof $primary_host $primary_port
-            assert_replica_synced $primary $replica "(plaintext disk sync)"
-
-            wait_for_log_messages -1 {"*Starting BGSAVE for SYNC with target: disk*"} $primary_loglines 50 100
-            assert_equal 0 [rdb_is_compressed $primary]
-
-            $replica replicaof no one
-        }
-        # Restore the fixture defaults for subsequent shared-primary tests.
-        $primary config set rdbcompression lz4
-        $primary config set repl-compression no
     }
 
     # Regression: a size-framed ($<len>, no EOF mark) compressed disk RDB, loaded
@@ -186,26 +183,6 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
     }
 
     if {$::fullsync_zstd_supported} {
-        start_server {overrides {save "" enable-debug-command local repl-compression zstd}} {
-            set replica [srv 0 client]
-
-            test {LZ4 disk full sync uses the capability advertised by a ZSTD replica} {
-                $primary config set rdbcompression lz4
-                populate_compressible_dataset $primary "zstd-lz4-fallback"
-                set primary_loglines [count_log_lines -1]
-
-                $replica replicaof $primary_host $primary_port
-                assert_replica_synced $primary $replica "(zstd replica, lz4 RDB fallback)"
-
-                assert_equal 1 [rdb_is_compressed $primary]
-                assert_equal 1 [rdb_compression_codec $primary]
-                wait_for_log_messages -1 {"*Disk-based full sync with compression: lz4*"} \
-                    $primary_loglines 50 100
-
-                $replica replicaof no one
-            }
-        }
-
         start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
             set replica [srv 0 client]
 

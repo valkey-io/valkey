@@ -1,8 +1,9 @@
 # Full-sync streaming compression: end-to-end coverage across disk-based,
 # diskless, and dual-channel full sync, both replica load paths, negative cases
 # (truncation, corruption, premature EOF, non-capable cohorts), and byte
-# accounting. Asymmetric policy: an all-capable group gets a compressed round; any
-# non-capable member forces one plaintext round for all.
+# accounting. Cohort policy: replicas parked in one BGSAVE wait are split by their
+# negotiated wire codec into separate rounds, so a mixed group runs compressed and
+# plaintext rounds side by side instead of downgrading the whole group to plaintext.
 
 # --- helpers --------------------------------------------------------------
 
@@ -60,8 +61,8 @@ proc start_fake_primary {payload announce} {
 
 # Park both replicas in WAIT_BGSAVE_START together: a slow manual BGSAVE
 # occupies the RDB child slot (syncCommand defers to replicationCron), so the
-# following grouped round makes its group-AND capability decision over both
-# waiters deterministically. Resetting the delay lets that round run fast.
+# following round deterministically splits both waiters into cohorts by their
+# negotiated wire codec. Resetting the delay lets that round run fast.
 proc park_replicas_for_grouped_bgsave {primary replica1 replica2 primary_host primary_port} {
     $primary config set rdb-key-save-delay 5000
     assert_match {*Background saving started*} [$primary bgsave]

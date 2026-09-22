@@ -234,7 +234,6 @@ int moduleAllModulesHandleForkless(void);
 int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c);
 sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections);
 void moduleFireServerEvent(uint64_t eid, int subid, void *data);
-int moduleAnyKeyMetadataRegistered(void);
 list *moduleGatherKeyMetadata(robj *key, int dbid);
 int moduleRestoreKeyMetadata(const char *modulename, robj *key, robj *metadata, int dbid);
 void processModuleLoadingProgressEvent(int is_aof);

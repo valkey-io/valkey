@@ -311,7 +311,7 @@ void restoreCommand(client *c) {
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "metadata")) {
             /* Remaining args are (module-name, value) pairs. */
             meta_start = j + 1;
-            if (additional % 2 != 0) {
+            if (additional < 2 || additional % 2 != 0) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }

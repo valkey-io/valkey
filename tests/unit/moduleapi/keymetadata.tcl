@@ -87,6 +87,17 @@ start_server {tags {"modules"}} {
         r del src
         catch {r restore src 0 $payload METADATA keymetadata} e
         assert_match {*syntax*} $e
+        assert_equal [r exists src] {0}
+    }
+
+    test {RESTORE METADATA with no pairs is a syntax error} {
+        r flushall
+        r set src hello
+        set payload [r dump src]
+        r del src
+        catch {r restore src 0 $payload METADATA} e
+        assert_match {*syntax*} $e
+        assert_equal [r exists src] {0}
     }
 }
 

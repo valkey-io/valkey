@@ -8626,18 +8626,6 @@ int VM_RegisterKeyMetadata(ValkeyModuleCtx *ctx,
     return VALKEYMODULE_OK;
 }
 
-/* Return 1 if any loaded module has registered a key-metadata dump callback. */
-int moduleAnyKeyMetadataRegistered(void) {
-    listIter li;
-    listNode *ln;
-    listRewind(modules, &li);
-    while ((ln = listNext(&li))) {
-        ValkeyModule *module = listNodeValue(ln);
-        if (module->key_meta_dump_cb) return 1;
-    }
-    return 0;
-}
-
 /* Invoke every registered dump callback for 'key' and gather the results into a
  * newly-allocated list of robj as alternating (module-name, metadata-value)
  * pairs, or NULL if no module produced metadata. The caller owns the returned

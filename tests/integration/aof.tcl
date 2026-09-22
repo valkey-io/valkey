@@ -563,7 +563,11 @@ tags {"aof external:skip logreqres:skip"} {
 
             set base_aof [get_base_aof_path r]
             set manifest [file join [file dirname $base_aof] "[lindex [r config get appendfilename] 1]$::manifest_suffix"]
-            assert_equal "VALKEY" [read_binary_file_prefix $base_aof 6]
+            set fd [open $base_aof r]
+            fconfigure $fd -translation binary
+            set base_prefix [read $fd 6]
+            close $fd
+            assert_equal "VALKEY" $base_prefix
 
             set failed [catch {
                 exec $::VALKEY_CHECK_AOF_BIN $manifest

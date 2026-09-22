@@ -31,6 +31,9 @@ int vcsBuildEnvelope(uint8_t *buf, compressionAlgo algo, uint8_t stream_kind) {
     case ALGO_LZ4:
         codec = VCS_CODEC_LZ4;
         break;
+    case ALGO_ZSTD:
+        codec = VCS_CODEC_ZSTD;
+        break;
     default:
         return C_ERR;
     }
@@ -63,9 +66,13 @@ static int readVcsEnvelope(const uint8_t *buf, uint8_t expected_stream_kind, com
     case VCS_CODEC_LZ4:
         *algo = ALGO_LZ4;
         break;
+    case VCS_CODEC_ZSTD:
+        *algo = ALGO_ZSTD;
+        break;
     default:
         return C_ERR;
     }
+    if (!streamCodecIsSupported(*algo)) return C_ERR;
     if (buf[VCS_OFFSET_RESERVED] != 0) return C_ERR;
     if (buf[VCS_OFFSET_STREAM_KIND] != expected_stream_kind) return C_ERR;
     return C_OK;
@@ -485,8 +492,6 @@ streamPushReaderFeedCodec(streamPushReader *reader, const uint8_t *in, size_t le
             *budget -= (size_t)produced;
         }
         off += consumed;
-        /* Report the frame end; for a long-lived stream this means the
-         * source ended it unexpectedly. */
         if (reader->decompressor.frame_done) {
             *input_consumed = off;
             return STREAM_PUSH_READER_FRAME_DONE;
@@ -570,6 +575,11 @@ bool streamPushReaderHasPendingDecode(const streamPushReader *reader) {
     return reader->codec_needs_drain || reader->pending_input != NULL;
 }
 
+int streamPushReaderStartNextFrame(streamPushReader *reader) {
+    if (reader->state != STREAM_PUSH_READER_COMPRESSED || !reader->decompressor.frame_done) return C_ERR;
+    return streamDecompressorReset(&reader->decompressor);
+}
+
 streamPushReaderResult streamPushReaderFeed(streamPushReader *reader, const void *src, size_t len, sds *out, size_t output_budget) {
     bool resuming = streamPushReaderHasPendingDecode(reader);
     serverAssert(len == 0 || !resuming);
@@ -595,7 +605,8 @@ streamPushReaderResult streamPushReaderFeed(streamPushReader *reader, const void
             reader->pending_input = NULL;
             reader->pending_input_pos = 0;
         }
-    } else if (result == STREAM_PUSH_READER_NEED_OUTPUT && consumed < input_len) {
+    } else if ((result == STREAM_PUSH_READER_NEED_OUTPUT || result == STREAM_PUSH_READER_FRAME_DONE) &&
+               consumed < input_len) {
         reader->pending_input = sdsnewlen(input + consumed, input_len - consumed);
     }
     reader->codec_needs_drain = result == STREAM_PUSH_READER_NEED_OUTPUT && consumed == input_len;

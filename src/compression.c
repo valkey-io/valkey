@@ -6,6 +6,7 @@
 
 #include "compression.h"
 #include "compression_lz4.h"
+#include "compression_zstd.h"
 #include "server.h"
 #include "serverassert.h"
 #include <string.h>
@@ -19,8 +20,43 @@ const char *compressionAlgoName(compressionAlgo algo) {
         return "lzf";
     case ALGO_LZ4:
         return "lz4";
+    case ALGO_ZSTD:
+        return "zstd";
     default:
         return "unknown";
+    }
+}
+
+bool streamCodecIsSupported(compressionAlgo algo) {
+    switch (algo) {
+    case ALGO_LZ4:
+        return true;
+    case ALGO_ZSTD:
+        return compressionZstdIsSupported();
+    default:
+        return false;
+    }
+}
+
+uint8_t streamCodecIntegrityChecksumFlags(compressionAlgo algo) {
+    switch (algo) {
+    case ALGO_LZ4:
+        return STREAM_CHECKSUM_BLOCK;
+    case ALGO_ZSTD:
+        return STREAM_CHECKSUM_CONTENT;
+    default:
+        panic("Unsupported stream compression algorithm: %d", algo);
+    }
+}
+
+bool streamCodecNeedsBoundedFramesForIntegrity(compressionAlgo algo) {
+    switch (algo) {
+    case ALGO_LZ4:
+        return false;
+    case ALGO_ZSTD:
+        return true;
+    default:
+        panic("Unsupported stream compression algorithm: %d", algo);
     }
 }
 
@@ -42,6 +78,8 @@ int streamCompressorInit(streamCompressor *compressor,
     switch (algo) {
     case ALGO_LZ4:
         return compressionLz4CompressorInit(compressor);
+    case ALGO_ZSTD:
+        return compressionZstdCompressorInit(compressor);
     default:
         return C_ERR;
     }
@@ -51,6 +89,8 @@ size_t streamCompressorOutputBound(const streamCompressor *compressor, size_t in
     switch (compressor->algo) {
     case ALGO_LZ4:
         return compressionLz4OutputBound(input_len);
+    case ALGO_ZSTD:
+        return compressionZstdOutputBound(input_len);
     default:
         panic("Unsupported stream compression algorithm: %d", compressor->algo);
     }
@@ -71,6 +111,8 @@ ssize_t streamCompressorFeed(streamCompressor *compressor,
     switch (compressor->algo) {
     case ALGO_LZ4:
         return compressionLz4CompressFeed(compressor, output, output_capacity, input, input_len, flush_mode);
+    case ALGO_ZSTD:
+        return compressionZstdCompressFeed(compressor, output, output_capacity, input, input_len, flush_mode);
     default:
         panic("Unsupported stream compression algorithm: %d", compressor->algo);
     }
@@ -80,6 +122,9 @@ void streamCompressorFree(streamCompressor *compressor) {
     switch (compressor->algo) {
     case ALGO_LZ4:
         compressionLz4CompressorFree(compressor);
+        break;
+    case ALGO_ZSTD:
+        compressionZstdCompressorFree(compressor);
         break;
     default:
         break;
@@ -99,6 +144,8 @@ int streamDecompressorInit(streamDecompressor *decompressor,
     switch (algo) {
     case ALGO_LZ4:
         return compressionLz4DecompressorInit(decompressor);
+    case ALGO_ZSTD:
+        return compressionZstdDecompressorInit(decompressor);
     default:
         return C_ERR;
     }
@@ -117,8 +164,22 @@ ssize_t streamDecompressorFeed(streamDecompressor *decompressor,
     case ALGO_LZ4:
         return compressionLz4DecompressFeed(decompressor, output, output_capacity,
                                             input, input_len, input_consumed);
+    case ALGO_ZSTD:
+        return compressionZstdDecompressFeed(decompressor, output, output_capacity,
+                                             input, input_len, input_consumed);
     default:
         panic("Unsupported stream decompression algorithm: %d", decompressor->algo);
+    }
+}
+
+int streamDecompressorReset(streamDecompressor *decompressor) {
+    switch (decompressor->algo) {
+    case ALGO_LZ4:
+        return compressionLz4DecompressorReset(decompressor);
+    case ALGO_ZSTD:
+        return compressionZstdDecompressorReset(decompressor);
+    default:
+        return C_ERR;
     }
 }
 
@@ -128,6 +189,9 @@ void streamDecompressorFree(streamDecompressor *decompressor) {
         break;
     case ALGO_LZ4:
         compressionLz4DecompressorFree(decompressor);
+        break;
+    case ALGO_ZSTD:
+        compressionZstdDecompressorFree(decompressor);
         break;
     default:
         panic("Unsupported stream decompression algorithm: %d", decompressor->algo);

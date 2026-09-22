@@ -35,6 +35,7 @@
 
 /* Stable wire codec identifier. */
 #define VCS_CODEC_LZ4 0x01
+#define VCS_CODEC_ZSTD 0x02
 
 /* Identifies an RDB payload in the envelope. */
 #define VCS_STREAM_RDB 0x01
@@ -82,7 +83,8 @@ int vcsBuildEnvelope(uint8_t *buf, compressionAlgo algo, uint8_t stream_kind);
 
 /* Default decompressed-output buffer size. Tiny caller values are clamped up
  * so the reader can always make forward progress without growing internal
- * state. The compressed-input buffer only needs to hold one LZ4 block. */
+ * state. Compressed input is consumed incrementally through a fixed-size
+ * staging buffer. */
 #define STREAM_READER_BUFFER_SIZE_DEFAULT (1024 * 1024)
 #define STREAM_READER_BUFFER_SIZE_MIN (128 * 1024)
 #define STREAM_READER_COMPRESSED_BUFFER_SIZE (128 * 1024)
@@ -160,7 +162,7 @@ void streamReaderFree(streamReader *reader);
  * bytes are forwarded verbatim. Output is appended to a caller-provided sds. */
 
 /* OK and ERR intentionally match C_OK and C_ERR. The additional results
- * distinguish a closed live frame from resumable output backpressure. */
+ * distinguish a completed frame from resumable output backpressure. */
 typedef enum {
     STREAM_PUSH_READER_OK = 0,          /* Input consumed; output (possibly 0 bytes) appended. */
     STREAM_PUSH_READER_ERR = -1,        /* Envelope or codec error. */
@@ -191,6 +193,8 @@ typedef struct streamPushReader {
 void streamPushReaderInit(streamPushReader *reader, uint8_t expected_stream_kind);
 void streamPushReaderFree(streamPushReader *reader);
 bool streamPushReaderHasPendingDecode(const streamPushReader *reader);
+/* Resume after FRAME_DONE without expecting another VCS envelope. */
+int streamPushReaderStartNextFrame(streamPushReader *reader);
 streamPushReaderResult streamPushReaderFeed(streamPushReader *reader, const void *src, size_t len, sds *out, size_t output_budget);
 
 #endif /* COMPRESSION_STREAM_H */

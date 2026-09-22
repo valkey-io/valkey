@@ -1420,11 +1420,9 @@ static void returnAllItemsToMainThread(bgIterator *it) {
             break;
         case BGITERATOR_ITEM_SWAPDB:
             it->swapdb_queued--;
-            it->barrier_items--;
             break;
         case BGITERATOR_ITEM_FLUSHDB:
             it->flushdb_queued--;
-            it->barrier_items--;
             break;
 
         case BGITERATOR_ITEM_COMPLETE:

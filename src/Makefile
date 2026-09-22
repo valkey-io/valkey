@@ -33,6 +33,7 @@ ifneq ($(OPTIMIZATION),-O0)
 endif
 DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4
 NODEPS:=clean distclean
+CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out $(NODEPS),$(MAKECMDGOALS)),,yes))
 
 # Default settings
 STD=-pedantic
@@ -257,6 +258,46 @@ endif
 
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/lz4
+
+# Zstandard support is disabled by default.
+BUILD_ZSTD ?= no
+
+ifneq ($(CLEAN_ONLY),yes)
+ifneq ($(filter $(BUILD_ZSTD),yes no),$(BUILD_ZSTD))
+$(error BUILD_ZSTD must be yes or no)
+endif
+endif
+
+ifeq ($(BUILD_ZSTD),yes)
+ifneq ($(CLEAN_ONLY),yes)
+ifdef ZSTD_PREFIX
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(ZSTD_PREFIX)/lib/libzstd.a \
+    $(ZSTD_PREFIX)/lib64/libzstd.a))
+	ZSTD_CFLAGS := -I$(ZSTD_PREFIX)/include
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE)
+else
+ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
+ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
+# Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while installing the
+# archive to the multiarch directory, so also probe next to the .pc file.
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
+    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+ifneq ($(ZSTD_PKGCONFIG),0)
+$(error BUILD_ZSTD=yes requires static Zstandard 1.4.7 or newer)
+endif
+	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd)
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
+endif
+ifeq ($(ZSTD_STATIC_ARCHIVE),)
+$(error BUILD_ZSTD=yes requires a static Zstandard library)
+endif
+	FINAL_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
+	FINAL_LIBS += $(ZSTD_LIBS)
+endif
+endif
 
 # Lua scripting engine module
 ifeq ($(BUILD_LUA),no)
@@ -491,6 +532,7 @@ ENGINE_SERVER_OBJ = \
     commands.o \
     compression.o \
     compression_lz4.o \
+    compression_zstd.o \
     compression_stream.o \
     config.o \
     connection.o \
@@ -694,6 +736,8 @@ persist-settings: distclean
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo OPENSSL_PREFIX=$(OPENSSL_PREFIX) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
+	echo BUILD_ZSTD=$(BUILD_ZSTD) >> .make-settings
+	echo ZSTD_PREFIX=$(ZSTD_PREFIX) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings

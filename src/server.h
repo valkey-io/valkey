@@ -469,10 +469,13 @@ typedef enum {
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
 #define REPLICA_CAPA_LZ4 (1 << 4)               /* Accepts LZ4 streaming-compressed replication payloads. */
+#define REPLICA_CAPA_ZSTD (1 << 5)              /* Accepts Zstd streaming-compressed replication payloads. */
+#define REPLICA_CAPA_COMPRESSION_MASK (REPLICA_CAPA_LZ4 | REPLICA_CAPA_ZSTD)
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
 #define REPLICA_CAPA_LZ4_STR "lz4"                             /* Accepts LZ4 streaming-compressed replication payloads. */
+#define REPLICA_CAPA_ZSTD_STR "zstd"                           /* Accepts Zstd streaming-compressed replication payloads. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -625,13 +628,15 @@ typedef enum {
     RDB_COMPRESSION_NO = 0, /* Disable RDB compression. */
     RDB_COMPRESSION_YES,    /* Use the default compression algorithm. */
     RDB_COMPRESSION_LZF,    /* Pin legacy per-string LZF compression. */
-    RDB_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
+    RDB_COMPRESSION_LZ4,    /* Pin whole-stream LZ4 compression. */
+    RDB_COMPRESSION_ZSTD    /* Pin whole-stream Zstandard compression. */
 } rdb_compression_mode;
 
 typedef enum {
     REPL_COMPRESSION_NO = 0, /* Disable replication compression. */
     REPL_COMPRESSION_YES,    /* Use the default compression algorithm (currently LZ4). */
-    REPL_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
+    REPL_COMPRESSION_LZ4,    /* Pin whole-stream LZ4 compression. */
+    REPL_COMPRESSION_ZSTD    /* Pin whole-stream Zstandard compression. */
 } repl_compression_mode;
 
 #define REPL_COMPRESSION_CAPA_UNKNOWN -1
@@ -1295,12 +1300,18 @@ typedef struct ClientPubSubData {
  * shared by steady-state and dual-channel replication paths. */
 #define REPL_DECODE_EVENT_BUDGET (1024 * 1024)
 
+/* Bound compression work and staging memory for one write dispatch. */
+#define REPL_COMPRESSION_BATCH_SIZE (1024 * 1024)
+
 /* Primary-side compression state for one replica link. */
 typedef struct replicaCompressionState {
-    streamCompressor compressor;     /* The frame stays open for the lifetime of the link. */
+    streamCompressor compressor;     /* Codec state retained across replication write batches. */
+    bool envelope_written;           /* The VCS envelope is emitted once per link. */
     sds out_buf;                     /* Compressed bytes waiting for the socket. */
     size_t out_buf_pos;              /* Next byte to send from out_buf. */
     size_t batch_uncompressed_bytes; /* Backlog bytes represented by out_buf. */
+    size_t frame_uncompressed_bytes; /* Raw bytes accumulated in the current codec frame. */
+    size_t frame_max_bytes;          /* Close a frame at this raw-byte threshold, or 0 to keep it open. */
     long long compressed_bytes;      /* Completed batches, for INFO replication. */
     long long uncompressed_bytes;    /* Completed batches, for INFO replication. */
 } replicaCompressionState;
@@ -2313,7 +2324,7 @@ struct valkeyServer {
     int repl_ignore_disk_write_error;     /* Configures whether replicas panic when unable to
                                            * persist writes to AOF. */
 
-    int repl_compression_advertised;             /* Whether this replica advertised LZ4 in the current upstream
+    int repl_compression_advertised;             /* Compression algorithm advertised in the current upstream
                                                   * handshake, or REPL_COMPRESSION_CAPA_UNKNOWN before REPLCONF capa. */
     struct streamPushReader *repl_stream_reader; /* Decoder for the upstream command stream, or NULL for plaintext. */
 

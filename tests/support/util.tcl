@@ -1152,6 +1152,17 @@ proc config_get_set {param value {options {}}} {
     return $config
 }
 
+# Return whether a CONFIG parameter accepts a value without changing its
+# current setting.
+proc config_value_supported {client param value} {
+    set old [lindex [$client config get $param] 1]
+    set supported [expr {[catch {$client config set $param $value}] == 0}]
+    if {$supported} {
+        $client config set $param $old
+    }
+    return $supported
+}
+
 proc delete_lines_with_pattern {filename tmpfilename pattern} {
     set fh_in [open $filename r]
     set fh_out [open $tmpfilename w]

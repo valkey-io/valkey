@@ -11,7 +11,14 @@ proc rdb_is_compressed {client} {
     return [expr {$header eq "VCS"}]
 }
 
-# Compressible, multi-type dataset so an LZ4 frame is actually produced.
+proc rdb_compression_codec {client} {
+    binary scan [read_binary_file_prefix [server_rdb_path $client] 5] cu* bytes
+    return [lindex $bytes 4]
+}
+
+set ::fullsync_zstd_supported 0
+
+# Compressible, multi-type dataset so a streaming frame is actually produced.
 proc populate_compressible_dataset {client prefix {n 300}} {
     $client flushall
     for {set i 0} {$i < $n} {incr i} {
@@ -83,37 +90,48 @@ proc park_replicas_for_grouped_bgsave {primary replica1 replica2 primary_host pr
 # so each test sets its mode and repopulates its own prefix; the compression-off
 # test restores the fixture default (lz4) at its end for later shared tests.
 # Replicas are per-test nested start_servers because their repl-compression
-# settings control whether they advertise the LZ4 capability.
+# settings control which codec capabilities they advertise.
 # ============================================================================
 
 start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides {save "" enable-debug-command local}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
+    set ::fullsync_zstd_supported [config_value_supported $primary rdbcompression zstd]
 
     $primary config set repl-diskless-sync no
     $primary config set rdbcompression lz4
     $primary config set rdb-del-sync-files no
 
-    start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
-        set replica [srv 0 client]
+    set disk_compression_modes {lz4}
+    if {$::fullsync_zstd_supported} {
+        lappend disk_compression_modes zstd
+    }
+    foreach mode $disk_compression_modes {
+        start_server [list overrides [list save "" enable-debug-command local repl-compression $mode]] {
+            set replica [srv 0 client]
 
-        test {Disk full sync: all-capable group produces a compressed RDB that loads} {
-            $primary config set rdbcompression lz4
-            populate_compressible_dataset $primary "cap"
-            set primary_loglines [count_log_lines -1]
+            test "[string toupper $mode] disk full sync produces and loads a compressed RDB" {
+                $primary config set rdbcompression $mode
+                populate_compressible_dataset $primary "$mode-disk"
+                set primary_loglines [count_log_lines -1]
+                set replica_loglines [count_log_lines 0]
 
-            $replica replicaof $primary_host $primary_port
-            assert_replica_synced $primary $replica "(case1 capable)"
+                $replica replicaof $primary_host $primary_port
+                assert_replica_synced $primary $replica "($mode disk)"
 
-            assert {[file exists [server_rdb_path $primary]]}
-            assert_equal 1 [rdb_is_compressed $primary]
-            wait_for_log_messages -1 {"*Disk-based full sync with compression: lz4*"} $primary_loglines 50 100
+                assert {[file exists [server_rdb_path $primary]]}
+                assert_equal 1 [rdb_is_compressed $primary]
+                assert_equal [dict get {lz4 1 zstd 2} $mode] [rdb_compression_codec $primary]
+                wait_for_log_messages -1 [list "*Disk-based full sync with compression: $mode*"] \
+                    $primary_loglines 50 100
+                wait_for_log_messages 0 [list "*Loading compressed RDB (algo=$mode) from *.rdb*"] \
+                    $replica_loglines 50 100
 
-            $primary set cap:post "after-sync"
-            wait_for_value_to_propagate_to_replica $primary $replica cap:post
-
-            $replica replicaof no one
+                $primary set "$mode-disk:post" after
+                wait_for_value_to_propagate_to_replica $primary $replica "$mode-disk:post"
+                $replica replicaof no one
+            }
         }
     }
 
@@ -168,53 +186,80 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
             $replica replicaof no one
         }
     }
+
+    if {$::fullsync_zstd_supported} {
+        start_server {overrides {save "" enable-debug-command local repl-compression zstd}} {
+            set replica [srv 0 client]
+
+            test {LZ4 disk full sync uses the capability advertised by a ZSTD replica} {
+                $primary config set rdbcompression lz4
+                populate_compressible_dataset $primary "zstd-lz4-fallback"
+                set primary_loglines [count_log_lines -1]
+
+                $replica replicaof $primary_host $primary_port
+                assert_replica_synced $primary $replica "(zstd replica, lz4 RDB fallback)"
+
+                assert_equal 1 [rdb_is_compressed $primary]
+                assert_equal 1 [rdb_compression_codec $primary]
+                wait_for_log_messages -1 {"*Disk-based full sync with compression: lz4*"} \
+                    $primary_loglines 50 100
+
+                $replica replicaof no one
+            }
+        }
+    }
 }
 
-# Mixed disk group: force both replicas to park in WAIT_BGSAVE_START together so
-# the group-AND decision is exercised directly. A slow manual BGSAVE occupies the
-# RDB child slot; a disk replica can't start its own BGSAVE (syncCommand defers to
-# replicationCron), so both park. The cron then groups both waiters and the AND
-# clears the LZ4 capability. Deterministic because the manual BGSAVE is still
-# running when both register (asserted via connected_slaves==2); one round is
-# asserted via the "Starting BGSAVE for SYNC" delta.
-
+# Mixed disk groups: force both replicas to park in WAIT_BGSAVE_START together
+# so the capability intersection is exercised directly. A slow manual BGSAVE
+# occupies the RDB child slot, both replicas register, and replicationCron
+# groups them into one save. Any member that lacks the selected codec makes the
+# shared RDB plaintext for the whole group.
 start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides {save "" enable-debug-command local}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
 
     $primary config set repl-diskless-sync no
-    $primary config set rdbcompression lz4
     $primary config set rdb-del-sync-files no
-    # Enough keys so the manual BGSAVE stays alive for both replicas to register.
-    populate_compressible_dataset $primary "grp" 800
 
-    start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
-        set capable [srv 0 client]
+    set grouped_cases {
+        {lz4 lz4 no}
+    }
+    if {$::fullsync_zstd_supported} {
+        lappend grouped_cases {zstd zstd lz4}
+    }
+    foreach grouped_case $grouped_cases {
+        lassign $grouped_case selected_mode capable_mode incompatible_mode
+        $primary config set rdbcompression $selected_mode
+        # Enough keys so the manual BGSAVE stays alive for both replicas to register.
+        populate_compressible_dataset $primary "$selected_mode-group" 800
 
-        start_server {overrides {save "" enable-debug-command local repl-compression no}} {
-            set noncap [srv 0 client]
+        start_server [list overrides [list save "" enable-debug-command local repl-compression $capable_mode]] {
+            set capable [srv 0 client]
 
-            test {Disk full sync: a single grouped BGSAVE with a non-capable member is plaintext for all} {
-                # One round == one "Starting BGSAVE for SYNC" in the primary log.
-                # srv -2 is the primary inside this doubly-nested scope.
-                set rounds_before [count_log_message -2 {Starting BGSAVE for SYNC}]
-                set primary_loglines [count_log_lines -2]
+            start_server [list overrides [list save "" enable-debug-command local repl-compression $incompatible_mode]] {
+                set incompatible [srv 0 client]
 
-                park_replicas_for_grouped_bgsave $primary $capable $noncap $primary_host $primary_port
+                test "[string toupper $selected_mode] grouped disk full sync is plaintext with an incompatible member" {
+                    set rounds_before [count_log_message -2 {Starting BGSAVE for SYNC}]
+                    set primary_loglines [count_log_lines -2]
 
-                assert_replica_synced $primary $capable "(case3b capable, grouped)"
-                assert_replica_synced $primary $noncap   "(case3b non-capable, grouped)"
+                    park_replicas_for_grouped_bgsave \
+                        $primary $capable $incompatible $primary_host $primary_port
 
-                # Exactly one BGSAVE served both -> they were grouped (AND precondition).
-                assert_equal 1 [expr {[count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before}]
+                    assert_replica_synced $primary $capable "($selected_mode capable)"
+                    assert_replica_synced $primary $incompatible "($selected_mode incompatible)"
+                    assert_equal 1 [expr {
+                        [count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before
+                    }]
+                    assert_equal 0 [rdb_is_compressed $primary]
+                    verify_no_log_message -2 \
+                        "*Disk-based full sync with compression: $selected_mode*" $primary_loglines
 
-                # AND result: the grouped RDB is plaintext (capable replica downgraded too).
-                assert_equal 0 [rdb_is_compressed $primary]
-                verify_no_log_message -2 "*Disk-based full sync with compression: lz4*" $primary_loglines
-
-                $noncap replicaof no one
-                $capable replicaof no one
+                    $incompatible replicaof no one
+                    $capable replicaof no one
+                }
             }
         }
     }
@@ -412,48 +457,62 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
 
+    set diskless_compression_modes {lz4}
+    if {$::fullsync_zstd_supported} {
+        lappend diskless_compression_modes zstd
+    }
+
     # disabled: replica copies the payload to a temp file, then rdbLoad() auto-decompresses.
-    test {Disk-receive (repl-diskless-load disabled) + diskless compressed save loads correctly} {
-        set primary_loglines [count_log_lines 0]
-        populate_compressible_dataset $primary "diskrecv"
+    foreach mode $diskless_compression_modes {
+        test "[string toupper $mode] disk-receive (repl-diskless-load disabled) loads a diskless compressed save" {
+            $primary config set repl-compression $mode
+            set primary_loglines [count_log_lines 0]
+            populate_compressible_dataset $primary "$mode-diskrecv"
 
-        start_server {overrides {save "" repl-compression lz4 repl-diskless-load disabled}} {
-            set replica [srv 0 client]
-            set replica_loglines [count_log_lines 0]
-            $replica replicaof $primary_host $primary_port
+            start_server [list overrides [list save "" repl-compression $mode repl-diskless-load disabled]] {
+                set replica [srv 0 client]
+                set replica_loglines [count_log_lines 0]
+                $replica replicaof $primary_host $primary_port
 
-            assert_replica_synced $primary $replica "(disk-receive default load)"
+                assert_replica_synced $primary $replica "($mode disk-receive)"
 
-            wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
-            wait_for_log_messages -1 {"*Diskless full sync with compression: lz4*"} $primary_loglines 50 100
-            # Path B: disabled load reads from the received file; match "from <file>.rdb", not "from primary".
-            wait_for_log_messages 0 {"*Loading compressed RDB (algo=lz4) from *.rdb*"} $replica_loglines 50 100
+                wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
+                wait_for_log_messages -1 [list "*Diskless full sync with compression: $mode*"] \
+                    $primary_loglines 50 100
+                # Path B: disabled load reads from the received file; match
+                # "from <file>.rdb", not "from primary".
+                wait_for_log_messages 0 [list "*Loading compressed RDB (algo=$mode) from *.rdb*"] \
+                    $replica_loglines 50 100
 
-            $replica replicaof no one
+                $replica replicaof no one
+            }
         }
     }
 
-    # Diskless compresses the RDB payload as an LZ4 VCS frame over the socket; the
-    # $EOF:<mark> framing stays uncompressed so transfer boundaries are unchanged.
-    test {Diskless full sync compresses the RDB payload for a capable replica} {
-        set primary_loglines [count_log_lines 0]
-        populate_compressible_dataset $primary diskless-full-sync
+    # The VCS payload uses the selected codec while the $EOF:<mark> framing
+    # stays uncompressed, so transfer boundaries are unchanged.
+    foreach mode $diskless_compression_modes {
+        test "[string toupper $mode] diskless full sync loads directly from the socket" {
+            $primary config set repl-compression $mode
+            set primary_loglines [count_log_lines 0]
+            populate_compressible_dataset $primary "$mode-diskless"
 
-        start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb}} {
-            set replica [srv 0 client]
-            set replica_loglines [count_log_lines 0]
-            $replica replicaof $primary_host $primary_port
+            start_server [list overrides [list save "" repl-compression $mode repl-diskless-load swapdb]] {
+                set replica [srv 0 client]
+                set replica_loglines [count_log_lines 0]
+                $replica replicaof $primary_host $primary_port
 
-            assert_replica_synced $primary $replica "(compressed diskless full sync)"
+                assert_replica_synced $primary $replica "($mode diskless swapdb)"
+                wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
+                wait_for_log_messages -1 [list "*Diskless full sync with compression: $mode*"] \
+                    $primary_loglines 50 100
+                wait_for_log_messages 0 [list "*Loading compressed RDB (algo=$mode) from primary*"] \
+                    $replica_loglines 50 100
 
-            wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
-            wait_for_log_messages -1 {"*Diskless full sync with compression: lz4*"} $primary_loglines 50 100
-            wait_for_log_messages 0 {"*Loading compressed RDB (algo=lz4) from primary*"} $replica_loglines 50 100
-
-            $primary set diskless-full-sync:post after
-            wait_for_value_to_propagate_to_replica $primary $replica diskless-full-sync:post
-
-            $replica replicaof no one
+                $primary set "$mode-diskless:post" after
+                wait_for_value_to_propagate_to_replica $primary $replica "$mode-diskless:post"
+                $replica replicaof no one
+            }
         }
     }
 

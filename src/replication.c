@@ -140,16 +140,27 @@ static bool replicaAcceptsCompressionAlgorithm(int replica_capa, compressionAlgo
     }
 }
 
-static compressionAlgo replicaNegotiatedCompressionAlgorithm(client *replica) {
-    compressionAlgo configured_algo = replCompressionAlgorithm();
-    return replicaAcceptsCompressionAlgorithm(replica->repl_data->replica_capa, configured_algo) ? configured_algo : ALGO_NONE;
+/* Negotiate the wire compression codec for a replica: the strongest codec that
+ * the configured repl-compression permits (as a ceiling) and that the replica
+ * advertised it can decode. Codec strength follows the compressionAlgo enum
+ * order (higher value = stronger), so this walks down from the configured codec
+ * and returns the first the replica accepts; ALGO_NONE (plaintext) is always
+ * accepted and forms the floor. A codec stronger than configured is never used,
+ * and a replica that cannot decode the configured codec falls back to the
+ * strongest weaker one it can (e.g. a zstd primary serves an lz4-only replica
+ * with lz4 rather than dropping to plaintext). */
+static compressionAlgo replicaNegotiatedCompressionAlgorithm(int replica_capa) {
+    for (int algo = replCompressionAlgorithm(); algo > ALGO_NONE; algo--) {
+        if (replicaAcceptsCompressionAlgorithm(replica_capa, algo)) return algo;
+    }
+    return ALGO_NONE;
 }
 
 /* True when the replica's live transport no longer matches what the current
  * config would negotiate for it. */
 static bool replicaCompressionNeedsRenegotiation(client *replica) {
     compressionAlgo active = replica->repl_data->repl_compression ? replica->repl_data->repl_compression->compressor.algo : ALGO_NONE;
-    return replicaNegotiatedCompressionAlgorithm(replica) != active;
+    return replicaNegotiatedCompressionAlgorithm(replica->repl_data->replica_capa) != active;
 }
 
 /* Runtime repl-compression changes converge by reconnect, since a live link
@@ -213,7 +224,7 @@ static void reconcileUpstreamCompression(void) {
  * and put-online paths). Returns C_ERR when initialization failed; the caller
  * drops the link. */
 static int replicaEnableCompressionIfNegotiated(client *replica) {
-    compressionAlgo algo = replicaNegotiatedCompressionAlgorithm(replica);
+    compressionAlgo algo = replicaNegotiatedCompressionAlgorithm(replica->repl_data->replica_capa);
     if (algo == ALGO_NONE) return C_OK;
     if (replica->repl_data->repl_compression) return C_OK;
 
@@ -1235,11 +1246,18 @@ need_full_resync:
     return C_ERR;
 }
 
-compressionAlgo replSelectFullSyncCompression(int replica_capa, bool socket_target) {
-    /* Diskless full sync follows repl-compression. A disk-based sync follows
-     * rdbcompression because it also creates the persisted snapshot. */
-    compressionAlgo configured_algo = socket_target ? replCompressionAlgorithm() : rdbStreamCompressionAlgorithm();
-    return replicaAcceptsCompressionAlgorithm(replica_capa, configured_algo) ? configured_algo : ALGO_NONE;
+/* The whole-stream codec a replica receives for a full sync. An EOF-capable
+ * replica can be served diskless, so it gets its negotiated wire codec (the
+ * strongest that repl-compression permits and it can decode); a replica without
+ * EOF can only receive a disk-based sync, so it gets the on-disk rdbcompression
+ * codec if it can decode it (a non-EOF replica that cannot is rejected earlier in
+ * syncCommand). Cohort grouping, the disk-round attach filter, the in-flight join
+ * gate, the diskless-round filter (rdb.c), and the disk-vs-diskless decision all
+ * use this, so every path agrees on the codec a given replica actually gets. */
+compressionAlgo replSelectFullSyncCompression(int replica_capa) {
+    if (replica_capa & REPLICA_CAPA_EOF) return replicaNegotiatedCompressionAlgorithm(replica_capa);
+    compressionAlgo disk_algo = rdbStreamCompressionAlgorithm();
+    return replicaAcceptsCompressionAlgorithm(replica_capa, disk_algo) ? disk_algo : ALGO_NONE;
 }
 
 /* Start a BGSAVE for replication goals, which is, selecting the disk or
@@ -1283,10 +1301,12 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
      * from the on-disk (rdbcompression) whole-stream codec: a disk-based sync
      * sends dump.rdb verbatim, so it can only serve replicas whose wire format
      * equals the disk format. Everyone else gets a diskless sync in their wire
-     * format, keeping dump.rdb in the configured rdbcompression format. A
-     * replica that needs a differing codec but lacks EOF was already rejected
-     * in syncCommand, so a mismatch here always implies EOF is available. */
-    compressionAlgo wire_algo = replSelectFullSyncCompression(mincapa, true);
+     * format, keeping dump.rdb in the configured rdbcompression format. Only an
+     * EOF-capable cohort can be diverted to diskless, though: a non-EOF cohort
+     * can only receive a disk-based (size-framed) sync in the on-disk codec, so
+     * replSelectFullSyncCompression() resolves its codec to that and there is no mismatch.
+     * (syncCommand already rejected a non-EOF replica that cannot decode it.) */
+    compressionAlgo wire_algo = replSelectFullSyncCompression(mincapa);
     int compression_mismatch = wire_algo != rdbStreamCompressionAlgorithm();
     socket_target = (mincapa & REPLICA_CAPA_EOF) && (server.repl_diskless_sync ||
                                                      (req & REPLICA_REQ_RDB_MASK) ||
@@ -1366,7 +1386,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
                 /* Check replica has the exact requirements */
                 if (replica->repl_data->replica_req != req) continue;
                 if (replicaRdbVersion(replica) != rdbver) continue;
-                if (replSelectFullSyncCompression(replica->repl_data->replica_capa, true) != sync_compression_algo) continue;
+                if (replSelectFullSyncCompression(replica->repl_data->replica_capa) != sync_compression_algo) continue;
                 replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
             }
         }
@@ -1439,15 +1459,15 @@ void syncCommand(client *c) {
         return;
     }
 
-    /* Fail sync if the replica's negotiated wire codec differs from the on-disk
-     * (rdbcompression) whole-stream codec but the replica lacks EOF capability.
-     * Such a mismatch is served via a diskless (socket) sync so that dump.rdb
-     * stays in the configured rdbcompression format, and diskless requires EOF.
-     * In practice this only affects a pre-EOF replica (which can only decode
-     * plaintext) syncing from a primary whose rdbcompression is a whole-stream
-     * codec such as lz4. */
+    /* A replica without EOF capability can only receive a disk-based (size-framed)
+     * full sync, which sends the on-disk (rdbcompression) file verbatim. If it
+     * cannot decode that whole-stream codec, it also cannot be served a diskless
+     * plaintext sync (that needs EOF), so reject rather than sending a frame it
+     * can't read or clobbering dump.rdb. In practice this only affects a pre-EOF
+     * replica (plaintext only) against a primary whose rdbcompression is a
+     * whole-stream codec such as lz4 or zstd. */
     if (!(c->repl_data->replica_capa & REPLICA_CAPA_EOF) &&
-        replSelectFullSyncCompression(c->repl_data->replica_capa, true) != rdbStreamCompressionAlgorithm()) {
+        !replicaAcceptsCompressionAlgorithm(c->repl_data->replica_capa, rdbStreamCompressionAlgorithm())) {
         addReplyError(c, "Replica without EOF capability cannot full sync while rdbcompression uses a whole-stream codec");
         return;
     }
@@ -1561,7 +1581,7 @@ void syncCommand(client *c) {
         int trigger_capa = ln ? (replica->repl_data->replica_capa & ~REPLICA_CAPA_COMPRESSION_MASK) : 0;
         if (ln && ((c->repl_data->replica_capa & trigger_capa) == trigger_capa) &&
             c->repl_data->replica_req == replica->repl_data->replica_req &&
-            replSelectFullSyncCompression(c->repl_data->replica_capa, true) == server.rdb_child_sync_algo) {
+            replSelectFullSyncCompression(c->repl_data->replica_capa) == server.rdb_child_sync_algo) {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
@@ -6079,7 +6099,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
-                compressionAlgo replica_compr = replicaNegotiatedCompressionAlgorithm(replica);
+                compressionAlgo replica_compr = replSelectFullSyncCompression(replica->repl_data->replica_capa);
                 if (first) {
                     /* Get first replica's requirements */
                     req = replica->repl_data->replica_req;

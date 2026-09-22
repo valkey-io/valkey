@@ -4356,7 +4356,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
             /* Check replica has the exact requirements */
             if (replica->repl_data->replica_req != req) continue;
             if (replicaRdbVersion(replica) != rdbver) continue;
-            if (replSelectFullSyncCompression(replica->repl_data->replica_capa, true) != compr) continue;
+            if (replSelectFullSyncCompression(replica->repl_data->replica_capa) != compr) continue;
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {

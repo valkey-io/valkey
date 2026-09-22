@@ -108,11 +108,12 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
         lappend disk_compression_modes zstd
     }
     foreach mode $disk_compression_modes {
-        start_server [list overrides [list save "" enable-debug-command local repl-compression $mode]] {
+        start_server [list overrides [list save "" enable-debug-command local rdbcompression $mode repl-compression $mode]] {
             set replica [srv 0 client]
 
             test "[string toupper $mode] disk full sync produces and loads a compressed RDB" {
                 $primary config set rdbcompression $mode
+                $primary config set repl-compression $mode
                 populate_compressible_dataset $primary "$mode-disk"
                 set primary_loglines [count_log_lines -1]
                 set replica_loglines [count_log_lines 0]
@@ -199,6 +200,29 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
                 assert_equal 1 [rdb_is_compressed $primary]
                 assert_equal 1 [rdb_compression_codec $primary]
                 wait_for_log_messages -1 {"*Disk-based full sync with compression: lz4*"} \
+                    $primary_loglines 50 100
+
+                $replica replicaof no one
+            }
+        }
+
+        start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
+            set replica [srv 0 client]
+
+            test {ZSTD primary negotiates down to LZ4 for an LZ4-only replica} {
+                $primary config set rdbcompression zstd
+                $primary config set repl-compression zstd
+                populate_compressible_dataset $primary "zstd-to-lz4"
+                set primary_loglines [count_log_lines -1]
+
+                $replica replicaof $primary_host $primary_port
+                assert_replica_synced $primary $replica "(zstd primary, lz4-only replica)"
+
+                # The lz4-only replica cannot decode zstd, so the wire codec
+                # negotiates down to lz4 (the strongest it accepts) rather than
+                # dropping to plaintext. rdbcompression (zstd) differs from the lz4
+                # wire, so the sync is diskless and dump.rdb stays zstd.
+                wait_for_log_messages -1 {"*Diskless full sync with compression: lz4*"} \
                     $primary_loglines 50 100
 
                 $replica replicaof no one

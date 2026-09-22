@@ -572,85 +572,67 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
 
 }
 
-# The replica persists dump.rdb in its own rdbcompression codec: the received
-# full-sync stream is transcoded in the BIO thread when the wire codec differs
-# from the replica's on-disk codec. A successful sync proves the transcoded file
-# loaded (and, when decoding to plaintext, that the recomputed CRC64 trailer
-# verified). A non-empty save point keeps the synced dump.rdb (persistence not
-# disabled) so its on-disk format can be inspected.
-
-proc assert_replica_dump_plaintext {client} {
+# Transcode matrix: doing a disk-based load, the replica writes dump.rdb in its
+# own rdbcompression codec, transcoding the received full-sync stream when the
+# wire codec differs (verbatim / decode / encode / recode). `framing` selects the
+# receive path exercised: eof = diskless ($EOF-marked), size = disk-based
+# ($<len>). The replica's dump.rdb must end up in the `disk` codec and the data
+# must load (a bad recomputed CRC64 on a plaintext target would fail the load). A
+# non-empty save point keeps the synced dump.rdb so its format can be inspected.
+proc assert_replica_dump {client codec} {
     set path [file join [lindex [$client config get dir] 1] dump.rdb]
-    assert_equal "VALKEY" [string range [read_binary_file_prefix $path 6] 0 5]
-}
-
-proc assert_replica_dump_lz4 {client} {
-    set path [file join [lindex [$client config get dir] 1] dump.rdb]
-    binary scan [read_binary_file_prefix $path 7] cu* bytes
-    # V C S / version / LZ4 codec / reserved / RDB stream kind.
-    assert_equal {86 67 83 1 1 0 1} $bytes
-}
-
-# EOF-framed wire: a compressed wire is decoded to a plaintext dump.rdb.
-start_server {tags {"repl external:skip"} overrides {save "" repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
-    set primary [srv 0 client]
-    set primary_host [srv 0 host]
-    set primary_port [srv 0 port]
-
-    test {Disk-receive transcodes an EOF-framed compressed wire to a plaintext dump.rdb} {
-        populate_compressible_dataset $primary "xcode-decode"
-        $primary set xcode:key value
-        start_server {overrides {save "3600 1000000000" rdbcompression no repl-compression lz4 repl-diskless-load disabled}} {
-            set replica [srv 0 client]
-            $replica replicaof $primary_host $primary_port
-            assert_replica_synced $primary $replica "(decode)"
-            assert_replica_dump_plaintext $replica
-            assert_equal [$primary dbsize] [$replica dbsize]
-            assert_equal value [$replica get xcode:key]
-            $replica replicaof no one
-        }
+    if {$codec eq "no"} {
+        assert_equal "VALKEY" [string range [read_binary_file_prefix $path 6] 0 5]
+    } else {
+        binary scan [read_binary_file_prefix $path 7] cu* bytes
+        # V C S / version / codec id / reserved / RDB stream kind.
+        assert_equal [list 86 67 83 1 [dict get {lz4 1 zstd 2} $codec] 0 1] $bytes
     }
 }
 
-# EOF-framed wire: a plaintext wire is encoded to a compressed dump.rdb.
-start_server {tags {"repl external:skip"} overrides {save "" repl-compression no repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+start_server {tags {"repl external:skip"} overrides {save ""}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
 
-    test {Disk-receive transcodes an EOF-framed plaintext wire to a compressed dump.rdb} {
-        populate_compressible_dataset $primary "xcode-encode"
-        $primary set xcode:key value
-        start_server {overrides {save "3600 1000000000" rdbcompression lz4 repl-diskless-load disabled}} {
-            set replica [srv 0 client]
-            $replica replicaof $primary_host $primary_port
-            assert_replica_synced $primary $replica "(encode)"
-            assert_replica_dump_lz4 $replica
-            assert_equal [$primary dbsize] [$replica dbsize]
-            assert_equal value [$replica get xcode:key]
-            $replica replicaof no one
-        }
+    #   {wire disk framing}
+    set transcode_matrix {
+        {lz4  lz4  size}
+        {lz4  no   size}
+        {lz4  no   eof}
+        {no   lz4  eof}
+        {no   zstd size}
+        {zstd lz4  size}
+        {lz4  zstd eof}
+        {zstd zstd eof}
     }
-}
+    foreach case $transcode_matrix {
+        lassign $case wire disk framing
+        if {($wire eq "zstd" || $disk eq "zstd") && !$::fullsync_zstd_supported} continue
+        test "Disk-receive transcodes a $framing-framed $wire wire to a $disk dump.rdb" {
+            if {$framing eq "eof"} {
+                $primary config set repl-diskless-sync yes
+                $primary config set repl-diskless-sync-delay 0
+                $primary config set rdbcompression no
+                $primary config set repl-compression $wire
+            } else {
+                $primary config set repl-diskless-sync no
+                $primary config set rdbcompression $wire
+                $primary config set repl-compression $wire
+            }
+            populate_compressible_dataset $primary "xcode-$wire-$disk-$framing"
+            $primary set xcode:key value
 
-# Size-framed wire: a compressed wire is decoded to a plaintext dump.rdb,
-# exercising the non-mark receive path.
-start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4 repl-compression lz4 repl-diskless-sync no}} {
-    set primary [srv 0 client]
-    set primary_host [srv 0 host]
-    set primary_port [srv 0 port]
-
-    test {Disk-receive transcodes a size-framed compressed wire to a plaintext dump.rdb} {
-        populate_compressible_dataset $primary "xcode-sizeframed"
-        $primary set xcode:key value
-        start_server {overrides {save "3600 1000000000" rdbcompression no repl-compression lz4 repl-diskless-load disabled}} {
-            set replica [srv 0 client]
-            $replica replicaof $primary_host $primary_port
-            assert_replica_synced $primary $replica "(size-framed decode)"
-            assert_replica_dump_plaintext $replica
-            assert_equal [$primary dbsize] [$replica dbsize]
-            assert_equal value [$replica get xcode:key]
-            $replica replicaof no one
+            start_server [list overrides [list save "3600 1000000000" rdbcompression $disk \
+                                              repl-compression $wire repl-diskless-load disabled]] {
+                set replica [srv 0 client]
+                $replica replicaof $primary_host $primary_port
+                assert_replica_synced $primary $replica "($wire -> $disk, $framing)"
+                assert_replica_dump $replica $disk
+                assert_equal [$primary dbsize] [$replica dbsize]
+                assert_equal value [$replica get xcode:key]
+                $replica replicaof no one
+            }
         }
     }
 }

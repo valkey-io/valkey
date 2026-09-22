@@ -50,13 +50,14 @@
  * In an RDB file/stream, we also check the magic string REDIS or VALKEY but in
  * the DUMP/RESTORE format, there is only the RDB version number and no magic
  * string. */
-#define RDB_VERSION 80
+#define RDB_VERSION 81
 
 /* Mapping between RDB version and the Valkey version where it was added. */
 static const int RDB_VERSION_MAP[][2] = {
     /* {RDB version, added in Valkey version} from oldest to newest. */
     {11, 0x070200},
     {80, 0x090000},
+    {81, 0x090200},
 };
 
 /* Reserved range for foreign (unsupported, non-OSS) RDB format. */
@@ -128,7 +129,8 @@ enum RdbType {
     RDB_TYPE_STREAM_LISTPACKS_2 = 19,
     RDB_TYPE_SET_LISTPACK = 20, /* Added in RDB 11 (7.2) */
     RDB_TYPE_STREAM_LISTPACKS_3 = 21,
-    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration, RDB 80 (9.0) */
+    RDB_TYPE_HASH_2 = 22,    /* Hash with field-level expiration, RDB 80 (9.0) */
+    RDB_TYPE_PATH_HASH = 23, /* Path hash paths with field/value payloads, RDB 81 (9.2) */
     RDB_TYPE_LAST
 };
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
@@ -172,13 +174,14 @@ enum RdbType {
 #define RDB_LOAD_SDS (1 << 2)
 
 /* flags on the purpose of rdb save or load */
-#define RDBFLAGS_NONE 0                /* No special RDB loading or saving. */
-#define RDBFLAGS_AOF_PREAMBLE (1 << 0) /* Load/save the RDB as AOF preamble. */
-#define RDBFLAGS_REPLICATION (1 << 1)  /* Load/save for SYNC. */
-#define RDBFLAGS_ALLOW_DUP (1 << 2)    /* Allow duplicated keys when loading.*/
-#define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
-#define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
-#define RDBFLAGS_EMPTY_DATA (1 << 5)   /* Flush the database after validating magic and rdb version*/
+#define RDBFLAGS_NONE 0                 /* No special RDB loading or saving. */
+#define RDBFLAGS_AOF_PREAMBLE (1 << 0)  /* Load/save the RDB as AOF preamble. */
+#define RDBFLAGS_REPLICATION (1 << 1)   /* Load/save for SYNC. */
+#define RDBFLAGS_ALLOW_DUP (1 << 2)     /* Allow duplicated keys when loading.*/
+#define RDBFLAGS_FEED_REPL (1 << 3)     /* Feed replication stream when loading.*/
+#define RDBFLAGS_KEEP_CACHE (1 << 4)    /* Don't reclaim cache after rdb file is generated */
+#define RDBFLAGS_EMPTY_DATA (1 << 5)    /* Flush the database after validating magic and rdb version*/
+#define RDBFLAGS_FORKLESS_SAVE (1 << 6) /* Save is performed by forkless save (background thread). */
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
@@ -201,6 +204,8 @@ int rdbGetObjectType(robj *o, int rdbver);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
+int rdbStartBgsave(int bgsave_type);
+int resolveBgsaveType(void);
 int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
 int rdbSaveToFile(const char *filename);
@@ -224,6 +229,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 bool rdbRioHasCorruptCompressedInput(rio *rdb);
 bool rdbRioHasInternalStreamReaderError(rio *rdb);
+void rdbReportCorruptCompressedStream(const char *source);
 
 typedef enum {
     RDB_STREAM_READER_INIT_ERROR = -1,
@@ -245,5 +251,11 @@ int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveI
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 void replicationEmptyDbCallback(hashtable *ht);
+ssize_t rdbSaveDbSizeHints(rio *rdb, serverDb *db, int include_importing);
+int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi);
+int rdbWriteFooter(rio *rdb, int req);
+void rdbRecordStartMetrics(int bgsave_type);
+void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end);
+void rdbClearSaveState(time_t save_end);
 
 #endif

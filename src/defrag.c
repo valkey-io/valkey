@@ -44,6 +44,7 @@
 #include "eval.h"
 #include "script.h"
 #include "module.h"
+#include "bgiteration.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -658,9 +659,12 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     unsigned char *newzl;
     ob = *elemref;
 
+    if (bgIteration_isEntryInuse(ob)) return;
+
     /* Try to defrag robj and/or string value. */
     if ((newob = activeDefragStringOb(ob))) {
         *elemref = newob;
+        bgIteration_updateDbEntryPtr(ob, newob);
         if (objectGetExpire(newob) >= 0) {
             /* Replace the pointer in the expire table without accessing the old
              * pointer. */
@@ -709,6 +713,8 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         defragHash(ob);
     } else if (ob->type == OBJ_STREAM) {
         defragStream(ob);
+    } else if (ob->type == OBJ_PATH_HASH) {
+        /* Path hash payload defragmentation is intentionally deferred. */
     } else if (ob->type == OBJ_MODULE) {
         defragModule(db, ob);
     } else {
@@ -765,6 +771,11 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
  * and 1 if time is up and more work is needed. */
 static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid) {
     if (ob) {
+        if (bgIteration_isEntryInuse(ob)) {
+            *cursor = 0;
+            return 0;
+        }
+
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
         } else if (ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE) {
@@ -959,7 +970,7 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
     /* In case we are in the process of eval some script we do not want to replace the script being run
      * so we just bail out without really defragging here. */
     if (scriptIsRunning()) return DEFRAG_DONE;
-    activeDefragSdsDict(evalScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+    activeDefragSdsDict(evalCtxScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
     return DEFRAG_DONE;
 }
 
@@ -967,9 +978,7 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
 static doneStatus defragModuleGlobals(monotime endtime, void *target, void *privdata) {
     UNUSED(target);
     UNUSED(privdata);
-    if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
-    moduleDefragGlobals();
-    return DEFRAG_DONE;
+    return moduleDefragGlobals(endtime) ? DEFRAG_NOT_DONE : DEFRAG_DONE;
 }
 
 

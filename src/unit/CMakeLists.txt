@@ -28,6 +28,10 @@ elseif (USE_TCMALLOC OR USE_TCMALLOC_MINIMAL)
     list(APPEND COMPILE_DEFINITIONS "USE_TCMALLOC")
 endif ()
 
+if (USE_ZSTD)
+    list(APPEND COMPILE_DEFINITIONS "HAVE_ZSTD")
+endif ()
+
 # Fetch GoogleTest using FetchContent (modern approach)
 include(FetchContent)
 FetchContent_Declare(
@@ -45,6 +49,9 @@ target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
 target_include_directories(valkeylib-gtest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps)
 target_link_libraries(valkeylib-gtest PRIVATE ffc)
+if (USE_ZSTD)
+    target_link_libraries(valkeylib-gtest PRIVATE valkey_zstd)
+endif ()
 
 # Generate wrapper files from wrappers.h
 set(GENERATED_WRAPPERS_DIR ${CMAKE_BINARY_DIR}/gtest_generated)
@@ -168,7 +175,7 @@ add_custom_target(test-unit
         [ -n \"$large_memory\" ] && TEST_ARGS=\"$TEST_ARGS --large-memory\"; \
         [ -n \"$valgrind\" ] && TEST_ARGS=\"$TEST_ARGS --valgrind\"; \
         [ -n \"$seed\" ] && TEST_ARGS=\"$TEST_ARGS --seed $seed\"; \
-        python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
+        python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --timeout_per_test 300 --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
     DEPENDS valkey-unit-gtests
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Running tests with gtest-parallel"

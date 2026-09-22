@@ -365,8 +365,10 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
         dictDelete(server.migrate_cached_sockets, dictGetKey(de));
     }
 
-    /* Create the connection */
+    /* Create the connection and tag as high-priority so key/slot migration
+     * packets are not delayed by normal tenant commands. */
     conn = connCreate(connTypeOfCluster());
+    connSetPriority(conn, true);
     if (connBlockingConnect(conn, objectGetVal(host), atoi(objectGetVal(port)), timeout) != C_OK) {
         addReplyError(c, "-IOERR error or timeout connecting to the client");
         connClose(conn);
@@ -1068,8 +1070,14 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      * distributed system. */
 
     /* Determine transaction slot and return early on cross-slot. */
-    if (c->cmd->proc == execCommand && c->flag.multi) {
-        int slot = -1;
+    if (c->cmd->proc == execCommand) {
+        if (!c->flag.multi || c->flag.dirty_exec) return myself;
+
+        int slot = c->slot;
+        if (c->read_flags & READ_FLAGS_CROSSSLOT) {
+            if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
+            return NULL;
+        }
         for (i = 0; i < c->mstate->count; i++) {
             if (slot == -1) {
                 slot = c->mstate->commands[i].slot;
@@ -1130,9 +1138,6 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
     if (c->cmd->proc == execCommand) {
-        /* If CLIENT_MULTI flag is not set EXEC is just going to return an
-         * error. */
-        if (!c->flag.multi) return myself;
         ms = c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
@@ -1150,15 +1155,21 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     serverDb *currentDb = origDb;
 
     /* Check for multiple keys, existing keys, missing keys. */
-    for (i = 0; i < ms->count; i++) {
+    for (i = c->cmd->proc == execCommand ? -1 : 0; i < ms->count; i++) {
         struct serverCommand *mcmd;
         robj **margv;
         int margc, numkeys, j;
         keyReference *keyindex;
 
-        mcmd = ms->commands[i].cmd;
-        margc = ms->commands[i].argc;
-        margv = ms->commands[i].argv;
+        if (i == -1) {
+            mcmd = c->cmd;
+            margc = c->argc;
+            margv = c->argv;
+        } else {
+            mcmd = ms->commands[i].cmd;
+            margc = ms->commands[i].argc;
+            margv = ms->commands[i].argv;
+        }
 
         getKeysResult result;
         initGetKeysResult(&result);
@@ -1223,7 +1234,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
              * slot migration, the channel will be served from the source
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
-            int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
+            int flags = LOOKUP_NOEFFECTS; /* not client key access */
             if (!pubsubshard_included &&
                 (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand))) {
                 /* Multi/Exec validation happens on exec */
@@ -1636,6 +1647,8 @@ void resetClusterStats(void) {
     server.cluster->stats_bus_module_bytes_sent = 0;
     server.cluster->stats_bus_module_bytes_received = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->stat_cluster_links_established_inbound = 0;
+    server.cluster->stat_cluster_links_established_outbound = 0;
 }
 
 void clusterCommandFlushslot(client *c) {

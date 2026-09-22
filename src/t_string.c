@@ -98,7 +98,7 @@ void setGenericCommand(client *c,
     robj *existing_value = lookupKeyWrite(c->db, key);
     found = existing_value != NULL;
 
-    /* Handle the IFEQ conditional check */
+    /* Handle the IFEQ or IFNE conditional check */
     if (flags & ARGS_SET_IFEQ && found) {
         if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
@@ -115,6 +115,17 @@ void setGenericCommand(client *c,
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
+    } else if (flags & ARGS_SET_IFNE && found) {
+        if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
+            goto cleanup;
+        }
+
+        if (compareStringObjects(existing_value, comparison) == 0) {
+            if (!(flags & ARGS_SET_GET)) {
+                addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+            }
+            goto cleanup;
+        }
     }
 
     if ((flags & ARGS_SET_NX && found) || (flags & ARGS_SET_XX && !found)) {
@@ -254,7 +265,7 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison, NULL) != C_OK) {
         return;
     }
 
@@ -279,16 +290,42 @@ void psetexCommand(client *c) {
     setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
-/* DELIFEQ key value */
-void delifeqCommand(client *c) {
-    robj *o;
-    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+/* Function handling DELEX key <IFEQ | IFNE> value */
+void delexCommand(client *c) {
+    int flags = ARGS_NO_FLAGS;
+    robj *compare_val = NULL;
+    robj *incrby_val = NULL;
 
-    if (compareStringObjects(o, c->argv[2]) != 0) {
-        addReply(c, shared.czero);
+    if (parseExtendedCommandArgumentsOrReply(
+            c, COMMAND_DELEX, 2, c->argc,
+            &flags, NULL, NULL, NULL, &compare_val, &incrby_val) != C_OK) {
         return;
     }
 
+    delexGenericCommand(c, flags, compare_val);
+}
+
+/* DELIFEQ key value */
+void delifeqCommand(client *c) {
+    delexGenericCommand(c, ARGS_SET_IFEQ, c->argv[2]);
+}
+
+/* Implements DELEX and its conditional variants. */
+void delexGenericCommand(client *c, int flag, robj *compare_value) {
+    robj *o;
+    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+
+    if (flag & ARGS_SET_IFEQ) {
+        if (compareStringObjects(o, compare_value) != 0) {
+            addReply(c, shared.czero);
+            return;
+        }
+    } else if (flag & ARGS_SET_IFNE) {
+        if (compareStringObjects(o, compare_value) == 0) {
+            addReply(c, shared.czero);
+            return;
+        }
+    }
     serverAssert(dbSyncDelete(c->db, c->argv[1]));
 
     /* Propagate as DEL command */
@@ -342,7 +379,7 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -624,7 +661,7 @@ void msetexCommand(client *c) {
         return;
     }
     if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
-                                             &flags, &unit, &expire_idx, &expire, NULL) != C_OK) {
+                                             &flags, &unit, &expire_idx, &expire, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -786,6 +823,171 @@ void incrbyfloatCommand(client *c) {
     rewriteClientCommandArgument(c, 0, shared.set);
     rewriteClientCommandArgument(c, 2, new);
     rewriteClientCommandArgument(c, 3, shared.keepttl);
+}
+
+void increxCommand(client *c) {
+    robj *expire = NULL;
+    robj *incr_obj = NULL; /* value token for BYINT/BYFLOAT, if present */
+    int unit = UNIT_SECONDS;
+    int flags = ARGS_NO_FLAGS;
+    long long incr_ll = 1;
+    long double incr_ld = 1.0L;
+    int use_float = 0;
+
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj) != C_OK) {
+        return;
+    }
+
+    long long value_ll = 0, oldvalue_ll = 0, applied_ll = 0;
+    long double value_ld = 0, oldvalue_ld = 0, applied_ld = 0;
+    long long milliseconds = 0;
+    robj *o, *new;
+
+    if (expire &&
+        getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
+    if (flags & ARGS_BYINT) {
+        if (getLongLongFromObjectOrReply(c, incr_obj, &incr_ll, "Increment is not an integer or out of range") != C_OK) {
+            return;
+        }
+    } else if (flags & ARGS_BYFLOAT) {
+        if (getLongDoubleFromObjectOrReply(c, incr_obj, &incr_ld, "Increment is not a valid float") != C_OK) {
+            return;
+        }
+        use_float = 1;
+    }
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+
+    if (o) {
+        if (checkType(c, o, OBJ_STRING)) return;
+        if (use_float) {
+            if (getLongDoubleFromObjectOrReply(c, o, &oldvalue_ld, NULL) != C_OK) return;
+        } else {
+            if (getLongLongFromObjectOrReply(c, o, &oldvalue_ll, NULL) != C_OK) return;
+        }
+    }
+
+    if ((flags & ARGS_SET_NX) && o != NULL) {
+        if (use_float) {
+            addReplyArrayLen(c, 2);
+            addReplyHumanLongDouble(c, oldvalue_ld);
+            addReplyHumanLongDouble(c, 0);
+        } else {
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, oldvalue_ll);
+            addReplyLongLong(c, 0);
+        }
+        return;
+    }
+    if ((flags & ARGS_SET_XX) && o == NULL) {
+        /* A non-existent key is treated as zero by the INCR family, and a
+         * declined operation reports the current value with a zero delta. */
+        addReplyArrayLen(c, 2);
+        if (use_float) {
+            addReplyHumanLongDouble(c, 0);
+            addReplyHumanLongDouble(c, 0);
+        } else {
+            addReplyLongLong(c, 0);
+            addReplyLongLong(c, 0);
+        }
+        return;
+    }
+
+    if (use_float) {
+        if (isinf(incr_ld)) {
+            addReplyError(c, "BYFLOAT increment cannot be Infinity");
+            return;
+        }
+        if (isinf(oldvalue_ld)) {
+            addReplyError(c, "value cannot be Infinity");
+            return;
+        }
+        value_ld = oldvalue_ld + incr_ld;
+        if (isnan(value_ld)) {
+            addReplyError(c, "Increment is not a valid float");
+            return;
+        }
+        if (isinf(value_ld)) {
+            addReplyArrayLen(c, 2);
+            addReplyHumanLongDouble(c, oldvalue_ld);
+            addReplyHumanLongDouble(c, 0);
+            return;
+        }
+        /* Float accuracy may cause applied to differ from requested. */
+        applied_ld = value_ld - oldvalue_ld;
+    } else {
+        value_ll = oldvalue_ll;
+        if ((incr_ll < 0 && value_ll < 0 && incr_ll < (LLONG_MIN - value_ll)) ||
+            (incr_ll > 0 && value_ll > 0 && incr_ll > (LLONG_MAX - value_ll))) {
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, value_ll);
+            addReplyLongLong(c, 0);
+            return;
+        }
+        value_ll += incr_ll;
+        applied_ll = value_ll - oldvalue_ll;
+    }
+
+    /* If the `milliseconds` have expired, then we don't need to set it into the
+     * database, and then wait for the active expire to delete it, it is wasteful.
+     * If the key already exists, delete it. */
+    if (expire && checkAlreadyExpired(milliseconds)) {
+        if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
+        addReplyArrayLen(c, 2);
+        if (use_float) {
+            addReplyHumanLongDouble(c, value_ld);
+            addReplyHumanLongDouble(c, applied_ld);
+        } else {
+            addReplyLongLong(c, value_ll);
+            addReplyLongLong(c, applied_ll);
+        }
+        return;
+    }
+
+    if (!use_float && o && o->refcount == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
+        value_ll >= LONG_MIN && value_ll <= LONG_MAX) {
+        new = o;
+        objectSetVal(o, (void *)((long)value_ll));
+    } else {
+        new = use_float ? createStringObjectFromLongDouble(value_ld, 1)
+                        : createStringObjectFromLongLongForValue(value_ll);
+        if (o) {
+            dbReplaceValue(c->db, c->argv[1], &new);
+        } else {
+            dbAdd(c->db, c->argv[1], &new);
+        }
+    }
+
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, use_float ? "incrbyfloat" : "incrby", c->argv[1], c->db->id);
+    server.dirty++;
+
+    if (expire) {
+        new = setExpire(c, c->db, c->argv[1], milliseconds);
+        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandVector(c, 5, shared.set, c->argv[1], new, shared.pxat, milliseconds_obj);
+        decrRefCount(milliseconds_obj);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
+    } else if (use_float) {
+        /* BYFLOAT with no expire still needs rewriting to SET for
+         * deterministic replication - reuse `new`, the exact object
+         * that was stored, rather than re-deriving the string from
+         * value_ld a second time (which risks formatting drift
+         * between what the master stored and what it propagates). */
+        rewriteClientCommandVector(c, 4, shared.set, c->argv[1], new, shared.keepttl);
+    }
+
+    addReplyArrayLen(c, 2);
+    if (use_float) {
+        addReplyHumanLongDouble(c, value_ld);
+        addReplyHumanLongDouble(c, applied_ld);
+    } else {
+        addReplyLongLong(c, value_ll);
+        addReplyLongLong(c, applied_ll);
+    }
 }
 
 void appendCommand(client *c) {

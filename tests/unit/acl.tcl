@@ -992,6 +992,88 @@ start_server {tags {"acl external:skip"}} {
         assert {[s acl_access_denied_key] eq $current_invalid_key_accesses}
         assert {[s acl_access_denied_channel] eq [expr $current_invalid_channel_accesses + 1]}
     }
+
+    test {ACL DIGEST returns a stable digest of a fixed size} {
+        set digest [r ACL DIGEST]
+        assert_equal 1 [regexp {^[0-9a-f]{64}$} $digest]
+        assert_equal $digest [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST follows the rules of a user} {
+        set before [r ACL DIGEST]
+        r ACL setuser digestuser on >digestpass ~key:a* +get
+        set created [r ACL DIGEST]
+        assert {$created ne $before}
+
+        # Changing a rule moves the digest, and putting the rule back moves it
+        # to the very same value: the digest describes the state, not how many
+        # times the state was edited.
+        r ACL setuser digestuser resetkeys ~key:b*
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setuser digestuser resetkeys ~key:a*
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestuser
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST follows the passwords of a user} {
+        set before [r ACL DIGEST]
+        r ACL setuser digestuser on >digestpass ~* +get
+        set created [r ACL DIGEST]
+        r ACL setuser digestuser >anotherpass
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setuser digestuser <anotherpass
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestuser
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST does not cancel out users sharing the same rules} {
+        # Per user digests are combined with XOR, which cancels out two equal
+        # values, so users having the very same rules are only kept apart by
+        # their names being hashed along with the rules.
+        set before [r ACL DIGEST]
+        r ACL setuser digesttwin1 on >twinpass ~twin:* +get
+        r ACL setuser digesttwin2 on >twinpass ~twin:* +get
+
+        # Assert the rules really are identical, or the pair would not
+        # exercise the cancellation at all.
+        set twin1 ""
+        set twin2 ""
+        foreach line [r ACL LIST] {
+            if {[string match "user digesttwin1 *" $line]} {
+                set twin1 [string range $line [string length "user digesttwin1 "] end]
+            } elseif {[string match "user digesttwin2 *" $line]} {
+                set twin2 [string range $line [string length "user digesttwin2 "] end]
+            }
+        }
+        assert {$twin1 ne ""}
+        assert_equal $twin1 $twin2
+
+        set both [r ACL DIGEST]
+        assert {$both ne $before}
+        r ACL deluser digesttwin2
+        set one [r ACL DIGEST]
+        assert {$one ne $both}
+        assert {$one ne $before}
+
+        r ACL deluser digesttwin1
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST rejects extra arguments} {
+        assert_error "*wrong number of arguments for 'acl|digest' command" {r ACL DIGEST extra}
+    }
+
+    test {ACL DIGEST needs permission to run} {
+        r ACL setuser digestnoperm on >digestpass ~* +acl|whoami
+        r AUTH digestnoperm digestpass
+        assert_error "*has no permissions to run the 'acl|digest' command*" {r ACL DIGEST}
+        r AUTH default ""
+        r ACL deluser digestnoperm
+    }
 }
 
 set server_path [tmpdir "server.acl"]
@@ -1237,6 +1319,57 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         
         # Verify server is still running
         assert_equal [r PING] "PONG"
+    }
+}
+
+set server_path [tmpdir "digest.acl"]
+exec cp -f tests/assets/user.acl $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "external:skip"]] {
+    set aclfile [file join $server_path "user.acl"]
+
+    proc write_digest_acl_file {path users} {
+        set fd [open $path w]
+        foreach user $users {
+            puts $fd $user
+        }
+        close $fd
+    }
+
+    # Every file below keeps the default user as it already is, so that the
+    # client running the test is never disconnected by the reload.
+    test {ACL DIGEST is unchanged by an ACL LOAD of an equivalent file} {
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~key:* &chan:* +@all"
+            "user bob on >bob ~* &* +@all"
+        }
+        r ACL LOAD
+        set digest [r ACL DIGEST]
+
+        # The same users with the same effective rules, listed in a different
+        # order and written with the aliases of those rules. Both files load
+        # into the same state, which is what the digest reports.
+        write_digest_acl_file $aclfile {
+            "user bob on >bob allkeys allchannels allcommands"
+            "user default on nopass allkeys allchannels allcommands"
+            "user alice on >alice ~key:* &chan:* allcommands"
+        }
+        r ACL LOAD
+        assert_equal $digest [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST changes after an ACL LOAD of a file with different rules} {
+        set digest [r ACL DIGEST]
+
+        # A permission only edit: same users, same passwords, one command
+        # taken away from bob.
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~key:* &chan:* +@all"
+            "user bob on >bob ~* &* +@all -get"
+        }
+        r ACL LOAD
+        assert {[r ACL DIGEST] ne $digest}
     }
 }
 

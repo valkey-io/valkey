@@ -990,6 +990,32 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_error {ERR syntax error} {r set foo "new_value" ifeq "initial_value" nx}
     }
 
+    test {SET with IFNE conditional} {
+        r del foo
+        r set foo "initial_value"
+        assert_equal {OK} [r set foo "new_value" ifne "wrong_value"]
+        assert_equal "new_value" [r get foo]
+        assert_equal {} [r set foo "should_not_set" ifne "new_value"]
+        assert_equal "new_value" [r get foo]
+    }
+
+    test {SET with IFNE conditional - with get} {
+        r del foo
+        assert_equal {} [r set foo "new_value" ifne "initial_value" get]
+        assert_equal "new_value" [r get foo]
+        r set foo "initial_value"
+        assert_equal "initial_value" [r set foo "new_value" ifne "wrong_value" get]
+        assert_equal "new_value" [r get foo]
+        assert_equal {new_value} [r set foo "should_not_set" ifne "new_value" get]
+    }
+
+    test "SET with IFNE conditional - non string current value with get" {
+        r del foo
+        r sadd foo "some_set_value"
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value} \
+            {r set foo "new_value" ifne "initial_value" get}
+    }
+
     test {Extended SET EX option} {
         r del foo
         r set foo bar ex 10
@@ -1146,6 +1172,42 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         }
         close_replication_stream $repl
     } {} {needs:repl}
+
+    # DELEX tests
+    test {DELEX non-existing key} {
+        r del foo
+        assert_equal 0 [r delex foo ifeq "test"]
+    }
+
+    test {DELEX IFEQ existing key, matching value} {
+        r set foo "test"
+        assert_equal 1 [r delex foo ifeq "test"]
+        assert_equal 0 [r exists foo]
+    }
+
+    test {DELEX IFEQ existing key, non-matching value} {
+        r set foo "nope"
+        assert_equal 0 [r delex foo ifeq "test"]
+        assert_equal "nope" [r get foo]
+    }
+
+    test {DELEX IFNE existing key, matching value} {
+        r set foo "test"
+        assert_equal 0 [r delex foo ifne "test"]
+        assert_equal "test" [r get foo]
+    }
+
+    test {DELEX IFNE existing key, non-matching value} {
+        r set foo "nope"
+        assert_equal 1 [r delex foo ifne "test"]
+        assert_equal 0 [r exists foo]
+    }
+
+    test {DELEX existing key, non-string key} {
+        r del foo
+        r sadd foo "test"
+        assert_error "WRONGTYPE*" {r delex foo ifeq "test"}
+    }
 
 if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {

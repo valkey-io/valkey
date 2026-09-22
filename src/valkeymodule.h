@@ -96,6 +96,7 @@ typedef long long ustime_t;
 #define VALKEYMODULE_KEYTYPE_ZSET 5
 #define VALKEYMODULE_KEYTYPE_MODULE 6
 #define VALKEYMODULE_KEYTYPE_STREAM 7
+#define VALKEYMODULE_KEYTYPE_PATH_HASH 8
 
 /* Reply types. */
 #define VALKEYMODULE_REPLY_UNKNOWN -1
@@ -237,31 +238,32 @@ This flag should not be used directly by the module.
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes.
  * NOTE: These have to be in sync with NOTIFY_* in server.h */
-#define VALKEYMODULE_NOTIFY_KEYSPACE (1 << 0)  /* K */
-#define VALKEYMODULE_NOTIFY_KEYEVENT (1 << 1)  /* E */
-#define VALKEYMODULE_NOTIFY_GENERIC (1 << 2)   /* g */
-#define VALKEYMODULE_NOTIFY_STRING (1 << 3)    /* $ */
-#define VALKEYMODULE_NOTIFY_LIST (1 << 4)      /* l */
-#define VALKEYMODULE_NOTIFY_SET (1 << 5)       /* s */
-#define VALKEYMODULE_NOTIFY_HASH (1 << 6)      /* h */
-#define VALKEYMODULE_NOTIFY_ZSET (1 << 7)      /* z */
-#define VALKEYMODULE_NOTIFY_EXPIRED (1 << 8)   /* x */
-#define VALKEYMODULE_NOTIFY_EVICTED (1 << 9)   /* e */
-#define VALKEYMODULE_NOTIFY_STREAM (1 << 10)   /* t */
-#define VALKEYMODULE_NOTIFY_KEY_MISS (1 << 11) /* m (Note: This one is excluded from VALKEYMODULE_NOTIFY_ALL on purpose) */
-#define VALKEYMODULE_NOTIFY_LOADED (1 << 12)   /* module only key space notification, indicate a key loaded from rdb */
-#define VALKEYMODULE_NOTIFY_MODULE (1 << 13)   /* d, module key space notification */
-#define VALKEYMODULE_NOTIFY_NEW (1 << 14)      /* n, new key notification */
+#define VALKEYMODULE_NOTIFY_KEYSPACE (1 << 0)   /* K */
+#define VALKEYMODULE_NOTIFY_KEYEVENT (1 << 1)   /* E */
+#define VALKEYMODULE_NOTIFY_GENERIC (1 << 2)    /* g */
+#define VALKEYMODULE_NOTIFY_STRING (1 << 3)     /* $ */
+#define VALKEYMODULE_NOTIFY_LIST (1 << 4)       /* l */
+#define VALKEYMODULE_NOTIFY_SET (1 << 5)        /* s */
+#define VALKEYMODULE_NOTIFY_HASH (1 << 6)       /* h */
+#define VALKEYMODULE_NOTIFY_ZSET (1 << 7)       /* z */
+#define VALKEYMODULE_NOTIFY_EXPIRED (1 << 8)    /* x */
+#define VALKEYMODULE_NOTIFY_EVICTED (1 << 9)    /* e */
+#define VALKEYMODULE_NOTIFY_STREAM (1 << 10)    /* t */
+#define VALKEYMODULE_NOTIFY_KEY_MISS (1 << 11)  /* m (Note: This one is excluded from VALKEYMODULE_NOTIFY_ALL on purpose) */
+#define VALKEYMODULE_NOTIFY_LOADED (1 << 12)    /* module only key space notification, indicate a key loaded from rdb */
+#define VALKEYMODULE_NOTIFY_MODULE (1 << 13)    /* d, module key space notification */
+#define VALKEYMODULE_NOTIFY_NEW (1 << 14)       /* n, new key notification */
+#define VALKEYMODULE_NOTIFY_PATH_HASH (1 << 15) /* p */
 
 /* Next notification flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
  * Use ValkeyModule_GetKeyspaceNotificationFlagsAll instead. */
-#define _VALKEYMODULE_NOTIFY_NEXT (1 << 15)
+#define _VALKEYMODULE_NOTIFY_NEXT (1 << 16)
 
 #define VALKEYMODULE_NOTIFY_ALL                                                                                        \
     (VALKEYMODULE_NOTIFY_GENERIC | VALKEYMODULE_NOTIFY_STRING | VALKEYMODULE_NOTIFY_LIST | VALKEYMODULE_NOTIFY_SET |   \
      VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_ZSET | VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED | \
-     VALKEYMODULE_NOTIFY_STREAM | VALKEYMODULE_NOTIFY_MODULE) /* A */
+     VALKEYMODULE_NOTIFY_STREAM | VALKEYMODULE_NOTIFY_MODULE | VALKEYMODULE_NOTIFY_PATH_HASH) /* A */
 
 /* A special pointer that we can use between the core and the module to signal
  * field deletion, and that is impossible to be a valid pointer. */
@@ -342,10 +344,18 @@ typedef uint64_t ValkeyModuleTimerID;
  * slot migration must be used. */
 #define VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION (1 << 5)
 
+/* Declare that the module handles forkless operations. Opting in has a
+ * tradeoff: while a forkless operation is running, opening a key for write can
+ * return NULL if the key is currently in use, and the module must handle that
+ * NULL return. A module that registers a data type also declares that its RDB
+ * save callbacks are safe to run on a background thread. When any loaded module
+ * does not set this, forkless operations are blocked. */
+#define VALKEYMODULE_OPTIONS_HANDLE_FORKLESS (1 << 6)
+
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.
  * Use ValkeyModule_GetModuleOptionsAll instead. */
-#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 6)
+#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 7)
 
 /* Definitions for ValkeyModule_SetCommandInfo. */
 
@@ -1165,6 +1175,15 @@ typedef enum ValkeyModuleScriptingEngineDebuggerEnableRet {
     VMSE_DEBUG_ENABLE_FAIL,   /* The scripting engine failed to enable the debugging mode. */
 } ValkeyModuleScriptingEngineDebuggerEnableRet;
 
+/* Execute a debugger command.
+ *
+ * - `argv`: the command arguments.
+ *
+ * - `argc`: the number of command arguments.
+ *
+ * - `context`: the `context` field of the command descriptor, or the scripting
+ *   engine runtime context if that field is NULL.
+ */
 typedef int (*ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc)(
     ValkeyModuleString **argv,
     size_t argc,
@@ -1192,7 +1211,7 @@ typedef struct ValkeyModuleScriptingEngineDebuggerCommand {
     const char *desc;                                              /* The description of the command that is shown in the help message. */
     int invisible;                                                 /* Whether this command should be hidden in the help message. */
     ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc handler; /* The function pointer that implements this command. */
-    void *context;                                                 /* The pointer to a context structure that is passed when invoking the command handler. */
+    void *context;                                                 /* The pointer to a context structure that is passed when invoking the command handler. When NULL, the engine context is passed instead. */
 } ValkeyModuleScriptingEngineDebuggerCommandV1;
 
 #define ValkeyModuleScriptingEngineDebuggerCommand ValkeyModuleScriptingEngineDebuggerCommandV1
@@ -1495,6 +1514,12 @@ typedef void (*ValkeyModuleScanKeyCB)(ValkeyModuleKey *key,
                                       ValkeyModuleString *field,
                                       ValkeyModuleString *value,
                                       void *privdata);
+typedef void (*ValkeyModuleScanKeyRawBorrowedCB)(ValkeyModuleKey *key,
+                                                 const char *field,
+                                                 size_t field_len,
+                                                 const char *value,
+                                                 size_t value_len,
+                                                 void *privdata);
 typedef ValkeyModuleString *(*ValkeyModuleConfigGetStringFunc)(const char *name, void *privdata);
 typedef long long (*ValkeyModuleConfigGetNumericFunc)(const char *name, void *privdata);
 typedef unsigned long long (*ValkeyModuleConfigGetUnsignedNumericFunc)(const char *name, void *privdata);
@@ -1563,6 +1588,8 @@ VALKEYMODULE_API void (*ValkeyModule_Free)(void *ptr) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_Calloc)(size_t nmemb, size_t size)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_TryCalloc)(size_t nmemb, size_t size)VALKEYMODULE_ATTR;
 VALKEYMODULE_API char *(*ValkeyModule_Strdup)(const char *str)VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IncrExternalMemory)(size_t bytes) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DecrExternalMemory)(size_t bytes) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetApi)(const char *, void *) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CreateCommand)(ValkeyModuleCtx *ctx,
                                                    const char *name,
@@ -2032,6 +2059,10 @@ VALKEYMODULE_API int (*ValkeyModule_ScanKey)(ValkeyModuleKey *key,
                                              ValkeyModuleScanCursor *cursor,
                                              ValkeyModuleScanKeyCB fn,
                                              void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ScanKeyRawBorrowed)(ValkeyModuleKey *key,
+                                                        ValkeyModuleScanCursor *cursor,
+                                                        ValkeyModuleScanKeyRawBorrowedCB fn,
+                                                        void *privdata) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetContextFlagsAll)(void) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetModuleOptionsAll)(void) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetKeyspaceNotificationFlagsAll)(void) VALKEYMODULE_ATTR;
@@ -2158,7 +2189,7 @@ VALKEYMODULE_API size_t (*ValkeyModule_MallocUsableSize)(void *ptr) VALKEYMODULE
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeString)(ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeDict)(ValkeyModuleDict *dict) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleUser *(*ValkeyModule_CreateModuleUser)(const char *name)VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_FreeModuleUser)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_FreeModuleUser)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetContextUser)(ValkeyModuleCtx *ctx,
                                                      const ValkeyModuleUser *user) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_SetModuleUserACL)(ValkeyModuleUser *user, const char *acl) VALKEYMODULE_ATTR;
@@ -2183,14 +2214,14 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckPermissions)(ValkeyModuleUser *user,
                                                          int argc,
                                                          int dbid,
                                                          ValkeyModuleACLLogEntryReason *denial_reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
-                                                     ValkeyModuleUser *user,
-                                                     ValkeyModuleString *object,
-                                                     ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntryByUserName)(ValkeyModuleCtx *ctx,
-                                                               ValkeyModuleString *user,
-                                                               ValkeyModuleString *object,
-                                                               ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
+                                                    ValkeyModuleUser *user,
+                                                    ValkeyModuleString *object,
+                                                    ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLAddLogEntryByUserName)(ValkeyModuleCtx *ctx,
+                                                              ValkeyModuleString *user,
+                                                              ValkeyModuleString *object,
+                                                              ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_AuthenticateClientWithACLUser)(ValkeyModuleCtx *ctx,
                                                                    const char *name,
                                                                    size_t len,
@@ -2333,6 +2364,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(Realloc);
     VALKEYMODULE_GET_API(TryRealloc);
     VALKEYMODULE_GET_API(Strdup);
+    VALKEYMODULE_GET_API(IncrExternalMemory);
+    VALKEYMODULE_GET_API(DecrExternalMemory);
     VALKEYMODULE_GET_API(CreateCommand);
     VALKEYMODULE_GET_API(GetCommand);
     VALKEYMODULE_GET_API(CreateSubcommand);
@@ -2582,6 +2615,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ScanCursorDestroy);
     VALKEYMODULE_GET_API(Scan);
     VALKEYMODULE_GET_API(ScanKey);
+    VALKEYMODULE_GET_API(ScanKeyRawBorrowed);
     VALKEYMODULE_GET_API(GetContextFlagsAll);
     VALKEYMODULE_GET_API(GetModuleOptionsAll);
     VALKEYMODULE_GET_API(GetKeyspaceNotificationFlagsAll);

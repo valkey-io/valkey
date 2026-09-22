@@ -215,6 +215,13 @@ typedef struct benchmarkThread {
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
+    /* Per-thread latency histograms: recording into one shared histogram
+     * with hdr_record_value_atomic makes every command from every thread
+     * contend on the same counter cache lines. Each thread records into
+     * its own histograms lock-free; thread 0 folds them for live display
+     * and the main thread folds them after join for the final report. */
+    struct hdr_histogram *latency_histogram;
+    struct hdr_histogram *current_sec_latency_histogram;
 } benchmarkThread;
 
 /* Cluster. */
@@ -480,6 +487,48 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
         zfree(temp_indices[placeholder]);
     }
     return;
+}
+
+/* Batched per-thread accounting for config.requests_finished. A relaxed
+ * fetch_add per completed command from every thread turns the counter's
+ * cache line into a process-wide contention point at high rates (the same
+ * failure mode as the shared latency histogram). Each thread accumulates
+ * locally and publishes one fetch_add per REQUESTS_FINISHED_FLUSH_BATCH
+ * completions, so the line is written at ~rps/batch instead of ~rps; the
+ * per-command read below then almost always hits a Shared cached copy.
+ *
+ * The residue is flushed from each thread's showThroughput timer (so
+ * count-mode termination, detected from the global value, cannot stall on
+ * unpublished counts) and after aeMain() returns (so the final report is
+ * exact). Consequences of the batching: termination detection and the
+ * "stop recording latency at the end" gate can lag by up to
+ * batch * num_threads commands, and a warmup-boundary reset can carry over
+ * a residue of the same magnitude -- both are the same benign-race class
+ * as the surrounding relaxed counter resets. The warmup carry-over is an
+ * intentional, documented trade-off: with --threads and --warmup, completion
+ * accounting around the warmup boundary is exact only to within
+ * batch * num_threads (an exact boundary would reintroduce cross-thread
+ * coordination on the completion path -- the contention this design
+ * removes). Runs whose -n is small enough for this to matter are far below
+ * any meaningful measurement size; the limitation is stated in the --warmup
+ * help text. Single-threaded mode keeps the exact per-command path. */
+#define REQUESTS_FINISHED_FLUSH_BATCH 256
+static _Thread_local int pending_requests_finished = 0;
+
+static void flushRequestsFinished(void) {
+    if (pending_requests_finished > 0) {
+        atomic_fetch_add_explicit(&config.requests_finished, pending_requests_finished, memory_order_relaxed);
+        pending_requests_finished = 0;
+    }
+}
+
+static int addRequestFinished(void) {
+    if (config.num_threads == 0) {
+        return atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+    }
+    pending_requests_finished++;
+    if (pending_requests_finished >= REQUESTS_FINISHED_FLUSH_BATCH) flushRequestsFinished();
+    return atomic_load_explicit(&config.requests_finished, memory_order_relaxed) + pending_requests_finished;
 }
 
 static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
@@ -789,7 +838,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                int requests_finished = addRequestFinished();
                 if (!isBenchmarkFinished(requests_finished)) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -801,14 +850,15 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                                              ? (long)c->latency
                                              : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     } else {
-                        hdr_record_value_atomic(config.latency_histogram, // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
-                        hdr_record_value_atomic(config.current_sec_latency_histogram,      // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
+                        benchmarkThread *thread = config.threads[c->thread_id];
+                        hdr_record_value(thread->latency_histogram, // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
+                        hdr_record_value(thread->current_sec_latency_histogram,     // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     }
                 }
                 c->pending--;
@@ -1295,6 +1345,13 @@ static void startBenchmarkThreads(void) {
         }
     }
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
+    /* All threads have stopped: fold the per-thread latency histograms into
+     * the global histogram for exact final reporting. Reset it first --
+     * showThroughput may have populated it with approximate live merges. */
+    hdr_reset(config.latency_histogram);
+    for (i = 0; i < config.num_threads; i++) {
+        hdr_add(config.latency_histogram, config.threads[i]->latency_histogram);
+    }
 }
 
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
@@ -1364,12 +1421,22 @@ static benchmarkThread *createBenchmarkThread(int index) {
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
     thread->paused_clients = listCreate();
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->latency_histogram);                // Pointer to initialise
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE, // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->current_sec_latency_histogram);    // Pointer to initialise
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
+    if (thread->latency_histogram) hdr_close(thread->latency_histogram);
+    if (thread->current_sec_latency_histogram) hdr_close(thread->current_sec_latency_histogram);
     listRelease(thread->paused_clients);
     zfree(thread);
 }
@@ -1387,6 +1454,9 @@ static void freeBenchmarkThreads(void) {
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
     aeMain(thread->el);
+    /* Publish any batched completion residue: the final report reads
+     * config.requests_finished after all threads are joined. */
+    flushRequestsFinished();
     return NULL;
 }
 
@@ -2039,7 +2109,10 @@ usage:
         "                    Run benchmark for specified number of seconds\n"
         "                    (mutually exclusive with -n)\n"
         " --warmup <seconds> Run benchmark for specified warmup period before\n"
-        "                    recording data\n"
+        "                    recording data. With --threads, completed-request\n"
+        "                    accounting is batched per thread, so a small number\n"
+        "                    of pre-warmup completions may carry into the counted\n"
+        "                    total at the warmup boundary.\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -2095,6 +2168,9 @@ usage:
         " --rps <requests>   Limit the total number of requests per second.\n"
         "                    Default 0 (no limit)\n"
         " --seed <num>       Set the seed for random number generator.\n"
+        "                    With --threads, per-thread streams are seeded\n"
+        "                    deterministically but their order of first use\n"
+        "                    depends on thread scheduling.\n"
         "                    Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
@@ -2142,6 +2218,9 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
+    /* Publish this thread's batched completion count so global termination
+     * detection and the displayed totals stay fresh (see addRequestFinished). */
+    flushRequestsFinished();
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
@@ -2162,6 +2241,13 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
             atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
             atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
             hdr_reset(config.latency_histogram);
+            /* Per-thread histograms carry the recorded values now; clear them
+             * too. Concurrent recording may leak a warmup sample into the
+             * results -- same benign-race class as the counter resets above. */
+            for (int t = 0; t < config.num_threads; t++) {
+                hdr_reset(config.threads[t]->latency_histogram);
+                hdr_reset(config.threads[t]->current_sec_latency_histogram);
+            }
         }
     } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
@@ -2181,6 +2267,18 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         printf("clients: %d\r", config.liveclients);
         fflush(stdout);
         return SHOW_THROUGHPUT_INTERVAL;
+    }
+    if (config.num_threads) {
+        /* Use thread-0's own histograms for the live display line. This is
+         * race-free (showThroughput runs on thread-0's event loop, same thread
+         * that records into these histograms) and representative under uniform
+         * workloads. The final report folds all threads exactly after join. */
+        benchmarkThread *t0 = config.threads[0];
+        hdr_reset(config.latency_histogram);
+        hdr_add(config.latency_histogram, t0->latency_histogram);
+        hdr_reset(config.current_sec_latency_histogram);
+        hdr_add(config.current_sec_latency_histogram, t0->current_sec_latency_histogram);
+        hdr_reset(t0->current_sec_latency_histogram);
     }
     const float dt = (float)(current_tick - config.start) / 1000.0;
     const float rps = (float)requests_finished / dt;

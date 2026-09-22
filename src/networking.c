@@ -2668,9 +2668,6 @@ client *lookupClientByID(uint64_t id) {
     return c;
 }
 
-/* Bound compression work and staging memory for one write dispatch. */
-#define REPL_COMPRESSION_BATCH_SIZE (1024 * 1024)
-
 /* Advance the replica's replication-buffer cursor (ref_repl_buf_node /
  * ref_block_pos) past consumed raw bytes, releasing the reference on each
  * fully-sent block. Shared by the compressed and plaintext post-write paths. */
@@ -2761,16 +2758,17 @@ static bool getReplicaWriteRange(client *c, listNode **last_node, size_t *last_p
 }
 
 /* Append compressed input to the link's staging buffer. The first call emits
- * the replication envelope; a sync flush makes the batch writable without
- * ending the frame. */
+ * the replication envelope. Frames may span multiple socket-write batches;
+ * later frames start without repeating the envelope. */
 static int compressReplicaDataToOutputBuffer(replicaCompressionState *compression,
                                              const uint8_t *input,
                                              size_t input_len,
                                              compressFlushMode flush_mode) {
-    if (!compression->compressor.stream_started) {
+    if (!compression->envelope_written) {
         uint8_t envelope[VCS_ENVELOPE_SIZE];
         if (vcsBuildEnvelope(envelope, compression->compressor.algo, VCS_STREAM_REPL) == C_ERR) return C_ERR;
         compression->out_buf = sdscatlen(compression->out_buf, envelope, sizeof(envelope));
+        compression->envelope_written = true;
     }
     size_t bound = streamCompressorOutputBound(&compression->compressor, input_len);
     serverAssert(bound > 0);
@@ -2845,12 +2843,26 @@ static void writeToReplicaCompressed(client *c) {
 
     if (batch_uncompressed_bytes == 0) return;
 
-    /* Drain codec-buffered bytes so the whole batch lands in out_buf. */
-    if (compressReplicaDataToOutputBuffer(compression, NULL, 0, COMPRESS_FLUSH_SYNC) != C_OK) {
+    /* Drain codec-buffered bytes so the whole batch lands in out_buf. Codecs
+     * that need bounded frames for integrity retain history across small write
+     * batches and close after reaching the configured raw-byte threshold. */
+    compressFlushMode flush_mode = COMPRESS_FLUSH_SYNC;
+    if (compression->frame_max_bytes &&
+        compression->frame_uncompressed_bytes + batch_uncompressed_bytes >= compression->frame_max_bytes) {
+        flush_mode = COMPRESS_FLUSH_END;
+    }
+    if (compressReplicaDataToOutputBuffer(compression, NULL, 0, flush_mode) != C_OK) {
         c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
         return;
     }
 
+    if (compression->frame_max_bytes) {
+        if (flush_mode == COMPRESS_FLUSH_END) {
+            compression->frame_uncompressed_bytes = 0;
+        } else {
+            compression->frame_uncompressed_bytes += batch_uncompressed_bytes;
+        }
+    }
     compression->batch_uncompressed_bytes = batch_uncompressed_bytes;
 
     /* Send out_buf. The backlog cursor advances only after a full send

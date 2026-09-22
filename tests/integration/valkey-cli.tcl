@@ -542,6 +542,9 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 
         fconfigure $fd -blocking true
         r client kill type slave
+        # Drain stdout before closing the pipe so pending output cannot cause SIGPIPE
+        # before the CLI reports the server disconnect on stderr.
+        read $fd
         catch { close_cli $fd } err
         assert_match {*Server closed the connection*} $err
     }

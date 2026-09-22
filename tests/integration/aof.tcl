@@ -555,6 +555,24 @@ tags {"aof external:skip logreqres:skip"} {
         assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
     }
 
+    start_server {overrides {appendonly yes aof-use-rdb-preamble yes}} {
+        test {Test valkey-check-aof for Multi Part AOF with Valkey RDB base} {
+            r set foo bar
+            r bgrewriteaof
+            waitForBgrewriteaof r
+
+            set base_aof [get_base_aof_path r]
+            set manifest [file join [file dirname $base_aof] "[lindex [r config get appendfilename] 1]$::manifest_suffix"]
+            assert_equal "VALKEY" [read_binary_file_prefix $base_aof 6]
+
+            set failed [catch {
+                exec $::VALKEY_CHECK_AOF_BIN $manifest
+            } result]
+            assert_equal 0 $failed
+            assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*BASE AOF*is valid*All AOF files and manifest are valid*" $result
+        }
+    }
+
     test {Test valkey-check-aof for Multi Part AOF with resp AOF base} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof [formatCommand set foo hello]

@@ -581,7 +581,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
         {no   zstd size}
         {zstd lz4  size}
         {lz4  zstd eof}
-        {zstd zstd eof}
+        {zstd zstd size}
     }
     foreach case $transcode_matrix {
         lassign $case wire disk framing
@@ -596,6 +596,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                 $primary config set repl-diskless-sync no
                 $primary config set rdbcompression $wire
                 $primary config set repl-compression $wire
+                $primary config set rdb-del-sync-files no
             }
             populate_compressible_dataset $primary "xcode-$wire-$disk-$framing"
             $primary set xcode:key value
@@ -606,6 +607,12 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                 $replica replicaof $primary_host $primary_port
                 assert_replica_synced $primary $replica "($wire -> $disk, $framing)"
                 assert_replica_dump $replica $disk
+                if {$wire eq $disk && $framing eq "size"} {
+                    # Verbatim disk-based: the replica copies the primary's RDB
+                    # byte-for-byte (a re-encode would produce a different frame).
+                    set rc [catch {exec cmp [server_rdb_path $primary] [server_rdb_path $replica]} cmpout]
+                    assert_equal 0 $rc "primary and replica dump.rdb differ: $cmpout"
+                }
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal value [$replica get xcode:key]
                 $replica replicaof no one

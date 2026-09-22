@@ -51,8 +51,10 @@ void rdbTranscoderInit(rdbTranscoder *t, compressionAlgo target, bool checksum, 
 static int rdbTranscoderClassify(rdbTranscoder *t) {
     bool src_compressed = t->probe_len >= VCS_ENVELOPE_SIZE && t->probe[0] == VCS_MAGIC_0 &&
                           t->probe[1] == VCS_MAGIC_1 && t->probe[2] == VCS_MAGIC_2;
-    bool verbatim = src_compressed ? (t->target == ALGO_LZ4 && t->probe[VCS_OFFSET_CODEC] == VCS_CODEC_LZ4)
-                                   : (t->target == ALGO_NONE);
+    /* Verbatim when the source codec equals the target. */
+    bool verbatim = src_compressed
+                        ? (t->target != ALGO_NONE && vcsCodecToAlgo(t->probe[VCS_OFFSET_CODEC]) == t->target)
+                        : (t->target == ALGO_NONE);
     if (verbatim) {
         t->route = RDB_TRANSCODE_VERBATIM;
         return C_OK;

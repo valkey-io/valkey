@@ -51,6 +51,14 @@ int vcsBuildEnvelope(uint8_t *buf, compressionAlgo algo, uint8_t stream_kind) {
     return C_OK;
 }
 
+compressionAlgo vcsCodecToAlgo(uint8_t codec) {
+    switch (codec) {
+    case VCS_CODEC_LZ4: return ALGO_LZ4;
+    case VCS_CODEC_ZSTD: return ALGO_ZSTD;
+    default: return ALGO_NONE;
+    }
+}
+
 static int writeVcsEnvelope(streamWriterWriteFn write_cb, void *ctx, compressionAlgo algo, uint8_t stream_kind) {
     uint8_t envelope[VCS_ENVELOPE_SIZE];
     if (vcsBuildEnvelope(envelope, algo, stream_kind) == C_ERR) return C_ERR;

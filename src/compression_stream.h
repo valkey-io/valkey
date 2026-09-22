@@ -79,6 +79,10 @@ void streamWriterFree(streamWriter *writer);
  * Returns C_ERR when algo has no wire codec id. */
 int vcsBuildEnvelope(uint8_t *buf, compressionAlgo algo, uint8_t stream_kind);
 
+/* Map a VCS envelope codec id to its whole-stream compressionAlgo, or ALGO_NONE
+ * for an unknown codec id. */
+compressionAlgo vcsCodecToAlgo(uint8_t codec);
+
 /* ===== Reader ===== */
 
 /* Default decompressed-output buffer size. Tiny caller values are clamped up

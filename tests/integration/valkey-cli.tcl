@@ -156,6 +156,28 @@ start_server {tags {"cli logreqres:skip"}} {
         }
     }
 
+    foreach test_cli {test_tty_cli test_nontty_cli} {
+        $test_cli "INFO respects explicit output modes" {
+            foreach resp {2 3} {
+                foreach {mode expected} {
+                    --csv {"# Cluster\r\ncluster_enabled:0\r\n"}
+                    --json {"# Cluster\r\ncluster_enabled:0\r\n"}
+                    --quoted-json {"# Cluster\\r\\ncluster_enabled:0\\r\\n"}
+                } {
+                    assert_equal $expected [run_cli -$resp $mode info cluster]
+                }
+            }
+        }
+
+        $test_cli "INFO remains raw by default and with --raw" {
+            foreach resp {2 3} {
+                foreach mode {{} --raw} {
+                    assert_equal "# Cluster\r\ncluster_enabled:0\r" [run_cli -$resp {*}$mode info cluster]
+                }
+            }
+        }
+    }
+
     test_interactive_cli "Status reply" {
         assert_equal "OK" [run_command $fd "set key foo"]
     }

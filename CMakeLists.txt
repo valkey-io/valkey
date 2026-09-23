@@ -14,6 +14,7 @@ endif ()
 
 # Options
 set(BUILD_LUA "static" CACHE STRING "Build Valkey Lua scripting engine: static (default), module, no")
+set(BUILD_ZSTD "no" CACHE STRING "Build Zstandard streaming RDB and replication compression: yes, no")
 option(BUILD_UNIT_GTESTS "Build valkey-unit-gtests" OFF)
 option(BUILD_TEST_MODULES "Build all test modules" OFF)
 option(BUILD_EXAMPLE_MODULES "Build example modules" OFF)

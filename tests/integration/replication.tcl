@@ -432,6 +432,8 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
+        # This test can't be executed on x86 when valgrind is enabled,
+        # valgrind simulation will return a finite result on 1e4932 + 1e4932
         test {INCREX BYFLOAT arithmetic overflow does not propagate} {
             set big [ldbl_overflow_operand -1]
             r -1 del foo
@@ -445,7 +447,7 @@ start_server {tags {"repl external:skip"}} {
                 {set marker 1}
             }
             close_replication_stream $repl
-        }
+        } {} {valgrind:skip}
 
         test {ROLE in master reports master with a slave} {
             set res [r -1 role]

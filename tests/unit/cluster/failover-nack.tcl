@@ -179,7 +179,7 @@ proc test_nack_fast_fail_reason {reason_name reason_code} {
 
         # 3 primaries, one FAIL, quorum 2: a single NACK leaves at most one
         # achievable ACK, so the election is reset immediately.
-        wait_for_log_messages -3 [list "*Failover auth NACK *$reason_name* from $voter_id * for epoch $election_epoch (NACKs 1, quorum 2)*"] $election_line 1000 50
+        wait_for_log_messages -3 [list "*Failover auth NACK *$reason_name* from $voter_id * for epoch $election_epoch*"] $election_line 1000 50
         wait_for_log_messages -3 [list "*Failover election for epoch $election_epoch cannot reach quorum*"] $election_line 1000 50
         # The reason must have been counted, not skipped as one a new epoch
         # cannot fix, and the election must not have waited out auth_timeout.
@@ -227,7 +227,7 @@ proc test_nack_ignored_reasons {reason_list} {
 
             # Not counted: no accounting line for it, no reset, still a replica waiting for votes.
             wait_for_log_messages -3 [list "*Ignoring failover auth NACK *$reason_name* from $voter_id * for epoch $election_epoch*"] $election_line 1000 10
-            verify_no_log_message -3 "*Failover auth NACK *$reason_name* from $voter_id * quorum*" $election_line
+            verify_no_log_message -3 "*Failover auth NACK *$reason_name* from $voter_id * for epoch*" $election_line
             verify_no_log_message -3 "*cannot reach quorum*" $election_line
             assert_equal "slave" [s -3 role]
         }
@@ -315,7 +315,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         # None of them was counted: no accounting line, hence no reset. That is
         # what keeps the election open until it expires instead of being reset.
-        verify_no_log_message -3 "*Failover auth NACK *no-primary*NACKs*" 0
+        verify_no_log_message -3 "*Failover auth NACK *no-primary* for epoch*" 0
 
         resume_process [srv 0 pid]
     }
@@ -367,7 +367,7 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
     test "First NACK is counted, election stays open" {
         send_cluster_bus_packet $candidate_cport [create_cluster_failover_nack_packet \
             $v1_id $v1_port $v1_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
-        wait_for_log_messages -5 [list "*Failover auth NACK * from $v1_id * for epoch $election_epoch (NACKs 1, quorum 3)*"] $election_line 1000 50
+        wait_for_log_messages -5 [list "*Failover auth NACK * from $v1_id * for epoch $election_epoch*"] $election_line 1000 50
         verify_no_log_message -5 "*cannot reach quorum*" $election_line
     }
 
@@ -387,7 +387,7 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
             $v2_id $v2_port $v2_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
         # The accounting line is written before the bound is checked, so once
         # it is there any reset would already be in the log too.
-        wait_for_log_messages -5 [list "*Failover auth NACK * from $v2_id * for epoch $election_epoch (NACKs 2, quorum 3)*"] $election_line 1000 50
+        wait_for_log_messages -5 [list "*Failover auth NACK * from $v2_id * for epoch $election_epoch*"] $election_line 1000 50
         verify_no_log_message -5 "*cannot reach quorum*" $election_line
         assert_equal "slave" [s -5 role]
     }
@@ -411,7 +411,7 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
         }
         send_cluster_bus_packet $candidate_cport [create_cluster_failover_nack_packet \
             $v3_id $v3_port $v3_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
-        wait_for_log_messages -5 [list "*Failover auth NACK * from $v3_id * for epoch $election_epoch (NACKs 3, quorum 3)*"] $election_line 1000 50
+        wait_for_log_messages -5 [list "*Failover auth NACK * from $v3_id * for epoch $election_epoch*"] $election_line 1000 50
         wait_for_log_messages -5 [list "*Failover election for epoch $election_epoch cannot reach quorum*"] $election_line 1000 50
     }
 
@@ -420,6 +420,90 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
             [s -5 role] eq "master"
         } else {
             fail "Replica did not win the retried election"
+        }
+        wait_for_cluster_state ok
+    }
+}
+
+# A voter that is already FAIL when the election starts will never respond to
+# it, so it must count as a dead voter from the first NACK on (see #4626). Five
+# voters, quorum 3, V1 FAIL before the election: after V2 and V3 NACK, only V4
+# and V5 can still vote, so the election is reset at the second NACK with one
+# dead voter. Resetting the per-voter state to CAN_RESPOND for every node at
+# election start loses V1 and would need a third NACK. The retried election
+# is then answered only by R0, V1 and R4, so it can reach quorum only if the
+# ACK from V1, still FAIL in the candidate's view, is counted as a vote.
+start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
+    set CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST 5
+    set NACK_REASON_ALREADY_VOTED 3
+
+    set primary_id [R 0 cluster myid]
+    set candidate_cport [expr {[srv -5 port] + 10000}]
+    set candidate_epoch 0
+
+    foreach v {1 2 3} {
+        set v${v}_id [R $v cluster myid]
+        set v${v}_port [srv -$v port]
+        set v${v}_cport [expr {[srv -$v port] + 10000}]
+    }
+
+    test "Freeze the election and mark one voter FAIL before it starts" {
+        assert_equal $primary_id [dict get [cluster_get_myself 5] slaveof]
+        assert_equal 5 [CI 5 cluster_size]
+        foreach v {0 1 2 3 4} {
+            R $v DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST
+        }
+        send_cluster_bus_packet $candidate_cport [create_cluster_fail_packet \
+            $v2_id $v2_port $v2_cport [CI 5 cluster_current_epoch] $v1_id]
+        wait_for_condition 1000 10 {
+            [cluster_all_see_flag {5} [list $v1_id] fail]
+        } else {
+            fail "Candidate did not mark the voter as fail"
+        }
+    }
+
+    set election_epoch 0
+    set election_line 0
+    test "Replica starts a manual election with one voter already FAIL" {
+        R 5 CLUSTER FAILOVER FORCE
+        set res [wait_for_log_messages -5 {"*Starting a failover election for epoch *"} 0 1000 50]
+        set election_line [lindex $res 1]
+        assert {[regexp {Starting a failover election for epoch (\d+)} [lindex $res 0] -> election_epoch]}
+        set candidate_epoch [CI 5 cluster_current_epoch]
+        assert_equal $election_epoch $candidate_epoch
+        assert {[cluster_all_see_flag {5} [list $v1_id] fail]}
+    }
+
+    test "First NACK is counted, election stays open" {
+        send_cluster_bus_packet $candidate_cport [create_cluster_failover_nack_packet \
+            $v2_id $v2_port $v2_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
+        wait_for_log_messages -5 [list "*Failover auth NACK * from $v2_id * for epoch $election_epoch*"] $election_line 1000 50
+        verify_no_log_message -5 "*cannot reach quorum*" $election_line
+    }
+
+    test "Second NACK resets the election because the FAIL voter cannot respond" {
+        # Let R0, V1 and R4 answer the retry started by the reset. V2 and V3
+        # keep dropping the request, so the retry can only reach quorum 3 if
+        # the ACK from V1, which the candidate still considers FAIL, is
+        # counted. The injected packets cost V2 and V3 their link to the
+        # candidate, which does not matter since they stay silent.
+        foreach v {0 1 4} {
+            R $v DEBUG DROP-CLUSTER-PACKET-FILTER -1
+        }
+        send_cluster_bus_packet $candidate_cport [create_cluster_failover_nack_packet \
+            $v3_id $v3_port $v3_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
+        wait_for_log_messages -5 [list "*Failover auth NACK * from $v3_id * for epoch $election_epoch*"] $election_line 1000 50
+        wait_for_log_messages -5 [list "*Failover election for epoch $election_epoch cannot reach quorum 3 (ACKs 0, NACKs 2, dead voters 1)*"] $election_line 1000 50
+    }
+
+    test "Replica wins the retried election with the FAIL voter's ACK" {
+        wait_for_condition 1000 50 {
+            [s -5 role] eq "master"
+        } else {
+            fail "Replica did not win the retried election"
+        }
+        foreach v {2 3} {
+            R $v DEBUG DROP-CLUSTER-PACKET-FILTER -1
         }
         wait_for_cluster_state ok
     }

@@ -139,14 +139,16 @@ static_assert(CLUSTER_NODE_MAX <= UINT16_MAX, "cluster node flags must fit in 16
 #define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
 #define nodeSupportsFailoverAuthNack(n) ((n)->flags & CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED)
 
-/* While our FAILOVER_AUTH_REQUEST is outstanding, every voting primary is in
- * exactly one of these states. A voter that responded keeps its state if it is
- * later marked FAIL, so no voter is counted twice. */
+/* While our FAILOVER_AUTH_REQUEST is outstanding, every node is in exactly one
+ * of these states; only voting primaries are counted. A voter that responded
+ * keeps its state if it is later marked FAIL, so no voter is counted twice. A
+ * FAILED_WITHOUT_RESPONSE voter that still reaches us with an ACK moves to
+ * ACKED. */
 typedef enum {
     VOTER_CAN_RESPOND,            /* Has not responded and may still ACK or NACK. */
     VOTER_ACKED,                  /* Counted in failover_auth_count. */
-    VOTER_NACKED,                 /* Counted in failover_auth_nack_count. */
-    VOTER_FAILED_WITHOUT_RESPONSE /* Counted in failed_voters_without_response, will never respond. */
+    VOTER_NACKED,                 /* Will not vote for us in this election. */
+    VOTER_FAILED_WITHOUT_RESPONSE /* Will never respond. */
 } voterElectionState;
 
 /* Cluster messages header */
@@ -510,7 +512,7 @@ struct _clusterNode {
     int is_node_healthy;                     /* Boolean indicating the cached node health.
                                                 Update with updateAndCountChangedNodeHealth(). */
     unsigned int replica_priority;           /* Replica priority used for auto failover ranking. */
-    voterElectionState voter_election_state; /* The state of the node in the current failover election*/
+    voterElectionState voter_election_state; /* The state of the node in the current failover election. */
 };
 
 /* Struct used for storing slot statistics. */
@@ -528,15 +530,13 @@ typedef struct slotRange {
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
-    int state;                          /* CLUSTER_OK, CLUSTER_FAIL, ... */
-    int fail_reason;                    /* Why the cluster state changes to fail. */
-    int safe_to_join;                   /* Can the restarted node safely join the cluster? */
-    int size;                           /* Num of primary nodes with at least one slot */
-    int failed_voters_without_response; /* Voting primaries in FAIL state that have not responded to our
-                                           current election. */
-    dict *nodes;                        /* Hash table of name -> clusterNode structures */
-    dict *shards;                       /* Hash table of shard_id -> list (of nodes) structures */
-    dict *nodes_black_list;             /* Nodes we don't re-add for a few seconds. */
+    int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
+    int fail_reason;        /* Why the cluster state changes to fail. */
+    int safe_to_join;       /* Can the restarted node safely join the cluster? */
+    int size;               /* Num of primary nodes with at least one slot */
+    dict *nodes;            /* Hash table of name -> clusterNode structures */
+    dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
+    dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
     dict *migrating_slots_to;
     dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
@@ -546,7 +546,6 @@ struct clusterState {
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
-    int failover_auth_nack_count;     /* Number of distinct voters that rejected this election so far. */
     int failover_auth_sent;           /* True if we already asked for votes. */
     int failover_auth_rank;           /* This replica rank for current auth request. */
     int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */

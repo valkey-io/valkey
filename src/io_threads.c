@@ -49,9 +49,12 @@ static mpscQueue io_shared_outbox[JOB_PRIORITY_COUNT] = {0};
 static spscQueue io_private_inbox[IO_THREADS_MAX_NUM] = {0};
 static size_t io_jobs_submitted;
 static _Atomic(size_t) io_jobs_finished;
-static _Atomic int io_threads_final_shutdown;
 static size_t cluster_io_pending_responses;
 static int io_threads_initialized = 0;
+/* Set once the process is going away and the main thread will never consume
+ * io_shared_outbox again. Workers use it to stop retrying a blocking flush that
+ * can no longer make progress. */
+static _Atomic int io_threads_exiting = 0;
 _Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
 
 /* Job Types for Tagged Pointers
@@ -112,26 +115,6 @@ void drainIOThreadsQueue(void) {
     while (getPendingIOThreadsJobs()) {
         atomic_thread_fence(memory_order_acquire);
     }
-}
-
-/* Drain outstanding I/O work during shutdown while worker threads are still
- * alive, then park them so no new work is offloaded before they are killed.
- * Unlike drainIOThreadsQueue(), this also consumes worker responses on the main
- * thread to avoid deadlocking if an I/O response queue fills up. */
-void prepareIOThreadsForShutdown(void) {
-    if (server.io_threads_num == 1) return;
-    serverAssert(inMainThread());
-
-    commitIOJobs();
-    while (getPendingIOThreadsJobs() || getPendingIOResponsesCount()) {
-        processIOThreadsResponses();
-        atomic_thread_fence(memory_order_acquire);
-    }
-
-    for (int i = 1; i < server.active_io_threads_num; i++) {
-        pthread_mutex_lock(&io_threads_mutex[i]);
-    }
-    server.active_io_threads_num = 1;
 }
 
 /* Returns if there is an IO operation in progress for the given client. */
@@ -300,7 +283,9 @@ static void flushPendingIOResponsesList(list **pending_list, mpscQueue *outbox, 
         /* Try to enqueue. If blocking is set, retry until success. */
         do {
             pushed = mpscEnqueue(outbox, job, ticket);
-            if (pushed || !blocking || server.crashed) break; /* On server crash we kill the IO threads, no point in sending back jobs to the main-thread. */
+            /* On server crash or process exit we kill the IO threads, no point in sending back jobs to the main-thread. */
+            if (pushed || !blocking || server.crashed) break;
+            if (atomic_load_explicit(&io_threads_exiting, memory_order_acquire)) break;
             atomic_thread_fence(memory_order_acquire);
         } while (true);
 
@@ -325,11 +310,16 @@ static void flushPendingIOResponses(int blocking) {
 void cleanupThreadResources(void *dummy) {
     UNUSED(dummy);
 
-    /* Blocking flush: ensure all pending jobs are sent before thread dies.
-     * During final shutdown there is no main-thread consumer left for those
-     * responses, so only free thread-local resources. */
-    if (!atomic_load_explicit(&io_threads_final_shutdown, memory_order_acquire)) {
-        flushPendingIOResponses(1);
+    /* Blocking flush: ensure all pending jobs are sent before thread dies */
+    flushPendingIOResponses(1);
+
+    /* The flush gives up early when there is no consumer left, so the backlog
+     * lists it did not drain are still allocated. Nothing will read them. */
+    for (int i = 0; i < JOB_PRIORITY_COUNT; i++) {
+        if (pending_io_responses[i]) {
+            listRelease(pending_io_responses[i]);
+            pending_io_responses[i] = NULL;
+        }
     }
 
     /* Free the shared query buffer */
@@ -387,8 +377,6 @@ static void *IOThreadMain(void *myid) {
     int processed = 0;
     monotime work_start_time = 0;
     while (1) {
-        if (atomic_load_explicit(&io_threads_final_shutdown, memory_order_acquire)) break;
-
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
         size_t batch_count = 0;
@@ -453,7 +441,7 @@ static void *IOThreadMain(void *myid) {
             }
         }
     }
-    pthread_cleanup_pop(1);
+    pthread_cleanup_pop(0);
     return NULL;
 }
 
@@ -507,7 +495,11 @@ static void shutdownIOThread(int id) {
 }
 
 void killIOThreads(void) {
-    atomic_store_explicit(&io_threads_final_shutdown, 1, memory_order_release);
+    /* Both callers are one-way trips out of the process: the crash handler and
+     * finishShutdown(). The main thread is about to sit in pthread_join() and
+     * will not drain io_shared_outbox again, so tell the workers to stop
+     * retrying their blocking flush. */
+    atomic_store_explicit(&io_threads_exiting, 1, memory_order_release);
     for (int j = 1; j < server.io_threads_num; j++) { /* We don't kill thread 0, which is the main thread. */
         shutdownIOThread(j);
     }

@@ -5326,14 +5326,12 @@ int finishShutdown(void) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
-    /* Quiesce IO threads while workers are still alive. Module unload below can
-     * drain IO queues, so the workers must not be killed before this point. */
-    prepareIOThreadsForShutdown();
-
     moduleUnloadAllModules();
 
-    /* Terminate IO threads before exiting so their cleanup handlers can free
-     * thread-local resources. */
+    /* Terminate the IO workers so their cleanup handlers run and free their
+     * thread-local resources. This has to come after module unloading, which
+     * calls drainIOThreadsQueue() and needs the workers alive, and after every
+     * "goto error" above, which leaves the server running. */
     killIOThreads();
 
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");

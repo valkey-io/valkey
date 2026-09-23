@@ -30,14 +30,17 @@ proc check_log_backtrace_for_debug {log_pattern} {
         # the following are skipped since valgrind is slow and a timeout can happen
         if {!$::valgrind} {
             assert_equal [count_log_message 0 "wait_threads(): waiting threads timed out"] 0
-            # make sure the server prints stack trace for all threads. we know 3 threads are idle in bio.c
-            assert_equal [count_log_message 0 "bioProcessBackgroundJobs"] 3
+            # make sure the server prints stack trace for all threads. we know 5 threads are idle in bio.c
+            # Search for thread names (bio_*) which appear on all systems, including Alpine where
+            # function names may not be resolved
+            assert_equal [count_log_message 0 "bio_"] 5
+            # Verify at least one stack frame was emitted (format: #<n> 0x...)
+            # This format is specific to libbacktrace; execinfo.h uses a different format
+            if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {
+                assert_range [count_log_message 0 "#. 0x"] 1 999
+            }
         }
     }
-
-    set pattern "*debugCommand*"
-    set res [wait_for_log_messages 0 \"$pattern\" 0 100 100]
-    if {$::verbose} { puts $res}
 }
 
 # used when backtrace_supported == 0
@@ -61,14 +64,14 @@ if {$backtrace_supported} {
     }
 }
 
-# Valgrind will complain that the process terminated by a signal, skip it.
-if {!$::valgrind} {
-    if {$backtrace_supported} {
-        set check_cb check_log_backtrace_for_debug
-    } else {
-        set check_cb check_crash_log
-    }
+if {$backtrace_supported} {
+    set check_cb check_log_backtrace_for_debug
+} else {
+    set check_cb check_crash_log
+}
 
+# Valgrind will complain that the process terminated by a signal, skip it.
+tags {"valgrind:skip"} {
     # test being killed by a SIGABRT from outside
     set server_path [tmpdir server1.log]
     start_server [list overrides [list dir $server_path crash-memcheck-enabled no]] {

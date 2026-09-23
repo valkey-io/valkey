@@ -1468,7 +1468,7 @@ void quicklistRotate(quicklist *quicklist) {
 
     /* If quicklist has only one node, the head listpack is also the
      * tail listpack and PushHead() could have reallocated our single listpack,
-     * which would make our pre-existing 'p' unusable. */
+     * which would make our preexisting 'p' unusable. */
     if (quicklist->len == 1) {
         p = lpSeek(quicklist->tail->entry, -1);
     }
@@ -1687,4 +1687,26 @@ void quicklistBookmarksClear(quicklist *ql) {
     while (ql->bookmark_count) zfree(ql->bookmarks[--ql->bookmark_count].name);
     /* NOTE: We do not shrink (realloc) the quick list. main use case for this
      * function is just before releasing the allocation. */
+}
+
+/* Wrapper functions for gtest to access static internals. */
+
+size_t testOnlyQuicklistNodeNegFillLimit(int fill) {
+    return quicklistNodeNegFillLimit(fill);
+}
+
+quicklistNode *testOnlyQuicklistCreateNode(void) {
+    return quicklistCreateNode();
+}
+
+quicklistNode *testOnlyQuicklistCreateNodeWithValue(int container, void *value, size_t sz) {
+    return __quicklistCreateNode(container, value, sz);
+}
+
+int testOnlyQuicklistCompressNode(quicklistNode *node) {
+    return __quicklistCompressNode(node);
+}
+
+int testOnlyQuicklistDecompressNode(quicklistNode *node) {
+    return __quicklistDecompressNode(node);
 }

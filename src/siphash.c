@@ -30,9 +30,9 @@
       returns an uint64_t value, the hash itself, instead of receiving an
       output buffer. This also means that the output size is set to 8 bytes
       and the 16 bytes output code handling was removed.
-   4. Provide a case insensitive variant to be used when hashing strings that
+   4. Provide a case-insensitive variant to be used when hashing strings that
       must be considered identical by the hash table regardless of the case.
-      If we don't have directly a case insensitive hash function, we need to
+      If we don't have directly a case-insensitive hash function, we need to
       perform a text transformation in some temporary buffer, which is costly.
    5. Remove debugging code.
    6. Modified the original test.c file to be a stand-alone function testing
@@ -341,7 +341,7 @@ int siphash_test(void) {
         }
     }
 
-    /* Run a few basic tests with the case insensitive version. */
+    /* Run a few basic tests with the case-insensitive version. */
     uint64_t h1, h2;
     h1 = siphash((uint8_t*)"hello world",11,(uint8_t*)"1234567812345678");
     h2 = siphash_nocase((uint8_t*)"hello world",11,(uint8_t*)"1234567812345678");

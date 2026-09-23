@@ -21,6 +21,130 @@ start_server {tags {"multi"}} {
         list $v1 $v2 $v3
     } {QUEUED QUEUED {{a b c} PONG}}
 
+    test {EXEC conditions} {
+        r del condition{t} destination{t}
+        r set condition{t} value
+
+        r multi
+        r set destination{t} committed
+        set committed [r exec ifeq condition{t} value ifne condition{t} other xx condition{t} nx missing{t}]
+
+        r multi
+        r set destination{t} not-committed
+        set ifeq_failed [r exec ifeq condition{t} other]
+
+        r multi
+        r set destination{t} not-committed
+        set ifne_failed [r exec ifne condition{t} value]
+
+        r multi
+        r set destination{t} not-committed
+        set nx_failed [r exec nx condition{t}]
+
+        r multi
+        r set destination{t} not-committed
+        set xx_failed [r exec xx missing{t}]
+
+        list $committed $ifeq_failed $ifne_failed $nx_failed $xx_failed [r get destination{t}]
+    } {OK {} {} {} {} committed}
+
+    test {EXEC conditions past the static key buffer report the real keys} {
+        # getKeysPrepareResult() grows out of keysbuf at MAX_KEYS_BUFFER (256),
+        # and copies result->numkeys entries when it does.
+        set conds {}
+        for {set i 0} {$i < 300} {incr i} {
+            lappend conds IFEQ key:$i val:$i
+        }
+        set keys [r command getkeys EXEC {*}$conds]
+        assert_equal 300 [llength $keys]
+        assert_equal key:0 [lindex $keys 0]
+        assert_equal key:255 [lindex $keys 255]
+        assert_equal key:299 [lindex $keys 299]
+        r ping
+    } {PONG}
+
+    test {EXEC IFNE matches a missing key} {
+        r del condition{t} destination{t}
+        r multi
+        r set destination{t} committed
+        list [r exec ifne condition{t} value] [r get destination{t}]
+    } {OK committed}
+
+    test {EXEC NX lazy-deletes expired condition key on primary} {
+        r flushdb
+        r debug set-active-expire 0
+        r psetex expired_cond{t} 10 old_val
+        after 50
+        # The expired condition key remains in the dictionary while active expiration is off.
+        assert_equal 1 [r dbsize]
+        r multi
+        r set destination{t} committed
+        assert_equal {OK} [r exec nx expired_cond{t}]
+        assert_equal {committed} [r get destination{t}]
+        # The condition key was lazy-deleted; only destination{t} remains.
+        assert_equal 1 [r dbsize]
+        r debug set-active-expire 1
+    } {OK} {needs:debug}
+
+    test {EXEC string comparisons return WRONGTYPE for non-string keys} {
+        r del condition{t} destination{t}
+        r lpush condition{t} value
+        r multi
+        r set destination{t} not-committed
+        assert_error {EXECABORT*WRONGTYPE*} {r exec ifeq condition{t} value}
+        r multi
+        r set destination{t} not-committed
+        assert_error {EXECABORT*WRONGTYPE*} {r exec ifne condition{t} value}
+        assert_equal {} [r get destination{t}]
+    }
+
+    test {EXEC condition syntax errors abort the transaction} {
+        r del condition{t} destination{t}
+        r set condition{t} value
+        r multi
+        r set destination{t} committed
+        assert_error {EXECABORT*invalid check condition syntax*} {r exec ifeq condition{t}}
+        list [r ping] [r get destination{t}]
+    } {PONG {}}
+
+    test {EXEC condition syntax error logs to MONITOR only once} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        assert_match {*OK*} [$rd read]
+        r multi
+        r set destination{t} committed
+        assert_error {EXECABORT*invalid check condition syntax*} {r exec ifeq condition{t}}
+        r ping
+        set m1 [$rd read]
+        set m2 [$rd read]
+        set m3 [$rd read]
+        $rd close
+        assert_match {*"multi"*} $m1
+        assert_match {*"exec" "ifeq"*} $m2
+        assert_match {*"ping"*} $m3
+    }
+
+    test {EXEC skips conditions when WATCH already aborted the transaction} {
+        r del watched{t} condition{t} destination{t}
+        r set watched{t} value
+        r lpush condition{t} value
+        r watch watched{t}
+        r set watched{t} changed
+        r multi
+        r set destination{t} should-not-execute
+        list [r exec ifeq condition{t} value] [r get destination{t}]
+    } {{} {}}
+
+    test {EXEC skips conditions when queueing already aborted the transaction} {
+        r del condition{t} destination{t}
+        r lpush condition{t} value
+        r multi
+        catch {r non-existing-command}
+        r set destination{t} should-not-execute
+        assert_error {EXECABORT*} {r exec ifeq condition{t} value}
+        assert_equal {} [r get destination{t}]
+    }
+
     test {DISCARD} {
         r del mylist
         r rpush mylist a
@@ -369,6 +493,66 @@ start_server {tags {"multi"}} {
         r ping
         r exec
     } {}
+
+    test {WATCH same key multiple times should be fine} {
+        r set x 10
+        r watch x
+        r watch x x
+        r watch x x x
+        assert_equal 1 [get_field_in_client_info [r client info] "watch"]
+        r multi
+        r incr x
+        r exec
+        assert_equal {11} [r get x]
+        assert_equal 0 [get_field_in_client_info [r client info] "watch"]
+    }
+
+    test {WATCH same key name in different DBs} {
+        set rd0 [valkey_client]
+        set rd1 [valkey_client]
+
+        # Set up two keys with the same name in different DBs
+        r select 0
+        r set key value
+        r select 1
+        r set key value
+
+        # rd0 and rd1 are watching the same key in different DBs
+        $rd0 select 0
+        $rd0 watch key
+        $rd0 multi
+        $rd1 select 1
+        $rd1 watch key
+        $rd1 multi
+
+        # Modify key in DB 0, should only affect DB 0's watch, that is, only affect rd0
+        r select 0
+        r set key modified
+
+        # Transaction should fail because key in DB 0 was touched
+        $rd0 set key new_value
+        assert_equal {} [$rd0 exec]
+
+        # Transaction should succeed because key in DB 1 was not touched
+        $rd1 set key new_value
+        assert_equal {OK} [$rd1 exec]
+
+        $rd0 close
+        $rd1 close
+    } {0} {singledb:skip}
+
+    test {WATCH with large number of keys} {
+        set elements {}
+        for {set i 0} {$i < 50000} {incr i} {
+            lappend elements key{t}-$i
+        }
+        r watch {*}$elements
+        r watch {*}$elements
+        assert_equal 50000 [get_field_in_client_info [r client info] "watch"]
+
+        r unwatch
+        assert_equal 0 [get_field_in_client_info [r client info] "watch"]
+    }
 
     test {DISCARD should clear the WATCH dirty flag on the client} {
         r watch x
@@ -807,7 +991,7 @@ start_server {tags {"multi"}} {
             r XADD mystream * foo3 bar3
             r XGROUP CREATE mystream mygroup 0
 
-            # make sure the XCALIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
+            # make sure the XCLAIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
             r multi
             r XREADGROUP GROUP mygroup consumer1 COUNT 2 STREAMS mystream ">"
             r XREADGROUP GROUP mygroup consumer1 STREAMS mystream ">"

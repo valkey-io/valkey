@@ -78,24 +78,24 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
         OR USE_TCMALLOC
         OR USE_TCMALLOC_MINIMAL)
         # Using custom allocator
-        target_link_libraries(${target} ${ALLOCATOR_LIB})
+        target_link_libraries(${target} PRIVATE ${ALLOCATOR_LIB})
     endif ()
 
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
-    target_link_libraries(${target} ${libs} ${ld_flags})
-    target_link_libraries(${target} valkey::valkey)
+    target_link_libraries(${target} PRIVATE ${libs} ${ld_flags})
+    target_link_libraries(${target} PRIVATE valkey::valkey)
     if (USE_TLS)
         # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
+        target_link_libraries(${target} PRIVATE OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
     if (USE_RDMA)
         # Add required libraries needed for RDMA
-        target_link_libraries(${target} valkey::valkey_rdma)
+        target_link_libraries(${target} PRIVATE valkey::valkey_rdma)
     endif ()
 
     if (IS_FREEBSD)
-        target_link_libraries(${target} execinfo)
+        target_link_libraries(${target} PRIVATE execinfo)
     endif ()
 
     # Enable all warnings + fail on warning
@@ -236,7 +236,7 @@ if (BUILDING_ARM64)
 endif ()
 
 if (APPLE)
-    add_valkey_server_linker_option("-rdynamic")
+    add_valkey_server_linker_option("-Wl,-export_dynamic")
     add_valkey_server_linker_option("-ldl")
 elseif (UNIX)
     add_valkey_server_linker_option("-rdynamic")
@@ -282,6 +282,41 @@ include_directories("${CMAKE_SOURCE_DIR}/src/modules/lua")
 include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
+include_directories("${CMAKE_SOURCE_DIR}/deps/lz4")
+
+string(TOLOWER "${BUILD_ZSTD}" BUILD_ZSTD_LOWER)
+if (NOT "${BUILD_ZSTD_LOWER}" MATCHES "^(yes|no|on|off|1|0)$")
+    message(FATAL_ERROR "BUILD_ZSTD can be one of: [yes | no | on | off | 1 | 0], but '${BUILD_ZSTD}' was provided")
+endif ()
+
+set(USE_ZSTD 0)
+if (BUILD_ZSTD)
+    unset(ZSTD_STATIC_LIBRARY CACHE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ZSTD REQUIRED libzstd>=1.4.7)
+    find_library(
+        ZSTD_STATIC_LIBRARY
+        NAMES libzstd.a zstd_static.lib
+        HINTS ${ZSTD_LIBRARY_DIRS})
+    if (NOT ZSTD_STATIC_LIBRARY)
+        message(FATAL_ERROR "BUILD_ZSTD=yes requires the static libzstd archive")
+    endif ()
+    message(STATUS "Zstandard support is enabled")
+    set(USE_ZSTD 1)
+    add_valkey_server_compiler_options("-DHAVE_ZSTD")
+    add_library(valkey_zstd STATIC IMPORTED GLOBAL)
+    set(ZSTD_PRIVATE_LIBRARIES "${ZSTD_STATIC_LIBRARIES}")
+    list(REMOVE_ITEM ZSTD_PRIVATE_LIBRARIES zstd)
+    set_target_properties(
+        valkey_zstd
+        PROPERTIES IMPORTED_LOCATION "${ZSTD_STATIC_LIBRARY}"
+                   INTERFACE_COMPILE_OPTIONS "${ZSTD_STATIC_CFLAGS_OTHER}"
+                   INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_STATIC_INCLUDE_DIRS}"
+                   INTERFACE_LINK_LIBRARIES "${ZSTD_PRIVATE_LIBRARIES}"
+                   INTERFACE_LINK_OPTIONS "${ZSTD_STATIC_LDFLAGS_OTHER}")
+else ()
+    message(STATUS "Zstandard support is disabled")
+endif ()
 
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
 
@@ -330,22 +365,10 @@ if (PYTHON_EXE)
         COMMAND touch ${CMAKE_BINARY_DIR}/fmtargs_generated
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
     add_custom_target(generate_fmtargs_h DEPENDS ${CMAKE_BINARY_DIR}/fmtargs_generated)
-
-    # Rule for generating test_files.h
-    message(STATUS "Adding target generate_test_files_h")
-    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/unit/*.c")
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/test_files_generated
-        DEPENDS "${UNIT_TEST_SRCS};${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py"
-        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py
-        COMMAND touch ${CMAKE_BINARY_DIR}/test_files_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
-    add_custom_target(generate_test_files_h DEPENDS ${CMAKE_BINARY_DIR}/test_files_generated)
 else ()
     # Fake targets
     add_custom_target(generate_commands_def)
     add_custom_target(generate_fmtargs_h)
-    add_custom_target(generate_test_files_h)
 endif ()
 
 # Generate release.h file (always)
@@ -373,6 +396,7 @@ unset(USE_TLS CACHE)
 unset(USE_RDMA CACHE)
 unset(BUILD_TLS CACHE)
 unset(BUILD_RDMA CACHE)
+unset(BUILD_ZSTD CACHE)
 unset(BUILD_MALLOC CACHE)
 unset(USE_JEMALLOC CACHE)
 unset(BUILD_TLS_MODULE CACHE)

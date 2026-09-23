@@ -37,6 +37,15 @@ valkeyReply *create_cluster_nodes_reply(const char *str) {
     return create_reply(buf, len);
 }
 
+/* Helper to create a valkeyReply that contains a verbatim string. */
+valkeyReply *create_cluster_nodes_reply_resp3(const char *str) {
+    char buf[1024];
+    const char *encoding = "txt:";
+    int len = sprintf(buf, "=%zu\r\n%s%s\r\n", strlen(encoding) + strlen(str), encoding, str);
+
+    return create_reply(buf, len);
+}
+
 /* Helper to create a cluster slots response.
  * Parses the string using a rudimentary JSON like format which accepts:
  * - arrays   example: [elem1, elem2]
@@ -526,6 +535,43 @@ void test_parse_cluster_nodes_with_legacy_format(void) {
     valkeyClusterFree(cc);
 }
 
+/* Parse a cluster nodes reply when RESP3 is used,
+ * i.e. the reply is a verbatim string. */
+void test_parse_cluster_nodes_with_resp3(void) {
+    valkeyClusterOptions options = {0};
+    valkeyClusterContext *cc = createClusterContext(&options);
+    valkeyContext *c = valkeyContextInit();
+    valkeyClusterNode *node;
+    dictIterator di;
+
+    valkeyReply *reply = create_cluster_nodes_reply_resp3(
+        "67ed2db8d677e59ec4a4cefb06858cf2a1a89fa1 127.0.0.1:30002@31002,hostname2 master - 0 1426238316232 2 connected 5461-10922\n"
+        "292f8b365bb7edb5e285caf0b7e6ddc7265d2f4f 127.0.0.1:30003@31003,hostname3 master - 0 1426238318243 3 connected 10923-16383\n"
+        "e7d1eecce10fd6bb5eb35b9f99a514335d9ba9ca 127.0.0.1:30001@31001,hostname1 myself,master - 0 0 1 connected 0-5460\n");
+    dict *nodes = parse_cluster_nodes(cc, c, reply);
+    freeReplyObject(reply);
+
+    assert(nodes);
+    assert(dictSize(nodes) == 3); /* 3 primaries */
+    dictInitIterator(&di, nodes);
+    /* Verify node 1 */
+    node = dictGetVal(dictNext(&di));
+    assert(strcmp(node->name, "e7d1eecce10fd6bb5eb35b9f99a514335d9ba9ca") == 0);
+    assert(strcmp(node->addr, "127.0.0.1:30001") == 0);
+    /* Verify node 2 */
+    node = dictGetVal(dictNext(&di));
+    assert(strcmp(node->name, "67ed2db8d677e59ec4a4cefb06858cf2a1a89fa1") == 0);
+    assert(strcmp(node->addr, "127.0.0.1:30002") == 0);
+    /* Verify node 3 */
+    node = dictGetVal(dictNext(&di));
+    assert(strcmp(node->name, "292f8b365bb7edb5e285caf0b7e6ddc7265d2f4f") == 0);
+    assert(strcmp(node->addr, "127.0.0.1:30003") == 0);
+
+    dictRelease(nodes);
+    valkeyFree(c);
+    valkeyClusterFree(cc);
+}
+
 /* Parse a cluster slots reply from a basic deployment. */
 void test_parse_cluster_slots(bool parse_replicas) {
     valkeyClusterOptions options = {0};
@@ -810,6 +856,7 @@ int main(void) {
     test_parse_cluster_nodes_with_multiple_replicas();
     test_parse_cluster_nodes_with_parse_error();
     test_parse_cluster_nodes_with_legacy_format();
+    test_parse_cluster_nodes_with_resp3();
 
     test_parse_cluster_slots(false /* replicas not parsed */);
     test_parse_cluster_slots(true /* replicas parsed */);

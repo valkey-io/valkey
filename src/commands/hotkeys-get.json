@@ -1,0 +1,43 @@
+{
+    "GET": {
+        "summary": "Get the hottest keys from the last completed window, ordered by estimated QPS descending",
+        "complexity": "O(N) where N is the number of hot keys in the history",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": 2,
+        "function": "hotkeysGetCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "container": "HOTKEYS",
+        "reply_schema": {
+            "description": "Hottest keys from the last completed window, ordered by estimated QPS (descending)",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "key": {
+                        "description": "Key name",
+                        "type": "string"
+                    },
+                    "db": {
+                        "description": "Database id",
+                        "type": "integer"
+                    },
+                    "qps": {
+                        "description": "Estimated accesses per second over the last completed window",
+                        "type": "integer"
+                    }
+                }
+            }
+        }
+    }
+}

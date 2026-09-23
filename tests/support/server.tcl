@@ -1,6 +1,8 @@
 set ::global_overrides {}
 set ::tags {}
 set ::valgrind_errors {}
+# Tags that are only allowed at the top level (not in nested blocks)
+set ::toplevel_only_tags {large-memory needs:other-server compatible-redis network}
 
 proc start_server_error {executable config_file error} {
     set err {}
@@ -75,7 +77,7 @@ proc kill_server config {
     }
 
     # check for leaks
-    if {![dict exists $config "skipleaks"]} {
+    if {$::leaks && ![dict exists $config "skipleaks"]} {
         catch {
             if {[string match {*Darwin*} [exec uname -a]]} {
                 tags {"leaks"} {
@@ -189,6 +191,22 @@ proc server_is_up {host port retrynum} {
     return 0
 }
 
+# Checks if $tags are allowed on a sub-level.
+# If ::tags is empty, we're at top level; otherwise we're nested.
+proc check_subtags {tags} {
+    if {$::tags eq {}} {
+        # We're entering a top-level block with tags.
+        return
+    }
+    foreach tag $tags {
+        # Only error if it's a top-level-only tag AND it's not already in ::tags
+        if {[lsearch -exact $::toplevel_only_tags $tag] >= 0 &&
+            [lsearch -exact $::tags $tag] < 0} {
+            error "Test design error: Tag is only allowed on toplevel: $tag"
+        }
+    }
+}
+
 # Check if current ::tags match requested tags. If ::allowtags are used,
 # there must be some intersection. If ::denytags are used, no intersection
 # is allowed. Returns 1 if tags are acceptable or 0 otherwise, in which
@@ -200,7 +218,7 @@ proc tags_acceptable {tags err_return} {
     if {[llength $::allowtags] > 0} {
         set matched 0
         foreach tag $::allowtags {
-            if {[lsearch $tags $tag] >= 0} {
+            if {[lsearch -exact $tags $tag] >= 0} {
                 incr matched
             }
         }
@@ -211,73 +229,78 @@ proc tags_acceptable {tags err_return} {
     }
 
     foreach tag $::denytags {
-        if {[lsearch $tags $tag] >= 0} {
+        if {[lsearch -exact $tags $tag] >= 0} {
             set err "Tag: $tag denied"
             return 0
         }
     }
 
     # some units mess with the client output buffer so we can't really use the req-res logging mechanism.
-    if {$::log_req_res && [lsearch $tags "logreqres:skip"] >= 0} {
+    if {$::log_req_res && [lsearch -exact $tags "logreqres:skip"] >= 0} {
         set err "Not supported when running in log-req-res mode"
         return 0
     }
 
-    if {$::other_server_path eq {} && [lsearch $tags "needs:other-server"] >= 0} {
+    if {$::other_server_path eq {} && [lsearch -exact $tags "needs:other-server"] >= 0} {
         set err "Other server path not provided"
         return 0
     }
 
-    if {$::external && [lsearch $tags "external:skip"] >= 0} {
+    if {$::external && [lsearch -exact $tags "external:skip"] >= 0} {
         set err "Not supported on external server"
         return 0
     }
 
-    if {$::debug_defrag && [lsearch $tags "debug_defrag:skip"] >= 0} {
+    if {$::debug_defrag && [lsearch -exact $tags "debug_defrag:skip"] >= 0} {
         set err "Not supported on server compiled with DEBUG_FORCE_DEFRAG option"
         return 0
     }
 
-    if {$::singledb && [lsearch $tags "singledb:skip"] >= 0} {
+    if {$::singledb && [lsearch -exact $tags "singledb:skip"] >= 0} {
         set err "Not supported on singledb"
         return 0
     }
 
-    if {$::cluster_mode && [lsearch $tags "cluster:skip"] >= 0} {
+    if {$::cluster_mode && [lsearch -exact $tags "cluster:skip"] >= 0} {
         set err "Not supported in cluster mode"
         return 0
     }
 
-    if {$::tls && [lsearch $tags "tls:skip"] >= 0} {
+    if {$::tls && [lsearch -exact $tags "tls:skip"] >= 0} {
         set err "Not supported in tls mode"
         return 0
     }
 
-    if {!$::large_memory && [lsearch $tags "large-memory"] >= 0} {
+    if {!$::large_memory && [lsearch -exact $tags "large-memory"] >= 0} {
         set err "large memory flag not provided"
         return 0
     }
 
-    if {$::io_threads && [lsearch $tags "io-threads:skip"] >= 0} {
+    if {$::io_threads && [lsearch -exact $tags "io-threads:skip"] >= 0} {
         set err "Not supported in io-threads mode"
         return 0
     }
 
-    if {$::tcl_version < 8.6 && [lsearch $tags "ipv6"] >= 0} {
+    if {$::tcl_version < 8.6 && [lsearch -exact $tags "ipv6"] >= 0} {
         set err "TCL version is too low and does not support this"
         return 0
     }
 
-    if {[lsearch $tags "ipv6"] >= 0 && ![is_ipv6_available]} {
+    if {[lsearch -exact $tags "ipv6"] >= 0 && ![is_ipv6_available]} {
         set err "IPv6 not available on this system"
         return 0
     }
 
-    if {[lsearch $tags "mptcp"] >= 0 && ![is_mptcp_available]} {
+    if {[lsearch -exact $tags "mptcp"] >= 0 && ![is_mptcp_available]} {
         set err "MPTCP not available on this system"
         return 0
     }
 
+    if {$::valgrind && [lsearch -exact $tags "valgrind:skip"] >= 0} {
+        set err "Not supported when running under Valgrind"
+        return 0
+    }
+    
     return 1
 }
 
@@ -286,6 +309,7 @@ proc tags {tags code} {
     # If we 'tags' contain multiple tags, quoted and separated by spaces,
     # we want to get rid of the quotes in order to have a proper list
     set tags [string map { \" "" } $tags]
+    check_subtags $tags
     set ::tags [concat $::tags $tags]
     if {![tags_acceptable $::tags err]} {
         incr ::num_aborted
@@ -293,8 +317,13 @@ proc tags {tags code} {
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
     }
-    uplevel 1 $code
+    # Catch to ensure cleanup always happens
+    set err_code [catch {uplevel 1 $code} result]
     set ::tags [lrange $::tags 0 end-[llength $tags]]
+    if {$err_code} {
+        # Re-raise, let handler up the stack take care of this.
+        error $result $::errorInfo
+    }
 }
 
 # Write the configuration in the dictionary 'config' in the specified
@@ -335,8 +364,9 @@ proc spawn_server {executable config_file stdout stderr args} {
         read stdin 1
     }
 
-    # Tell the test server about this new instance.
-    send_data_packet $::test_server_fd server-spawned "$pid - $::curfile"
+    # Tell the test server about this new instance. Send the log path too so
+    # the orchestrator can dump it if the test times out.
+    send_data_packet $::test_server_fd server-spawned [list $pid $stdout $::curfile]
     return $pid
 }
 
@@ -419,7 +449,7 @@ proc run_external_server_test {code overrides} {
         dict set saved_config $param [lindex [r config get $param] 1]
         r config set $param $val
 
-        # If we enable appendonly, wait for for rewrite to complete. This is
+        # If we enable appendonly, wait for rewrite to complete. This is
         # required for tests that begin with a bg* command which will fail if
         # the rewriteaof operation is not completed at this point.
         if {$param == "appendonly" && $val == "yes"} {
@@ -494,6 +524,7 @@ proc start_server {options {code undefined}} {
                 # If we 'tags' contain multiple tags, quoted and separated by spaces,
                 # we want to get rid of the quotes in order to have a proper list
                 set tags [string map { \" "" } $value]
+                check_subtags $tags
                 set ::tags [concat $::tags $tags]
             }
             "keep_persistence" {
@@ -545,7 +576,7 @@ proc start_server {options {code undefined}} {
     set config {}
     if {$::tls} {
         if {$::tls_module} {
-            lappend config_lines [list "loadmodule" [format "%s/src/valkey-tls.so" [pwd]]]
+            lappend config_lines [list "loadmodule" $::VALKEY_TLS_MODULE]
         }
         dict set config "tls-cert-file" [format "%s/tests/tls/server.crt" [pwd]]
         dict set config "tls-key-file" [format "%s/tests/tls/server.key" [pwd]]
@@ -558,7 +589,7 @@ proc start_server {options {code undefined}} {
 
     if {$::io_threads} {
         dict set config "io-threads" 2
-        dict set config "events-per-io-thread" 0
+        dict set config "io-threads-always-active" yes
         dict set config "min-io-threads-avoid-copy-reply" 2
     }
 
@@ -679,6 +710,8 @@ proc start_server {options {code undefined}} {
             set err {}
             append err [exec cat $stdout] "\n" [exec cat $stderr]
             start_server_error $executable $config_file $err
+            set ::singledb $old_singledb
+            set ::tags [lrange $::tags 0 end-[llength $tags]]
             return
         }
         set server_started 1
@@ -782,6 +815,9 @@ proc start_server {options {code undefined}} {
                 incr ::num_failed
                 send_data_packet $::test_server_fd err [join $details "\n"]
             } else {
+                # Restore state before re-raising
+                set ::singledb $old_singledb
+                set ::tags [lrange $::tags 0 end-[llength $tags]]
                 # Re-raise, let handler up the stack take care of this.
                 error $error $backtrace
             }

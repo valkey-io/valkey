@@ -2,7 +2,12 @@
 #define CLUSTER_LEGACY_H
 
 #include <stdint.h>
+
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
+
+/* Receive buffer sizing for a cluster link. */
+#define RCVBUF_INIT_LEN 1024
+#define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
 
 /* The following defines are amount of time, sometimes expressed as
  * multipliers of the node timeout value (when ending with MULT). */
@@ -17,6 +22,7 @@
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
 #define CLUSTER_CANT_FAILOVER_EXPIRED 3
 #define CLUSTER_CANT_FAILOVER_WAITING_VOTES 4
+#define CLUSTER_CANT_FAILOVER_NO_DATA 5
 #define CLUSTER_CANT_FAILOVER_RELOG_PERIOD 1 /* seconds. */
 
 /* clusterState todo_before_sleep flags. */
@@ -27,6 +33,22 @@
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
 #define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
+
+/* I/O state for threaded cluster bus offload. */
+typedef enum {
+    CLUSTER_LINK_IO_IDLE = 0,
+    CLUSTER_LINK_IO_PENDING,
+} clusterLinkIOState;
+
+/* Result codes for cluster I/O jobs. */
+typedef enum {
+    CLUSTER_IO_OK = 0,
+    CLUSTER_IO_BAD_HEADER,
+    CLUSTER_IO_BAD_LENGTH,
+    CLUSTER_IO_READ_ERROR,
+    CLUSTER_IO_EOF,
+    CLUSTER_IO_WRITE_ERROR,
+} clusterIOResult;
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -41,6 +63,29 @@ typedef struct clusterLink {
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
     int flags;                             /* CLUSTER_LINK_... */
+
+    /* Threaded I/O state (main-thread owned, except where noted) */
+    int io_read_state;         /* clusterLinkIOState: read job state */
+    int io_write_state;        /* clusterLinkIOState: write job state */
+    int async_close;           /* 1 if teardown requested while jobs in flight */
+    int io_refs;               /* Count of in-flight I/O jobs */
+    clusterIOResult io_result; /* Result code from last I/O job (written by I/O thread).
+                                * Shared by read/write jobs because they are mutually exclusive per link. */
+
+    /* Async write snapshot/result */
+    listNode *io_last_send_block; /* Last queue node visible to current write job */
+    size_t io_head_offset;        /* Snapshot/result offset into queue head */
+    int io_nodes_sent;            /* Number of fully-sent head nodes (set by I/O thread) */
+
+    /* Pre-dispatch rcvbuf_alloc for memory accounting on completion */
+    size_t rcvbuf_alloc_at_dispatch; /* rcvbuf_alloc when read job was dispatched */
+
+    /* Async read framing/result */
+    size_t io_complete_bytes;   /* Bytes at the start of rcvbuf framed as complete packets */
+    size_t io_complete_packets; /* Number of complete packets in io_complete_bytes */
+
+    /* Read/write fairness */
+    int io_read_deferred; /* Read skipped while a write was in flight; next write dispatch yields */
 } clusterLink;
 
 /* Cluster link flags and macros. */
@@ -65,6 +110,17 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_MULTI_MEET_SUPPORTED CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED /* This node handles multi meet packet.                             \
                                                                                      Light hdr for module and multi meet were both introduced in 8.1, \
                                                                                      so we could reduce the same flag value. */
+#define CLUSTER_NODE_MY_PRIMARY_FAIL (1 << 13)                                    /* myself is a replica and my primary is FAIL in my view. \
+                                                                                   * myself will gossip this flag to other replica in the   \
+                                                                                   * shard so that the replicas can make a better ranking   \
+                                                                                   * decisions to help with the failover. */
+#define CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED (1 << 14)                       /* This node understands FAILOVER_AUTH_NACK messages. */
+#define CLUSTER_NODE_MAX CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED                /* Max bit for CLUSTER_NODE_* flag, update while adding a new flag. */
+
+/* Ensure cluster node flags never silently grew beyond 16 bits.
+ * The flags in clusterMsg and clusterMsgDataGossip are uint16_t. */
+static_assert(CLUSTER_NODE_MAX <= UINT16_MAX, "cluster node flags must fit in 16 bits");
+
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
@@ -80,6 +136,8 @@ typedef struct clusterLink {
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
 #define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
+#define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
+#define nodeSupportsFailoverAuthNack(n) ((n)->flags & CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED)
 
 /* Cluster messages header */
 
@@ -100,7 +158,8 @@ typedef struct clusterLink {
 #define CLUSTERMSG_TYPE_MFSTART 8               /* Pause clients for manual failover */
 #define CLUSTERMSG_TYPE_MODULE 9                /* Module cluster API message. */
 #define CLUSTERMSG_TYPE_PUBLISHSHARD 10         /* Pub/Sub Publish shard propagation */
-#define CLUSTERMSG_TYPE_COUNT 11                /* Total number of message types. */
+#define CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK 11   /* No, you don't have my vote. */
+#define CLUSTERMSG_TYPE_COUNT 12                /* Total number of message types. */
 
 #define CLUSTERMSG_LIGHT 0x8000 /* Modifier bit for message types that support light header */
 
@@ -136,6 +195,17 @@ typedef struct {
 } clusterMsgDataFail;
 
 typedef struct {
+    uint64_t epoch;      /* currentEpoch of the rejected FAILOVER_AUTH_REQUEST, so the
+                          * candidate can match the NACK to the election it actually
+                          * answers rather than to whatever election it is running when
+                          * the NACK arrives. Network byte order. */
+    uint8_t reason;      /* One of CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_*. */
+    uint8_t reserved[7]; /* Explicit padding, always zero. */
+} clusterMsgDataFailoverNack;
+
+static_assert(sizeof(clusterMsgDataFailoverNack) == 16, "unexpected FAILOVER_AUTH_NACK payload size");
+
+typedef struct {
     uint32_t channel_len;
     uint32_t message_len;
     unsigned char bulk_data[8]; /* 8 bytes just as placeholder. */
@@ -166,6 +236,8 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
     CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
+    CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
+    CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -178,6 +250,10 @@ typedef struct {
 typedef struct {
     char human_nodename[1]; /* The announced nodename, ends with \0. */
 } clusterMsgPingExtHumanNodename;
+
+typedef struct {
+    char availability_zone[1]; /* The availability zone, ends with \0. */
+} clusterMsgPingExtAvailabilityZone;
 
 typedef struct {
     char name[CLUSTER_NAMELEN]; /* Node name. */
@@ -207,6 +283,10 @@ typedef struct {
 } clusterMsgPingExtClientTlsPort;
 
 typedef struct {
+    unsigned int replica_priority; /* The replica priority. */
+} clusterMsgPingExtReplicaPriority;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -219,6 +299,8 @@ typedef struct {
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
         clusterMsgPingExtClientPort announce_client_port;
         clusterMsgPingExtClientTlsPort announce_client_tls_port;
+        clusterMsgPingExtAvailabilityZone availability_zone;
+        clusterMsgPingExtReplicaPriority replica_priority;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -252,6 +334,11 @@ union clusterMsgData {
     struct {
         clusterMsgModule msg;
     } module;
+
+    /* FAILOVER_AUTH_NACK */
+    struct {
+        clusterMsgDataFailoverNack nack;
+    } failover_nack;
 };
 
 #define CLUSTER_PROTO_VER 1 /* Cluster bus protocol version. */
@@ -324,6 +411,15 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
                                               primary is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
 
+/* Reason values carried in clusterMsgDataFailoverNack.reason. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE 1       /* Voter is not safe to vote yet. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD 2  /* Request epoch < voter's currentEpoch. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED 3  /* Voter already voted in this epoch. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY 4 /* Requester is a primary itself. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY 5     /* Voter doesn't know it's primary. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP 6     /* Voter still sees it's primary up. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG 7   /* Replica's slot config is stale. */
+
 typedef struct {
     char sig[4];     /* Signature "RCmb" (Cluster message bus). */
     uint32_t totlen; /* Total length of this message */
@@ -392,6 +488,7 @@ struct _clusterNode {
     sds announce_client_ipv6;               /* IPv6 for clients only. */
     sds hostname;                           /* The known hostname for this node */
     sds human_nodename;                     /* The known human readable nodename for this node */
+    sds availability_zone;                  /* The known availability zone for this node */
     int tcp_port;                           /* Latest known clients TCP port. */
     int tls_port;                           /* Latest known clients TLS port */
     int cport;                              /* Latest known cluster port of this node. */
@@ -402,6 +499,7 @@ struct _clusterNode {
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
 };
 
 /* Struct used for storing slot statistics. */
@@ -423,6 +521,7 @@ struct clusterState {
     int fail_reason;        /* Why the cluster state changes to fail. */
     int safe_to_join;       /* Can the restarted node safely join the cluster? */
     int size;               /* Num of primary nodes with at least one slot */
+    int size_fail;          /* Num of voting primaries currently in FAIL state (subset of size). */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
@@ -435,6 +534,7 @@ struct clusterState {
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
+    int failover_auth_nack_count;     /* Number of rejected votes received so far. */
     int failover_auth_sent;           /* True if we already asked for votes. */
     int failover_auth_rank;           /* This replica rank for current auth request. */
     int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */
@@ -458,10 +558,20 @@ struct clusterState {
     /* Messages received and sent by type. */
     long long stats_bus_messages_sent[CLUSTERMSG_TYPE_COUNT];
     long long stats_bus_messages_received[CLUSTERMSG_TYPE_COUNT];
+    uint64_t stats_bus_bytes_sent;
+    uint64_t stats_bus_bytes_received;
+    uint64_t stats_bus_pubsub_bytes_sent;
+    uint64_t stats_bus_pubsub_bytes_received;
+    uint64_t stats_bus_module_bytes_sent;
+    uint64_t stats_bus_module_bytes_received;
     long long stats_pfail_nodes;                                 /* Number of nodes in PFAIL status,
                                                                     excluding nodes without address. */
     unsigned long long stat_cluster_links_buffer_limit_exceeded; /* Total number of cluster links freed due to exceeding
                                                                     buffer limit */
+    unsigned long long stat_cluster_links_established_inbound;   /* Total number of inbound cluster links
+                                                                    successfully established via accept. */
+    unsigned long long stat_cluster_links_established_outbound;  /* Total number of outbound cluster links
+                                                                    successfully established via connect. */
 
     /* Bit map for slots that are no longer claimed by the owner in cluster PING
      * messages. During slot migration, the owner will stop claiming the slot after
@@ -472,5 +582,19 @@ struct clusterState {
     /* Struct used for storing slot statistics, for all slots owned by the current shard. */
     slotStat slot_stats[CLUSTER_SLOTS];
 };
+
+/* Cluster I/O completion handlers called from processIOThreadsResponses().
+ * For read/write, the tagged pointer is the clusterLink* itself.
+ * For accept, the tagged pointer is the connection* (no clusterLink exists yet).
+ * Implemented in cluster_legacy.c. */
+void clusterHandleReadCompletion(clusterLink *link);
+void clusterHandleWriteCompletion(clusterLink *link);
+void clusterHandleAcceptCompletion(connection *conn);
+void clusterConnAcceptHandler(connection *conn);
+void clusterReadJob(clusterLink *link);
+void clusterWriteJob(clusterLink *link);
+
+void testOnlyFreeClusterLinkOnBufferLimitReached(clusterLink *link);
+void clusterAcceptJob(connection *conn);
 
 #endif // CLUSTER_LEGACY_H

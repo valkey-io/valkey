@@ -29,6 +29,7 @@
  */
 
 #include "geo.h"
+#include "ordered_index.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
@@ -36,7 +37,6 @@
 /* Things exported from t_zset.c only for geo.c, since it is the only other
  * part of the server that requires close zset introspection. */
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
-int zslValueLteMax(double value, zrangespec *spec);
 
 /* ====================================================================
  * This file implements the following commands:
@@ -294,7 +294,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             score = zzlGetScore(sptr);
 
             /* If we fell out of range, break. */
-            if (!zslValueLteMax(score, &range)) break;
+            if (!zsetScoreLteMax(score, &range)) break;
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
@@ -305,28 +305,27 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             if (ga->used && limit && ga->used >= limit) break;
             zzlNext(zl, &eptr, &sptr);
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, zs->oi);
+        orderedIndexSeekToScoreRange(&iter, range.min, range.max, range.minex, range.maxex, 0);
+        OrderedIndexItem *ln;
 
-        if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
-            /* Nothing exists starting at our min.  No results. */
-            return 0;
-        }
-
-        while (ln) {
+        while ((ln = orderedIndexNext(&iter)) != NULL) {
             double xy[2];
             double distance = 0;
+            double score = orderedIndexItemGetScore(ln);
             /* Abort when the node is no longer in range. */
-            if (!zslValueLteMax(ln->score, &range)) break;
-            if (geoWithinShape(shape, ln->score, xy, &distance) == C_OK) {
+            if (!zsetScoreLteMax(score, &range)) break;
+            if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                sds ele = zslGetNodeElement(ln);
-                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(ln, &ele, &ele_len);
+                geoArrayAppend(ga, xy, distance, score, sdsnewlen(ele, ele_len));
             }
             if (ga->used && limit && ga->used >= limit) break;
-            ln = ln->level[0].forward;
         }
     }
     return ga->used - origincount;
@@ -526,7 +525,7 @@ void geoaddCommand(client *c) {
  *                               [COUNT count [ANY]] [STORE key|STOREDIST key]
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  * GEOSEARCH key [FROMMEMBER member] [FROMLONLAT long lat] [BYRADIUS radius unit]
- *               [BYBOX width height unit] [WITHCOORD] [WITHDIST] [WITHASH] [COUNT count [ANY]] [ASC|DESC]
+ *               [BYBOX width height unit] [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]
  * GEOSEARCHSTORE dest_key src_key [FROMMEMBER member] [FROMLONLAT long lat] [BYRADIUS radius unit]
  *               [BYBOX width height unit] [COUNT count [ANY]] [ASC|DESC] [STOREDIST]
  *  */
@@ -580,6 +579,8 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     long long count = 0; /* Max number of results to return. 0 means unlimited. */
     if (c->argc > base_args) {
         int remaining = c->argc - base_args;
+        /* Call geoPolygonPointsFree() from error paths even when it may be a
+         * no-op, so cleanup stays safe if option parsing order changes. */
         for (int i = 0; i < remaining; i++) {
             char *arg = objectGetVal(c->argv[base_args + i]);
             if (!strcasecmp(arg, "withdist")) {
@@ -595,9 +596,13 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             } else if (!strcasecmp(arg, "desc")) {
                 sort = SORT_DESC;
             } else if (!strcasecmp(arg, "count") && (i + 1) < remaining) {
-                if (getLongLongFromObjectOrReply(c, c->argv[base_args + i + 1], &count, NULL) != C_OK) return;
+                if (getLongLongFromObjectOrReply(c, c->argv[base_args + i + 1], &count, NULL) != C_OK) {
+                    geoPolygonPointsFree(&shape);
+                    return;
+                }
                 if (count <= 0) {
                     addReplyError(c, "COUNT must be > 0");
+                    geoPolygonPointsFree(&shape);
                     return;
                 }
                 i++;
@@ -622,50 +627,60 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 }
                 robj *member = c->argv[base_args + i + 1];
                 if (longLatFromMemberOrReply(c, zobj, member, shape.xy) == C_ERR) {
+                    geoPolygonPointsFree(&shape);
                     return;
                 }
                 frommember = 1;
                 i++;
             } else if (!strcasecmp(arg, "fromlonlat") && (i + 2) < remaining && flags & GEOSEARCH && !frommember && !bypolygon) {
-                if (extractLongLatOrReply(c, c->argv + base_args + i + 1, shape.xy) == C_ERR) return;
+                if (extractLongLatOrReply(c, c->argv + base_args + i + 1, shape.xy) == C_ERR) {
+                    geoPolygonPointsFree(&shape);
+                    return;
+                }
                 fromloc = 1;
                 i += 2;
             } else if (!strcasecmp(arg, "byradius") && (i + 2) < remaining && flags & GEOSEARCH && !bybox && !bypolygon) {
-                if (extractDistanceOrReply(c, c->argv + base_args + i + 1, &shape.conversion, &shape.t.radius) != C_OK)
+                if (extractDistanceOrReply(c, c->argv + base_args + i + 1, &shape.conversion, &shape.t.radius) != C_OK) {
+                    geoPolygonPointsFree(&shape);
                     return;
+                }
                 shape.type = CIRCULAR_TYPE;
                 byradius = 1;
                 i += 2;
             } else if (!strcasecmp(arg, "bybox") && (i + 3) < remaining && flags & GEOSEARCH && !byradius && !bypolygon) {
                 if (extractBoxOrReply(c, c->argv + base_args + i + 1, &shape.conversion, &shape.t.r.width,
-                                      &shape.t.r.height) != C_OK)
+                                      &shape.t.r.height) != C_OK) {
+                    geoPolygonPointsFree(&shape);
                     return;
+                }
                 shape.type = RECTANGLE_TYPE;
                 bybox = 1;
                 i += 3;
             } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox && !frommember && !fromloc) {
                 int num_vertices = 0;
                 if (getIntFromObjectOrReply(c, c->argv[base_args + i + 1], &num_vertices, "invalid number of vertices") != C_OK) {
+                    geoPolygonPointsFree(&shape);
                     return;
                 }
                 /* Check how many args are remaining. Divide by 2 to see the possible number of vertices. */
                 int possible_vertices = (remaining - i - 2) / 2;
                 if (num_vertices < 3 || possible_vertices < num_vertices) {
                     addReplyError(c, "GEOSEARCH BYPOLYGON must have at least 3 vertices");
+                    geoPolygonPointsFree(&shape);
                     return;
                 }
                 /* Extract polygon vertices. */
                 shape.conversion = 1;
                 shape.t.polygon.num_vertices = num_vertices;
                 shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));
+                shape.type = POLYGON_TYPE;
+                bypolygon = 1;
                 for (int j = 0; j < num_vertices * 2; j += 2) {
                     if (extractLongLatOrReply(c, c->argv + base_args + i + 2 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
-                        zfree(shape.t.polygon.points);
+                        geoPolygonPointsFree(&shape);
                         return;
                     }
                 }
-                shape.type = POLYGON_TYPE;
-                bypolygon = 1;
                 i += (1 + num_vertices * 2);
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
@@ -713,7 +728,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             }
             addReply(c, shared.czero);
         } else {
-            /* Otherwise we return an empty array. */
+            /* Otherwise, we return an empty array. */
             addReply(c, shared.emptyarray);
         }
         geoPolygonPointsFree(&shape);
@@ -816,7 +831,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
 
         for (i = 0; i < returned_items; i++) {
-            zskiplistNode *znode;
+            OrderedIndexItem *znode;
             geoPoint *gp = ga.array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
             double score = storedist ? gp->dist : gp->score;
@@ -824,7 +839,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = zslInsert(zs->zsl, score, gp->member);
+            znode = orderedIndexInsert(zs->oi, score, gp->member, elelen);
             serverAssert(hashtableAdd(zs->ht, znode));
             sdsfree(gp->member);
             gp->member = NULL;

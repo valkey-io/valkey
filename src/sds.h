@@ -87,7 +87,7 @@ struct __attribute__((__packed__)) sdshdr64 {
 #define SDS_TYPE_64 4
 #define SDS_TYPE_MASK 7
 #define SDS_TYPE_BITS 3
-#define SDS_HDR_VAR(T, s) struct sdshdr##T *sh = (void *)((s) - (sizeof(struct sdshdr##T)));
+#define SDS_HDR_VAR(T, s) struct sdshdr##T *sh = (struct sdshdr##T *)((s) - (sizeof(struct sdshdr##T)))
 #define SDS_HDR(T, s) ((struct sdshdr##T *)((s) - (sizeof(struct sdshdr##T))))
 #define SDS_TYPE_5_LEN(f) ((unsigned char)(f) >> SDS_TYPE_BITS)
 
@@ -269,7 +269,7 @@ int sdsneedsrepr(const_sds s);
  * substitution value. Returning a NULL indicates an error.
  */
 typedef sds (*sdstemplate_callback_t)(const_sds variable, void *arg);
-sds sdstemplate(const char *template, sdstemplate_callback_t cb_func, void *cb_arg);
+sds sdstemplate(const char *sds_template, sdstemplate_callback_t cb_func, void *cb_arg);
 
 /* Low level functions exposed to the user API */
 int sdsHdrSize(char type);

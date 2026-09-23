@@ -178,7 +178,7 @@ run_solo {stream-large-memory} {
             # restore defaults
             r config set proto-max-bulk-len $original_proto
             r config set client-query-buffer-limit $original_query
-        } {OK} {large-memory}
+        } {OK}
 
         assert_equal {OK} [r module unload stream]
     }

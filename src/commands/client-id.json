@@ -8,6 +8,7 @@
         "container": "CLIENT",
         "function": "clientIDCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "NOSCRIPT",
             "LOADING",
             "STALE",

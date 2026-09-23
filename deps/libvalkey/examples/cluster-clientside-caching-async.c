@@ -26,6 +26,7 @@ void modifyKey(const char *key, const char *value);
  * and sets the push callback in the libvalkey context. */
 void connectCallback(valkeyAsyncContext *ac, int status) {
     assert(status == VALKEY_OK);
+    (void)status; /* Suppress unused warning when NDEBUG is defined. */
     valkeyAsyncSetPushCallback(ac, pushCallback);
     valkeyAsyncCommand(ac, NULL, NULL, "HELLO 3");
     valkeyAsyncCommand(ac, NULL, NULL, "CLIENT TRACKING ON");
@@ -48,6 +49,7 @@ void eventCallback(const valkeyClusterContext *cc, int event, void *privdata) {
         int status =
             valkeyClusterAsyncCommand(acc, setCallback, NULL, "SET %s 1", KEY);
         assert(status == VALKEY_OK);
+        (void)status; /* Suppress unused warning when NDEBUG is defined. */
     }
 }
 
@@ -62,6 +64,7 @@ void setCallback(valkeyClusterAsyncContext *acc, void *r, void *privdata) {
     int status =
         valkeyClusterAsyncCommand(acc, getCallback1, NULL, "GET %s", KEY);
     assert(status == VALKEY_OK);
+    (void)status; /* Suppress unused warning when NDEBUG is defined. */
 }
 
 /* Message callback for the first 'GET' command. Modifies the key to
@@ -82,6 +85,7 @@ void getCallback1(valkeyClusterAsyncContext *acc, void *r, void *privdata) {
     int status =
         valkeyClusterAsyncCommand(acc, getCallback2, NULL, "GET %s", KEY);
     assert(status == VALKEY_OK);
+    (void)status; /* Suppress unused warning when NDEBUG is defined. */
 }
 
 /* Push message callback handling invalidation messages. */
@@ -121,6 +125,7 @@ void getCallback2(valkeyClusterAsyncContext *acc, void *r, void *privdata) {
 /* A disconnect callback should invalidate all cached keys. */
 void disconnectCallback(const valkeyAsyncContext *ac, int status) {
     assert(status == VALKEY_OK);
+    (void)status; /* Suppress unused warning when NDEBUG is defined. */
     printf("Disconnected from %s:%d\n", ac->c.tcp.host, ac->c.tcp.port);
 
     printf("Invalidate all\n");

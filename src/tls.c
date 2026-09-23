@@ -40,18 +40,26 @@
      ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
       (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
 
+#include <openssl/x509_vfy.h>
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
+#include <openssl/bn.h>
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/decoder.h>
 #endif
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <arpa/inet.h>
+#include <dirent.h>
+#include <ctype.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #define REDIS_TLS_PROTO_TLSv1 (1 << 0)
 #define REDIS_TLS_PROTO_TLSv1_1 (1 << 1)
@@ -179,6 +187,26 @@ static void tlsInit(void) {
     pending_list = listCreate();
 }
 
+/* Serial and expiry of the two server certificates, captured while the context is built
+ * because a finished context cannot tell you which slot came from tls-cert-file: OpenSSL
+ * orders slots by key algorithm and records nothing about configuration order. The key
+ * algorithm cannot stand in for the slot either, since EVP_PKEY_base_id() is NID_undef
+ * for a provider-only algorithm such as ML-DSA. */
+typedef struct {
+    long long cert_expiry;
+    sds cert_serial;
+    long long alt_cert_expiry;
+    sds alt_cert_serial;
+} tlsServerCertInfo;
+
+static tlsServerCertInfo active_cert_info = {0};
+
+static void tlsClearCertInfo(long long *expiry, sds *serial);
+static void tlsClearCACertInfo(void);
+static void tlsClearAllCertInfo(void);
+static void tlsRefreshAllCertInfo(void);
+static void tlsClearServerCertInfo(tlsServerCertInfo *info);
+
 static void tlsCleanup(void) {
     if (valkey_tls_ctx) {
         SSL_CTX_free(valkey_tls_ctx);
@@ -188,11 +216,272 @@ static void tlsCleanup(void) {
         SSL_CTX_free(valkey_tls_client_ctx);
         valkey_tls_client_ctx = NULL;
     }
+    tlsClearAllCertInfo();
+    tlsClearServerCertInfo(&active_cert_info);
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
     // unavailable on LibreSSL
     OPENSSL_cleanup();
 #endif
+}
+
+/* Convert ASN1_TIME into a UTC tm plus a timezone offset (seconds). */
+static int tlsAsn1TimeToTm(const ASN1_TIME *time, struct tm *tm, int *tz_off) {
+    if (!time || !tm) return 0;
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L || defined(LIBRESSL_VERSION_NUMBER)
+    if (ASN1_TIME_to_tm(time, tm)) {
+        if (tz_off) *tz_off = 0;
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+/* Civil-from-fixed algorithm: convert Y/M/D to absolute days since Unix epoch. */
+static int64_t daysFromCivil(int64_t y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (unsigned)((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1);
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+/* Convert a UTC tm to a unix timestamp (seconds since epoch). */
+static long long tmToEpochUTC(const struct tm *tm) {
+    int64_t year = tm->tm_year + 1900;
+    unsigned month = tm->tm_mon + 1;
+    unsigned day = tm->tm_mday;
+    int64_t days = daysFromCivil(year, month, day);
+    int64_t seconds = days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+    return (long long)seconds;
+}
+
+/* Helper that returns the unix timestamp for an ASN1_TIME value. */
+static int asn1TimeToEpoch(const ASN1_TIME *time, long long *epoch) {
+    struct tm tm;
+    int tz_offset = 0;
+    if (!tlsAsn1TimeToTm(time, &tm, &tz_offset)) return 0;
+    long long ts = tmToEpochUTC(&tm);
+    ts -= tz_offset;
+    if (epoch) *epoch = ts;
+    return 1;
+}
+
+static int tlsGetX509Expiry(X509 *cert, long long *expiry) {
+    if (!cert) return C_ERR;
+    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
+    if (!not_after) return C_ERR;
+    return asn1TimeToEpoch(not_after, expiry) ? C_OK : C_ERR;
+}
+
+void tlsResetCertInfo(void) {
+    if (server.tls_port || server.tls_replication || server.tls_cluster) {
+        tlsRefreshAllCertInfo();
+        return;
+    }
+    tlsClearAllCertInfo();
+}
+
+/* Convert a certificate serial number to hex string for INFO reporting. */
+static sds tlsX509SerialToSds(X509 *cert) {
+    if (!cert) return NULL;
+    ASN1_INTEGER *serial = X509_get_serialNumber(cert);
+    if (!serial) return NULL;
+    sds serial_sds = NULL;
+    BIGNUM *bn = ASN1_INTEGER_to_BN(serial, NULL);
+    if (bn) {
+        char *hex = BN_bn2hex(bn);
+        if (hex) {
+            serial_sds = sdsnew(hex);
+            OPENSSL_free(hex);
+        }
+        BN_free(bn);
+    }
+    return serial_sds;
+}
+
+static void tlsClearCertSerial(sds *serial) {
+    if (*serial) {
+        sdsfree(*serial);
+        *serial = NULL;
+    }
+}
+
+static int tlsStoreCertInfo(long long expiry, sds serial, int count, long long *out_expiry, sds *out_serial, int *out_count) {
+    if (out_count) *out_count = count;
+    tlsClearCertSerial(out_serial);
+    if (expiry == 0) {
+        if (serial) sdsfree(serial);
+        if (out_count) *out_count = 0;
+        return C_ERR;
+    }
+    if (out_expiry) *out_expiry = expiry;
+    *out_serial = serial;
+    return C_OK;
+}
+
+static int tlsUpdateCertInfoFromCtx(SSL_CTX *ctx, long long *expiry, sds *serial) {
+    if (!ctx) return C_ERR;
+    X509 *cert = SSL_CTX_get0_certificate(ctx);
+    if (tlsGetX509Expiry(cert, expiry) != C_OK) return C_ERR;
+    tlsClearCertSerial(serial);
+    *serial = tlsX509SerialToSds(cert);
+    return C_OK;
+}
+
+static int tlsUpdateCertInfoFromFileHandle(FILE *fp, long long *expiry, sds *serial, int *count) {
+    int cert_count = 0;
+    long long earliest_expiry = 0;
+    sds earliest_serial = NULL;
+    X509 *cert = NULL;
+    while ((cert = PEM_read_X509(fp, NULL, NULL, NULL)) != NULL) {
+        cert_count++;
+        long long cert_expiry = 0;
+        if (tlsGetX509Expiry(cert, &cert_expiry) == C_OK) {
+            if (earliest_expiry == 0 || cert_expiry < earliest_expiry) {
+                earliest_expiry = cert_expiry;
+                if (earliest_serial) sdsfree(earliest_serial);
+                earliest_serial = tlsX509SerialToSds(cert);
+            }
+        }
+        X509_free(cert);
+    }
+    if (count) *count = cert_count;
+    if (earliest_expiry == 0) {
+        if (earliest_serial) sdsfree(earliest_serial);
+        if (count) *count = 0;
+        return C_ERR;
+    }
+    if (expiry) *expiry = earliest_expiry;
+    *serial = earliest_serial;
+    return C_OK;
+}
+
+static void tlsMergeCertInfo(long long *expiry, sds *serial, int *count, long long src_expiry, sds src_serial, int src_count) {
+    if (count) *count += src_count;
+    if (src_expiry > 0 && (*expiry == 0 || src_expiry < *expiry)) {
+        if (*serial) sdsfree(*serial);
+        *expiry = src_expiry;
+        *serial = src_serial;
+    } else if (src_serial) {
+        sdsfree(src_serial);
+    }
+}
+
+static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *serial, int *count) {
+    if (!path) return C_ERR;
+    FILE *fp = fopen(path, "r");
+    if (!fp) return C_ERR;
+    long long file_expiry = 0;
+    sds file_serial = NULL;
+    int file_count = 0;
+    int result = tlsUpdateCertInfoFromFileHandle(fp, &file_expiry, &file_serial, &file_count);
+    fclose(fp);
+    if (result == C_ERR) {
+        return tlsStoreCertInfo(0, file_serial, file_count, expiry, serial, count);
+    }
+    return tlsStoreCertInfo(file_expiry, file_serial, file_count, expiry, serial, count);
+}
+
+static int tlsUpdateCertInfoFromDir(const char *path, long long *expiry, sds *serial, int *count) {
+    if (!path) return C_ERR;
+    DIR *dir = opendir(path);
+    if (!dir) return C_ERR;
+    int cert_count = 0;
+    long long earliest_expiry = 0;
+    sds earliest_serial = NULL;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char fullpath[PATH_MAX];
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", path, de->d_name) >= (int)sizeof(fullpath)) continue;
+        struct stat st;
+        if (stat(fullpath, &st) == -1) continue;
+        if (!S_ISREG(st.st_mode)) continue;
+        FILE *fp = fopen(fullpath, "r");
+        if (!fp) continue;
+        long long file_expiry = 0;
+        sds file_serial = NULL;
+        int file_count = 0;
+        if (tlsUpdateCertInfoFromFileHandle(fp, &file_expiry, &file_serial, &file_count) == C_OK) {
+            tlsMergeCertInfo(&earliest_expiry, &earliest_serial, &cert_count, file_expiry, file_serial, file_count);
+        } else {
+            if (file_serial) sdsfree(file_serial);
+        }
+        fclose(fp);
+    }
+    closedir(dir);
+    return tlsStoreCertInfo(earliest_expiry, earliest_serial, cert_count, expiry, serial, count);
+}
+
+static void tlsClearServerCertInfo(tlsServerCertInfo *info) {
+    tlsClearCertSerial(&info->cert_serial);
+    tlsClearCertSerial(&info->alt_cert_serial);
+    info->cert_expiry = 0;
+    info->alt_cert_expiry = 0;
+}
+
+static void tlsPublishCertInfo(long long src_expiry, sds src_serial, long long *expiry, sds *serial) {
+    tlsClearCertInfo(expiry, serial);
+    if (!src_serial) return;
+    *expiry = src_expiry;
+    *serial = sdsdup(src_serial);
+}
+
+static void tlsRefreshServerCertInfo(void) {
+    if (!(server.tls_port || server.tls_replication || server.tls_cluster) || !valkey_tls_ctx) {
+        tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+        tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
+        return;
+    }
+    tlsPublishCertInfo(active_cert_info.cert_expiry, active_cert_info.cert_serial,
+                       &server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    tlsPublishCertInfo(active_cert_info.alt_cert_expiry, active_cert_info.alt_cert_serial,
+                       &server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
+}
+
+static void tlsRefreshClientCertInfo(void) {
+    if (tlsUpdateCertInfoFromCtx(valkey_tls_client_ctx, &server.tls_client_cert_expire_time, &server.tls_client_cert_serial) == C_ERR) {
+        tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
+    }
+}
+
+static void tlsRefreshCACertInfo(void) {
+    long long file_expiry = 0, dir_expiry = 0;
+    sds file_serial = NULL, dir_serial = NULL;
+    int file_count = 0, dir_count = 0;
+    int file_ok = tlsUpdateCertInfoFromFile(server.tls_ctx_config.ca_cert_file,
+                                            &file_expiry,
+                                            &file_serial,
+                                            &file_count) == C_OK;
+    int dir_ok = tlsUpdateCertInfoFromDir(server.tls_ctx_config.ca_cert_dir,
+                                          &dir_expiry,
+                                          &dir_serial,
+                                          &dir_count) == C_OK;
+
+    tlsClearCACertInfo();
+    if (!file_ok && !dir_ok) {
+        if (file_serial) sdsfree(file_serial);
+        if (dir_serial) sdsfree(dir_serial);
+        return;
+    }
+
+    if (file_ok && (!dir_ok || file_expiry <= dir_expiry)) {
+        server.tls_ca_cert_expire_time = file_expiry;
+        server.tls_ca_cert_serial = file_serial;
+        if (dir_serial) sdsfree(dir_serial);
+    } else {
+        server.tls_ca_cert_expire_time = dir_expiry;
+        server.tls_ca_cert_serial = dir_serial;
+        if (file_serial) sdsfree(file_serial);
+    }
+}
+
+static void tlsRefreshAllCertInfo(void) {
+    tlsRefreshServerCertInfo();
+    tlsRefreshClientCertInfo();
+    tlsRefreshCACertInfo();
 }
 
 /* Callback for passing a keyfile password stored as an sds to OpenSSL */
@@ -210,16 +499,123 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     return (int)pass_len;
 }
 
+/* Check a single X509 certificate validity */
+static bool isCertValid(X509 *cert) {
+    if (!cert) return false;
+#if OPENSSL_VERSION_NUMBER >= 0x40000000L
+    int error = 0;
+    if (X509_check_certificate_times(NULL, cert, &error) != 1) {
+        if (error == X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notBefore field");
+        } else if (error == X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notAfter field");
+        }
+        return false;
+    }
+#else
+    const ASN1_TIME *not_before = X509_get0_notBefore(cert);
+    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
+    if (!not_before || !not_after) return false;
+    if (X509_cmp_current_time(not_before) > 0 ||
+        X509_cmp_current_time(not_after) < 0) {
+        return false;
+    }
+#endif
+    return true;
+}
+
+/* Load all certificates from a directory into the X509_STORE
+ * Returns true on success, false on failure */
+static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
+    if (!ca_cert_dir) return true;
+
+    DIR *dir;
+    struct dirent *entry;
+    char full_path[PATH_MAX];
+    X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+
+    if (!store) {
+        serverLog(LL_WARNING, "Failed to get X509_STORE from SSL_CTX");
+        return false;
+    }
+
+    dir = opendir(ca_cert_dir);
+    if (!dir) {
+        serverLog(LL_WARNING, "Failed to open CA certificate directory: %s", ca_cert_dir);
+        return false;
+    }
+
+    int loaded = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+
+        snprintf(full_path, sizeof(full_path), "%s/%s", ca_cert_dir, entry->d_name);
+        FILE *fp = fopen(full_path, "r");
+        if (!fp) continue;
+
+        X509 *cert = PEM_read_X509(fp, NULL, NULL, NULL);
+        fclose(fp);
+
+        if (cert) {
+            if (X509_STORE_add_cert(store, cert) != 1) {
+                unsigned long err = ERR_peek_last_error();
+                if (ERR_GET_REASON(err) != X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+                    serverLog(LL_WARNING, "Failed to add CA certificate from %s to store", full_path);
+                    X509_free(cert);
+                    closedir(dir);
+                    return false;
+                }
+                ERR_clear_error();
+            }
+            X509_free(cert);
+            loaded++;
+        }
+    }
+
+    closedir(dir);
+
+    if (loaded == 0) {
+        serverLog(LL_WARNING, "No CA certificates loaded from directory: %s", ca_cert_dir);
+        return false;
+    }
+
+    return true;
+}
+
+/* Iterate over all CA certs in the SSL_CTX and fail-fast if any are invalid */
+static bool areAllCaCertsValid(SSL_CTX *ctx) {
+    X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+    if (!store) return false;
+    STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
+    if (!objs) return false;
+    for (int i = 0; i < sk_X509_OBJECT_num(objs); i++) {
+        X509_OBJECT *obj = sk_X509_OBJECT_value(objs, i);
+        int type = X509_OBJECT_get_type(obj);
+        if (type == X509_LU_X509) {
+            X509 *ca_cert = X509_OBJECT_get0_X509(obj);
+            if (ca_cert && !isCertValid(ca_cert)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /* Create a *base* SSL_CTX using the SSL configuration provided. The base context
  * includes everything that's common for both client-side and server-side connections.
  */
-static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protocols, int client) {
+static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protocols, int client, tlsServerCertInfo *out_info) {
     const char *cert_file = client ? ctx_config->client_cert_file : ctx_config->cert_file;
     const char *key_file = client ? ctx_config->client_key_file : ctx_config->key_file;
     const char *key_file_pass = client ? ctx_config->client_key_file_pass : ctx_config->key_file_pass;
+
+    const char *alt_cert_file = client ? NULL : ctx_config->alt_cert_file;
+    const char *alt_key_file = client ? NULL : ctx_config->alt_key_file;
+    const char *alt_key_file_pass = client ? NULL : ctx_config->alt_key_file_pass;
     char errbuf[256];
     SSL_CTX *ctx = NULL;
-
+    EVP_PKEY *primary_pkey = NULL;
+    EVP_PKEY *alt_pkey = NULL;
     ctx = SSL_CTX_new(SSLv23_method());
     if (!ctx) goto error;
 
@@ -254,17 +650,76 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 
+    if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
+        serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.", client ? "Client" : "Server");
+        goto error;
+    }
+
+    /* INFO reporting only. A failure leaves the field as none rather than refusing the
+     * configuration. */
+    if (out_info) tlsUpdateCertInfoFromCtx(ctx, &out_info->cert_expiry, &out_info->cert_serial);
+
+    if (alt_cert_file) {
+        primary_pkey = X509_get_pubkey(SSL_CTX_get0_certificate(ctx));
+        if (!primary_pkey) {
+            serverLog(LL_WARNING, "Could not get public key from primary certificate");
+            goto error;
+        }
+
+        if (SSL_CTX_use_certificate_chain_file(ctx, alt_cert_file) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load certificate: %s: %s", alt_cert_file, errbuf);
+            goto error;
+        }
+
+        if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
+            serverLog(LL_WARNING, "Alternate server TLS certificate is invalid. Aborting TLS configuration.");
+            goto error;
+        }
+
+        alt_pkey = X509_get_pubkey(SSL_CTX_get0_certificate(ctx));
+        if (!alt_pkey) {
+            serverLog(LL_WARNING, "Could not get public key from alternate certificate");
+            goto error;
+        }
+
+        if (EVP_PKEY_base_id(primary_pkey) == EVP_PKEY_base_id(alt_pkey)) {
+            serverLog(LL_WARNING, "Primary and alternate certificates must use different key algorithms");
+            goto error;
+        }
+        if (out_info) tlsUpdateCertInfoFromCtx(ctx, &out_info->alt_cert_expiry, &out_info->alt_cert_serial);
+    }
+
     if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
         serverLog(LL_WARNING, "Failed to load private key: %s: %s", key_file, errbuf);
         goto error;
     }
+    if (alt_key_file) {
+        SSL_CTX_set_default_passwd_cb_userdata(ctx, (void *)alt_key_file_pass);
+        if (SSL_CTX_use_PrivateKey_file(ctx, alt_key_file, SSL_FILETYPE_PEM) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load private key: %s: %s", alt_key_file, errbuf);
+            goto error;
+        }
+    }
 
-    if ((ctx_config->ca_cert_file || ctx_config->ca_cert_dir) &&
-        SSL_CTX_load_verify_locations(ctx, ctx_config->ca_cert_file, ctx_config->ca_cert_dir) <= 0) {
-        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
-        serverLog(LL_WARNING, "Failed to configure CA certificate(s) file/directory: %s", errbuf);
-        goto error;
+    if (ctx_config->ca_cert_file || ctx_config->ca_cert_dir) {
+        if (SSL_CTX_load_verify_locations(ctx, ctx_config->ca_cert_file, ctx_config->ca_cert_dir) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to configure CA certificate(s) file/directory: %s", errbuf);
+            goto error;
+        }
+
+        if (!loadCaCertDir(ctx, ctx_config->ca_cert_dir)) {
+            serverLog(LL_WARNING, "Failed to load CA certificates from directory: %s", ctx_config->ca_cert_dir);
+            goto error;
+        }
+
+        if (!areAllCaCertsValid(ctx)) {
+            serverLog(LL_WARNING, "One or more loaded CA certificates are invalid. Aborting TLS configuration.");
+            goto error;
+        }
     }
 
     if (ctx_config->ciphers && !SSL_CTX_set_cipher_list(ctx, ctx_config->ciphers)) {
@@ -279,9 +734,17 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
     }
 #endif
 
+    /* Loading the alternate certificate moved the current certificate to its slot,
+     * and outgoing TLS 1.2 connections pick their client certificate from there.
+     * Leave it on the lowest slot, which is where it sat before dual certificates. */
+    SSL_CTX_set_current_cert(ctx, SSL_CERT_SET_FIRST);
+    EVP_PKEY_free(primary_pkey);
+    EVP_PKEY_free(alt_pkey);
     return ctx;
 
 error:
+    EVP_PKEY_free(primary_pkey);
+    EVP_PKEY_free(alt_pkey);
     if (ctx) SSL_CTX_free(ctx);
     return NULL;
 }
@@ -291,7 +754,10 @@ error:
  * Returns C_OK on success, C_ERR on failure.
  * On success, *ctx and *client_ctx are set (client_ctx may be NULL).
  * On failure, both are set to NULL. */
-static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_ctx, SSL_CTX **out_client_ctx) {
+static int tlsCreateContexts(serverTLSContextConfig *ctx_config,
+                             SSL_CTX **out_ctx,
+                             SSL_CTX **out_client_ctx,
+                             tlsServerCertInfo *out_info) {
     char errbuf[256];
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
@@ -306,6 +772,16 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
         goto error;
     }
 
+    if (ctx_config->alt_cert_file && !ctx_config->alt_key_file) {
+        serverLog(LL_WARNING, "tls-alt-cert-file provided without a key");
+        goto error;
+    }
+
+    if (ctx_config->alt_key_file && !ctx_config->alt_cert_file) {
+        serverLog(LL_WARNING, "tls-alt-key-file provided without a certificate");
+        goto error;
+    }
+
     if (((server.tls_auth_clients != TLS_CLIENT_AUTH_NO) || server.tls_cluster || server.tls_replication) &&
         !ctx_config->ca_cert_file && !ctx_config->ca_cert_dir) {
         serverLog(LL_WARNING, "Either tls-ca-cert-file or tls-ca-cert-dir must be specified when tls-cluster, "
@@ -317,7 +793,7 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
     if (protocols == -1) goto error;
 
     /* Create server side/general context */
-    ctx = createSSLContext(ctx_config, protocols, 0);
+    ctx = createSSLContext(ctx_config, protocols, 0, out_info);
     if (!ctx) goto error;
 
     if (ctx_config->session_caching) {
@@ -398,7 +874,7 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
 
     /* If a client-side certificate is configured, create an explicit client context */
     if (ctx_config->client_cert_file && ctx_config->client_key_file) {
-        client_ctx = createSSLContext(ctx_config, protocols, 1);
+        client_ctx = createSSLContext(ctx_config, protocols, 1, NULL);
         if (!client_ctx) goto error;
     }
 
@@ -407,6 +883,7 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
     return C_OK;
 
 error:
+    if (out_info) tlsClearServerCertInfo(out_info);
     if (ctx) SSL_CTX_free(ctx);
     if (client_ctx) SSL_CTX_free(client_ctx);
     *out_ctx = NULL;
@@ -418,6 +895,8 @@ error:
 typedef struct {
     unsigned char cert_fingerprint[EVP_MAX_MD_SIZE];
     unsigned int cert_fingerprint_len;
+    unsigned char alt_cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int alt_cert_fingerprint_len;
     unsigned char client_cert_fingerprint[EVP_MAX_MD_SIZE];
     unsigned int client_cert_fingerprint_len;
     unsigned char ca_cert_fingerprint[EVP_MAX_MD_SIZE];
@@ -426,6 +905,8 @@ typedef struct {
     time_t ca_cert_dir_mtime;
     ino_t key_file_inode;
     time_t key_file_mtime;
+    ino_t alt_key_file_inode;
+    time_t alt_key_file_mtime;
     ino_t client_key_file_inode;
     time_t client_key_file_mtime;
 } tlsMaterialsMetadata;
@@ -436,6 +917,7 @@ typedef struct {
     SSL_CTX *ctx;
     SSL_CTX *client_ctx;
     tlsMaterialsMetadata metadata;
+    tlsServerCertInfo cert_info;
 } tlsPendingReload;
 
 /* Last known (active) TLS materials metadata */
@@ -475,6 +957,7 @@ static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMeta
 
     /* Certificate files: fingerprint-based detection */
     getCertFingerprint(ctx_config->cert_file, metadata->cert_fingerprint, &metadata->cert_fingerprint_len);
+    getCertFingerprint(ctx_config->alt_cert_file, metadata->alt_cert_fingerprint, &metadata->alt_cert_fingerprint_len);
     getCertFingerprint(ctx_config->client_cert_file, metadata->client_cert_fingerprint, &metadata->client_cert_fingerprint_len);
     getCertFingerprint(ctx_config->ca_cert_file, metadata->ca_cert_fingerprint, &metadata->ca_cert_fingerprint_len);
 
@@ -488,6 +971,10 @@ static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMeta
         metadata->key_file_inode = st.st_ino;
         metadata->key_file_mtime = st.st_mtime;
     }
+    if (ctx_config->alt_key_file && stat(ctx_config->alt_key_file, &st) == 0) {
+        metadata->alt_key_file_inode = st.st_ino;
+        metadata->alt_key_file_mtime = st.st_mtime;
+    }
     if (ctx_config->client_key_file && stat(ctx_config->client_key_file, &st) == 0) {
         metadata->client_key_file_inode = st.st_ino;
         metadata->client_key_file_mtime = st.st_mtime;
@@ -499,6 +986,11 @@ static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMe
     /* Check certificate fingerprints */
     if (old->cert_fingerprint_len != new->cert_fingerprint_len ||
         (new->cert_fingerprint_len > 0 && memcmp(old->cert_fingerprint, new->cert_fingerprint, new->cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    if (old->alt_cert_fingerprint_len != new->alt_cert_fingerprint_len ||
+        (new->alt_cert_fingerprint_len > 0 && memcmp(old->alt_cert_fingerprint, new->alt_cert_fingerprint, new->alt_cert_fingerprint_len) != 0)) {
         return 1;
     }
 
@@ -517,6 +1009,9 @@ static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMe
         return 1;
     }
     if (old->key_file_inode != new->key_file_inode || old->key_file_mtime != new->key_file_mtime) {
+        return 1;
+    }
+    if (old->alt_key_file_inode != new->alt_key_file_inode || old->alt_key_file_mtime != new->alt_key_file_mtime) {
         return 1;
     }
     if (old->client_key_file_inode != new->client_key_file_inode || old->client_key_file_mtime != new->client_key_file_mtime) {
@@ -567,7 +1062,8 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         }
         serverLog(LL_NOTICE, "TLS materials changed, reloading in background");
 
-        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
+        tlsServerCertInfo cert_info = {0};
+        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx, &cert_info) == C_ERR) {
             serverLog(LL_WARNING, "Background TLS reload failed");
             return C_ERR;
         }
@@ -576,16 +1072,19 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         if (pending_reload.ctx) {
             SSL_CTX_free(pending_reload.ctx);
             SSL_CTX_free(pending_reload.client_ctx);
+            tlsClearServerCertInfo(&pending_reload.cert_info);
             serverLog(LL_DEBUG, "Replacing previous pending TLS reload");
         }
         pending_reload.ctx = ctx;
         pending_reload.client_ctx = client_ctx;
         pending_reload.metadata = new_metadata;
+        pending_reload.cert_info = cert_info;
         pthread_mutex_unlock(&pending_reload_mutex);
 
         serverLog(LL_DEBUG, "Background TLS reload parsed TLS materials successfully");
     } else {
-        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
+        tlsServerCertInfo cert_info = {0};
+        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx, &cert_info) == C_ERR) {
             return C_ERR;
         }
 
@@ -593,7 +1092,10 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         SSL_CTX_free(valkey_tls_client_ctx);
         valkey_tls_ctx = ctx;
         valkey_tls_client_ctx = client_ctx;
+        tlsClearServerCertInfo(&active_cert_info);
+        active_cert_info = cert_info;
         captureMetadata(ctx_config, &active_metadata);
+        tlsRefreshAllCertInfo();
     }
 
     atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
@@ -627,6 +1129,7 @@ void tlsApplyPendingReload(void) {
     if (!metadataChanged(&active_metadata, &pending_reload.metadata)) {
         SSL_CTX_free(pending_reload.ctx);
         SSL_CTX_free(pending_reload.client_ctx);
+        tlsClearServerCertInfo(&pending_reload.cert_info);
         memset(&pending_reload, 0, sizeof(pending_reload));
         pthread_mutex_unlock(&pending_reload_mutex);
         serverLog(LL_DEBUG, "Discarding pending TLS reload with unchanged materials");
@@ -644,9 +1147,13 @@ void tlsApplyPendingReload(void) {
     valkey_tls_client_ctx = local_pending.client_ctx;
 
     active_metadata = local_pending.metadata;
+    tlsClearServerCertInfo(&active_cert_info);
+    active_cert_info = local_pending.cert_info;
 
     SSL_CTX_free(old_ctx);
     SSL_CTX_free(old_client_ctx);
+
+    tlsRefreshAllCertInfo();
 
     serverLog(LL_NOTICE, "TLS materials reloaded successfully");
 }
@@ -832,22 +1339,24 @@ static int updateStateAfterSSLIO(tls_connection *conn, int ret_value, int update
 }
 
 static void registerSSLEvent(tls_connection *conn) {
+    int priority_flag = connGetAEPriorityFlag(&conn->c);
     int mask = aeGetFileEvents(server.el, conn->c.fd);
+    bool priority_changed = ((mask & AE_HIGH_PRIORITY) != (priority_flag & AE_HIGH_PRIORITY));
 
     if (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ) {
         if (mask & AE_WRITABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
-        if (!(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+        if (!(mask & AE_READABLE) || priority_changed) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE | priority_flag, tlsEventHandler, conn);
     } else if (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE) {
         if (mask & AE_READABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
-        if (!(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
+        if (!(mask & AE_WRITABLE) || priority_changed) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE | priority_flag, tlsEventHandler, conn);
     } else {
         serverAssert(0);
     }
 }
 
-static void postPoneUpdateSSLState(connection *conn_, int postpone) {
+static void postPoneUpdateSSLState(connection *conn_, int postpone_mask) {
     tls_connection *conn = (tls_connection *)conn_;
-    if (postpone) {
+    if (postpone_mask) {
         conn->flags |= TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
@@ -871,7 +1380,7 @@ static void updatePendingData(tls_connection *conn) {
 }
 
 void updateSSLPendingFlag(tls_connection *conn) {
-    if (SSL_pending(conn->ssl) > 0) {
+    if (conn->ssl && SSL_pending(conn->ssl) > 0) {
         conn->flags |= TLS_CONN_FLAG_HAS_PENDING;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_HAS_PENDING;
@@ -881,16 +1390,16 @@ void updateSSLPendingFlag(tls_connection *conn) {
 static void updateSSLEvent(tls_connection *conn) {
     if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) return;
 
+    int priority_flag = connGetAEPriorityFlag(&conn->c);
     int mask = aeGetFileEvents(server.el, conn->c.fd);
-    int need_read = conn->c.read_handler || (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ);
-    int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
+    bool priority_changed = ((mask & AE_HIGH_PRIORITY) != (priority_flag & AE_HIGH_PRIORITY));
+    int need_read = conn->c.read_handler || (conn->c.write_handler && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+    int need_write = conn->c.write_handler || (conn->c.read_handler && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
 
-    if (need_read && !(mask & AE_READABLE))
-        aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+    if (need_read && (!(mask & AE_READABLE) || priority_changed)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE | priority_flag, tlsEventHandler, conn);
     if (!need_read && (mask & AE_READABLE)) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
 
-    if (need_write && !(mask & AE_WRITABLE))
-        aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
+    if (need_write && (!(mask & AE_WRITABLE) || priority_changed)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE | priority_flag, tlsEventHandler, conn);
     if (!need_write && (mask & AE_WRITABLE)) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
 }
 
@@ -924,8 +1433,13 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
-static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
-    if (!cert || !field || !out) return 0;
+/* Return the named field of cert's subject, or NULL if it is absent or empty.
+ * Caller frees.
+ *
+ * sds rather than a C string, so the caller sees what the CA signed even when
+ * the value contains a NUL. */
+static sds getCertSubjectFieldByName(X509 *cert, const char *field) {
+    if (!cert || !field) return NULL;
 
     int nid = -1;
 
@@ -935,43 +1449,139 @@ static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t o
         nid = NID_organizationName;
     /* Add more mappings here as needed */
 
-    if (nid == -1) return 0;
+    if (nid == -1) return NULL;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    const X509_NAME *subject = X509_get_subject_name(cert);
+#else
     X509_NAME *subject = X509_get_subject_name(cert);
-    if (!subject) return 0;
+#endif
+    if (!subject) return NULL;
 
-    return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
+    /* Not X509_NAME_get_text_by_NID(): it NUL terminates into a caller buffer,
+     * hiding an embedded NUL and truncating a long value. Also deprecated in
+     * OpenSSL 4.0. */
+    int idx = X509_NAME_get_index_by_NID(subject, nid, -1);
+    if (idx < 0) return NULL;
+
+    const X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, idx);
+    if (!entry) return NULL;
+
+    const ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
+    if (!data) return NULL;
+
+    const unsigned char *str = ASN1_STRING_get0_data(data);
+    int str_len = ASN1_STRING_length(data);
+    if (!str || str_len <= 0) return NULL;
+
+    return sdsnewlen(str, str_len);
 }
 
-sds tlsGetPeerUsername(connection *conn_) {
+/* Extract URI from Subject Alternative Name extension and return the first
+ * enabled Valkey user that matches a URI. Returns NULL if no match found.
+ * If cert_username is non-NULL, it is set to the last URI checked. */
+static user *getValidUserFromCertSanUri(X509 *cert, sds *cert_username) {
+    if (!cert) return NULL;
+
+    GENERAL_NAMES *san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (!san_names) return NULL;
+
+    user *result = NULL;
+    int num_names = sk_GENERAL_NAME_num(san_names);
+
+    for (int i = 0; i < num_names; i++) {
+        GENERAL_NAME *name = sk_GENERAL_NAME_value(san_names, i);
+
+        if (name->type == GEN_URI) {
+            ASN1_STRING *uri_asn1 = name->d.uniformResourceIdentifier;
+            const unsigned char *uri_data = ASN1_STRING_get0_data(uri_asn1);
+            int uri_len = ASN1_STRING_length(uri_asn1);
+
+            if (!uri_data || uri_len <= 0 || memchr(uri_data, '\0', uri_len)) {
+                serverLog(LL_DEBUG, "TLS: Invalid or malformed SAN URI in certificate");
+                continue;
+            }
+
+            if (cert_username) {
+                sdsfree(*cert_username);
+                *cert_username = sdsnewlen(uri_data, uri_len);
+            }
+
+            user *u = ACLGetUserByName((const char *)uri_data, uri_len);
+            if (u && (u->flags & USER_FLAG_ENABLED)) {
+                result = u;
+                break;
+            }
+        }
+    }
+
+    GENERAL_NAMES_free(san_names);
+    return result;
+}
+
+user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
     tls_connection *conn = (tls_connection *)conn_;
     if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
 
-    /* Find the corresponding field name from the enum mapping */
-    const char *field = NULL;
-    switch (server.tls_ctx_config.client_auth_user) {
-    case TLS_CLIENT_FIELD_CN:
-        field = "CN";
-        break;
-    default:
+    long verify_result = SSL_get_verify_result(conn->ssl);
+    if (verify_result != X509_V_OK) {
+        serverLog(LL_DEBUG, "TLS: Client certificate verification failed: %s",
+                  X509_verify_cert_error_string(verify_result));
         return NULL;
     }
 
-    if (!field) return NULL;
-
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
-    char field_value[256];
-    sds result = NULL;
+    user *result = NULL;
 
-    if (getCertFieldByName(cert, field, field_value, sizeof(field_value))) {
-        result = sdsnew(field_value);
-    } else {
-        serverLog(LL_NOTICE, "TLS: Failed to extract field '%s' from certificate", field);
+    switch (server.tls_ctx_config.client_auth_user) {
+    case TLS_CLIENT_FIELD_URI:
+        result = getValidUserFromCertSanUri(cert, cert_username);
+        if (!result) {
+            serverLog(LL_VERBOSE, "TLS: No matching user found in certificate SAN URI fields");
+        }
+        break;
+
+    case TLS_CLIENT_FIELD_CN: {
+        sds cn = getCertSubjectFieldByName(cert, "CN");
+        if (!cn) {
+            serverLog(LL_DEBUG, "TLS: Failed to extract CN in certificate subject");
+            break;
+        }
+
+        /* Compared over the whole CN, so "CN=admin\0attacker" does not match the
+         * user "admin". */
+        result = ACLGetUserByName(cn, sdslen(cn));
+        if (!result || !(result->flags & USER_FLAG_ENABLED)) {
+            sds repr = server.hide_user_data_from_log ? NULL : sdscatrepr(sdsempty(), cn, sdslen(cn));
+            serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN %s",
+                      repr ? repr : "*redacted*");
+            sdsfree(repr);
+            result = NULL;
+        }
+
+        /* Hand over the CN even when it does not match, so it reaches the ACL log. */
+        if (cert_username) {
+            *cert_username = cn;
+        } else {
+            sdsfree(cn);
+        }
+        break;
     }
 
+    default:
+        break;
+    }
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
     X509_free(cert);
+#endif
+
     return result;
 }
 
@@ -1026,10 +1636,12 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
         if (connTLSAccept((connection *)conn, NULL) == C_ERR || conn->c.state != CONN_STATE_CONNECTED) return;
         break;
     case CONN_STATE_CONNECTED: {
-        int call_read = ((mask & AE_READABLE) && conn->c.read_handler) ||
-                        ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
-        int call_write = ((mask & AE_WRITABLE) && conn->c.write_handler) ||
-                         ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+        int call_read = conn->c.read_handler &&
+                        ((mask & AE_READABLE) ||
+                         ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE)));
+        int call_write = conn->c.write_handler &&
+                         ((mask & AE_WRITABLE) ||
+                          ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ)));
 
         /* Normally we execute the readable event first, and the writable
          * event laster. This is useful as sometimes we may be able
@@ -1185,6 +1797,7 @@ static int connTLSConnect(connection *conn_,
     unsigned char addr_buf[sizeof(struct in6_addr)];
 
     if (conn->c.state != CONN_STATE_NONE) return C_ERR;
+    if (addr == NULL) return C_ERR;
     ERR_clear_error();
 
     /* Check whether addr is an IP address, if not, use the value for Server Name Indication */
@@ -1206,6 +1819,14 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
     int ret;
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
+    if (server.debug_force_tls_write_error) {
+        conn->last_failed_write_data_len = data_len;
+        conn->flags &= ~(TLS_CONN_FLAG_WRITE_WANT_READ | TLS_CONN_FLAG_READ_WANT_WRITE);
+        conn->flags |= TLS_CONN_FLAG_READ_WANT_WRITE;
+        updateSSLEvent(conn);
+        errno = EAGAIN;
+        return -1;
+    }
     ERR_clear_error();
     /* In case when last write failed due to some internal reason, retry has to provide
      * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
@@ -1226,11 +1847,10 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     tls_connection *conn = (tls_connection *)conn_;
     if (iovcnt == 1) return connTLSWrite(conn_, iov[0].iov_base, iov[0].iov_len);
 
-    /* Accumulate the amount of bytes of each buffer and check if it exceeds NET_MAX_WRITES_PER_EVENT. */
-    size_t iov_bytes_len = 0;
+    /* Accumulate the total amount of bytes of all buffers. */
+    size_t total_len = 0;
     for (int i = 0; i < iovcnt; i++) {
-        iov_bytes_len += iov[i].iov_len;
-        if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) break;
+        total_len += iov[i].iov_len;
     }
 
     /* In case the amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
@@ -1239,9 +1859,9 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
      * However, in case when last write failed we still have to repeat sending last_failed_write_data_len
      * bytes. Because of openssl implementation we cannot repeat sending writes with length smaller than
      * the last failed write (https://docs.openssl.org/master/man3/SSL_write) so in case the first io buffer
-     * does not provide at least the same amount of bytes as previous failed write, we will have to fallback to
+     * does not provide at least the same amount of bytes as previous failed write, we will have to fall back to
      * memory copy to a static buffer before calling SSL_write. */
-    if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
+    if (total_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
         ssize_t tot_sent = 0;
         for (int i = 0; i < iovcnt; i++) {
             ssize_t sent = connTLSWrite(conn_, iov[i].iov_base, iov[i].iov_len);
@@ -1252,21 +1872,36 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
         return tot_sent;
     }
 
-    /* The amount of all buffers is less than NET_MAX_WRITES_PER_EVENT,
-     * which is worth doing more memory copies in exchange for fewer system calls,
-     * so concatenate these scattered buffers into a contiguous piece of memory
-     * and send it away by one call to connTLSWrite().
-     * However, code can fallback here in case when last write failed and first
-     * element of io is buffer not big enough to provide required amount of bytes
-     * to retry, so iov_bytes_len may exceed NET_MAX_WRITES_PER_EVENT by the amount
-     * of remaining bytes from last taken io. */
-    char buf[iov_bytes_len];
-    size_t offset = 0;
-    for (int i = 0; i < iovcnt && offset < iov_bytes_len; i++) {
-        memcpy(buf + offset, iov[i].iov_base, iov[i].iov_len);
-        offset += iov[i].iov_len;
+    /* We concatenate scattered buffers into a contiguous piece of memory
+     * and send it away by one call to connTLSWrite() to reduce system calls.
+     * To avoid stack overflow (VLA) and heap allocation, we use a fixed-size buffer
+     * of NET_MAX_WRITES_PER_EVENT and copy only up to this limit. The remaining
+     * data will be sent in subsequent socket writable events (partial writes). */
+    char buf[NET_MAX_WRITES_PER_EVENT];
+    size_t to_write = 0;
+
+    for (int i = 0; i < iovcnt && to_write < NET_MAX_WRITES_PER_EVENT; i++) {
+        size_t available = NET_MAX_WRITES_PER_EVENT - to_write;
+        size_t copy_len = iov[i].iov_len;
+        if (copy_len > available) {
+            copy_len = available;
+        }
+        memcpy(buf + to_write, iov[i].iov_base, copy_len);
+        to_write += copy_len;
     }
-    return connTLSWrite(conn_, buf, iov_bytes_len);
+
+    /* Verify OpenSSL retry constraint: we must have copied at least the amount
+     * of bytes that failed in the previous write attempt. */
+    if (to_write < conn->last_failed_write_data_len) {
+        serverLog(LL_WARNING, "connTLSWritev: cannot satisfy last_failed_write_data_len (%zu < %zu)",
+                  to_write, conn->last_failed_write_data_len);
+        conn->c.last_errno = EIO;
+        conn->c.state = CONN_STATE_ERROR;
+        errno = EIO;
+        return -1;
+    }
+
+    return connTLSWrite(conn_, buf, to_write);
 }
 
 static int connTLSRead(connection *conn_, void *buf, size_t buf_len) {
@@ -1357,6 +1992,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1372,6 +2010,9 @@ static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long 
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1409,6 +2050,9 @@ exit:
     if (!blocking) {
         unsetBlockingTimeout(conn);
     }
+    if (nread < 0) {
+        conn->c.last_errno = errno;
+    }
     return nread;
 }
 
@@ -1422,14 +2066,27 @@ static int tlsHasPendingData(void) {
 }
 
 static int tlsProcessPendingData(void) {
-    listIter li;
     listNode *ln;
 
     int processed = 0;
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* Pop each connection off the list before handling it. A handler may
+     * synchronously free another pending connection (e.g. CLIENT KILL ->
+     * freeClient -> connTLSClose -> listDelNode), so we must not hold an
+     * iterator into a node that could be freed out from under us.
+     *
+     * Connections with buffered data re-add themselves to the tail, so the
+     * length captured on entry bounds the loop and guarantees termination. */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         tls_connection *conn = listNodeValue(ln);
-        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        listDelNode(pending_list, ln);
+        conn->pending_list_node = NULL;
+        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) {
+            /* Not handled now, but keep it pending for a later call. */
+            listAddNodeTail(pending_list, conn);
+            conn->pending_list_node = listLast(pending_list);
+            continue;
+        }
         tlsHandleEvent(conn, AE_READABLE);
         processed++;
     }
@@ -1443,12 +2100,19 @@ static sds connTLSGetPeerCert(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if ((conn_->type != connectionTypeTls()) || !conn->ssl) return NULL;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
     BIO *bio = BIO_new(BIO_s_mem());
     if (bio == NULL || !PEM_write_bio_X509(bio, cert)) {
         if (bio != NULL) BIO_free(bio);
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+        X509_free(cert);
+#endif
         return NULL;
     }
 
@@ -1456,6 +2120,10 @@ static sds connTLSGetPeerCert(connection *conn_) {
     long long bio_len = BIO_get_mem_data(bio, &bio_ptr);
     sds cert_pem = sdsnewlen(bio_ptr, bio_len);
     BIO_free(bio);
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+    X509_free(cert);
+#endif
 
     return cert_pem;
 }
@@ -1507,11 +2175,11 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
-    .get_peer_username = tlsGetPeerUsername,
+    .get_peer_user = tlsGetPeerUser,
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,
-
+    .is_closing = connTcpSocketIsClosing,
 };
 
 int RedisRegisterConnectionTypeTLS(void) {
@@ -1520,12 +2188,38 @@ int RedisRegisterConnectionTypeTLS(void) {
 
 #else /* USE_OPENSSL */
 
+static void tlsClearAllCertInfo(void);
+
+void tlsResetCertInfo(void) {
+    if (server.tls_port || server.tls_replication || server.tls_cluster) return;
+    tlsClearAllCertInfo();
+}
+
 int RedisRegisterConnectionTypeTLS(void) {
     serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_TLS));
     return C_ERR;
 }
 
 #endif
+
+static void tlsClearCertInfo(long long *expiry, sds *serial) {
+    if (expiry) *expiry = 0;
+    if (serial && *serial) {
+        sdsfree(*serial);
+        *serial = NULL;
+    }
+}
+
+static void tlsClearCACertInfo(void) {
+    tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
+}
+
+static void tlsClearAllCertInfo(void) {
+    tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
+    tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
+    tlsClearCACertInfo();
+}
 
 #if defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
 
@@ -1549,7 +2243,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
         return VALKEYMODULE_ERR;
     }
 
-    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD | VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD | VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION | VALKEYMODULE_OPTIONS_HANDLE_FORKLESS);
 
     if (connTypeRegister(&CT_TLS) != C_OK) return VALKEYMODULE_ERR;
 

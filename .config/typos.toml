@@ -5,16 +5,32 @@ extend-exclude = [
     ".git/",
     "deps/",
     # crc16_slottable is primarily pre-generated random strings.
-    "src/crc16_slottable.h",
+    "src/crc16_slottable.c",
 ]
 ignore-hidden = false
 
 [default.extend-words]
 exat = "exat"
 optin = "optin"
+passin = "passin"
 smove = "smove"
 Parth = "Parth" # seems like the spellchecker does not like it is similar to "Path"
+Collet = "Collet" # LZ4 author Yann Collet
 nd = "nd"
+Ba = "Ba"
+Addd = "Addd"
+forkless = "forkless"
+
+[default.extend-identifiers]
+dbe = "dbe"
+
+[default]
+extend-ignore-re = [
+    "SELECTed",
+    "SELECTs",
+    "WATCHed",
+    "AIMD",
+]
 
 [type.c]
 extend-ignore-re = [
@@ -50,12 +66,17 @@ seeked = "seeked"
 
 [type.c.extend-words]
 arange = "arange"
+Forkless = "Forkless"
 fo = "fo"
 frst = "frst"
 limite = "limite"
+pathc = "pathc"
 pn = "pn"
 seeked = "seeked"
 tre = "tre"
+
+[type.cpp.extend-words]
+fo = "fo"
 
 [type.systemd.extend-words]
 # systemd = .conf

@@ -6,7 +6,7 @@
 # Slaves and Masters are in SYNC.
 #
 # If you hack this code make sure to sort keys and set elements as this are
-# unsorted elements. Otherwise the sum may differ with equal dataset.
+# unsorted elements. Otherwise, the sum may differ with equal dataset.
 
 require 'rubygems'
 require 'redis'

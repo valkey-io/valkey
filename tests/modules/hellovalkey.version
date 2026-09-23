@@ -1,0 +1,4 @@
+module {
+global: RedisModule_OnLoad;
+local: *;
+};

@@ -51,12 +51,26 @@ void freeClientMultiStateCmds(client *c) {
     c->mstate->commands = NULL;
 }
 
+void freeClientMultiWatchedKeysByDB(client *c) {
+    if (!c->mstate || !c->mstate->watched_keys_by_db) return;
+
+    for (int i = 0; i < server.dbnum; i++) {
+        if (c->mstate->watched_keys_by_db[i]) {
+            hashtableRelease(c->mstate->watched_keys_by_db[i]);
+            c->mstate->watched_keys_by_db[i] = NULL;
+        }
+    }
+    zfree(c->mstate->watched_keys_by_db);
+    c->mstate->watched_keys_by_db = NULL;
+}
+
 /* Release all the resources associated with MULTI/EXEC state */
 void freeClientMultiState(client *c) {
     if (!c->mstate) return;
 
     freeClientMultiStateCmds(c);
     unwatchAllKeys(c);
+    freeClientMultiWatchedKeysByDB(c);
     zfree(c->mstate);
     c->mstate = NULL;
 }
@@ -101,11 +115,17 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->slot = c->slot;
 
     if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
-        int count;
-        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
-        if (dbids && count > 0) {
-            c->mstate->transaction_db_id = dbids[0];
-            zfree(dbids);
+        int count = 0;
+        int *positions = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
+        if (positions) {
+            if (count > 0) {
+                long long dbid;
+                /* The helper has already validated argv[positions[i]] as a
+                 * valid in-range dbid, so this should never fail. */
+                serverAssert(getLongLongFromObject(mc->argv[positions[0]], &dbid) == C_OK);
+                c->mstate->transaction_db_id = (int)dbid;
+            }
+            zfree(positions);
         }
     }
 
@@ -168,8 +188,126 @@ void execCommandAbort(client *c, sds error) {
 
     /* Send EXEC to clients waiting data from MONITOR. We did send a MULTI
      * already, and didn't send any of the queued commands, now we'll just send
-     * EXEC so it is clear that the transaction is over. */
-    replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
+     * EXEC so it is clear that the transaction is over. If called from call(),
+     * it will feed monitors when it returns. */
+    if (!c->flag.executing_command) {
+        replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
+    }
+}
+
+typedef enum {
+    EXEC_CONDITION_IFEQ,
+    EXEC_CONDITION_IFNE,
+    EXEC_CONDITION_NX,
+    EXEC_CONDITION_XX,
+} execCondition;
+
+/* Parse the next condition in an EXEC command. */
+static int parseExecCondition(robj **argv, int argc, int *index, execCondition *condition) {
+    const char *token = objectGetVal(argv[*index]);
+    int args;
+
+    if (!strcasecmp(token, "ifeq")) {
+        *condition = EXEC_CONDITION_IFEQ;
+        args = 2;
+    } else if (!strcasecmp(token, "ifne")) {
+        *condition = EXEC_CONDITION_IFNE;
+        args = 2;
+    } else if (!strcasecmp(token, "nx")) {
+        *condition = EXEC_CONDITION_NX;
+        args = 1;
+    } else if (!strcasecmp(token, "xx")) {
+        *condition = EXEC_CONDITION_XX;
+        args = 1;
+    } else {
+        return C_ERR;
+    }
+
+    if (*index + args >= argc) return C_ERR;
+    *index += args + 1;
+    return C_OK;
+}
+
+/* Return the condition keys in EXEC arguments for ACL and cluster routing. */
+int execGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    int index = 1;
+    int numkeys = 0;
+    keyReference *keys;
+
+    while (index < argc) {
+        int key_index = index + 1;
+        execCondition condition;
+
+        if (parseExecCondition(argv, argc, &index, &condition) != C_OK) {
+            result->numkeys = 0;
+            return 0;
+        }
+        keys = getKeysPrepareResult(result, numkeys + 1);
+        keys[numkeys].pos = key_index;
+        keys[numkeys].flags = CMD_KEY_RO | CMD_KEY_ACCESS;
+        /* Publish the count as we go. getKeysPrepareResult() copies only
+         * result->numkeys entries when it moves off the static buffer, so
+         * leaving it at 0 until the end discards the first MAX_KEYS_BUFFER
+         * entries and hands back uninitialised ones. */
+        result->numkeys = ++numkeys;
+    }
+    return numkeys;
+}
+
+/* Check whether every condition supplied to EXEC matches the current database. */
+static int checkExecConditions(client *c) {
+    int index = 1;
+
+    /* Validate the complete condition list before reading any keys. This keeps
+     * malformed commands from exposing the result of an earlier condition. */
+    while (index < c->argc) {
+        execCondition condition;
+
+        if (parseExecCondition(c->argv, c->argc, &index, &condition) != C_OK) {
+            execCommandAbort(c, "invalid check condition syntax");
+            return -1;
+        }
+    }
+
+    index = 1;
+    while (index < c->argc) {
+        int condition_index = index;
+        execCondition condition;
+        robj *key, *value = NULL, *o;
+        int matches;
+
+        serverAssert(parseExecCondition(c->argv, c->argc, &index, &condition) == C_OK);
+
+        key = c->argv[condition_index + 1];
+        if (condition == EXEC_CONDITION_IFEQ || condition == EXEC_CONDITION_IFNE) {
+            value = c->argv[condition_index + 2];
+        }
+        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH);
+
+        switch (condition) {
+        case EXEC_CONDITION_IFEQ:
+            if (o && objectGetType(o) != OBJ_STRING) {
+                execCommandAbort(c, objectGetVal(shared.wrongtypeerr));
+                return -1;
+            }
+            matches = o && equalStringObjects(o, value);
+            break;
+        case EXEC_CONDITION_IFNE:
+            if (o && objectGetType(o) != OBJ_STRING) {
+                execCommandAbort(c, objectGetVal(shared.wrongtypeerr));
+                return -1;
+            }
+            matches = !o || !equalStringObjects(o, value);
+            break;
+        case EXEC_CONDITION_NX: matches = !o; break;
+        case EXEC_CONDITION_XX: matches = o != NULL; break;
+        default: serverPanic("Unknown EXEC condition");
+        }
+
+        if (!matches) return 0;
+    }
+    return 1;
 }
 
 void execCommand(client *c) {
@@ -201,6 +339,15 @@ void execCommand(client *c) {
             addReply(c, shared.nullarray[c->resp]);
         }
 
+        discardTransaction(c);
+        return;
+    }
+
+    int conditions_match = checkExecConditions(c);
+    if (conditions_match == -1) return;
+
+    if (!conditions_match) {
+        addReply(c, shared.nullarray[c->resp]);
         discardTransaction(c);
         return;
     }
@@ -305,6 +452,22 @@ typedef struct watchedKey {
     unsigned expired : 1; /* Flag that we're watching an already expired key. */
 } watchedKey;
 
+/* Callback used for watchedKeysHashtableType where the entries are watchedKey *
+ * and it already contains the key. */
+static const void *watchedKeyGetKey(const void *entry) {
+    const watchedKey *wk = entry;
+    return wk->key;
+}
+
+/* Hashtable type for client's per-db watched keys lookup.
+ * Entries are watchedKey* stored directly, no destructor needed since the
+ * actual memory is managed by the multiState->watched_keys list. */
+hashtableType watchedKeysHashtableType = {
+    .entryGetKey = watchedKeyGetKey,
+    .hashFunction = dictEncObjHash,
+    .keyCompare = dictEncObjKeyCompare,
+};
+
 /* Attach a watchedKey to the list of clients watching that key. */
 static inline void watchedKeyLinkToClients(list *clients, watchedKey *wk) {
     wk->node.value = clients;             /* Point the value back to the list */
@@ -325,25 +488,36 @@ static inline listNode *watchedKeyGetClientNode(watchedKey *wk) {
 /* Watch for the specified key */
 void watchForKey(client *c, robj *key) {
     list *clients = NULL;
-    listIter li;
-    listNode *ln;
     watchedKey *wk;
 
     if (listLength(&c->mstate->watched_keys) == 0) server.watching_clients++;
 
-    /* Check if we are already watching for this key */
-    listRewind(&c->mstate->watched_keys, &li);
-    while ((ln = listNext(&li))) {
-        wk = listNodeValue(ln);
-        if (wk->db == c->db && equalStringObjects(key, wk->key)) return; /* Key already watched */
+    /* Lazily allocate the per-db hashtable array. */
+    if (c->mstate->watched_keys_by_db == NULL) {
+        c->mstate->watched_keys_by_db = zcalloc(sizeof(hashtable *) * server.dbnum);
     }
+
+    /* Lazily allocate the hashtable for this specific db. */
+    if (c->mstate->watched_keys_by_db[c->db->id] == NULL) {
+        c->mstate->watched_keys_by_db[c->db->id] = hashtableCreate(&watchedKeysHashtableType);
+    }
+
+    /* Check if we are already watching for this key */
+    if (hashtableFind(c->mstate->watched_keys_by_db[c->db->id], key, NULL)) {
+        return; /* Key already watched */
+    }
+
     /* This key is not already watched in this DB. Let's add it */
-    clients = dictFetchValue(c->db->watched_keys, key);
-    if (!clients) {
+    dictEntry *de = dictFind(c->db->watched_keys, key);
+    if (de == NULL) {
         clients = listCreate();
         dictAdd(c->db->watched_keys, key, clients);
         incrRefCount(key);
+    } else {
+        key = dictGetKey(de);
+        clients = dictGetVal(de);
     }
+
     /* Add the new key to the list of keys watched by this client */
     wk = zmalloc(sizeof(*wk));
     wk->key = key;
@@ -353,6 +527,10 @@ void watchForKey(client *c, robj *key) {
     incrRefCount(key);
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
+    c->mstate->watched_keys_mem += getStringObjectMemory(key);
+
+    /* Add the new key to the per-db hashtable for O(1) lookup. */
+    hashtableAdd(c->mstate->watched_keys_by_db[c->db->id], wk);
 }
 
 /* Unwatch all the keys watched by this client. To clean the EXEC dirty
@@ -376,9 +554,20 @@ void unwatchAllKeys(client *c) {
         if (listLength(clients) == 0) dictDelete(wk->db->watched_keys, wk->key);
         /* Remove this watched key from the client->watched list */
         listDelNode(&c->mstate->watched_keys, ln);
+        c->mstate->watched_keys_mem -= getStringObjectMemory(wk->key);
         decrRefCount(wk->key);
         zfree(wk);
     }
+
+    /* Empty the per-db hashtables as we have unwatched all keys. */
+    if (c->mstate->watched_keys_by_db) {
+        for (int i = 0; i < server.dbnum; i++) {
+            if (c->mstate->watched_keys_by_db[i]) {
+                hashtableEmpty(c->mstate->watched_keys_by_db[i], NULL);
+            }
+        }
+    }
+
     server.watching_clients--;
 }
 
@@ -515,9 +704,21 @@ void unwatchCommand(client *c) {
 size_t multiStateMemOverhead(client *c) {
     if (!c->mstate) return 0;
     size_t mem = c->mstate->argv_len_sums;
-    /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
-     * managed per-client. */
-    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(c->mstate->watched_keys));
+    /* Add watched keys overhead. We take into account the watched keys themselves.
+     * A watched key robj is shared (via refcount) by all clients watching the
+     * same key, but we attribute it to each watching client so it stays visible
+     * to CLIENT INFO and maxmemory-clients. */
+    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(watchedKey));
+    mem += c->mstate->watched_keys_mem;
+    /* Add per-db watched keys hashtable overhead. */
+    if (c->mstate->watched_keys_by_db) {
+        mem += sizeof(hashtable *) * server.dbnum;
+        for (int i = 0; i < server.dbnum; i++) {
+            if (c->mstate->watched_keys_by_db[i]) {
+                mem += hashtableMemUsage(c->mstate->watched_keys_by_db[i]);
+            }
+        }
+    }
     /* Reserved memory for queued multi commands. */
     mem += c->mstate->alloc_count * sizeof(multiCmd);
     return mem;

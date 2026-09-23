@@ -2710,6 +2710,7 @@ unsigned long fbtreeCountRangeByValue(fbtreeIndex *fbt,
 typedef struct {
     bool valid;
     size_t size;
+    size_t leaves; /* leaf nodes reachable from the root */
     leafNode *leftmost_leaf;
     leafNode *rightmost_leaf;
 } validateResult;
@@ -2769,12 +2770,13 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose, vali
         }
         if (count > 0 && count % 8 != 0) printf("\n");
     }
-    return (validateResult){.valid = valid, .size = count, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
+    return (validateResult){.valid = valid, .size = count, .leaves = 1, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
 }
 
 static validateResult validateInner(innerNode *inner, int depth, bool verbose, validateErrCtx *err) {
     bool valid = true;
     size_t total_size = 0;
+    size_t total_leaves = 0;
     leafNode *leftmost = NULL;
     leafNode *rightmost = NULL;
 
@@ -2809,9 +2811,10 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
 
         validateResult child_result = validateNode(child, depth + 1, verbose, err);
 
-        /* Track leftmost/rightmost leaves */
+        /* Track leftmost/rightmost leaves and the structural leaf count */
         if (i == 0) leftmost = child_result.leftmost_leaf;
         rightmost = child_result.rightmost_leaf;
+        total_leaves += child_result.leaves;
 
         /* Validate stored size matches actual size */
         bool size_ok = (inner->child_sizes[i] == child_result.size);
@@ -2839,7 +2842,7 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
             printf("FAIL\033[0m\n");
         }
     }
-    return (validateResult){.valid = valid, .size = total_size, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
+    return (validateResult){.valid = valid, .size = total_size, .leaves = total_leaves, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
 }
 
 static validateResult validateNode(node *n, int depth, bool verbose, validateErrCtx *err) {
@@ -2860,10 +2863,15 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
     unsigned long length = fbt->root ? getSubtreeSize(fbt->root) : 0;
     if (verbose) printf("FBTree (length=%lu)\n", length);
     if (!fbt->root) {
-        /* Empty tree: caches must be NULL */
+        /* Empty tree: caches must be NULL and the leaf counter zero */
         if (fbt->leftmost_leaf || fbt->rightmost_leaf) {
             if (verbose) printf("\033[31mERROR: empty tree has non-NULL leaf cache\033[0m\n");
             validateFail(err, "empty tree has non-NULL leaf cache");
+            return false;
+        }
+        if (fbt->num_leaves != 0) {
+            if (verbose) printf("\033[31mERROR: empty tree has num_leaves %zu\033[0m\n", fbt->num_leaves);
+            validateFail(err, "empty tree has num_leaves %zu", fbt->num_leaves);
             return false;
         }
         return true;
@@ -2891,7 +2899,56 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
                      (void *)fbt->rightmost_leaf, (void *)actual_rightmost);
     }
 
-    return result.valid && length_ok && caches_ok;
+    /* Verify the cached leaf counter against the leaves reachable from the root. */
+    bool leaves_ok = (fbt->num_leaves == result.leaves);
+    if (!leaves_ok) {
+        if (verbose) printf("\033[31mERROR: num_leaves %zu != %zu leaves reachable from root\033[0m\n", fbt->num_leaves, result.leaves);
+        validateFail(err, "num_leaves %zu != %zu leaves reachable from root", fbt->num_leaves, result.leaves);
+    }
+
+    /* Verify the doubly-linked leaf chain: starts at the leftmost leaf with no
+     * predecessor, every next/prev pair is mutually consistent, keys never go
+     * backwards across a link, and it ends at the rightmost leaf after visiting
+     * exactly the leaves the tree owns. Any leaf reachable from the root but
+     * absent from the chain (or vice versa) shows up as a count mismatch. */
+    bool chain_ok = true;
+    if (actual_leftmost && actual_leftmost->prev != NULL) {
+        chain_ok = false;
+        validateFail(err, "leaf chain: leftmost leaf has non-NULL prev");
+    }
+    size_t chain_leaves = 0;
+    leafNode *leaf = actual_leftmost;
+    while (leaf && chain_ok) {
+        chain_leaves++;
+        if (chain_leaves > result.leaves) {
+            chain_ok = false;
+            validateFail(err, "leaf chain: more than %zu leaves reachable via next (cycle or stray leaf)", result.leaves);
+            break;
+        }
+        leafNode *next = leaf->next;
+        if (next) {
+            if (next->prev != leaf) {
+                chain_ok = false;
+                validateFail(err, "leaf chain: leaf %zu next->prev does not point back", chain_leaves - 1);
+            } else if (leaf->header.num_items > 0 && next->header.num_items > 0 &&
+                       sdscmp(leafNodeHighKey(leaf), leafNodeLowKey(next)) > 0) {
+                /* Equal keys across a link are legal: duplicates may span leaves. */
+                chain_ok = false;
+                validateFail(err, "leaf chain: keys decrease across link after leaf %zu", chain_leaves - 1);
+            }
+        } else if (leaf != actual_rightmost) {
+            chain_ok = false;
+            validateFail(err, "leaf chain: ends at leaf %zu, which is not the rightmost leaf", chain_leaves - 1);
+        }
+        leaf = next;
+    }
+    if (chain_ok && chain_leaves != result.leaves) {
+        chain_ok = false;
+        validateFail(err, "leaf chain: visits %zu leaves, tree has %zu", chain_leaves, result.leaves);
+    }
+    if (!chain_ok && verbose) printf("\033[31mERROR: leaf chain inconsistent\033[0m\n");
+
+    return result.valid && length_ok && caches_ok && leaves_ok && chain_ok;
 }
 
 /* ========== Defrag / Dismiss ========== */

@@ -2,6 +2,8 @@ CXX ?= g++
 AR ?= ar
 SERVER_AR ?= $(AR)
 -include ../.make-settings
+# The server objects were built with the parent's OPT, so capture it before OPT
+# is redefined below for the test objects.
 SERVER_OPT := $(OPT)
 OPT=-Og -g
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')

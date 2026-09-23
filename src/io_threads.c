@@ -613,6 +613,11 @@ size_t testOnlyGetClusterIOPendingResponses(void) {
     return cluster_io_pending_responses;
 }
 
+/* This function attempts to offload the client's read to an I/O thread.
+ * Returns C_OK if the read was offloaded, or if an I/O thread is already reading
+ * or writing for this client, so the main thread must not read now.
+ * Returns C_ERR if the client is not eligible for offloading, or the job queue
+ * is full, and the main thread should read the client itself. */
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
     /* Fake/teardown clients may have no connection; never offload those. */

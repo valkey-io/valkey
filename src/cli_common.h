@@ -5,20 +5,24 @@
 #include "sds.h"
 #include <stdint.h>
 
+/* Named-group configuration for TLS client connections.
+ * CLI_TLS_SUPPORTS_GROUPS is 1 when the linked OpenSSL exposes
+ * SSL_CTX_set1_groups_list() or the older SSL_CTX_set1_curves_list().
+ * Define TLS_NO_GROUPS at build time to disable this feature. */
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #endif
 
-#if defined(TLS_NO_GROUPS)
-#define CLI_TLS_SUPPORTS_GROUPS 0
+#ifdef TLS_NO_GROUPS
+# define CLI_TLS_SUPPORTS_GROUPS 0
 #elif defined(SSL_CTX_set1_groups_list)
-#define CLI_TLS_SUPPORTS_GROUPS 1
-#define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_groups_list((ctx), (list))
+# define CLI_TLS_SUPPORTS_GROUPS 1
+# define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_groups_list((ctx), (list))
 #elif defined(SSL_CTX_set1_curves_list)
-#define CLI_TLS_SUPPORTS_GROUPS 1
-#define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_curves_list((ctx), (list))
+# define CLI_TLS_SUPPORTS_GROUPS 1
+# define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_curves_list((ctx), (list))
 #else
-#define CLI_TLS_SUPPORTS_GROUPS 0
+# define CLI_TLS_SUPPORTS_GROUPS 0
 #endif
 
 typedef struct cliSSLconfig {
@@ -38,7 +42,7 @@ typedef struct cliSSLconfig {
     char *ciphers;
     /* Preferred ciphersuites list, or NULL (applies only to TLSv1.3) */
     char *ciphersuites;
-    /* Preferred TLS named groups list, or NULL */
+    /* Colon-separated named groups for key exchange (--tls-groups), or NULL */
     char *groups;
 } cliSSLconfig;
 

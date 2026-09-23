@@ -102,12 +102,12 @@ int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err)
             goto error;
         }
 #endif
+        /* Apply named group preferences when tls-groups is configured.
+         * Requires CLI_TLS_SUPPORTS_GROUPS (OpenSSL >= 1.0.2). */
 #if CLI_TLS_SUPPORTS_GROUPS
-        if (config.groups) {
-            if (!cliSslCtxSetGroupsList(ssl_ctx, config.groups)) {
-                *err = "Error while configuring TLS groups";
-                goto error;
-            }
+        if (config.groups && !cliSslCtxSetGroupsList(ssl_ctx, config.groups)) {
+            *err = "Failed to set TLS group list";
+            goto error;
         }
 #endif
     }

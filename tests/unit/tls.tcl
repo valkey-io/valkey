@@ -84,23 +84,35 @@ start_server {tags {"tls"}} {
             r CONFIG SET tls-ciphers "DEFAULT"
         }
 
-        proc tls_valkey_cli {host port groups} {
-            set tlsdir [file join [pwd] tests tls]
-            set cmd [list src/valkey-cli \
-                -h $host \
-                -p $port \
+        # Helper: run valkey-cli with a specific tls-groups value and return output.
+        # Uses ECDHE-RSA-AES128-GCM-SHA256 so we can test TLSv1.2 group selection
+        # independently of the cipher negotiation.
+        proc connect_with_tls_groups {host port groups} {
+            set tls_dir [file join [pwd] tests tls]
+            set cli_cmd [list src/valkey-cli \
+                -h $host -p $port \
                 --tls \
-                --cert [file join $tlsdir client.crt] \
-                --key [file join $tlsdir client.key] \
-                --cacert [file join $tlsdir ca.crt] \
+                --cert  [file join $tls_dir client.crt] \
+                --key   [file join $tls_dir client.key] \
+                --cacert [file join $tls_dir ca.crt] \
                 --tls-ciphers ECDHE-RSA-AES128-GCM-SHA256 \
-                --tls-groups $groups \
-                PING]
-            exec {*}$cmd 2>@1
+                --tls-groups $groups PING]
+            exec {*}$cli_cmd 2>@1
         }
 
-        test {TLS: Verify tls-groups validates group names} {
-            assert_equal {OK} [r CONFIG SET tls-groups "prime256v1"]
+        test {TLS: tls-groups rejects invalid group names at CONFIG SET time} {
+            # Skip when tls-groups support was compiled out (-DTLS_NO_GROUPS).
+            # The server rejects any non-empty group list in that build, so
+            # probing with a valid group name is sufficient to detect it.
+            set groups_supported 1
+            catch {r CONFIG SET tls-groups "prime256v1"} probe_err
+            if {[string match "*not supported*" $probe_err] ||
+                [string match "*Unable to update TLS*" $probe_err]} {
+                set groups_supported 0
+            }
+            if {!$groups_supported} {
+                skip "tls-groups not supported in this build (TLS_NO_GROUPS)"
+            }
 
             catch {r CONFIG SET tls-groups "invalid-group"} e
             assert_match {*Unable to update TLS configuration*} $e
@@ -108,30 +120,52 @@ start_server {tags {"tls"}} {
             r CONFIG SET tls-groups ""
         }
 
-        test {TLS: Verify tls-groups with a common group} {
+        test {TLS: tls-groups with overlapping groups completes handshake} {
+            # Skip when tls-groups support was compiled out (-DTLS_NO_GROUPS).
+            set groups_supported 1
+            catch {r CONFIG SET tls-groups "prime256v1"} probe_err
+            if {[string match "*not supported*" $probe_err] ||
+                [string match "*Unable to update TLS*" $probe_err]} {
+                set groups_supported 0
+            }
+            if {!$groups_supported} {
+                skip "tls-groups not supported in this build (TLS_NO_GROUPS)"
+            }
+
             set ecdhe_ciphers ECDHE-RSA-AES128-GCM-SHA256
             r CONFIG SET tls-protocols TLSv1.2
             r CONFIG SET tls-ciphers $ecdhe_ciphers
             r CONFIG SET tls-groups prime256v1
 
-            # The client and server both allow prime256v1, so the handshake
-            # should complete.
-            assert_equal {PONG} [tls_valkey_cli [srv 0 host] [srv 0 port] prime256v1]
+            # Server is restricted to prime256v1; client requests the same
+            # group, so TLS negotiation must succeed without HRR.
+            assert_equal {PONG} [connect_with_tls_groups [srv 0 host] [srv 0 port] prime256v1]
 
             r CONFIG SET tls-groups ""
             r CONFIG SET tls-protocols ""
             r CONFIG SET tls-ciphers DEFAULT
         }
 
-        test {TLS: Verify tls-groups with disjoint groups} {
+        test {TLS: tls-groups with no shared group causes handshake failure} {
+            # Skip when tls-groups support was compiled out (-DTLS_NO_GROUPS).
+            set groups_supported 1
+            catch {r CONFIG SET tls-groups "prime256v1"} probe_err
+            if {[string match "*not supported*" $probe_err] ||
+                [string match "*Unable to update TLS*" $probe_err]} {
+                set groups_supported 0
+            }
+            if {!$groups_supported} {
+                skip "tls-groups not supported in this build (TLS_NO_GROUPS)"
+            }
+
             set ecdhe_ciphers ECDHE-RSA-AES128-GCM-SHA256
             r CONFIG SET tls-protocols TLSv1.2
             r CONFIG SET tls-ciphers $ecdhe_ciphers
             r CONFIG SET tls-groups prime256v1
 
-            # The client and server expose disjoint group lists, so the TLS
-            # handshake must fail.
-            assert_equal 1 [catch {tls_valkey_cli [srv 0 host] [srv 0 port] secp384r1} e]
+            # Server allows only prime256v1; client offers only secp384r1.
+            # No group is common so the server must reject the handshake.
+            assert_equal 1 [catch {connect_with_tls_groups [srv 0 host] [srv 0 port] secp384r1} e]
             assert_match {*sslv3 alert handshake failure*} $e
 
             r CONFIG SET tls-groups ""

@@ -10,6 +10,10 @@
             [
                 "6.2.0",
                 "Added the `MINID` trimming strategy and the `LIMIT` option."
+            ],
+            [
+                "9.2.0",
+                "Added the `MAXBYTES` trimming strategy."
             ]
         ],
         "command_flags": [
@@ -54,42 +58,60 @@
                 "type": "block",
                 "arguments": [
                     {
-                        "name": "strategy",
+                        "name": "strategy-selector",
                         "type": "oneof",
                         "arguments": [
                             {
-                                "name": "maxlen",
-                                "type": "pure-token",
-                                "token": "MAXLEN"
+                                "name": "maxlen-or-minid",
+                                "type": "block",
+                                "arguments": [
+                                    {
+                                        "name": "strategy",
+                                        "type": "oneof",
+                                        "arguments": [
+                                            {
+                                                "name": "maxlen",
+                                                "type": "pure-token",
+                                                "token": "MAXLEN"
+                                            },
+                                            {
+                                                "name": "minid",
+                                                "type": "pure-token",
+                                                "token": "MINID",
+                                                "since": "6.2.0"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "operator",
+                                        "type": "oneof",
+                                        "optional": true,
+                                        "arguments": [
+                                            {
+                                                "name": "equal",
+                                                "type": "pure-token",
+                                                "token": "="
+                                            },
+                                            {
+                                                "name": "approximately",
+                                                "type": "pure-token",
+                                                "token": "~"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "threshold",
+                                        "type": "string"
+                                    }
+                                ]
                             },
                             {
-                                "name": "minid",
-                                "type": "pure-token",
-                                "token": "MINID",
-                                "since": "6.2.0"
+                                "name": "maxbytes",
+                                "type": "integer",
+                                "token": "MAXBYTES",
+                                "since": "9.2.0"
                             }
                         ]
-                    },
-                    {
-                        "name": "operator",
-                        "type": "oneof",
-                        "optional": true,
-                        "arguments": [
-                            {
-                                "name": "equal",
-                                "type": "pure-token",
-                                "token": "="
-                            },
-                            {
-                                "name": "approximately",
-                                "type": "pure-token",
-                                "token": "~"
-                            }
-                        ]
-                    },
-                    {
-                        "name": "threshold",
-                        "type": "string"
                     },
                     {
                         "token": "LIMIT",

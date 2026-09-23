@@ -5,8 +5,8 @@ test "Shutdown cleans up IO threads with pipelined commands" {
         set server_pid [srv 0 pid]
         set rd [valkey_deferring_client]
 
-        # Send all commands in one read so command cleanup can leave batched
-        # free-argv jobs in the IO thread's private inbox when SHUTDOWN runs.
+        # Make the pipeline arrive in one read so SHUTDOWN can leave
+        # batched argument-cleanup jobs queued.
         pause_process $server_pid
         for {set i 0} {$i < 200} {incr i} {
             $rd set shutdown-io-key:$i $i

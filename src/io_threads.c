@@ -491,6 +491,31 @@ static void shutdownIOThread(int id) {
         serverLog(LL_NOTICE, "IO thread(tid:%lu) terminated", (unsigned long)tid);
     }
     pthread_mutex_destroy(&io_threads_mutex[id]);
+
+    /* The worker is joined, so the main thread owns this inbox outright now.
+     * tryOffloadFreeArgvToIOThreads() batches jobs into it without committing,
+     * so a client that pipelined writes ahead of SHUTDOWN can leave argv in here
+     * that only this queue points at. Run those jobs before the buffer goes
+     * away. Skipped when crashing, where allocator work is worse than leaking.
+     * On the CONFIG SET path drainIOThreadsQueue() ran first and this finds
+     * nothing. */
+    if (!server.crashed) {
+        spscCommit(&io_private_inbox[id]);
+        void *batch[BATCH_SIZE];
+        size_t batch_count;
+        size_t drained = 0;
+        while ((batch_count = spscDequeueBatch(&io_private_inbox[id], batch, BATCH_SIZE)) > 0) {
+            for (size_t i = 0; i < batch_count; i++) {
+                void *data;
+                int type;
+                untagJob(batch[i], &data, &type);
+                if (type == JOB_SPSC_FREE_ARGV) ioThreadFreeArgv((robj **)data);
+            }
+            drained += batch_count;
+        }
+        if (drained) atomic_fetch_add_explicit(&io_jobs_finished, drained, memory_order_release);
+    }
+
     spscFree(&io_private_inbox[id]);
 }
 

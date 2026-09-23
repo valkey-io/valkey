@@ -5,6 +5,22 @@
 #include "sds.h"
 #include <stdint.h>
 
+#ifdef USE_OPENSSL
+#include <openssl/ssl.h>
+#endif
+
+#if defined(TLS_NO_GROUPS)
+#define CLI_TLS_SUPPORTS_GROUPS 0
+#elif defined(SSL_CTX_set1_groups_list)
+#define CLI_TLS_SUPPORTS_GROUPS 1
+#define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_groups_list((ctx), (list))
+#elif defined(SSL_CTX_set1_curves_list)
+#define CLI_TLS_SUPPORTS_GROUPS 1
+#define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_curves_list((ctx), (list))
+#else
+#define CLI_TLS_SUPPORTS_GROUPS 0
+#endif
+
 typedef struct cliSSLconfig {
     /* Requested SNI, or NULL */
     char *sni;
@@ -22,6 +38,8 @@ typedef struct cliSSLconfig {
     char *ciphers;
     /* Preferred ciphersuites list, or NULL (applies only to TLSv1.3) */
     char *ciphersuites;
+    /* Preferred TLS named groups list, or NULL */
+    char *groups;
 } cliSSLconfig;
 
 

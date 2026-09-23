@@ -1778,6 +1778,7 @@ typedef struct serverTLSContextConfig {
     char *protocols;
     char *ciphers;
     char *ciphersuites;
+    char *groups;             /* TLS key-exchange groups (e.g. X25519MLKEM768:x25519) */
     int prefer_server_ciphers;
     int session_caching;
     int session_cache_size;

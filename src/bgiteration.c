@@ -254,23 +254,6 @@ static const bgIteratorItem STATIC_ITEM_ITER_CLOSED = {.type = (bgIteratorItemTy
  *   + In db.c, if the object is reallocated, bgIteration_updateDbEntryPtr() is called.
  *   + In defrag.c, we don't defrag if there are multiple references (and we incr the refcount). */
 
-// Thomas Wang's 64-bit mix
-static uint64_t pointerHash(const void *key) {
-    uint64_t h = (uint64_t)(uintptr_t)key;
-    h = (~h) + (h << 21); // h = (h << 21) - h - 1;
-    h = h ^ (h >> 24);
-    h = (h + (h << 3)) + (h << 8); // h * 265
-    h = h ^ (h >> 14);
-    h = (h + (h << 2)) + (h << 4); // h * 21
-    h = h ^ (h >> 28);
-    h = h + (h << 31);
-    return h;
-}
-
-static int pointerCompare(const void *key1, const void *key2) {
-    return key1 == key2;
-}
-
 // This dict grows and shrinks constantly during the iteration.  Avoid constant rehashing.
 static int onlyAllowExpansion(size_t moreMem, double usedRatio) {
     UNUSED(moreMem);
@@ -279,14 +262,12 @@ static int onlyAllowExpansion(size_t moreMem, double usedRatio) {
 
 static dictType dictEntryPtrDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = pointerHash,
-    .keyCompare = pointerCompare,
+    .hashFunction = hashtablePointerHash,
     .resizeAllowed = onlyAllowExpansion,
     .entryDestructor = zfree};
 
 static hashtableType dbEntryPtrHashtableType = {
-    .hashFunction = pointerHash,
-    .keyCompare = pointerCompare,
+    .hashFunction = hashtablePointerHash,
     .resizeAllowed = onlyAllowExpansion};
 
 
@@ -1420,11 +1401,9 @@ static void returnAllItemsToMainThread(bgIterator *it) {
             break;
         case BGITERATOR_ITEM_SWAPDB:
             it->swapdb_queued--;
-            it->barrier_items--;
             break;
         case BGITERATOR_ITEM_FLUSHDB:
             it->flushdb_queued--;
-            it->barrier_items--;
             break;
 
         case BGITERATOR_ITEM_COMPLETE:
@@ -1652,6 +1631,9 @@ static long long bgIteration_feedIterators_task(struct aeEventLoop *eventLoop,
         }
     }
     monotime endTime = startTime + dutyTimeUs;
+
+    // Test path (manual feed, no timer thread): ignore the budget so a slow env can't starve the blocking read.
+    if (eventLoop == NULL) endTime = UINT64_MAX;
 
     // Run this part regardless of time limit...
     receiveItemsBackFromIterators(false);

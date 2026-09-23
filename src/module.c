@@ -58,6 +58,7 @@
 #include "server.h"
 #include "ordered_index.h"
 #include "cluster.h"
+#include "entry.h"
 #include "commandlog.h"
 #include "rdb.h"
 #include "monotonic.h"
@@ -607,6 +608,38 @@ void VM_Free(void *ptr) {
 /* Like strdup() but returns memory allocated with ValkeyModule_Alloc(). */
 char *VM_Strdup(const char *str) {
     return zstrdup(str);
+}
+
+/* Report memory obtained outside the server allocator, such as an mmap()ed
+ * region, so it counts toward used_memory and maxmemory. Does not allocate.
+ *
+ * Report only resident memory, and only memory not already obtained from
+ * ValkeyModule_Alloc(). Each call must be matched by
+ * ValkeyModule_DecrExternalMemory() of the same size.
+ *
+ * May be called from a command callback or a thread-safe context.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if the
+ * total would overflow, leaving the accounting unchanged. */
+int VM_IncrExternalMemory(size_t bytes) {
+    if (zmalloc_increase_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* Stop accounting for memory reported with ValkeyModule_IncrExternalMemory().
+ * Frees nothing.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if
+ * `bytes` exceeds the reported total, leaving the accounting unchanged. */
+int VM_DecrExternalMemory(size_t bytes) {
+    if (zmalloc_decrease_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
 }
 
 /* --------------------------------------------------------------------------
@@ -2646,6 +2679,22 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * atomic slot migration and CLUSTER MIGRATESLOTS will return an error. Modules
  * should set this flag if they understand keys may be loaded during the
  * migration but before ownership is transferred.
+ *
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS:
+ * When set, this option indicates that the module is capable of handling
+ * forkless operations (such as a forkless background save). Opting in has the
+ * following implications the module must acknowledge:
+ * - While a forkless operation is running, opening a key for write with
+ *   VM_OpenKey() may return NULL when the key is in use by the operation; the
+ *   module must handle that NULL return.
+ * - A module that registers a data type also declares that its RDB save
+ *   callbacks are thread-safe.
+ * - A module that registers an aux_save/aux_save2 function must run it only in
+ *   the VALKEYMODULE_AUX_BEFORE_RDB section, and it must export only limited
+ *   data (this function runs on the main thread and blocks it during a forkless
+ *   operation).
+ * When forkless background saving is configured, if any loaded module does not
+ * set this flag, the server falls back to fork-based saving.
  */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
@@ -4304,7 +4353,7 @@ static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
  * Valkey 9.2+: When opening a key with VALKEYMODULE_WRITE, NULL will be returned
  * if the key is currently write-locked (i.e. if forkless operations are operating
  * on the key).  This change is non-breaking as:
- * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE
+ * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS
  * * Module write commands are blocked (before execution), if a declared key is write-locked
  * The risk is only for a module that performs VM_OpenKey() on a key which was NOT
  * declared in the current command OR arbitrarily opens keys during a timer event.
@@ -4399,6 +4448,7 @@ int VM_KeyType(ValkeyModuleKey *key) {
     case OBJ_HASH: return VALKEYMODULE_KEYTYPE_HASH;
     case OBJ_MODULE: return VALKEYMODULE_KEYTYPE_MODULE;
     case OBJ_STREAM: return VALKEYMODULE_KEYTYPE_STREAM;
+    case OBJ_PATH_HASH: return VALKEYMODULE_KEYTYPE_PATH_HASH;
     default: return VALKEYMODULE_KEYTYPE_EMPTY;
     }
 }
@@ -4417,6 +4467,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
     case OBJ_ZSET: return zsetLength(key->value);
     case OBJ_HASH: return hashTypeLength(key->value);
     case OBJ_STREAM: return streamLength(key->value);
+    case OBJ_PATH_HASH: return raxSize(((pathHashObject *)objectGetVal(key->value))->index);
     default: return 0;
     }
 }
@@ -9465,6 +9516,16 @@ int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNo
     return VALKEYMODULE_OK;
 }
 
+/* Whether any module post-execution-unit job is pending. Kept as a tiny
+ * accessor rather than exposing modulePostExecUnitJobs itself, so callers
+ * outside this file (postExecutionUnitOperations()) don't need to know it's
+ * backed by a list - if that representation ever changes, only this
+ * function needs to change with it. It's trivial enough that LTO can inline
+ * it at its (currently single) call site same as any other cross-TU call. */
+bool moduleHasPostExecUnitJobs(void) {
+    return listLength(modulePostExecUnitJobs) > 0;
+}
+
 void firePostExecutionUnitJobs(void) {
     /* Avoid propagation of commands.
      * In that way, postExecutionUnitOperations will prevent
@@ -10431,7 +10492,9 @@ ValkeyModuleUser *VM_CreateModuleUser(const char *name) {
 }
 
 /* Frees a given user and disconnects all of the clients that have been
- * authenticated with it. See VM_CreateModuleUser for detailed usage.*/
+ * authenticated with it. See VM_CreateModuleUser for detailed usage.
+ *
+ * Returns VALKEYMODULE_OK. */
 int VM_FreeModuleUser(ValkeyModuleUser *user) {
     if (user->free_user) ACLFreeUserAndKillClients(user->user);
     zfree(user);
@@ -12172,8 +12235,11 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
  *      ValkeyModule_CloseKey(key);
  *      ValkeyModule_ScanCursorDestroy(c);
  *
- * The function will return 1 if there are more elements to scan and 0 otherwise,
- * possibly setting errno if the call failed.
+ * The function will return 1 if there are more elements to scan and 0 otherwise.
+ * On a return value of 0, errno is set to distinguish the cases:
+ *   - 0       - the scan completed successfully.
+ *   - EINVAL  - the key is NULL or not a hash, set or sorted set.
+ *   - ENOENT  - the cursor is already exhausted (a previous call returned 0).
  * It is also possible to restart an existing cursor using VM_ScanCursorRestart.
  *
  * NOTE: Certain operations are unsafe while iterating the object. For instance
@@ -12241,6 +12307,171 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
             p = lpNext(objectGetVal(o), p);
             decrRefCount(field);
             decrRefCount(value);
+        }
+        cursor->cursor = 1;
+        cursor->done = 1;
+        ret = 0;
+    }
+    errno = 0;
+    return ret;
+}
+
+/* Callback for VM_ScanKeyRawBorrowed. See VM_ScanKeyRawBorrowed below for the
+ * (field, value) meaning per type and the pointer lifetime contract. */
+typedef void (*ValkeyModuleScanKeyRawBorrowedCB)(ValkeyModuleKey *key,
+                                                 const char *field,
+                                                 size_t field_len,
+                                                 const char *value,
+                                                 size_t value_len,
+                                                 void *privdata);
+typedef struct {
+    ValkeyModuleKey *key;
+    void *user_data;
+    ValkeyModuleScanKeyRawBorrowedCB fn;
+} ScanKeyRawBorrowedCBData;
+
+/* Hashtable-encoded SET / HASH / ZSET(btree) callback: borrowed field/member
+ * (+ borrowed hash value, or materialized zset score). */
+static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entry) {
+    ScanKeyRawBorrowedCBData *data = privdata;
+    robj *o = data->key->value;
+    if (objectGetType(o) == OBJ_SET) {
+        sds member = entry;
+        data->fn(data->key, member, sdslen(member), NULL, 0, data->user_data);
+    } else if (objectGetType(o) == OBJ_ZSET) {
+        const char *member;
+        size_t mlen;
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &member, &mlen);
+        char scorebuf[MAX_D2STRING_CHARS]; /* materialized: callback-scoped */
+        int slen = d2string(scorebuf, sizeof(scorebuf), orderedIndexItemGetScore((const OrderedIndexItem *)entry));
+        data->fn(data->key, member, mlen, scorebuf, (size_t)slen, data->user_data);
+    } else if (objectGetType(o) == OBJ_HASH) {
+        sds field = entryGetField(entry);
+        size_t val_len;
+        char *val = entryGetValue(entry, &val_len);
+        data->fn(data->key, field, sdslen(field), val, val_len, data->user_data);
+    } else {
+        serverPanic("unexpected object type in ScanKeyRawBorrowed");
+    }
+}
+
+/* Like ValkeyModule_ScanKey, but each element is delivered to the callback as
+ * borrowed `(const char *, size_t)` byte ranges instead of allocating a
+ * ValkeyModuleString per element. This avoids a per-element allocation on the
+ * hot reply path. Works on the same key types as ValkeyModule_ScanKey: hash,
+ * set and sorted set.
+ *
+ *     void scan_callback(ValkeyModuleKey *key, const char *field, size_t field_len,
+ *                        const char *value, size_t value_len, void *privdata);
+ *
+ * Per element the callback receives (field, field_len, value, value_len):
+ *   - HASH: field = field name,   value = field value.
+ *   - SET:  field = member,       value = NULL, value_len = 0 (sets have no value).
+ *   - ZSET: field = member,       value = score as a decimal string.
+ *
+ * The score string uses the same form as `ZRANGE ... WITHSCORES`: e.g. the score
+ * 1.5 is delivered as "1.5" and 2.0 as "2". (ValkeyModule_ScanKey instead
+ * delivers a `%.17Lg`-style rendering for sorted-set scores.)
+ *
+ * POINTER LIFETIME: the field and value pointers are only guaranteed to be valid
+ * for the duration of the callback invocation. A typical use is to reply to the
+ * calling client from within the callback with ValkeyModule_ReplyWithStringBuffer.
+ * To keep a field or value beyond the callback, copy it (for example into a
+ * ValkeyModuleString with ValkeyModule_CreateString).
+ *
+ * The usage pattern, return value, errno semantics and iteration-safety notes
+ * are identical to ValkeyModule_ScanKey. */
+int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModuleScanKeyRawBorrowedCB fn, void *privdata) {
+    if (key == NULL || key->value == NULL) {
+        errno = EINVAL;
+        return 0;
+    }
+    hashtable *ht = NULL;
+    robj *o = key->value;
+    if (objectGetType(o) == OBJ_SET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) ht = objectGetVal(o);
+    } else if (objectGetType(o) == OBJ_HASH) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) ht = objectGetVal(o);
+    } else if (objectGetType(o) == OBJ_ZSET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) ht = ((zset *)objectGetVal(o))->ht;
+    } else {
+        errno = EINVAL;
+        return 0;
+    }
+    if (cursor->done) {
+        errno = ENOENT;
+        return 0;
+    }
+    int ret = 1;
+    if (ht) {
+        /* hashtable-encoded set/hash, or btree-encoded zset: incremental. */
+        ScanKeyRawBorrowedCBData data = {key, privdata, fn};
+        cursor->cursor = hashtableScan(ht, cursor->cursor, moduleScanKeyRawBorrowedHashtableCallback, &data);
+        if (cursor->cursor == 0) {
+            cursor->done = 1;
+            ret = 0;
+        }
+    } else if (objectGetType(o) == OBJ_SET) {
+        /* intset / listpack set: full scan. Listpack members are borrowed;
+         * intset integer members are materialized (callback-scoped). */
+        setTypeIterator *si = setTypeInitIterator(o);
+        char *str;
+        size_t len;
+        int64_t llele;
+        char intbuf[LONG_STR_SIZE];
+        while (setTypeNext(si, &str, &len, &llele) != -1) {
+            const char *m;
+            size_t mlen;
+            if (str != NULL) {
+                m = str;
+                mlen = len;
+            } else {
+                mlen = (size_t)ll2string(intbuf, sizeof(intbuf), llele);
+                m = intbuf;
+            }
+            fn(key, m, mlen, NULL, 0, privdata);
+        }
+        setTypeReleaseIterator(si);
+        cursor->cursor = 1;
+        cursor->done = 1;
+        ret = 0;
+    } else {
+        /* listpack-encoded zset or hash: (field/member, value/score) pairs.
+         * String entries are borrowed; integer-encoded entries are materialized
+         * (callback-scoped). Integers may be either field or value. */
+        unsigned char *lp = objectGetVal(o);
+        unsigned char *p = lpSeek(lp, 0);
+        while (p) {
+            unsigned int flen;
+            long long fll;
+            char fbuf[LONG_STR_SIZE];
+            unsigned char *fstr = lpGetValue(p, &flen, &fll);
+            const char *fp;
+            size_t fl;
+            if (fstr != NULL) {
+                fp = (char *)fstr;
+                fl = flen;
+            } else {
+                fl = (size_t)ll2string(fbuf, sizeof(fbuf), fll);
+                fp = fbuf;
+            }
+            p = lpNext(lp, p);
+            if (!p) break;
+            unsigned int vlen;
+            long long vll;
+            char vbuf[LONG_STR_SIZE];
+            unsigned char *vstr = lpGetValue(p, &vlen, &vll);
+            const char *vp;
+            size_t vl;
+            if (vstr != NULL) {
+                vp = (char *)vstr;
+                vl = vlen;
+            } else {
+                vl = (size_t)ll2string(vbuf, sizeof(vbuf), vll);
+                vp = vbuf;
+            }
+            fn(key, fp, fl, vp, vl, privdata);
+            p = lpNext(lp, p);
         }
         cursor->cursor = 1;
         cursor->done = 1;
@@ -15043,13 +15274,19 @@ struct ValkeyModuleDefragCtx {
 
 /* Register a defrag callback for global data, i.e. anything that the module
  * may allocate that is not tied to a specific data type.
+ *
+ * The callback is invoked with a time limit: it should call VM_DefragShouldStop() periodically, and
+ * save its position with VM_DefragCursorSet() so a later invocation can resume (using VM_DefragCursorGet).
+ *
+ * If a non-zero cursor is set (VM_DefragCursorSet) the function will be invoked repeatedly until a zero
+ * cursor is returned.
  */
 int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
     ctx->module->defrag_cb = cb;
     return VALKEYMODULE_OK;
 }
 
-/* When the data type defrag callback iterates complex structures, this
+/* When a defrag callback iterates complex structures, this
  * function should be called periodically. A zero (false) return
  * indicates the callback may continue its work. A non-zero value (true)
  * indicates it should stop.
@@ -15057,8 +15294,9 @@ int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
  * When stopped, the callback may use VM_DefragCursorSet() to store its
  * position so it can later use VM_DefragCursorGet() to resume defragging.
  *
- * When stopped and more work is left to be done, the callback should
- * return 1. Otherwise, it should return 0.
+ * When stopped and more work is left to be done, the data type callback
+ * should return 1. Otherwise, it should return 0. The global callback has no
+ * return value and reports this through its cursor instead.
  *
  * NOTE: Modules should consider the frequency in which this function is called,
  * so it generally makes sense to do small batches of work in between calls.
@@ -15069,18 +15307,18 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
 
 /* Store an arbitrary cursor value for future re-use.
  *
- * This should only be called if VM_DefragShouldStop() has returned a non-zero
- * value and the defrag callback is about to exit without fully iterating its
- * data type.
+ * For a data type callback, this should only be called if VM_DefragShouldStop()
+ * has returned a non-zero value and the defrag callback is about to exit without
+ * fully iterating its data type.
  *
  * This behavior is reserved to cases where late defrag is performed. Late
  * defrag is selected for keys that implement the `free_effort` callback and
  * return a `free_effort` value that is larger than the defrag
  * 'active-defrag-max-scan-fields' configuration directive.
  *
- * Smaller keys, keys that do not implement `free_effort` or the global
- * defrag callback are not called in late-defrag mode. In those cases, a
- * call to this function will return VALKEYMODULE_ERR.
+ * Smaller keys and keys that do not implement `free_effort` are not called in
+ * late-defrag mode. In those cases, a call to this function will return
+ * VALKEYMODULE_ERR.
  *
  * The cursor may be used by the module to represent some progress into the
  * module's data type. Modules may also store additional cursor-related
@@ -15088,6 +15326,15 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
  * traversal of a new key begins. This is possible because the API makes
  * a guarantee that concurrent defragmentation of multiple keys will
  * not be performed.
+ *
+ * A global callback (registered with VM_RegisterDefragFunc) always has a cursor
+ * available, and the cursor is also how it reports completion: 0, the value a
+ * fresh pass starts from, means done, and non-zero means it will be invoked
+ * again. The server discards the cursor once the callback completes or the pass
+ * is interrupted, so a cursor saved before an interruption is never handed
+ * back. A flush or a database swap does not end defragmentation, so a
+ * module must still be able to restart when its cursor may be invalid,
+ * usually just returning a 0 cursor, indicating done.
  */
 int VM_DefragCursorSet(ValkeyModuleDefragCtx *ctx, unsigned long cursor) {
     if (!ctx->cursor) return VALKEYMODULE_ERR;
@@ -15098,7 +15345,7 @@ int VM_DefragCursorSet(ValkeyModuleDefragCtx *ctx, unsigned long cursor) {
 
 /* Fetch a cursor value that has been previously stored using VM_DefragCursorSet().
  *
- * If not called for a late defrag operation, VALKEYMODULE_ERR will be returned and
+ * If no cursor is available, VALKEYMODULE_ERR will be returned and
  * the cursor should be ignored. See VM_DefragCursorSet() for more details on
  * defrag cursors.
  */
@@ -15202,20 +15449,49 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
     return 1;
 }
 
-/* Call registered module API defrag functions */
-void moduleDefragGlobals(void) {
-    if (listLength(modules) == 0) return;
+/* Global defrag walks the modules one at a time.  These two values are the whole resume state: the
+ * module currently being defragged (by position, since a module can be unloaded between invocations)
+ * and the cursor that module last stored.  Both are reset at the start of every cycle. */
+static long defrag_module_position = 0;
+static unsigned long defrag_module_cursor = 0;
 
-    listIter li;
-    listNode *ln;
+/* Begin a fresh pass from the first module.  Called internally when the stage starts (endtime==0);
+ * a cycle that was aborted mid-pass leaves stale values here, which this discards. */
+static void moduleDefragGlobalsStart(void) {
+    defrag_module_position = 0;
+    defrag_module_cursor = 0;
+}
 
-    listRewind(modules, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        struct ValkeyModule *module = listNodeValue(ln);
-        if (!module->defrag_cb) continue;
-        ValkeyModuleDefragCtx defrag_ctx = {0, NULL, NULL, -1};
-        module->defrag_cb(&defrag_ctx);
+/* Defrag module global data, forwarding 'endtime' so a callback can bound its own latency via
+ * VM_DefragShouldStop().  Each module is defragged to completion (its cursor back to 0) before we
+ * move to the next; walking off the end of the module list means every module is done.
+ *
+ * Returns true while work remains, false once the pass is complete. */
+bool moduleDefragGlobals(monotime endtime) {
+    if (endtime == 0) {
+        moduleDefragGlobalsStart();
+        return true;
     }
+
+    /* Resolve the resume position to a node once; walking with listIndex per step would be quadratic
+     * in the number of loaded modules.  The list can't change during a single call (defrag is
+     * single-threaded), so the node stays valid until we return. */
+    listNode *ln = listIndex(modules, defrag_module_position);
+    while (ln != NULL) {
+        if (getMonotonicUs() >= endtime) return true;
+
+        struct ValkeyModule *module = listNodeValue(ln);
+        if (module->defrag_cb) {
+            ValkeyModuleDefragCtx defrag_ctx = {endtime, &defrag_module_cursor, NULL, -1};
+            module->defrag_cb(&defrag_ctx);
+            if (defrag_module_cursor != 0) continue; /* more work on this module */
+        }
+        /* This module is done (or has no callback): advance and start the next one at cursor 0. */
+        defrag_module_position++;
+        defrag_module_cursor = 0;
+        ln = ln->next;
+    }
+    return false;
 }
 
 /* Returns the name of the key currently being processed.
@@ -15282,6 +15558,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(TryRealloc);
     REGISTER_API(Free);
     REGISTER_API(Strdup);
+    REGISTER_API(IncrExternalMemory);
+    REGISTER_API(DecrExternalMemory);
     REGISTER_API(CreateCommand);
     REGISTER_API(GetCommand);
     REGISTER_API(CreateSubcommand);
@@ -15591,6 +15869,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ScanCursorRestart);
     REGISTER_API(Scan);
     REGISTER_API(ScanKey);
+    REGISTER_API(ScanKeyRawBorrowed);
     REGISTER_API(CreateModuleUser);
     REGISTER_API(SetContextUser);
     REGISTER_API(SetModuleUserACL);

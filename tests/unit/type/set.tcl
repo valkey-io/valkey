@@ -55,6 +55,26 @@ start_server {
         r memory usage myset
     }
 
+    test {SISMEMBER with XX parameter} {
+        r sadd myset foo bar baz
+
+        assert_equal 1 [r sismember myset foo]
+        assert_equal 1 [r sismember myset foo XX]
+        assert_equal 0 [r sismember myset nonexist]
+        assert_equal 0 [r sismember myset nonexist XX]
+
+        r del nonexistkey
+        assert_equal 0 [r sismember nonexistkey foo]
+        assert_equal -1 [r sismember nonexistkey foo XX]
+        
+        r set wrongtype "not a set"
+        assert_error WRONGTYPE* {r sismember wrongtype foo}
+        assert_error WRONGTYPE* {r sismember wrongtype foo XX}
+        
+        assert_error "ERR*syntax error*" {r sismember myset foo invalidparam}
+        assert_error "ERR*syntax error*" {r sismember myset foo XX invalidparam}
+    }
+
     test {SMISMEMBER SMEMBERS SCARD against non set} {
         r lpush mylist foo
         assert_error WRONGTYPE* {r smismember mylist bar}
@@ -1233,3 +1253,24 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 } ;# skip 32bit builds
 }
 } ;# run_solo
+
+start_server {config "minimal.conf" tags {"set" "external:skip"} overrides {io-threads 4 io-threads-always-active yes set-max-listpack-entries 0}} {
+    test "Set nested prefetch - SISMEMBER correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r sadd myset "member:$i"
+        }
+        assert_encoding hashtable myset
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd sismember myset "member:$i"
+        }
+        $rd sismember myset "absent"
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal 1 [$rd read]
+        }
+        assert_equal 0 [$rd read]
+        $rd close
+    }
+}

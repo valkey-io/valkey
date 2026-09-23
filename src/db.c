@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "listpack.h"
 #include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
@@ -1159,7 +1160,7 @@ int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
 }
 
 char *obj_type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", NULL, /* module type is special */
-                                     "stream"};
+                                     "stream", "pathhash"};
 
 /* Helper function to get type from a string in scan commands */
 long long getObjectTypeByName(char *name) {
@@ -1374,7 +1375,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         setTypeReleaseIterator(si);
         cursor = 0;
     } else if ((objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *p = lpFirst(objectGetVal(o));
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
         unsigned char *str;
         int64_t len;
         unsigned char intbuf[LP_INTBUF_SIZE];
@@ -1383,9 +1385,13 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             str = lpGet(p, &len, intbuf);
             /* point to the value */
             p = lpNext(objectGetVal(o), p);
+            unsigned char *vptr = p;
+            /* Skip fields not visible in the current context */
+            long long expiry = hashTypeListpackGetExpiry(zl, vptr);
+            int is_valid = hashTypeListpackFieldIsValid(expiry);
+            p = lpNext(zl, vptr);
+            if (!is_valid) continue;
             if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
-                /* jump to the next key/val pair */
-                p = lpNext(objectGetVal(o), p);
                 continue;
             }
             /* add key object */
@@ -1393,11 +1399,10 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             addScanDataItem(&result, (const char *)item, sdslen(item));
             /* add value object */
             if (!opts->only_keys) {
-                str = lpGet(p, &len, intbuf);
+                str = lpGet(vptr, &len, intbuf);
                 item = sdsnewlen(str, len);
                 addScanDataItem(&result, (const char *)item, sdslen(item));
             }
-            p = lpNext(objectGetVal(o), p);
         }
         cursor = 0;
     } else {
@@ -1725,6 +1730,7 @@ void copyCommand(client *c) {
     case OBJ_ZSET: newobj = zsetDup(o); break;
     case OBJ_HASH: newobj = hashTypeDup(o); break;
     case OBJ_STREAM: newobj = streamDup(o); break;
+    case OBJ_PATH_HASH: newobj = pathHashTypeDup(o); break;
     case OBJ_MODULE:
         newobj = moduleTypeDupOrReply(c, key, newkey, dst->id, o);
         if (!newobj) return;
@@ -2883,6 +2889,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
                 found_store = 1;
                 keys[num].pos = i + 1; /* <store-key> */
                 keys[num].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
+                /* Skip the destination. It is a key name, so it must never be
+                 * examined as an option: a key that spells one would hide the
+                 * later STORE clause that SORT actually writes to. */
+                i++;
                 break;
             }
         }

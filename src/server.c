@@ -49,6 +49,7 @@
 #include "threads_mngr.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "compression.h"
 #include "tls.h"
 #include "sds.h"
 #include "module.h"
@@ -1301,7 +1302,6 @@ static void clientsCron(int clients_this_cycle) {
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
         if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
-        if (clientsCronTcpIsClosing(c)) continue;
 
         /* Iterating all the clients in getMemoryOverheadData() is too slow and
          * in turn would make the INFO command too slow. So we perform this
@@ -1901,6 +1901,21 @@ static void sendGetackToReplicas(void) {
 
 extern int ProcessingEventsWhileBlocked;
 
+/* Process one buffered decompression slice before the event loop sleeps.
+ * Returning true lets processEventsWhileBlocked count the slice as progress. */
+static bool processPendingReplStreamDecode(void) {
+    client *primary = server.primary;
+    if (!primary || primary->flag.close_asap || !replStreamHasPendingDecode()) return false;
+    /* streamReplDataBufToDb owns the reader while replaying dual-channel
+     * buffers. Resuming it here could read newer socket bytes before the
+     * remaining buffered blocks. */
+    if (server.pending_repl_data.blocks) return false;
+    if (primary->io_write_state != CLIENT_IDLE || primary->io_read_state != CLIENT_IDLE) return false;
+
+    readQueryFromClient(primary->conn);
+    return true;
+}
+
 /* This function gets called every time the server is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors.
@@ -1933,6 +1948,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         uint64_t processed = 0;
         processed += processIOThreadsResponses();
         processed += connTypeProcessPendingData();
+        /* Keep an online compressed primary draining when a long-running
+         * command yields to the event loop. */
+        processed += processPendingReplStreamDecode();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
         int last_processed = 0;
@@ -1956,6 +1974,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
     int dont_sleep = connTypeHasPendingData();
+    if (processPendingReplStreamDecode()) {
+        server.el_iteration_active = true;
+        if (replStreamHasPendingDecode()) dont_sleep = 1;
+    }
 
     /* Call the Cluster before sleep function. Note that this function
      * may change the state of Cluster (from ok to fail or vice versa),
@@ -2163,6 +2185,21 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
     IOThreadsAfterSleep(numevents);
 }
 
+/* Callback invoked by the event loop after draining priority events.
+ * Records priority eventloop duration and updates peak commands executed per priority cycle. */
+static void qosStatsCallback(struct aeEventLoop *el, uint64_t duration_us) {
+    UNUSED(el);
+    durationAddSample(EL_DURATION_TYPE_PRIORITY_EL, duration_us);
+    unsigned long long priority_cmds = server.duration_stats[EL_DURATION_TYPE_PRIORITY_CMD].cnt;
+    if (priority_cmds > (unsigned long long)server.priority_el_cmd_cnt_prev) {
+        long long el_cmd_cnt = priority_cmds - server.priority_el_cmd_cnt_prev;
+        if (el_cmd_cnt > server.priority_el_cmd_cnt_max) {
+            server.priority_el_cmd_cnt_max = el_cmd_cnt;
+        }
+        server.priority_el_cmd_cnt_prev = priority_cmds;
+    }
+}
+
 /* =========================== Server initialization ======================== */
 
 static inline robj *createSharedString(const char *string) {
@@ -2301,6 +2338,8 @@ void createSharedObjects(void) {
     shared.srem = createSharedString("SREM");
     shared.xgroup = createSharedString("XGROUP");
     shared.xclaim = createSharedString("XCLAIM");
+    shared.xdel = createSharedString("XDEL");
+    shared.xack = createSharedString("XACK");
     shared.script = createSharedString("SCRIPT");
     shared.replconf = createSharedString("REPLCONF");
     shared.pexpireat = createSharedString("PEXPIREAT");
@@ -2447,9 +2486,11 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
     server.tls_server_cert_expire_time = 0;
+    server.tls_server_alt_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
     server.tls_server_cert_serial = NULL;
+    server.tls_server_alt_cert_serial = NULL;
     server.tls_client_cert_serial = NULL;
     server.tls_ca_cert_serial = NULL;
 
@@ -2470,6 +2511,7 @@ void initServerConfig(void) {
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;
+    server.repl_compression_advertised = REPL_COMPRESSION_CAPA_UNKNOWN;
     server.repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     server.repl_down_since = 0; /* Never connected, repl is down since EVER. */
     server.primary_repl_offset = 0;
@@ -2904,6 +2946,7 @@ void resetServerStats(void) {
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
     server.stat_rejected_conn = 0;
+    server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
@@ -2937,9 +2980,15 @@ void resetServerStats(void) {
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
     server.stat_reply_buffer_shrinks = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.priority_el_cmd_cnt_max = 0;
+    server.priority_el_cmd_cnt_prev = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
     server.stat_total_prefetch_batches = 0;
@@ -3093,7 +3142,12 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-
+    /* Setup QoS event loop if multiplexer backend supports secondary polling.
+     * If secondary polling is unsupported (e.g. evport, select), gracefully fallback to standard event processing without QoS. */
+    if (aeActuateQoSEventLoopIfSupported(server.el, server.priority_preemptive_poll_interval_us, qosStatsCallback) == AE_ERR) {
+        serverLog(LL_NOTICE, "QoS event prioritization not supported on %s multiplexer, falling back to standard event processing",
+                  aeGetApiName());
+    }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
 
@@ -3161,6 +3215,10 @@ void initServer(void) {
     server.stat_module_progress = 0;
     for (int j = 0; j < CLIENT_TYPE_COUNT; j++) server.stat_clients_type_memory[j] = 0;
     server.stat_cluster_links_memory = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.cron_malloc_stats.zmalloc_used = 0;
     server.cron_malloc_stats.process_rss = 0;
     server.cron_malloc_stats.allocator_allocated = 0;
@@ -3240,6 +3298,11 @@ void initServer(void) {
 
     /* Initialization hotkey */
     hotkeysInit();
+
+    /* Initialize priority subnets if configured */
+    if (updatePrioritySubnets(server.priority_subnets) != C_OK) {
+        serverPanic("Failed parsing priority-subnets on startup, check the server logs.");
+    }
 }
 
 void initListeners(void) {
@@ -3962,6 +4025,21 @@ static void propagatePendingCommands(void) {
     serverOpArrayFree(&server.also_propagate);
 }
 
+/* Whether any of the module-jobs / propagation / module-yield post-execution-
+ * unit work is pending. Shared by postExecutionUnitOperations() and
+ * afterCommand() so the "is there anything to do?" condition for these three
+ * sub-systems has a single home instead of being duplicated at both call
+ * sites - static inline costs nothing here since both callers are in this
+ * same translation unit. moduleHasPostExecUnitJobs() is a tiny cross-TU
+ * accessor rather than reaching into module.c's list directly, so this file
+ * doesn't need to know how the module subsystem tracks its pending jobs.
+ *
+ * Must stay an OR of every condition below - never drop one as an
+ * optimization, since that would silently skip real pending work. */
+static inline int hasPostExecutionUnitPendingWork(void) {
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+}
+
 /* Performs operations that should be performed after an execution unit ends.
  * Execution unit is a code that should be done atomically.
  * Execution units can be nested and do not necessarily start with a server command.
@@ -3979,14 +4057,27 @@ static void propagatePendingCommands(void) {
 void postExecutionUnitOperations(void) {
     if (server.execution_nesting) return;
 
-    firePostExecutionUnitJobs();
+    /* Combined pending-work gate: in the overwhelming majority of calls
+     * (e.g. after a plain read-only command like GET) none of the three
+     * sub-systems below have anything queued. Fold all of their "is there
+     * anything to do?" checks into a single branch here so the common case
+     * pays for one memory read + one branch instead of three separate
+     * (partly cross-translation-unit, non-inlinable) function calls.
+     *
+     * Deliberately NOT hinted unlikely() here: unlike the afterCommand()
+     * gate below, this function is also called right after queuing a
+     * propagation (expire.c, evict.c, db.c) where the condition is
+     * typically true, so a fixed hint would be wrong for those call sites. */
+    if (hasPostExecutionUnitPendingWork()) {
+        firePostExecutionUnitJobs();
 
-    /* If we are at the top-most call() and not inside an active module
-     * context (e.g. within a module timer) we can propagate what we accumulated. */
-    propagatePendingCommands();
+        /* If we are at the top-most call() and not inside an active module
+         * context (e.g. within a module timer) we can propagate what we accumulated. */
+        propagatePendingCommands();
 
-    /* Module subsystem post-execution-unit logic */
-    modulePostExecutionUnitOperations();
+        /* Module subsystem post-execution-unit logic */
+        modulePostExecutionUnitOperations();
+    }
 }
 
 /* Increment the command failure counters (either rejected_calls or failed_calls).
@@ -4212,7 +4303,13 @@ void call(client *c, int flags) {
         } else {
             latencyTraceIfNeeded(server, command, duration);
         }
-        if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
+        if (server.execution_nesting == 0) {
+            durationAddSample(EL_DURATION_TYPE_CMD, duration);
+            /* Attribute command execution latency for high-priority client connections. */
+            if (connIsPriority(c->conn)) {
+                durationAddSample(EL_DURATION_TYPE_PRIORITY_CMD, duration);
+            }
+        }
     }
 
     /* Log the command into the commandlog if needed.
@@ -4234,7 +4331,7 @@ void call(client *c, int flags) {
     if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !c->flag.blocked)
+        if (server.latency_tracking_enabled)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
         clusterSlotStatsAddCpuDuration(c, c->duration);
     }
@@ -4376,18 +4473,37 @@ void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...) {
 /* This is called after a command in call, we can do some maintenance job in it. */
 void afterCommand(client *c) {
     UNUSED(c);
-    /* Should be done before trackingHandlePendingKeyInvalidations so that we
-     * reply to client before invalidating cache (makes more sense) */
-    postExecutionUnitOperations();
 
-    /* Flush pending tracking invalidations. */
-    trackingHandlePendingKeyInvalidations();
+    /* Combined pending-work gate for command-completion tail work.
+     * See postExecutionUnitOperations() for why each callee below still
+     * needs its own defensive check - this gate exists purely so the
+     * overwhelmingly common "nothing pending" case (e.g. after a plain
+     * GET, or after each sub-command of a MULTI/EXEC or script) short-
+     * circuits before paying for any of the calls below.
+     *
+     * Unlike the shared hasPostExecutionUnitPendingWork() conditions, the
+     * unlikely() hint here is safe: this is the single call site reached
+     * from a plain top-level command, where "nothing pending" genuinely
+     * dominates. clusterSlotStatsAddNetworkBytesOutForUserClient() is
+     * intentionally excluded from the gate: it is not deferred/queued
+     * work, it must run for every command whenever slot-stats accounting
+     * is enabled. */
+    if (server.execution_nesting == 0 &&
+        unlikely(hasPostExecutionUnitPendingWork() || trackingHasPendingKeyInvalidations() ||
+                 listLength(server.pending_push_messages))) {
+        /* Should be done before trackingHandlePendingKeyInvalidations so that we
+         * reply to client before invalidating cache (makes more sense) */
+        postExecutionUnitOperations();
+
+        /* Flush pending tracking invalidations. */
+        trackingHandlePendingKeyInvalidations();
+
+        /* Flush other pending push messages. Not interleaved with
+         * transaction response since we're already outside nesting here. */
+        listJoin(c->reply, server.pending_push_messages);
+    }
 
     clusterSlotStatsAddNetworkBytesOutForUserClient(c);
-
-    /* Flush other pending push messages. only when we are not in nested call.
-     * So the messages are not interleaved with transaction response. */
-    if (!server.execution_nesting) listJoin(c->reply, server.pending_push_messages);
 }
 
 /* Check if c->cmd exists, fills `err` with details in case it doesn't.
@@ -6431,6 +6547,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
             if (tls_server_seconds_remaining < 0) tls_server_seconds_remaining = 0;
         }
+        long long tls_server_alt_seconds_remaining = 0;
+        if (server.tls_server_alt_cert_expire_time > 0) {
+            tls_server_alt_seconds_remaining = server.tls_server_alt_cert_expire_time - (long long)server.unixtime;
+            if (tls_server_alt_seconds_remaining < 0) tls_server_alt_seconds_remaining = 0;
+        }
         long long tls_client_seconds_remaining = 0;
         if (server.tls_client_cert_expire_time > 0) {
             tls_client_seconds_remaining = server.tls_client_cert_expire_time - (long long)server.unixtime;
@@ -6446,6 +6567,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "# TLS\r\n" FMTARGS(
                 "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
                 "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
+                "tls_server_alt_cert_serial:%s\r\n", server.tls_server_alt_cert_serial ? server.tls_server_alt_cert_serial : "none",
+                "tls_server_alt_cert_expires_in_seconds:%lld\r\n", tls_server_alt_seconds_remaining,
                 "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
                 "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
                 "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
@@ -6478,6 +6601,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             info,
             "# Clients\r\n" FMTARGS(
                 "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
+                "connected_priority_clients:%lld\r\n", server.stat_num_active_priority_clients,
                 "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
                 "maxclients:%u\r\n", server.maxclients,
                 "client_recent_max_input_buffer:%zu\r\n", maxin,
@@ -6552,7 +6676,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "used_memory_vm_eval:%lld\r\n", memory_lua,
                 "used_memory_lua_human:%s\r\n", used_memory_lua_hmem, /* deprecated */
                 "used_memory_scripts_eval:%lld\r\n", (long long)mh->lua_caches,
-                "number_of_cached_scripts:%zu\r\n", dictSize(evalScriptsDict()),
+                "number_of_cached_scripts:%zu\r\n", dictSize(evalCtxScriptsDict()),
                 "number_of_functions:%lu\r\n", functionsNum(),
                 "number_of_libraries:%lu\r\n", functionsLibNum(),
                 "used_memory_vm_functions:%lld\r\n", memory_functions,
@@ -6734,6 +6858,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
                 "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
                 "rejected_connections:%lld\r\n", server.stat_rejected_conn,
+                "rejected_priority_connections:%lld\r\n", server.stat_rejected_priority_conn,
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
@@ -6786,7 +6911,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].sum,
                 "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
-                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
+                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION),
+                "eventloop_priority_cycles:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].cnt,
+                "eventloop_priority_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].sum,
+                "eventloop_priority_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_CMD].sum));
         info = genValkeyInfoStringACLStats(info);
     }
 
@@ -6889,12 +7017,22 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
-                                    "offset=%lld,lag=%ld,type=%s\r\n",
+                                    "offset=%lld,lag=%ld,type=%s",
                                     replica_id, replica_ip, replica->repl_data->replica_listening_port, state,
                                     replica->repl_data->repl_ack_off, lag,
                                     replica->flag.repl_rdb_channel                                ? "rdb-channel"
                                     : replica->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
                                                                                                   : "replica");
+                if (replica->repl_data->repl_compression) {
+                    info = sdscatprintf(info,
+                                        ",repl_compression=%s"
+                                        ",repl_compressed_bytes=%lld"
+                                        ",repl_uncompressed_bytes=%lld",
+                                        compressionAlgoName(replica->repl_data->repl_compression->compressor.algo),
+                                        replica->repl_data->repl_compression->compressed_bytes,
+                                        replica->repl_data->repl_compression->uncompressed_bytes);
+                }
+                info = sdscat(info, "\r\n");
                 replica_id++;
             }
         }
@@ -7065,14 +7203,18 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     }
 
     if (dictFind(section_dict, "debug") != NULL) {
+        size_t module_external_memory = zmalloc_used_external_memory();
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(
             info,
             "# Debug\r\n" FMTARGS(
+                "used_memory_module_external:%zu\r\n", module_external_memory,
                 "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
+                "eventloop_priority_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].max,
+                "eventloop_priority_cmd_per_cycle_max:%lld\r\n", server.priority_el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
 
@@ -8106,10 +8248,13 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
+ * DELEX specific command extended options - IFEQ/IFNE
+ * INCREX specific command extended options - BYINT/BYFLOAT
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_*.
+ * pointer to pointer of compare obj, pointer to pointer of incrby obj, and command_type
+ * which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
@@ -8119,7 +8264,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
@@ -8130,13 +8275,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
             !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
-            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
+            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
-                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
@@ -8156,7 +8301,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
             *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
@@ -8166,7 +8311,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'n' || opt[2] == 'N') &&
                    (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
             *flags |= ARGS_SET_IFNE;
             *compare_val = next;
@@ -8193,7 +8338,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_EX;
             *expire = next;
@@ -8203,7 +8348,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
@@ -8216,7 +8361,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_EXAT;
             *expire = next;
@@ -8228,12 +8373,36 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && next)
+                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
             if (expire_idx) *expire_idx = j;
+            j++;
+        } else if ((opt[0] == 'b' || opt[0] == 'B') &&
+                   (opt[1] == 'y' || opt[1] == 'Y') &&
+                   (opt[2] == 'i' || opt[2] == 'I') &&
+                   (opt[3] == 'n' || opt[3] == 'N') &&
+                   (opt[4] == 't' || opt[4] == 'T') && opt[5] == '\0' &&
+                   command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
+        {
+            *flags |= ARGS_BYINT;
+            if (incrby_val) *incrby_val = next;
+            j++;
+        } else if ((opt[0] == 'b' || opt[0] == 'B') &&
+                   (opt[1] == 'y' || opt[1] == 'Y') &&
+                   (opt[2] == 'f' || opt[2] == 'F') &&
+                   (opt[3] == 'l' || opt[3] == 'L') &&
+                   (opt[4] == 'o' || opt[4] == 'O') &&
+                   (opt[5] == 'a' || opt[5] == 'A') &&
+                   (opt[6] == 't' || opt[6] == 'T') && opt[7] == '\0' &&
+                   command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
+        {
+            *flags |= ARGS_BYFLOAT;
+            if (incrby_val) *incrby_val = next;
             j++;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

@@ -3026,6 +3026,86 @@ TEST_F(FbtreeTest, DeleteRangeByRankThenInsert) {
     EXPECT_EQ(all.size(), 20u);
 }
 
+/* A range delete that strips every sibling from an inner node leaves that node
+ * with a single child. If updateCommonPrefix() skips the recompute for such a
+ * node, it retains the prefix derived when the node still had >= 2 anchors,
+ * while innerNodeRefreshChildMeta() has just rewritten the surviving child-0
+ * anchor. Child 0's key range extends BELOW its own high key, so the refreshed
+ * anchor can fall below the retained prefix, breaking the "every anchor starts
+ * with the node prefix" invariant. This test guards that path.
+ *
+ * Needs a >= 3-level tree, and the delete must (a) start inside child 0 of a
+ * depth-1 inner node, (b) extend past the end of that node's subtree, and
+ * (c) stop short of the last root child so the node is not collapsed away.
+ * Keys are equal length, so the tree shape depends only on the element count:
+ * the first pass learns the shape, the second builds the triggering content. */
+TEST_F(FbtreeTest, RangeDeleteLeavingSingleChildKeepsPrefixValid) {
+    const int N = TEST_THREE_LEVEL_ITEMS * 3; /* comfortably 3 levels */
+
+    /* Pass 1: uniform keys, purely to locate a suitable depth-1 inner node. */
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "b%08d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    ASSERT_FALSE(fbt->root->is_leaf);
+    ASSERT_GT(fbtreeHeight(fbt), 2UL) << "test needs a >= 3-level tree";
+
+    int flip = -1, del_start = -1, del_end = -1;
+    {
+        innerNode *root = (innerNode *)(void *)fbt->root;
+        size_t rank = 0;
+        for (int i = 0; i < root->header.num_items; i++) {
+            node *child = root->children[i];
+            size_t subtree = root->child_sizes[i];
+            /* Skip root child 0: its child 0 has no lower neighbour to dip into. */
+            if (i >= 1 && !child->is_leaf && flip < 0) {
+                innerNode *d = (innerNode *)(void *)child;
+                if (d->header.num_items >= 2) {
+                    size_t c0 = d->child_sizes[0];
+                    flip = (int)(rank + c0 / 2);     /* inside child 0 of this node */
+                    del_start = (int)(rank + 1);     /* keep >= 1 survivor in child 0 */
+                    del_end = (int)(rank + subtree); /* one past this subtree */
+                }
+            }
+            rank += subtree;
+        }
+    }
+    ASSERT_GE(flip, 0) << "no suitable depth-1 inner node found";
+
+    /* Pass 2: rebuild so the key prefix flips 'a' -> 'b' at `flip`. Ordering is
+     * still by index, so the shape is identical to pass 1. */
+    fbtreeFree(fbt);
+    fbt = fbtreeCreate();
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%c%08d", i < flip ? 'a' : 'b', i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, del_start, del_end, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(del_end - del_start + 1));
+
+    char errmsg[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg))) << errmsg;
+
+    /* The surviving elements must still be exactly the expected set, in order. */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    for (int i = 0; i < N; i++) {
+        if (i >= del_start && i <= del_end) continue;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%c%08d", i < flip ? 'a' : 'b', i);
+        sds expected = createString(buf);
+        ASSERT_NE(pos = fbtreeNext(&it), nullptr) << "tree exhausted at index " << i;
+        EXPECT_EQ(sdscmp(pos, expected), 0);
+        sdsfree(expected);
+    }
+    EXPECT_EQ(pos = fbtreeNext(&it), nullptr);
+}
+
 TEST_F(FbtreeTest, DeleteRangeByRankDeepTree) {
     /* Build a 3+ level tree */
     const int N = TEST_THREE_LEVEL_ITEMS;
@@ -3338,6 +3418,255 @@ TEST_F(FbtreeTest, DeleteRangeByValueNoMatch) {
     sdsfree(min_val);
     sdsfree(max_val);
     expectValid();
+}
+
+/* Regression test for a false-empty short-circuit in deleteRangeCore.
+ *
+ * The tree spans multiple leaves (NODE_SIZE=61 forces this with 300+
+ * elements). After trimming the first leaf down to a single low member, a
+ * later range delete has BOTH boundaries land in leaves with no locally
+ * matching elements ("leaf-untouched") while the split node still has one
+ * or more middle children strictly between the boundary subtrees, wholly
+ * inside the deleted range and non-empty. The buggy guard only checked
+ * leaf-local untouched-ness and returned 0 (deleted nothing) even though
+ * those middle leaves' elements were still in range. */
+TEST_F(FbtreeTest, DeleteRangeByValueSkipsNoMiddleLeafFalseEmpty) {
+    /* Seed enough elements to force several leaves/levels: an empty-string
+     * low sentinel plus 300 zero-padded members "m0001".."m0300". */
+    insert("");
+    char buf[16];
+    for (int i = 1; i <= 300; i++) {
+        snprintf(buf, sizeof(buf), "m%04d", i);
+        insert(buf);
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 301u);
+
+    /* Trim the first leaf down to just the empty-string member: removes
+     * [m0001, m0060] inclusive, leaving the low leaf with a single element
+     * and no members in the immediately following range. */
+    sds trim_min = createString("m0001");
+    sds trim_max = createString("m0060");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, trim_min, trim_max, 0, 0, NULL, NULL), 60u);
+    sdsfree(trim_min);
+    sdsfree(trim_max);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 241u);
+
+    /* Exclusive lower bound just past the trimmed leaf's remaining element,
+     * and an upper bound landing in the gap just after "m0121" (no stored
+     * element equals "m0121x"). Both boundary leaves are leaf-locally
+     * untouched, but middle leaves fully inside the range still exist. */
+    sds range_min = createString("");
+    sds range_max = createString("m0121x");
+    unsigned long expected = fbtreeCountRangeByValue(fbt, range_min, range_max, 1, 0);
+    ASSERT_GT(expected, 0u) << "range must be non-empty for this regression to be meaningful";
+
+    unsigned long removed = fbtreeDeleteRangeByValue(fbt, range_min, range_max, 1, 0, NULL, NULL);
+    sdsfree(range_min);
+    sdsfree(range_max);
+    expectValid();
+
+    EXPECT_EQ(removed, expected) << "deleteRangeCore must not short-circuit to 0 when non-empty middle leaves lie between untouched boundary leaves";
+}
+
+/* Regression test for a DEEPER false-empty short-circuit in deleteRangeCore
+ * than the one covered above. The prior fix's guard (no_middle_child) only
+ * checks adjacency of the SPLIT NODE's own boundary children (shared_left_idx
+ * / shared_right_idx at split_depth). It says nothing about levels below the
+ * split: when the split happens at the root and the root has exactly two
+ * children (a common shape once a two-level tree overflows into a third
+ * level), those two children are trivially "adjacent" (li=0, ri=1) even
+ * though each child is itself a whole inner-node subtree with many leaves.
+ * If the min boundary's descent path picks a non-rightmost child at some
+ * level under root->children[li], the right-siblings at that level are
+ * middle subtrees fully inside the deleted range that the split-node-only
+ * guard cannot see (symmetric on the right side under root->children[ri]).
+ *
+ * 5000 zero-padded members force height 3: NODE_SIZE=61 fans out to at most
+ * 61 leaves per level-2 inner node (61*61=3721 items per full level-2
+ * subtree), so 5000 items split across exactly two such level-2 subtrees
+ * under the root -- the shape this test needs.
+ *
+ * The chosen bounds land both boundaries in an untouched state at the LEAF
+ * level (exclusive bound resolves past/before the boundary leaf's members),
+ * which is exactly what makes the split-node guard's no_middle_child==true
+ * wrongly conclude the whole range is empty -- while leaves strictly between
+ * the min's leaf and the max's leaf, one level below the root, still hold
+ * thousands of in-range elements. */
+TEST_F(FbtreeTest, DeleteRangeByValueSkipsDeeperMiddleLeafFalseEmpty) {
+    /* 5000 zero-padded members "m00001".."m05000", forcing height 3. */
+    char buf[16];
+    for (int i = 1; i <= 5000; i++) {
+        snprintf(buf, sizeof(buf), "m%05d", i);
+        insert(buf);
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 5000u);
+    EXPECT_EQ(fbtreeHeight(fbt), 3u);
+
+    /* Exclusive bounds discovered by direct probing of this exact 5000-item
+     * tree shape: min excludes "m00061" (the last member of the leftmost
+     * leaf, landing start_idx just past that leaf -- leaf-untouched), max
+     * excludes "m02868" (the first member of some leaf under the root's
+     * second child, landing end_idx just before that leaf -- also
+     * leaf-untouched). Both boundary leaves are untouched, root's two
+     * children are (trivially) adjacent, yet 2806 elements strictly between
+     * them are in range. */
+    sds range_min = createString("m00061");
+    sds range_max = createString("m02868");
+    unsigned long expected = fbtreeCountRangeByValue(fbt, range_min, range_max, 1, 1);
+    ASSERT_EQ(expected, 2806u) << "expected count must match the probed shape for this regression to be meaningful";
+
+    unsigned long removed = fbtreeDeleteRangeByValue(fbt, range_min, range_max, 1, 1, NULL, NULL);
+    sdsfree(range_min);
+    sdsfree(range_max);
+    expectValid();
+
+    EXPECT_EQ(removed, expected) << "deleteRangeCore must not short-circuit to 0 when non-empty middle "
+                                    "leaves lie one or more levels below the split node between "
+                                    "leaf-untouched boundaries";
+}
+
+/* Exclusive range bounds that land exactly on a real member sitting at a
+ * leaf's fill edge (the last member of the leaf below the bound, or the
+ * first member of the leaf above it) have repeatedly disagreed between
+ * fbtreeCountRangeByValue and fbtreeDeleteRangeByValue: excluding the
+ * actual last item of a leaf pushes the descent index past that leaf's
+ * item count, which upstream code has mistaken for "this side is out of
+ * range" even when whole leaves and subtrees strictly between the two
+ * boundaries remain in range. Synthetic between-member values do not
+ * reach this state -- they land at the next leaf's insertion point without
+ * ever aligning with a real fill edge -- so this sweep only uses bounds
+ * equal to real inserted members, concentrated at multiples of NODE_SIZE
+ * (61) where a leaf actually fills, plus a coarser stride for background
+ * coverage away from those edges. The score-comparison path is not swept
+ * here: probing it directly showed no equivalent alignment sensitivity,
+ * so it is omitted to keep the property scoped to the code path that is
+ * actually affected. */
+TEST_F(FbtreeTest, DeleteRangeMatchesCountAcrossExclusiveBounds) {
+    /* --- Tree A: 300 members, height 2. --- */
+    {
+        const int kTotalA = 300;
+        const int leaf_edges_a[] = {61, 122, 183, 244};
+        const int num_leaf_edges_a = 4;
+        const int stride_a = 23;
+        const int j_stride_a = 31;
+        const int j_extra_a[] = {122, 183, 244};
+        const int num_j_extra_a = 3;
+
+        int min_indexes[64];
+        int num_mins = 0;
+        for (int k = 0; k < num_leaf_edges_a; k++) min_indexes[num_mins++] = leaf_edges_a[k];
+        for (int i = stride_a; i < kTotalA; i += stride_a) {
+            int dup = 0;
+            for (int k = 0; k < num_mins; k++) {
+                if (min_indexes[k] == i) dup = 1;
+            }
+            if (!dup) min_indexes[num_mins++] = i;
+        }
+
+        int max_indexes[64];
+        int num_maxs = 0;
+        for (int j = j_stride_a; j < kTotalA; j += j_stride_a) max_indexes[num_maxs++] = j;
+        for (int k = 0; k < num_j_extra_a; k++) {
+            int dup = 0;
+            for (int m = 0; m < num_maxs; m++) {
+                if (max_indexes[m] == j_extra_a[k]) dup = 1;
+            }
+            if (!dup) max_indexes[num_maxs++] = j_extra_a[k];
+        }
+
+        int num_pairs_a = 0;
+        char buf[16];
+        for (int mi = 0; mi < num_mins; mi++) {
+            for (int mj = 0; mj < num_maxs; mj++) {
+                int i = min_indexes[mi];
+                int j = max_indexes[mj];
+                if (i >= j) continue;
+                if (num_pairs_a >= 120) continue;
+                num_pairs_a++;
+
+                fbtreeIndex *sweep_fbt = fbtreeCreate();
+                for (int n = 1; n <= kTotalA; n++) {
+                    snprintf(buf, sizeof(buf), "m%04d", n);
+                    fbtreeInsert(sweep_fbt, createString(buf));
+                }
+
+                snprintf(buf, sizeof(buf), "m%04d", i);
+                sds range_min = createString(buf);
+                snprintf(buf, sizeof(buf), "m%04d", j);
+                sds range_max = createString(buf);
+
+                unsigned long expected = fbtreeCountRangeByValue(sweep_fbt, range_min, range_max, 1, 1);
+                unsigned long removed = fbtreeDeleteRangeByValue(sweep_fbt, range_min, range_max, 1, 1, NULL, NULL);
+                EXPECT_EQ(removed, expected) << "tree A pair (i=" << i << ", j=" << j << ") disagreed";
+                ASSERT_TRUE(fbtreeDebugValidate(sweep_fbt, false, NULL, 0)) << "tree A pair (i=" << i << ", j=" << j
+                                                                            << ") left an invalid tree";
+
+                sdsfree(range_min);
+                sdsfree(range_max);
+                fbtreeFree(sweep_fbt);
+            }
+        }
+        ASSERT_GT(num_pairs_a, 0) << "tree A sweep must exercise at least one pair";
+    }
+
+    /* --- Tree B: 5000 members, height 3. Must include the known failing
+     * pair (61, 2868). --- */
+    {
+        const int leaf_edges_b[] = {61, 610, 1220, 2440, 3721};
+        const int num_leaf_edges_b = 5;
+        const int stride_b = 173;
+        const int known_max_b = 2868;
+
+        int min_indexes[64];
+        int num_mins = 0;
+        for (int k = 0; k < num_leaf_edges_b; k++) min_indexes[num_mins++] = leaf_edges_b[k];
+
+        int max_indexes[64];
+        int num_maxs = 0;
+        max_indexes[num_maxs++] = known_max_b;
+        for (int j = stride_b; j < 5000; j += stride_b) {
+            if (j == known_max_b) continue;
+            max_indexes[num_maxs++] = j;
+        }
+
+        int num_pairs_b = 0;
+        char buf[16];
+        int saw_known_pair = 0;
+        for (int mi = 0; mi < num_mins; mi++) {
+            for (int mj = 0; mj < num_maxs; mj++) {
+                int i = min_indexes[mi];
+                int j = max_indexes[mj];
+                if (i >= j) continue;
+                if (num_pairs_b >= 30) continue;
+                num_pairs_b++;
+                if (i == 61 && j == known_max_b) saw_known_pair = 1;
+
+                fbtreeIndex *sweep_fbt = fbtreeCreate();
+                for (int n = 1; n <= 5000; n++) {
+                    snprintf(buf, sizeof(buf), "m%05d", n);
+                    fbtreeInsert(sweep_fbt, createString(buf));
+                }
+
+                snprintf(buf, sizeof(buf), "m%05d", i);
+                sds range_min = createString(buf);
+                snprintf(buf, sizeof(buf), "m%05d", j);
+                sds range_max = createString(buf);
+
+                unsigned long expected = fbtreeCountRangeByValue(sweep_fbt, range_min, range_max, 1, 1);
+                unsigned long removed = fbtreeDeleteRangeByValue(sweep_fbt, range_min, range_max, 1, 1, NULL, NULL);
+                EXPECT_EQ(removed, expected) << "tree B pair (i=" << i << ", j=" << j << ") disagreed";
+                ASSERT_TRUE(fbtreeDebugValidate(sweep_fbt, false, NULL, 0)) << "tree B pair (i=" << i << ", j=" << j
+                                                                            << ") left an invalid tree";
+
+                sdsfree(range_min);
+                sdsfree(range_max);
+                fbtreeFree(sweep_fbt);
+            }
+        }
+        ASSERT_GT(num_pairs_b, 0) << "tree B sweep must exercise at least one pair";
+        ASSERT_TRUE(saw_known_pair) << "tree B sweep must include the known failing pair (61, 2868)";
+    }
 }
 
 TEST_F(FbtreeTest, DeleteRangeByValueExactMatch) {

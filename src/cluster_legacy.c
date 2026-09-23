@@ -44,7 +44,9 @@
 #include "cluster_migrateslots.h"
 #include "endianconv.h"
 #include "connection.h"
+#include "connhelpers.h"
 #include "module.h"
+#include "io_threads.h"
 #include "bio.h"
 
 #include <stdlib.h>
@@ -70,7 +72,7 @@ void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request);
-void clusterSendFailoverNack(clusterNode *node, uint8_t reason);
+void clusterSendFailoverNack(clusterNode *node, uint64_t request_epoch, uint8_t reason);
 static const char *clusterNackReasonString(uint8_t reason);
 void clusterUpdateState(void);
 list *clusterGetNodesInMyShard(clusterNode *node);
@@ -139,7 +141,7 @@ sds auxReplicaPriorityGetter(clusterNode *n, sds s);
 int auxReplicaPriorityPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
-void freeClusterLink(clusterLink *link);
+int freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
@@ -246,12 +248,9 @@ static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
 #define CLUSTER_SLOT_WORDS (CLUSTER_SLOTS / 64)
 #define SLOT_WORD_OFFSET(w) ((w) << 3)
 
-#define RCVBUF_INIT_LEN 1024
 #define RCVBUF_MIN_READ_LEN 14
 static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_LEN,
               "Incorrect length to read to identify type");
-
-#define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
 
 /* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
  * clusterNode structures. */
@@ -280,21 +279,11 @@ dictType clusterSdsToListType = {
     .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
-static uint64_t dictPtrHash(const void *key) {
-    /* We hash the pointer value itself. */
-    return dictGenHashFunction((const char *)&key, sizeof(key));
-}
-
-static int dictPtrCompare(const void *key1, const void *key2) {
-    return key1 == key2;
-}
-
 /* Dictionary type for mapping hash slots to cluster nodes.
- * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
-dictType clusterSlotDictType = {
+ * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers.
+ * The default hash function and key comparison already handle pointer keys. */
+static dictType clusterSlotDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictPtrHash,
-    .keyCompare = dictPtrCompare,
     .entryDestructor = zfree,
 };
 
@@ -1330,7 +1319,7 @@ void deriveAnnouncedPorts(int *announced_tcp_port,
 void clusterUpdateMyselfFlags(void) {
     if (!myself) return;
     int oldflags = myself->flags;
-    int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
+    int nofailover = server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
@@ -1873,6 +1862,24 @@ clusterLink *createClusterLink(clusterNode *node) {
     link->send_msg_queue_mem = sizeof(list);
     link->rcvbuf = zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
     link->rcvbuf_len = 0;
+
+    /* Threaded I/O state */
+    link->io_read_state = CLUSTER_LINK_IO_IDLE;
+    link->io_write_state = CLUSTER_LINK_IO_IDLE;
+    link->async_close = 0;
+    link->io_refs = 0;
+    link->io_result = CLUSTER_IO_OK;
+
+    /* Async write snapshot/result */
+    link->io_last_send_block = NULL;
+    link->io_head_offset = 0;
+    link->io_nodes_sent = 0;
+
+    link->rcvbuf_alloc_at_dispatch = 0;
+    link->io_complete_bytes = 0;
+    link->io_complete_packets = 0;
+    link->io_read_deferred = 0;
+
     server.stat_cluster_links_memory += link->rcvbuf_alloc + link->send_msg_queue_mem;
     link->conn = NULL;
     link->node = node;
@@ -1887,22 +1894,23 @@ clusterLink *createClusterLink(clusterNode *node) {
 
 /* Free a cluster link, but does not free the associated node of course.
  * This function will just make sure that the original node associated
- * with this link will have the 'link' field set to NULL. */
-void freeClusterLink(clusterLink *link) {
+ * with this link will have the 'link' field set to NULL.
+ *
+ * If I/O jobs are in flight (io_refs > 0), the link is not freed immediately.
+ * Instead, async_close is set, the link is detached from node fields, and any
+ * read/write handlers are removed so no new I/O work is scheduled. The actual
+ * connClose() happens later on the main thread when the last completion
+ * decrements io_refs to 0, mirroring the client close flow.
+ *
+ * Returns 1 if the link was freed immediately, 0 if teardown was deferred. */
+int freeClusterLink(clusterLink *link) {
     serverAssert(link != NULL);
     serverLog(LL_DEBUG, "Freeing cluster link for node: %.40s:%s (%s)",
               clusterLinkGetNodeName(link),
               link->inbound ? "inbound" : "outbound",
               clusterLinkGetHumanNodeName(link));
 
-    if (link->conn) {
-        connClose(link->conn);
-        link->conn = NULL;
-    }
-    server.stat_cluster_links_memory -= sizeof(list) + listLength(link->send_msg_queue) * sizeof(listNode);
-    listRelease(link->send_msg_queue);
-    server.stat_cluster_links_memory -= link->rcvbuf_alloc;
-    zfree(link->rcvbuf);
+    /* Detach from node regardless of whether we free now or defer. */
     if (link->node) {
         if (link->node->link == link) {
             serverAssert(!link->inbound);
@@ -1912,8 +1920,44 @@ void freeClusterLink(clusterLink *link) {
             link->node->inbound_link = NULL;
             link->node->inbound_link_freed_time = mstime();
         }
+        link->node = NULL;
     }
+
+    /* If I/O jobs are in flight, defer the actual free. */
+    if (link->io_refs > 0) {
+        serverAssert(link->io_read_state == CLUSTER_LINK_IO_PENDING ||
+                     link->io_write_state == CLUSTER_LINK_IO_PENDING);
+        if (!link->async_close) {
+            if (link->conn) {
+                connSetReadHandler(link->conn, NULL);
+                connSetWriteHandler(link->conn, NULL);
+            }
+            link->async_close = 1;
+        }
+        return 0;
+    }
+
+    /* Close the connection now that no I/O jobs are in flight. */
+    if (link->conn) {
+        connClose(link->conn);
+        link->conn = NULL;
+    }
+
+    /* Immediate free path — both states must be idle. */
+    serverAssert(link->io_read_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(link->io_write_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(link->io_refs == 0);
+    server.stat_cluster_links_memory -= sizeof(list) + listLength(link->send_msg_queue) * sizeof(listNode);
+    listRelease(link->send_msg_queue);
+
+    /* Discard any complete packets the worker framed but we never applied. */
+    link->io_complete_bytes = 0;
+    link->io_complete_packets = 0;
+
+    server.stat_cluster_links_memory -= link->rcvbuf_alloc;
+    zfree(link->rcvbuf);
     zfree(link);
+    return 1;
 }
 
 void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
@@ -1947,7 +1991,7 @@ void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
     }
 }
 
-static void clusterConnAcceptHandler(connection *conn) {
+void clusterConnAcceptHandler(connection *conn) {
     clusterLink *link;
 
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
@@ -1955,6 +1999,9 @@ static void clusterConnAcceptHandler(connection *conn) {
         connClose(conn);
         return;
     }
+
+    serverAssert(connGetOwnerKind(conn) == CONN_OWNER_CLUSTER_LINK);
+    serverAssert(connGetPrivateData(conn) == NULL);
 
     /* Create a link object we use to handle the connection.
      * It gets passed to the readable handler when data is available.
@@ -1995,6 +2042,16 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
+        /* Tag inbound cluster bus link as high-priority so cluster gossip and heartbeats
+         * are processed via QoS ahead of normal client traffic. */
+        connSetPriority(conn, true);
+        /* Mark as cluster-owned before any TLS accept retries so generic
+         * accept offload routing can safely avoid client assumptions. */
+        connSetOwnerKind(conn, CONN_OWNER_CLUSTER_LINK);
+        /* Only a TLS accept is worth offloading: it runs the handshake. A
+         * plain TCP accept just flips the connection state, so offloading it
+         * would cost a worker round trip and an inbox slot for no work. */
+        if (connGetType(conn) == CONN_TYPE_TLS) conn->flags |= CONN_FLAG_ALLOW_ACCEPT_OFFLOAD;
 
         /* Make sure connection is not in an error state */
         if (connGetState(conn) != CONN_STATE_ACCEPTING) {
@@ -2009,9 +2066,18 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         /* Use non-blocking I/O for cluster messages. */
         serverLog(LL_VERBOSE, "Accepting cluster node connection from %s:%d", cip, cport);
 
-        /* Accept the connection now.  connAccept() may call our handler directly
-         * or schedule it for later depending on connection implementation.
-         */
+        /* Install before offloading: that path skips connAccept() below, and a
+         * TLS retry that cannot re-offload only ever invokes conn_handler. */
+        conn->conn_handler = clusterConnAcceptHandler;
+
+        /* Try to offload the TLS accept handshake to an I/O thread.
+         * If offload succeeds, the completion handler will create the
+         * clusterLink and install the read handler. */
+        if (trySendClusterAcceptToIOThreads(conn) == C_OK) continue;
+
+        /* Synchronous fallback: accept inline. connAccept() may call our
+         * handler directly or schedule it for later depending on
+         * connection implementation. */
         if (connAccept(conn, clusterConnAcceptHandler) == C_ERR) {
             if (connGetState(conn) == CONN_STATE_ERROR)
                 serverLog(LL_VERBOSE, "Error accepting cluster node connection: %s", connGetLastError(conn));
@@ -4683,13 +4749,19 @@ int clusterProcessPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
         if (!sender) return 1; /* We don't know that node. */
 
-        /* We consider this nack only if the sender is a primary serving
-         * a non-zero number of slots, and its currentEpoch is greater or
-         * equal to epoch where this node started the election. */
+        /* We consider this nack only if the sender is a primary serving a
+         * non-zero number of slots, we have an election in progress, and the
+         * NACK rejects the request of *this* election. The NACK echoes the
+         * epoch of the request it rejects; the sender's header currentEpoch
+         * is not usable for this (see clusterSendFailoverNack), because a
+         * voter rejecting an old request already claims a newer epoch, which
+         * would let a NACK for a previous election be counted against the
+         * current one and reset an election we could still win. */
+        uint64_t nack_epoch = ntohu64(msg->data.failover_nack.nack.epoch);
         if (server.cluster->failover_auth_time &&
             server.cluster->failover_auth_sent &&
             clusterNodeIsVotingPrimary(sender) &&
-            sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
+            nack_epoch == server.cluster->failover_auth_epoch) {
             clusterProcessFailoverAuthNack(sender, msg);
         }
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
@@ -4752,6 +4824,62 @@ int clusterProcessPacket(clusterLink *link) {
     return 1;
 }
 
+/* Drain complete packets queued at the start of rcvbuf.
+ *
+ * io_complete_bytes marks the bytes the I/O thread determined contain
+ * only complete packets. clusterProcessPacket() reads from the front of
+ * rcvbuf, so each packet is slid down to offset 0 in turn and the unparsed
+ * tail is compacted once at the end.
+ *
+ * Returns 1 if the link is still valid after all packets were applied, or
+ * 0 if packet processing freed the link. */
+static int clusterDrainCompletePackets(clusterLink *link) {
+    size_t buf_len = link->rcvbuf_len;
+    size_t consumed = 0;
+
+    while (link->io_complete_bytes > 0) {
+        clusterMsgHeader *hdr = (clusterMsgHeader *)(link->rcvbuf + consumed);
+        uint32_t totlen = ntohl(hdr->totlen);
+
+        serverAssert(link->io_complete_bytes >= totlen);
+        serverAssert(link->io_complete_packets > 0);
+
+        link->io_complete_bytes -= totlen;
+        link->io_complete_packets--;
+
+        /* Copy just this packet, not the whole remaining tail, which would make
+         * the drain quadratic. Safe because the copy writes [0, totlen) while
+         * the bytes not yet consumed start at consumed + totlen. */
+        if (consumed > 0) memmove(link->rcvbuf, link->rcvbuf + consumed, totlen);
+        consumed += totlen;
+
+        link->rcvbuf_len = totlen;
+        if (!clusterProcessPacket(link)) {
+            return 0;
+        }
+    }
+
+    link->rcvbuf_len = buf_len - consumed;
+    if (consumed > 0 && link->rcvbuf_len > 0) {
+        memmove(link->rcvbuf, link->rcvbuf + consumed, link->rcvbuf_len);
+    }
+
+    return 1;
+}
+
+static void clusterShrinkRcvbuf(clusterLink *link) {
+    /* Shrink around any leftover partial packet, plus headroom. Requiring an
+     * empty buffer would pin a busy link at its high-water mark. */
+    size_t target = link->rcvbuf_len + RCVBUF_INIT_LEN;
+    if (target < RCVBUF_INIT_LEN) target = RCVBUF_INIT_LEN;
+    if (link->rcvbuf_alloc <= target) return;
+
+    size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;
+    link->rcvbuf = zrealloc(link->rcvbuf, target);
+    link->rcvbuf_alloc = target;
+    server.stat_cluster_links_memory += link->rcvbuf_alloc - prev_rcvbuf_alloc;
+}
+
 /* This function is called when we detect the link with this node is lost.
    We set the node as no longer connected. The Cluster Cron will detect
    this connection and will try to get it connected again.
@@ -4767,6 +4895,13 @@ void clusterWriteHandler(connection *conn) {
     clusterLink *link = connGetPrivateData(conn);
     ssize_t nwritten;
     size_t totwritten = 0;
+
+    if (listLength(link->send_msg_queue) == 0) {
+        connSetWriteHandler(link->conn, NULL);
+        return;
+    }
+
+    if (trySendClusterWriteToIOThreads(link) == C_OK) return;
 
     while (totwritten < NET_MAX_WRITES_PER_EVENT && listLength(link->send_msg_queue) > 0) {
         listNode *head = listFirst(link->send_msg_queue);
@@ -4802,6 +4937,8 @@ void clusterWriteHandler(connection *conn) {
         totwritten += nwritten;
     }
 
+    /* Unregister the write handler when the queue is empty to avoid
+     * burning CPU on spurious writable events. */
     if (listLength(link->send_msg_queue) == 0) connSetWriteHandler(link->conn, NULL);
 }
 
@@ -4866,6 +5003,62 @@ static inline int isClusterMsgSignatureAndLengthValid(clusterMsgHeader *hdr) {
     return 1;
 }
 
+/* Find the maximal prefix of rcvbuf that contains only complete packets.
+ *
+ * Scans the buffer by validating the signature ("RCmb"), minimum header
+ * length, and total length field. complete_bytes is the number of bytes at the
+ * start of rcvbuf that contain complete packets, and complete_packets is the
+ * number of packets in that prefix.
+ *
+ * Thread-safe: reads only from the provided buffer and writes only to the
+ * output parameters. Does not touch clusterNode, clusterState, or any
+ * main-thread structure. */
+void clusterFindCompletePackets(char *rcvbuf,
+                                size_t rcvbuf_len,
+                                size_t *complete_bytes,
+                                size_t *complete_packets,
+                                clusterIOResult *result) {
+    size_t offset = 0;
+
+    *complete_bytes = 0;
+    *complete_packets = 0;
+    *result = CLUSTER_IO_OK;
+
+    while (offset < rcvbuf_len) {
+        size_t remaining = rcvbuf_len - offset;
+
+        /* Need at least the header to determine message length. */
+        if (remaining < RCVBUF_MIN_READ_LEN) break;
+
+        clusterMsgHeader *hdr = (clusterMsgHeader *)(rcvbuf + offset);
+
+        /* Validate signature and minimum length. */
+        if (memcmp(hdr->sig, "RCmb", 4) != 0) {
+            *complete_bytes = offset; /* preserve any valid prefix already scanned */
+            *result = CLUSTER_IO_BAD_HEADER;
+            return;
+        }
+
+        uint32_t totlen = ntohl(hdr->totlen);
+        uint16_t type = ntohs(hdr->type);
+        uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
+
+        if (totlen < minlen) {
+            *complete_bytes = offset; /* preserve any valid prefix already scanned */
+            *result = CLUSTER_IO_BAD_LENGTH;
+            return;
+        }
+
+        /* Wait for the full message to arrive. */
+        if (remaining < totlen) break;
+
+        offset += totlen;
+        (*complete_packets)++;
+    }
+
+    *complete_bytes = offset;
+}
+
 /* Read data. Try to read the first field of the header first to check the
  * full length of the packet. When a whole packet is in memory this function
  * will call the function to process the packet. And so forth. */
@@ -4875,6 +5068,18 @@ void clusterReadHandler(connection *conn) {
     clusterMsgHeader *hdr;
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
+
+    /* A worker read job is still in flight or its completion hasn't been
+     * consumed yet. Do not touch the framed packets or rcvbuf from the main
+     * thread until clusterHandleReadCompletion() transitions the link back
+     * to idle. */
+    if (link->io_read_state != CLUSTER_LINK_IO_IDLE) return;
+
+    if (!clusterDrainCompletePackets(link)) return;
+
+    /* Try to offload the read first. If offload is unavailable (pool inactive,
+     * queue full), fall back to the synchronous path below. */
+    if (trySendClusterReadToIOThreads(link) == C_OK) return;
 
     while (1) { /* Read as long as there is data to read. */
         rcvbuflen = link->rcvbuf_len;
@@ -4940,13 +5145,8 @@ void clusterReadHandler(connection *conn) {
         /* Total length obtained? Process this packet. */
         if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr->totlen)) {
             if (clusterProcessPacket(link)) {
-                if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
-                    size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;
-                    zfree(link->rcvbuf);
-                    link->rcvbuf = zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
-                    server.stat_cluster_links_memory += link->rcvbuf_alloc - prev_rcvbuf_alloc;
-                }
                 link->rcvbuf_len = 0;
+                clusterShrinkRcvbuf(link);
             } else {
                 return; /* Link no longer valid. */
             }
@@ -5572,8 +5772,15 @@ static const char *clusterNackReasonString(uint8_t reason) {
     }
 }
 
-/* Send a FAILOVER_AUTH_NACK message to the specified node. */
-void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
+/* Send a FAILOVER_AUTH_NACK message to the specified node, rejecting its
+ * FAILOVER_AUTH_REQUEST for 'request_epoch'.
+ *
+ * The rejected request's epoch is echoed in the payload because the header's
+ * currentEpoch describes the voter, not the request: a REQ_EPOCH_OLD rejection
+ * is by definition sent while our currentEpoch is already past the request
+ * epoch, so a candidate that has since started a newer election could not
+ * otherwise tell this NACK apart from one rejecting that newer election. */
+void clusterSendFailoverNack(clusterNode *node, uint64_t request_epoch, uint8_t reason) {
     if (!node->link) return;
     if (!nodeSupportsFailoverAuthNack(node)) return;
 
@@ -5581,7 +5788,10 @@ void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK, msglen);
 
     clusterMsg *hdr = getMessageFromSendBlock(msgblock);
-    memcpy(&hdr->data.failover_nack.nack.reason, &reason, sizeof(reason));
+    clusterMsgDataFailoverNack *nack = &hdr->data.failover_nack.nack;
+    nack->epoch = htonu64(request_epoch);
+    nack->reason = reason;
+    memset(nack->reserved, 0, sizeof(nack->reserved));
 
     clusterSendMessage(node->link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
@@ -5617,7 +5827,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (!server.cluster->safe_to_join) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
                   node->name, humanNodename(node));
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE);
         return;
     }
 
@@ -5629,7 +5839,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): reqEpoch (%llu) < curEpoch(%llu)", node->name,
                   humanNodename(node), (unsigned long long)requestCurrentEpoch,
                   (unsigned long long)server.cluster->currentEpoch);
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD);
         return;
     }
 
@@ -5637,7 +5847,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (server.cluster->lastVoteEpoch == server.cluster->currentEpoch) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): already voted for epoch %llu", node->name,
                   humanNodename(node), (unsigned long long)server.cluster->currentEpoch);
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED);
         return;
     }
 
@@ -5648,15 +5858,15 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         if (clusterNodeIsPrimary(node)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: it is a primary node", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY);
         } else if (primary == NULL) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: I don't know its primary",
                       node->name, humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY);
         } else if (!nodeFailed(primary)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
         }
         return;
     }
@@ -5697,7 +5907,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
              * for auth_timeout. TCP ordering on the same link guarantees the
              * UPDATE arrives before the NACK. */
             clusterSendUpdate(node->link, slot_owner);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
             return;
         }
     }
@@ -5906,6 +6116,10 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_NO_DATA:
+        msg = "Replication offset is 0 and no data has been received from the primary. "
+              "Please check the 'cluster-replica-no-failover' configuration option.";
+        break;
     default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
@@ -6011,7 +6225,7 @@ void clusterHandleReplicaFailover(void) {
      *    not a manual failover. */
     if (clusterNodeIsPrimary(myself) || myself->replicaof == NULL ||
         (!nodeFailed(myself->replicaof) && !manual_failover) ||
-        (server.cluster_replica_no_failover && !manual_failover)) {
+        (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES && !manual_failover)) {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
@@ -6042,6 +6256,23 @@ void clusterHandleReplicaFailover(void) {
             clusterLogCantFailover(CLUSTER_CANT_FAILOVER_DATA_AGE);
             return;
         }
+    }
+
+    /* Refuse to start an automatic failover while we are still empty, when
+     * configured to do so. An empty replica has never received any data from
+     * its primary (e.g. it was just added and hasn't finished the initial
+     * sync, so its replication offset is 0), so promoting it would make an
+     * empty dataset the new primary and lose all the data of the shard.
+     *
+     * Note that "empty" refers to the data received from the primary, not to
+     * the number of keys: a replica fully synced with an empty primary has a
+     * non-zero offset and is therefore not considered empty.
+     *
+     * Check bypassed for manual failovers. */
+    if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY &&
+        !manual_failover && replicationGetReplicaOffset() == 0) {
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_NO_DATA);
+        return;
     }
 
     /* If the previous failover attempt timeout and the retry time has
@@ -6476,7 +6707,11 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         (*cluster_conn_attempts)--;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
+        /* Tag outbound cluster bus link as high-priority so node reconnects, gossip ping/pong,
+         * and failure detection heartbeats operate with QoS priority. */
+        connSetPriority(link->conn, true);
         connSetPrivateData(link->conn, link);
+        connSetOwnerKind(link->conn, CONN_OWNER_CLUSTER_LINK);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
             C_ERR) {
             /* We got a synchronous error from connect before
@@ -6513,7 +6748,12 @@ static void freeClusterLinkOnBufferLimitReached(clusterLink *link) {
     }
 }
 
-/* Free outbound link to a node if its send buffer size exceeded limit. */
+/* ========================== Wrapper Functions for Testing ========================== */
+void testOnlyFreeClusterLinkOnBufferLimitReached(clusterLink *link) {
+    freeClusterLinkOnBufferLimitReached(link);
+}
+
+/* Free a link to a node if its buffer size exceeded limit. */
 static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
     freeClusterLinkOnBufferLimitReached(node->link);
     freeClusterLinkOnBufferLimitReached(node->inbound_link);
@@ -7837,6 +8077,16 @@ sds genClusterInfoString(sds info) {
                      (unsigned long long)server.cluster->stat_cluster_links_established_inbound,
                      (unsigned long long)server.cluster->stat_cluster_links_established_outbound);
 
+    info = sdscatfmt(info,
+                     "cluster_io_threaded_reads_processed:%I\r\n"
+                     "cluster_io_threaded_writes_processed:%I\r\n"
+                     "cluster_io_threaded_accepts_processed:%I\r\n"
+                     "cluster_io_main_thread_fallbacks:%I\r\n",
+                     (long long)server.stat_cluster_threaded_reads_processed,
+                     (long long)server.stat_cluster_threaded_writes_processed,
+                     (long long)server.stat_cluster_threaded_accepts_processed,
+                     (long long)server.stat_cluster_io_main_thread_fallbacks);
+
     return info;
 }
 
@@ -8804,7 +9054,7 @@ const char **clusterCommandExtendedHelp(void) {
         "LINKS",
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
-        "MIGRATESLOTS SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id ...]",
+        "MIGRATESLOTS SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [AUTH username password] [SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [AUTH username password] ...]",
         "    Migrate the specified slot ranges from this node to the specified node.",
         "CANCELSLOTMIGRATIONS ALL",
         "    Cancel all migrations.",
@@ -8967,4 +9217,338 @@ bool isAnySlotInManualImportingState(void) {
 /* Returns if any slot has been put in MIGRATING state via SETSLOT command. */
 bool isAnySlotInManualMigratingState(void) {
     return dictSize(server.cluster->migrating_slots_to) > 0;
+}
+
+/* ===================== Cluster I/O Thread Worker Functions ==================
+ * These run on I/O threads. They must NOT touch clusterNode, clusterState,
+ * server.stat_cluster_links_memory, or any main-thread-only structure.
+ *
+ * Read and write jobs are mutually exclusive per link, so the shared
+ * io_result field still has only one writer at a time. */
+
+/* I/O thread worker: read bytes from a cluster link's connection, grow the
+ * receive buffer as needed, frame packets, and post a completion.
+ *
+ * Buffer growth follows the same logic as clusterReadHandler:
+ *   - If < 1 MB, grow to twice the required size.
+ *   - If >= 1 MB, grow by 1 MB.
+ * stat_cluster_links_memory adjustment is deferred to the main-thread
+ * completion handler. */
+void clusterReadJob(clusterLink *link) {
+    connection *conn = link->conn;
+    clusterIOResult result = CLUSTER_IO_OK;
+    ssize_t total_read = 0;
+
+    /* I/O thread invariant: we must be in PENDING state. */
+    serverAssert(link->io_read_state == CLUSTER_LINK_IO_PENDING);
+    serverAssert(link->io_write_state == CLUSTER_LINK_IO_IDLE);
+
+    /* The link holds a connection for as long as an I/O job can be in flight:
+     * link->conn is only cleared on the immediate free path, which is
+     * unreachable while io_refs > 0, and the async-close path keeps the
+     * connection alive until the last completion. */
+    serverAssert(conn != NULL);
+
+    /* Bounded so one job cannot balloon rcvbuf or hold a worker; the socket stays
+     * readable and the next event continues. */
+    while (total_read < (ssize_t)RCVBUF_MAX_PREALLOC) {
+        /* Ensure at least some space in rcvbuf. */
+        size_t rcvbuf_len = link->rcvbuf_len;
+        if (rcvbuf_len == link->rcvbuf_alloc) {
+            size_t required = link->rcvbuf_alloc + 1;
+            link->rcvbuf_alloc = required < RCVBUF_MAX_PREALLOC ? required * 2 : required + RCVBUF_MAX_PREALLOC;
+            link->rcvbuf = zrealloc(link->rcvbuf, link->rcvbuf_alloc);
+        }
+
+        size_t avail = link->rcvbuf_alloc - rcvbuf_len;
+        ssize_t nread = connRead(conn, link->rcvbuf + rcvbuf_len, avail);
+
+        if (nread > 0) {
+            link->rcvbuf_len = rcvbuf_len + nread;
+            total_read += nread;
+            continue;
+        }
+
+        if (nread == 0) {
+            /* EOF */
+            result = CLUSTER_IO_EOF;
+            break;
+        }
+
+        /* nread == -1 */
+        if (connGetState(conn) == CONN_STATE_CONNECTED) {
+            /* EAGAIN — no more data right now, that's fine. */
+            break;
+        }
+        /* Real read error. */
+        result = CLUSTER_IO_READ_ERROR;
+        break;
+    }
+
+    /* If we read something, frame the complete packet prefix and update
+     * the read timestamp. */
+    if (total_read > 0) {
+        size_t complete_bytes = 0;
+        size_t complete_packets = 0;
+        clusterIOResult frame_result;
+        serverAssert(link->io_complete_bytes == 0);
+        serverAssert(link->io_complete_packets == 0);
+        clusterFindCompletePackets(link->rcvbuf, link->rcvbuf_len,
+                                   &complete_bytes, &complete_packets, &frame_result);
+        link->io_complete_bytes = complete_bytes;
+        link->io_complete_packets = complete_packets;
+
+        /* If framing found a protocol error, that takes priority. */
+        if (frame_result != CLUSTER_IO_OK) {
+            result = frame_result;
+        }
+    }
+
+    /* Post result and completion to the main thread. */
+    link->io_result = result;
+    sendToMainThread(link, JOB_RES_CLUSTER_READ);
+}
+
+/* I/O thread worker: write bytes from the canonical send queue to the
+ * connection, starting at io_head_offset and stopping once it reaches
+ * io_last_send_block.
+ *
+ * The worker does NOT pop nodes or decrement refcounts — clusterMsgSendBlock
+ * refcounts are non-atomic and blocks can be shared across links. The
+ * worker records how many head nodes were fully sent (io_nodes_sent) and
+ * the byte offset into the next partially-sent node (io_head_offset). The
+ * main-thread completion handler uses these to pop nodes and update memory
+ * accounting. */
+void clusterWriteJob(clusterLink *link) {
+    connection *conn = link->conn;
+    clusterIOResult result = CLUSTER_IO_OK;
+    int nodes_sent = 0;
+    listNode *node = listFirst(link->send_msg_queue);
+    size_t head_offset = link->io_head_offset;
+    size_t totwritten = 0;
+
+    /* I/O thread invariant: we must be in PENDING state. */
+    serverAssert(link->io_write_state == CLUSTER_LINK_IO_PENDING);
+    serverAssert(link->io_read_state == CLUSTER_LINK_IO_IDLE);
+
+    /* See clusterReadJob(): link->conn outlives any in-flight I/O job. */
+    serverAssert(conn != NULL);
+
+    /* Bounded like the synchronous path. A worker is shared, so a link with a
+     * large backlog must not hold it while other jobs wait; whatever is left
+     * goes out on the next writable event. */
+    while (node && totwritten < NET_MAX_WRITES_PER_EVENT) {
+        clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)node->value;
+        clusterMsg *msg = &msgblock->data[0].msg;
+        size_t msg_len = ntohl(msg->totlen);
+        size_t msg_offset = head_offset;
+
+        ssize_t nwritten = connWrite(conn, (char *)msg + msg_offset, msg_len - msg_offset);
+        if (nwritten <= 0) {
+            if (nwritten == -1 && connGetState(conn) == CONN_STATE_CONNECTED) {
+                break; /* EAGAIN */
+            }
+            result = CLUSTER_IO_WRITE_ERROR;
+            break;
+        }
+
+        head_offset += nwritten;
+        totwritten += nwritten;
+        if (head_offset < msg_len) {
+            break; /* Partial write */
+        }
+
+        /* Fully sent this message — advance to next. */
+        head_offset = 0;
+        nodes_sent++;
+        if (node == link->io_last_send_block) break;
+        node = listNextNode(node);
+    }
+
+    link->io_nodes_sent = nodes_sent;
+    link->io_head_offset = head_offset;
+    link->io_result = result;
+    sendToMainThread(link, JOB_RES_CLUSTER_WRITE);
+}
+
+/* I/O thread worker: perform TLS accept handshake on a cluster connection.
+ * No clusterLink exists yet — it is created by the main thread on success. */
+void clusterAcceptJob(connection *conn) {
+    /* The dispatcher holds a reference on the connection for the whole job, so
+     * it cannot be NULL here. Returning early instead would skip
+     * sendToMainThread() and leak a pending response forever. */
+    serverAssert(conn != NULL);
+    connAccept(conn, NULL);
+    sendToMainThread(conn, JOB_RES_CLUSTER_ACCEPT);
+}
+
+/* ===================== Cluster I/O Completion Handlers =====================
+ * These handlers are called from processIOThreadsResponses() when cluster
+ * I/O completions are dequeued from the response queue. The tagged pointer
+ * is the clusterLink* (read/write) or connection* (accept) directly. */
+
+void clusterHandleReadCompletion(clusterLink *link) {
+    connection *conn = link->conn;
+
+    /* Apply deferred connection state transitions. Even if freeClusterLink()
+     * was called while the job was in flight, link->conn remains valid until
+     * the final async_close teardown runs after the last completion. */
+    if (conn) {
+        connSetPostponeUpdateState(conn, 0);
+        connUpdateState(conn);
+    }
+
+    /* Transition back to idle and release the I/O ref. */
+    serverAssert(link->io_read_state == CLUSTER_LINK_IO_PENDING);
+    serverAssert(link->io_write_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(link->io_refs > 0);
+    link->io_read_state = CLUSTER_LINK_IO_IDLE;
+    link->io_refs--;
+
+    /* Update stat_cluster_links_memory for rcvbuf growth that occurred on
+     * the I/O thread (the I/O thread grows rcvbuf_alloc but does not touch
+     * the global stat). */
+    if (link->rcvbuf_alloc > link->rcvbuf_alloc_at_dispatch) {
+        server.stat_cluster_links_memory += link->rcvbuf_alloc - link->rcvbuf_alloc_at_dispatch;
+    }
+
+    /* If the link was already marked for async close, check if we can
+     * perform the final free now that io_refs has been decremented. */
+    if (link->async_close) {
+        if (link->io_refs == 0) {
+            freeClusterLink(link);
+        }
+        return;
+    }
+
+    clusterIOResult result = link->io_result;
+
+    /* Handle error results: log and tear down the link. */
+    if (result == CLUSTER_IO_BAD_HEADER || result == CLUSTER_IO_BAD_LENGTH) {
+        /* Drain any valid packets that preceded the bad header/length before
+         * closing, so we don't silently drop already-complete messages. */
+        if (link->io_complete_bytes > 0) {
+            if (!clusterDrainCompletePackets(link)) return;
+        }
+        serverLog(LL_WARNING, "Bad cluster packet header/length from node %.40s:%s (%s)",
+                  clusterLinkGetNodeName(link),
+                  link->inbound ? "inbound" : "outbound",
+                  clusterLinkGetHumanNodeName(link));
+        freeClusterLink(link);
+        return;
+    }
+
+    if (result == CLUSTER_IO_READ_ERROR || result == CLUSTER_IO_EOF) {
+        serverLog(LL_DEBUG, "I/O error reading from node link (%.40s:%s) (%s): %s",
+                  clusterLinkGetNodeName(link),
+                  link->inbound ? "inbound" : "outbound",
+                  clusterLinkGetHumanNodeName(link),
+                  (result == CLUSTER_IO_EOF) ? "connection closed" : "read error");
+    }
+
+    if (!clusterDrainCompletePackets(link)) return;
+
+    clusterShrinkRcvbuf(link);
+
+    if (result == CLUSTER_IO_READ_ERROR || result == CLUSTER_IO_EOF) {
+        freeClusterLink(link);
+    }
+}
+
+void clusterHandleWriteCompletion(clusterLink *link) {
+    connection *conn = link->conn;
+
+    /* Apply deferred connection state transitions. */
+    if (conn) {
+        connSetPostponeUpdateState(conn, 0);
+        connUpdateState(conn);
+    }
+
+    /* Transition back to idle and release the I/O ref. */
+    serverAssert(link->io_write_state == CLUSTER_LINK_IO_PENDING);
+    serverAssert(link->io_read_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(link->io_refs > 0);
+    link->io_write_state = CLUSTER_LINK_IO_IDLE;
+    link->io_refs--;
+
+    /* Pop fully-sent nodes from the canonical send queue. The I/O thread
+     * recorded how many nodes it fully sent (io_nodes_sent) without
+     * modifying the list. We pop them here on the main thread where
+     * refcount decrements and memory accounting are safe. */
+    size_t prev_head_offset = link->head_msg_send_offset;
+    for (int i = 0; i < link->io_nodes_sent; i++) {
+        listNode *head = listFirst(link->send_msg_queue);
+        serverAssert(head != NULL);
+        clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)head->value;
+        clusterMsg *msg = getMessageFromSendBlock(msgblock);
+        uint32_t msg_len = ntohl(msg->totlen);
+        size_t start = (i == 0) ? prev_head_offset : 0;
+        clusterBusAddNetworkBytesByType(ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK, msg_len - start, 1);
+        uint32_t blocklen = msgblock->totlen;
+        listDelNode(link->send_msg_queue, head);
+        link->send_msg_queue_mem -= sizeof(listNode) + blocklen;
+        server.stat_cluster_links_memory -= sizeof(listNode);
+    }
+
+    /* Account for bytes written into a partially-sent head node. */
+    if (link->io_head_offset > 0) {
+        listNode *head = listFirst(link->send_msg_queue);
+        if (head) {
+            clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)head->value;
+            clusterMsg *msg = getMessageFromSendBlock(msgblock);
+            size_t start = (link->io_nodes_sent == 0) ? prev_head_offset : 0;
+            size_t partial_bytes = link->io_head_offset - start;
+            if (partial_bytes > 0) {
+                clusterBusAddNetworkBytesByType(ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK, partial_bytes, 1);
+            }
+        }
+    }
+
+    link->head_msg_send_offset = listLength(link->send_msg_queue) > 0 ? link->io_head_offset : 0;
+    link->io_last_send_block = NULL;
+    link->io_head_offset = 0;
+    link->io_nodes_sent = 0;
+
+    /* If the link was already marked for async close, check if we can
+     * perform the final free now that io_refs has been decremented. */
+    if (link->async_close) {
+        if (link->io_refs == 0) {
+            freeClusterLink(link);
+        }
+        return;
+    }
+
+    clusterIOResult result = link->io_result;
+
+    /* Handle write error: log and tear down the link. */
+    if (result == CLUSTER_IO_WRITE_ERROR) {
+        serverLog(LL_DEBUG, "I/O error writing to node link (%.40s:%s) (%s)",
+                  clusterLinkGetNodeName(link),
+                  link->inbound ? "inbound" : "outbound",
+                  clusterLinkGetHumanNodeName(link));
+        freeClusterLink(link);
+        return;
+    }
+
+    /* If data remains, wait for the next writable event before attempting
+     * another offload. This avoids a tight completion -> offload loop when
+     * the transport reports EAGAIN with no write progress. */
+    if (listLength(link->send_msg_queue) > 0) {
+        if (link->conn) {
+            connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
+        }
+    } else if (link->conn && connHasWriteHandler(link->conn)) {
+        connSetWriteHandler(link->conn, NULL);
+    }
+}
+
+void clusterHandleAcceptCompletion(connection *conn) {
+    conn->flags &= ~CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
+    /* Runs conn_handler if the handshake finished, re-arms the TLS event if not. */
+    connSetPostponeUpdateState(conn, 0);
+    connUpdateState(conn);
+    connDecrRefs(conn);
+    if ((conn->flags & CONN_FLAG_CLOSE_SCHEDULED) && !connHasRefs(conn)) {
+        connClose(conn);
+    }
 }

@@ -1,4 +1,4 @@
-start_server {tags {"repl network external:skip"} overrides {save ""}} {
+start_server {tags {"repl network external:skip cluster:skip"} overrides {save ""}} {
     set primary [srv 0 client]
     start_server {overrides {save "" io-threads 4 io-threads-always-active yes}} {
         set replica [srv 0 client]
@@ -11,13 +11,19 @@ start_server {tags {"repl network external:skip"} overrides {save ""}} {
             for {set i 0} {$i < 128} {incr i} {
                 $primary set flow-control:$i $value
             }
-            wait_for_ofs_sync $primary $replica
+            set sync_polls 0
+            wait_for_condition 50 100 {
+                [incr sync_polls] > 0 &&
+                [status $primary master_repl_offset] eq [status $replica master_repl_offset]
+            } else {
+                fail "replica offset didn't match in time"
+            }
             assert_equal $value [$replica get flow-control:127]
             set reads_after [getInfoProperty [$replica info stats] io_threaded_reads_processed]
 
-            # INFO and GET on the replica can be offloaded, but the replication
-            # stream must not contribute to the I/O thread read count.
-            assert_lessthan_equal [expr {$reads_after - $reads_before}] 20
+            # Count the replica-side INFO polls and GET, which may be offloaded.
+            # The replication stream must not add I/O thread reads.
+            assert_lessthan_equal [expr {$reads_after - $reads_before}] [expr {$sync_polls + 3}]
 
             # Verify that I/O thread reads are active for ordinary clients.
             for {set i 0} {$i < 20} {incr i} {

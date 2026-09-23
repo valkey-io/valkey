@@ -630,8 +630,9 @@ int trySendReadToIOThreads(client *c) {
     if (c->io_write_state == CLIENT_PENDING_IO) return C_OK;
     /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
-    /* Keep the primary link on the main thread so readQueryFromClient can
-     * drain multiple full reads per event before serving other clients. */
+    /* Keep the primary link on the main thread: readQueryFromClient drains multiple
+     * full reads per event before serving other clients, and the IO-thread read path
+     * does not decode the replication stream. */
     if (c->flag.primary) return C_ERR;
     /* With Lua debug client we may call connWrite directly in the main thread */
     if (c->flag.lua_debug) return C_ERR;

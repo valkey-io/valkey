@@ -256,8 +256,8 @@ bool replStreamHasPendingDecode(void) {
  * decoded byte count (0 means a partial envelope or compressed block was
  * buffered), or -1 when the stream is corrupt and the caller should disconnect
  * the link. Once the probe classifies the stream as plaintext, the reader
- * retires itself: later reads take the regular read path (callers gate on
- * server.repl_stream_reader) and may use IO threads. */
+ * retires itself: later reads take the regular read path on the main thread
+ * (callers gate on server.repl_stream_reader). */
 ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_len, size_t output_budget) {
     streamPushReader *reader = server.repl_stream_reader;
     serverAssert(reader != NULL);

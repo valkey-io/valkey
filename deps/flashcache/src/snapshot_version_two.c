@@ -16,9 +16,6 @@
 #define FC_SNAPSHOT_DEFAULT_KEEP_ALIVE_MSG_INTERVAL_US (5000000)                             // 5 seconds
 #define FC_SNAPSHOT_DEFAULT_MAX_REPLICATION_LINK_SECS (21600)                                // 6 hours
 
-#define FC_SNAPSHOT_EXPORT_PARKING_BUFFER_SIZE (1024 * 1024 * 200)         // The largest an item can be is 128 MiB
-#define FC_SNAPSHOT_EXPORT_DEFAULT_READ_BUFFER (1024 * 1024)               // 1 MiB
-
 extern snapshotMetrics snapshot_metrics;
 // The snapshot file contains 2 sections in the following order:
 // 1. Metadata section: The metadata of the snapshot is written from offset 0. The metadata contains information used
@@ -822,29 +819,6 @@ static snapshotV2Metadata *readSnapshotV2Metadata(fioContext *snapshot_file_io_c
     return metadata;
 }
 
-// Overloaded function of the one above in order to work for snapshot exporter. This is needed because snapshot
-// exporter does not use fio, inherits the running checksum from processRDB, and cannot read the same bytes more than
-// once (in order to be pipe streaming safe).
-static snapshotV2Metadata *readSnapshotV2MetadataForSnapshotExporter(FILE *source_fdb, char *first_page) {
-    snapshotV2Metadata initial_metadata = { 0 };
-    memcpy(&initial_metadata, first_page, sizeof(snapshotV2Metadata));
-
-    size_t metadata_page_bytes_left = getSerializedSnapshotV2MetadataSize(initial_metadata.num_databases) - FC_PAGESIZE;
-    snapshotV2Metadata *metadata = (snapshotV2Metadata *)
-                                    fcMalloc(getSerializedSnapshotV2MetadataSize(initial_metadata.num_databases));
-
-    if (metadata_page_bytes_left > 0) {
-        // need more data for full metadata
-        memcpy(metadata, first_page, FC_PAGESIZE);
-        if (fread(metadata + FC_PAGESIZE, 1, metadata_page_bytes_left, source_fdb) != metadata_page_bytes_left) {
-            flashcacheAssertWithLogging(0, "Unable to read FDB Metadata", 0);
-        }
-    } else {
-        memcpy(metadata, first_page, getSnapshotV2MetadataSize(initial_metadata.num_databases));
-    }
-    return metadata;
-}
-
 // Calculate the number of base size bits for the index.
 // Use the base_size_bits unless the number of items requires more bits.
 static size_t getBaseSizeBits(size_t expected_num_items, size_t base_size_bits) {
@@ -1144,129 +1118,6 @@ void snapshotV2UpdateSnapshottingRangeDuringThreadsave(snapshotVersionTwoInfo *s
                                                        size_t updated_log_tail_offset_after_eviction) {
     if (!isThreadsaveReplication(snapshot_info) || snapshot_info->snapshot_common.has_failed) return;
     snapshot_info->snapshot_common.log_file_tail_offset = updated_log_tail_offset_after_eviction;
-}
-
-static size_t calculate_buffer_size(size_t *partial_item_bytes_left) {
-    // By default, reads are performed by 1MB chunks
-    size_t buf = FC_MAX(FC_SNAPSHOT_EXPORT_DEFAULT_READ_BUFFER, *partial_item_bytes_left);
-    *partial_item_bytes_left = 0;
-    return buf;
-}
-
-static bool is_eof(char *item) {
-    uint32_t item_flag = getFlagInSerializedItem(item);
-    return item_flag == FC_EOF_INDICATOR;
-}
-
-static void adjust_parking_buffer(int head, int tail, char *parking_buffer) {
-    // starting point of data we want to keep
-    char *item = parking_buffer + head;
-    // reset everything else
-    memset(parking_buffer, 0, head);
-    // move the needed data to the beginning
-    memmove(parking_buffer, item, tail - head);
-}
-
-// Snapshot V2 specific algorithm for processing snapshot data for the snapshot exporter
-
-// The approach is to maintain a parking buffer which will store data read from the snapshot
-// file. This buffer will keep appending reads from the snapshot file to the end. There will
-// be a head and a tail. The tail will keep track of how much of the parking buffer has been
-// populated. The head will track how much of the populated buffer has been processed. Once
-// there is no room for the next read, the data at the head will be moved to the beginning of
-// the buffer- clearing the data that has already been processed. This will carry on until
-// the EOF is detected.
-// Returns -1 on failure, and 0 on success.
-int snapshotV2ProcessSourceFdbForSnapshotExporter(FILE *source_fdb,
-                                               FILE *target_rdb,
-                                               uint64_t *crc64_checksum,
-                                               flashcacheSnapshotSecret *rdb_secret,
-                                               char *first_page_in_source_fdb,
-                                               crc64_checksum_callback crc64_callback,
-                                               get_customer_dbid_and_ttl_callback dbid_and_ttl_callback) {
-    // Get the metadata and jump to where data bytes start
-    snapshotV2Metadata *snapshot_metadata = readSnapshotV2MetadataForSnapshotExporter(source_fdb,
-                                                                     first_page_in_source_fdb);
-    flashcacheAssertWithLogging(snapshot_metadata != NULL,
-                                "snapshot_metadata is NULL while processing Snapshot exporter", 0);
-    // Ensure the secrets match up
-    if (snapshot_metadata->snapshot_secret.size > 0 &&
-        (rdb_secret->size != snapshot_metadata->snapshot_secret.size ||
-        memcmp(rdb_secret->secret, snapshot_metadata->snapshot_secret.secret, rdb_secret->size) != 0)) {
-        flashcacheLogger(FC_LL_WARNING,
-                         "Snapshot Exporter- snapshotV2ProcessSourceFdbForSnapshotExporter:"
-                         "rdb & fdb secret do not match.", 0);
-        return -1;
-    }
-
-    // A buffer to park the data read from the snapshot prior to processing
-    char *parking_buffer = fcCalloc(FC_SNAPSHOT_EXPORT_PARKING_BUFFER_SIZE, sizeof(char));
-    int head = 0;
-    int tail = 0;
-    size_t partial_item_bytes_left = 0;
-    int eof_reached = 0;
-
-    while (!eof_reached) {
-        size_t buffer_size = calculate_buffer_size(&partial_item_bytes_left);
-        // If there is not sufficient space for the upcoming read, perform memmove on
-        // existing data
-        if (buffer_size >= (size_t)(FC_SNAPSHOT_EXPORT_PARKING_BUFFER_SIZE - tail)) {
-            adjust_parking_buffer(head, tail, parking_buffer);
-            // update the new heads and tails
-            tail = tail - head;
-            head = 0;
-        }
-        // Perform the read and ensure that it doesnt return an error.
-        // If there has been an error return -1.
-        int res = fread(parking_buffer + tail, 1, buffer_size, source_fdb);
-        if (res < (int)(buffer_size)) {
-            if (ferror(source_fdb)) {
-                // TODO: Do some specific error handling
-                flashcacheLogger(FC_LL_WARNING,
-                                "Snapshot Exporter- unable to read from source fdb file.", 0);
-                return -1;
-            }
-        }
-        tail += res;
-
-        // Check if there is enough data to process the header
-        if ((tail - head) < (int)(FC_ITEM_HEADER_LEN)) {
-            // there is not
-            continue;
-        }
-
-        // Process header
-        char *item = parking_buffer + head;
-        flashcacheAssert(validateHeaderInSerializedItem(item, flashcacheCrc32c));
-        size_t total_item_len = extractTotalLenFromSerializedItem(item);
-
-        // Check if there is enough data to process the full item
-        if ((tail - head) < (int)(total_item_len)) {
-            // There is not, so note down how many more bytes are needed
-            partial_item_bytes_left = total_item_len - (tail - head);
-            continue;
-        }
-
-        // Check if reached EOF
-        if (is_eof(item)){
-            eof_reached = 1;
-            break;
-        }
-
-        // Process item
-        if (snapshotExporterUpdateChecksumAndWriteItemToTargetFile(target_rdb,
-                                                               item,
-                                                               crc64_checksum,
-                                                               crc64_callback,
-                                                               dbid_and_ttl_callback) == -1) {
-            return -1;
-        }
-        // Item has been processed, so move the head
-        head += total_item_len;
-    }
-    fcFree(parking_buffer);
-    fcFree(snapshot_metadata);
-    return FC_OK;
 }
 
 // Only used for unit testing purposes

@@ -4,7 +4,6 @@
 #include "include/hash.h"
 #include "include/log.h"
 #include "include/snapshot_common.h"
-#include "include/snapshot_exporter.h"
 
 struct snapshotVersionTwoInfo;
 struct persistedInfo;
@@ -207,15 +206,5 @@ size_t snapshotV2GetCountBasedMetric(snapshotVersionTwoInfo *snapshot_info, flas
 // Updates the Snapshotting range after eviction in flash during Threadsave replication.
 void snapshotV2UpdateSnapshottingRangeDuringThreadsave(snapshotVersionTwoInfo *snapshot_info,
                                                        size_t updated_log_tail_offset_after_eviction);
-
-// Reads through the source_fdb file and invokes a write to the target_rdb file once an entire item has
-// been identified during Snapshot Exporter
-int snapshotV2ProcessSourceFdbForSnapshotExporter(FILE *source_fdb,
-                                               FILE *target_rdb,
-                                               uint64_t *crc64_checksum,
-                                               flashcacheSnapshotSecret *rdb_secret,
-                                               char *first_page_in_source_fdb,
-                                               crc64_checksum_callback crc64_callback,
-                                               get_customer_dbid_and_ttl_callback dbid_and_ttl_callback);
 
 #endif  // __FLASHCACHE_SNAPSHOTV2_H

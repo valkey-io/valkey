@@ -4,7 +4,6 @@
 #include "include/fio.h"
 #include "include/hash.h"
 #include "include/index.h"
-#include "include/snapshot_exporter.h"
 
 typedef struct flashcacheContext {
     flashcacheLog *log;
@@ -226,10 +225,4 @@ void flashcacheFsyncBufferedWrites() {
 
 void flashcacheNotifyRedisLayerSnapshotCompletion() {
     logCompleteThreadsaveReplication(flashcache_context.log);
-}
-
-int flashcacheStartSnapshotExport(const char *source_fdb_filename,
-                                   const char *target_rdb_filename,
-                                   flashcacheSnapshotExportMetadata *metadata) {
-    return snapshotExporterProcessFDB(source_fdb_filename, target_rdb_filename, metadata);
 }

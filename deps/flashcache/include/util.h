@@ -151,38 +151,4 @@ size_t getPartialItemReadSizeBytes(size_t item_len, size_t offset);
  */
 char *createPageAlignedBuffer(size_t buf_size);
 
-/**
- * Convert a uint_32_t between host and network byte order.
- * @param hostlong: Value in host byte order.
- * @return: Value in network byte order.
- */
-extern uint32_t htonl(uint32_t __hostlong);
-
-/**
- * Toggle the 64 bit unsigned integer pointed by *p from little endian to big endian.
- * @param p: Value pointing to little endian form.y
- * @return: void
- */
-void littleToBigEndian64(void *p);
-
-/**
- * Convert the specified value to network byte ordering.
- * @param v: Value in host byte order.
- * @return: Value in network byte order.
- *
-*/
-uint64_t hostToNetworkBytes64(uint64_t v);
-
-/**
- * Update the running checksum given the crc64 callback
- * @param cksum: The current checksum.
- * @param buf: The buf that is being written to the file.
- * @param buf_size: How many bytes of the buffer are being used.
- * @param crc64_callback: The crc64 callback function.
- * @return void
- */
-void updateChecksumUsingCrc64(uint64_t *crc64_checksum,
-                              void *buf,
-                              size_t buf_size,
-                              crc64_checksum_callback crc64_callback);
 #endif  // __FLASHCACHE_UTIL_H

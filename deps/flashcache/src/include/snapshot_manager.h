@@ -112,14 +112,4 @@ void snapshotManagerSetReplicationLinkTimeoutSecs(size_t value);
 // Updates the Snapshotting range after eviction in flash during Threadsave replication.
 void snapshotManagerUpdateSnapshottingRangeTailOffset(size_t updated_log_tail_offset);
 
-// Determines the snapshot type and calls the correct function to start processing the
-// source fdb file bytes.
-// Returns 0 on success; -1 on failure
-int snapshotManagerInvokeProcessingForSnapshotExporter(FILE *source_fdb,
-                                                           FILE *target_rdb,
-                                                           uint64_t *crc64_checksum,
-                                                           flashcacheSnapshotSecret *rdb_secret,
-                                                           crc64_checksum_callback crc64_callback,
-                                                           get_customer_dbid_and_ttl_callback dbid_and_ttl_callback);
-
 #endif  // __FLASHCACHE_SNAPSHOT_MANAGER_H

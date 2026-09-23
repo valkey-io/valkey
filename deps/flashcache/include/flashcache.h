@@ -194,15 +194,4 @@ void flashcacheFsyncBufferedWrites();
  */
 void flashcacheNotifyRedisLayerSnapshotCompletion();
 
-/**!\brief Invokes the snapshot export process for FDB
- *
- * @Returns : 0 for success; -1 for failure
- * @param source_fdb_filename : the name of source fdb snapshot file
- * @param target_rdb_filename : filename to which the data will be written into
- * @param metadata : Contains RDB secret, running checksum, the CRC64 checksum function callback,
- *                   and the callback to obtain the TTL and the customer DB ID for a given key
- */
-int flashcacheStartSnapshotExport(const char *source_fdb_filename,
-                                   const char *target_rdb_filename,
-                                   flashcacheSnapshotExportMetadata *metadata);
 #endif  // __FLASHCACHE_H

@@ -229,37 +229,3 @@ size_t getPartialItemReadSizeBytes(size_t item_len, size_t offset) {
 char *createPageAlignedBuffer(size_t buf_size) {
     return fcPosixMemalign(FC_PAGESIZE, buf_size);
 }
-
-extern uint32_t htonl(uint32_t __hostlong)
-    __THROW __attribute__((__const__));
-
-void littleToBigEndian64(void *p) {
-    unsigned char *x = p, t;
-
-    t = x[0];
-    x[0] = x[7];
-    x[7] = t;
-    t = x[1];
-    x[1] = x[6];
-    x[6] = t;
-    t = x[2];
-    x[2] = x[5];
-    x[5] = t;
-    t = x[3];
-    x[3] = x[4];
-    x[4] = t;
-}
-
-uint64_t hostToNetworkBytes64(uint64_t v) {
-    littleToBigEndian64(&v);
-    return v;
-}
-
-void updateChecksumUsingCrc64(uint64_t *crc64_checksum,
-                              void *buf,
-                              size_t buf_size,
-                              crc64_checksum_callback crc64_callback) {
-    const unsigned char *const_buf = buf;
-    uint64_t buf_checksum = crc64_callback(*crc64_checksum, const_buf, buf_size);
-    *crc64_checksum = buf_checksum;
-}

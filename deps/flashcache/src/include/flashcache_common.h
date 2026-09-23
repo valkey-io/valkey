@@ -426,33 +426,4 @@ typedef struct {
     void (*complete)(void *callback_context, int completed);
 } flashcacheSnapshotWriter;
 
-/* This callback is triggered when we need to update the running checksum
- * for snapshot exporter.
- */
-typedef uint64_t (*crc64_checksum_callback)(uint64_t start_crc, const unsigned char *buf, size_t buf_len);
-
-/* This callback is triggered when we need to obtain the TTL and the customer db id for a given key.
- */
-typedef long long (*get_customer_dbid_and_ttl_callback)
-                  (int internal_db_id, const char *key_name, int key_len, int *customer_db_id);
-
-/* This struct is used to pass in data that is necessary to perform the snapshot
- * exporter fdb portion.
- */
-typedef struct {
-    // The secret from the RDB portion to verify that the two files
-    // are from the same snapshot.
-    flashcacheSnapshotSecret *rdb_secret;
-
-    // The running checksum that has been calculated in the RDB portion and will
-    // continue to be updated in the FDB portion.
-    uint64_t target_rdb_running_checksum;
-
-    // The callback to calculate the checksum
-    crc64_checksum_callback checksum_callback;
-
-    // The callback to obtain the customer db id and the expiry time for a given key
-    get_customer_dbid_and_ttl_callback dbid_and_ttl_callback;
-} flashcacheSnapshotExportMetadata;
-
 #endif  // __FLASHCACHE_COMMON_H

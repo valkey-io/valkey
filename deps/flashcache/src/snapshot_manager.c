@@ -466,38 +466,3 @@ void snapshotManagerUpdateSnapshottingRangeTailOffset(size_t updated_log_tail_of
             break;
     }
 }
-
-int snapshotManagerInvokeProcessingForSnapshotExporter(FILE *source_fdb,
-                                                           FILE *target_rdb,
-                                                           uint64_t *crc64_checksum,
-                                                           flashcacheSnapshotSecret *rdb_secret,
-                                                           crc64_checksum_callback crc64_callback,
-                                                           get_customer_dbid_and_ttl_callback dbid_and_ttl_callback) {
-    // Read the first page of the metadata section
-    char first_page_in_source_fdb[FC_PAGESIZE];
-    if (fread(first_page_in_source_fdb, 1, FC_PAGESIZE, source_fdb) != FC_PAGESIZE) {
-            flashcacheAssertWithLogging(0, "Snapshot Exporter: Unable to read first page of source FDB file.", 0);
-    }
-
-    // Determine the snapshot version
-    flashcacheSnapshotVersion current_snapshot_version;
-    memcpy(&current_snapshot_version, first_page_in_source_fdb, sizeof(uint32_t));
-
-    // Currently only support snapshot exporter for snapshot V2
-    if (current_snapshot_version < FC_SNAPSHOT_VERSION_TWO) {
-        flashcacheLogger(FC_LL_WARNING,
-                        "Unexpected snapshot version `%d`. It should be `%d`",
-                        current_snapshot_version,
-                        FC_SNAPSHOT_VERSION_TWO);
-        return -1;
-    }
-    // Invoke snapshot v2 specific algorithm for processing snapshot data
-    flashcacheLogger(FC_LL_WARNING, "Starting snapshot version `%d` snapshot exporter.", current_snapshot_version);
-    return snapshotV2ProcessSourceFdbForSnapshotExporter(source_fdb,
-                                                      target_rdb,
-                                                      crc64_checksum,
-                                                      rdb_secret,
-                                                      first_page_in_source_fdb,
-                                                      crc64_callback,
-                                                      dbid_and_ttl_callback);
-}

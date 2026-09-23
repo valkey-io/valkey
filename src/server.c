@@ -2371,6 +2371,7 @@ void createSharedObjects(void) {
     shared.getack = createSharedString("GETACK");
     shared.special_asterisk = createSharedString("*");
     shared.special_equals = createSharedString("=");
+    shared.maxlen = createSharedString("MAXLEN");
     shared.redacted = createSharedString("(redacted)");
     shared.fields = createSharedString("FIELDS");
     shared.finish = createSharedString("FINISH");

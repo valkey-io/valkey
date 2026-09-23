@@ -21,6 +21,7 @@ typedef struct stream {
     streamID first_id;             /* The first non-tombstone entry, zero if empty. */
     streamID max_deleted_entry_id; /* The maximal ID that was deleted. */
     uint64_t entries_added;        /* All time count of elements added. */
+    size_t total_lp_bytes;         /* Sum of lpBytes() over all listpack nodes in 'rax'. */
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without

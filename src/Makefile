@@ -24,6 +24,12 @@ OPTIMIZATION?=-O3
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
 		OPTIMIZATION+=-flto
+		ifneq ($(uname_S),Darwin)
+			FAT_LTO_OBJECTS := $(findstring -ffat-lto-objects,$(shell sh -c '$(CC) --help'))
+			ifneq (,$(FAT_LTO_OBJECTS))
+				OPTIMIZATION+=-ffat-lto-objects
+			endif
+		endif
 	else
 		OPTIMIZATION+=-flto=auto -ffat-lto-objects
 	endif
@@ -49,6 +55,20 @@ endif
 endif
 WARN=-Wall -W -Wno-missing-field-initializers -Werror=deprecated-declarations -Wstrict-prototypes -Werror=undef
 OPT=$(OPTIMIZATION)
+
+# On macOS the unit tests turn the LLVM bitcode of the server objects into native objects with llc.
+# llc only understands bitcode from its own LLVM, so the matching Homebrew toolchain is used.
+ifeq ($(uname_S),Darwin)
+ifeq ($(origin CC),default)
+	BREW_CLANG := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/clang /usr/local/opt/llvm/bin/clang))
+	ifneq ($(BREW_CLANG),)
+		CC := $(BREW_CLANG)
+		CXX := $(BREW_CLANG)++
+		AR := $(dir $(BREW_CLANG))llvm-ar
+		RANLIB := $(dir $(BREW_CLANG))llvm-ranlib
+	endif
+endif
+endif
 
 # Detect if the compiler supports C11 _Atomic.
 # NUMBER_SIGN_CHAR is a workaround to support both GNU Make 4.3 and older versions.
@@ -728,6 +748,10 @@ all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
 persist-settings: distclean
+	echo CC=$(CC) >> .make-settings
+	echo CXX=$(CXX) >> .make-settings
+	echo AR=$(AR) >> .make-settings
+	echo RANLIB=$(RANLIB) >> .make-settings
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings

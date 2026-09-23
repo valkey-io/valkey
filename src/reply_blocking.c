@@ -803,6 +803,9 @@ static void replyBlockingResetPrimaryState(bool is_free_clients_needed) {
 void replyBlockingClearPrimaryState(void) {
     if (!isReplyBlockingEnabled()) return;
     replyBlockingResetPrimaryState(true);
+    /* Our offset now follows the new primary and may drop below the acked
+     * watermark, which would then never be exceeded after a re-promotion. */
+    server.reply_blocking.previous_acked_offset = -1;
 }
 
 // Generate INFO string for reply-blocking stats.
@@ -832,6 +835,9 @@ sds genReplyBlockingInfoString(sds info) {
 
 // Reset related resources when enabling/disabling reply-blocking.
 void replyBlockingReset(void) {
+    /* The durable offset restarts from 0 on an appendonly toggle; re-seed the
+     * acked watermark from the next progress notification. */
+    server.reply_blocking.previous_acked_offset = -1;
     if (isReplyBlockingEnabled()) {
         server.reply_blocking.pre_command_replication_offset = server.primary_repl_offset;
         listIter li;

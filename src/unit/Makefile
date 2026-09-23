@@ -2,6 +2,7 @@ CXX ?= g++
 AR ?= ar
 SERVER_AR ?= $(AR)
 -include ../.make-settings
+SERVER_OPT := $(OPT)
 OPT=-Og -g
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 
@@ -134,13 +135,26 @@ else
 endif
 endif
 
+WRAP_DIR := wrapped
+VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
+ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
+
+# Symbol interposition does not survive LLVM LTO when -ffat-lto-objects is missing.
+CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
+NEEDS_UNWRAP :=
+ifeq (clang,$(CLANG))
+ifneq (,$(findstring -flto,$(SERVER_OPT)))
+ifeq (,$(findstring -ffat-lto-objects,$(SERVER_OPT)))
+NEEDS_UNWRAP := yes
+endif
+endif
+endif
+
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
 # by copying all object files into the wrapped/ folder and applying symbol redefinitions.
 ifeq ($(uname_S), Darwin)
-WRAP_DIR := wrapped
-VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
-ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
+REDEFINE_SYMS := yes
 TEST_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ALL_OBJECTS))
 
 # Homebrew does not add llvm/bin to PATH by default, so we check the standard
@@ -150,6 +164,13 @@ ifneq ($(BREW_LLVM_BIN),)
   export PATH := $(BREW_LLVM_BIN):$(PATH)
 else
   $(error LLVM tools not found. Install via: brew install llvm)
+endif
+endif
+
+ifneq (,$(REDEFINE_SYMS)$(NEEDS_UNWRAP))
+SERVER_LINK_LIB := $(VALKEY_SERVER_WRAP_LIB)
+else
+SERVER_LINK_LIB := $(VALKEY_SERVER_LIB)
 endif
 
 $(WRAP_DIR):
@@ -192,14 +213,15 @@ $(ENGINE_SERVER_WRAP_OBJ): WRAP_CC := $(CC)
 $(ENGINE_SERVER_WRAP_OBJ): $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
 	$(wrap-object)
 
+$(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) generated_wrappers.o
+	@rm -f $@
+	$(SERVER_AR) rcs $@ $(ENGINE_SERVER_WRAP_OBJ)
+
+ifeq ($(uname_S), Darwin)
 # Wrap test objects, so that calls to wrapped functions are redirected to __wrap_*
 $(TEST_WRAP_OBJ): WRAP_CC := $(CXX)
 $(TEST_WRAP_OBJ): $(WRAP_DIR)/%.o: %.o $(WRAP_DIR) generated_wrappers.o
 	$(wrap-object)
-
-$(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) generated_wrappers.o
-	@rm -f $@
-	$(SERVER_AR) rcs $@ $(ENGINE_SERVER_WRAP_OBJ)
 endif
 
 # Ensure Valkey server library is built
@@ -274,7 +296,7 @@ valkey-unit-gtests: $(TEST_WRAP_OBJ) generated_wrappers.o $(VALKEY_SERVER_WRAP_L
 		-o $@ $^ $(LD_LIBS) \
 		-lm -pthread -ldl
 else
-valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS)
+valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(SERVER_LINK_LIB) $(FINAL_LIBS)
 	$(CXX) -g $(LDFLAGS) -fno-lto \
 		$(OVERRIDES) \
 		-Wall -Wno-deprecated-declarations \

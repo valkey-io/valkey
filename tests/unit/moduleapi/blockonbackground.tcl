@@ -9,6 +9,20 @@ proc latency_percentiles_usec {cmd} {
 start_server {tags {"modules"}} {
     r module load $testmodule
 
+    test { blocked client timeout overflow does not crash server } {
+        assert_error {*timeout is out of range*} {
+            r block.debug 0 9223372036854775807
+        }
+
+        # Let the background thread enqueue the handle before checking the server.
+        after 100
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 0
+        } else {
+            fail "Server crashed after module timeout overflow"
+        }
+    }
+
     test { blocked clients time tracking - check blocked command that uses RedisModule_BlockedClientMeasureTimeStart() is tracking background time} {
         r slowlog reset
         r config set slowlog-log-slower-than 200000

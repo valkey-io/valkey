@@ -682,9 +682,10 @@ int trySendWriteToIOThreads(client *c) {
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
     clientReplyBlock *block = NULL;
     if (is_replica) {
-        c->io_last_reply_block = listLast(server.repl_buffer_blocks);
-        replBufBlock *o = listNodeValue(c->io_last_reply_block);
-        c->io_last_bufpos = o->used;
+        /* Snapshot the send limit rather than the buffer tail: under reply
+         * blocking the IO thread must stop at the last durable byte too. No
+         * limit means nothing to send; let the main thread handle it. */
+        if (!getReplicationSendLimit(&c->io_last_reply_block, &c->io_last_bufpos)) return C_ERR;
     } else {
         /* Save the last block of the reply list to io_last_reply_block and the used
          * position to io_last_bufpos. The I/O thread will write only up to

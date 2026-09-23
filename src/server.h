@@ -3418,6 +3418,9 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
 int prepareReplicasToWrite(void);
+int getReplicationSendLimit(listNode **last_node, size_t *last_pos);
+int replicaCursorBeforeSendLimit(client *c, listNode *limit_node, size_t limit_pos);
+void wakeReplicasForDurableProgress(void);
 void replicationFeedReplicas(int dictid, robj **argv, int argc);
 void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen);
 void resetReplicationBuffer(void);

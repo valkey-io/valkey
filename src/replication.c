@@ -525,6 +525,87 @@ int prepareReplicasToWrite(void) {
     return prepared;
 }
 
+/* Resolve the end of the replication-buffer range that may be sent to
+ * replicas now, as a (node, pos) pair with pos in (0, used], so the last
+ * block of a send range is never empty.
+ *
+ * Without reply blocking this is the buffer tail. With it, this is the last
+ * byte whose AOF record is fsynced, so a replica never receives a write the
+ * primary could still lose on a crash. Bytes past the limit stay in the
+ * shared buffer until the fsync covering them completes.
+ *
+ * Returns 0 when nothing may be sent: the buffer is empty, or the durable
+ * offset lies before the first retained block. */
+int getReplicationSendLimit(listNode **last_node, size_t *last_pos) {
+    listNode *ln = listLast(server.repl_buffer_blocks);
+    if (ln == NULL) return 0;
+    replBufBlock *block = listNodeValue(ln);
+
+    if (!isPrimaryReplyBlockingEnabled()) {
+        *last_node = ln;
+        *last_pos = block->used;
+        return 1;
+    }
+
+    long long durable = getAofDurableOffset();
+    if (durable >= server.primary_repl_offset) {
+        /* Everything fed so far is durable. */
+        *last_node = ln;
+        *last_pos = block->used;
+        return 1;
+    }
+
+    /* Walk back to the block holding the last durable byte. Only bytes fed
+     * since the in-flight fsync started can lie past it, so this is short. */
+    while (block->repl_offset > durable) {
+        ln = listPrevNode(ln);
+        if (ln == NULL) return 0;
+        block = listNodeValue(ln);
+    }
+    *last_node = ln;
+    *last_pos = (size_t)(durable - block->repl_offset + 1);
+    /* Blocks are offset-contiguous and durable < primary_repl_offset here.
+     * Debug-only: a violation would cap short, never over-send. */
+    debugServerAssert(*last_pos > 0 && *last_pos <= block->used);
+    return 1;
+}
+
+/* Return 1 if replica c's cursor is strictly before the send limit, i.e. it
+ * has bytes that may be sent now. Compares absolute replication offsets, so a
+ * cursor at the start of one block equals a limit at the end of the previous
+ * block, and a limit that has fallen behind the cursor (the durable offset
+ * restarts after CONFIG SET appendonly yes) reads as nothing to send. Relies
+ * on blocks being offset-contiguous, as PSYNC lookup already does. */
+int replicaCursorBeforeSendLimit(client *c, listNode *limit_node, size_t limit_pos) {
+    replBufBlock *cur = listNodeValue(c->repl_data->ref_repl_buf_node);
+    replBufBlock *lim = listNodeValue(limit_node);
+    long long cursor_offset = cur->repl_offset + (long long)c->repl_data->ref_block_pos;
+    long long limit_offset = lim->repl_offset + (long long)limit_pos;
+    return cursor_offset < limit_offset;
+}
+
+/* Queue replicas parked at the durable send limit so the next
+ * handleClientsWithPendingWrites() sends the bytes that became durable.
+ *
+ * A parked replica has no pending replies, so postWriteToClient() removed its
+ * write handler, and once the limit moves prepareClientToWrite() skips it
+ * because a client with pending replies is assumed to be armed already. */
+void wakeReplicasForDurableProgress(void) {
+    listIter li;
+    listNode *ln;
+
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (!canFeedReplicaReplBuffer(replica)) continue;
+        if (replica->flag.close_asap) continue;
+        /* Already armed: the write handler or IO job will pick up the new
+         * limit. */
+        if (replica->io_write_state != CLIENT_IDLE || connHasWriteHandler(replica->conn)) continue;
+        if (clientHasPendingReplies(replica)) putClientInPendingWriteQueue(replica);
+    }
+}
+
 /* Wrapper for feedReplicationBuffer() that takes string Objects
  * as input. */
 void feedReplicationBufferWithObject(robj *o) {
@@ -1241,6 +1322,15 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
+        /* The RDB snapshot bypasses the durable send limit that caps the
+         * replication stream. Drain any offloaded AOF flush first so everything
+         * in the snapshot is fsynced before it can reach a replica. */
+        if (isPrimaryReplyBlockingEnabled()) {
+            flushAppendOnlyFile(1);
+            debugServerAssert(atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed) ==
+                              server.primary_repl_offset);
+        }
+
         if (socket_target)
             retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
         else {

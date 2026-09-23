@@ -48,14 +48,10 @@ int isAofReplyBlockingEnabled(void) {
     return server.aof_state != AOF_OFF && server.aof_fsync == AOF_FSYNC_ALWAYS;
 }
 
-/* Returns the replication offset that has been durably committed locally.
- *
- * When AOF synchronous reply-blocking is enabled, this is the AOF-acknowledged
- * offset (or the snapshot captured at pause time, when paused via DEBUG).
- * When AOF synchronous reply-blocking is disabled, no local reply-blocking gate
- * is in effect, so the primary's current replication offset is returned
- * (i.e. nothing is reply-blocked). */
-long long getDurablyCommittedOffset(void) {
+/* Returns the replication offset that is durable in the local AOF: the
+ * fsynced offset, or the value frozen by DEBUG reply-blocking-pause. Returns
+ * primary_repl_offset when AOF reply blocking is not in effect. */
+long long getAofDurableOffset(void) {
     if (!isAofReplyBlockingEnabled()) {
         return server.primary_repl_offset;
     }
@@ -63,6 +59,12 @@ long long getDurablyCommittedOffset(void) {
         return server.reply_blocking.aof_paused_offset;
     }
     return aofAckedOffset();
+}
+
+/* Returns the consensus offset that client replies are held against. Today
+ * the only provider is the local AOF. */
+long long getDurablyCommittedOffset(void) {
+    return getAofDurableOffset();
 }
 
 /* Pause AOF reply-blocking progress (via DEBUG command).
@@ -436,6 +438,15 @@ void notifyReplyBlockingProgress(void) {
     }
 
     reply_blocking_t *rb_state = &server.reply_blocking;
+
+    /* Re-arm parked replicas on every call, independent of the consensus
+     * check below: the send cap follows the AOF offset, not the consensus, and
+     * a "did the offset advance" guard would fail after a demotion and
+     * re-promotion, where the replication offset drops below any watermark
+     * kept from the previous history. The wake is a no-op unless a replica has
+     * sendable bytes and no write handler. */
+    wakeReplicasForDurableProgress();
+
     const long long consensus_ack_offset = getDurablyCommittedOffset();
     if (consensus_ack_offset <= rb_state->previous_acked_offset) {
         return;
@@ -850,6 +861,9 @@ void replyBlockingReset(void) {
     } else {
         if (iAmPrimary()) {
             replyBlockingResetPrimaryState(false);
+            /* The replica send limit is the buffer tail again; queue replicas
+             * that were parked at the durable offset. */
+            wakeReplicasForDurableProgress();
         }
         clearAllUncommittedKeys();
     }

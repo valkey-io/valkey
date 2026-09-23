@@ -211,6 +211,7 @@ int isPrimaryReplyBlockingEnabled(void);
 int isReplyBlockingEnabled(void);
 int isAofReplyBlockingEnabled(void);
 long long getDurablyCommittedOffset(void);
+long long getAofDurableOffset(void);
 void pauseAofReplyBlocking(void);
 void resumeAofReplyBlocking(void);
 bool isClientReplyBufferLimited(client *c);

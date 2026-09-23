@@ -993,3 +993,190 @@ TEST_F(SyncReplicationTest, ClientInitIdempotent) {
     zfree(c);
     cleanupReplyBlockingForTest();
 }
+
+/* ========================= Replica Send Limit Tests ========================= */
+
+/* Build a two-block replication buffer by hand: block A covers offsets
+ * [1, a_used], block B covers [a_used+1, a_used+b_used]. Returns the list;
+ * caller frees with listRelease (free method set). */
+static list *makeTwoBlockReplBuffer(size_t a_used, size_t b_used, replBufBlock **a_out, replBufBlock **b_out) {
+    list *blocks = listCreate();
+    listSetFreeMethod(blocks, zfree);
+    replBufBlock *a = (replBufBlock *)zcalloc(sizeof(replBufBlock) + a_used);
+    a->size = a_used;
+    a->used = a_used;
+    a->repl_offset = 1;
+    a->refcount = 1;
+    replBufBlock *b = (replBufBlock *)zcalloc(sizeof(replBufBlock) + b_used);
+    b->size = b_used;
+    b->used = b_used;
+    b->repl_offset = (long long)a_used + 1;
+    b->refcount = 1;
+    listAddNodeTail(blocks, a);
+    listAddNodeTail(blocks, b);
+    *a_out = a;
+    *b_out = b;
+    return blocks;
+}
+
+class ReplicaSendLimitTest : public ::testing::Test {
+  protected:
+    list *old_blocks;
+    long long old_primary_repl_offset;
+    int old_aof_state;
+    int old_aof_fsync;
+    char *old_primary_host;
+    long long old_fsynced_pending;
+    bool old_paused;
+
+    void SetUp() override {
+        initTestEnv();
+        old_blocks = server.repl_buffer_blocks;
+        old_primary_repl_offset = server.primary_repl_offset;
+        old_aof_state = server.aof_state;
+        old_aof_fsync = server.aof_fsync;
+        old_primary_host = server.primary_host;
+        old_fsynced_pending = __atomic_load_n(&server.fsynced_reploff_pending, __ATOMIC_RELAXED);
+        old_paused = server.reply_blocking.aof_paused;
+
+        /* Reply blocking active on a primary. */
+        server.aof_state = AOF_ON;
+        server.aof_fsync = AOF_FSYNC_ALWAYS;
+        server.primary_host = nullptr;
+        server.reply_blocking.aof_paused = false;
+    }
+
+    void TearDown() override {
+        server.repl_buffer_blocks = old_blocks;
+        server.primary_repl_offset = old_primary_repl_offset;
+        server.aof_state = old_aof_state;
+        server.aof_fsync = old_aof_fsync;
+        server.primary_host = old_primary_host;
+        __atomic_store_n(&server.fsynced_reploff_pending, old_fsynced_pending, __ATOMIC_RELAXED);
+        server.reply_blocking.aof_paused = old_paused;
+    }
+
+    void setDurable(long long offset) {
+        __atomic_store_n(&server.fsynced_reploff_pending, offset, __ATOMIC_RELAXED);
+    }
+};
+
+/* The limit is a byte position inside the block holding the last durable byte,
+ * and collapses to the tail when everything is durable. */
+TEST_F(ReplicaSendLimitTest, LimitLandsInsideTheRightBlock) {
+    replBufBlock *a, *b;
+    list *blocks = makeTwoBlockReplBuffer(100, 50, &a, &b);
+    server.repl_buffer_blocks = blocks;
+    server.primary_repl_offset = 150;
+
+    listNode *node;
+    size_t pos;
+
+    /* Durable in the middle of A. */
+    setDurable(40);
+    ASSERT_TRUE(getReplicationSendLimit(&node, &pos));
+    ASSERT_EQ(listNodeValue(node), a);
+    ASSERT_EQ(pos, (size_t)40);
+
+    /* Durable in the middle of B. */
+    setDurable(120);
+    ASSERT_TRUE(getReplicationSendLimit(&node, &pos));
+    ASSERT_EQ(listNodeValue(node), b);
+    ASSERT_EQ(pos, (size_t)20);
+
+    /* Everything durable: the tail. */
+    setDurable(150);
+    ASSERT_TRUE(getReplicationSendLimit(&node, &pos));
+    ASSERT_EQ(listNodeValue(node), b);
+    ASSERT_EQ(pos, (size_t)50);
+
+    /* Durable before the first retained byte: nothing sendable. */
+    a->repl_offset = 1000;
+    b->repl_offset = 1100;
+    server.primary_repl_offset = 1149;
+    setDurable(500);
+    ASSERT_FALSE(getReplicationSendLimit(&node, &pos));
+
+    listRelease(blocks);
+}
+
+/* A durable offset on the last byte of A is reported as (A, A->used), never as
+ * an empty (B, 0): the last block of a send range must not be empty. */
+TEST_F(ReplicaSendLimitTest, LimitAtBlockBoundaryIsEndOfPreviousBlock) {
+    replBufBlock *a, *b;
+    list *blocks = makeTwoBlockReplBuffer(100, 50, &a, &b);
+    server.repl_buffer_blocks = blocks;
+    server.primary_repl_offset = 150;
+
+    listNode *node;
+    size_t pos;
+    setDurable(100);
+    ASSERT_TRUE(getReplicationSendLimit(&node, &pos));
+    ASSERT_EQ(listNodeValue(node), a);
+    ASSERT_EQ(pos, (size_t)100);
+
+    listRelease(blocks);
+}
+
+/* A cursor at the start of B and a limit at the end of A are the same byte
+ * position: the replica has nothing to send. One byte earlier and it does. */
+TEST_F(ReplicaSendLimitTest, CursorAtNextBlockStartEqualsLimitAtPreviousBlockEnd) {
+    replBufBlock *a, *b;
+    list *blocks = makeTwoBlockReplBuffer(100, 50, &a, &b);
+    server.repl_buffer_blocks = blocks;
+    server.primary_repl_offset = 150;
+
+    client *c = (client *)zcalloc(sizeof(client));
+    ClientReplicationData rd;
+    memset(&rd, 0, sizeof(rd));
+    c->repl_data = &rd;
+
+    listNode *limit_node = listFirst(blocks);
+    size_t limit_pos = 100;
+
+    /* Cursor normalized to (B, 0) after sending all of A. */
+    rd.ref_repl_buf_node = listLast(blocks);
+    rd.ref_block_pos = 0;
+    ASSERT_FALSE(replicaCursorBeforeSendLimit(c, limit_node, limit_pos));
+
+    /* Cursor one byte short of the end of A. */
+    rd.ref_repl_buf_node = listFirst(blocks);
+    rd.ref_block_pos = 99;
+    ASSERT_TRUE(replicaCursorBeforeSendLimit(c, limit_node, limit_pos));
+
+    /* Limit behind the cursor (durable offset restarted): nothing to send. */
+    rd.ref_repl_buf_node = listLast(blocks);
+    rd.ref_block_pos = 10;
+    ASSERT_FALSE(replicaCursorBeforeSendLimit(c, limit_node, 50));
+
+    zfree(c);
+    listRelease(blocks);
+}
+
+/* With reply blocking off the limit is the tail regardless of the durable
+ * offset, so stock behaviour is unaffected. */
+TEST_F(ReplicaSendLimitTest, LimitIsTailWhenReplyBlockingOff) {
+    replBufBlock *a, *b;
+    list *blocks = makeTwoBlockReplBuffer(100, 50, &a, &b);
+    server.repl_buffer_blocks = blocks;
+    server.primary_repl_offset = 150;
+    setDurable(10);
+
+    listNode *node;
+    size_t pos;
+
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    ASSERT_TRUE(getReplicationSendLimit(&node, &pos));
+    ASSERT_EQ(listNodeValue(node), b);
+    ASSERT_EQ(pos, (size_t)50);
+
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
+    server.primary_host = sdsnew("127.0.0.1");
+    ASSERT_TRUE(getReplicationSendLimit(&node, &pos));
+    ASSERT_EQ(listNodeValue(node), b);
+    ASSERT_EQ(pos, (size_t)50);
+    sdsfree(server.primary_host);
+    server.primary_host = nullptr;
+
+    listRelease(blocks);
+}

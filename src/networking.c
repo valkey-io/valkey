@@ -1820,6 +1820,14 @@ void copyReplicaOutputBuffer(client *dst, client *src) {
  * reply-blocking boundary. Use it where the buffers must be truly empty. */
 int clientHasUnsentOutput(client *c) {
     if (c->bufpos || listLength(c->reply)) return 1;
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->ref_repl_buf_node != NULL) {
+        /* A replica's output is the shared buffer from its cursor to the
+         * tail. Under reply blocking part of it may not be sendable yet, but
+         * it is still unsent. */
+        listNode *ln = listLast(server.repl_buffer_blocks);
+        replBufBlock *tail = listNodeValue(ln);
+        if (ln != c->repl_data->ref_repl_buf_node || c->repl_data->ref_block_pos != tail->used) return 1;
+    }
     return clientHasPendingReplies(c);
 }
 
@@ -1869,6 +1877,15 @@ int clientHasPendingReplies(client *c) {
         listNode *ln = listLast(server.repl_buffer_blocks);
         replBufBlock *tail = listNodeValue(ln);
         if (ln == c->repl_data->ref_repl_buf_node && c->repl_data->ref_block_pos == tail->used) return 0;
+
+        /* Under reply blocking only bytes up to the durable send limit are
+         * pending. The replica is queued again when the limit advances. */
+        if (isPrimaryReplyBlockingEnabled()) {
+            listNode *limit_node;
+            size_t limit_pos;
+            if (!getReplicationSendLimit(&limit_node, &limit_pos)) return 0;
+            return replicaCursorBeforeSendLimit(c, limit_node, limit_pos);
+        }
 
         return 1;
     } else {
@@ -2783,14 +2800,22 @@ static void postWriteToReplica(client *c) {
 /* Resolve the replication-buffer range available to replica c: the
  * last block to send and the end position within it (the start is the
  * replica's own cursor, ref_repl_buf_node/ref_block_pos). The main thread
- * reads the live buffer tail; an IO thread uses the snapshot taken when the
- * write job was dispatched. Returns false only when the buffer has no blocks.
+ * reads the live send limit (the buffer tail, or the last durable byte under
+ * reply blocking); an IO thread uses the snapshot taken when the write job was
+ * dispatched. Returns false when there is nothing the replica may be sent.
  * Shared by the plaintext and compressed write paths. */
 static bool getReplicaWriteRange(client *c, listNode **last_node, size_t *last_pos) {
     if (inMainThread()) {
-        *last_node = listLast(server.repl_buffer_blocks);
-        if (!*last_node) return false;
-        *last_pos = ((replBufBlock *)listNodeValue(*last_node))->used;
+        if (!isPrimaryReplyBlockingEnabled()) {
+            *last_node = listLast(server.repl_buffer_blocks);
+            if (!*last_node) return false;
+            *last_pos = ((replBufBlock *)listNodeValue(*last_node))->used;
+            return true;
+        }
+        if (!getReplicationSendLimit(last_node, last_pos)) return false;
+        /* A range ending at or before the cursor would make writeToReplica's
+         * block loop run past last_node. */
+        if (!replicaCursorBeforeSendLimit(c, *last_node, *last_pos)) return false;
     } else {
         *last_node = c->io_last_reply_block;
         serverAssert(*last_node != NULL);

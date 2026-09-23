@@ -1501,13 +1501,95 @@ void sinterstoreCommand(client *c) {
     sinterGenericCommand(c, c->argv + 2, c->argc - 2, c->argv[1], 0, 0);
 }
 
+/* Reply with all members of a set. */
+static void replySetMembers(client *c, robj *set) {
+    setTypeIterator *si = setTypeInitIterator(set);
+    char *str;
+    size_t len = 0;
+    int64_t llval;
+
+    addReplySetLen(c, setTypeSize(set));
+    while (setTypeNext(si, &str, &len, &llval) != -1) {
+        if (str)
+            addReplyBulkCBuffer(c, str, len);
+        else
+            addReplyBulkLongLong(c, llval);
+    }
+    setTypeReleaseIterator(si);
+}
+
+/* DIFF algorithm 1 can reply as it filters the first set. The caller ensures
+ * the source exists and does not also appear among the subtractors. */
+static void sdiffReplyDirect(client *c, robj **sets, int setnum) {
+    void *replylen = addReplyDeferredLen(c);
+    setTypeIterator *si = setTypeInitIterator(sets[0]);
+    unsigned long cardinality = 0;
+    char *str;
+    size_t len = 0;
+    int64_t llval;
+    int encoding, j;
+
+    while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {
+        for (j = 1; j < setnum; j++) {
+            if (!sets[j]) continue;
+            if (setTypeIsMemberAux(sets[j], str, len, llval, encoding == OBJ_ENCODING_HASHTABLE)) break;
+        }
+        if (j == setnum) {
+            if (str)
+                addReplyBulkCBuffer(c, str, len);
+            else
+                addReplyBulkLongLong(c, llval);
+            cardinality++;
+        }
+    }
+    setTypeReleaseIterator(si);
+    setDeferredSetLen(c, replylen, cardinality);
+}
+
+/* Called after type validation for non-STORE commands. Return 1 if the result
+ * is known without building a new set. */
+static int replyKnownSetOperationResult(client *c, robj **sets, int setnum, int op, int sameset) {
+    int j;
+
+    if (op == SET_OP_UNION) {
+        robj *single_set = NULL;
+        for (j = 0; j < setnum; j++) {
+            if (!sets[j]) continue;
+            if (!single_set)
+                single_set = sets[j];
+            else if (single_set != sets[j])
+                break;
+        }
+        if (j == setnum) {
+            if (single_set)
+                replySetMembers(c, single_set);
+            else
+                addReply(c, shared.emptyset[c->resp]);
+            return 1;
+        }
+    } else if (op == SET_OP_DIFF) {
+        if (!sets[0] || sameset) {
+            addReply(c, shared.emptyset[c->resp]);
+            return 1;
+        }
+        for (j = 1; j < setnum; j++) {
+            if (sets[j]) break;
+        }
+        if (j == setnum) {
+            replySetMembers(c, sets[0]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstkey, int op) {
     robj **sets = zmalloc(sizeof(robj *) * setnum);
     setTypeIterator *si;
     robj *dstset = NULL;
     int dstset_encoding = OBJ_ENCODING_INTSET;
     char *str;
-    size_t len;
+    size_t len = 0;
     int64_t llval;
     int encoding;
     int j, cardinality = 0;
@@ -1547,6 +1629,12 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         }
     }
 
+    /* Check every input type before returning a known result. */
+    if (!dstkey && replyKnownSetOperationResult(c, sets, setnum, op, sameset)) {
+        zfree(sets);
+        return;
+    }
+
     /* Select what DIFF algorithm to use.
      *
      * Algorithm 1 is O(N*M) where N is the size of the element first set
@@ -1579,9 +1667,14 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         }
     }
 
-    /* We need a temp set object to store our union/diff. If the dstkey
-     * is not NULL (that is, we are inside an SUNIONSTORE/SDIFFSTORE operation) then
-     * this set object will be the resulting object to set into the target key*/
+    /* Algorithm 1 can emit members directly unless the result must be stored. */
+    if (!dstkey && op == SET_OP_DIFF && sets[0] && !sameset && diff_algo == 1) {
+        sdiffReplyDirect(c, sets, setnum);
+        zfree(sets);
+        return;
+    }
+
+    /* STORE commands and other algorithms need a result set. */
     if (dstset_encoding == OBJ_ENCODING_INTSET) {
         dstset = createIntsetObject();
     } else {
@@ -1653,15 +1746,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
 
     /* Output the content of the resulting set, if not in STORE mode */
     if (!dstkey) {
-        addReplySetLen(c, cardinality);
-        si = setTypeInitIterator(dstset);
-        while (setTypeNext(si, &str, &len, &llval) != -1) {
-            if (str)
-                addReplyBulkCBuffer(c, str, len);
-            else
-                addReplyBulkLongLong(c, llval);
-        }
-        setTypeReleaseIterator(si);
+        replySetMembers(c, dstset);
         server.lazyfree_lazy_server_del ? freeObjAsync(NULL, dstset, -1) : decrRefCount(dstset);
     } else {
         /* If we have a target key where to store the resulting set

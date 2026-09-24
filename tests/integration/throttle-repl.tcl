@@ -24,19 +24,20 @@ proc grow_replica_cob {r nkeys valsize} {
     } 0 $nkeys $valsize
 }
 
+proc nudge_writer_throttled {r writer wid} {
+    grow_replica_cob $writer 200 1
+    expr {[client_throttled $r $wid] &&
+          [getInfoProperty [{*}$r info debug] repl_throttle_current_clients] > 0}
+}
+
 # Issue small write bursts until the writer client is observed being throttled.
 proc wait_throttled_client {r writer wid} {
-    for {set k 0} {$k < 100} {incr k} {
-        for {set j 0} {$j < 200} {incr j} {
-            $writer set nudge v
-        }
-        if {[client_throttled $r $wid] &&
-            [getInfoProperty [{*}$r info debug] repl_throttle_current_clients] > 0} {
-            return 1
-        }
-        after 50
+    wait_for_condition 100 50 {
+        [nudge_writer_throttled $r $writer $wid]
+    } else {
+        return 0
     }
-    return 0
+    return 1
 }
 
 # Set up primary/replica replication with throttling enabled and a COB limit configured.
@@ -188,15 +189,14 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
 
             pause_process $replica_pid
 
-            set activated 0
-            for {set i 0} {$i < 20 && !$activated} {incr i} {
+            set steps 0
+            while {[throttle_rate $primary] < 0 && [incr steps] <= 20} {
                 grow_replica_cob $primary 200 2000
-                after 150 ;# let serverCron evaluate the new COB size
-                if {[throttle_rate $primary] >= 0} {
-                    set activated 1
-                }
+                wait_for_condition 3 50 {
+                    [throttle_rate $primary] >= 0
+                } else {} ;
             }
-            if {!$activated} {
+            if {[throttle_rate $primary] < 0} {
                 resume_process $replica_pid
                 fail "throttler never began queueing clients"
             }

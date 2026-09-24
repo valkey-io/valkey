@@ -168,7 +168,10 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
                 resume_process $replica_pid
                 fail "replica was disconnected while above soft but below hard COB limit"
             }
-            assert {[throttle_rate $primary] >= 0}
+            if {[throttle_rate $primary] < 0} {
+                resume_process $replica_pid
+                fail "throttler stopped while the replica remained above the soft COB limit"
+            }
 
             $writer close
             resume_process $replica_pid

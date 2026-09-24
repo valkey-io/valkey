@@ -285,14 +285,7 @@ GeoHashFix52Bits geohashAlign52Bits(const GeoHashBits hash) {
  * we can simplify arcsin(sin(x)) to x.
  */
 double geohashGetLatDistance(double lat1d, double lat2d) {
-    /* `deg_rad(lat2d) - deg_rad(lat1d)` might result in the following assembly on ARM:
-     *      fmul    d0, d0, d2      # t = lat1d * D_R
-     *      fnmsub  d0, d1, d2, d0  # t = lat2d * D_R - t
-     * This results in the `lat2d * D_R` operation of having higher precision than `lat1d * D_R`,
-     * which is fine as long as `lat1d != lat2d`, however when the values are equal, this might
-     * result in a non-zero value rather than a clean zero as one would expect.*/
-    if (lat1d == lat2d) return 0;
-    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d) - deg_rad(lat1d));
+    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d - lat1d));
 }
 
 /* Calculate distance using haversine great circle distance formula. */

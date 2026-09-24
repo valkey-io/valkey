@@ -2239,6 +2239,7 @@ start_server {tags {"zset"}} {
         }
 
         test "ZSETs btree implementation backlink consistency test - $encoding" {
+            r del myzset
             set diff 0
             for {set j 0} {$j < $elements} {incr j} {
                 r zadd myzset [expr rand()] "Element-$j"

@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __FUNCTIONS_H_
-#define __FUNCTIONS_H_
+#ifndef FUNCTIONS_H
+#define FUNCTIONS_H
 
 /*
  * functions.c unit provides the Functions API:
@@ -99,4 +99,4 @@ void functionsRemoveLibFromEngine(scriptingEngine *engine);
 
 int functionsInit(void);
 
-#endif /* __FUNCTIONS_H_ */
+#endif /* FUNCTIONS_H */

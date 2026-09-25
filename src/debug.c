@@ -518,6 +518,8 @@ void debugCommand(client *c) {
             "    Return the size of different core C structures.",
             "LISTPACK <key>",
             "    Show low level info about the listpack encoding of <key>.",
+            "STREAM-BYTES <key>",
+            "    Return the tracked and recounted listpack bytes of <key>.",
             "QUICKLIST <key> [<0|1>]",
             "    Show low level info about the quicklist encoding of <key>.",
             "    The optional argument (0 by default) sets the level of detail",
@@ -789,6 +791,25 @@ void debugCommand(client *c) {
         } else {
             lpRepr(objectGetVal(o));
             addReplyStatus(c, "Listpack structure printed on stdout");
+        }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "stream-bytes") && c->argc == 3) {
+        robj *o;
+
+        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.nokeyerr)) == NULL) return;
+
+        if (objectGetType(o) != OBJ_STREAM) {
+            addReplyError(c, "Not a stream object.");
+        } else {
+            stream *s = objectGetVal(o);
+            raxIterator ri;
+            size_t recount = 0;
+            raxStart(&ri, s->rax);
+            raxSeek(&ri, "^", NULL, 0);
+            while (raxNext(&ri)) recount += lpBytes(ri.data);
+            raxStop(&ri);
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, s->total_lp_bytes);
+            addReplyLongLong(c, recount);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "quicklist") && (c->argc == 3 || c->argc == 4)) {
         robj *o;

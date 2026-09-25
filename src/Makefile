@@ -299,6 +299,9 @@ endif
 endif
 endif
 
+get_cwd = $(subst $() $(),\ ,$(shell pwd))
+current_dir = $(call get_cwd)
+
 # Lua scripting engine module
 ifeq ($(BUILD_LUA),no)
 	LUA_MODULE_NAME=
@@ -310,7 +313,6 @@ else ifeq ($(BUILD_LUA),module)
 	LUA_MODULE=$(LUA_MODULE_NAME)
 	LUA_MODULE_INSTALL=install-lua-module
 
-	current_dir = $(shell pwd)
 	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so -DSTATIC_LUA=0
 	ifeq ($(uname_S),Darwin)
 		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
@@ -322,7 +324,6 @@ else
 	# The default: building Lua as a static module.
 	LUA_MODULE_NAME=modules/lua/libvalkeylua.a
 	LUA_MODULE=$(LUA_MODULE_NAME)
-	current_dir = $(shell pwd)
 	FINAL_CFLAGS+=-DLUA_ENABLED -DSTATIC_LUA=1
 	ifeq ($(uname_S),Darwin)
 		LUA_LDFLAGS=-Wl,-export_dynamic -Wl,-force_load,$(current_dir)/modules/lua/libvalkeylua.a ../deps/lua/src/liblua.a
@@ -747,8 +748,8 @@ persist-settings: distclean
 	echo CPPFLAGS=$(CPPFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
-	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
-	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	echo 'PREV_FINAL_CFLAGS=$(FINAL_CFLAGS)' >> .make-settings
+	echo 'PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS)' >> .make-settings
 	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 

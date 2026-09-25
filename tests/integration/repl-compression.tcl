@@ -110,21 +110,43 @@ start_server {tags {"repl"} overrides {save ""}} {
     # Negotiation and the compressed incremental stream are load-mode
     # independent. Keep both explicit LZ4 load modes and prove that "yes"
     # selects the current default algorithm (LZ4).
-    set negotiation_cases {
-        {lz4 swapdb}
-        {lz4 disabled}
-        {yes swapdb}
+    # Wire-codec negotiation matrix. For both full sync and the steady-state
+    # stream, the primary uses the strongest codec (zstd > lz4 > plaintext) that
+    # its repl-compression permits and the replica advertised it can decode. A
+    # replica advertises from its own repl-compression: zstd -> {zstd, lz4},
+    # lz4 -> {lz4}, no -> {}. Negotiated wire codec per (primary, replica) pair:
+    #
+    #   primary \ replica |  no         lz4        zstd
+    #   ------------------+---------------------------------
+    #   no                |  plaintext  plaintext  plaintext
+    #   lz4               |  plaintext  lz4        lz4
+    #   zstd              |  plaintext  lz4        zstd
+    #
+    # The loop below exercises each cell: connect one replica, assert the
+    # negotiated codec, and confirm the post-sync incremental stream + digest. The
+    # no+no cell is skipped (no compression either way). Disk-based load of a
+    # compressed sync is covered in repl-fullsync-compression.tcl; dynamic
+    # renegotiation on runtime repl-compression changes by "ZSTD replica advertises
+    # LZ4 fallback and renegotiates to ZSTD" and "Primary codec flips preserve ...".
+    set negotiation_matrix {
+        {no   lz4  {}}
+        {no   zstd {}}
+        {lz4  no   {}}
+        {lz4  lz4  lz4}
+        {lz4  zstd lz4}
+        {zstd no   {}}
+        {zstd lz4  lz4}
+        {zstd zstd zstd}
     }
-    if {$::replcompression_zstd_supported} {
-        lappend negotiation_cases {zstd swapdb}
-    }
-    foreach negotiation_case $negotiation_cases {
-        lassign $negotiation_case compression_mode diskless_load
-        test "Replica negotiates $compression_mode compression (repl-diskless-load $diskless_load)" {
-            set expected_algo [expr {$compression_mode eq "yes" ? "lz4" : $compression_mode}]
-            $primary config set repl-compression $compression_mode
+    foreach negotiation_case $negotiation_matrix {
+        lassign $negotiation_case primary_mode replica_mode expected
+        # zstd on either side requires a zstd-capable build to configure.
+        if {($primary_mode eq "zstd" || $replica_mode eq "zstd") && !$::replcompression_zstd_supported} continue
+        set label [expr {$expected eq "" ? "no" : $expected}]
+        test "Primary $primary_mode + replica $replica_mode negotiates $label compression" {
+            $primary config set repl-compression $primary_mode
             set _code [catch {
-                start_server [list overrides [list save "" repl-compression $compression_mode repl-diskless-load $diskless_load]] {
+                start_server [list overrides [list save "" repl-compression $replica_mode repl-diskless-load swapdb]] {
                     set replica [srv 0 client]
                     $replica replicaof $primary_host $primary_port
 
@@ -134,22 +156,29 @@ start_server {tags {"repl"} overrides {save ""}} {
                         fail "Replication not started"
                     }
 
-                    # The same negotiated capability covers diskless full sync
-                    # and the post-sync incremental stream.
-                    wait_for_condition 50 100 {
-                        [regexp -all "repl_compression=$expected_algo" [$primary info replication]] >= 1
+                    # The negotiated codec covers both the full sync and the
+                    # post-sync incremental stream.
+                    if {$expected eq ""} {
+                        wait_for_condition 50 100 {
+                            [regexp -all {repl_compression=} [$primary info replication]] == 0
+                        } else {
+                            fail "Expected a plaintext link"
+                        }
                     } else {
-                        fail "Compression not negotiated"
+                        wait_for_condition 50 100 {
+                            [regexp -all "repl_compression=$expected" [$primary info replication]] == 1
+                        } else {
+                            fail "Expected an $expected link"
+                        }
                     }
 
-                    # Exercise the compressed incremental stream.
                     for {set i 0} {$i < 100} {incr i} {
                         $primary set "negotiated:$i" [string repeat "v" 50]
                     }
                     wait_for_condition 50 100 {
                         [$replica get "negotiated:99"] eq [string repeat "v" 50]
                     } else {
-                        fail "Replica did not receive compressed incremental stream"
+                        fail "Replica did not receive the incremental stream"
                     }
                     assert_equal [$primary debug digest] [$replica debug digest]
 
@@ -847,33 +876,6 @@ start_server {tags {"repl"} overrides {save ""}} {
             }
             $primary config set repl-compression no
         }
-
-        test {ZSTD primary leaves an LZ4-only replica plaintext} {
-            $primary config set repl-compression zstd
-            $primary flushall
-
-            start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb}} {
-                set replica [srv 0 client]
-                $replica replicaof $primary_host $primary_port
-
-                wait_for_condition 50 200 {
-                    [s 0 master_link_status] eq {up}
-                } else {
-                    fail "LZ4-only replica did not connect to ZSTD primary"
-                }
-                assert_equal 0 [regexp -all {repl_compression=} [$primary info replication]]
-
-                $primary set zstd:lz4-only delivered
-                wait_for_condition 50 100 {
-                    [$replica get zstd:lz4-only] eq {delivered}
-                } else {
-                    fail "Plaintext fallback did not replicate data"
-                }
-
-                $replica replicaof no one
-            }
-            $primary config set repl-compression no
-        }
     }
 
     test {Replica config change waits for an in-progress full sync} {
@@ -1072,13 +1074,14 @@ start_server {tags {"repl"} overrides {save ""}} {
                         set full_before [status $primary sync_full]
                         set partial_before [status $primary sync_partial_ok]
 
-                        # Only the Zstd-capable replica upgrades. The LZ4-only
-                        # and opted-out replicas remain on plaintext links.
+                        # The Zstd-capable replica upgrades to zstd and the LZ4-only
+                        # replica negotiates down to lz4; the opted-out replica stays
+                        # plaintext.
                         $primary config set repl-compression zstd
                         wait_for_condition 100 200 {
                             [regexp -all {repl_compression=zstd} [$primary info replication]] == 1 &&
-                            [regexp -all {repl_compression=lz4} [$primary info replication]] == 0 &&
-                            [status $primary sync_partial_ok] == $partial_before + 1
+                            [regexp -all {repl_compression=lz4} [$primary info replication]] == 1 &&
+                            [status $primary sync_partial_ok] == $partial_before + 2
                         } else {
                             fail "Mixed capability replicas did not converge to ZSTD"
                         }
@@ -1092,8 +1095,8 @@ start_server {tags {"repl"} overrides {save ""}} {
                             fail "Data did not reach every replica during the ZSTD phase"
                         }
 
-                        # Moving to LZ4 upgrades the LZ4-only replica and moves
-                        # the Zstd replica to its advertised LZ4 fallback.
+                        # Moving to LZ4 moves the Zstd replica to its advertised
+                        # LZ4 fallback; the LZ4-only replica is already on lz4.
                         $primary config set repl-compression lz4
                         wait_for_condition 100 200 {
                             [regexp -all {repl_compression=lz4} [$primary info replication]] == 2 &&

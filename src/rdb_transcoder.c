@@ -109,7 +109,13 @@ static int rdbTranscoderEmitPlain(rdbTranscoder *t, const uint8_t *data, size_t 
 
 /* Emit already-classified bytes into the chosen route. */
 static int rdbTranscoderRun(rdbTranscoder *t, const uint8_t *data, size_t len) {
-    if (t->route == RDB_TRANSCODE_VERBATIM) return t->emit(t->emit_ctx, data, len);
+    if (t->route == RDB_TRANSCODE_VERBATIM) {
+        if (t->emit(t->emit_ctx, data, len) == C_ERR) {
+            t->failed = true;
+            return C_ERR;
+        }
+        return C_OK;
+    }
     /* Convert: push into the decoder, drain decoded output into the encoder or a
      * plaintext write. Loop to honor NEED_OUTPUT backpressure (decode budget hit). */
     const void *src = data;

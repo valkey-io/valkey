@@ -4379,9 +4379,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
             skip_rdb_checksum = 0;
     }
 
-    if (compr != ALGO_NONE)
-        serverLog(LL_NOTICE, "Diskless full sync with compression: %s", compressionAlgoName(compr));
-
     /* Create the child process. */
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         /* Child */

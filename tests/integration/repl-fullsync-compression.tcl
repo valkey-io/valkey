@@ -200,7 +200,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
                 # negotiates down to lz4 (the strongest it accepts) rather than
                 # dropping to plaintext. rdbcompression (zstd) differs from the lz4
                 # wire, so the sync is diskless and dump.rdb stays zstd.
-                wait_for_log_messages -1 {"*Diskless full sync with compression: lz4*"} \
+                wait_for_log_messages -1 {"*target: replicas sockets*compression: lz4*"} \
                     $primary_loglines 50 100
 
                 $replica replicaof no one
@@ -251,7 +251,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
                     # srv -2 is the primary inside this doubly-nested scope.
                     set rounds_before [count_log_message -2 {Starting BGSAVE for SYNC}]
                     set sockets_before [count_log_message -2 {target: replicas sockets}]
-                    set compr_before [count_log_message -2 "Disk-based full sync with compression: $selected_mode"]
+                    set compr_before [count_log_message -2 "target: disk using: .*compression: $selected_mode"]
 
                     park_replicas_for_grouped_bgsave \
                         $primary $capable $incompatible $primary_host $primary_port
@@ -265,7 +265,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
                     # file. The capable replica keeps compression instead of being
                     # downgraded, and dump.rdb stays in $selected_mode.
                     assert_equal 2 [expr {[count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before}]
-                    assert_equal 1 [expr {[count_log_message -2 "Disk-based full sync with compression: $selected_mode"] - $compr_before}]
+                    assert_equal 1 [expr {[count_log_message -2 "target: disk using: .*compression: $selected_mode"] - $compr_before}]
                     assert_equal 1 [expr {[count_log_message -2 {target: replicas sockets}] - $sockets_before}]
                     assert_equal 1 [rdb_is_compressed $primary]
                     assert_equal [dict get {lz4 1 zstd 2} $selected_mode] [rdb_compression_codec $primary]
@@ -338,7 +338,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
 
                         $trigger replicaof $primary_host $primary_port
                         if {$rdbcompr eq "lz4"} {
-                            wait_for_log_messages -2 {"*Disk-based full sync with compression: lz4*"} \
+                            wait_for_log_messages -2 {"*target: disk*compression: lz4*"} \
                                 $primary_loglines 50 100
                         } else {
                             wait_for_log_messages -2 {"*Starting BGSAVE for SYNC with target: disk*"} \
@@ -409,7 +409,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
                 assert_replica_synced $primary $replica "(dual-channel $load_mode)"
 
                 wait_for_log_messages -1 {"*using: dual-channel*"} $primary_loglines 50 100
-                wait_for_log_messages -1 {"*Diskless full sync with compression: lz4*"} $primary_loglines 50 100
+                wait_for_log_messages -1 {"*target: replicas sockets*compression: lz4*"} $primary_loglines 50 100
                 # swapdb loads inline from the socket ("from primary"); disabled loads from the received file.
                 if {$load_mode eq "swapdb"} {
                     wait_for_log_messages 0 {"*Loading compressed RDB (algo=lz4) from primary*"} $replica_loglines 50 100
@@ -509,7 +509,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
                 assert_replica_synced $primary $replica "($mode disk-receive)"
 
                 wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
-                wait_for_log_messages -1 [list "*Diskless full sync with compression: $mode*"] \
+                wait_for_log_messages -1 [list "*target: replicas sockets*compression: $mode*"] \
                     $primary_loglines 50 100
                 # Path B: disabled load reads from the received file; match
                 # "from <file>.rdb", not "from primary".
@@ -536,7 +536,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
 
                 assert_replica_synced $primary $replica "($mode diskless swapdb)"
                 wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
-                wait_for_log_messages -1 [list "*Diskless full sync with compression: $mode*"] \
+                wait_for_log_messages -1 [list "*target: replicas sockets*compression: $mode*"] \
                     $primary_loglines 50 100
                 wait_for_log_messages 0 [list "*Loading compressed RDB (algo=$mode) from primary*"] \
                     $replica_loglines 50 100
@@ -642,7 +642,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
 
             assert_replica_synced $primary $replica "(checksum off)"
 
-            wait_for_log_messages -1 {"*Diskless full sync with compression: lz4*"} $primary_loglines 50 100
+            wait_for_log_messages -1 {"*target: replicas sockets*compression: lz4*"} $primary_loglines 50 100
             # Disabled load reads from the received file; match "from <file>.rdb", not "from primary".
             wait_for_log_messages 0 {"*Loading compressed RDB (algo=lz4) from *.rdb*"} $replica_loglines 50 100
 
@@ -730,7 +730,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
             test {Mixed diskless cohort splits into a compressed and a plaintext round} {
                 set rounds_before [count_log_message -2 {Starting BGSAVE for SYNC}]
                 set sockets_before [count_log_message -2 {target: replicas sockets}]
-                set compr_before [count_log_message -2 {Diskless full sync with compression: lz4}]
+                set compr_before [count_log_message -2 {target: replicas sockets using: .*compression: lz4}]
 
                 park_replicas_for_grouped_bgsave $primary $replica_capable $replica_plain $primary_host $primary_port
 
@@ -742,7 +742,7 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
                 # and a plaintext round (non-capable).
                 assert_equal 2 [expr {[count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before}]
                 assert_equal 2 [expr {[count_log_message -2 {target: replicas sockets}] - $sockets_before}]
-                assert_equal 1 [expr {[count_log_message -2 {Diskless full sync with compression: lz4}] - $compr_before}]
+                assert_equal 1 [expr {[count_log_message -2 {target: replicas sockets using: .*compression: lz4}] - $compr_before}]
 
                 $replica_plain replicaof no one
                 $replica_capable replicaof no one

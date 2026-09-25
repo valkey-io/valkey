@@ -428,7 +428,7 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
                 # wrong (plaintext) format, and rdbcompression does not leak into
                 # the diskless wire (which follows repl-compression).
                 wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: replicas sockets*"} $primary_loglines 50 100
-                verify_no_log_message 0 "*Diskless full sync with compression: lz4*" $primary_loglines
+                verify_no_log_message 0 "*target: replicas sockets*compression: lz4*" $primary_loglines
             }
 
             # The mismatch never wrote a plaintext dump.rdb; any snapshot that

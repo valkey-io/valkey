@@ -299,7 +299,7 @@ void delexCommand(client *c) {
 
     if (parseExtendedCommandArgumentsOrReply(
             c, COMMAND_DELEX, 2, c->argc,
-            &flags, NULL, NULL, NULL, &compare_val, &incrby_val) != C_OK) {
+            &flags, NULL, NULL, NULL, &compare_val, &incrby_val, NULL, NULL) != C_OK) {
         return;
     }
 

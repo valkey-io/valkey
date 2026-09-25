@@ -906,10 +906,6 @@ void increxCommand(client *c) {
             return;
         }
         value_ld = oldvalue_ld + incr_ld;
-        if (isnan(value_ld)) {
-            addReplyError(c, "Increment is not a valid float");
-            return;
-        }
         if (isinf(value_ld)) {
             addReplyArrayLen(c, 2);
             addReplyHumanLongDouble(c, oldvalue_ld);

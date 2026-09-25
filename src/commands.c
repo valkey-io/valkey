@@ -7,7 +7,7 @@
     name, summary, complexity, since, doc_flags, replaced, deprecated, group_enum, history, num_history, tips,  \
         num_tips, function, arity, flags, acl, get_dbid_args, key_specs, key_specs_num, get_keys, numargs
 #define MAKE_ARG(name, type, key_spec_index, token, summary, since, flags, numsubargs, deprecated_since) \
-    name, type, key_spec_index, token, summary, since, flags, deprecated_since, numsubargs
+    name, type, key_spec_index, token, summary, since, flags, numsubargs, deprecated_since
 #define COMMAND_STRUCT serverCommand
 #define COMMAND_ARG serverCommandArg
 

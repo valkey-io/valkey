@@ -1498,6 +1498,169 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         assert_equal 0 [r linsert not-a-key before 0 0]
     }
 
+    test {LPUSHBOUND EVICT basic} {
+        r del lb_key{t}
+        r rpush lb_key{t} a b c
+        assert_equal 4 [r lpushbound lb_key{t} 5 evict x]
+        assert_equal {x a b c} [r lrange lb_key{t} 0 -1]
+        assert_equal 5 [r lpushbound lb_key{t} 5 evict y z]
+        assert_equal {z y x a b} [r lrange lb_key{t} 0 -1]
+        assert_equal 3 [r lpushbound lb_key{t} 3 evict p]
+        assert_equal {p z y} [r lrange lb_key{t} 0 -1]
+    }
+
+    test {RPUSHBOUND EVICT basic} {
+        r del rb_key{t}
+        r rpush rb_key{t} a b c
+        assert_equal 4 [r rpushbound rb_key{t} 5 evict x]
+        assert_equal {a b c x} [r lrange rb_key{t} 0 -1]
+        assert_equal 5 [r rpushbound rb_key{t} 5 evict y z]
+        assert_equal {b c x y z} [r lrange rb_key{t} 0 -1]
+        assert_equal 3 [r rpushbound rb_key{t} 3 evict p]
+        assert_equal {y z p} [r lrange rb_key{t} 0 -1]
+    }
+
+    test {LPUSHBOUND REJECT basic} {
+        r del lb_key{t}
+        r rpush lb_key{t} a b c
+        assert_equal 4 [r lpushbound lb_key{t} 5 reject x]
+        assert_equal {x a b c} [r lrange lb_key{t} 0 -1]
+        assert_equal -1 [r lpushbound lb_key{t} 5 reject y z]
+        assert_equal {x a b c} [r lrange lb_key{t} 0 -1]
+        assert_equal -3 [r lpushbound lb_key{t} 3 reject p q]
+        assert_equal {x a b c} [r lrange lb_key{t} 0 -1]
+    }
+
+    test {RPUSHBOUND REJECT basic} {
+        r del rb_key{t}
+        r rpush rb_key{t} a b c
+        assert_equal 4 [r rpushbound rb_key{t} 5 reject x]
+        assert_equal {a b c x} [r lrange rb_key{t} 0 -1]
+        assert_equal -1 [r rpushbound rb_key{t} 5 reject y z]
+        assert_equal {a b c x} [r lrange rb_key{t} 0 -1]
+        assert_equal -3 [r rpushbound rb_key{t} 3 reject p q]
+        assert_equal {a b c x} [r lrange rb_key{t} 0 -1]
+    }
+
+    test {LPUSHBOUND/RPUSHBOUND EVICT empty key} {
+        r del empty_key{t}
+        assert_equal 2 [r lpushbound empty_key{t} 5 evict a b]
+        assert_equal {b a} [r lrange empty_key{t} 0 -1]
+        r del empty_key2{t}
+        assert_equal 3 [r rpushbound empty_key2{t} 5 evict a b c]
+        assert_equal {a b c} [r lrange empty_key2{t} 0 -1]
+    }
+
+    test {LPUSHBOUND EVICT batch larger than bound} {
+        r del lb_key{t}
+        r rpush lb_key{t} a b
+        assert_equal 2 [r lpushbound lb_key{t} 2 evict x y z]
+        assert_equal {z y} [r lrange lb_key{t} 0 -1]
+    }
+
+    test {LPUSHBOUND EVICT list already over bound} {
+        r del lb_key{t}
+        r rpush lb_key{t} a b c d e
+        assert_equal 3 [r lpushbound lb_key{t} 3 evict x]
+        assert_equal {x a b} [r lrange lb_key{t} 0 -1]
+    }
+
+    test {LPUSHBOUND/RPUSHBOUND REJECT over bound does not create the key} {
+        r del nf_key{t}
+        assert_equal -1 [r lpushbound nf_key{t} 2 reject a b c]
+        assert_equal 0 [r exists nf_key{t}]
+    }
+
+    test {LPUSHBOUND/RPUSHBOUND wrong arity} {
+        assert_error "ERR wrong number*" {r lpushbound}
+        assert_error "ERR wrong number*" {r lpushbound k}
+        assert_error "ERR wrong number*" {r lpushbound k 5}
+        assert_error "ERR wrong number*" {r lpushbound k 5 evict}
+        assert_error "ERR wrong number*" {r rpushbound k 5 reject}
+    }
+
+    test {LPUSHBOUND/RPUSHBOUND invalid maxlen} {
+        assert_error "ERR maxlen must be a positive integer" {r lpushbound k foo evict a}
+        assert_error "ERR maxlen must be a positive integer" {r lpushbound k 0 evict a}
+        assert_error "ERR maxlen must be a positive integer" {r lpushbound k -5 evict a}
+        assert_error "ERR maxlen must be a positive integer" {r rpushbound k 1.5 reject a}
+    }
+
+    test {LPUSHBOUND/RPUSHBOUND invalid policy} {
+        assert_error "ERR syntax error" {r lpushbound k 5 xx a}
+        assert_error "ERR syntax error" {r rpushbound k 5 xx a}
+    }
+
+    test {LPUSHBOUND/RPUSHBOUND against non-list value error} {
+        r set str_key{t} str
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r lpushbound str_key{t} 5 evict a}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r rpushbound str_key{t} 5 reject a}
+    }
+
+    test {LPUSHBOUND propagation} {
+        r del lb_key{t} rb_key{t}
+        r rpush lb_key{t} a b c
+        r rpush rb_key{t} a b c
+
+        set repl [attach_to_replication_stream]
+
+        # EVICT always propagates the command itself.
+        assert_equal 3 [r lpushbound lb_key{t} 3 evict x]
+        # REJECT rejected: nothing changed, not propagated.
+        assert_equal -1 [r lpushbound lb_key{t} 3 reject y]
+        # REJECT accepted: propagated.
+        assert_equal 4 [r rpushbound rb_key{t} 4 reject d]
+
+        assert_replication_stream $repl {
+            {select *}
+            {lpushbound lb_key{t} 3 evict x}
+            {rpushbound rb_key{t} 4 reject d}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
+    test {LPUSHBOUND/RPUSHBOUND keyspace notifications} {
+        r config set notify-keyspace-events KEA
+        set rd [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd __keyevent@*]
+
+        # Assert the next N keyevent messages for a key, in order.
+        proc assert_events {rd key events} {
+            foreach expected $events {
+                set event [$rd read]
+                assert_match "pmessage __keyevent@* __keyevent@*:$expected $key" $event
+            }
+        }
+
+        r del note_key{t}
+        r rpush note_key{t} a b c
+        assert_events $rd note_key{t} {rpush}
+
+        # EVICT without eviction: only the push event.
+        r lpushbound note_key{t} 5 evict x
+        assert_events $rd note_key{t} {lpush}
+
+        # EVICT with eviction: the eviction (rpop) precedes the push (lpush).
+        r lpushbound note_key{t} 3 evict y
+        assert_events $rd note_key{t} {rpop lpush}
+
+        # EVICT emptying the list: trimmed down to maxlen but the key is never
+        # actually deleted, so no del event is emitted.
+        r lpushbound note_key{t} 1 evict z
+        assert_events $rd note_key{t} {rpop lpush}
+
+        # REJECT accepted: only the push event.
+        r rpushbound note_key{t} 5 reject w
+        assert_events $rd note_key{t} {rpush}
+
+        # REJECT rejected: emits nothing; the following rpush is the first event.
+        r lpushbound note_key{t} 1 reject v
+        r rpush note_key{t} q
+        assert_events $rd note_key{t} {rpush}
+
+        $rd close
+    }
+
 foreach type {listpack quicklist} {
     foreach {num} {250 500} {
         if {$type == "quicklist"} {

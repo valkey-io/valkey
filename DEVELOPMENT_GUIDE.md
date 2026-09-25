@@ -73,3 +73,18 @@ Valkey keeps most of the user documentation in the [valkey-doc](https://github.c
 1. Server info fields are documented in the [INFO](https://github.com/valkey-io/valkey-doc/blob/main/commands/info.md) command.
 
 When a PR is opened that requires documentation to be updated, the `needs-doc-pr` should be added until the corresponding documentation PR is open.
+
+### Adding INFO fields
+Keep the number of INFO fields small.
+Before adding a metric, check whether users can derive it from existing fields.
+Prefer counters over gauges.
+Counters let monitoring systems compute changes over time, while gauges can miss short spikes that happen between samples.
+Choose its section based on the intended audience and whether the field is expected to remain stable:
+
+- Metrics that are broadly useful to users belong in a default section, returned by `INFO` and `INFO default`.
+  Document these fields in the INFO command documentation.
+- Stable metrics for specific features or less common troubleshooting needs belong in a non-default section.
+  Document these fields too.
+  Non-default server sections are included in `INFO all`, which monitoring tools may collect, so avoid adding unnecessary fields just because a section is not returned by default.
+- Internal debugging metrics that may change or be removed belong in the `debug` section and are not part of the user documentation.
+  This section must be requested explicitly with `INFO debug`; it is excluded from `INFO`, `INFO all`, and `INFO everything`.

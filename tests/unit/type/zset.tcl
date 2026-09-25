@@ -3923,3 +3923,259 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 }
+
+start_server {tags {"zset" "needs:debug"} overrides {save ""}} {
+    # Read the B+tree load factor exposed by DEBUG OBJECT (bt_load_factor field).
+    proc zset_load_factor {key} {
+        assert {[regexp {bt_load_factor:(\S+)} [r debug object $key] -> lf]}
+        return $lf
+    }
+    proc zset_num_leaves {key} {
+        assert {[regexp {bt_num_leaves:(\d+)} [r debug object $key] -> n]}
+        return $n
+    }
+    # 1 when a completed sweep freed nothing and the set has not changed enough
+    # since for compaction to be re-attempted.
+    proc zset_compact_parked {key} {
+        assert {[regexp {bt_compact_parked:(\d)} [r debug object $key] -> p]}
+        return $p
+    }
+
+    # Enable aggressive background compaction so the serverCron drain acts within
+    # the test window. min-length 1 + high cycle budget => one drain compacts fully.
+    proc set_aggressive_compaction_params {} {
+        r config set zset-compaction-min-length 1
+        r config set zset-compaction-trigger-percent 70
+        r config set zset-compaction-limit-percent 80
+        r config set zset-compaction-cycle-elements 100000
+    }
+
+    test {ZSET btree background compaction raises load factor after sparse deletes} {
+        r config set zset-max-ziplist-entries 0
+
+        # Phase 1: build a sparse btree zset with compaction OFF, so no serverCron
+        # drain interferes while we establish -- and assert -- the low load factor.
+        r config set zset-compaction no
+        r del z
+        for {set i 0} {$i < 2000} {incr i} { r zadd z $i m$i }
+        assert_encoding btree z
+        for {set i 0} {$i < 2000} {incr i 2} { r zrem z m$i } ; # delete every other -> sparse
+        assert_equal 1000 [r zcard z]
+        assert {[zset_load_factor z] < 0.6}
+
+        # Phase 2: enable compaction. Nothing is queued yet (the deletes above ran
+        # while it was off), so one more delete crosses the trigger and enqueues the
+        # still-sparse set; the serverCron drain then compacts it toward the limit.
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+        r zrem z m1 ; # LF still < trigger => enqueue
+        assert_equal 999 [r zcard z]
+
+        wait_for_condition 50 100 {
+            [zset_load_factor z] > 0.70
+        } else {
+            fail "compaction did not raise load factor (lf=[zset_load_factor z])"
+        }
+
+        # Data intact after compaction; survivors are the remaining odd-index members.
+        assert_equal 999 [r zcard z]
+        assert_encoding btree z
+        assert_equal {m3 m5 m7} [r zrange z 0 2]
+        assert_equal 1999 [r zscore z m1999]
+        assert_equal 998 [r zrank z m1999]
+    }
+
+    test {ZSET btree compaction works on listpack-to-btree converted sets} {
+        # A set that starts as a listpack and converts to a B+tree must take the
+        # same compaction path as one created directly as a B+tree.
+        r config set zset-max-ziplist-entries 128
+
+        # Phase 1: build set that starts as listpack and converts to btree.
+        r config set zset-compaction no
+        r del z
+        for {set i 0} {$i < 2000} {incr i} { r zadd z $i m$i }
+        assert_encoding btree z
+
+        # Sparse-delete to drive load factor well below trigger.
+        for {set i 0} {$i < 2000} {incr i 2} { r zrem z m$i }
+        assert_equal 1000 [r zcard z]
+        assert {[zset_load_factor z] < 0.6}
+
+        # Phase 2: enable compaction and trigger with one more delete.
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+        r zrem z m1
+        assert_equal 999 [r zcard z]
+
+        wait_for_condition 50 100 {
+            [zset_load_factor z] > 0.70
+        } else {
+            fail "compaction did not fire on converted zset (lf=[zset_load_factor z])"
+        }
+
+        # Data intact.
+        assert_equal 999 [r zcard z]
+        assert_encoding btree z
+    }
+
+    test {ZSET btree compaction still triggers after a queued key is renamed} {
+        # Queue membership is keyed by (db, key name), not by a flag on the value.
+        # A key renamed while queued must remain eligible under its new name; the
+        # stale entry for the old name drains as a harmless miss. Both keys share
+        # a hash tag so RENAME is legal in cluster mode.
+        r config set zset-max-ziplist-entries 0
+        r config set zset-compaction no
+        r del "{c}z" "{c}z2"
+        for {set i 0} {$i < 2000} {incr i} { r zadd "{c}z" $i m$i }
+        for {set i 0} {$i < 2000} {incr i 2} { r zrem "{c}z" m$i }
+        assert {[zset_load_factor "{c}z"] < 0.6}
+
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+        # Enqueue and rename atomically, so no cron tick can drain in between.
+        r multi
+        r zrem "{c}z" m1
+        r rename "{c}z" "{c}z2"
+        r exec
+        assert_equal 0 [r exists "{c}z"]
+        assert_equal 999 [r zcard "{c}z2"]
+
+        # Give the drain a few ticks to hit (and drop) the stale "z" candidate.
+        # The renamed set is untouched: nothing refers to it by its new name yet.
+        after 300
+        assert {[zset_load_factor "{c}z2"] < 0.6}
+
+        # A delete under the new name must enqueue it afresh.
+        r zrem "{c}z2" m3
+        wait_for_condition 50 100 {
+            [zset_load_factor "{c}z2"] > 0.70
+        } else {
+            fail "compaction did not fire on renamed zset (lf=[zset_load_factor "{c}z2"])"
+        }
+        assert_equal 998 [r zcard "{c}z2"]
+        assert_equal {m5 m7 m9} [r zrange "{c}z2" 0 2]
+    }
+
+    test {ZSET btree compaction queue de-duplicates repeated deletes and drains} {
+        # Every qualifying delete on an already-queued key must not add a second
+        # candidate, and a candidate must leave the queue once it has drained.
+        # INFO zset_compaction_pending_keys exposes the queue depth.
+        r config set zset-max-ziplist-entries 0
+        r config set zset-compaction no
+        r del "{c}z" "{c}z2"
+        for {set i 0} {$i < 2000} {incr i} { r zadd "{c}z" $i m$i ; r zadd "{c}z2" $i m$i }
+        for {set i 0} {$i < 2000} {incr i 2} { r zrem "{c}z" m$i ; r zrem "{c}z2" m$i }
+        assert_equal 0 [s zset_compaction_pending_keys]
+
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+        # Hold serverCron so nothing drains while candidates accumulate.
+        r debug pause-cron 1
+        # 100 qualifying deletes on one key enqueue it exactly once.
+        for {set i 1} {$i < 200} {incr i 2} { r zrem "{c}z" m$i }
+        assert_equal 1 [s zset_compaction_pending_keys]
+        # A second key is a second candidate.
+        r zrem "{c}z2" m1
+        assert_equal 2 [s zset_compaction_pending_keys]
+        r debug pause-cron 0
+
+        # Both drain and are released: the queue returns to empty.
+        wait_for_condition 50 100 {
+            [s zset_compaction_pending_keys] == 0
+        } else {
+            fail "compaction queue did not drain (pending=[s zset_compaction_pending_keys])"
+        }
+        assert {[zset_load_factor "{c}z"] > 0.70}
+        assert_equal 900 [r zcard "{c}z"]
+        assert_equal 999 [r zcard "{c}z2"]
+    }
+
+    test {ZSET btree compaction parks a set it cannot improve, re-arms on shrink} {
+        # Compaction packs leaves under one bottom inner node and never merges
+        # bottom nodes, so a large set whittled down by scattered deletes can sit
+        # below the trigger forever. Such a set must be swept once, then left
+        # alone until it shrinks by 10% (or a leaf count changes), instead of
+        # being re-swept on every delete.
+        r config set zset-max-ziplist-entries 0
+        r config set zset-compaction no
+        r del z
+        # 20000 members appended in score order: full leaves, ~half-full inners,
+        # a dozen bottom inner nodes. Keep one member in every 150.
+        for {set i 0} {$i < 20000} {incr i 200} {
+            set args {}
+            for {set j $i} {$j < $i + 200} {incr j} { lappend args $j m$j }
+            r zadd z {*}$args
+        }
+        set victims {}
+        for {set i 0} {$i < 20000} {incr i} {
+            if {$i % 150 != 0} { lappend victims m$i }
+        }
+        for {set i 0} {$i < [llength $victims]} {incr i 200} {
+            r zrem z {*}[lrange $victims $i [expr {$i + 199}]]
+        }
+        assert_equal 134 [r zcard z]
+        assert_encoding btree z
+        assert {[zset_load_factor z] < 0.2}
+        assert_equal 0 [zset_compact_parked z]
+
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+
+        # Sweep 1 packs each node's one-member leaves into one leaf: productive,
+        # so not parked, but the set is still below the trigger.
+        r debug pause-cron 1
+        r zrem z m0
+        assert_equal 1 [s zset_compaction_pending_keys]
+        r debug pause-cron 0
+        wait_for_condition 50 100 {
+            [s zset_compaction_pending_keys] == 0
+        } else {
+            fail "sweep 1 did not drain"
+        }
+        assert {[zset_load_factor z] < 0.70}
+        assert_equal 0 [zset_compact_parked z]
+        set leaves [zset_num_leaves z]
+
+        # Sweep 2 frees nothing: the set parks.
+        r debug pause-cron 1
+        r zrem z m150
+        assert_equal 1 [s zset_compaction_pending_keys]
+        r debug pause-cron 0
+        wait_for_condition 50 100 {
+            [s zset_compaction_pending_keys] == 0
+        } else {
+            fail "sweep 2 did not drain"
+        }
+        assert_equal 1 [zset_compact_parked z]
+        assert_equal 132 [r zcard z]
+
+        # Parked: deletes below a 10% shrink no longer enqueue it, even though
+        # it is still below the trigger. (Every-other survivor, so no leaf
+        # empties and the leaf count stays put.)
+        r debug pause-cron 1
+        foreach m {m300 m600 m900 m1200 m1500} { r zrem z $m }
+        assert_equal 127 [r zcard z]
+        assert_equal $leaves [zset_num_leaves z]
+        assert {[zset_load_factor z] < 0.70}
+        assert_equal 1 [zset_compact_parked z]
+        assert_equal 0 [s zset_compaction_pending_keys]
+
+        # Crossing 10% shrink (132 -> 118) re-arms it: the next delete enqueues.
+        foreach m {m1800 m2100 m2400 m2700 m3000 m3300 m3600 m3900 m4200} { r zrem z $m }
+        assert_equal 118 [r zcard z]
+        assert_equal $leaves [zset_num_leaves z]
+        assert_equal 0 [zset_compact_parked z]
+        assert_equal 1 [s zset_compaction_pending_keys]
+        r debug pause-cron 0
+        wait_for_condition 50 100 {
+            [s zset_compaction_pending_keys] == 0
+        } else {
+            fail "re-armed sweep did not drain"
+        }
+        # That sweep found nothing again, so it re-parks at the new length.
+        assert_equal 1 [zset_compact_parked z]
+        assert_equal 118 [r zcard z]
+        assert_equal {m450 m750 m1050} [r zrange z 0 2]
+        assert_equal 19950 [r zscore z m19950]
+    }
+}

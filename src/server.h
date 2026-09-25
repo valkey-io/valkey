@@ -2094,6 +2094,12 @@ struct valkeyServer {
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
+    /* fbtree ZSET background load-factor compaction. */
+    int zset_compaction_enabled;                 /* global on/off switch */
+    int zset_compaction_trigger_pct;             /* enqueue a set when its load factor < this % */
+    int zset_compaction_limit_pct;               /* compact leaves up to this % fill */
+    int zset_compaction_min_length;              /* skip sets smaller than this many elements */
+    int zset_compaction_cycle_elements;          /* elements processed per cron drain step */
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
     int rdb_version_check;                       /* Try to load RDB produced by a future version. */
     int jemalloc_bg_thread;                      /* Enable jemalloc background thread */
@@ -4311,6 +4317,11 @@ void msetCommand(client *c);
 void msetnxCommand(client *c);
 void msetexCommand(client *c);
 void zaddCommand(client *c);
+/* Background load-factor compaction (t_zset.c). */
+void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj);
+void zsetCompactionCron(void);
+void zsetCompactionCleanup(void);
+size_t zsetCompactionPendingCount(void);
 void zincrbyCommand(client *c);
 void zrangeCommand(client *c);
 void zrangebyscoreCommand(client *c);

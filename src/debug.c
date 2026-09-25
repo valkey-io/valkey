@@ -741,6 +741,13 @@ void debugCommand(client *c) {
                 nextra += used;
                 remaining -= used;
             }
+        } else if (val->encoding == OBJ_ENCODING_BTREE) {
+            /* Expose B+tree leaf count, load factor and compaction-parked state
+             * for introspection and load-factor compaction tests. */
+            zset *zs = objectGetVal(val);
+            snprintf(extra, sizeof(extra), " bt_num_leaves:%lu bt_load_factor:%.4f bt_compact_parked:%d",
+                     orderedIndexNumLeaves(zs->oi), orderedIndexLoadFactor(zs->oi),
+                     !orderedIndexCompactWorthwhile(zs->oi));
         }
 
         sds s = sdsempty();

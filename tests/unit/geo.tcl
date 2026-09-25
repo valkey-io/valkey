@@ -671,6 +671,8 @@ start_server {tags {"geo"}} {
         r geoadd points -122.40710645914077759 37.79430076631935975 position
         assert_equal {{position 0.0000}} [r GEOSEARCH points FROMMEMBER position BYRADIUS 0 mi ASC WITHDIST]
         assert_equal {{position 0.0000}} [r GEOSEARCH points FROMLONLAT -122.40710645914077759 37.79430076631935975 BYRADIUS 0 mi ASC WITHDIST]
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMMEMBER position BYBOX 0 0 mi ASC WITHDIST]
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMLONLAT -122.40710645914077759 37.79430076631935975 BYBOX 0 0 mi ASC WITHDIST]
     }
 
     foreach {type} {byradius bybox} {

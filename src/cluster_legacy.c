@@ -72,7 +72,7 @@ void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request);
-void clusterSendFailoverNack(clusterNode *node, uint8_t reason);
+void clusterSendFailoverNack(clusterNode *node, uint64_t request_epoch, uint8_t reason);
 static const char *clusterNackReasonString(uint8_t reason);
 void clusterUpdateState(void);
 list *clusterGetNodesInMyShard(clusterNode *node);
@@ -279,21 +279,11 @@ dictType clusterSdsToListType = {
     .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
-static uint64_t dictPtrHash(const void *key) {
-    /* We hash the pointer value itself. */
-    return dictGenHashFunction((const char *)&key, sizeof(key));
-}
-
-static int dictPtrCompare(const void *key1, const void *key2) {
-    return key1 == key2;
-}
-
 /* Dictionary type for mapping hash slots to cluster nodes.
- * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
-dictType clusterSlotDictType = {
+ * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers.
+ * The default hash function and key comparison already handle pointer keys. */
+static dictType clusterSlotDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictPtrHash,
-    .keyCompare = dictPtrCompare,
     .entryDestructor = zfree,
 };
 
@@ -1329,7 +1319,7 @@ void deriveAnnouncedPorts(int *announced_tcp_port,
 void clusterUpdateMyselfFlags(void) {
     if (!myself) return;
     int oldflags = myself->flags;
-    int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
+    int nofailover = server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
@@ -4759,13 +4749,19 @@ int clusterProcessPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
         if (!sender) return 1; /* We don't know that node. */
 
-        /* We consider this nack only if the sender is a primary serving
-         * a non-zero number of slots, and its currentEpoch is greater or
-         * equal to epoch where this node started the election. */
+        /* We consider this nack only if the sender is a primary serving a
+         * non-zero number of slots, we have an election in progress, and the
+         * NACK rejects the request of *this* election. The NACK echoes the
+         * epoch of the request it rejects; the sender's header currentEpoch
+         * is not usable for this (see clusterSendFailoverNack), because a
+         * voter rejecting an old request already claims a newer epoch, which
+         * would let a NACK for a previous election be counted against the
+         * current one and reset an election we could still win. */
+        uint64_t nack_epoch = ntohu64(msg->data.failover_nack.nack.epoch);
         if (server.cluster->failover_auth_time &&
             server.cluster->failover_auth_sent &&
             clusterNodeIsVotingPrimary(sender) &&
-            sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
+            nack_epoch == server.cluster->failover_auth_epoch) {
             clusterProcessFailoverAuthNack(sender, msg);
         }
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
@@ -5776,8 +5772,15 @@ static const char *clusterNackReasonString(uint8_t reason) {
     }
 }
 
-/* Send a FAILOVER_AUTH_NACK message to the specified node. */
-void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
+/* Send a FAILOVER_AUTH_NACK message to the specified node, rejecting its
+ * FAILOVER_AUTH_REQUEST for 'request_epoch'.
+ *
+ * The rejected request's epoch is echoed in the payload because the header's
+ * currentEpoch describes the voter, not the request: a REQ_EPOCH_OLD rejection
+ * is by definition sent while our currentEpoch is already past the request
+ * epoch, so a candidate that has since started a newer election could not
+ * otherwise tell this NACK apart from one rejecting that newer election. */
+void clusterSendFailoverNack(clusterNode *node, uint64_t request_epoch, uint8_t reason) {
     if (!node->link) return;
     if (!nodeSupportsFailoverAuthNack(node)) return;
 
@@ -5785,7 +5788,10 @@ void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK, msglen);
 
     clusterMsg *hdr = getMessageFromSendBlock(msgblock);
-    memcpy(&hdr->data.failover_nack.nack.reason, &reason, sizeof(reason));
+    clusterMsgDataFailoverNack *nack = &hdr->data.failover_nack.nack;
+    nack->epoch = htonu64(request_epoch);
+    nack->reason = reason;
+    memset(nack->reserved, 0, sizeof(nack->reserved));
 
     clusterSendMessage(node->link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
@@ -5821,7 +5827,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (!server.cluster->safe_to_join) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
                   node->name, humanNodename(node));
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE);
         return;
     }
 
@@ -5833,7 +5839,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): reqEpoch (%llu) < curEpoch(%llu)", node->name,
                   humanNodename(node), (unsigned long long)requestCurrentEpoch,
                   (unsigned long long)server.cluster->currentEpoch);
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD);
         return;
     }
 
@@ -5841,7 +5847,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (server.cluster->lastVoteEpoch == server.cluster->currentEpoch) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): already voted for epoch %llu", node->name,
                   humanNodename(node), (unsigned long long)server.cluster->currentEpoch);
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED);
         return;
     }
 
@@ -5852,15 +5858,15 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         if (clusterNodeIsPrimary(node)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: it is a primary node", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY);
         } else if (primary == NULL) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: I don't know its primary",
                       node->name, humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY);
         } else if (!nodeFailed(primary)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
         }
         return;
     }
@@ -5901,7 +5907,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
              * for auth_timeout. TCP ordering on the same link guarantees the
              * UPDATE arrives before the NACK. */
             clusterSendUpdate(node->link, slot_owner);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
             return;
         }
     }
@@ -6110,6 +6116,10 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_NO_DATA:
+        msg = "Replication offset is 0 and no data has been received from the primary. "
+              "Please check the 'cluster-replica-no-failover' configuration option.";
+        break;
     default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
@@ -6215,7 +6225,7 @@ void clusterHandleReplicaFailover(void) {
      *    not a manual failover. */
     if (clusterNodeIsPrimary(myself) || myself->replicaof == NULL ||
         (!nodeFailed(myself->replicaof) && !manual_failover) ||
-        (server.cluster_replica_no_failover && !manual_failover)) {
+        (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES && !manual_failover)) {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
@@ -6246,6 +6256,23 @@ void clusterHandleReplicaFailover(void) {
             clusterLogCantFailover(CLUSTER_CANT_FAILOVER_DATA_AGE);
             return;
         }
+    }
+
+    /* Refuse to start an automatic failover while we are still empty, when
+     * configured to do so. An empty replica has never received any data from
+     * its primary (e.g. it was just added and hasn't finished the initial
+     * sync, so its replication offset is 0), so promoting it would make an
+     * empty dataset the new primary and lose all the data of the shard.
+     *
+     * Note that "empty" refers to the data received from the primary, not to
+     * the number of keys: a replica fully synced with an empty primary has a
+     * non-zero offset and is therefore not considered empty.
+     *
+     * Check bypassed for manual failovers. */
+    if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY &&
+        !manual_failover && replicationGetReplicaOffset() == 0) {
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_NO_DATA);
+        return;
     }
 
     /* If the previous failover attempt timeout and the retry time has

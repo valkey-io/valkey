@@ -451,6 +451,8 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
+        # This test can't be executed on x86 when valgrind is enabled,
+        # valgrind simulation will return a finite result on 1e4932 + 1e4932
         test {INCREX BYFLOAT arithmetic overflow does not propagate} {
             set big [ldbl_overflow_operand -1]
             r -1 del foo
@@ -464,7 +466,7 @@ start_server {tags {"repl external:skip"}} {
                 {set marker 1}
             }
             close_replication_stream $repl
-        }
+        } {} {valgrind:skip}
 
         test {ROLE in master reports master with a slave} {
             set res [r -1 role]
@@ -1272,7 +1274,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
 # per-key save delay keeps the compressed diskless transfer in flight while one
 # replica is killed. The primary's RDB child must complete without crashing and
 # the surviving replica must converge.
-start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}} {
+start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4 repl-compression lz4}} {
     set master [srv 0 client]
     $master config set repl-diskless-sync yes
     $master config set repl-diskless-sync-delay 5
@@ -1287,9 +1289,9 @@ start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}
     $master config set rdb-key-save-delay 1000
 
     test "diskless replica drops during compressed rdb pipe" {
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+        start_server {overrides {save "" rdbcompression lz4 repl-compression lz4 repl-diskless-load swapdb}} {
             set survivor [srv 0 client]
-            start_server {overrides {save "" rdbcompression lz4}} {
+            start_server {overrides {save "" rdbcompression lz4 repl-compression lz4}} {
                 set loglines [count_log_lines -2]
                 $survivor replicaof $master_host $master_port
                 [srv 0 client] replicaof $master_host $master_port

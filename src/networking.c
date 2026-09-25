@@ -37,6 +37,7 @@
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "compression_stream.h"
 #include "throttle.h"
 #include "throttle_repl.h"
 #include "stat_calc.h"
@@ -1816,6 +1817,15 @@ int clientHasPendingReplies(client *c) {
         /* Replicas use global shared replication buffer instead of
          * private output buffer. */
         serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
+
+        /* Unsent compressed data counts as pending. Skip while CLIENT_PENDING_IO:
+         * the IO thread owns the compression state; postWriteToReplica re-checks
+         * when the job completes. */
+        if (c->repl_data->repl_compression && c->io_write_state != CLIENT_PENDING_IO &&
+            c->repl_data->repl_compression->out_buf_pos < sdslen(c->repl_data->repl_compression->out_buf)) {
+            return 1;
+        }
+
         if (c->repl_data->ref_repl_buf_node == NULL) return 0;
 
         /* If the last replication buffer block content is totally sent,
@@ -2658,61 +2668,238 @@ client *lookupClientByID(uint64_t id) {
     return c;
 }
 
+/* Advance the replica's replication-buffer cursor (ref_repl_buf_node /
+ * ref_block_pos) past consumed raw bytes, releasing the reference on each
+ * fully-sent block. Shared by the compressed and plaintext post-write paths. */
+static void advanceReplicaReplBufferCursor(client *c, size_t consumed) {
+    listNode *node = c->repl_data->ref_repl_buf_node;
+    listNode *next_node = NULL;
+    size_t remaining = consumed + c->repl_data->ref_block_pos;
+    replBufBlock *block = listNodeValue(node);
+
+    while (remaining >= block->used) {
+        next_node = listNextNode(node);
+        if (!next_node) break; /* End of list */
+
+        remaining -= block->used;
+        block->refcount--;
+
+        node = next_node;
+        block = listNodeValue(node);
+        block->refcount++;
+    }
+
+    serverAssert(remaining <= block->used);
+    c->repl_data->ref_repl_buf_node = node;
+    c->repl_data->ref_block_pos = remaining;
+}
+
 static void postWriteToReplica(client *c) {
+    replicaCompressionState *compression = c->repl_data->repl_compression;
+    if (c->write_flags & WRITE_FLAGS_COMPRESSION_ERROR) {
+        serverAssert(compression != NULL);
+        serverLog(LL_WARNING, "Compression error on replica %s (algo=%s, batch_uncompressed_bytes=%zu), disconnecting",
+                  replicationGetReplicaName(c), compressionAlgoName(compression->compressor.algo),
+                  compression->batch_uncompressed_bytes);
+        freeClientAsync(c);
+        return;
+    }
+
     if (c->nwritten <= 0) return;
 
     server.stat_net_repl_output_bytes += c->nwritten;
 
-    /* Locate the last node which has leftover data and
-     * decrement reference counts of all nodes in front of it.
-     * Set c->ref_repl_buf_node to point to the last node and
-     * c->ref_block_pos to the offset within that node  */
-    listNode *curr = c->repl_data->ref_repl_buf_node;
-    listNode *next = NULL;
-    size_t nwritten = c->nwritten + c->repl_data->ref_block_pos;
-    replBufBlock *o = listNodeValue(curr);
+    if (compression) {
+        /* An IO thread may send the batch but cannot update replication block
+         * refcounts while the main thread appends and trims them. Advance the
+         * cursor here only after the whole compressed batch has been sent. */
+        if (compression->out_buf_pos == sdslen(compression->out_buf)) {
+            size_t batch_uncompressed_bytes = compression->batch_uncompressed_bytes;
 
-    while (nwritten >= o->used) {
-        next = listNextNode(curr);
-        if (!next) break; /* End of list */
+            advanceReplicaReplBufferCursor(c, batch_uncompressed_bytes);
 
-        nwritten -= o->used;
-        o->refcount--;
+            compression->uncompressed_bytes += batch_uncompressed_bytes;
+            compression->compressed_bytes += sdslen(compression->out_buf);
 
-        curr = next;
-        o = listNodeValue(curr);
-        o->refcount++;
+            /* Start the next batch. One batch's compressed output is bounded
+             * by REPL_COMPRESSION_BATCH_SIZE plus the codec's small
+             * worst-case expansion margin, so the allocation is retained. */
+            sdsclear(compression->out_buf);
+            compression->out_buf_pos = 0;
+            compression->batch_uncompressed_bytes = 0;
+
+            incrementalTrimReplicationBacklog(REPL_BACKLOG_TRIM_BLOCKS_PER_CALL);
+        }
+        return;
     }
 
-    serverAssert(nwritten <= o->used);
-    c->repl_data->ref_repl_buf_node = curr;
-    c->repl_data->ref_block_pos = nwritten;
+    advanceReplicaReplBufferCursor(c, c->nwritten);
 
     incrementalTrimReplicationBacklog(REPL_BACKLOG_TRIM_BLOCKS_PER_CALL);
 }
 
-static void writeToReplica(client *c) {
-    listNode *last_node;
-    size_t bufpos;
-
-    serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
-    /* Determine the last block and buffer position based on thread context */
+/* Resolve the replication-buffer range available to replica c: the
+ * last block to send and the end position within it (the start is the
+ * replica's own cursor, ref_repl_buf_node/ref_block_pos). The main thread
+ * reads the live buffer tail; an IO thread uses the snapshot taken when the
+ * write job was dispatched. Returns false only when the buffer has no blocks.
+ * Shared by the plaintext and compressed write paths. */
+static bool getReplicaWriteRange(client *c, listNode **last_node, size_t *last_pos) {
     if (inMainThread()) {
-        last_node = listLast(server.repl_buffer_blocks);
-        if (!last_node) return;
-        bufpos = ((replBufBlock *)listNodeValue(last_node))->used;
+        *last_node = listLast(server.repl_buffer_blocks);
+        if (!*last_node) return false;
+        *last_pos = ((replBufBlock *)listNodeValue(*last_node))->used;
     } else {
-        last_node = c->io_last_reply_block;
-        serverAssert(last_node != NULL);
-        bufpos = c->io_last_bufpos;
+        *last_node = c->io_last_reply_block;
+        serverAssert(*last_node != NULL);
+        *last_pos = c->io_last_bufpos;
     }
+    return true;
+}
+
+/* Append compressed input to the link's staging buffer. The first call emits
+ * the replication envelope. Frames may span multiple socket-write batches;
+ * later frames start without repeating the envelope. */
+static int compressReplicaDataToOutputBuffer(replicaCompressionState *compression,
+                                             const uint8_t *input,
+                                             size_t input_len,
+                                             compressFlushMode flush_mode) {
+    if (!compression->envelope_written) {
+        uint8_t envelope[VCS_ENVELOPE_SIZE];
+        if (vcsBuildEnvelope(envelope, compression->compressor.algo, VCS_STREAM_REPL) == C_ERR) return C_ERR;
+        compression->out_buf = sdscatlen(compression->out_buf, envelope, sizeof(envelope));
+        compression->envelope_written = true;
+    }
+    size_t bound = streamCompressorOutputBound(&compression->compressor, input_len);
+    serverAssert(bound > 0);
+    compression->out_buf = sdsMakeRoomFor(compression->out_buf, bound);
+    ssize_t compressed =
+        streamCompressorFeed(&compression->compressor, (uint8_t *)compression->out_buf + sdslen(compression->out_buf),
+                             sdsavail(compression->out_buf), input, input_len, flush_mode);
+    if (compressed < 0) return C_ERR;
+    sdsIncrLen(compression->out_buf, (size_t)compressed);
+    return C_OK;
+}
+
+/* Compressed write path for replicas on either the IO thread or the main thread. */
+static void writeToReplicaCompressed(client *c) {
+    replicaCompressionState *compression = c->repl_data->repl_compression;
+
+    /* Finish sending the previous batch's leftover first; compressed bytes
+     * must reach the socket in order. */
+    if (compression->out_buf_pos < sdslen(compression->out_buf)) {
+        size_t avail = sdslen(compression->out_buf) - compression->out_buf_pos;
+        c->nwritten = connWrite(c->conn,
+                                compression->out_buf + compression->out_buf_pos,
+                                avail);
+        if (c->nwritten <= 0) {
+            c->write_flags |= WRITE_FLAGS_WRITE_ERROR;
+            return;
+        }
+        compression->out_buf_pos += c->nwritten;
+        /* Skip trim here; postWriteToReplica trims only after the batch fully
+         * drains. Worst-case trim delay is one batch (REPL_COMPRESSION_BATCH_SIZE). */
+        return;
+    }
+
+    /* postWriteToReplica resets the batch once it fully drains, so a fresh
+     * batch always starts from an empty buffer. */
+    serverAssert(sdslen(compression->out_buf) == 0 && compression->out_buf_pos == 0 &&
+                 compression->batch_uncompressed_bytes == 0);
+
+    listNode *last_node;
+    size_t last_pos;
+    if (!getReplicaWriteRange(c, &last_node, &last_pos)) return;
+    listNode *first_node = c->repl_data->ref_repl_buf_node;
+
+    /* Compress new replication-backlog bytes, capped at
+     * REPL_COMPRESSION_BATCH_SIZE raw bytes per cycle to bound per-batch
+     * latency and keep out_buf size predictable. */
+    size_t batch_uncompressed_bytes = 0;
+    for (listNode *cur = first_node; cur != NULL; cur = listNextNode(cur)) {
+        replBufBlock *block = listNodeValue(cur);
+        size_t start = (cur == first_node) ? c->repl_data->ref_block_pos : 0;
+        size_t end = (cur == last_node) ? last_pos : block->used;
+
+        serverAssert(end >= start);
+        if (end == start) {
+            if (cur == last_node) break;
+            continue;
+        }
+
+        size_t len = end - start;
+        /* Cap this write at the remaining batch budget; the cursor resumes mid-block next cycle. */
+        size_t remaining = REPL_COMPRESSION_BATCH_SIZE - batch_uncompressed_bytes;
+        if (len > remaining) len = remaining;
+        if (compressReplicaDataToOutputBuffer(compression, (const uint8_t *)block->buf + start, len,
+                                              COMPRESS_FLUSH_CONTINUE) == C_ERR) {
+            c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
+            return;
+        }
+        batch_uncompressed_bytes += len;
+        if (batch_uncompressed_bytes >= REPL_COMPRESSION_BATCH_SIZE) break;
+        if (cur == last_node) break;
+    }
+
+    if (batch_uncompressed_bytes == 0) return;
+
+    /* Drain codec-buffered bytes so the whole batch lands in out_buf. Codecs
+     * that need bounded frames for integrity retain history across small write
+     * batches and close after reaching the configured raw-byte threshold. */
+    compressFlushMode flush_mode = COMPRESS_FLUSH_SYNC;
+    if (compression->frame_max_bytes &&
+        compression->frame_uncompressed_bytes + batch_uncompressed_bytes >= compression->frame_max_bytes) {
+        flush_mode = COMPRESS_FLUSH_END;
+    }
+    if (compressReplicaDataToOutputBuffer(compression, NULL, 0, flush_mode) != C_OK) {
+        c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
+        return;
+    }
+
+    if (compression->frame_max_bytes) {
+        if (flush_mode == COMPRESS_FLUSH_END) {
+            compression->frame_uncompressed_bytes = 0;
+        } else {
+            compression->frame_uncompressed_bytes += batch_uncompressed_bytes;
+        }
+    }
+    compression->batch_uncompressed_bytes = batch_uncompressed_bytes;
+
+    /* Send out_buf. The backlog cursor advances only after a full send
+     * (postWriteToReplica), so a partial send keeps it pinned to the start of
+     * the batch. */
+    size_t avail = sdslen(compression->out_buf);
+    serverAssert(avail > 0);
+
+    c->nwritten = connWrite(c->conn, compression->out_buf, avail);
+    if (c->nwritten <= 0) {
+        c->write_flags |= WRITE_FLAGS_WRITE_ERROR;
+        return;
+    }
+    compression->out_buf_pos = c->nwritten;
+}
+
+static void writeToReplica(client *c) {
+    serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
+
+    /* Compressed replicas use the framed write path; the decision lives here so
+     * callers do not branch on the per-replica compression state. */
+    if (c->repl_data->repl_compression != NULL) {
+        writeToReplicaCompressed(c);
+        return;
+    }
+
+    listNode *last_node;
+    size_t last_pos;
+
+    if (!getReplicaWriteRange(c, &last_node, &last_pos)) return;
 
     listNode *first_node = c->repl_data->ref_repl_buf_node;
 
     /* Handle the single block case */
     if (first_node == last_node) {
         replBufBlock *b = listNodeValue(first_node);
-        c->nwritten = connWrite(c->conn, b->buf + c->repl_data->ref_block_pos, bufpos - c->repl_data->ref_block_pos);
+        c->nwritten = connWrite(c->conn, b->buf + c->repl_data->ref_block_pos, last_pos - c->repl_data->ref_block_pos);
         if (c->nwritten <= 0) {
             c->write_flags |= WRITE_FLAGS_WRITE_ERROR;
         }
@@ -2729,7 +2916,7 @@ static void writeToReplica(client *c) {
     for (listNode *cur_node = first_node; cur_node != NULL && iovcnt < iovmax; cur_node = listNextNode(cur_node)) {
         replBufBlock *cur_block = listNodeValue(cur_node);
         size_t start = (cur_node == first_node) ? c->repl_data->ref_block_pos : 0;
-        size_t len = (cur_node == last_node) ? bufpos : cur_block->used;
+        size_t len = (cur_node == last_node) ? last_pos : cur_block->used;
         len -= start;
 
         /* For TLS, we should not call SSL_write() with num=0 */
@@ -3399,7 +3586,9 @@ int handleReadResult(client *c) {
     c->last_interaction = server.unixtime;
     c->net_input_bytes += c->nread;
     if (isReplicatedClient(c)) {
-        c->repl_data->read_reploff += c->nread;
+        /* A reader-active primary link advances read_reploff with decoded
+         * bytes (replDecodeToQueryBuf); c->nread counts wire bytes here. */
+        if (!(c->flag.primary && server.repl_stream_reader)) c->repl_data->read_reploff += c->nread;
         if (getClientType(c) == CLIENT_TYPE_PRIMARY) {
             server.stat_net_repl_input_bytes += c->nread;
         } else {
@@ -4606,6 +4795,26 @@ static bool readToQueryBuf(client *c) {
 }
 
 #define REPL_MAX_READS_PER_IO_EVENT 25
+
+/* Keep the wire scratch buffer off the stack of ordinary client reads. */
+__attribute__((noinline)) static bool readAndDecodePrimaryStream(client *primary,
+                                                                 size_t output_budget,
+                                                                 ssize_t *decoded_bytes,
+                                                                 bool *full_read) {
+    uint8_t wire_buf[PROTO_IOBUF_LEN];
+    if (primary->flag.close_asap) {
+        primary->nread = 0;
+        *full_read = false;
+    } else {
+        primary->nread = connRead(primary->conn, wire_buf, sizeof(wire_buf));
+        *full_read = primary->nread == (int)sizeof(wire_buf);
+    }
+    if (handleReadResult(primary) != C_OK) return false;
+
+    *decoded_bytes = replDecodeToQueryBuf(primary, wire_buf, (size_t)primary->nread, output_budget);
+    return true;
+}
+
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     /* Check if we can send the client to be handled by the IO-thread */
@@ -4615,15 +4824,38 @@ void readQueryFromClient(connection *conn) {
 
     bool repeat = false;
     int iter = 0;
+    size_t decoded_bytes = 0;
     do {
-        bool full_read = readToQueryBuf(c);
-        if (handleReadResult(c) == C_OK) {
+        ssize_t decoded_this_iteration = 0;
+        bool full_read;
+        bool read_ok = true;
+        bool decode_repl_stream = c->flag.primary && server.repl_stream_reader;
+        bool resume_decode = decode_repl_stream && replStreamHasPendingDecode();
+        size_t decode_budget = REPL_DECODE_EVENT_BUDGET - decoded_bytes;
+        if (resume_decode) {
+            decoded_this_iteration = replDecodeToQueryBuf(c, NULL, 0, decode_budget);
+            full_read = !replStreamHasPendingDecode();
+        } else if (decode_repl_stream) {
+            read_ok = readAndDecodePrimaryStream(c, decode_budget, &decoded_this_iteration, &full_read);
+        } else {
+            full_read = readToQueryBuf(c);
+            read_ok = handleReadResult(c) == C_OK;
+        }
+        if (read_ok) {
+            if (decoded_this_iteration < 0) {
+                serverLog(LL_WARNING, "Disconnecting primary due to replication stream decompression failure");
+                freeClientAsync(c);
+                return;
+            }
+            decoded_bytes += (size_t)decoded_this_iteration;
             if (processInputBuffer(c) == C_ERR) return;
             trimCommandQueue(c);
+            if (decode_repl_stream && replStreamHasPendingDecode()) full_read = false;
         }
         repeat = (c->flag.primary &&
                   !c->flag.close_asap &&
                   ++iter < REPL_MAX_READS_PER_IO_EVENT &&
+                  decoded_bytes < REPL_DECODE_EVENT_BUDGET &&
                   full_read);
         beforeNextClient(c);
     } while (repeat);
@@ -6372,6 +6604,8 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
             repl_buf_size = last->repl_offset + last->size - cur->repl_offset;
             repl_node_num = last->id - cur->id + 1;
         }
+        /* A compressed batch keeps this cursor pinned until the staged output
+         * drains, so repl_buf_size already represents all unsent data. */
         return repl_buf_size + (repl_node_size * repl_node_num);
     }
 
@@ -6397,6 +6631,23 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     mem += c->querybuf ? sdsAllocSize(c->querybuf) : 0;
     mem += zmalloc_size(c);
     mem += c->buf_usable_size;
+    /* Compression staging capacity is retained for reuse, so account it as
+     * client memory rather than pending output. Skip while an IO thread may
+     * reallocate the buffer. */
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_compression &&
+        c->io_write_state != CLIENT_PENDING_IO) {
+        replicaCompressionState *compression = c->repl_data->repl_compression;
+        mem += zmalloc_size(compression) + sdsAllocSize(compression->out_buf) + compression->compressor.ctx_memory;
+    }
+    /* The stream decoder for a compressed upstream link hangs off the server
+     * struct, but it exists for exactly this link, so attribute it to the
+     * primary client. Reads are not offloaded to IO threads while the decoder
+     * is active, so its buffers are stable here. */
+    if (c->flag.primary && server.repl_stream_reader) {
+        streamPushReader *reader = server.repl_stream_reader;
+        mem += zmalloc_size(reader) + reader->decompressor.ctx_memory;
+        mem += reader->pending_input ? sdsAllocSize(reader->pending_input) : 0;
+    }
     /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */

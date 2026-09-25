@@ -182,11 +182,23 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {"yes", RDB_COMPRESSION_YES},
                                      {"lzf", RDB_COMPRESSION_LZF},
                                      {"lz4", RDB_COMPRESSION_LZ4},
+                                     {"zstd", RDB_COMPRESSION_ZSTD},
                                      {NULL, 0}};
 
 configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
                                    {"forkless", RDB_BGSAVE_TYPE_FORKLESS},
                                    {NULL, 0}};
+
+configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILOVER_NO},
+                                                 {"yes", CLUSTER_REPLICA_NO_FAILOVER_YES},
+                                                 {"if-empty", CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY},
+                                                 {NULL, 0}};
+
+configEnum repl_compression_enum[] = {{"no", REPL_COMPRESSION_NO},
+                                      {"yes", REPL_COMPRESSION_YES},
+                                      {"lz4", REPL_COMPRESSION_LZ4},
+                                      {"zstd", REPL_COMPRESSION_ZSTD},
+                                      {NULL, 0}};
 
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
@@ -599,8 +611,16 @@ void loadServerConfigFromString(sds config) {
         } else if (!strcasecmp(argv[0], "user") && argc >= 2) {
             int argc_err;
             if (ACLAppendUserForLoading(argv, argc, &argc_err) == C_ERR) {
-                const char *errmsg = ACLSetUserStringError();
+                const char *errmsg = ACLSetStringError();
                 snprintf(buf, sizeof(buf), "Error in user declaration '%s': %s", argv[argc_err], errmsg);
+                err = buf;
+                goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "role") && argc >= 2) {
+            int argc_err;
+            if (ACLAppendRoleForLoading(argv, argc, &argc_err) == C_ERR) {
+                const char *errmsg = ACLSetStringError();
+                snprintf(buf, sizeof(buf), "Error in role declaration '%s': %s", argv[argc_err], errmsg);
                 err = buf;
                 goto loaderr;
             }
@@ -1249,7 +1269,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
              /* The following is a list of config features that are only supported in
               * config file parsing and are not recognized by lookupConfig */
              strcasecmp(argv[0], "include") && strcasecmp(argv[0], "rename-command") && strcasecmp(argv[0], "user") &&
-             strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
+             strcasecmp(argv[0], "role") && strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
             /* The line is either unparsable for some reason, for
              * instance it may have unbalanced quotes, may contain a
              * config that doesn't exist anymore, for instance a module that got
@@ -1514,36 +1534,36 @@ void rewriteConfigSaveOption(standardConfig *config, const char *name, struct re
     rewriteConfigMarkAsProcessed(state, name);
 }
 
-/* Rewrite the user option. */
-void rewriteConfigUserOption(struct rewriteConfigState *state) {
+/* Rewrite the user or role option. */
+static void rewriteConfigAclOption(struct rewriteConfigState *state, const char *directive, rax *table) {
     /* If there is a user file defined we just mark this configuration
      * directive as processed, so that all the lines containing users
      * inside the config file gets discarded. */
     if (server.acl_filename[0] != '\0') {
-        rewriteConfigMarkAsProcessed(state, "user");
+        rewriteConfigMarkAsProcessed(state, directive);
         return;
     }
 
-    /* Otherwise, scan the list of users and rewrite every line. Note that
-     * in case the list here is empty, the effect will just be to comment
-     * all the users directive inside the config file. */
+    /* Otherwise, scan the table and rewrite every line. Note that in case the
+     * table here is empty, the effect will just be to comment all the matching
+     * directives inside the config file. */
     raxIterator ri;
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
-        sds line = sdsnew("user ");
+        sds line = sdscatfmt(sdsempty(), "%s ", directive);
         line = sdscatsds(line, u->name);
         line = sdscatlen(line, " ", 1);
         robj *descr = ACLDescribeUser(u);
         line = sdscatsds(line, objectGetVal(descr));
         decrRefCount(descr);
-        rewriteConfigRewriteLine(state, "user", line, 1);
+        rewriteConfigRewriteLine(state, directive, line, 1);
     }
     raxStop(&ri);
 
-    /* Mark "user" as processed in case there are no defined users. */
-    rewriteConfigMarkAsProcessed(state, "user");
+    /* Mark the directive as processed in case the table is empty. */
+    rewriteConfigMarkAsProcessed(state, directive);
 }
 
 /* Rewrite the dir option, always using absolute paths.*/
@@ -1873,7 +1893,8 @@ int rewriteConfig(char *path, int force_write) {
     }
     dictReleaseIterator(di);
 
-    rewriteConfigUserOption(state);
+    rewriteConfigAclOption(state, "role", Roles);
+    rewriteConfigAclOption(state, "user", Users);
     rewriteConfigLoadmoduleOption(state);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
@@ -2486,6 +2507,24 @@ static int isValidActiveDefrag(int val, const char **err) {
     return 1;
 }
 
+static int isZstdCompressionAvailable(const char **err) {
+    if (!streamCodecIsSupported(ALGO_ZSTD)) {
+        *err = "Zstandard compression is not available in this build";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidRdbCompression(int val, const char **err) {
+    if (val == RDB_COMPRESSION_ZSTD) return isZstdCompressionAvailable(err);
+    return 1;
+}
+
+static int isValidReplCompression(int val, const char **err) {
+    if (val == REPL_COMPRESSION_ZSTD) return isZstdCompressionAvailable(err);
+    return 1;
+}
+
 static int isValidClusterConfigFile(char *val, const char **err) {
     if (!strcmp(val, "")) {
         *err = "cluster-config-file can't be empty";
@@ -2721,6 +2760,9 @@ static int updateMaxmemory(const char **err) {
         }
         startEvictionTimeProc();
     }
+    /* maxmemory-scripts can be a percentage of maxmemory, in that case the
+     * scripts eviction limit changed together with maxmemory. */
+    if (server.maxmemory_scripts < 0) startScriptsEvictionTimeProc();
     return 1;
 }
 
@@ -3136,7 +3178,7 @@ static int setConfigNotifyKeyspaceEventsOption(standardConfig *config, sds *argv
     }
     int flags = keyspaceEventsStringToFlags(argv[0]);
     if (flags == -1) {
-        *err = "Invalid event class character. Use 'Ag$lshzxeKEtmdn'.";
+        *err = "Invalid event class character. Use 'Ag$lshzxeKEtmdnp'.";
         return 0;
     }
     server.notify_keyspace_events = flags;
@@ -3382,6 +3424,12 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+static int updateMaxmemoryScripts(const char **err) {
+    UNUSED(err);
+    startScriptsEvictionTimeProc();
+    return 1;
+}
+
 #define HASH_SEED_MAX_LEN 256
 static int isValidDbHashSeed(sds val, const char **err) {
     if (sdslen(val) > HASH_SEED_MAX_LEN) {
@@ -3419,7 +3467,6 @@ standardConfig static_configs[] = {
     createBoolConfig("aof-load-truncated", NULL, MODIFIABLE_CONFIG, server.aof_load_truncated, 1, NULL, NULL),
     createBoolConfig("aof-use-rdb-preamble", NULL, MODIFIABLE_CONFIG, server.aof_use_rdb_preamble, 1, NULL, NULL),
     createBoolConfig("aof-timestamp-enabled", NULL, MODIFIABLE_CONFIG, server.aof_timestamp_enabled, 0, NULL, NULL),
-    createBoolConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, server.cluster_replica_no_failover, 0, NULL, updateClusterFlags), /* Failover by default. */
     createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 1, NULL, NULL),
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, server.repl_serve_stale_data, 1, NULL, NULL),
     createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, NULL),
@@ -3508,7 +3555,9 @@ standardConfig static_configs[] = {
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
-    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
+    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, isValidRdbCompression, NULL),
+    createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
+    createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, isValidReplCompression, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3619,6 +3668,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("maxmemory-scripts", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_scripts, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, updateMaxmemoryScripts),
     createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */

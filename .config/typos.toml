@@ -12,6 +12,7 @@ ignore-hidden = false
 [default.extend-words]
 exat = "exat"
 optin = "optin"
+passin = "passin"
 smove = "smove"
 Parth = "Parth" # seems like the spellchecker does not like it is similar to "Path"
 Collet = "Collet" # LZ4 author Yann Collet
@@ -43,11 +44,6 @@ extend-ignore-re = [
 [type.tcl]
 extend-ignore-re = [
     "DUMPed",
-]
-
-[type.sh]
-extend-ignore-re = [
-    "passin", # gen-test-certs.sh
 ]
 
 [type.c.extend-identifiers]

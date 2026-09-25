@@ -1034,11 +1034,11 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         assert {[clock milliseconds] < $deadline_base}
         
         # Start the save just before the first deadline, so that the stretch of
-        # save that has to be held open below is a fixed ~3.5 s no matter how
-        # long the loop above took. Starting it as soon as the loop ends would
-        # make that stretch grow with the budget, and it would then have to
-        # outlast the injected save duration, which does not grow with it.
-        while {[clock milliseconds] < $deadline_base - 500} {
+        # save that has to be held open below is a fixed ~4 s no matter how long
+        # the loop above took. Starting it as soon as the loop ends would make
+        # that stretch grow with the budget, and it would then have to outlast
+        # the injected save duration, which does not grow with it.
+        while {[clock milliseconds] < $deadline_base - 1000} {
             after 50
         }
         
@@ -1049,6 +1049,12 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         r config set rdb-key-save-delay 10000
         r config set bgsave-default-method forkless
         set expired_before [s expired_keys]
+        
+        # Nothing has expired yet: the earliest deadline is still 2 s out. This
+        # is the positive-side check for the early key groups, whose deadlines
+        # fall inside the save window and which are therefore already gone by
+        # the time the post-reload verification below runs.
+        assert_equal [expr {$num_keys * 12}] [r dbsize]
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -1056,11 +1062,9 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not start"
         }
         
-        # Nothing should have expired yet: the earliest deadline is still 1.5 s
-        # out. This is the positive-side check for the early key groups, whose
-        # deadlines fall inside the save window and which are therefore already
-        # gone by the time the post-reload verification below runs.
-        assert_equal [expr {$num_keys * 12}] [r dbsize]
+        # The save has to be open before the first key expires, or the keys below
+        # expire with no save running and the window proves nothing.
+        assert {[clock milliseconds] < $deadline_base + 1000}
         
         # Keep the save in progress until the earliest deadlines have lapsed.
         while {[clock milliseconds] < $deadline_base + 3000} {

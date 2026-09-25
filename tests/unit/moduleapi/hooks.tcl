@@ -386,6 +386,14 @@ tags "modules" {
     }
 
     start_cluster 3 3 [list tags [list logreqres:skip external:skip cluster] overrides [list loadmodule "$testmodule"]] {
+        test {Test cluster topology change hook fires on cluster formation} {
+            # Runs before any slot migration so the count is attributable to
+            # formation: assigning slots and adding nodes fires the event.
+            for {set i 0} {$i < 6} {incr i} {
+                assert {[R $i hooks.event_count cluster-topology-change] > 0}
+            }
+        }
+
         test {Test atomic slot migration hooks} {
             assert_match "OK" [R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1]
             set node0_id [R 0 CLUSTER MYID]
@@ -464,6 +472,27 @@ tags "modules" {
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-jobname] $job_name
+        }
+
+        test {Test cluster topology change hook fires when a replica reparents} {
+            # Reparenting changes no slot owner or node membership; baseline
+            # each node, then assert it fires a fresh event on the relationship
+            # change learned via gossip.
+            set base {}
+            for {set i 0} {$i < 6} {incr i} {
+                lappend base [R $i hooks.event_count cluster-topology-change]
+            }
+
+            set node0_id [R 0 CLUSTER MYID]
+            assert_match "OK" [R 4 CLUSTER REPLICATE $node0_id]
+
+            for {set i 0} {$i < 6} {incr i} {
+                wait_for_condition 50 100 {
+                    [R $i hooks.event_count cluster-topology-change] > [lindex $base $i]
+                } else {
+                    fail "topology-change event not fired on node $i after reparent"
+                }
+            }
         }
     }
 }

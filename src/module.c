@@ -12608,6 +12608,7 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED */
+    -1,                                            /* VALKEYMODULE_EVENT_CLUSTER_TOPOLOGY_CHANGE */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -13021,6 +13022,17 @@ static uint64_t moduleEventVersions[] = {
  *       - VALKEYMODULE_ACL_LOG_KEY / VALKEYMODULE_ACL_LOG_CHANNEL:
  *         the denied key or channel name from argv
  *       - All other ACL subevents: NULL
+ *
+ * * ValkeyModuleEvent_ClusterTopologyChange
+ *
+ *     Called when the local view of the cluster topology changes: a slot's
+ *     owner is assigned or unassigned, or a node is added to or removed from
+ *     the cluster. Multiple changes within one event loop iteration are
+ *     coalesced into a single notification fired before sleep.
+ *
+ *     The subevent is always 0 and the data pointer is always NULL. Modules
+ *     should query the current topology (e.g. via the cluster API) when
+ *     handling this event rather than relying on event payload.
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event

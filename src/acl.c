@@ -35,6 +35,7 @@
 #include <ctype.h>
 
 #include "script.h"
+#include "io_threads.h"
 
 /* =============================================================================
  * Global state for ACLs
@@ -205,6 +206,9 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
 static struct serverCommand *ACLLookupCommand(const char *name);
 static sds ACLDescribeSelector(aclSelector *selector);
 static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetlen);
+/* acl-offload structural guard (defined with the other offload helpers). */
+static int aclUserIsPublished(user *u);
+static inline void aclOffloadAssertNoReaders(void);
 static sds *ACLMergeSelectorArguments(sds *argv, int argc, int *merged_argc, int *invalid_idx);
 static int ACLStringHasSpaces(const char *s, size_t len);
 static int ACLUserHasAllChannels(user *u);
@@ -523,6 +527,9 @@ user *ACLCreateUnlinkedUser(void) {
 /* Remove user from all roles' member lists and release the roles list. */
 static void ACLUserClearRoles(user *u) {
     if (!u->roles) return;
+    /* acl-offload: IO threads walk u->roles while tagging; only touch it
+     * in place once no job is in flight (ACLCopyUser quiesces before this). */
+    if (aclUserIsPublished(u)) aclOffloadAssertNoReaders();
     listIter li;
     listNode *ln;
     listRewind(u->roles, &li);
@@ -545,12 +552,17 @@ static void ACLCopyRoles(user *dst, user *src) {
         user *r = listNodeValue(ln);
         listAddNodeTail(dst->roles, r);
         serverAssert(dictAdd(r->members, dst, dst) == DICT_OK);
+        /* acl-offload: a role held by a bound user is reachable from IO
+         * threads through that user, with no clientSetUser in between. */
+        if ((dst->flags & USER_FLAG_BOUND) && !(r->flags & USER_FLAG_BOUND)) r->flags |= USER_FLAG_BOUND;
     }
 }
 
 /* Release the memory used by the user structure. Note that this function
  * will not remove the user from the Users global radix tree. */
 void ACLFreeUser(user *u) {
+    /* acl-offload: a linked user may be referenced by an in-flight IO job. */
+    if (aclUserIsPublished(u)) aclOffloadAssertNoReaders();
     ACLUserClearRoles(u);
     sdsfree(u->name);
     if (u->acl_string) {
@@ -593,18 +605,39 @@ void ACLFreeUserAndKillClients(user *u) {
             freeClientOrCloseLater(c, 1);
         }
     }
+    /* acl-offload: clients were rebound above while their parsed commands may
+     * carry verdicts computed under 'u'; an IO thread may still be reading 'u'. */
+    aclOffloadBumpEpoch();
+    aclOffloadQuiesce();
     ACLFreeUser(u);
 }
 
 /* Copy the user ACL rules from the source user 'src' to the destination
  * user 'dst' so that at the end of the process they'll have exactly the
  * same rules (but the names will continue to be the original ones). */
-static void ACLCopyUser(user *dst, user *src) {
+static void ACLCopyUser(user *dst, user *src, int dst_is_live) {
     if (dst->passwords) listRelease(dst->passwords);
-    listRelease(dst->selectors);
     dst->passwords = src->passwords ? listDup(src->passwords) : NULL;
-    dst->selectors = listDup(src->selectors);
-    dst->flags = src->flags;
+    /* acl-offload: if dst is a published user, IO threads may be reading
+     * dst->selectors. Publish the new list by pointer swap (never mutate the
+     * live list), make every pending verdict stale, then free the old list
+     * only once no IO job is in flight. A staging copy (dst_is_live == 0) is
+     * unreachable from IO threads and needs none of this. */
+    list *old_selectors = dst->selectors;
+    list *new_selectors = listDup(src->selectors);
+    atomic_store_explicit((_Atomic(list *) *)&dst->selectors, new_selectors, memory_order_release);
+    if (dst_is_live) {
+        aclOffloadBumpEpoch();
+        aclOffloadQuiesce();
+        aclOffloadAssertNoReaders();
+    } else {
+        /* A destination some client is bound to must be published as live. */
+        serverAssert(!(dst->flags & USER_FLAG_BOUND));
+    }
+    listRelease(old_selectors);
+    /* Rules come from the staging copy; reachability is a property of dst
+     * alone (a staging copy made FROM a bound user must not inherit it). */
+    dst->flags = (src->flags & ~USER_FLAG_BOUND) | (dst->flags & USER_FLAG_BOUND);
     if (dst->acl_string) {
         decrRefCount(dst->acl_string);
     }
@@ -757,9 +790,22 @@ static sds ACLStringSetRole(user *r, sds rolename, sds *argv, int argc) {
         serverAssert(r != NULL);
     }
 
-    /* Save old selectors before updating. */
+    /* Save old selectors before updating.
+     * acl-offload: a member user's effective rules include this role's
+     * selectors, so IO threads may be walking r->selectors right now. Same
+     * discipline as ACLCopyUser on a live user: publish the new list by
+     * pointer swap, make every pending verdict stale, and free the old list
+     * only once no IO job is in flight. A brand-new role has no members yet
+     * and is unreachable from IO threads. */
+    int role_is_live = (r->members && dictSize(r->members) > 0);
     list *old_selectors = r->selectors;
-    r->selectors = listDup(tempr->selectors);
+    list *new_selectors = listDup(tempr->selectors);
+    atomic_store_explicit((_Atomic(list *) *)&r->selectors, new_selectors, memory_order_release);
+    if (role_is_live) {
+        aclOffloadBumpEpoch();
+        aclOffloadQuiesce();
+        aclOffloadAssertNoReaders();
+    }
 
     /* Kill pubsub clients of member users whose channel access was revoked.
      * Since the role's selectors are already updated, the member's effective
@@ -1752,6 +1798,11 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * ERANGE: A database ID provided with the db= rule is out of the supported range.
  */
 int ACLSetUser(user *u, const char *op, ssize_t oplen) {
+    /* acl-offload: this is the one function that mutates a user's rule set in
+     * place. Runtime callers operate on staging copies and publish through
+     * ACLCopyUser; the only in-place caller on a published user is the
+     * requirepass path, which quiesces first. Anything else is a bug. */
+    if (aclUserIsPublished(u)) aclOffloadAssertNoReaders();
     /* as we are changing the ACL, the old generated string is now invalid */
     if (u->acl_string) {
         decrRefCount(u->acl_string);
@@ -2548,6 +2599,164 @@ static int ACLUserHasAllChannels(user *u) {
     return 0;
 }
 
+/* ============================== ACL offload ==============================
+ *
+ * IO threads evaluate a command's ACL permissions at parse time and record an
+ * ALLOW verdict as a bit in the command's read flags, together with the ACL
+ * epoch the read job observed. The main thread consumes the verdict iff that
+ * epoch equals the global ACL epoch at execution time; otherwise it
+ * re-evaluates on the stock path. Every mutation of ACL rules visible to a
+ * client (SETUSER/SETROLE/LOAD/DELUSER, client rebinding while commands are
+ * pending) bumps the epoch, so a verdict computed under old rules is never
+ * consumed after those rules changed -- this is what closes the check-then-use
+ * window (deny Y; write secret; Y's pre-parsed GET must not return the secret).
+ *
+ * Memory safety: user->selectors is replaced by atomic pointer swap, never
+ * mutated in place while linked (ACLCopyUser), and the old list -- or a whole
+ * user -- is only freed after aclOffloadQuiesce(), which waits for in-flight
+ * IO jobs; an IO thread holds a selectors pointer only within one job.
+ *
+ * Ordering: the worker reads the epoch (acquire) BEFORE the selectors pointer
+ * (acquire); main publishes the new selectors (release) BEFORE bumping the
+ * epoch (release). A worker that observes the new rules with the old epoch
+ * merely produces a tag that will be punted. */
+
+static _Atomic uint64_t acl_epoch = 1;
+
+static inline int aclOffloadActive(void) {
+    return server.acl_offload && server.io_threads_num > 1;
+}
+
+void aclOffloadBumpEpoch(void) {
+    atomic_fetch_add_explicit(&acl_epoch, 1, memory_order_release);
+}
+
+/* True if rebinding this client to another user could leave a verdict
+ * evaluated under the old user waiting to be consumed: a parsed command
+ * (current or queued) already carries the ALLOW bit, or a read job is in
+ * flight and may be tagging right now. Main-thread only; the scan is bounded
+ * by the client's pending queue and runs only on the rare rebinding path. */
+int aclOffloadClientHasPendingVerdicts(client *c) {
+    if (!aclOffloadActive()) return 0;
+    if (c->io_read_state != CLIENT_IDLE) return 1;
+    if (c->read_flags & READ_FLAGS_ACL_ALLOWED) return 1;
+    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
+        if (c->cmd_queue.cmds[i].read_flags & READ_FLAGS_ACL_ALLOWED) return 1;
+    }
+    return 0;
+}
+
+/* A user object is reachable from IO threads once a client has been bound to
+ * it (or to a member, for a role): only then can a read job dereference its
+ * rule set. USER_FLAG_BOUND records that, set once on first bind and never
+ * cleared, because a job parsed just before an unbind may still hold the
+ * pointer. Staging copies, fake validation users, module users that were
+ * never authenticated, and ACL LOAD's new objects before the rebind are all
+ * unbound and need none of the swap+drain discipline. Main-thread only. */
+void aclMarkUserBound(user *u) {
+    if (u->flags & USER_FLAG_BOUND) return;
+    u->flags |= USER_FLAG_BOUND;
+    if (u->roles) {
+        listIter li;
+        listNode *ln;
+        listRewind(u->roles, &li);
+        while ((ln = listNext(&li))) {
+            user *r = listNodeValue(ln);
+            if (!(r->flags & USER_FLAG_BOUND)) r->flags |= USER_FLAG_BOUND;
+        }
+    }
+}
+
+static int aclUserIsPublished(user *u) {
+    return u != NULL && (u->flags & USER_FLAG_BOUND);
+}
+
+/* Structural guard for the offload invariant. Call this immediately before
+ * mutating in place, or freeing, any rule-set memory (selectors or roles
+ * lists, or a whole user) that IO threads could reach. It holds after
+ * aclOffloadQuiesce() for the rest of the current command, because main is
+ * the only submitter of IO jobs. A code path that forgets the swap+drain
+ * discipline fails this assertion in every CI run of the ACL suites with
+ * io-threads on, instead of leaking only when a probe happens to race. */
+static inline void aclOffloadAssertNoReaders(void) {
+    if (!aclOffloadActive()) return;
+    serverAssert(inMainThread());
+    serverAssert(ioThreadsHaveNoPendingJobs());
+}
+
+/* Wait until no IO job is in flight. Called on main before freeing anything an
+ * IO thread may be reading (selectors lists, user objects). Cheap when idle;
+ * on the rare ACL-mutation path only. */
+void aclOffloadQuiesce(void) {
+    /* Only needed when IO threads may hold rule-set pointers, i.e. when they
+     * evaluate ACLs. With the feature off, mutation is stock in-place-safe. */
+    if (!server.acl_offload || !inMainThread() || server.io_threads_num <= 1) return;
+    monotime start = getMonotonicUs();
+    drainIOThreadsQueue();
+    long long us = (long long)(getMonotonicUs() - start);
+    server.stat_acl_offload_quiesce_count++;
+    server.stat_acl_offload_quiesce_total_us += us;
+    if (us > server.stat_acl_offload_quiesce_max_us) server.stat_acl_offload_quiesce_max_us = us;
+}
+
+/* Commands after which a worker must stop tagging for the rest of the batch:
+ * they change the identity/db the following commands are evaluated under, and
+ * the change only takes effect when main executes them. */
+int aclOffloadShouldStopTagging(struct serverCommand *cmd) {
+    if (cmd == NULL) return 1;
+    serverCommandProc *p = cmd->proc;
+    return p == authCommand || p == helloCommand || p == resetCommand || p == selectCommand ||
+           p == multiCommand;
+}
+
+/* IO-thread side, once per read job: record the ACL epoch every verdict in
+ * this job will be evaluated under. Must happen-before the evaluations
+ * (acquire), so a mutation that publishes a new rule set and bumps the epoch
+ * either is seen here (and the verdicts use the new rules) or is not (and
+ * main rejects the verdicts on the epoch compare). A read job is never
+ * submitted while the client still has unconsumed parsed commands
+ * (parseInputBuffer asserts an empty queue), so one snapshot per client is
+ * enough. Only the low 32 bits are kept: a stale verdict could then only be
+ * accepted after exactly 2^32 ACL mutations while its commands sit queued,
+ * and every one of those mutations drains the IO backlog first. */
+void aclOffloadBeginBatch(client *c) {
+    if (!aclOffloadActive() || inMainThread()) return;
+    c->acl_epoch_seen = (uint32_t)atomic_load_explicit(&acl_epoch, memory_order_acquire);
+}
+
+/* IO-thread side: evaluate and tag. Never touches main-thread-owned state
+ * except plain reads the read-job protocol already permits. Only an ALLOW
+ * verdict is recorded, as a bit in the command's read flags; a denial leaves
+ * the bit clear so main runs the stock check and produces the exact error
+ * position itself. Denials are rare, and this keeps the offload strictly an
+ * accelerator for the permitted path. */
+void aclOffloadTagCommand(client *c, struct serverCommand *cmd, robj **argv, int argc, int *read_flags) {
+    if (!aclOffloadActive()) return;
+    if (cmd == NULL || argc == 0) return;
+    if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || (*read_flags & (READ_FLAGS_COMMAND_NOT_FOUND | READ_FLAGS_BAD_ARITY)))
+        return;
+    /* Inside MULTI the check runs against the transaction db; leave it to main. */
+    if (c->flag.multi) return;
+    user *u = c->user;
+    if (u == NULL) return; /* No ACL: main's check is a no-op anyway. */
+
+    int errpos = 0;
+    if (ACLCheckAllUserCommandPerm(u, cmd, argv, argc, c->db->id, &errpos) == ACL_OK) *read_flags |= READ_FLAGS_ACL_ALLOWED;
+}
+
+/* Main-thread side: consume a fresh ALLOW verdict or fall back to evaluation. */
+int aclOffloadConsume(client *c, int *idxptr) {
+    if (c->read_flags & READ_FLAGS_ACL_ALLOWED) {
+        c->read_flags &= ~READ_FLAGS_ACL_ALLOWED;
+        if (!c->flag.multi && c->acl_epoch_seen == (uint32_t)atomic_load_explicit(&acl_epoch, memory_order_relaxed)) {
+            server.stat_acl_offload_hits++;
+            return ACL_OK;
+        }
+        server.stat_acl_offload_punts++;
+    }
+    return ACLCheckAllPerm(c, idxptr);
+}
+
 /* Build a list of all channel patterns accessible by user (own + role selectors).
  * Caller must listRelease() the returned list. */
 static list *ACLUserGetChannels(user *u) {
@@ -2770,7 +2979,7 @@ sds ACLStringSetUser(user *u, sds username, sds *argv, int argc) {
      * If there are any errors then none of the changes will be applied. */
     user *tempu = ACLCreateUnlinkedUser();
     if (u) {
-        ACLCopyUser(tempu, u);
+        ACLCopyUser(tempu, u, 0);
     }
 
     for (int j = 0; j < merged_argc; j++) {
@@ -2793,7 +3002,7 @@ sds ACLStringSetUser(user *u, sds username, sds *argv, int argc) {
     }
     serverAssert(u != NULL);
 
-    ACLCopyUser(u, tempu);
+    ACLCopyUser(u, tempu, 1);
 
 cleanup:
     ACLFreeUser(tempu);
@@ -3016,6 +3225,9 @@ static int ACLLoadConfiguredRoles(void) {
  * the new role of the same name, or drop them if it is gone. Called after the old
  * users are freed, so only such survivors are left on the old member lists. */
 static void ACLRemapSurvivingRoleMembers(rax *old_roles) {
+    /* acl-offload: mutates published users' roles lists in place; ACL LOAD
+     * quiesces before calling this and frees nothing until it returns. */
+    aclOffloadAssertNoReaders();
     raxIterator ri;
     raxStart(&ri, old_roles);
     raxSeek(&ri, "^", NULL, 0);
@@ -3284,7 +3496,7 @@ static sds ACLLoadFromFile(const char *filename) {
             new_default = ACLCreateDefaultUser();
         }
 
-        ACLCopyUser(DefaultUser, new_default);
+        ACLCopyUser(DefaultUser, new_default, 1);
         ACLFreeUser(new_default);
         raxInsert(Users, (unsigned char *)"default", 7, DefaultUser, NULL);
         raxRemove(old_users, (unsigned char *)"default", 7, NULL);
@@ -3325,12 +3537,16 @@ static sds ACLLoadFromFile(const char *filename) {
         }
 
         if (user_channels) raxFreeWithCallback(user_channels, listReleaseVoid);
+        /* acl-offload: every client was rebound to a new user object above. */
+        aclOffloadBumpEpoch();
+        aclOffloadQuiesce();
         raxFreeWithCallback(old_users, ACLFreeUserVoid);
         ACLRemapSurvivingRoleMembers(old_roles);
         raxFreeWithCallback(old_roles, ACLFreeUserVoid);
         sdsfree(errors);
         return NULL;
     } else {
+        /* The new objects were never bound to any client (unpublished). */
         raxFreeWithCallback(Users, ACLFreeUserVoid);
         raxFreeWithCallback(Roles, ACLFreeUserVoid);
         Users = old_users;
@@ -4327,6 +4543,13 @@ void authCommand(client *c) {
 /* Set the password for the "default" ACL user. This implements supports for
  * requirepass config, so passing in NULL will set the user to be nopass. */
 void ACLUpdateDefaultUserPassword(sds password) {
+    /* acl-offload: DefaultUser is published and this mutates it in place.
+     * Passwords are not read by IO threads, but the rule is uniform: no
+     * in-place change to a published user while a job may be reading it.
+     * requirepass changes are rare; one drain is the same class of pause as
+     * ACL SETUSER (see aclOffloadQuiesce). */
+    aclOffloadBumpEpoch();
+    aclOffloadQuiesce();
     ACLSetUser(DefaultUser, "resetpass", -1);
     if (password) {
         sds aclop = sdscatlen(sdsnew(">"), password, sdslen(password));

@@ -1095,6 +1095,12 @@ typedef struct readyList {
 #define USER_FLAG_ROLE (1 << 3)      /* This user entry represents a role, \
                                         not a regular user. Stored in the  \
                                         Roles rax instead of Users. */
+#define USER_FLAG_BOUND (1 << 4)     /* A client has been bound to this user \
+                                        (or to a member of this role) at     \
+                                        least once, so an IO thread may have \
+                                        read its rule set. Set once, never   \
+                                        cleared; main-thread only. Used by   \
+                                        the acl-offload lifetime guard.      */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */
@@ -1448,6 +1454,11 @@ typedef struct client {
     int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
     uint32_t redact_arg_bitmap; /* Bitmap of argument indexes that should be redacted in logs. */
+    uint32_t acl_epoch_seen;    /* acl-offload: low 32 bits of the ACL epoch an IO thread observed
+                                 * before evaluating the commands of the current read job. Main
+                                 * honours a READ_FLAGS_ACL_ALLOWED verdict only while the epoch
+                                 * still matches. Fills a padding hole on a line the read-job
+                                 * protocol already shares between IO threads and main. */
     /* Client flags and state indicators */
     union {
         struct {
@@ -1959,6 +1970,7 @@ struct valkeyServer {
     int io_threads_num;                       /* Number of IO threads to use. */
     int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
     int io_threads_always_active;             /* Activate all IO threads regardless of load size. */
+    int acl_offload;                          /* Evaluate ACL permissions on IO threads. */
     int prefetch_batch_max_size;              /* Maximum number of keys to prefetch in a single batch */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
     int enable_protected_configs;             /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
@@ -2546,6 +2558,13 @@ struct valkeyServer {
     int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
     int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkeys_manager;
+    /* acl-offload counters. Kept at the tail of the struct so adding them does
+     * not shift the offsets of existing fields (and their cache-line grouping). */
+    long long stat_acl_offload_hits;             /* acl-offload: verdicts consumed without main-thread evaluation */
+    long long stat_acl_offload_punts;            /* acl-offload: tagged verdicts rejected (epoch mismatch), re-evaluated on main */
+    long long stat_acl_offload_quiesce_count;    /* acl-offload: waits for in-flight IO jobs before freeing ACL memory */
+    long long stat_acl_offload_quiesce_total_us; /* acl-offload: total time spent in those waits */
+    long long stat_acl_offload_quiesce_max_us;   /* acl-offload: longest single wait */
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3084,6 +3103,9 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_CROSSSLOT (1 << 20)
 #define READ_FLAGS_PREFETCHED (1 << 21)
 #define READ_FLAGS_ERROR_INVALID_CRLF (1 << 22)
+#define READ_FLAGS_ACL_ALLOWED (1 << 23) /* acl-offload: an IO thread evaluated this command's ACL  \
+                                            permissions under client->acl_epoch_seen and it passed. \
+                                            Denials are never recorded; main re-checks them. */
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -3571,6 +3593,14 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags);
 int ACLCheckAllPerm(client *c, int *idxptr);
+void aclOffloadBeginBatch(client *c);
+void aclOffloadTagCommand(client *c, struct serverCommand *cmd, robj **argv, int argc, int *read_flags);
+int aclOffloadShouldStopTagging(struct serverCommand *cmd);
+int aclOffloadConsume(client *c, int *idxptr);
+void aclOffloadBumpEpoch(void);
+int aclOffloadClientHasPendingVerdicts(client *c);
+void aclMarkUserBound(user *u);
+void aclOffloadQuiesce(void);
 int ACLSetUser(user *u, const char *op, ssize_t oplen);
 sds ACLStringSetUser(user *u, sds username, sds *argv, int argc);
 uint64_t ACLGetCommandCategoryFlagByName(const char *name);

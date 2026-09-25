@@ -2977,6 +2977,11 @@ void resetServerStats(void) {
     server.stat_net_cluster_slot_import_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
+    server.stat_acl_offload_hits = 0;
+    server.stat_acl_offload_punts = 0;
+    server.stat_acl_offload_quiesce_count = 0;
+    server.stat_acl_offload_quiesce_total_us = 0;
+    server.stat_acl_offload_quiesce_max_us = 0;
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
     server.stat_reply_buffer_shrinks = 0;
@@ -4569,7 +4574,7 @@ uint64_t getCommandFlags(client *c) {
  * processing, including looking up the command, checking arity and calculating
  * cluster slot. This should be done before calling processCommand() and can be
  * done by I/O threads to offload the main-thread. */
-static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot) {
+static void prepareCommandGeneric(client *c, robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot, int *acl_stop) {
     if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
     /* Make sure we don't do this twice. */
     debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
@@ -4584,29 +4589,42 @@ static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct
                           !(*read_flags & READ_FLAGS_NO_KEYS));
         *slot = clusterSlotByCommand(*cmd, argv, argc, read_flags);
     }
+    /* acl-offload: only IO threads tag (main would just duplicate its own
+     * check). Stop tagging for the rest of the batch after a command that
+     * changes the identity/db the following commands run under. With the
+     * feature off this costs one predictable branch per command. */
+    if (server.acl_offload && !inMainThread() && !*acl_stop) {
+        aclOffloadTagCommand(c, *cmd, argv, argc, read_flags);
+        if (*cmd && aclOffloadShouldStopTagging(*cmd)) *acl_stop = 1;
+    }
 }
 
 /* Prepare the client's current command. See prepareCommandGeneric(). */
 void prepareCommand(client *c) {
-    prepareCommandGeneric(c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot);
+    int acl_stop = 0;
+    aclOffloadBeginBatch(c);
+    prepareCommandGeneric(c, c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot, &acl_stop);
 }
 
 /* Prepare all parsed commands in the client's queue. See prepareCommand(). */
 void prepareCommandQueue(client *c) {
+    int acl_stop = 0;
+    aclOffloadBeginBatch(c);
     /* First AKA current command (c->argv). */
-    prepareCommand(c);
+    prepareCommandGeneric(c, c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot, &acl_stop);
 
     /* Commands in client's command queue. */
     for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
         parsedCommand *p = &c->cmd_queue.cmds[i];
-        prepareCommandGeneric(p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot);
+        prepareCommandGeneric(c, p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot, &acl_stop);
     }
 }
 
 /* Undo prepareCommand(), to allow prepareCommand() again after applying command filters. */
 void unprepareCommand(client *c) {
     c->parsed_cmd = NULL;
-    c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
+    c->read_flags &= ~(READ_FLAGS_ACL_ALLOWED | /* argv may have been rewritten by a filter. */
+                       READ_FLAGS_COMMAND_NOT_FOUND |
                        READ_FLAGS_BAD_ARITY |
                        READ_FLAGS_CROSSSLOT |
                        READ_FLAGS_NO_KEYS);
@@ -4740,7 +4758,7 @@ int processCommand(client *c) {
     /* Check if the user can run this command according to the current
      * ACLs. */
     int acl_errpos;
-    int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
+    int acl_retval = aclOffloadConsume(c, &acl_errpos);
     if (acl_retval != ACL_OK) {
         addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
                        NULL);
@@ -6870,6 +6888,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "expire_cycle_cpu_milliseconds:%lld\r\n", server.stat_expire_cycle_time_used / 1000,
                 "evicted_keys:%lld\r\n", server.stat_evictedkeys,
                 "evicted_clients:%lld\r\n", server.stat_evictedclients,
+                "acl_offload_hits:%lld\r\n", server.stat_acl_offload_hits,
+                "acl_offload_punts:%lld\r\n", server.stat_acl_offload_punts,
+                "acl_offload_quiesce_count:%lld\r\n", server.stat_acl_offload_quiesce_count,
+                "acl_offload_quiesce_total_us:%lld\r\n", server.stat_acl_offload_quiesce_total_us,
+                "acl_offload_quiesce_max_us:%lld\r\n", server.stat_acl_offload_quiesce_max_us,
                 "evicted_scripts:%lld\r\n", server.stat_evictedscripts,
                 "total_eviction_exceeded_time:%lld\r\n", (server.stat_total_eviction_exceeded_time + current_eviction_exceeded_time) / 1000,
                 "current_eviction_exceeded_time:%lld\r\n", current_eviction_exceeded_time / 1000,

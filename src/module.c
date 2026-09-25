@@ -8514,6 +8514,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
         mstime_t now = mstime();
         if (timeout_ms > LLONG_MAX - now) {
             c->bstate->module_blocked_handle = NULL;
+            bc->client = NULL;
             addReplyError(c, "timeout is out of range"); /* 'timeout_ms+now' would overflow */
             return bc;
         }

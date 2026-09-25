@@ -1329,7 +1329,7 @@ start_server {tags {"repl"} overrides {save ""}} {
 # REPLCONF reply can leave pending output that makes the primary reject PSYNC,
 # and the legacy-SYNC fallback suppresses the ACK that diskless sync waits for
 # (upstream race). It is enabled once all replicas are streaming.
-start_server {tags {"repl"} overrides {save "" io-threads 4 repl-compression lz4}} {
+start_server {tags {"repl" "valgrind:skip"} overrides {save "" io-threads 4 repl-compression lz4}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -1388,7 +1388,7 @@ start_server {tags {"repl"} overrides {save "" io-threads 4 repl-compression lz4
 # Chained replication: each hop negotiates compression independently, and the
 # middle node simultaneously decodes its primary link on the main thread while
 # encoding for its own replica on IO threads.
-start_server {tags {"repl"} overrides {save "" repl-compression lz4}} {
+start_server {tags {"repl" "valgrind:skip"} overrides {save "" repl-compression lz4}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]

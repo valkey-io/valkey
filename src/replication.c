@@ -2751,16 +2751,11 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
      * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
     if (server.aof_enabled) {
         bool aof_rdb_base_candidate = disk_based_sync && server.aof_use_rdb_preamble;
-        if (aof_rdb_base_candidate && !rsi->loaded_compressed) {
+        if (aof_rdb_base_candidate) {
             if (restartAOFWithSyncRdb() == C_ERR) {
                 restartAOFAfterSYNC();
             }
         } else {
-            if (aof_rdb_base_candidate) {
-                serverLog(LL_NOTICE,
-                          "Sync RDB file %s is streaming-compressed, falling back to BGREWRITEAOF instead of reusing it as an AOF base",
-                          server.rdb_filename);
-            }
             restartAOFAfterSYNC();
         }
     }

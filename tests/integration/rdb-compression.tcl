@@ -10,11 +10,15 @@ proc read_dump_rdb_header_bytes {client} {
     return [read_binary_file_prefix [dump_rdb_path $client] 8]
 }
 
-proc assert_rdb_envelope {client mode} {
-    binary scan [read_binary_file_prefix [dump_rdb_path $client] 7] cu* bytes
+proc assert_rdb_file_envelope {path mode} {
+    binary scan [read_binary_file_prefix $path 7] cu* bytes
     set codec [dict get {lz4 1 zstd 2} $mode]
     # V C S / envelope version / codec / reserved / RDB stream kind.
     assert_equal [list 86 67 83 1 $codec 0 1] $bytes
+}
+
+proc assert_rdb_envelope {client mode} {
+    assert_rdb_file_envelope [dump_rdb_path $client] $mode
 }
 
 proc assert_lz4_rdb_checksum_flags {client expected} {
@@ -367,21 +371,48 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
     }
 }
 
-start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
-    test {AOF rewrite RDB preamble remains plain with LZ4 stream snapshots} {
-        r set aof-lz4:key [string repeat "aof-lz4-value " 100]
-        set digest [debug_digest]
+start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes}} {
+    foreach mode $::rdbcompression_modes {
+        test "AOF rewrite compresses and reloads its RDB base with [string toupper $mode]" {
+            r config set rdbcompression $mode
+            r flushall
+            r set "aof-$mode:key" [string repeat "aof-$mode-value " 100]
 
-        r bgrewriteaof
-        waitForBgrewriteaof r
+            r bgrewriteaof
+            waitForBgrewriteaof r
 
-        set base_aof [get_base_aof_path r]
-        assert {[file exists $base_aof]}
-        assert_equal "VALKEY" [string range [read_binary_file_prefix $base_aof 7] 0 5]
+            set base_aof [get_base_aof_path r]
+            assert {[file exists $base_aof]}
+            assert_rdb_file_envelope $base_aof $mode
 
-        restart_server 0 true false
-        assert_equal $digest [debug_digest]
-        assert_equal [string repeat "aof-lz4-value " 100] [r get aof-lz4:key]
+            set dir [lindex [r config get dir] 1]
+            set appenddirname [lindex [r config get appenddirname] 1]
+            set appendfilename [lindex [r config get appendfilename] 1]
+            set manifest [file join $dir $appenddirname $appendfilename$::manifest_suffix]
+            assert_match "*All AOF files and manifest are valid*" [exec $::VALKEY_CHECK_AOF_BIN $manifest]
+
+            # The decoder must stop at the compressed frame boundary so an
+            # old-style AOF can continue with a RESP tail in the same file.
+            set old_style_aof [file join $dir "compressed-preamble-$mode.aof"]
+            with_cleanup {
+                set old_style_data [read_binary_file $base_aof]
+                append old_style_data [formatCommand set "aof-$mode:old-style-tail" tail]
+                write_binary_file $old_style_aof $old_style_data
+                assert_match "*RDB preamble is OK, proceeding with AOF tail*is valid*" \
+                    [exec $::VALKEY_CHECK_AOF_BIN $old_style_aof]
+            } {
+                file delete -force $old_style_aof
+            }
+
+            # Keep data in the incremental AOF too, so restart covers both files.
+            r set "aof-$mode:incremental" tail
+            set digest [debug_digest]
+
+            restart_server 0 true false
+            assert_equal $digest [debug_digest]
+            assert_equal [string repeat "aof-$mode-value " 100] [r get "aof-$mode:key"]
+            assert_equal tail [r get "aof-$mode:incremental"]
+        }
     }
 }
 

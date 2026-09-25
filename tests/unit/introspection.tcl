@@ -1382,6 +1382,8 @@ start_server {tags {"introspection"}} {
                 tls-ciphers
                 tls-ciphersuites
                 tls-port
+                tls-alt-cert-file
+                tls-alt-key-file
             }
         }
 
@@ -1946,6 +1948,14 @@ start_server {config "minimal.conf" tags {"introspection external:skip"} overrid
             assert_equal [$r2 close] 0
         }
     } {} {needs:debug}
+}
+
+start_server {tags {introspection external:skip}} {
+
+    catch {r config set tls-port 6798}
+    catch {r config set tls-cluster yes}
+    catch {r config set tls-replication yes}
+    assert_equal "PONG" [r ping]
 }
 
 test {config during loading} {

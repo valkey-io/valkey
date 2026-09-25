@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#ifndef __ENDIANCONV_H
-#define __ENDIANCONV_H
+#ifndef VALKEY_ENDIANCONV_H
+#define VALKEY_ENDIANCONV_H
 
 #include "config.h"
 #include <stdint.h>

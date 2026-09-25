@@ -384,7 +384,7 @@ int valkeyHasMptcp(void) {
     return 0;
 }
 
-static int valkeyTcpGetProtocol(int is_mptcp_enabled) {
+static int valkeyTcpGetProtocol(VALKEY_UNUSED int is_mptcp_enabled) {
     assert(!is_mptcp_enabled);
     (void)is_mptcp_enabled; /* Suppress unused warning when NDEBUG is defined. */
     return IPPROTO_TCP;

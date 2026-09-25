@@ -1,4 +1,26 @@
-# This test suite tests shutdown when there are lagging replicas connected.
+# This test suite tests shutdown behavior.
+
+test "Shutdown cleans up IO threads with pipelined commands" {
+    start_server {overrides {save "" io-threads 4 io-threads-always-active yes}} {
+        set server_pid [srv 0 pid]
+        set rd [valkey_deferring_client]
+
+        # Make the pipeline arrive in one read so SHUTDOWN can leave
+        # batched argument-cleanup jobs queued.
+        pause_process $server_pid
+        for {set i 0} {$i < 200} {incr i} {
+            $rd set shutdown-io-key:$i $i
+        }
+        $rd shutdown nosave
+        $rd flush
+        resume_process $server_pid
+
+        wait_for_log_messages 0 {"*ready to exit, bye bye*"} 0 1000 20
+        assert_equal 3 [count_log_message 0 "IO thread.*terminated"]
+        assert_equal 0 [count_log_message 0 "BUG REPORT START"]
+        $rd close
+    }
+} {} {external:skip}
 
 # Fill up the OS socket send buffer for the replica connection 1M at a time.
 # When the replication buffer memory increases beyond 2M (often after writing 4M

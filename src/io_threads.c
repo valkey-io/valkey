@@ -51,6 +51,8 @@ static size_t io_jobs_submitted;
 static _Atomic(size_t) io_jobs_finished;
 static size_t cluster_io_pending_responses;
 static int io_threads_initialized = 0;
+/* Set during process exit to stop worker response retries. */
+static _Atomic int io_threads_exiting = 0;
 _Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
 
 /* Job Types for Tagged Pointers
@@ -279,7 +281,8 @@ static void flushPendingIOResponsesList(list **pending_list, mpscQueue *outbox, 
         /* Try to enqueue. If blocking is set, retry until success. */
         do {
             pushed = mpscEnqueue(outbox, job, ticket);
-            if (pushed || !blocking || server.crashed) break; /* On server crash we kill the IO threads, no point in sending back jobs to the main-thread. */
+            if (pushed || !blocking || server.crashed) break;
+            if (atomic_load_explicit(&io_threads_exiting, memory_order_acquire)) break;
             atomic_thread_fence(memory_order_acquire);
         } while (true);
 
@@ -306,6 +309,14 @@ void cleanupThreadResources(void *dummy) {
 
     /* Blocking flush: ensure all pending jobs are sent before thread dies */
     flushPendingIOResponses(1);
+
+    /* Release response lists left when the flush stops early. */
+    for (int i = 0; i < JOB_PRIORITY_COUNT; i++) {
+        if (pending_io_responses[i]) {
+            listRelease(pending_io_responses[i]);
+            pending_io_responses[i] = NULL;
+        }
+    }
 
     /* Free the shared query buffer */
     freeSharedQueryBuf();
@@ -476,10 +487,31 @@ static void shutdownIOThread(int id) {
         serverLog(LL_NOTICE, "IO thread(tid:%lu) terminated", (unsigned long)tid);
     }
     pthread_mutex_destroy(&io_threads_mutex[id]);
+
+    /* The joined worker's inbox may contain uncommitted JOB_SPSC_FREE_ARGV jobs. */
+    if (!server.crashed) {
+        spscCommit(&io_private_inbox[id]);
+        void *batch[BATCH_SIZE];
+        size_t batch_count;
+        size_t drained = 0;
+        while ((batch_count = spscDequeueBatch(&io_private_inbox[id], batch, BATCH_SIZE)) > 0) {
+            for (size_t i = 0; i < batch_count; i++) {
+                void *data;
+                int type;
+                untagJob(batch[i], &data, &type);
+                if (type == JOB_SPSC_FREE_ARGV) ioThreadFreeArgv((robj **)data);
+            }
+            drained += batch_count;
+        }
+        if (drained) atomic_fetch_add_explicit(&io_jobs_finished, drained, memory_order_release);
+    }
+
     spscFree(&io_private_inbox[id]);
 }
 
 void killIOThreads(void) {
+    /* The main thread does not consume responses while joining workers. */
+    atomic_store_explicit(&io_threads_exiting, 1, memory_order_release);
     for (int j = 1; j < server.io_threads_num; j++) { /* We don't kill thread 0, which is the main thread. */
         shutdownIOThread(j);
     }

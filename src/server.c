@@ -5328,6 +5328,9 @@ int finishShutdown(void) {
 
     moduleUnloadAllModules();
 
+    /* Module unloading may drain IO queues, so stop workers afterward. */
+    killIOThreads();
+
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
 

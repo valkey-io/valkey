@@ -1009,28 +1009,60 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Create initial dataset with 100 keys
         set num_keys 100
+        set create_start [clock milliseconds]
         createComplexDatasetForVerification r $num_keys
+        set create_ms [expr {[clock milliseconds] - $create_start}]
         
-        # Set TTLs on all keys - key i expires (i/10 + 1) seconds after deadline_base.
-        # The deadlines are absolute so that the length of this loop, which issues
-        # num_keys * 12 round trips, cannot shift them. deadline_base is far enough
-        # ahead that every key is still alive when the save below starts, even on a
-        # runner slow enough to make the loop take seconds.
-        set deadline_base [expr {[clock milliseconds] + 3000}]
+        # Spread the deadlines 100 ms apart, starting a second after
+        # deadline_base, so that expirations keep landing throughout the save
+        # below and go on past its end. The deadlines are absolute so that the
+        # length of the loop, which issues num_keys * 12 round trips, cannot
+        # shift them. The budget for that loop is measured from the dataset
+        # creation above, which issues a comparable number of round trips, so
+        # that a slow runner gets a proportionally longer one instead of a
+        # figure that only holds on a fast one.
+        set deadline_base [expr {[clock milliseconds] + ($create_ms > 1500 ? $create_ms * 2 : 3000)}]
         for {set i 0} {$i < $num_keys} {incr i} {
-            set ttl [expr {$i/10 + 1}]
             foreach prefix {before int lst set zset hash hll bits geo geo_set stream iset} {
-                r pexpireat ${prefix}_${i} [expr {$deadline_base + $ttl * 1000}]
+                r pexpireat ${prefix}_${i} [expr {$deadline_base + 1000 + $i * 100}]
             }
         }
-        # Had the loop overrun the budget, the shortest-lived keys would have been
-        # dropped here instead of expiring during the save, and the checks below
-        # would pass without testing anything. Fail loudly rather than silently.
+        # Had the loop overrun the budget, the earliest keys would have been
+        # dropped before the save even started instead of expiring during it, and
+        # the checks below would pass without testing anything. Fail loudly
+        # rather than silently.
         assert {[clock milliseconds] < $deadline_base}
         
-        # Start save and wait for completion
+        # Hold the save open across the first part of the deadline spread, so
+        # that the iterator is walking the keyspace while keys expire under it.
+        # num_keys * 12 keys at 10 ms each would take about 12 seconds; the delay
+        # is cleared as soon as the window below has been covered.
+        r config set rdb-key-save-delay 10000
         r config set bgsave-default-method forkless
+        set expired_before [s expired_keys]
         r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+        
+        # Keep the save in progress until the earliest deadlines have lapsed.
+        while {[clock milliseconds] < $deadline_base + 3000} {
+            assert_equal 1 [s rdb_bgsave_in_progress]
+            after 100
+        }
+        
+        # These two assertions are what make this test cover expiration during
+        # the save: keys went away while the snapshot was still open. Without
+        # them the save could complete before any deadline and only the reload
+        # path would be exercised.
+        assert_equal 1 [s rdb_bgsave_in_progress]
+        assert {[s expired_keys] > $expired_before}
+        
+        # Let the save finish. Keys whose deadline falls after this still expire
+        # once the snapshot is done, so both sides of the save are covered.
+        r config set rdb-key-save-delay 0
         waitForBgsave r
         
         # Reload from RDB
@@ -1050,11 +1082,11 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             foreach i $verified {
                 # Re-read the clock per key: one pass issues up to num_keys * 12 round
                 # trips, so a single reading taken before the pass goes stale.
-                set elapsed_time [expr {([clock milliseconds] - $deadline_base) / 1000.0}]
-                set ttl [expr {$i/10 + 1}]
+                set now [clock milliseconds]
+                set deadline [expr {$deadline_base + 1000 + $i * 100}]
 
                 # If not yet expired, verify all data types exist
-                if {$elapsed_time < [expr {$ttl - 1}]} {
+                if {$now < $deadline - 1000} {
                     assert_equal [r exists before_${i}] 1
                     assert_equal [r exists int_${i}] 1
                     assert_equal [r exists lst_${i}] 1
@@ -1070,7 +1102,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 }
                 
                 # If expired for more than a second, verify all data types are gone
-                if {$elapsed_time > [expr {$ttl + 1}]} {
+                if {$now > $deadline + 1000} {
                     assert_equal [r exists before_${i}] 0
                     assert_equal [r exists int_${i}] 0
                     assert_equal [r exists lst_${i}] 0

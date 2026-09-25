@@ -70,6 +70,12 @@ static dictType aclMembershipDictType = {
     .entryDestructor = zfree,
 };
 
+enum {
+    ACL_LIST_FILTER_ALL,
+    ACL_LIST_FILTER_USER,
+    ACL_LIST_FILTER_ROLE
+};
+
 static rax *commandId = NULL; /* Command name to id mapping */
 
 static unsigned long nextid = 0; /* Next command id that has not been assigned */
@@ -3790,7 +3796,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL HELP
  * ACL LOAD
  * ACL SAVE
- * ACL LIST
+ * ACL LIST [<filter>]
  * ACL USERS
  * ACL DIGEST
  * ACL CAT [<category>]
@@ -3803,6 +3809,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  */
 void aclCommand(client *c) {
     char *sub = objectGetVal(c->argv[1]);
+    serverLog(LL_WARNING, "sub=%s argc=%d", sub, c->argc);
     if (!strcasecmp(sub, "setuser") && c->argc >= 3) {
         /* Initially redact all of the arguments to not leak any information
          * about the user. */
@@ -3917,48 +3924,95 @@ void aclCommand(client *c) {
         }
 
         setDeferredMapLen(c, ufields, fields);
-    } else if ((!strcasecmp(sub, "list") || !strcasecmp(sub, "users")) && c->argc == 2) {
+    } else if ((!strcasecmp(sub, "list") || !strcasecmp(sub, "users")) &&
+               (c->argc == 2 || (!strcasecmp(sub, "list") && c->argc == 3))) {
         int justnames = !strcasecmp(sub, "users");
+
         if (justnames) {
+            /* List usernames for ACL USERS. */
             addReplyArrayLen(c, raxSize(Users));
-        } else {
-            addReplyArrayLen(c, raxSize(Roles) + raxSize(Users));
+
+            raxIterator ri;
+            raxStart(&ri, Users);
+            raxSeek(&ri, "^", NULL, 0);
+
+            while (raxNext(&ri)) {
+                user *u = ri.data;
+                addReplyBulkCBuffer(c, u->name, sdslen(u->name));
+            }
+
+            raxStop(&ri);
+            return;
         }
+
+        int filter = ACL_LIST_FILTER_ALL;
+        size_t count = raxSize(Roles) + raxSize(Users);
+
+        if (c->argc == 3) {
+            char *filter_arg = objectGetVal(c->argv[2]);
+
+            if (!strcasecmp(filter_arg, "user")) {
+                filter = ACL_LIST_FILTER_USER;
+                count = raxSize(Users);
+            } else if (!strcasecmp(filter_arg, "role")) {
+                filter = ACL_LIST_FILTER_ROLE;
+                count = raxSize(Roles);
+            } else if (!strcasecmp(filter_arg, "all")) {
+                filter = ACL_LIST_FILTER_ALL;
+                count = raxSize(Roles) + raxSize(Users);
+            } else {
+                addReplyErrorFormat(c, "Unknown ACL LIST filter '%s'", filter_arg);
+                return;
+            }
+        }
+
+        addReplyArrayLen(c, count);
+
         raxIterator ri;
-        if (!justnames) {
-            /* List roles first in ACL LIST */
+
+        /* List roles first in ACL LIST. */
+        if (filter != ACL_LIST_FILTER_USER) {
             raxStart(&ri, Roles);
             raxSeek(&ri, "^", NULL, 0);
+
             while (raxNext(&ri)) {
                 user *r = ri.data;
+
                 sds config = sdsnew("role ");
                 config = sdscatsds(config, r->name);
                 config = sdscatlen(config, " ", 1);
+
                 robj *descr = ACLDescribeUser(r);
                 config = sdscatsds(config, objectGetVal(descr));
+
                 decrRefCount(descr);
                 addReplyBulkSds(c, config);
             }
+
             raxStop(&ri);
         }
-        /* List users */
-        raxStart(&ri, Users);
-        raxSeek(&ri, "^", NULL, 0);
-        while (raxNext(&ri)) {
-            user *u = ri.data;
-            if (justnames) {
-                addReplyBulkCBuffer(c, u->name, sdslen(u->name));
-            } else {
+
+        /* List users. */
+        if (filter != ACL_LIST_FILTER_ROLE) {
+            raxStart(&ri, Users);
+            raxSeek(&ri, "^", NULL, 0);
+
+            while (raxNext(&ri)) {
+                user *u = ri.data;
+
                 sds config = sdsnew("user ");
                 config = sdscatsds(config, u->name);
                 config = sdscatlen(config, " ", 1);
+
                 robj *descr = ACLDescribeUser(u);
                 config = sdscatsds(config, objectGetVal(descr));
+
                 decrRefCount(descr);
                 addReplyBulkSds(c, config);
             }
+
+            raxStop(&ri);
         }
-        raxStop(&ri);
     } else if (!strcasecmp(sub, "digest") && c->argc == 2) {
         addReplyBulkSds(c, ACLDigest());
     } else if (!strcasecmp(sub, "whoami") && c->argc == 2) {
@@ -4245,8 +4299,8 @@ void aclCommand(client *c) {
             "    Get the role's details.",
             "ROLES",
             "    List all the registered role names.",
-            "LIST",
-            "    Show users details in config file format.",
+            "LIST [<filter>]",
+            "    Show users and roles details in config file format, optionally filtered by type.",
             "LOAD",
             "    Reload users from the ACL file.",
             "LOG [<count> | RESET]",

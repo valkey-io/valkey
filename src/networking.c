@@ -237,12 +237,6 @@ void linkClient(client *c) {
     c->client_list_node = listLast(server.clients);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index, (unsigned char *)&id, sizeof(id), c, NULL);
-
-    /* Increment active client counters. These counters are paired with decrements
-     * in unlinkClient() and track connected clients in the global active clients list. */
-    if (connIsPriority(c->conn)) {
-        server.stat_num_active_priority_clients++;
-    }
 }
 
 /* Initialize client authentication state. */
@@ -1964,48 +1958,6 @@ static int parseSubnetList(const char *raw_sources, anetSubnet **subnets, int *c
     return C_OK;
 }
 
-/* Re-evaluate connection priority for all currently connected clients when
- * priority-subnets is updated dynamically at runtime via CONFIG SET.
- *
- * 1. Immediate dynamic reclassification: Existing clients connecting before a
- *    subnet update that match the new configuration are immediately promoted
- *    to priority status without requiring a reconnect. Similarly, clients that
- *    no longer match are demoted to normal priority.
- * 2. Strict counter reconciliation: Accurately recomputes
- *    server.stat_num_active_priority_clients to reflect the exact
- *    ground truth of active priority connections, preventing telemetry drift
- *    or underflow/overflow desync across dynamic config changes.
- * 3. Safe transport handling: Fake clients (c->conn == NULL) and non-IP
- *    connections (such as UNIX domain sockets or unresolved peers) are safely
- *    classified as normal (non-priority) connections. */
-static void reclassifyClientsPriority(void) {
-    if (!server.clients) return;
-
-    long long count = 0;
-    listIter li;
-    listNode *ln;
-    listRewind(server.clients, &li);
-
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        if (!c->conn) continue;
-
-        char ip[CONN_ADDR_STR_LEN];
-        int port = 0;
-        if (connAddrPeerName(c->conn, ip, sizeof(ip), &port) != C_OK) {
-            connSetPriority(c->conn, false);
-            continue;
-        }
-
-        bool is_prio = (server.priority_subnets_count > 0 &&
-                        anetMatchIpSubnet(ip, server.priority_subnets_array, server.priority_subnets_count));
-        connSetPriority(c->conn, is_prio);
-        if (is_prio) count++;
-    }
-
-    server.stat_num_active_priority_clients = count;
-}
-
 /* Validate priority-subnets configuration string.
  * Returns C_OK if valid, C_ERR otherwise and sets *err if provided. */
 int validatePrioritySubnets(const char *subnets_str, const char **err) {
@@ -2019,7 +1971,7 @@ int validatePrioritySubnets(const char *subnets_str, const char **err) {
     return C_OK;
 }
 
-/* Update compiled priority-subnets from configuration string and reclassify clients.
+/* Update compiled priority-subnets from configuration string.
  * Returns C_OK on success, C_ERR on parsing failure. */
 int updatePrioritySubnets(const char *subnets_str) {
     anetSubnet *new_subnets = NULL;
@@ -2030,7 +1982,6 @@ int updatePrioritySubnets(const char *subnets_str) {
     zfree(server.priority_subnets_array);
     server.priority_subnets_array = new_subnets;
     server.priority_subnets_count = new_count;
-    reclassifyClientsPriority();
     return C_OK;
 }
 
@@ -2115,6 +2066,14 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
                   connGetLastError(conn), addr, laddr);
         connClose(conn); /* May be already closed, just ignore errors */
         return;
+    }
+
+    /* Record priority status for connections admitted via priority-subnets.
+     * This flag ensures exact 1:1 symmetry for stat_num_active_priority_clients
+     * on disconnection in unlinkClient(). */
+    if (is_prioritized) {
+        c->flag.priority_source = 1;
+        server.stat_num_active_priority_clients++;
     }
 
     /* Last chance to keep flags */
@@ -2213,10 +2172,8 @@ void unlinkClient(client *c) {
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
 
-            /* Decrement active client counters. Fake clients (where c->conn is NULL)
-             * and unlinked clients (c->client_list_node is NULL) do not increment these
-             * counters on creation, so we only decrement here for linked, active connections. */
-            if (connIsPriority(c->conn)) {
+            /* Decrement active priority client counter if admitted via priority-subnets. */
+            if (c->flag.priority_source) {
                 if (server.stat_num_active_priority_clients > 0) {
                     server.stat_num_active_priority_clients--;
                 }

@@ -1522,6 +1522,172 @@ start_server {
         assert_equal 0 [r XLEN teststream]
     }
 
+    test {XNACK argument validation} {
+        # Key has to be a stream
+        r DEL mystream
+        assert_error "*NOGROUP No such key 'badstream' or consumer group 'mygroup'*" {r XNACK badstream mygroup SILENT IDS 1 1-0}
+
+        r SET mystream notastream
+        assert_error "*WRONGTYPE*" {r XNACK mystream mygroup SILENT IDS 1 1-0}
+        r DEL mystream
+
+        # Group has to exist
+        r XADD mystream 1-0 hello world
+        assert_error "*NOGROUP No such key 'mystream' or consumer group 'badgroup'*" {r XNACK mystream badgroup SILENT IDS 1 1-0}
+
+        # Validation for each case of mode, numids, and the stream ids array themselves
+        r XGROUP CREATE mystream mygroup 0
+        assert_error "*syntax error*" {r XNACK mystream mygroup BADMODE IDS 1 1-0}
+        assert_error "*syntax error*" {r XNACK mystream mygroup SILENT NOTIDS 1 1-0}
+        assert_error "*Number of IDs must be a positive integer*" {r XNACK mystream mygroup SILENT IDS -1 1-0}
+
+        # Below minimum arg count, missing mode & too few IDS arguments
+        assert_error "*wrong number of arguments*" {r XNACK mystream mygroup IDS 1 1-0}
+        assert_error "*wrong number of arguments*" {r XNACK mystream mygroup SILENT IDS 1}
+        assert_error "*syntax error*" {r XNACK mystream mygroup SILENT IDS 1 2 3}
+        assert_error "*Invalid stream ID*" {r XNACK mystream mygroup SILENT IDS 1 -1}
+        assert_error "*Invalid stream ID*" {r XNACK mystream mygroup SILENT IDS 1 bad}
+        assert_error "*value is not an integer or out of range*" {r XNACK mystream mygroup SILENT IDS 1 1-0 RETRYCOUNT -1}
+        assert_error "*value is not an integer or out of range*" {r XNACK mystream mygroup SILENT IDS 1 1-0 RETRYCOUNT bad}
+
+        # No hits
+        assert_equal 0 [r XNACK mystream mygroup SILENT IDS 3 97-0 98-0 99-0]
+    }
+
+    test {XNACK modes affect delivery count appropriately} {
+        # Create stream w/ 2 messages
+        r DEL mystream
+        r XADD mystream 1-0 hello world
+        r XADD mystream 2-0 hello world
+
+        # Create group & add message 1-0 to PEL
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup consumer COUNT 1 STREAMS mystream >
+        set pend [r XPENDING mystream mygroup]
+        assert_equal 1-0 [lindex $pend 1]
+
+        # Check each mode's behavior:
+        # - SILENT: decrements the delivery count (here: always returning to 0)
+        # - FAIL:   doesn't change it (allowing to increment up w/ each claim)
+        # - FATAL:  sets to max (LLONG_MAX)
+        foreach mode {SILENT FAIL FATAL} {
+            for {set j 1} {$j <= 3} {incr j} {
+                switch $mode {
+                    SILENT {set expected 0}
+                    FAIL   {set expected $j}
+                    FATAL  {set expected 9223372036854775807}
+                }
+
+                # Only 1 got NACK'd b/c only message 1-0 was in PEL, not 2-0
+                assert_equal [r XNACK mystream mygroup $mode IDS 2 1-0 2-0] 1 $mode
+
+                # Delivery count matches the mode's semantics
+                set pend [r XPENDING mystream mygroup - + 1]
+                assert_equal $expected [lindex $pend 0 3]
+
+                # Available for reclaim, despite not being 10s
+                set claim [r XAUTOCLAIM mystream mygroup consumer 10000 0-0]
+                assert_equal {{1-0 {hello world}}} [lindex $claim 1]
+            }
+        }
+
+        # Test with enough IDs to trigger heap allocation
+        assert_equal 1 [r XNACK mystream mygroup SILENT IDS 17 1-0 2-0 3-0 4-0 5-0 6-0 7-0 8-0 9-0 10-0 11-0 12-0 13-0 14-0 15-0 16-0 17-0]
+    }
+
+    test {PEL delivery count clamps to LLONG_MAX} {
+        # Create stream w/ 1 message, group, and deliver into the PEL
+        r DEL mystream
+        r XADD mystream 1-0 hello world
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup consumer COUNT 1 STREAMS mystream >
+
+        # XNACK FATAL sets delivery count to LLONG_MAX
+        assert_equal 1 [r XNACK mystream mygroup FATAL IDS 1 1-0]
+        set pend [r XPENDING mystream mygroup - + 1]
+        assert_equal 9223372036854775807 [lindex $pend 0 3]
+
+        # Check each path that can incr delivery count below
+        # XAUTOCLAIM claim
+        r XAUTOCLAIM mystream mygroup consumer 0 0-0
+        set pend [r XPENDING mystream mygroup - + 1]
+        assert_equal 9223372036854775807 [lindex $pend 0 3]
+
+        # XCLAIM claim
+        r XCLAIM mystream mygroup consumer 0 1-0
+        set pend [r XPENDING mystream mygroup - + 1]
+        assert_equal 9223372036854775807 [lindex $pend 0 3]
+
+        # XREADGROUP re-delivery of a pending entry
+        r XREADGROUP GROUP mygroup consumer COUNT 1 STREAMS mystream 0
+        set pend [r XPENDING mystream mygroup - + 1]
+        assert_equal 9223372036854775807 [lindex $pend 0 3]
+    }
+
+    test {XNACK with RETRYCOUNT sets the delivery count manually} {
+        # Create stream w/ 2 messages
+        r DEL mystream
+        r XADD mystream 1-0 hello world
+        r XADD mystream 2-0 hello world
+
+        # Create group & add message 1-0 to PEL
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup consumer COUNT 1 STREAMS mystream >
+        set pend [r XPENDING mystream mygroup]
+        assert_equal 1-0 [lindex $pend 1]
+
+        # NACK with forced delivery count override
+        assert_equal [r XNACK mystream mygroup SILENT IDS 1 1-0 RETRYCOUNT 99] 1
+
+        # Delivery count didn't decrement
+        set pend [r XPENDING mystream mygroup - + 1]
+        assert_equal 99 [lindex $pend 0 3]
+
+        # Available for reclaim, despite not being 10s
+        set claim [r XAUTOCLAIM mystream mygroup consumer 10000 0-0]
+        assert_equal {{1-0 {hello world}}} [lindex $claim 1]
+    }
+
+    test {XNACK with FORCE creates PEL entry even if didn't exist} {
+        # Create stream w/ 2 messages and a group, do not read anything
+        r DEL mystream
+        r XADD mystream 1-0 hello world
+        r XADD mystream 2-0 hello world
+        r XGROUP CREATE mystream mygroup 0
+
+        # FORCE creates PEL entries only for messages that exist
+        assert_equal 1 [r XNACK mystream mygroup SILENT IDS 2 1-0 99-0 FORCE]
+        set pend [r XPENDING mystream mygroup - + 1]
+        assert_equal 1-0 [lindex $pend 0 0]
+        assert_equal 0 [lindex $pend 0 3]
+
+        # FORCE on an already-NACK'd message doesn't duplicate the entry
+        # The dummy consumer shows up in XPENDING extended output
+        assert_equal 1 [r XNACK mystream mygroup SILENT IDS 1 1-0 FORCE]
+        set pend [r XPENDING mystream mygroup - + 1]
+        assert_equal {1-0 0} [list [lindex $pend 0 0] [lindex $pend 0 3]]
+
+        # But, the internal dummy consumer doesn't show in consumers list,
+        # full stream info, and can't be deleted directly.
+        assert_equal [r XINFO CONSUMERS mystream mygroup] {}
+        assert_equal {} [dict get [lindex [dict get [r XINFO STREAM mystream FULL] groups] 0] consumers]
+        assert_equal [r XGROUP DELCONSUMER mystream mygroup ""] 0
+
+        # Available for reclaim, despite not being 10s
+        set claim [r XAUTOCLAIM mystream mygroup consumer 10000 0-0]
+        assert_equal {{1-0 {hello world}}} [lindex $claim 1]
+
+        # XINFO GROUPS counts only the real consumer created here by XAUTOCLAIM
+        assert_equal 1 [dict get [lindex [r XINFO GROUPS mystream] 0] consumers]
+
+        # Forced NACK on a different message reuses the existing dummy consumer
+        assert_equal 1 [r XNACK mystream mygroup SILENT IDS 1 2-0 FORCE]
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal consumer [lindex $pend 0 1] ;# 1-0 was claimed by XAUTOCLAIM
+        assert_equal 2 [llength $pend]
+        assert_equal {} [lindex $pend 1 1] ;# 2-0 is owned by the reused dummy
+    }
+
     test {XRANGE fuzzing} {
         set items [r XRANGE mystream{t} - +]
         set low_id [lindex $items 0 0]

@@ -357,30 +357,68 @@ start_server {tags {"string"}} {
         assert_range [r pttl key2{t}] 5000 10000
     }
 
-    test {MSETEX with past EXAT/PXAT - key stored but logically expired} {
+    test {MSETEX with past EXAT/PXAT - keys are not stored} {
         r debug set-active-expire 0
         r flushall
 
+        # MSETEX with an expiration that is already in the past must not
+        # materialize the key in the database (no insert + later expire).
         assert_equal 1 [r msetex 1 key1{t} val1 exat [expr [clock seconds] - 100]]
         assert_equal 1 [r msetex 1 key2{t} val2 pxat [expr [clock milliseconds] - 100000]]
 
-        set repl [attach_to_replication_stream]
-
-        assert_equal 2 [r dbsize]
-        assert_equal 0 [r exists key1{t} key2{t}]
         assert_equal 0 [r dbsize]
-
-        assert_replication_stream $repl {
-            {multi}
-            {select *}
-            {unlink *}
-            {unlink *}
-            {exec}
-        }
-        close_replication_stream $repl
+        assert_equal 0 [r exists key1{t} key2{t}]
 
         assert_equal {OK} [r debug set-active-expire 1]
-    } {} {needs:debug needs:repl}
+    } {} {needs:debug}
+
+    test {MSETEX with past PXAT deletes existing keys and propagates as a single UNLINK} {
+        r del key1{t} key2{t}
+        r config set lazyfree-lazy-expire yes
+        r set key1{t} pre_existing_val1
+        r set key2{t} pre_existing_val2
+
+        set repl [attach_to_replication_stream]
+
+        assert_equal 1 [r msetex 2 key1{t} val1 key2{t} val2 \
+                        pxat [expr [clock milliseconds] - 1000]]
+
+        # Both pre-existing keys must be removed in place.
+        assert_equal 0 [r exists key1{t} key2{t}]
+
+        # A single consolidated UNLINK is propagated (not per-key UNLINKs,
+        # and not the original MSETEX). The default lazyfree-lazy-expire
+        # is yes, which is why the aux verb is UNLINK.
+        assert_replication_stream $repl {
+            {select *}
+            {unlink key1{t} key2{t}}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
+    test {MSETEX with past PXAT and no existing keys does not propagate} {
+        r del nokey1{t} nokey2{t} sentinel{t}
+        r config set lazyfree-lazy-expire yes
+
+        set repl [attach_to_replication_stream]
+
+        # Fast path with no pre-existing keys: nothing is deleted and
+        # preventCommandPropagation() is called, so the MSETEX must not
+        # appear on the replication link.
+        assert_equal 1 [r msetex 2 nokey1{t} v1 nokey2{t} v2 \
+                        pxat [expr [clock milliseconds] - 1000]]
+
+        # Sentinel: a subsequent SET must propagate. If the MSETEX had
+        # leaked through, it would appear in the stream before the SET
+        # and the pattern match below would fail.
+        r set sentinel{t} ok
+
+        assert_replication_stream $repl {
+            {select *}
+            {set sentinel{t} ok}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
 
     test {MSETEX lazy expire with all expiration options} {
         r debug set-active-expire 0
@@ -388,6 +426,8 @@ start_server {tags {"string"}} {
 
         r msetex 1 key1{t} val1 ex 1
         r msetex 1 key2{t} val2 px 1
+        # key3{t} and key4{t} hit the past-expire fast path and are never
+        # inserted; they therefore never produce a lazy-expire UNLINK.
         r msetex 1 key3{t} val3 exat [expr [clock seconds] - 1]
         r msetex 1 key4{t} val4 pxat [expr [clock milliseconds] - 1]
 
@@ -406,8 +446,6 @@ start_server {tags {"string"}} {
             {select *}
             {unlink *}
             {unlink *}
-            {unlink *}
-            {unlink *}
         }
         close_replication_stream $repl
 
@@ -421,6 +459,8 @@ start_server {tags {"string"}} {
 
         r msetex 1 key1{t} val1 ex 1
         r msetex 1 key2{t} val2 px 1
+        # Past-expire fast path: key3{t}/key4{t} are never stored, so active
+        # expiration has nothing to do for them.
         r msetex 1 key3{t} val3 exat [expr [clock seconds] - 1]
         r msetex 1 key4{t} val4 pxat [expr [clock milliseconds] - 1]
 
@@ -428,15 +468,13 @@ start_server {tags {"string"}} {
         r debug set-active-expire 1
 
         wait_for_condition 5 1000 {
-            [s expired_keys] eq 4
+            [s expired_keys] eq 2
         } else {
             fail "Keys did not expire"
         }
 
         assert_replication_stream $repl {
             {select *}
-            {unlink *}
-            {unlink *}
             {unlink *}
             {unlink *}
         }

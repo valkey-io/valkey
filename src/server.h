@@ -2388,14 +2388,14 @@ struct valkeyServer {
     int list_max_listpack_size;
     int list_compress_depth;
     /* time cache */
-    _Atomic(time_t) unixtime;     /* Unix time sampled every cron cycle. */
-    time_t timezone;              /* Cached timezone. As set by tzset(). */
-    _Atomic(int) daylight_active; /* Currently in daylight saving time. */
-    mstime_t mstime;              /* 'unixtime' in milliseconds. */
-    ustime_t ustime;              /* 'unixtime' in microseconds. */
-    mstime_t cmd_time_snapshot;   /* Time snapshot of the root execution nesting. */
-    size_t blocking_op_nesting;   /* Nesting level of blocking operation, used to reset blocked_last_cron. */
-    long long blocked_last_cron;  /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
+    _Atomic(time_t) unixtime;    /* Unix time sampled every cron cycle. */
+    _Atomic(long) utc_offset;    /* Local time's offset east of UTC in seconds, DST included.
+                                  * Refreshed with the cached time; read lock-free by the logger. */
+    mstime_t mstime;             /* 'unixtime' in milliseconds. */
+    ustime_t ustime;             /* 'unixtime' in microseconds. */
+    mstime_t cmd_time_snapshot;  /* Time snapshot of the root execution nesting. */
+    size_t blocking_op_nesting;  /* Nesting level of blocking operation, used to reset blocked_last_cron. */
+    long long blocked_last_cron; /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
     /* Pubsub */
     kvstore *pubsub_channels;      /* Map channels to list of subscribed clients */
     dict *pubsub_patterns;         /* A dict of pubsub_patterns */

@@ -127,15 +127,13 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd);
 
 /* We use a private localtime implementation which is fork-safe. The logging
  * function of the server may be called from other threads. */
-void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
+void nolocks_localtime(struct tm *tmp, time_t t, long utc_offset);
 
-/* Formats the timezone offset into a string. daylight_active indicates whether dst is active (1)
- * or not (0). */
-void formatTimezone(char *buf, size_t buflen, int timezone, int daylight_active) {
+/* Formats a UTC offset (seconds east of UTC, DST included) as +HH:MM / -HH:MM. */
+void formatTimezone(char *buf, size_t buflen, long utc_offset) {
     serverAssert(buflen >= 7);
-    serverAssert(timezone >= -50400 && timezone <= 43200);
-    // Adjust the timezone for daylight saving, if active
-    int total_offset = (-1) * timezone + 3600 * daylight_active;
+    serverAssert(utc_offset >= -50400 && utc_offset <= 50400); /* UTC-14 .. UTC+14 */
+    int total_offset = (int)utc_offset;
     int hours = abs(total_offset / 3600);
     int minutes = abs(total_offset % 3600) / 60;
     buf[0] = total_offset >= 0 ? '+' : '-';
@@ -213,11 +211,11 @@ void serverLogRaw(int level, const char *msg) {
         int off;
         struct timeval tv;
         pid_t pid = getpid();
-        int daylight_active = atomic_load_explicit(&server.daylight_active, memory_order_relaxed);
+        long utc_offset = atomic_load_explicit(&server.utc_offset, memory_order_relaxed);
 
         gettimeofday(&tv, NULL);
         struct tm tm;
-        nolocks_localtime(&tm, tv.tv_sec, server.timezone, daylight_active);
+        nolocks_localtime(&tm, tv.tv_sec, utc_offset);
         switch (server.log_timestamp_format) {
         case LOG_TIMESTAMP_LEGACY:
             off = strftime(buf, sizeof(buf), "%d %b %Y %H:%M:%S.", &tm);
@@ -227,7 +225,7 @@ void serverLogRaw(int level, const char *msg) {
         case LOG_TIMESTAMP_ISO8601:
             off = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S.", &tm);
             char tzbuf[7];
-            formatTimezone(tzbuf, sizeof(tzbuf), server.timezone, server.daylight_active);
+            formatTimezone(tzbuf, sizeof(tzbuf), utc_offset);
             snprintf(buf + off, sizeof(buf) - off, "%03d%s", (int)tv.tv_usec / 1000, tzbuf);
             break;
 
@@ -1439,16 +1437,14 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime
     server.unixtime = server.mstime / 1000;
     lrulfu_updateClockAndPolicy(server.mstime, (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) != 0);
 
-    /* To get information about daylight saving time, we need to call
-     * localtime_r and cache the result. However calling localtime_r in this
+    /* The logger needs local time without calling localtime_r (which takes
+     * locks and is not async-signal-safe), so we cache the current UTC offset
+     * here and let it use a lock-free conversion. Calling localtime_r in this
      * context is safe since we will never fork() while here, in the main
-     * thread. The logging function will call a thread safe version of
-     * localtime that has no locks. */
+     * thread. Refreshing the actual offset, rather than a DST flag, handles
+     * every DST shape tzdata has: one hour, half an hour, and negative DST. */
     if (update_daylight_info) {
-        struct tm tm;
-        time_t ut = server.unixtime;
-        localtime_r(&ut, &tm);
-        atomic_store_explicit(&server.daylight_active, tm.tm_isdst, memory_order_relaxed);
+        atomic_store_explicit(&server.utc_offset, utcOffsetFromLocaltime(server.unixtime), memory_order_relaxed);
     }
 }
 
@@ -2425,11 +2421,10 @@ void initServerConfig(void) {
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
     clearReplicationId2();
-    server.hz = CONFIG_DEFAULT_HZ;   /* Initialize it ASAP, even if it may get
-                                        updated later after loading the config.
-                                        This value may be used before the server
-                                        is initialized. */
-    server.timezone = getTimeZone(); /* Initialized by tzset(). */
+    server.hz = CONFIG_DEFAULT_HZ; /* Initialize it ASAP, even if it may get
+                                      updated later after loading the config.
+                                      This value may be used before the server
+                                      is initialized. */
     server.configfile = NULL;
     server.executable = NULL;
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
@@ -7911,7 +7906,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 #ifdef INIT_SETPROCTITLE_REPLACEMENT
     spt_init(argc, argv);
 #endif
-    tzset(); /* Populates 'timezone' global. */
+    tzset(); /* Apply TZ so localtime_r() sees the configured zone. */
     zmalloc_set_oom_handler(serverOutOfMemoryHandler);
 #if defined(HAVE_DEFRAG)
     int res = allocatorDefragInit();

@@ -37,6 +37,17 @@ start_server {tags {"other"}} {
         assert_equal [llength [dict get $info range]] 2
     }
 
+    test {CONFIG replication full sync backoff} {
+        assert_equal {repl-sync-backoff-base-time 1} [r CONFIG GET repl-sync-backoff-base-time]
+        assert_equal {repl-sync-backoff-max-time 60} [r CONFIG GET repl-sync-backoff-max-time]
+        assert_equal OK [r CONFIG SET repl-sync-backoff-base-time 2]
+        assert_equal OK [r CONFIG SET repl-sync-backoff-max-time 0]
+        assert_equal {repl-sync-backoff-base-time 2} [r CONFIG GET repl-sync-backoff-base-time]
+        assert_equal {repl-sync-backoff-max-time 0} [r CONFIG GET repl-sync-backoff-max-time]
+        assert_error {*must be between 1 and*} {r CONFIG SET repl-sync-backoff-base-time 0}
+        assert_error {*must be between 0 and*} {r CONFIG SET repl-sync-backoff-max-time -1}
+    }
+
     test {CONFIG INFO with config name - bool type} {
         set result [r CONFIG INFO activerehashing]
         assert_equal [llength $result] 1

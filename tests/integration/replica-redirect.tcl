@@ -37,7 +37,7 @@ start_server {tags {needs:repl external:skip}} {
             $rr close
         }
 
-        test {replica allow read command by default} {
+        test {replica allows read command by default} {
             r get foo
         } {}
 
@@ -45,10 +45,15 @@ start_server {tags {needs:repl external:skip}} {
             assert_error {READONLY*} {r set foo bar}
         }
 
-        test {replica redirect read and write command after CLIENT CAPA REDIRECT} {
+        test {replica redirects read and write command after CLIENT CAPA REDIRECT} {
             r client capa redirect
             assert_error "REDIRECT $primary_host:$primary_port" {r set foo bar}
             assert_error "REDIRECT $primary_host:$primary_port" {r get foo}
+        }
+
+        test {replica redirects (read-only) script with keys} {
+            assert_error "REDIRECT $primary_host:$primary_port" {r eval {return redis.error_reply("ERR script must not be executed")} 1 foo}
+            assert_error "REDIRECT $primary_host:$primary_port" {r eval_ro {return redis.error_reply("ERR script must not be executed")} 1 foo}
         }
 
         test {CLIENT INFO} {
@@ -59,10 +64,86 @@ start_server {tags {needs:repl external:skip}} {
             r ping
         } {PONG}
 
-        test {replica allow read command in READONLY mode} {
+        # TODO: This corresponds to the behavior in cluster mode. But this may not be correct
+        # as pub/sub works differently in standalone mode (messages are _not_ forwarded
+        # from replica to primary), see issue #1780.
+        test {replica allows pubsub commands} {
+            r publish foo bar
+            r spublish foo bar
+        }
+
+        test {replica allows script accessing no key} {
+            assert_equal "PONG" [r eval {return redis.call("ping")} 0]
+        }
+
+        test {replica allows read-only script accessing no key} {
+            assert_equal "PONG" [r eval_ro {return redis.call("ping")} 0]
+        }
+
+        test {replica allows MULTI that accesses no key} {
+            r multi
+            r ping
+            r eval {return redis.call("ping")} 0
+            r eval_ro {return redis.call("ping")} 0
+            r exec
+        }
+
+        test {replica redirects WATCH} {
+            assert_error "REDIRECT*" {r watch foo}
+        }
+
+        test {replica allows read command in READONLY mode} {
             r readonly
             r get foo
         } {}
+
+        test {replica allows read command in MULTI in READONLY mode} {
+            r readonly
+            r multi
+            r get foo
+            r exec
+        }
+
+        test {replica allows WATCH in READONLY mode} {
+            r readonly
+            r watch foo
+            r unwatch
+        }
+
+        test {replica allows read-only script in READONLY mode} {
+            r readonly
+            r eval_ro {redis.call("get", KEYS[1])} 1 foo
+        }
+
+        test {replica allows read-only script in MULTI in READONLY mode} {
+            r readonly
+            r multi
+            r eval_ro {redis.call("get", KEYS[1])} 1 foo
+            r exec
+        }
+
+        test {replica allows script that potentially writes but may only read in READONLY mode} {
+            r readonly
+            r eval {redis.call("get", KEYS[1])} 1 foo
+        }
+
+        test {replica allows script that potentially writes but may only read in MULTI in READONLY mode} {
+            r readonly
+            r multi
+            r eval {redis.call("get", KEYS[1])} 1 foo
+            r exec
+        }
+
+        test {replica allows script that potentially writes in READONLY mode and fails if it actually writes} {
+            r readonly
+            assert_error "READONLY*" {r eval {redis.call("set", KEYS[1], 'bar')} 1 foo}
+        }
+
+        test {replica allows script accessing no key in READONLY mode} {
+            r readonly
+            assert_equal "PONG" [r eval {return redis.call("ping")} 0]
+            assert_equal "PONG" [r eval_ro {return redis.call("ping")} 0]
+        }
 
         test {client paused before and during failover-in-progress} {
             set rd_blocking [valkey_deferring_client -1]

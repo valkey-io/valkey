@@ -1698,7 +1698,7 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Too many scripts are cached? */
-        if (dictSize(evalCtxScriptsDict()) > 1000) {
+        if (evalScriptsCount() > 1000) {
             many_scripts = 1;
             num_reports++;
         }

@@ -1862,7 +1862,15 @@ int loadAppendOnlyFiles(aofManifest *am, rdbSaveInfo *rsi) {
      * replay backlog commands that were already applied from the
      * incremental AOF, double-applying non-idempotent commands (e.g.
      * INCR, XADD). Invalidate it so the caller falls back to a full sync
-     * instead. */
+     * instead.
+     *
+     * This only guards the dataset: traffic that advances the replica's
+     * offset without dirtying the dataset (PUBLISH, PING, REPLCONF) isn't
+     * written to the incremental AOF, so it doesn't trip this check. A
+     * restart after such traffic can still resend that range on partial
+     * resync; the dataset is unaffected but e.g. pub/sub subscribers may
+     * see messages redelivered, same as the existing RDB crash-restart
+     * path. */
     if (rsi && rsi->repl_id_is_set && total_size > base_size) {
         rsi->repl_id_is_set = 0;
     }

@@ -1601,7 +1601,13 @@ int loadSingleAppendOnlyFile(char *filename, rdbSaveInfo *rsi) {
             valid_up_to = ftello(fp);
             loadingAbsProgress(valid_up_to);
             last_progress_report_size = valid_up_to;
-            if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
+            if (old_style) {
+                serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
+                /* Same hazard as the base/incr guard in loadAppendOnlyFiles():
+                 * a command tail after the RDB preamble advances the dataset
+                 * past the persisted offset without updating it. */
+                if (rsi && valid_up_to < sb.st_size) rsi->repl_id_is_set = 0;
+            }
         }
     }
 

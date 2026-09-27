@@ -29,6 +29,34 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+        append_to_aof [string range [formatCommand exec] 0 end-1]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Short read in MULTI: Discard incomplete transaction and preserve subsequent writes across restart" {
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "OK" [$client set baz survived]
+            assert_equal "survived" [$client get baz]
+
+            restart_server 0 true false
+
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "survived" [$client get baz]
+        }
+    }
+
     ## Should also start with truncated AOF without incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand incr foo]
@@ -376,6 +404,31 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    # A MULTI/EXEC block in the AOF must be replayed even when the default user
+    # is disabled. EXEC re-checks ACLs of the queued commands, but that check
+    # must not apply to the client used for loading the AOF, otherwise the
+    # transaction's writes are silently lost.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set outside-tx 1]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set inside-tx-a 2]
+        append_to_aof [formatCommand set inside-tx-b 3]
+        append_to_aof [formatCommand exec]
+    }
+
+    set acl_config_lines {user {default off} user {someuser on nopass ~* &* +@all}}
+    start_server_aof_ex [list dir $server_path] [list wait_ready false config_lines $acl_config_lines] {
+        test {AOF with MULTI/EXEC is fully loaded when the default user is disabled} {
+            set c [valkey [srv host] [srv port] 0 $::tls]
+            $c auth someuser somepass
+            wait_done_loading $c
+            assert_equal 1 [$c get outside-tx]
+            assert_equal 2 [$c get inside-tx-a]
+            assert_equal 3 [$c get inside-tx-b]
+            $c close
+        }
+    }
+
     # The server could load AOF which has timestamp annotations inside
     create_aof $aof_dirpath $aof_file {
         append_to_aof "#TS:1628217470\r\n"
@@ -500,6 +553,24 @@ tags {"aof external:skip logreqres:skip"} {
             exec $::VALKEY_CHECK_AOF_BIN tests/assets/rdb-preamble.aof
         } result
         assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
+    }
+
+    start_server {overrides {appendonly yes aof-use-rdb-preamble yes}} {
+        test {Test valkey-check-aof for Multi Part AOF with Valkey RDB base} {
+            r set foo bar
+            r bgrewriteaof
+            waitForBgrewriteaof r
+
+            set base_aof [get_base_aof_path r]
+            set manifest [file join [file dirname $base_aof] "[lindex [r config get appendfilename] 1]$::manifest_suffix"]
+            assert_equal "VALKEY" [read_binary_file_prefix $base_aof 6]
+
+            set failed [catch {
+                exec $::VALKEY_CHECK_AOF_BIN $manifest
+            } result]
+            assert_equal 0 $failed
+            assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*BASE AOF*is valid*All AOF files and manifest are valid*" $result
+        }
     }
 
     test {Test valkey-check-aof for Multi Part AOF with resp AOF base} {

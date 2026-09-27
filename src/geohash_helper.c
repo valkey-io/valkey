@@ -285,7 +285,7 @@ GeoHashFix52Bits geohashAlign52Bits(const GeoHashBits hash) {
  * we can simplify arcsin(sin(x)) to x.
  */
 double geohashGetLatDistance(double lat1d, double lat2d) {
-    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d) - deg_rad(lat1d));
+    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d - lat1d));
 }
 
 /* Calculate distance using haversine great circle distance formula. */
@@ -349,7 +349,7 @@ int geohashGetDistanceIfInRectangle(double width_m,
  * The Polygon's centroid's lon lat coordinates are `centroidLon` and `centroidLat`.
  * The algorithm is based on PNPOLY - Point Inclusion in Polygon Test by W. Randolph Franklin (WRF).
  * See: https://wrfranklin.org/Research/Short_Notes/pnpoly.html
- * Returns 1 if inside the polyon and returns 0 otherwise. */
+ * Returns 1 if inside the polygon and returns 0 otherwise. */
 int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance) {
     int i, j;
     int inside = 0;

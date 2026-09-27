@@ -70,7 +70,7 @@ int HelloPushNative_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
     return VALKEYMODULE_OK;
 }
 
-/* HELLO.PUSH.CALL implements RPUSH using an higher level approach, calling
+/* HELLO.PUSH.CALL implements RPUSH using a higher level approach, calling
  * a command instead of working with the key in a low level way. This
  * approach is useful when you need to call commands that are not
  * available as low level APIs, or when you don't need the maximum speed
@@ -326,7 +326,7 @@ int HelloToggleCase_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
 /* HELLO.MORE.EXPIRE key milliseconds.
  *
  * If the key has already an associated TTL, extends it by "milliseconds"
- * milliseconds. Otherwise no operation is performed. */
+ * milliseconds. Otherwise, no operation is performed. */
 int HelloMoreExpire_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
     if (argc != 3) return ValkeyModule_WrongArity(ctx);

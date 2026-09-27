@@ -1667,7 +1667,13 @@ start_server {tags {"hashexpire"}} {
         r copy myhash{t} nwhash{t}
 
         # Verify initial TTL state
-        assert_equal [r MEMORY USAGE myhash{t}] [r MEMORY USAGE nwhash{t}]
+        # COPY builds the new object from fresh allocations, while the source
+        # was grown with realloc. With libc malloc the usable size of those
+        # allocations (what MEMORY USAGE reports) can differ by an allocator
+        # chunk, so assert the encoding is preserved and memory stays close.
+        assert_equal [r OBJECT ENCODING myhash{t}] [r OBJECT ENCODING nwhash{t}]
+        set mem_src [r MEMORY USAGE myhash{t}]
+        assert_range [r MEMORY USAGE nwhash{t}] [expr {$mem_src - 16}] [expr {$mem_src + 16}]
         assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
         assert_equal "v1 v3 v4" [r HMGET nwhash{t} f1 f3 f4]
         assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f1] [r HEXPIRETIME nwhash{t} FIELDS 1 f1] 

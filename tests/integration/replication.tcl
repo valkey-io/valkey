@@ -1279,7 +1279,7 @@ start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4 
 
                 # Wait for a compressed transfer to be in flight: the cohort
                 # negotiated compression and the survivor began the socket load.
-                wait_for_log_messages -2 {"*Diskless full sync with compression: lz4*"} $loglines 1500 10
+                wait_for_log_messages -2 {"*target: replicas sockets*compression: lz4*"} $loglines 1500 10
                 wait_for_log_messages -1 {"*Loading DB in memory*"} 0 1500 10
 
                 # Kill one replica mid-transfer.

@@ -1260,6 +1260,15 @@ compressionAlgo replSelectFullSyncCompression(int replica_capa) {
     return replicaAcceptsCompressionAlgorithm(replica_capa, disk_algo) ? disk_algo : ALGO_NONE;
 }
 
+/* Whether a replica waiting for a full sync belongs to the cohort described by the
+ * given requirements, RDB version and codec, i.e. whether it can share that sync.
+ * Replicas that don't match are served by a separate one. */
+bool isReplicaInCohort(client *replica, int req, int rdbver, compressionAlgo compr) {
+    return replica->repl_data->replica_req == req &&
+           replicaRdbVersion(replica) == rdbver &&
+           replSelectFullSyncCompression(replica->repl_data->replica_capa) == compr;
+}
+
 /* Start a BGSAVE for replication goals, which is, selecting the disk or
  * socket target depending on the configuration.
  *
@@ -1341,10 +1350,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
             client *replica = ln->value;
 
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
-                /* Check replica has the exact requirements */
-                if (replica->repl_data->replica_req != req) continue;
-                if (replicaRdbVersion(replica) != rdbver) continue;
-                if (replSelectFullSyncCompression(replica->repl_data->replica_capa) != sync_compression_algo) continue;
+                if (!isReplicaInCohort(replica, req, rdbver, sync_compression_algo)) continue;
                 replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
             }
         }
@@ -1353,9 +1359,9 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     return C_OK;
 
 error:
-    /* Remove the replicas waiting for a full resynchronization from the list of
-     * replicas, inform them with an error about what happened, close the connection
-     * ASAP. */
+    /* Remove the replicas of this cohort waiting for a full resynchronization from
+     * the list of replicas, inform them with an error about what happened, close the
+     * connection ASAP. The other cohorts are served by their own rounds. */
     serverAssert(fail_msg != NULL);
     serverLog(LL_WARNING, "BGSAVE for replication failed: %s", fail_msg);
     listRewind(server.replicas, &li);
@@ -1363,6 +1369,7 @@ error:
         client *replica = ln->value;
 
         if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+            if (!isReplicaInCohort(replica, req, rdbver, sync_compression_algo)) continue;
             replica->repl_data->repl_state = REPL_STATE_NONE;
             replica->flag.replica = 0;
             listDelNode(server.replicas, ln);
@@ -6077,9 +6084,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
                     req = replica->repl_data->replica_req;
                     rdbver = replicaRdbVersion(replica);
                     compr = replica_compr;
-                } else if (req != replica->repl_data->replica_req ||
-                           rdbver != replicaRdbVersion(replica) ||
-                           compr != replica_compr) {
+                } else if (!isReplicaInCohort(replica, req, rdbver, compr)) {
                     /* Skip replicas that don't match */
                     continue;
                 }

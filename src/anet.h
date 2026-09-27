@@ -32,6 +32,8 @@
 #define ANET_H
 
 #include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define ANET_OK 0
 #define ANET_ERR -1
@@ -51,6 +53,18 @@
 #undef ip_len
 #endif
 
+/* Represents an IP subnet (IPv4 or IPv6) and its prefix length. */
+typedef struct anetSubnet {
+    int family; /* AF_INET or AF_INET6 */
+    union {
+        struct in_addr ipv4;
+        struct in6_addr ipv6;
+    } addr;
+    int prefix_len;
+} anetSubnet;
+
+int anetParseSubnet(char *err, const char *token, anetSubnet *subnet);
+int anetMatchIpSubnet(const char *ip, const anetSubnet *subnets, int count);
 int anetTcpNonBlockConnect(char *err, const char *addr, int port);
 int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int mptcp);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len, int flags);

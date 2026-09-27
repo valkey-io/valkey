@@ -67,7 +67,7 @@ proc publish_messages {server num_msgs msg_size} {
     }
 }
 
-start_cluster 1 2 {tags {external:skip cluster}} {
+start_cluster 1 2 {tags {external:skip cluster network}} {
     set primary_id 0
     set replica1_id 1
 
@@ -122,7 +122,7 @@ start_cluster 1 2 {tags {external:skip cluster}} {
     } {} {needs:debug}
 }
 
-start_cluster 3 0 {tags {external:skip cluster}} {
+start_cluster 3 0 {tags {external:skip cluster network}} {
     test "Each node has two links with each peer" {
         for {set id 0} {$id < [llength $::servers]} {incr id} {
             # Assert that from point of view of each node, there are two links for
@@ -156,6 +156,29 @@ start_cluster 3 0 {tags {external:skip cluster}} {
                 assert {$to eq 1}
                 assert {$from eq 1}
             }
+        }
+    }
+
+    test "Cluster bus I/O is offloaded only when I/O threads are enabled" {
+        if {[lindex [R 0 config get io-threads] 1] > 1} {
+            # Gossip is continuous, so completed threaded reads and writes must
+            # show up. These are counted on completion, not on dispatch.
+            wait_for_condition 50 100 {
+                [CI 0 cluster_io_threaded_reads_processed] > 0 &&
+                [CI 0 cluster_io_threaded_writes_processed] > 0
+            } else {
+                fail "cluster bus I/O was never offloaded to the I/O threads"
+            }
+        } else {
+            # With the pool disabled, every dispatch has to take the
+            # main-thread fallback and nothing may be counted as threaded.
+            wait_for_condition 50 100 {
+                [CI 0 cluster_io_main_thread_fallbacks] > 0
+            } else {
+                fail "cluster bus I/O did not fall back to the main thread"
+            }
+            assert_equal 0 [CI 0 cluster_io_threaded_reads_processed]
+            assert_equal 0 [CI 0 cluster_io_threaded_writes_processed]
         }
     }
 

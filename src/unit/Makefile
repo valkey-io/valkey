@@ -19,13 +19,19 @@ DEPENDS := $(patsubst %.cpp,%.d,$(SOURCES))
 TEST_CFLAGS := $(CFLAGS)
 
 # Hold new gtest test to a high standard
+# The -Wframe-larger-than cap must accommodate the compiler-generated static
+# initialization function, whose frame grows with the number of TEST_F
+# registrations in a file: under -fsanitize=address each registration's
+# temporaries get their own redzoned stack slot, roughly 150 bytes per test
+# on current toolchains (more on older ones). 128K allows large test files
+# while still catching runaway frames in hand-written code.
 MORE_WARNINGS=-Wno-variadic-macros \
 	-Werror \
 	-Wpedantic \
 	-Wextra \
 	-Wall \
 	-Wcast-align \
-	-Wframe-larger-than=32768 \
+	-Wframe-larger-than=131072 \
 	-Wno-strict-overflow \
 	-Wsign-compare \
 	-Werror=missing-braces \
@@ -94,7 +100,9 @@ HIREDIS_LIB := ../../deps/libvalkey/lib/libvalkey.a
 JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
 FPCONV_LIB := ../../deps/fpconv/libfpconv.a
+LZ4_LIB := ../../deps/lz4/liblz4.a
 TLS_LIBS := ../../deps/libvalkey/lib/libvalkey_tls.a -lssl -lcrypto
+PKG_CONFIG ?= pkg-config
 GTEST_CFLAGS ?=
 GTEST_LIBS   ?=
 ifeq ($(strip $(GTEST_LIBS)),)
@@ -106,6 +114,26 @@ ifeq ($(strip $(GTEST_LIBS)),)
     $(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
 endif
 
+ZSTD_LD_LIBS :=
+
+ifeq ($(BUILD_ZSTD),yes)
+ifdef ZSTD_PREFIX
+	ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+	    $(ZSTD_PREFIX)/lib/libzstd.a \
+	    $(ZSTD_PREFIX)/lib64/libzstd.a))
+	TEST_CFLAGS += -DHAVE_ZSTD -I$(ZSTD_PREFIX)/include
+	ZSTD_LD_LIBS := $(ZSTD_STATIC_ARCHIVE)
+else
+	ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
+	ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
+	ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+	    $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
+	    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
+	TEST_CFLAGS += -DHAVE_ZSTD $(shell $(PKG_CONFIG) --cflags libzstd)
+	ZSTD_LD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
+endif
+endif
+
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
 # by copying all object files into the wrapped/ folder and applying symbol redefinitions.
@@ -113,6 +141,7 @@ ifeq ($(uname_S), Darwin)
 WRAP_DIR := wrapped
 VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
 ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
+TEST_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ALL_OBJECTS))
 
 # Homebrew does not add llvm/bin to PATH by default, so we check the standard
 # Homebrew prefix locations for both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
@@ -126,7 +155,7 @@ endif
 $(WRAP_DIR):
 	@mkdir -p $(WRAP_DIR)
 
-$(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
+define wrap-object
 	@mkdir -p $(dir $@)
 	@if file $< | grep -q "LLVM bitcode"; then \
 		llc $< -filetype=obj -o $(WRAP_DIR)/$*_temp.o; \
@@ -138,8 +167,18 @@ $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
 	fi
 	@rm -f $(WRAP_DIR)/$*-wrap-syms
+endef
+
+# Wrap server library objects
+$(ENGINE_SERVER_WRAP_OBJ): $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
+	$(wrap-object)
+
+# Wrap test objects, so that calls to wrapped functions are redirected to __wrap_*
+$(TEST_WRAP_OBJ): $(WRAP_DIR)/%.o: %.o $(WRAP_DIR) generated_wrappers.o
+	$(wrap-object)
 
 $(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) generated_wrappers.o
+	@rm -f $@
 	$(SERVER_AR) rcs $@ $(ENGINE_SERVER_WRAP_OBJ)
 endif
 
@@ -163,7 +202,9 @@ LD_LIBS := $(HIREDIS_LIB) \
 	$(JEMALLOC_LIB) \
 	$(GTEST_LIBS) \
 	$(HDR_HISTOGRAM_LIB) \
-	$(FPCONV_LIB)
+	$(FPCONV_LIB) \
+	$(LZ4_LIB) \
+	$(ZSTD_LD_LIBS)
 
 # Add libbacktrace support if enabled
 ifeq ($(USE_LIBBACKTRACE),yes)
@@ -207,9 +248,8 @@ generated_wrappers.o: generated_wrappers.cpp
 
 # Generate the single test binary in parent directory.
 ifeq ($(uname_S), Darwin)
-valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB) $(FINAL_LIBS)
+valkey-unit-gtests: $(TEST_WRAP_OBJ) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB) $(FINAL_LIBS)
 	$(CXX) -g $(LDFLAGS) -fno-lto \
-		-Wl,-flat_namespace -Wl,-undefined,dynamic_lookup \
 		-Wall -Wno-deprecated-declarations \
 		-o $@ $^ $(LD_LIBS) \
 		-lm -pthread -ldl
@@ -228,7 +268,7 @@ all: valkey-unit-gtests
 .PHONY: test-unit
 TEST_ARGS = $(if $(accurate),--accurate) $(if $(large_memory),--large-memory) $(if $(valgrind),--valgrind) $(if $(seed),--seed $(seed))
 test-unit: valkey-unit-gtests
-	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests --gtest_filter=$(UNIT_TEST_PATTERN)* -- $(TEST_ARGS)
+	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests --timeout_per_test 300 --gtest_filter=$(UNIT_TEST_PATTERN)* -- $(TEST_ARGS)
 	@printf '\033[32mAll UNIT TESTS PASSED!\033[0m\n'
 
 .PHONY: valgrind

@@ -60,7 +60,7 @@
             },
             {
                 "name": "member",
-                "type": "string",
+                "type": "member",
                 "multiple": true
             }
         ]

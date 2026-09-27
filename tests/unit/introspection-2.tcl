@@ -139,11 +139,21 @@ start_server {tags {"introspection"}} {
         assert_equal {key} [r command getkeys get key]
     }
 
+    test {COMMAND GETKEYS EXEC} {
+        assert_equal {} [r command getkeys exec]
+        assert_equal {key} [r command getkeys exec ifeq key value]
+    }
+
     test {COMMAND GETKEYSANDFLAGS} {
         assert_equal {{k1 {OW update}}} [r command getkeysandflags set k1 v1]
         assert_equal {{k1 {OW update}} {k2 {OW update}}} [r command getkeysandflags mset k1 v1 k2 v2]
         assert_equal {{k1 {RW access delete}} {k2 {RW insert}}} [r command getkeysandflags LMOVE k1 k2 left right]
         assert_equal {{k1 {RO access}} {k2 {OW update}}} [r command getkeysandflags sort k1 store k2]
+    }
+
+    test {COMMAND GETKEYSANDFLAGS EXEC} {
+        assert_equal {} [r command getkeysandflags exec]
+        assert_equal {{key {RO access}}} [r command getkeysandflags exec ifeq key value]
     }
 
     test {COMMAND GETKEYS MEMORY USAGE} {
@@ -233,7 +243,7 @@ start_server {tags {"introspection"}} {
         assert_not_equal [lsearch $commands "client|list"] -1
     }
 
-    test "COMMAND LIST FILTERBY ACLCAT against non existing category" {
+    test "COMMAND LIST FILTERBY ACLCAT against nonexistent category" {
         assert_equal {} [r command list filterby aclcat non_existing_category]
     }
 
@@ -271,7 +281,7 @@ start_server {tags {"introspection"}} {
         assert_equal {} [r command list filterby pattern non_exists*]
     }
 
-    test "COMMAND LIST FILTERBY MODULE against non existing module" {
+    test "COMMAND LIST FILTERBY MODULE against nonexistent module" {
         # This should be empty, the real one is in subcommands.tcl
         assert_equal {} [r command list filterby module non_existing_module]
     }
@@ -316,7 +326,7 @@ start_server {tags {"introspection"}} {
         }
     }
 
-    foreach cmd {ZUNIONSTORE XREAD EVAL SORT SORT_RO MIGRATE GEORADIUS} {
+    foreach cmd {ZUNIONSTORE XREAD EVAL EXEC SORT SORT_RO MIGRATE GEORADIUS} {
         test "$cmd command is marked with movablekeys" {
             set info [lindex [r command info $cmd] 0]
             assert_match {*movablekeys*} [lindex $info 2]

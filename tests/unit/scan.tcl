@@ -262,7 +262,7 @@ proc test_scan {type} {
         }
     }
 
-    foreach enc {listpack skiplist} {
+    foreach enc {listpack btree} {
         test "{$type} ZSCAN with encoding $enc" {
             # Create the Sorted Set
             r del zset
@@ -458,6 +458,55 @@ proc test_scan {type} {
 
         set keys [lsort -unique $keys]
         assert_equal 100 [llength $keys]
+    }
+
+    # Tests specific to cluster mode
+    if {$type == "cluster"} {
+        test "{cluster} SCAN returns keys present for the whole iteration when another slot is freed" {
+            # Keys in {t2} are present before the iteration starts and are never
+            # touched, so a full iteration must return all of them. Emptying {t3}
+            # partway through frees its hashtable, and kvstoreScan then skips it. The
+            # hashtable cursor is only meaningful for the hashtable it came from, so
+            # it has to be reset when moving on, or it is applied to the next slot and
+            # the buckets before it are never visited.
+            r flushdb
+            set slot_a [r cluster keyslot "{t3}"]
+            set slot_b [r cluster keyslot "{t2}"]
+            assert {$slot_a < $slot_b}
+            for {set j 0} {$j < 400} {incr j} {
+                r set "{t3}-$j" v
+                r set "{t2}-$j" v
+            }
+
+            # Scan until the cursor is parked partway through the first slot.
+            set cursor 0
+            set keys {}
+            while 1 {
+                set res [r scan $cursor count 5]
+                set cursor [lindex $res 0]
+                lappend keys {*}[lindex $res 1]
+                if {$cursor == 0} {
+                    fail "scan ended before reaching a mid-slot cursor"
+                }
+                if {($cursor & 16383) == $slot_a && ($cursor >> 14) != 0} break
+            }
+
+            # Emptying the slot frees its hashtable, so the next call skips it. The
+            # deleted keys may or may not be returned, but {t2} is unaffected.
+            for {set j 0} {$j < 400} {incr j} {
+                r del "{t3}-$j"
+            }
+
+            while 1 {
+                set res [r scan $cursor count 5]
+                set cursor [lindex $res 0]
+                lappend keys {*}[lindex $res 1]
+                if {$cursor == 0} break
+            }
+
+            set keys [lsort -unique $keys]
+            assert_equal 400 [llength [lsearch -all -inline -glob $keys "{t2}-*"]]
+        }
     }
 }
 

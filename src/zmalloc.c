@@ -114,6 +114,9 @@ static _Atomic size_t *used_memory_thread = &used_memory_thread_padded[PADDING_E
 static atomic_int total_active_threads = 0;
 /* This is a simple protection. It's used only if some modules create a lot of threads. */
 static atomic_size_t used_memory_for_additional_threads = 0;
+/* Memory tracked by modules outside the allocator. Writers are serialized by moduleGIL,
+ * but readers may sample it without the GIL. */
+static atomic_size_t used_memory_external = 0;
 
 /* Register the thread index in start_routine. */
 static inline void zmalloc_register_thread_index(void) {
@@ -526,7 +529,34 @@ size_t zmalloc_used_memory(void) {
     for (int i = 0; i < threads_num; i++) {
         um += used_memory_thread[i];
     }
+    um += atomic_load_explicit(&used_memory_external, memory_order_relaxed);
     return um;
+}
+
+size_t zmalloc_used_external_memory(void) {
+    return atomic_load_explicit(&used_memory_external, memory_order_relaxed);
+}
+
+int zmalloc_increase_used_memory_external(size_t size) {
+    size_t current = atomic_load_explicit(&used_memory_external, memory_order_relaxed);
+    while (1) {
+        size_t next;
+        if (SIZE_MAX - current < size) return -1;
+        next = current + size;
+        if (atomic_compare_exchange_weak_explicit(&used_memory_external, &current, next, memory_order_relaxed, memory_order_relaxed))
+            return 0;
+    }
+}
+
+int zmalloc_decrease_used_memory_external(size_t size) {
+    size_t current = atomic_load_explicit(&used_memory_external, memory_order_relaxed);
+    while (1) {
+        size_t next;
+        if (current < size) return -1;
+        next = current - size;
+        if (atomic_compare_exchange_weak_explicit(&used_memory_external, &current, next, memory_order_relaxed, memory_order_relaxed))
+            return 0;
+    }
 }
 
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {

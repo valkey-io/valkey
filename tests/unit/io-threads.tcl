@@ -138,3 +138,36 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         }
     }
 }
+
+start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {io-threads 5}} {
+    # A queued command whose argc violates its arity used to be handed to
+    # getKeysFromCommand() by the prefetch path, which assumes the arity check
+    # has already passed. GET with argc 1 panicked on the legacy range spec;
+    # EVAL and MIGRATE read past the end of argv.
+    test {Pipelined commands with bad arity do not reach the key prefetcher} {
+        assert_equal {OK} [r config set io-threads-always-active yes]
+        activate_io_threads_and_wait
+
+        set server_pid [s process_id]
+        set rd [valkey_deferring_client]
+
+        # Suspend the server so the whole pipeline arrives in a single read and
+        # is parsed into the client's command queue, which is the path that
+        # skipped the arity check.
+        pause_process $server_pid
+        $rd ping
+        $rd get
+        $rd eval x
+        $rd migrate a b
+        $rd flush
+        resume_process $server_pid
+
+        assert_equal {PONG} [$rd read]
+        assert_error "ERR wrong number of arguments*" {$rd read}
+        assert_error "ERR wrong number of arguments*" {$rd read}
+        assert_error "ERR wrong number of arguments*" {$rd read}
+        $rd close
+
+        assert_equal {PONG} [r ping]
+    }
+}

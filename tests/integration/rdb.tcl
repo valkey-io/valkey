@@ -1009,20 +1009,79 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Create initial dataset with 100 keys
         set num_keys 100
+        set create_start [clock milliseconds]
         createComplexDatasetForVerification r $num_keys
+        set create_ms [expr {[clock milliseconds] - $create_start}]
         
-        # Set TTLs on all keys - key i expires in (i/10 + 1) seconds
-        set start_time [clock milliseconds]
+        # Spread the deadlines 100 ms apart, starting a second after
+        # deadline_base, so that expirations keep landing throughout the save
+        # below and go on past its end. The deadlines are absolute so that the
+        # length of the loop, which issues num_keys * 12 round trips, cannot
+        # shift them. The budget for that loop is measured from the dataset
+        # creation above, which issues a comparable number of round trips, so
+        # that a slow runner gets a proportionally longer one instead of a
+        # figure that only holds on a fast one.
+        set deadline_base [expr {[clock milliseconds] + ($create_ms > 1500 ? $create_ms * 2 : 3000)}]
         for {set i 0} {$i < $num_keys} {incr i} {
-            set ttl [expr {$i/10 + 1}]
             foreach prefix {before int lst set zset hash hll bits geo geo_set stream iset} {
-                r expire ${prefix}_${i} $ttl
+                r pexpireat ${prefix}_${i} [expr {$deadline_base + 1000 + $i * 100}]
             }
         }
+        # Had the loop overrun the budget, the earliest keys would have been
+        # dropped before the save even started instead of expiring during it, and
+        # the checks below would pass without testing anything. Fail loudly
+        # rather than silently.
+        assert {[clock milliseconds] < $deadline_base}
         
-        # Start save and wait for completion
+        # Start the save just before the first deadline, so that the stretch of
+        # save that has to be held open below is a fixed ~4 s no matter how long
+        # the loop above took. Starting it as soon as the loop ends would make
+        # that stretch grow with the budget, and it would then have to outlast
+        # the injected save duration, which does not grow with it.
+        while {[clock milliseconds] < $deadline_base - 1000} {
+            after 50
+        }
+        
+        # Hold the save open across the first part of the deadline spread, so
+        # that the iterator is walking the keyspace while keys expire under it.
+        # num_keys * 12 keys at 10 ms each would take about 12 seconds, well
+        # over that stretch; the delay is cleared once the window is covered.
+        r config set rdb-key-save-delay 10000
         r config set bgsave-default-method forkless
+        set expired_before [s expired_keys]
+        
+        # Nothing has expired yet: the earliest deadline is still 2 s out. This
+        # is the positive-side check for the early key groups, whose deadlines
+        # fall inside the save window and which are therefore already gone by
+        # the time the post-reload verification below runs.
+        assert_equal [expr {$num_keys * 12}] [r dbsize]
         r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+        
+        # The save has to be open before the first key expires, or the keys below
+        # expire with no save running and the window proves nothing.
+        assert {[clock milliseconds] < $deadline_base + 1000}
+        
+        # Keep the save in progress until the earliest deadlines have lapsed.
+        while {[clock milliseconds] < $deadline_base + 3000} {
+            assert_equal 1 [s rdb_bgsave_in_progress]
+            after 100
+        }
+        
+        # These two assertions are what make this test cover expiration during
+        # the save: keys went away while the snapshot was still open. Without
+        # them the save could complete before any deadline and only the reload
+        # path would be exercised.
+        assert_equal 1 [s rdb_bgsave_in_progress]
+        assert {[s expired_keys] > $expired_before}
+        
+        # Let the save finish. Keys whose deadline falls after this still expire
+        # once the snapshot is done, so both sides of the save are covered.
+        r config set rdb-key-save-delay 0
         waitForBgsave r
         
         # Reload from RDB
@@ -1039,11 +1098,14 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
         
         while {[llength $verified] > 0} {
-            set elapsed_time [expr {([clock milliseconds] - $start_time) / 1000.0}]
-            
             foreach i $verified {
+                # Re-read the clock per key: one pass issues up to num_keys * 12 round
+                # trips, so a single reading taken before the pass goes stale.
+                set now [clock milliseconds]
+                set deadline [expr {$deadline_base + 1000 + $i * 100}]
+
                 # If not yet expired, verify all data types exist
-                if {$elapsed_time < [expr {$i/10.0}]} {
+                if {$now < $deadline - 1000} {
                     assert_equal [r exists before_${i}] 1
                     assert_equal [r exists int_${i}] 1
                     assert_equal [r exists lst_${i}] 1
@@ -1058,8 +1120,8 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                     assert_equal [r exists iset_${i}] 1
                 }
                 
-                # If expired for more than 2 seconds, verify all data types are gone
-                if {$elapsed_time > [expr {$i/10.0 + 2}]} {
+                # If expired for more than a second, verify all data types are gone
+                if {$now > $deadline + 1000} {
                     assert_equal [r exists before_${i}] 0
                     assert_equal [r exists int_${i}] 0
                     assert_equal [r exists lst_${i}] 0
@@ -1115,6 +1177,12 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         # Resume save at normal speed
         r config set rdb-key-save-delay 0
         waitForBgsave r
+        
+        # Lift the memory cap before verifying. It was derived from a reading taken
+        # while the save was running, and the reload brings the whole dataset back; on
+        # allocators with higher per-allocation overhead the restored dataset alone
+        # exceeds the cap, and allkeys-lru evicts the keys we are about to read.
+        r config set maxmemory 0
         
         # Verify snapshot contains original keys
         catch {r debug reload nosave}

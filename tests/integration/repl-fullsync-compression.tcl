@@ -611,8 +611,10 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                 if {$wire eq $disk && $framing eq "size"} {
                     # Verbatim disk-based: the replica copies the primary's RDB
                     # byte-for-byte (a re-encode would produce a different frame).
-                    set rc [catch {exec cmp [server_rdb_path $primary] [server_rdb_path $replica]} cmpout]
-                    assert_equal 0 $rc "primary and replica dump.rdb differ: $cmpout"
+                    set primary_rdb [server_rdb_path $primary]
+                    set replica_rdb [server_rdb_path $replica]
+                    assert_equal 1 [files_are_identical $primary_rdb $replica_rdb] \
+                        "primary and replica dump.rdb differ ([file size $primary_rdb] vs [file size $replica_rdb] bytes)"
                 }
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal value [$replica get xcode:key]

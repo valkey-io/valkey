@@ -40,6 +40,31 @@ proc read_binary_file {path} {
     return $data
 }
 
+# Compare two files without reading them entirely into memory, and without relying
+# on an external tool like cmp, which isn't available in every test environment.
+proc files_are_identical {path1 path2} {
+    if {[file size $path1] != [file size $path2]} {
+        return 0
+    }
+    set fd1 [open $path1 r]
+    set fd2 [open $path2 r]
+    fconfigure $fd1 -translation binary
+    fconfigure $fd2 -translation binary
+    set identical 1
+    while {1} {
+        set chunk1 [read $fd1 65536]
+        set chunk2 [read $fd2 65536]
+        if {$chunk1 ne $chunk2} {
+            set identical 0
+            break
+        }
+        if {$chunk1 eq ""} break
+    }
+    close $fd1
+    close $fd2
+    return $identical
+}
+
 proc write_binary_file {path data} {
     set fd [open $path w]
     fconfigure $fd -translation binary

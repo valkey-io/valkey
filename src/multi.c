@@ -246,9 +246,12 @@ int execGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
         keys = getKeysPrepareResult(result, numkeys + 1);
         keys[numkeys].pos = key_index;
         keys[numkeys].flags = CMD_KEY_RO | CMD_KEY_ACCESS;
-        numkeys++;
+        /* Publish the count as we go. getKeysPrepareResult() copies only
+         * result->numkeys entries when it moves off the static buffer, so
+         * leaving it at 0 until the end discards the first MAX_KEYS_BUFFER
+         * entries and hands back uninitialised ones. */
+        result->numkeys = ++numkeys;
     }
-    result->numkeys = numkeys;
     return numkeys;
 }
 

@@ -53,6 +53,21 @@ extern bool large_memory;
 uint16_t crc16(const char *buf, int len); /* From crc16.c */
 }
 
+typedef struct PrefixResult {
+    size_t lengths[64];
+    void *values[64];
+    size_t count;
+    size_t stop_after;
+} PrefixResult;
+
+static int collectPrefix(size_t key_len, void *data, void *context) {
+    PrefixResult *result = (PrefixResult *)context;
+    result->lengths[result->count] = key_len;
+    result->values[result->count] = data;
+    result->count++;
+    return result->stop_after == 0 || result->count < result->stop_after;
+}
+
 /* ---------------------------------------------------------------------------
  * Simple hash table implementation, no rehashing, just chaining. This is
  * used in order to test the radix tree implementation against something that
@@ -552,6 +567,107 @@ class RaxTest : public ::testing::Test {
         for (int x = 0; x < 10000; x++) genrand64_int64();
     }
 };
+
+TEST_F(RaxTest, ancestorPrefixWalkHandlesCompressedBinaryAndRootKeys) {
+    rax *tree = raxNew();
+    unsigned char root[] = "";
+    unsigned char p1[] = {'a', 0};
+    unsigned char p2[] = {'a', 0, 'b', 'c'};
+    unsigned char p3[] = {'a', 0, 'b', 'c', 'd'};
+    unsigned char sibling[] = {'a', 0, 'x'};
+    unsigned char query[] = {'a', 0, 'b', 'c', 'd', 'e'};
+    raxInsert(tree, root, 0, (void *)1, NULL);
+    raxInsert(tree, p1, sizeof(p1), (void *)2, NULL);
+    raxInsert(tree, p2, sizeof(p2), (void *)3, NULL);
+    raxInsert(tree, p3, sizeof(p3), (void *)4, NULL);
+    raxInsert(tree, sibling, sizeof(sibling), (void *)5, NULL);
+
+    PrefixResult result = {{0}, {NULL}, 0, 0};
+    EXPECT_EQ(raxForEachPrefix(tree, query, sizeof(query), collectPrefix, &result), 4u);
+    EXPECT_EQ(result.count, 4u);
+    EXPECT_EQ(result.lengths[0], 0u);
+    EXPECT_EQ(result.lengths[1], sizeof(p1));
+    EXPECT_EQ(result.lengths[2], sizeof(p2));
+    EXPECT_EQ(result.lengths[3], sizeof(p3));
+    EXPECT_EQ(result.values[3], (void *)4);
+
+    size_t matched_len = SIZE_MAX;
+    void *value = NULL;
+    EXPECT_EQ(raxFindLongestPrefix(tree, query, sizeof(query), &matched_len, &value), 1);
+    EXPECT_EQ(matched_len, sizeof(p3));
+    EXPECT_EQ(value, (void *)4);
+
+    raxFree(tree);
+}
+
+TEST_F(RaxTest, ancestorPrefixWalkStopsInsideCompressedEdgeAndOnCallbackRequest) {
+    rax *tree = raxNew();
+    unsigned char query[] = "foobaz";
+    raxInsert(tree, (unsigned char *)"foo", 3, (void *)1, NULL);
+    raxInsert(tree, (unsigned char *)"foobar", 6, (void *)2, NULL);
+    raxInsert(tree, (unsigned char *)"foobarbaz", 9, (void *)3, NULL);
+
+    PrefixResult mismatch = {{0}, {NULL}, 0, 0};
+    EXPECT_EQ(raxForEachPrefix(tree, query, 6, collectPrefix, &mismatch), 1u);
+    EXPECT_EQ(mismatch.count, 1u);
+    EXPECT_EQ(mismatch.lengths[0], 3u);
+
+    PrefixResult stopped = {{0}, {NULL}, 0, 1};
+    EXPECT_EQ(raxForEachPrefix(tree, (unsigned char *)"foobarbaz!", 10, collectPrefix, &stopped), 1u);
+    EXPECT_EQ(stopped.count, 1u);
+
+    size_t matched_len = SIZE_MAX;
+    EXPECT_EQ(raxFindLongestPrefix(tree, (unsigned char *)"f", 1, &matched_len, NULL), 0);
+    EXPECT_EQ(matched_len, SIZE_MAX);
+
+    raxFree(tree);
+}
+
+TEST_F(RaxTest, ancestorPrefixWalkMatchesRepeatedExactLookupsForRandomBinaryKeys) {
+    rax *tree = raxNew();
+    unsigned char key[32];
+    for (size_t i = 0; i < 512; i++) {
+        size_t key_len = (size_t)(rand() % 33);
+        for (size_t j = 0; j < key_len; j++) key[j] = (unsigned char)(rand() & 0xff);
+        raxInsert(tree, key, key_len, (void *)(uintptr_t)(i + 1), NULL);
+    }
+
+    for (size_t iteration = 0; iteration < 1000; iteration++) {
+        size_t query_len = (size_t)(rand() % 33);
+        for (size_t j = 0; j < query_len; j++) key[j] = (unsigned char)(rand() & 0xff);
+
+        PrefixResult actual = {{0}, {NULL}, 0, 0};
+        raxForEachPrefix(tree, key, query_len, collectPrefix, &actual);
+
+        size_t expected_count = 0;
+        size_t expected_longest = 0;
+        void *expected_value = NULL;
+        for (size_t prefix_len = 0; prefix_len <= query_len; prefix_len++) {
+            void *value = NULL;
+            if (raxFind(tree, key, prefix_len, &value)) {
+                EXPECT_LT(expected_count, 64u);
+                if (expected_count < 64) {
+                    EXPECT_EQ(actual.lengths[expected_count], prefix_len);
+                    EXPECT_EQ(actual.values[expected_count], value);
+                }
+                expected_count++;
+                expected_longest = prefix_len;
+                expected_value = value;
+            }
+        }
+        EXPECT_EQ(actual.count, expected_count);
+
+        size_t matched_len = SIZE_MAX;
+        void *longest_value = NULL;
+        int found = raxFindLongestPrefix(tree, key, query_len, &matched_len, &longest_value);
+        EXPECT_EQ(found, expected_count != 0);
+        if (found) {
+            EXPECT_EQ(matched_len, expected_longest);
+            EXPECT_EQ(longest_value, expected_value);
+        }
+    }
+    raxFree(tree);
+}
 
 /* Test the random walk function. */
 TEST_F(RaxTest, raxRandomWalk) {

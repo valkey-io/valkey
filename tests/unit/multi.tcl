@@ -48,6 +48,21 @@ start_server {tags {"multi"}} {
         list $committed $ifeq_failed $ifne_failed $nx_failed $xx_failed [r get destination{t}]
     } {OK {} {} {} {} committed}
 
+    test {EXEC conditions past the static key buffer report the real keys} {
+        # getKeysPrepareResult() grows out of keysbuf at MAX_KEYS_BUFFER (256),
+        # and copies result->numkeys entries when it does.
+        set conds {}
+        for {set i 0} {$i < 300} {incr i} {
+            lappend conds IFEQ key:$i val:$i
+        }
+        set keys [r command getkeys EXEC {*}$conds]
+        assert_equal 300 [llength $keys]
+        assert_equal key:0 [lindex $keys 0]
+        assert_equal key:255 [lindex $keys 255]
+        assert_equal key:299 [lindex $keys 299]
+        r ping
+    } {PONG}
+
     test {EXEC IFNE matches a missing key} {
         r del condition{t} destination{t}
         r multi

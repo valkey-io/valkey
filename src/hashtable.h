@@ -112,6 +112,9 @@ uint8_t *hashtableGetHashFunctionSeed(void);
 uint64_t hashtableGenHashFunction(const char *buf, size_t len);
 uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len);
 
+/* Hash function for pointer keys */
+uint64_t hashtablePointerHash(const void *key);
+
 /* Global resize policy */
 void hashtableSetResizePolicy(hashtableResizePolicy policy);
 

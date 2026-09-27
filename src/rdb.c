@@ -96,6 +96,8 @@ static compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
         return ALGO_LZF;
     case RDB_COMPRESSION_LZ4:
         return ALGO_LZ4;
+    case RDB_COMPRESSION_ZSTD:
+        return ALGO_ZSTD;
     default:
         serverPanic("Unknown RDB compression mode: %d", mode);
     }
@@ -783,6 +785,11 @@ int rdbGetObjectType(robj *o, int rdbver) {
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) return RDB_TYPE_HASH;
         serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;
+    case OBJ_PATH_HASH:
+        if (rdbver >= 81)
+            return RDB_TYPE_PATH_HASH;
+        else
+            return -1; /* can't be stored in old RDB */
     case OBJ_MODULE: return RDB_TYPE_MODULE_2;
     default: serverPanic("Unknown object type");
     }
@@ -1199,6 +1206,53 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             }
             raxStop(&ri);
         }
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        pathHashObject *path_hash = objectGetVal(o);
+        if ((n = rdbSaveLen(rdb, raxSize(path_hash->index))) == -1) return -1;
+        nwritten += n;
+
+        raxIterator paths;
+        raxStart(&paths, path_hash->index);
+        raxSeek(&paths, "^", NULL, 0);
+        while (raxNext(&paths)) {
+            robj *payload = paths.data;
+            if ((n = rdbSaveRawString(rdb, paths.key, paths.key_len)) == -1) {
+                raxStop(&paths);
+                return -1;
+            }
+            nwritten += n;
+            if ((n = rdbSaveLen(rdb, hashTypeLength(payload))) == -1) {
+                raxStop(&paths);
+                return -1;
+            }
+            nwritten += n;
+
+            hashTypeIterator fields;
+            hashTypeInitIterator(payload, &fields);
+            while (hashTypeNext(&fields) != C_ERR) {
+                sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
+                sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
+                ssize_t field_bytes = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field));
+                if (field_bytes == -1) {
+                    sdsfree(field);
+                    sdsfree(value);
+                    hashTypeResetIterator(&fields);
+                    raxStop(&paths);
+                    return -1;
+                }
+                ssize_t value_bytes = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value));
+                sdsfree(field);
+                sdsfree(value);
+                if (value_bytes == -1) {
+                    hashTypeResetIterator(&fields);
+                    raxStop(&paths);
+                    return -1;
+                }
+                nwritten += field_bytes + value_bytes;
+            }
+            hashTypeResetIterator(&fields);
+        }
+        raxStop(&paths);
     } else if (objectGetType(o) == OBJ_MODULE) {
         /* Save a module-specific value. */
         ValkeyModuleIO io;
@@ -1625,7 +1679,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     int saved_errno;
     char *err_op; /* For a detailed log */
     compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
-    bool use_streaming_compression = compression_algo == ALGO_LZ4;
+    bool use_streaming_compression = compression_algo != ALGO_NONE && compression_algo != ALGO_LZF;
     /* Replication full sync uses the codec selected before the child was forked. */
     if (rdbflags & RDBFLAGS_REPLICATION) {
         compression_algo = server.rdb_child_sync_algo;
@@ -2536,6 +2590,66 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             decrRefCount(o);
             if (error) *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
             return NULL;
+        }
+    } else if (rdbtype == RDB_TYPE_PATH_HASH) {
+        uint64_t path_count = rdbLoadLen(rdb, NULL);
+        if (path_count == RDB_LENERR) return NULL;
+        o = createPathHashObject();
+        pathHashObject *path_hash = objectGetVal(o);
+
+        while (path_count--) {
+            sds path = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+            if (path == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
+            uint64_t field_count = rdbLoadLen(rdb, NULL);
+            if (field_count == RDB_LENERR || field_count == 0) {
+                sdsfree(path);
+                decrRefCount(o);
+                if (field_count == 0) rdbReportCorruptRDB("Path hash path with empty payload");
+                return NULL;
+            }
+            robj *payload = createHashObject();
+            if (!raxTryInsert(path_hash->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
+                rdbReportCorruptRDB("Duplicate pathhash path");
+                sdsfree(path);
+                decrRefCount(payload);
+                decrRefCount(o);
+                return NULL;
+            }
+            sdsfree(path);
+
+            while (field_count--) {
+                sds field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+                if (field == NULL) {
+                    decrRefCount(o);
+                    return NULL;
+                }
+                sds value = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+                if (value == NULL) {
+                    sdsfree(field);
+                    decrRefCount(o);
+                    return NULL;
+                }
+                /* hashTypeSet() reports whether it updated an existing field, which
+                 * detects duplicates without a second lookup. It takes ownership of
+                 * both strings, so there is nothing left to free here. */
+                bool expired_overwritten = false;
+                int updated = hashTypeSet(payload,
+                                          field,
+                                          value,
+                                          EXPIRY_NONE,
+                                          HASH_SET_TAKE_FIELD | HASH_SET_TAKE_VALUE,
+                                          &expired_overwritten);
+                serverAssert(!expired_overwritten);
+                if (updated) {
+                    rdbReportCorruptRDB("Duplicate pathhash payload field");
+                    decrRefCount(o);
+                    return NULL;
+                }
+                path_hash->num_fields++;
+            }
         }
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST || rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
         if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;
@@ -4040,7 +4154,7 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     /* Probe every on-disk RDB:
      *
      *   plain file: rewind probe, then rdbLoadRio -> rdb(file backend)
-     *   VCS file:   rdbLoadRio -> streamReader LZ4 decode  -> rdb(file backend)
+     *   VCS file:   rdbLoadRio -> streamReader codec decode -> rdb(file backend)
      *
      * Non-rewindable plain sources retain the streamReader passthrough path.
      * For VCS input the parser sees the header produced by the decoder. */
@@ -4268,7 +4382,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
     }
 
     compressionAlgo sync_compression_algo =
-        connsnum > 0 ? replSelectFullSyncCompression(common_capa) : ALGO_NONE;
+        connsnum > 0 ? replSelectFullSyncCompression(common_capa, true) : ALGO_NONE;
     if (sync_compression_algo != ALGO_NONE)
         serverLog(LL_NOTICE, "Diskless full sync with compression: %s", compressionAlgoName(sync_compression_algo));
 

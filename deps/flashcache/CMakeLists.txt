@@ -28,7 +28,7 @@ target_compile_definitions(flashcache PRIVATE JEMALLOC_MANGLE)
 # Link against libaio (required for async I/O)
 target_link_libraries(flashcache PUBLIC aio)
 
-# Compiler flags — relaxed compared to the Brazil build (no -Werror)
+# Compiler flags (no -Werror yet)
 target_compile_options(flashcache PRIVATE
     -Wall -Wextra
     -Wno-unused-parameter

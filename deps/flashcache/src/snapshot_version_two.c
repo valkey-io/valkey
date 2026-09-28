@@ -186,7 +186,7 @@ int isUnprocessedItemInSnapshotRange(snapshotVersionTwoInfo *snapshot_info, size
  * Function to check if an item is within the snapshotting scope and already processed 
  * (added to the snapshot) when the range is not wrapped around or wrapped around.
  * 
- * This function is used by Threadsave to determine if we need to send a DEL command
+ * This function is used by forkless save to determine if we need to send a DEL command
  * on this item to Flashcache.
  */
 int isProcessedItemInSnapshotRange(snapshotVersionTwoInfo *snapshot_info, size_t offset) {
@@ -213,7 +213,7 @@ int isProcessedItemInSnapshotRange(snapshotVersionTwoInfo *snapshot_info, size_t
 /*
  * Functions to check if and item is within the snapshot offset range (from S to E).
  *
- * This function is used by Threadsave to determine if we need to propagate
+ * This function is used by forkless save to determine if we need to propagate
  * a flag add_item_to_rdb on this item back to ASIO.
  */
 int isItemInSnapshotRange(snapshotVersionTwoInfo *snapshot_info,
@@ -223,11 +223,11 @@ int isItemInSnapshotRange(snapshotVersionTwoInfo *snapshot_info,
 }
 
 // Not static since we use this function in unit test.
-int isThreadsaveReplication(snapshotVersionTwoInfo *snapshot_info) {
+int isForklessSaveReplication(snapshotVersionTwoInfo *snapshot_info) {
     return snapshot_info != NULL
            && snapshot_info->snapshot_common.is_running
            && (snapshot_info->snapshot_common.snapshot_writer != NULL
-               && snapshot_info->snapshot_save_type == FC_SAVE_TYPE_THREADSAVE);
+               && snapshot_info->snapshot_save_type == FC_SAVE_TYPE_FORKLESS_SAVE);
 }
 
 /*
@@ -436,9 +436,9 @@ static void resetSnapshotInfo(snapshotVersionTwoInfo *snapshot_info) {
     snapshot_info->checksum = 0;
     snapshot_info->checksum_filename = NULL;
     snapshot_info->eof_added = 0;
-    snapshot_info->snapshot_common.has_snapshotting_completed_in_redis_layer = 0;
+    snapshot_info->snapshot_common.has_snapshotting_completed_in_engine_layer = 0;
     snapshot_info->snapshot_save_type = FC_SAVE_TYPE_BGSAVE;
-    snapshot_info->is_waiting_for_redis_snapshotting_completion = 0;
+    snapshot_info->is_waiting_for_engine_snapshotting_completion = 0;
     snapshot_info->curr_num_delete_repl_cmd = 0;
     snapshot_info->curr_delete_repl_cmd_bytes = 0;
     snapshot_info->curr_num_items_deleted_from_pending_snapshot_range = 0;
@@ -475,9 +475,9 @@ static void snapshotV2Stop(snapshotVersionTwoInfo *snapshot_info, int completed)
         snapshot_info->snapshot_common.log_metrics->num_save_cancelled++;
     }
 
-    // Unpause the GC log compaction after Threadsave Replication is done.
+    // Unpause the GC log compaction after forkless save replication is done.
     if (snapshot_info->can_do_log_compaction && *(snapshot_info->can_do_log_compaction) == 0) {
-        flashcacheAssert(isThreadsaveReplication(snapshot_info));
+        flashcacheAssert(isForklessSaveReplication(snapshot_info));
         *(snapshot_info->can_do_log_compaction) = 1;
     }
 
@@ -610,7 +610,7 @@ void snapshotV2StartSave(snapshotVersionTwoInfo *snapshot_info,
                       snapshot_filename == NULL) || (snapshot_writer == NULL &&
                                                      file_based_snapshot_callback_details != NULL &&
                                                      snapshot_filename != NULL));
-    flashcacheAssert(snapshot_save_type == FC_SAVE_TYPE_BGSAVE || snapshot_save_type == FC_SAVE_TYPE_THREADSAVE);
+    flashcacheAssert(snapshot_save_type == FC_SAVE_TYPE_BGSAVE || snapshot_save_type == FC_SAVE_TYPE_FORKLESS_SAVE);
 
     // Reset snapshot info
     resetSnapshotInfo(snapshot_info);
@@ -675,10 +675,10 @@ void snapshotV2StartSave(snapshotVersionTwoInfo *snapshot_info,
     flashcacheAssert(snapshot_info->snapshot_file_write_offset == 0);
     writeSnapshotV2Metadata(snapshot_info);
 
-    // Pause GC log compaction in case of Threadsave stream based snapshot. It will be
+    // Pause GC log compaction in case of forkless save stream based snapshot. It will be
     // resumed after snapshotting completes. We need this to avoid any scenario of
     // item getting moved from snapshotting range which brings lot of complexity.
-    if (snapshot_save_type == FC_SAVE_TYPE_THREADSAVE && snapshot_writer != NULL
+    if (snapshot_save_type == FC_SAVE_TYPE_FORKLESS_SAVE && snapshot_writer != NULL
            && can_do_log_compaction) {
         *can_do_log_compaction = 0;
     }
@@ -754,19 +754,19 @@ void snapshotV2CronTask(snapshotVersionTwoInfo *snapshot_info) {
 
     if (!snapshot_info->eof_added && !snapshotV2IsLogReadingInProgress(snapshot_info) &&
         (snapshot_info->snapshot_data_generated_size_bytes == snapshot_file_size_at_completion)) {
-        // For stream based snapshot using threadsave when redis layer has not completed, skip EOF and continue.
-        // In this case we will wait and add EOF once Redis Layer completes the snapshotting generation.
-        if (snapshot_writer != NULL && snapshot_info->snapshot_save_type == FC_SAVE_TYPE_THREADSAVE &&
-            !snapshot_info->snapshot_common.has_snapshotting_completed_in_redis_layer) {
+        // For stream based snapshot using forkless save when the engine layer has not completed, skip EOF and continue.
+        // In this case we will wait and add EOF once the engine layer completes the snapshotting generation.
+        if (snapshot_writer != NULL && snapshot_info->snapshot_save_type == FC_SAVE_TYPE_FORKLESS_SAVE &&
+            !snapshot_info->snapshot_common.has_snapshotting_completed_in_engine_layer) {
             // Invoke log iteration completion callback
-            if (!snapshot_info->is_waiting_for_redis_snapshotting_completion) {
+            if (!snapshot_info->is_waiting_for_engine_snapshotting_completion) {
                 flashcacheLogIterationCallbackDetails log_iteration_completion_callback_details =
                         snapshot_info->log_iteration_completion_callback_details;
                 memset(&(snapshot_info->log_iteration_completion_callback_details), 0,
                        sizeof(flashcacheLogIterationCallbackDetails));
                 log_iteration_completion_callback_details.callback(
                         log_iteration_completion_callback_details.context);
-                snapshot_info->is_waiting_for_redis_snapshotting_completion = 1;
+                snapshot_info->is_waiting_for_engine_snapshotting_completion = 1;
             }
             return;
         }
@@ -1008,7 +1008,7 @@ int isUnprocessedItemInActiveSnapshotRange(snapshotVersionTwoInfo *snapshot_info
 }
 
 int snapshotV2ShouldExpediteItem(snapshotVersionTwoInfo *snapshot_info, size_t offset) {
-    return isUnprocessedItemInActiveSnapshotRange(snapshot_info, offset) && !isThreadsaveReplication(snapshot_info);
+    return isUnprocessedItemInActiveSnapshotRange(snapshot_info, offset) && !isForklessSaveReplication(snapshot_info);
 }
 
 // A function to expedite adding an item to the snapshot. If a snapshot is in progress and an item that
@@ -1016,9 +1016,9 @@ int snapshotV2ShouldExpediteItem(snapshotVersionTwoInfo *snapshot_info, size_t o
 // include the item in the snapshot before being deleted from FC.
 void snapshotV2AddExpeditedItem(snapshotVersionTwoInfo *snapshot_info, size_t offset, char *item, size_t item_size) {
     if (isUnprocessedItemInActiveSnapshotRange(snapshot_info, offset)) {
-        // When we are doing THREADSAVE replication, we will let read request to unprocessed item in
+        // When we are doing forkless save replication, we will let read request to unprocessed item in
         // snapshot range actually delete the item without expediting them and adding them to the snapshot.
-        if (isThreadsaveReplication(snapshot_info)) {
+        if (isForklessSaveReplication(snapshot_info)) {
             snapshot_info->curr_num_items_deleted_from_pending_snapshot_range++;
             snapshot_info->curr_items_deleted_from_pending_snapshot_range_bytes += item_size;
         } else {
@@ -1032,7 +1032,7 @@ void snapshotV2AddReplicationCommandIfRequired(snapshotVersionTwoInfo *snapshot_
                                                uint32_t dbid, char const *key, size_t key_len, char const *value,
                                                size_t value_len, flashcache_crc_function crc_function) {
     if (!snapshot_info->snapshot_common.is_running || snapshot_info->snapshot_common.has_failed
-        || !isThreadsaveReplication(snapshot_info))
+        || !isForklessSaveReplication(snapshot_info))
         return;
 
     // If item is already iterated by the log iterator, we will
@@ -1046,7 +1046,7 @@ void snapshotV2AddReplicationCommandIfRequired(snapshotVersionTwoInfo *snapshot_
                                                               serialized_item, serialized_item_len);
 
         // We need to update `curr_delete_repl_cmd_bytes` metric before calling `addDataToSnapshot` as its updated
-        // value is used in `addDataToSnapshot` function to determine the end of ThreadSave replication.
+        // value is used in `addDataToSnapshot` function to determine the end of forkless save replication.
         snapshot_info->curr_num_delete_repl_cmd++;
         snapshot_info->curr_delete_repl_cmd_bytes += serialized_item_len;
         addDataToSnapshot(snapshot_info, serialized_item, serialized_item_len);
@@ -1058,22 +1058,22 @@ void snapshotV2IncrementNumItemsAddedToRDB(snapshotVersionTwoInfo *snapshot_info
         snapshot_info->curr_num_items_with_add_to_rdb_flag++;
 }
 
-int snapshotV2IsItemInThreadsaveSnapshotRange(snapshotVersionTwoInfo *snapshot_info, size_t offset) {
-    int is_threadsave_replication = isThreadsaveReplication(snapshot_info);
+int snapshotV2IsItemInForklessSaveSnapshotRange(snapshotVersionTwoInfo *snapshot_info, size_t offset) {
+    int is_forkless_save_replication = isForklessSaveReplication(snapshot_info);
     int is_item_in_snapshot_range = isItemInSnapshotRange(snapshot_info, offset);
-    flashcacheLogger(FC_LL_DEBUG, "Threadsave related info : "
-                                  "HasSnapshotFailed = %d, IsThreadsaveReplication = %d, IsItemInSnapshotRange = %d, "
+    flashcacheLogger(FC_LL_DEBUG, "Forkless save related info : "
+                                  "HasSnapshotFailed = %d, IsForklessSaveReplication = %d, IsItemInSnapshotRange = %d, "
                                   "Offset = %lu", snapshot_info->snapshot_common.has_failed,
-                                  is_threadsave_replication, is_item_in_snapshot_range, offset);
-    if (snapshot_info->snapshot_common.has_failed || !is_threadsave_replication || !is_item_in_snapshot_range) return 0;
+                                  is_forkless_save_replication, is_item_in_snapshot_range, offset);
+    if (snapshot_info->snapshot_common.has_failed || !is_forkless_save_replication || !is_item_in_snapshot_range) return 0;
     return 1;
 }
 
 size_t snapshotV2GetCountBasedMetric(snapshotVersionTwoInfo *snapshot_info, flashcacheCountBasedMetrics metric) {
     size_t ret = 0;
     switch (metric) {
-        case FC_IS_WAITING_FOR_REDIS_SNAPSHOTTING_COMPLETION:
-            ret = snapshot_info->is_waiting_for_redis_snapshotting_completion;
+        case FC_IS_WAITING_FOR_ENGINE_SNAPSHOTTING_COMPLETION:
+            ret = snapshot_info->is_waiting_for_engine_snapshotting_completion;
             break;
         case FC_CURR_NUM_DELETE_REPL_CMD:
             ret = snapshot_info->curr_num_delete_repl_cmd;
@@ -1114,9 +1114,9 @@ size_t snapshotV2GetCountBasedMetric(snapshotVersionTwoInfo *snapshot_info, flas
     return ret;
 }
 
-void snapshotV2UpdateSnapshottingRangeDuringThreadsave(snapshotVersionTwoInfo *snapshot_info,
+void snapshotV2UpdateSnapshottingRangeDuringForklessSave(snapshotVersionTwoInfo *snapshot_info,
                                                        size_t updated_log_tail_offset_after_eviction) {
-    if (!isThreadsaveReplication(snapshot_info) || snapshot_info->snapshot_common.has_failed) return;
+    if (!isForklessSaveReplication(snapshot_info) || snapshot_info->snapshot_common.has_failed) return;
     snapshot_info->snapshot_common.log_file_tail_offset = updated_log_tail_offset_after_eviction;
 }
 

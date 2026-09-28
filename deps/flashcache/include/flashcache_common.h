@@ -20,7 +20,7 @@ typedef struct {
 
 typedef enum {
     FC_SAVE_TYPE_BGSAVE,
-    FC_SAVE_TYPE_THREADSAVE
+    FC_SAVE_TYPE_FORKLESS_SAVE
 } flashcacheSnapshotSaveType;
 
 typedef enum {
@@ -152,8 +152,8 @@ typedef enum {
     // Number of retryable disk error
     FC_NUM_RETRYABLE_DISK_ERROR,
 
-    // Flashcache is waiting for Redis snapshotting to finish or not
-    FC_IS_WAITING_FOR_REDIS_SNAPSHOTTING_COMPLETION,
+    // Flashcache is waiting for engine snapshotting to finish or not
+    FC_IS_WAITING_FOR_ENGINE_SNAPSHOTTING_COMPLETION,
 
     // Number of DELETE replication commands sent to FDB
     FC_CURR_NUM_DELETE_REPL_CMD,
@@ -161,15 +161,15 @@ typedef enum {
     // Number of bytes of DELETE replication commands sent to FDB
     FC_CURR_DELETE_REPL_CMD_BYTES,
 
-    // Number of items read in pending snapshotting range and moved back to Redis
-    // during THREADSAVE replication
+    // Number of items read in pending snapshotting range and moved back to the engine
+    // during forkless save replication
     FC_CURR_NUM_ITEMS_DELETED_FROM_PENDING_SNAPSHOT_RANGE,
 
-    // Number of bytes read in pending snapshotting range and moved back to Redis
-    // during THREADSAVE replication
+    // Number of bytes read in pending snapshotting range and moved back to the engine
+    // during forkless save replication
     FC_CURR_ITEMS_DELETED_FROM_PENDING_SNAPSHOT_RANGE_BYTES,
 
-    // Number of items that needs to be added to RDB while doing THREADSAVE replication
+    // Number of items that needs to be added to RDB while doing forkless save replication
     FC_CURR_NUM_ITEMS_WITH_ADD_TO_RDB_FLAG,
 
     // Number of DELETE replication commands sent to FDB in the previous snapshot
@@ -178,25 +178,25 @@ typedef enum {
     // Number of bytes of DELETE replication commands sent to FDB in the previous snapshot
     FC_LAST_DELETE_REPL_CMD_BYTES,
 
-    // Number of items read in pending snapshotting range and moved back to Redis
-    // during THREADSAVE replication in the previous snapshot
+    // Number of items read in pending snapshotting range and moved back to the engine
+    // during forkless save replication in the previous snapshot
     FC_LAST_NUM_ITEMS_DELETED_FROM_PENDING_SNAPSHOT_RANGE,
 
-    // Number of bytes read in pending snapshotting range and moved back to Redis
-    // during THREADSAVE replication in the previous snapshot
+    // Number of bytes read in pending snapshotting range and moved back to the engine
+    // during forkless save replication in the previous snapshot
     FC_LAST_ITEMS_DELETED_FROM_PENDING_SNAPSHOT_RANGE_BYTES,
 
-    // Number of items that needs to be added to RDB while doing THREADSAVE replication
+    // Number of items that needs to be added to RDB while doing forkless save replication
     // in the previous snapshot
     FC_LAST_NUM_ITEMS_WITH_ADD_TO_RDB_FLAG,
 
     // Latest keep alive message time in us
     FC_LATEST_KEEP_ALIVE_MSG_TIME_US,
 
-    // Size bytes of item which has been moved out of disk during threadsave replication
+    // Size bytes of item which has been moved out of disk during forkless save replication
     FC_ITEM_BYTES_MOVED_FROM_DISK,
 
-    // Size bytes of item which has been deleted from disk during threadsave replication
+    // Size bytes of item which has been deleted from disk during forkless save replication
     FC_ITEM_BYTES_DELETED_FROM_DISK,
 
     // Is log iterator evicting before flashcache log has reached max size or not
@@ -234,11 +234,11 @@ typedef enum {
     FC_CONFIG_KEY_BUFFERED_WRITE_FLUSH_THRESHOLD_BYTES,
     // Config for max size of snapshot that be buffered in memory before being written to snapshot file
     FC_CONFIG_KEY_MAX_SNAPSHOT_BUFFER_SIZE_BYTES,
-    // Config to update the status of redis layer snapshotting completion
-    FC_CONFIG_KEY_REDIS_LAYER_SNAPSHOT_COMPLETION_STATUS,
+    // Config to update the status of engine layer snapshotting completion
+    FC_CONFIG_KEY_ENGINE_LAYER_SNAPSHOT_COMPLETION_STATUS,
     // Config to change the time interval keep alive messages are sent in us
     FC_CONFIG_KEY_SNAPSHOT_KEEP_ALIVE_MSG_INTERVAL_US,
-    // Config to change the max amount of time FC wait for REDIS snapshotting to complete in seconds
+    // Config to change the max amount of time FC waits for engine snapshotting to complete in seconds
     FC_CONFIG_KEY_REPLICATION_LINK_TIMEOUT_SECS,
     // Config for the minumum flashcache garbage collection rate (bytes per second)
     FC_CONFIG_KEY_MIN_GARBAGE_COLLECTION_RATE,
@@ -248,7 +248,7 @@ typedef enum {
     // Rate of 0 means eviction under max logsize is disabled
     FC_CONFIG_KEY_EVICT_UNDER_MAX_LOGSIZE_RATE,
     // Config to change the amount of time that log iterator can evict under max logsize
-    // without signal from redis
+    // without a signal from the engine
     FC_CONFIG_KEY_EVICT_UNDER_MAX_LOGSIZE_TIME_LIMIT,
     // Config used to enable/disable optimized deletes in flashcache. Optimized deletes minimize latency
     // by requesting fewer pages.
@@ -308,12 +308,12 @@ typedef struct {
 /**
  * Flashcache has several code paths that may take significant time including saving or
  * loading a snapshot. This callback is to be invoked periodically during these long running
- * operations so that ASIO can respond in a timely manner to control messages from Redis main
+ * operations so that ASIO can respond in a timely manner to control messages from the Valkey main
  * thread in a timely fashion.
  *
- * (Redis Main thread) --> (control message: i.e. pull_metrics) --> ASIO thread
- *                                                                  (executing long-running flashcache function)
- * (Redis Main thread) <-- (timely control message reply) <-------- Flashcache(ASIO control msg callback)
+ * (Valkey main thread) --> (control message: i.e. pull_metrics) --> ASIO thread
+ *                                                                   (executing long-running flashcache function)
+ * (Valkey main thread) <-- (timely control message reply) <-------- Flashcache(ASIO control msg callback)
  */
 
 typedef void (*flashcache_asio_control_msg_callback)(void *context);
@@ -341,7 +341,7 @@ typedef struct {
     flashcache_snapshot_completion_callback callback;
 } flashcacheSnapshotCallbackDetails;
 
-/* This callback is triggered when log iteration is completed during Threadsave replication */
+/* This callback is triggered when log iteration is completed during forkless save replication */
 typedef void (*flashcache_log_iteration_completion_callback)(void *context);
 
 typedef struct {
@@ -349,7 +349,7 @@ typedef struct {
     void *context;
 
     /* The callback that is invoked when lot iteration is completed
-     * during Threadsave replication
+     * during forkless save replication
      */
     flashcache_log_iteration_completion_callback callback;
 } flashcacheLogIterationCallbackDetails;
@@ -405,7 +405,7 @@ typedef struct {
 
     /**
      * This API is used to write a keep alive message to the writer. 
-     * This is to keep the replication link alive during THREADSAVE.
+     * This is to keep the replication link alive during forkless save.
      *
      * @Returns : Void
      * @param :

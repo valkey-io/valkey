@@ -86,7 +86,7 @@ void flashcacheAssertHandledCrash(int expression) {
     }
 }
 
-// Used the hex dumper from Redis
+// Based on the hex dumper from Valkey (serverLogHexDump)
 void flashcacheLogHexDump(int level, char const *descr, char *value, size_t len) {
     char buf[FC_MAX_HEX_DUMP_LEN + 1], *b;
     unsigned char *v = (unsigned char *) value;

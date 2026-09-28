@@ -75,7 +75,7 @@ typedef struct perDbMetadata {
 // 2. Index data section: This section contains the serialized index.
 // 3. Log data section: This section contains the log data. The log data can have holes.
 //
-// TODO: Support checksum of the snapshot (ELMO-24464)
+// TODO: Support checksum of the snapshot
 typedef struct snapshotMetadatata {
     // Snapshot version
     uint32_t version;
@@ -846,7 +846,7 @@ void snapshotLoad(flashcacheLog *log, fioContext *snapshot_file_io_context, flas
     flashcacheAssert(snapshot_metadata->version == FC_SNAPSHOT_VERSION);
     flashcacheAssert(snapshot_metadata->num_databases <= log->num_databases);
 
-    // Prepare rdb/fdb correlation secret to be returned to ElastiCache Redis
+    // Prepare rdb/fdb correlation secret to be returned to the engine
     flashcacheAssert(snapshot_metadata != NULL);
     flashcacheAssert(shared_secret != NULL);
     memcpy(shared_secret, &snapshot_metadata->snapshot_secret, sizeof(flashcacheSnapshotSecret));

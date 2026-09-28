@@ -16,7 +16,7 @@
  * @param max_num_in_flight_read_requests The maximum allowed number of in-flight READ item requests in the queue
  *        before the read requests start to get throttled
  * param evict_under_max_logsize_time_limit longest amount of time that eviction under max logsize can
- *       run without signal from redis
+ *       run without a signal from the engine
  * @param hash_function function pointer used for hashing keys
  * @param crc_function function pointer used for computing checksum of data stored on flash
  * @param eviction_details the details of callback called when a key is evicted
@@ -156,7 +156,7 @@ int flashcacheShouldRunCronTasksImmediately();
  * @param snapshot_writer : Pointer of a flashcacheSnapshotWriter which contains bunch of APIs for stream based snapshot.
  * @param snapshot_version : The version of the snapshot to use in the current save attempt.
  * @param log_iteration_completion_callback_details : Callback which needs to be called after completion of log
- *                          iteration in Threadsave replication. Note: we do shallow copy of this callback currently
+ *                          iteration in forkless save replication. Note: we do shallow copy of this callback currently
  *                          but deep copy might be required if we change it in future by adding any allocated memory.
  */
 void flashcacheStartStreamBasedSave(flashcacheSnapshotSecret *snapshot_secret,
@@ -188,11 +188,11 @@ void flashcacheGetConfig(flashcacheConfig *config);
  */
 void flashcacheFsyncBufferedWrites();
 
-/**!\brief Notifies Redis layer Snapshot completion
+/**!\brief Notifies engine layer snapshot completion
  *
  * @Returns : Void
  */
-void flashcacheNotifyRedisLayerSnapshotCompletion();
+void flashcacheNotifyEngineLayerSnapshotCompletion();
 
 /*!\brief Check if a key exists in the FlashCache index (no disk I/O). */
 int flashcacheKeyExists(uint32_t dbid, char const *key, size_t key_len);

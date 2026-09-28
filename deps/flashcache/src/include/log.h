@@ -201,11 +201,11 @@ typedef struct logMetrics {
     // Total size of items evicted from log
     size_t total_item_evicted_size_bytes;
 
-    // Size bytes which is moved out of disk during threadsave
-    size_t item_bytes_moved_from_disk_during_threadsave;
+    // Size bytes which is moved out of disk during forkless save
+    size_t item_bytes_moved_from_disk_during_forkless_save;
 
-    // Size bytes which is deleted from disk during threadsave
-    size_t item_bytes_deleted_from_disk_during_threadsave;
+    // Size bytes which is deleted from disk during forkless save
+    size_t item_bytes_deleted_from_disk_during_forkless_save;
 
     // Is log iterator currently evicting while log has not reached maximum size
     size_t is_evicting_under_max_logsize;
@@ -331,7 +331,7 @@ typedef struct flashcacheLog {
     // Last timestamp of enabling evict_under_max_logsize.
     uint64_t last_evict_under_max_logsize_start;
 
-    // Longest amount of time that eviction under max logsize can run without signal from redis
+    // Longest amount of time that eviction under max logsize can run without a signal from the engine
     uint32_t evict_under_max_logsize_time_limit;
 
     // Tracks if flashcache is optimizing deletes (versus using reads for deleting)
@@ -425,8 +425,8 @@ void invokeAsioControlMsgCallback();
 // Flush staging buffer.
 void logFlushStagingBufferIfRequired(flashcacheLog *log, size_t threshold);
 
-// Completes Threadsave Replication
-void logCompleteThreadsaveReplication(flashcacheLog *log);
+// Completes forkless save replication
+void logCompleteForklessSaveReplication(flashcacheLog *log);
 
 // Snapshot support: pause/resume the GC iterator (see logRunCronTasks)
 void logSetGcPaused(int paused);

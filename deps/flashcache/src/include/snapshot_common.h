@@ -80,9 +80,9 @@ typedef struct snapshotCommon {
     // Size of active log file that needs to be copied into the snapshot
     size_t active_page_aligned_log_data_size_bytes;
 
-    // Set to 1 if snapshot generation (RDB) is done in redis layer during replication else 0 in all other cases.
+    // Set to 1 if snapshot generation (RDB) is done in the engine layer during replication else 0 in all other cases.
     // Needed for EOF marker in FDB
-    uint8_t has_snapshotting_completed_in_redis_layer;
+    uint8_t has_snapshotting_completed_in_engine_layer;
 } snapshotCommon;
 
 /*

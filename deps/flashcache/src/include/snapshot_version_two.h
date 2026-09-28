@@ -84,42 +84,42 @@ typedef struct snapshotVersionTwoInfo {
     // Flag to indicate that EOF has been added to snapshot buffer
     int eof_added;
 
-    // The snapshot save type from Redis.
+    // The snapshot save type from the engine.
     flashcacheSnapshotSaveType snapshot_save_type;
 
     // Callback for notifying the completion of log iteration to ASIO
     flashcacheLogIterationCallbackDetails log_iteration_completion_callback_details;
 
     // Flag to indicate if FC snapshotting is completed and is waiting
-    // for Redis layer to complete snapshotting.
-    size_t is_waiting_for_redis_snapshotting_completion;
+    // for the engine layer to complete snapshotting.
+    size_t is_waiting_for_engine_snapshotting_completion;
 
     /**
-     * When we are doing THREADSAVE replication:
+     * When we are doing forkless save replication:
      *
      * 1. If a read request comes to the processed part of the snapshot, we delete the item from FDB
      * by adding a DELETE flag to the item in the snapshot because the item will be in RDB.
      *
      * 2. If a read request comes to the pending snapshotting range, we will let the item be
-     * read/deleted from FC and move to Redis.
+     * read/deleted from FC and move to the engine.
      *
      * Read and delete are used interchangeably since a read into FC item means that the item
-     * will be move to Redis.
+     * will be move to the engine.
      **/
 
-    // Number of DELETE replication command written to snapshot during THREADSAVE replication.
+    // Number of DELETE replication command written to snapshot during forkless save replication.
     size_t curr_num_delete_repl_cmd;
 
     // Total size of replication data by DELETE replication command added into snapshot.
     size_t curr_delete_repl_cmd_bytes;
 
-    // Number of items reads in unprocessed part of the snapshot during THREADSAVE.
+    // Number of items reads in unprocessed part of the snapshot during forkless save.
     size_t curr_num_items_deleted_from_pending_snapshot_range;
 
-    // Bytes read in unprocessed part of the snapshot during THREADSAVE.
+    // Bytes read in unprocessed part of the snapshot during forkless save.
     size_t curr_items_deleted_from_pending_snapshot_range_bytes;
 
-    // Number of items that is added to RDB during THREADSAVE
+    // Number of items that is added to RDB during forkless save
     size_t curr_num_items_with_add_to_rdb_flag;
 
     // persisted_info collects metrics that is preserved after snapshot finishes.
@@ -198,13 +198,13 @@ void snapshotV2AddReplicationCommandIfRequired(snapshotVersionTwoInfo *snapshot_
 // Increments the snapshot manager's tracker for number of items added to the RDB
 void snapshotV2IncrementNumItemsAddedToRDB(snapshotVersionTwoInfo *snapshot_info);
 
-// Returns 1 if the item is in an active threadsave's snapshot range
-int snapshotV2IsItemInThreadsaveSnapshotRange(snapshotVersionTwoInfo *snapshot_info, size_t offset);
+// Returns 1 if the item is in an active forkless save's snapshot range
+int snapshotV2IsItemInForklessSaveSnapshotRange(snapshotVersionTwoInfo *snapshot_info, size_t offset);
 
 size_t snapshotV2GetCountBasedMetric(snapshotVersionTwoInfo *snapshot_info, flashcacheCountBasedMetrics metric);
 
-// Updates the Snapshotting range after eviction in flash during Threadsave replication.
-void snapshotV2UpdateSnapshottingRangeDuringThreadsave(snapshotVersionTwoInfo *snapshot_info,
+// Updates the Snapshotting range after eviction in flash during forkless save replication.
+void snapshotV2UpdateSnapshottingRangeDuringForklessSave(snapshotVersionTwoInfo *snapshot_info,
                                                        size_t updated_log_tail_offset_after_eviction);
 
 #endif  // __FLASHCACHE_SNAPSHOTV2_H

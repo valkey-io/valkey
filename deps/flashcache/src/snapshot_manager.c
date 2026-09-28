@@ -103,8 +103,8 @@ void snapshotManagerStartSave(flashcacheSnapshotSecret *snapshot_secret,
                                      snapshot_manager_info.snapshot_version);
     switch (snapshot_manager_info.snapshot_version) {
         case FC_SNAPSHOT_VERSION_ONE:
-            if (snapshot_writer != NULL && snapshot_save_type == FC_SAVE_TYPE_THREADSAVE) {
-                flashcacheAssertWithLogging(0, "Snapshot V1 does not support THREADSAVE replication.", 0);
+            if (snapshot_writer != NULL && snapshot_save_type == FC_SAVE_TYPE_FORKLESS_SAVE) {
+                flashcacheAssertWithLogging(0, "Snapshot V1 does not support forkless save replication.", 0);
             }
             indexPauseGrowth(index);  // If index growth is Running, Pause it.
 
@@ -344,13 +344,13 @@ void snapshotManagerAddReplicationCommandIfRequired(size_t offset, uint32_t dbid
     }
 }
 
-void snapshotManagerSetHasSnapshottingCompletedInRedisLayer(uint8_t value) {
+void snapshotManagerSetHasSnapshottingCompletedInEngineLayer(uint8_t value) {
     switch (snapshot_manager_info.snapshot_version) {
         case FC_SNAPSHOT_VERSION_ONE:
             // nothing to do for this snapshotting version.
             break;
         case FC_SNAPSHOT_VERSION_TWO:
-            snapshot_manager_info.snapshot_version_two_info->snapshot_common.has_snapshotting_completed_in_redis_layer
+            snapshot_manager_info.snapshot_version_two_info->snapshot_common.has_snapshotting_completed_in_engine_layer
                     = value;
             break;
         default:
@@ -379,20 +379,20 @@ void snapshotManagerIncrementNumItemsAddedToRDB() {
     }
 }
 
-int snapshotManagerIsItemInThreadsaveSnapshotRange(size_t offset) {
+int snapshotManagerIsItemInForklessSaveSnapshotRange(size_t offset) {
     int ret = 0;
     switch (snapshot_manager_info.snapshot_version) {
         case FC_SNAPSHOT_VERSION_ONE:
             // nothing to do for this snapshotting version.
             break;
         case FC_SNAPSHOT_VERSION_TWO:
-            ret = snapshotV2IsItemInThreadsaveSnapshotRange(snapshot_manager_info.snapshot_version_two_info,
+            ret = snapshotV2IsItemInForklessSaveSnapshotRange(snapshot_manager_info.snapshot_version_two_info,
                     offset);
             break;
         default:
             // Being here means we have an unsupported version of snapshotting.
             flashcacheAssertWithLogging(0, "Unknown snapshot version %d in "
-                                           "snapshotManagerIsItemInThreadsaveSnapshotRange",
+                                           "snapshotManagerIsItemInForklessSaveSnapshotRange",
                                         snapshot_manager_info.snapshot_version, 0);
             break;
     }
@@ -456,7 +456,7 @@ void snapshotManagerUpdateSnapshottingRangeTailOffset(size_t updated_log_tail_of
             // nothing to do for this snapshotting version.
             break;
         case FC_SNAPSHOT_VERSION_TWO:
-            snapshotV2UpdateSnapshottingRangeDuringThreadsave(snapshot_manager_info.snapshot_version_two_info,
+            snapshotV2UpdateSnapshottingRangeDuringForklessSave(snapshot_manager_info.snapshot_version_two_info,
                                                               updated_log_tail_offset);
             break;
         default:

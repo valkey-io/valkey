@@ -42,7 +42,7 @@ usage() {
     echo "  STAT_INTERVAL    Ops between stat emissions (default: 2000000)"
     echo "  READ_WRITE_RATIO Read:write ratio (e.g. 4 = 4 reads per write)"
     echo "  SNAPSHOT_VER     1 or 2 (default: 2)"
-    echo "  SNAPSHOT_TYPE    bgsave or threadsave (default: bgsave)"
+    echo "  SNAPSHOT_TYPE    bgsave or forkless_save (default: bgsave)"
     exit 1
 }
 

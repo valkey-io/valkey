@@ -280,7 +280,7 @@ static void asyncReadItemFromLog(flashcacheLog *log, indexEntry *entry,
      * must be true:
      * - The caller of this function must be logReadFromIndexEntry. If the caller is logRunCronTasks
      * it means num_pages_to_read is deliberately set (not 0) and cannot be altered.
-     * - The read_type must be FC_DELETE. FC_READ requires returning the value to Redis
+     * - The read_type must be FC_DELETE. FC_READ requires returning the value to the engine
      * - SnapshotV1 cannot be in progress
      * - The item being read must not be required to be expedited to the FDB. If replication snapshotting
      * is in progress and the item is unprocessed and is in the snapshot range, we must read the entire
@@ -800,11 +800,11 @@ void logIteratorCoreLogicProcessingGarbageCollectionCallback(void *context, void
     if (needToPerformEviction(log) || !log->garbage_collector_info.can_do_log_compaction) {
         // We perform item eviction in 3 scenarios:
         // 1. The current allocated log size bytes is greater than the max allowed allocated log size
-        // 2. We are not allowed to move items for log compaction during stream-based threadsave
+        // 2. We are not allowed to move items for log compaction during stream-based forkless save
         // 3. There are too few spillable values in memory
         char *value = NULL;
         size_t value_len = 0;
-        // For threadsave replication, we need to propagate a DELETE command for the item
+        // For forkless save replication, we need to propagate a DELETE command for the item
         size_t log_offset = expandTrimmedLogOffset(index_entry->item_entry.log_entry.trimmed_log_offset);
         extractValueFromSerializedItem(item, &value, &value_len);
         snapshotManagerAddReplicationCommandIfRequired(log_offset, dbid, key, key_len,
@@ -1241,16 +1241,16 @@ flashcacheReturnCode logRunCronTasks(flashcacheLog *log) {
                 if (completion_callback != NULL) {
                     int should_add_item_to_rdb = 0;
                     int is_item_in_ts_snapshot_range =
-                            snapshotManagerIsItemInThreadsaveSnapshotRange(log_offset);
+                            snapshotManagerIsItemInForklessSaveSnapshotRange(log_offset);
                     if (read_type == FC_READ) {
                         if (is_item_in_ts_snapshot_range) {
                             snapshotManagerIncrementNumItemsAddedToRDB();
                             should_add_item_to_rdb = 1;
-                            log->metrics.item_bytes_moved_from_disk_during_threadsave += key_len + value_len;
+                            log->metrics.item_bytes_moved_from_disk_during_forkless_save += key_len + value_len;
                         }
                     } else {
                         if (is_item_in_ts_snapshot_range) {
-                            log->metrics.item_bytes_deleted_from_disk_during_threadsave +=
+                            log->metrics.item_bytes_deleted_from_disk_during_forkless_save +=
                                 (total_len - FC_ITEM_HEADER_LEN);
                         }
                     }
@@ -1321,9 +1321,9 @@ finish_processing_request:
     // affected -- only the iterator that drives GC is skipped.
     if (!fc_gc_paused) logIteratorCron(log->log_iterator);
 
-    // Update the snapshotting range start offset if tail offset has been moved due to evictions during Threadsave
+    // Update the snapshotting range start offset if tail offset has been moved due to evictions during forkless save
     // replication. This is required because whenever eviction happens in flash, we move the log tail offset. As tail
-    // offset moves, head offset can overwrite the original snapshotting range of ThreadSave. Hence we need to update
+    // offset moves, head offset can overwrite the original snapshotting range of forkless save. Hence we need to update
     // the snapshotting range accordingly.
     snapshotManagerUpdateSnapshottingRangeTailOffset(log->tail_offset);
     return FC_OK;
@@ -1335,8 +1335,8 @@ void waitTillNoPendingIoAndGarbageCollection(flashcacheLog *log, int is_empty_st
     // 1. There are pending read request that came before logStartSnaphotting invocation.
     // 2. There is a GC run in progress.
     // 3. There are items in the staging buffer that has not been written to the log depending on
-    //    `is_empty_staging_buffer_required` flag. In case of end of ThreadSave replication, when log is full and items
-    //    are still present in staging buffer we wont be able to flush it in log as GC are disabled during ThreadSave.
+    //    `is_empty_staging_buffer_required` flag. In case of end of forkless save replication, when log is full and items
+    //    are still present in staging buffer we wont be able to flush it in log as GC are disabled during forkless save.
     //    In that case we dont wait for staging buffer to become empty.
     // 4. There is a log flush in progress
     while ((!fioRequestIsEmpty(&(log->log_flush_fio_request))) ||
@@ -1357,7 +1357,7 @@ static void logStartSave(flashcacheLog *log, flashcacheSnapshotSecret *snapshot_
                          flashcacheSnapshotSaveType snapshot_save_type,
                          flashcacheLogIterationCallbackDetails *log_iteration_completion_callback_details) {
     log->metrics.num_start_save_request++;
-    log->metrics.item_bytes_moved_from_disk_during_threadsave = 0;
+    log->metrics.item_bytes_moved_from_disk_during_forkless_save = 0;
 
     // Pause garbage collection and eviction so no new garbage collection starts
     log->garbage_collector_info.can_start_garbage_collection = 0;
@@ -1366,7 +1366,7 @@ static void logStartSave(flashcacheLog *log, flashcacheSnapshotSecret *snapshot_
     waitTillNoPendingIoAndGarbageCollection(log, 1);
 
     resetHeadTailOffsetOfLogIfRequired(log);  // Reset the head and tail offset of the log if required.
-    flashcacheLogger(FC_LL_NOTICE, "Starting save operation for Bgsave or Threadsave with Head offset : %lu, "
+    flashcacheLogger(FC_LL_NOTICE, "Starting save operation for Bgsave or forkless save with Head offset : %lu, "
                                    "Tail offset : %lu, Active size = %lu",
                      log->head_offset,  log->tail_offset, getActiveLogSizeBytes(log));
     snapshotManagerStartSave(snapshot_secret,
@@ -1526,8 +1526,8 @@ size_t logGetCountBasedMetric(flashcacheLog *log, flashcacheCountBasedMetrics me
             return log->metrics.num_items_evicted_under_logsize;
         case FC_NUM_RETRYABLE_DISK_ERROR:
             return fioGetCountBasedMetric(FC_NUM_RETRYABLE_DISK_ERROR);
-        case FC_IS_WAITING_FOR_REDIS_SNAPSHOTTING_COMPLETION:
-            return snapshotManagerGetCountBasedMetric(FC_IS_WAITING_FOR_REDIS_SNAPSHOTTING_COMPLETION);
+        case FC_IS_WAITING_FOR_ENGINE_SNAPSHOTTING_COMPLETION:
+            return snapshotManagerGetCountBasedMetric(FC_IS_WAITING_FOR_ENGINE_SNAPSHOTTING_COMPLETION);
         case FC_CURR_NUM_DELETE_REPL_CMD:
             return snapshotManagerGetCountBasedMetric(FC_CURR_NUM_DELETE_REPL_CMD);
         case FC_CURR_DELETE_REPL_CMD_BYTES:
@@ -1551,9 +1551,9 @@ size_t logGetCountBasedMetric(flashcacheLog *log, flashcacheCountBasedMetrics me
         case FC_LATEST_KEEP_ALIVE_MSG_TIME_US:
             return snapshotManagerGetCountBasedMetric(FC_LATEST_KEEP_ALIVE_MSG_TIME_US);
         case FC_ITEM_BYTES_MOVED_FROM_DISK:
-            return log->metrics.item_bytes_moved_from_disk_during_threadsave;
+            return log->metrics.item_bytes_moved_from_disk_during_forkless_save;
         case FC_ITEM_BYTES_DELETED_FROM_DISK:
-            return log->metrics.item_bytes_deleted_from_disk_during_threadsave;
+            return log->metrics.item_bytes_deleted_from_disk_during_forkless_save;
         default:
             flashcacheAssertWithLogging(0, "Unknown metric: [%d]", metric);
     }
@@ -1693,12 +1693,12 @@ int logShouldRunCronTasksImmediately(struct flashcacheLog *log) {
     return 0;
 }
 
-void logCompleteThreadsaveReplication(flashcacheLog *log) {
+void logCompleteForklessSaveReplication(flashcacheLog *log) {
     // Pause garbage collection and eviction so no new garbage collection starts
     log->garbage_collector_info.can_start_garbage_collection = 0;
     // Wait till all all the pending IO request has been served
     waitTillNoPendingIoAndGarbageCollection(log, 0);
-    snapshotManagerSetHasSnapshottingCompletedInRedisLayer(1);
+    snapshotManagerSetHasSnapshottingCompletedInEngineLayer(1);
     // Synchronously wait for Replication to complete.
     while (snapshotManagerIsRunning()) {
         logRunCronTasks(log);
@@ -1733,9 +1733,9 @@ void logSetConfig(flashcacheLog *log, flashcacheConfig *config) {
             flashcacheAssert(value >= 1);
             snapshotManagerSetMaxSnapshotBufferSizeBytes((size_t) value);
             break;
-        case FC_CONFIG_KEY_REDIS_LAYER_SNAPSHOT_COMPLETION_STATUS:
+        case FC_CONFIG_KEY_ENGINE_LAYER_SNAPSHOT_COMPLETION_STATUS:
             flashcacheAssert(value == 0 || value == 1);
-            snapshotManagerSetHasSnapshottingCompletedInRedisLayer((uint8_t) value);
+            snapshotManagerSetHasSnapshottingCompletedInEngineLayer((uint8_t) value);
             break;
         case FC_CONFIG_KEY_SNAPSHOT_KEEP_ALIVE_MSG_INTERVAL_US:
             flashcacheAssert(value >= 1);

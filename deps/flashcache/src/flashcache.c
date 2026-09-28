@@ -223,6 +223,6 @@ void flashcacheFsyncBufferedWrites() {
     logFsyncBufferedWrites(flashcache_context.log);
 }
 
-void flashcacheNotifyRedisLayerSnapshotCompletion() {
-    logCompleteThreadsaveReplication(flashcache_context.log);
+void flashcacheNotifyEngineLayerSnapshotCompletion() {
+    logCompleteForklessSaveReplication(flashcache_context.log);
 }

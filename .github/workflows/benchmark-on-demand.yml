@@ -221,13 +221,7 @@ jobs:
           [[ -n "$INPUT_BENCHMARK_THREADS" ]] && ARGS+=(--benchmark-threads "$INPUT_BENCHMARK_THREADS")
           [[ -n "$INPUT_PIPELINES" ]]         && ARGS+=(--pipelines "$INPUT_PIPELINES")
 
-          # Always explicit, so an unchecked box turns cluster mode off rather
-          # than inheriting the base config's value.
-          if [[ "$INPUT_CLUSTER_MODE" == "true" ]]; then
-            ARGS+=(--cluster-mode)
-          else
-            ARGS+=(--no-cluster-mode)
-          fi
+          [[ "$INPUT_CLUSTER_MODE" == "true" ]] && ARGS+=(--cluster-mode)
 
           # Bounds that describe this runner rather than the framework.
           ARGS+=(--server-cpu-ceiling 19 --max-io-threads 20 --max-benchmark-threads 96)

@@ -281,8 +281,10 @@ static void flushPendingIOResponsesList(list **pending_list, mpscQueue *outbox, 
         /* Try to enqueue. If blocking is set, retry until success. */
         do {
             pushed = mpscEnqueue(outbox, job, ticket);
-            if (pushed || !blocking || server.crashed) break;
-            if (atomic_load_explicit(&io_threads_exiting, memory_order_acquire)) break;
+            /* The main thread does not consume responses during crash or exit. */
+            if (pushed || !blocking || server.crashed ||
+                atomic_load_explicit(&io_threads_exiting, memory_order_acquire))
+                break;
             atomic_thread_fence(memory_order_acquire);
         } while (true);
 
@@ -499,7 +501,16 @@ static void shutdownIOThread(int id) {
                 void *data;
                 int type;
                 untagJob(batch[i], &data, &type);
-                if (type == JOB_SPSC_FREE_ARGV) ioThreadFreeArgv((robj **)data);
+                switch (type) {
+                case JOB_SPSC_FREE_ARGV:
+                    ioThreadFreeArgv((robj **)data);
+                    break;
+                case JOB_SPSC_POLL:
+                    serverAssert(atomic_load_explicit(&io_threads_exiting, memory_order_acquire));
+                    break;
+                default:
+                    serverPanic("Invalid SPSC job type: %d", type);
+                }
             }
             drained += batch_count;
         }
@@ -515,6 +526,7 @@ void killIOThreads(void) {
     for (int j = 1; j < server.io_threads_num; j++) { /* We don't kill thread 0, which is the main thread. */
         shutdownIOThread(j);
     }
+    server.active_io_threads_num = 1;
 }
 
 int updateIOThreads(const char **err) {

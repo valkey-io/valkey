@@ -1,9 +1,15 @@
 # This test suite tests shutdown behavior.
 
 test "Shutdown cleans up IO threads with pipelined commands" {
-    start_server {overrides {save "" io-threads 4 io-threads-always-active yes}} {
+    start_server {overrides {save "" enable-module-command local io-threads 4 io-threads-always-active yes}} {
         set server_pid [srv 0 pid]
         set rd [valkey_deferring_client]
+
+        # Leave no module unload hook to drain the IO queues before shutdown.
+        foreach module [r module list] {
+            assert_equal {OK} [r module unload [dict get $module name]]
+        }
+        assert_equal 0 [llength [r module list]]
 
         # Make the pipeline arrive in one read so SHUTDOWN can leave
         # batched argument-cleanup jobs queued.

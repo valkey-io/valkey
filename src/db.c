@@ -258,7 +258,8 @@ int getCachedKeySlot(sds key) {
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
         !mustObeyClient(server.current_client) &&
-        !(server.current_client->cmd && (server.current_client->cmd->flags & (CMD_MODULE | CMD_TOUCHES_ARBITRARY_KEYS)))) {
+        server.current_client->cmd &&
+        !(server.current_client->cmd->flags & (CMD_MODULE | CMD_TOUCHES_ARBITRARY_KEYS))) {
         debugServerAssertWithInfo(server.current_client, NULL,
                                   (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;

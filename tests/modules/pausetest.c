@@ -18,7 +18,8 @@
 #define UNUSED(V) ((void)V)
 
 /* Store the result of the last timer operation for the test to query.
- * "NONE" = not run, "OK" = write succeeded, "ERROR" = write rejected.
+ * "NONE" = not run, "OK" = success, "NULL" = VM_Call returned NULL,
+ * "ERROR" = error reply / VM_Replicate* returned an error.
  * Only one timer runs at a time, so a single variable is enough. */
 static const char *last_result = "NONE";
 
@@ -26,8 +27,10 @@ static const char *last_result = "NONE";
 void timerCallHandler(ValkeyModuleCtx *ctx, void *data) {
     UNUSED(data);
     ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "SET", "cc!", "pause_timer_key", "from_call");
+    /* Without "E" in the format, a rejected write is reported as a NULL reply,
+     * not an error reply, so record the two cases distinctly. */
     if (reply == NULL) {
-        last_result = "ERROR";
+        last_result = "NULL";
         return;
     }
     if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {

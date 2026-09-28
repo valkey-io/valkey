@@ -18,11 +18,15 @@ start_server {tags {"modules needs:repl"}} {
         }
 
         test {VM_Call write command returns error during CLIENT PAUSE WRITE with replica} {
-            $primary PAUSETEST.TIMER_CALL 200
+            $primary PAUSETEST.TIMER_CALL 100
             $primary CLIENT PAUSE 60000 WRITE
-            after 500
             # Without fix: server crashes (assertion in propagateNow)
             # With fix: result=1 (rejected)
+            wait_for_condition 50 20 {
+                [$primary PAUSETEST.GET_RESULT call] != -1
+            } else {
+                fail "Timer result not ready"
+            }
             set result [$primary PAUSETEST.GET_RESULT call]
             $primary CLIENT UNPAUSE
             assert_equal 1 $result
@@ -46,9 +50,13 @@ start_server {tags {"modules needs:repl"}} {
         }
 
         test {VM_Replicate returns error during CLIENT PAUSE WRITE with replica} {
-            $primary PAUSETEST.TIMER_REPLICATE 200
+            $primary PAUSETEST.TIMER_REPLICATE 100
             $primary CLIENT PAUSE 60000 WRITE
-            after 500
+            wait_for_condition 50 20 {
+                [$primary PAUSETEST.GET_RESULT replicate] != -1
+            } else {
+                fail "Timer result not ready"
+            }
             set result [$primary PAUSETEST.GET_RESULT replicate]
             $primary CLIENT UNPAUSE
             assert_equal 1 $result
@@ -72,9 +80,13 @@ start_server {tags {"modules needs:repl"}} {
         }
 
         test {VM_ReplicateVerbatim returns error during CLIENT PAUSE WRITE with replica} {
-            $primary PAUSETEST.TIMER_VERBATIM 200
+            $primary PAUSETEST.TIMER_VERBATIM 100
             $primary CLIENT PAUSE 60000 WRITE
-            after 500
+            wait_for_condition 50 20 {
+                [$primary PAUSETEST.GET_RESULT verbatim] != -1
+            } else {
+                fail "Timer result not ready"
+            }
             set result [$primary PAUSETEST.GET_RESULT verbatim]
             $primary CLIENT UNPAUSE
             assert_equal 1 $result
@@ -99,7 +111,11 @@ start_server {tags {"modules needs:repl"}} {
 
         test {Module timer VM_Call succeeds when not paused} {
             $primary PAUSETEST.TIMER_CALL 100
-            after 300
+            wait_for_condition 50 20 {
+                [$primary PAUSETEST.GET_RESULT call] != -1
+            } else {
+                fail "Timer result not ready"
+            }
             set result [$primary PAUSETEST.GET_RESULT call]
             assert_equal 0 $result
         }

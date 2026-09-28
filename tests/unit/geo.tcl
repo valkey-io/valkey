@@ -223,6 +223,22 @@ start_server {tags {"geo"}} {
         set err
     } {*valid*}
 
+    test {GEOADD out of range coordinates} {
+        # Valid longitudes are limited to [-180,+180]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc -190 40.747533 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc 190 40.747533 "out of range"}
+        # Valid latitudes are limited to [-85.05112878,+85.05112878]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc -73.9454966 -86 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc -73.9454966 86 "out of range"}
+        # The failing pair is reported even when it is not the first one.
+        assert_error "*invalid longitude,latitude pair 181.000000,38.000000*" {
+            r geoadd nyc -73.9454966 40.747533 "in range" 181 38 "out of range"
+        }
+        # GEOADD is all-or-nothing
+        assert_equal {} [r zscore nyc "in range"]
+        assert_equal {} [r zscore nyc "out of range"]
+    }
+
     test {GEOADD multi add} {
         r geoadd nyc -73.9733487 40.7648057 "central park n/q/r" -73.9903085 40.7362513 "union square" -74.0131604 40.7126674 "wtc one" -73.7858139 40.6428986 "jfk" -73.9375699 40.7498929 "q4" -73.9564142 40.7480973 4545
     } {6}
@@ -459,6 +475,20 @@ start_server {tags {"geo"}} {
         assert {$m eq {}}
     }
 
+    test {GEODIST invalid unit} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*unsupported unit*" {r geodist points Palermo Catania yards}
+    }
+
+    test {GEODIST too many arguments} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*syntax error*" {r geodist points Palermo Catania km extra}
+    }
+
     test {GEORADIUS STORE option: syntax error} {
         r del points{t}
         r geoadd points{t} 13.361389 38.115556 "Palermo" \
@@ -590,6 +620,29 @@ start_server {tags {"geo"}} {
         assert_error {ERR COUNT must be > 0} {
             r GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT -1
         }
+    }
+
+    test {GEORADIUS/GEOSEARCH out of range coordinates} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo"
+
+        assert_error "*invalid longitude,latitude pair*" {r georadius points 181 38 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r georadius_ro points 13 86 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 181 38 byradius 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 13 86 bybox 100 100 km}
+        # A bad vertex is reported wherever it appears in the polygon.
+        assert_error "*invalid longitude,latitude pair 181.000000,40.000000*" {
+            r geosearch points bypolygon 3 13 38 14 39 181 40
+        }
+    }
+
+    test {GEOSEARCHSTORE out of range coordinates} {
+        r del points{t} dest{t}
+        r geoadd points{t} 13.361389 38.115556 "Palermo"
+        assert_error "*invalid longitude,latitude pair*" {
+            r geosearchstore dest{t} points{t} fromlonlat 181 38 byradius 100 km
+        }
+        assert_equal 0 [r exists dest{t}]
     }
 
     test {GEOSEARCH BYPOLYGON standard operations} {

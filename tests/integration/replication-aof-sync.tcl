@@ -177,10 +177,12 @@ tags {"repl external:skip"} {
                     skip "zstd is not supported by this build"
                 }
                 $primary config set rdbcompression $mode
+                $primary config set repl-compression $mode
 
                 for {set i 0} {$i < 40} {incr i} {
                     $primary set "rcomp-$mode-key:$i" "value:$i"
                 }
+                set primary_loglines [count_log_lines 0]
 
                 start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-sync no save ""}} {
                     set replica [srv 0 client]
@@ -190,6 +192,9 @@ tags {"repl external:skip"} {
 
                     $replica replicaof $primary_host $primary_port
                     wait_for_sync $replica
+                    wait_for_log_messages -1 \
+                        [list "*Starting BGSAVE for SYNC with target: disk*compression: $mode*"] \
+                        $primary_loglines 50 100
 
                     # The compressed sync RDB is reused without another rewrite.
                     wait_for_condition 50 100 {

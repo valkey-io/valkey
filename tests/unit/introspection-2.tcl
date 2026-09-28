@@ -333,4 +333,46 @@ start_server {tags {"introspection"}} {
         }
     }
 
+    test "fuzzy traffic generator covers every data type" {
+        # generate_fuzzy_traffic_on_key picks the commands to send by the type of
+        # the key it is given. A data type with no command list makes the corrupt
+        # dump fuzzer fail as soon as it restores a key of that type, which is
+        # easy to miss because it depends on the payload it happens to corrupt.
+        # Catch it here instead, where it fails on the very first CI run.
+
+        # COMMAND DOCS group -> type name reported by TYPE.
+        set type_groups [dict create string string list list set set sorted-set zset \
+                                     hash hash stream stream pathhash pathhash]
+        # Groups whose commands operate on the types above rather than adding one
+        # of their own, plus the groups that are not about keys at all.
+        set typeless_groups {bitmap cluster connection generic geo hyperloglog pubsub scripting server transactions}
+
+        set supported [fuzzy_traffic_commands_by_type]
+        set uncovered {}
+        foreach {name doc} [r command docs] {
+            # skip anything lacking a group field
+            if {![dict exists $doc group]} continue
+            # skip typeless_groups
+            set group [dict get $doc group]
+            if {[lsearch -exact $typeless_groups $group] != -1} continue
+            if {![dict exists $type_groups $group] || ![dict exists $supported [dict get $type_groups $group]]} {
+                lappend uncovered $group
+            }
+        }
+        if {[llength $uncovered]} {
+            fail "command groups with no fuzzy traffic command list: [lsort -unique $uncovered].\
+                  Add them to fuzzy_traffic_commands_by_type in tests/support/util.tcl, and create a key\
+                  of that type in generate_types in tests/integration/corrupt-dump-fuzzer.tcl."
+        }
+
+        foreach {type cmds} $supported {
+            # SCAN validates the type name against the server's own type table, so
+            # this rejects a type key that was misspelled.
+            r scan 0 type $type
+            foreach cmd $cmds {
+                assert_not_equal {} [lindex [r command info $cmd] 0] "$type command $cmd does not exist"
+            }
+        }
+    }
+
 }

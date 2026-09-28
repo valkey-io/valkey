@@ -379,9 +379,11 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
 
 # Each matrix row needs its own server because rdbchecksum is immutable.
 #   {codec rdbchecksum}
-set aof_rewrite_matrix {{lz4 no}}
+set aof_rewrite_matrix {}
 foreach mode $::rdbcompression_modes {
-    lappend aof_rewrite_matrix [list $mode yes]
+    foreach checksum {yes no} {
+        lappend aof_rewrite_matrix [list $mode $checksum]
+    }
 }
 
 foreach case $aof_rewrite_matrix {
@@ -446,6 +448,32 @@ foreach case $aof_rewrite_matrix {
             assert_equal [string repeat "$key_prefix-value " 100] [r get "$key_prefix:key"]
             assert_equal tail [r get "$key_prefix:incremental"]
         }
+    }
+}
+
+start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
+    test {BGREWRITEAOF converts a compressed AOF base to the legacy RDB format for downgrade} {
+        r flushall
+        r select 0
+        set value [string repeat "downgrade-value " 100]
+        r set downgrade:key $value
+
+        r bgrewriteaof
+        waitForBgrewriteaof r
+        assert_rdb_file_envelope [get_base_aof_path r] lz4
+
+        assert_equal "OK" [r config set rdbcompression yes]
+        assert_equal "OK" [r config rewrite]
+        r bgrewriteaof
+        waitForBgrewriteaof r
+        assert_equal "VALKEY" [read_binary_file_prefix [get_base_aof_path r] 6]
+
+        set digest [debug_digest]
+        restart_server 0 true false
+        r select 0
+        assert_equal "yes" [lindex [r config get rdbcompression] 1]
+        assert_equal $digest [debug_digest]
+        assert_equal $value [r get downgrade:key]
     }
 }
 

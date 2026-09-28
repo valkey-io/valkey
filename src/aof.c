@@ -52,7 +52,7 @@ off_t getAppendOnlyFileSize(sds filename, int *status);
 off_t getBaseAndIncrAppendOnlyFilesSize(aofManifest *am, int *status);
 int getBaseAndIncrAppendOnlyFilesNum(aofManifest *am);
 int aofFileExist(char *filename);
-int rewriteAppendOnlyFile(char *filename, int use_rdb_preamble);
+int rewriteAppendOnlyFile(char *filename);
 aofManifest *aofLoadManifestFromFile(sds am_filepath);
 void aofManifestFreeAndUpdate(aofManifest *am);
 void aof_background_fsync_and_close(int fd);
@@ -721,7 +721,7 @@ void aofOpenIfNeededOnServerStart(void) {
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
         sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
-        if (rewriteAppendOnlyFile(base_filepath, server.aof_use_rdb_preamble) != C_OK) {
+        if (rewriteAppendOnlyFile(base_filepath) != C_OK) {
             exit(1);
         }
         sdsfree(base_filepath);
@@ -1570,10 +1570,10 @@ int loadSingleAppendOnlyFile(char *filename) {
     fakeClient = createAOFClient();
     server.current_client = server.executing_client = fakeClient;
 
-    /* Check if the AOF file is in RDB format (it may be RDB encoded base AOF
-     * or old style RDB-preamble AOF). In that case we need to load the RDB file
-     * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
-    char sig[6]; /* "REDIS", "VALKEY", or the VCS envelope magic. */
+    /* Check if the AOF starts with a plain or streaming-compressed RDB (it may
+     * be an RDB-encoded base AOF or old-style RDB-preamble AOF). In that case,
+     * load the RDB and then continue with any old-style AOF tail. */
+    char sig[6]; /* "REDIS0", "VALKEY", or the three-byte "VCS" prefix. */
     size_t siglen = fread(sig, 1, sizeof(sig), fp);
     if (!rdbHasFileSignature(sig, siglen)) {
         /* Not in RDB format, seek back at 0 offset. */
@@ -1599,6 +1599,8 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
+            /* The helper leaves fp at the first byte after the RDB, where an
+             * old-style AOF tail starts. */
             valid_up_to = ftello(fp);
             loadingAbsProgress(valid_up_to);
             last_progress_report_size = valid_up_to;
@@ -2533,7 +2535,7 @@ werr:
  * log, the server uses variadic commands when possible, such as RPUSH, SADD
  * and ZADD. However at max AOF_REWRITE_ITEMS_PER_CMD items per time
  * are inserted using a single command. */
-int rewriteAppendOnlyFile(char *filename, int use_rdb_preamble) {
+int rewriteAppendOnlyFile(char *filename) {
     rio aof;
     FILE *fp = NULL;
     char tmpfile[256];
@@ -2556,10 +2558,11 @@ int rewriteAppendOnlyFile(char *filename, int use_rdb_preamble) {
 
     startSaving(RDBFLAGS_AOF_PREAMBLE);
 
-    if (use_rdb_preamble) {
+    if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRioWithConfiguredCompression(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
-                                                RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
+        if (rdbSaveRioWithCompression(compression_algo, REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
+                                      RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }
@@ -2652,7 +2655,6 @@ int rewriteAppendOnlyFileBackground(void) {
     }
 
     server.stat_aof_rewrites++;
-    server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
 
     if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
@@ -2665,7 +2667,7 @@ int rewriteAppendOnlyFileBackground(void) {
         }
         serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());
-        if (rewriteAppendOnlyFile(tmpfile, server.aof_rewrite_use_rdb_preamble) == C_OK) {
+        if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             serverLog(LL_NOTICE, "Successfully created the temporary AOF base file %s", tmpfile);
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
@@ -2682,6 +2684,7 @@ int rewriteAppendOnlyFileBackground(void) {
         serverLog(LL_NOTICE, "Background append only file rewriting started by pid %ld", (long)childpid);
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
+        server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
         return C_OK;
     }
     return C_OK; /* unreached */

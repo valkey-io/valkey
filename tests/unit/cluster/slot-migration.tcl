@@ -386,7 +386,7 @@ start_cluster 3 5 [list tags {external:skip cluster} overrides [list cluster-all
     }
 }
 
-start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-allow-replica-migration no cluster-node-timeout $node_timeout_ms]] {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
@@ -433,7 +433,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
 
 }
 
-start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-allow-replica-migration no cluster-node-timeout $node_timeout_ms]] {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
@@ -453,7 +453,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 }
 
-start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-allow-replica-migration no cluster-node-timeout $node_timeout_ms]] {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with invalid timeouts" {
@@ -479,7 +479,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 }
 
-start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-allow-replica-migration no cluster-node-timeout $node_timeout_ms]] {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with an explicit timeout" {
@@ -502,7 +502,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 }
 
-start_cluster 2 0 [list tags {tls:skip external:skip cluster regression} overrides [list cluster-allow-replica-migration no cluster-node-timeout $node_timeout_ms]] {
+start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     # Issue #563 regression test
     test "Client blocked on XREADGROUP while stream's slot is migrated" {
         set stream_name aga
@@ -523,7 +523,7 @@ start_cluster 2 0 [list tags {tls:skip external:skip cluster regression} overrid
     }
 }
 
-start_cluster 3 6 [list tags {external:skip cluster} overrides [list cluster-node-timeout $node_timeout_ms]] {
+start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
     test "Slot migration is ok when the replicas are down" {
         # Killing all replicas in primary 0.
         assert_equal 2 [s 0 connected_slaves]

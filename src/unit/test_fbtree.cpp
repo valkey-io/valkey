@@ -110,6 +110,31 @@ class FbtreeTest : public ::testing::Test {
         }
         return result;
     }
+
+    /* Insert 'count' members sharing a prefix long enough to spill, so the
+     * tree gains an inner level whose root prefix is heap allocated. */
+    std::vector<sds> buildLongPrefixTree(int count, size_t prefix_len) {
+        char suffix[16]; /* "e" plus any int, so the format cannot truncate */
+
+        std::vector<sds> inserted;
+        for (int i = 0; i < count; i++) {
+            snprintf(suffix, sizeof(suffix), "e%03d", i);
+            sds ele = fbtreeInsert(fbt, createPrefixString("E", prefix_len, suffix));
+            inserted.emplace_back(ele);
+        }
+        expectValid();
+        EXPECT_FALSE(fbt->root->is_leaf);
+        innerNode *root = (innerNode *)(void *)fbt->root;
+        EXPECT_GT(root->prefix_len, (size_t)EMBED_PREFIX_LEN);
+        return inserted;
+    }
+
+    /* The tree holds no elements and its root is released. */
+    void expectEmpty() {
+        EXPECT_EQ(fbtreeLength(fbt), 0UL);
+        EXPECT_EQ(fbt->root, nullptr);
+        expectValid();
+    }
 };
 
 /* ========== Basic Lifecycle Tests ========== */
@@ -2097,46 +2122,27 @@ TEST_F(FbtreeTest, LongPrefixDelete) {
     zfree(inserted);
 }
 
-/* Empty a multilevel tree whose inner nodes hold a spilled prefix through
- * each path that can empty a tree. The fixture's memory check catches any
- * prefix buffer an inner node leaves behind on the way out. */
+/* Empty a multilevel tree with a spilled root prefix, each way a tree can be
+ * emptied, under the fixture's memory check. None of them reaches the
+ * emptied-inner-root branch of fbtreePostDeleteCleanup. */
 TEST_F(FbtreeTest, LongPrefixDeleteAll) {
     const size_t prefix_len = EMBED_PREFIX_LEN + 8;
     const int count = NODE_SIZE * 3;
-    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
-    char suffix[8];
-
-    auto build = [&]() {
-        for (int i = 0; i < count; i++) {
-            snprintf(suffix, sizeof(suffix), "e%03d", i);
-            inserted[i] = fbtreeInsert(fbt, createPrefixString("E", prefix_len, suffix));
-        }
-        expectValid();
-        ASSERT_FALSE(fbt->root->is_leaf);
-        ASSERT_GT(((innerNode *)fbt->root)->prefix_len, (size_t)EMBED_PREFIX_LEN);
-    };
-    auto expectEmpty = [&]() {
-        EXPECT_EQ(fbtreeLength(fbt), 0UL);
-        EXPECT_EQ(fbt->root, nullptr);
-        expectValid();
-    };
 
     /* Single deletes in both directions: the root collapses onto its
      * surviving child before it can empty. */
-    build();
+    std::vector<sds> inserted = buildLongPrefixTree(count, prefix_len);
     for (int i = 0; i < count; i++) EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
     expectEmpty();
 
-    build();
+    inserted = buildLongPrefixTree(count, prefix_len);
     for (int i = count - 1; i >= 0; i--) EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
     expectEmpty();
 
     /* A range covering everything takes the delete-all path. */
-    build();
+    inserted = buildLongPrefixTree(count, prefix_len);
     EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, count - 1, NULL, NULL), (unsigned long)count);
     expectEmpty();
-
-    zfree(inserted);
 }
 
 TEST_F(FbtreeTest, LongPrefixBoundary) {

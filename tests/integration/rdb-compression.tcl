@@ -21,11 +21,11 @@ proc assert_rdb_envelope {client mode} {
     assert_rdb_file_envelope [dump_rdb_path $client] $mode
 }
 
-proc assert_lz4_rdb_checksum_flags {client expected} {
+proc assert_lz4_file_checksum_flags {path expected} {
     set vcs_envelope_size 7
     set lz4_frame_magic_size 4
     set frame_flg_offset [expr {$vcs_envelope_size + $lz4_frame_magic_size}]
-    binary scan [read_binary_file_prefix [dump_rdb_path $client] [expr {$frame_flg_offset + 1}]] cu* bytes
+    binary scan [read_binary_file_prefix $path [expr {$frame_flg_offset + 1}]] cu* bytes
     # LZ4 frame magic 0x184D2204 is stored in little-endian byte order.
     assert_equal [list 4 34 77 24] [lrange $bytes $vcs_envelope_size [expr {$frame_flg_offset - 1}]]
     set frame_flg [lindex $bytes $frame_flg_offset]
@@ -36,15 +36,27 @@ proc assert_lz4_rdb_checksum_flags {client expected} {
     assert_equal $expected $has_content_checksum
 }
 
-proc assert_zstd_rdb_checksum_flag {client expected} {
+proc assert_zstd_file_checksum_flag {path expected} {
     # The Zstd frame descriptor follows the seven-byte VCS envelope and
     # four-byte frame magic; bit 2 declares a content checksum.
     set frame_descriptor_offset 11
-    binary scan [read_binary_file_prefix [dump_rdb_path $client] [expr {$frame_descriptor_offset + 1}]] cu* bytes
+    binary scan [read_binary_file_prefix $path [expr {$frame_descriptor_offset + 1}]] cu* bytes
     assert_equal [list 86 67 83 1 2 0 1] [lrange $bytes 0 6]
     assert_equal [list 40 181 47 253] [lrange $bytes 7 10]
     set frame_descriptor [lindex $bytes $frame_descriptor_offset]
     assert_equal $expected [expr {($frame_descriptor & 0x04) != 0}]
+}
+
+proc assert_rdb_file_checksum_flags {path mode expected} {
+    if {$mode eq "zstd"} {
+        assert_zstd_file_checksum_flag $path $expected
+    } else {
+        assert_lz4_file_checksum_flags $path $expected
+    }
+}
+
+proc assert_rdb_checksum_flags {client mode expected} {
+    assert_rdb_file_checksum_flags [dump_rdb_path $client] $mode $expected
 }
 
 set ::rdbcompression_zstd_supported 0
@@ -76,9 +88,7 @@ start_server {overrides {save "" enable-debug-command local}} {
             set digest [debug_digest]
             assert_equal "OK" [r save]
             assert_rdb_envelope r $mode
-            if {$mode eq "lz4"} {
-                assert_lz4_rdb_checksum_flags r 1
-            }
+            assert_rdb_checksum_flags r $mode 1
             set loglines [count_log_lines 0]
             assert_equal "OK" [r debug reload nosave]
             verify_log_message 0 "*Logical RDB CRC64 skipped for streaming-compressed input*" $loglines
@@ -354,11 +364,7 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
 
             r save
             assert_rdb_envelope r $mode
-            if {$mode eq "zstd"} {
-                assert_zstd_rdb_checksum_flag r 0
-            } else {
-                assert_lz4_rdb_checksum_flags r 0
-            }
+            assert_rdb_checksum_flags r $mode 0
             set digest [debug_digest]
             set loglines [count_log_lines 0]
             assert_equal "OK" [r debug reload nosave]
@@ -371,12 +377,22 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
     }
 }
 
-start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes}} {
-    foreach mode $::rdbcompression_modes {
-        test "AOF rewrite compresses and reloads its RDB base with [string toupper $mode]" {
-            r config set rdbcompression $mode
+# Each matrix row needs its own server because rdbchecksum is immutable.
+#   {codec rdbchecksum}
+set aof_rewrite_matrix {{lz4 no}}
+foreach mode $::rdbcompression_modes {
+    lappend aof_rewrite_matrix [list $mode yes]
+}
+
+foreach case $aof_rewrite_matrix {
+    lassign $case mode checksum
+    start_server [list overrides [list save "" appendonly yes aof-use-rdb-preamble yes \
+                                      rdbcompression $mode rdbchecksum $checksum]] {
+        test "AOF rewrite with [string toupper $mode] compression and rdbchecksum $checksum round-trips every load path" {
             r flushall
-            r set "aof-$mode:key" [string repeat "aof-$mode-value " 100]
+            r select 0
+            set key_prefix "aof-$mode-$checksum"
+            r set "$key_prefix:key" [string repeat "$key_prefix-value " 100]
 
             r bgrewriteaof
             waitForBgrewriteaof r
@@ -384,6 +400,7 @@ start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes}} {
             set base_aof [get_base_aof_path r]
             assert {[file exists $base_aof]}
             assert_rdb_file_envelope $base_aof $mode
+            assert_rdb_file_checksum_flags $base_aof $mode [expr {$checksum eq "yes"}]
 
             set dir [lindex [r config get dir] 1]
             set appenddirname [lindex [r config get appenddirname] 1]
@@ -393,25 +410,99 @@ start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes}} {
 
             # The decoder must stop at the compressed frame boundary so an
             # old-style AOF can continue with a RESP tail in the same file.
-            set old_style_aof [file join $dir "compressed-preamble-$mode.aof"]
+            set old_style_dir [file join $dir "compressed-preamble-$mode-$checksum"]
+            set old_style_aof [file join $old_style_dir "appendonly.aof"]
             with_cleanup {
+                file mkdir $old_style_dir
                 set old_style_data [read_binary_file $base_aof]
-                append old_style_data [formatCommand set "aof-$mode:old-style-tail" tail]
+                append old_style_data [formatCommand set "$key_prefix:old-style-tail" tail]
                 write_binary_file $old_style_aof $old_style_data
                 assert_match "*RDB preamble is OK, proceeding with AOF tail*is valid*" \
                     [exec $::VALKEY_CHECK_AOF_BIN $old_style_aof]
+
+                # valkey-check-aof and the server have separate loading paths.
+                # Verify that the server also resumes RESP parsing at exactly
+                # the first byte after the compressed frame.
+                start_server [list overrides [list \
+                    dir $old_style_dir \
+                    appendonly yes \
+                    aof-use-rdb-preamble yes \
+                    save ""] keep_persistence true] {
+                    r select 0
+                    assert_equal [string repeat "$key_prefix-value " 100] [r get "$key_prefix:key"]
+                    assert_equal tail [r get "$key_prefix:old-style-tail"]
+                }
             } {
-                file delete -force $old_style_aof
+                file delete -force $old_style_dir
             }
 
             # Keep data in the incremental AOF too, so restart covers both files.
-            r set "aof-$mode:incremental" tail
+            r set "$key_prefix:incremental" tail
             set digest [debug_digest]
 
             restart_server 0 true false
+            r select 0
             assert_equal $digest [debug_digest]
-            assert_equal [string repeat "aof-$mode-value " 100] [r get "aof-$mode:key"]
-            assert_equal tail [r get "aof-$mode:incremental"]
+            assert_equal [string repeat "$key_prefix-value " 100] [r get "$key_prefix:key"]
+            assert_equal tail [r get "$key_prefix:incremental"]
+        }
+    }
+}
+
+# Codec-level tests above cover malformed and truncated frames for every
+# supported codec. This test specifically verifies AOF recovery policy: a
+# damaged RDB base is never treated as a repairable RESP-tail truncation.
+start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
+    test {A truncated compressed AOF base cannot be repaired or loaded as a truncated RESP tail} {
+        r flushall
+        r select 0
+        r set damaged-aof-base:key [string repeat "damaged-aof-base-value " 100]
+        r bgrewriteaof
+        waitForBgrewriteaof r
+
+        set base_aof [get_base_aof_path r]
+        set dir [lindex [r config get dir] 1]
+        set appenddirname [lindex [r config get appenddirname] 1]
+        set appendfilename [lindex [r config get appendfilename] 1]
+        set damaged_dir [file join $dir "damaged-compressed-aof"]
+        set damaged_aof_dir [file join $damaged_dir $appenddirname]
+
+        with_cleanup {
+            file mkdir $damaged_dir
+            file copy -force [file join $dir $appenddirname] $damaged_dir
+
+            set damaged_base [file join $damaged_aof_dir [file tail $base_aof]]
+            set original [read_binary_file $damaged_base]
+            write_binary_file $damaged_base \
+                [string range $original 0 [expr {[string length $original] / 2}]]
+            set truncated [read_binary_file $damaged_base]
+            set damaged_manifest [file join $damaged_aof_dir "$appendfilename$::manifest_suffix"]
+
+            set failed [catch {
+                exec $::VALKEY_CHECK_AOF_BIN --fix $damaged_manifest << "y\n"
+            } result]
+            assert_equal 1 $failed
+            assert_match "*RDB preamble of AOF file is not sane, aborting*" $result
+            assert_equal $truncated [read_binary_file $damaged_base]
+
+            start_server [list overrides [list \
+                dir $damaged_dir \
+                appendonly yes \
+                appenddirname $appenddirname \
+                appendfilename $appendfilename \
+                aof-use-rdb-preamble yes \
+                aof-load-truncated yes \
+                save ""] keep_persistence true wait_ready false] {
+                set log [srv 0 stdout]
+                wait_for_condition 100 50 {
+                    ![is_alive [srv pid]]
+                } else {
+                    fail "Server loaded a truncated compressed AOF base"
+                }
+                assert_equal 1 [count_message_lines $log "Corrupt streaming-compressed RDB input"]
+            }
+        } {
+            file delete -force $damaged_dir
         }
     }
 }

@@ -14,28 +14,26 @@
  */
 
 #include "valkeymodule.h"
-#include <string.h>
 
 #define UNUSED(V) ((void)V)
 
 /* Store the result of the last timer operation for the test to query.
- * "NONE" = not run, "OK" = write succeeded, "ERROR" = write rejected. */
-static const char *last_call_result = "NONE";
-static const char *last_replicate_result = "NONE";
-static const char *last_verbatim_result = "NONE";
+ * "NONE" = not run, "OK" = write succeeded, "ERROR" = write rejected.
+ * Only one timer runs at a time, so a single variable is enough. */
+static const char *last_result = "NONE";
 
 /* Timer callback: VM_Call with replication. */
 void timerCallHandler(ValkeyModuleCtx *ctx, void *data) {
     UNUSED(data);
     ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "SET", "cc!", "pause_timer_key", "from_call");
     if (reply == NULL) {
-        last_call_result = "ERROR";
+        last_result = "ERROR";
         return;
     }
     if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
-        last_call_result = "ERROR";
+        last_result = "ERROR";
     } else {
-        last_call_result = "OK";
+        last_result = "OK";
     }
     ValkeyModule_FreeCallReply(reply);
 }
@@ -44,7 +42,7 @@ void timerCallHandler(ValkeyModuleCtx *ctx, void *data) {
 void timerReplicateHandler(ValkeyModuleCtx *ctx, void *data) {
     UNUSED(data);
     int ret = ValkeyModule_Replicate(ctx, "SET", "cc", "pause_timer_key", "from_replicate");
-    last_replicate_result = (ret == VALKEYMODULE_OK) ? "OK" : "ERROR";
+    last_result = (ret == VALKEYMODULE_OK) ? "OK" : "ERROR";
 }
 
 /* Timer callback: VM_ReplicateVerbatim.
@@ -52,14 +50,14 @@ void timerReplicateHandler(ValkeyModuleCtx *ctx, void *data) {
 void timerVerbatimHandler(ValkeyModuleCtx *ctx, void *data) {
     UNUSED(data);
     int ret = ValkeyModule_ReplicateVerbatim(ctx);
-    last_verbatim_result = (ret == VALKEYMODULE_OK) ? "OK" : "ERROR";
+    last_result = (ret == VALKEYMODULE_OK) ? "OK" : "ERROR";
 }
 
 /* PAUSETEST.TIMER_CALL [delay_ms] - Schedule a timer that does VM_Call. */
 int PauseTestTimerCall_Command(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     long long delay = 100;
     if (argc > 1) ValkeyModule_StringToLongLong(argv[1], &delay);
-    last_call_result = "NONE";
+    last_result = "NONE";
     ValkeyModule_CreateTimer(ctx, delay, timerCallHandler, NULL);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return VALKEYMODULE_OK;
@@ -69,7 +67,7 @@ int PauseTestTimerCall_Command(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
 int PauseTestTimerReplicate_Command(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     long long delay = 100;
     if (argc > 1) ValkeyModule_StringToLongLong(argv[1], &delay);
-    last_replicate_result = "NONE";
+    last_result = "NONE";
     ValkeyModule_CreateTimer(ctx, delay, timerReplicateHandler, NULL);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return VALKEYMODULE_OK;
@@ -79,31 +77,17 @@ int PauseTestTimerReplicate_Command(ValkeyModuleCtx *ctx, ValkeyModuleString **a
 int PauseTestTimerVerbatim_Command(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     long long delay = 100;
     if (argc > 1) ValkeyModule_StringToLongLong(argv[1], &delay);
-    last_verbatim_result = "NONE";
+    last_result = "NONE";
     ValkeyModule_CreateTimer(ctx, delay, timerVerbatimHandler, NULL);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return VALKEYMODULE_OK;
 }
 
-/* PAUSETEST.GET_RESULT <call|replicate|verbatim> - Get the result of the last timer op. */
+/* PAUSETEST.GET_RESULT - Get the result of the last timer op. */
 int PauseTestGetResult_Command(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    if (argc != 2) {
-        ValkeyModule_WrongArity(ctx);
-        return VALKEYMODULE_OK;
-    }
-    const char *which = ValkeyModule_StringPtrLen(argv[1], NULL);
-    const char *result;
-    if (!strcmp(which, "call")) {
-        result = last_call_result;
-    } else if (!strcmp(which, "replicate")) {
-        result = last_replicate_result;
-    } else if (!strcmp(which, "verbatim")) {
-        result = last_verbatim_result;
-    } else {
-        ValkeyModule_ReplyWithError(ctx, "ERR unknown result type");
-        return VALKEYMODULE_OK;
-    }
-    ValkeyModule_ReplyWithSimpleString(ctx, result);
+    UNUSED(argv);
+    UNUSED(argc);
+    ValkeyModule_ReplyWithSimpleString(ctx, last_result);
     return VALKEYMODULE_OK;
 }
 

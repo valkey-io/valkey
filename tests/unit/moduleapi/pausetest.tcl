@@ -2,9 +2,9 @@ set testmodule [file normalize tests/modules/pausetest.so]
 
 # Each test gets its own server pair since the crash kills the server.
 
-# The module command suffix and GET_RESULT key share the same word, but the
-# VM_ display name for verbatim is ReplicateVerbatim, so map them explicitly.
-foreach {apiname resultkey} {Call call Replicate replicate ReplicateVerbatim verbatim} {
+# The command suffix and VM_ display name differ for verbatim
+# (VERBATIM vs ReplicateVerbatim), so map them explicitly.
+foreach {apiname cmdsuffix} {Call CALL Replicate REPLICATE ReplicateVerbatim VERBATIM} {
     start_server {tags {"modules needs:repl"}} {
         r module load $testmodule
         set primary [srv 0 client]
@@ -21,16 +21,16 @@ foreach {apiname resultkey} {Call call Replicate replicate ReplicateVerbatim ver
             }
 
             test "VM_$apiname write command returns error during CLIENT PAUSE WRITE with replica" {
-                $primary PAUSETEST.TIMER_[string toupper $resultkey] 100
+                $primary PAUSETEST.TIMER_$cmdsuffix 100
                 $primary CLIENT PAUSE 60000 WRITE
                 # Without fix: server crashes (assertion in propagateNow)
-                # With fix: result=1 (rejected)
+                # With fix: result=ERROR (rejected)
                 wait_for_condition 50 20 {
-                    [$primary PAUSETEST.GET_RESULT $resultkey] ne "NONE"
+                    [$primary PAUSETEST.GET_RESULT] ne "NONE"
                 } else {
                     fail "Timer result not ready"
                 }
-                set result [$primary PAUSETEST.GET_RESULT $resultkey]
+                set result [$primary PAUSETEST.GET_RESULT]
                 $primary CLIENT UNPAUSE
                 assert_equal "ERROR" $result
             }
@@ -56,11 +56,11 @@ start_server {tags {"modules needs:repl"}} {
         test {Module timer VM_Call succeeds when not paused} {
             $primary PAUSETEST.TIMER_CALL 100
             wait_for_condition 50 20 {
-                [$primary PAUSETEST.GET_RESULT call] ne "NONE"
+                [$primary PAUSETEST.GET_RESULT] ne "NONE"
             } else {
                 fail "Timer result not ready"
             }
-            set result [$primary PAUSETEST.GET_RESULT call]
+            set result [$primary PAUSETEST.GET_RESULT]
             assert_equal "OK" $result
         }
     }

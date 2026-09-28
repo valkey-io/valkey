@@ -98,6 +98,13 @@ static size_t getPendingIOThreadsJobs(void) {
     return io_jobs_submitted - atomic_load_explicit(&io_jobs_finished, memory_order_acquire);
 }
 
+/* True when no IO job is queued or executing. Main is the only submitter, so
+ * once drainIOThreadsQueue() returns this stays true until main submits again;
+ * callers use it to assert that memory IO threads may read can be freed. */
+int ioThreadsHaveNoPendingJobs(void) {
+    return getPendingIOThreadsJobs() == 0;
+}
+
 /* Read/write jobs awaiting response from IO threads. */
 static size_t getPendingIOResponsesCount(void) {
     return server.stat_io_writes_pending + server.stat_io_reads_pending + cluster_io_pending_responses;

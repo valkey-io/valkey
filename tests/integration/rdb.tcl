@@ -607,7 +607,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         set original_keys [r dbsize]
         
         # Start forkless save with very slow save (high delay per key)
-        r config set rdb-key-save-delay 10000
+        r config set rdb-key-save-delay 100000
         r config set bgsave-default-method forkless
         r bgsave
         wait_for_condition 50 100 {

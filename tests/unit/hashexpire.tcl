@@ -5357,6 +5357,8 @@ start_server {tags {"hashexpire needs:debug external:skip"}} {
         foreach {name cmd expected} [list \
             HDEL "hdel myhash expired live" "hdel myhash live" \
             HGETDEL "hgetdel myhash FIELDS 2 expired live" "hdel myhash live" \
+            {HDEL multiple} "hdel myhash live expired live2" "hdel myhash live live2" \
+            {HGETDEL multiple} "hgetdel myhash FIELDS 3 live expired live2" "hdel myhash live live2" \
             HPERSIST "hpersist myhash FIELDS 2 expired live" "hpersist myhash FIELDS 1 live" \
             HEXPIREAT "hexpireat myhash $exat XX GT FIELDS 2 expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
             {HPERSIST multiple} "hpersist myhash FIELDS 4 live expired missing live2" "hpersist myhash FIELDS 2 live live2" \

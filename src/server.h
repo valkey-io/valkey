@@ -3084,6 +3084,7 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_CROSSSLOT (1 << 20)
 #define READ_FLAGS_PREFETCHED (1 << 21)
 #define READ_FLAGS_ERROR_INVALID_CRLF (1 << 22)
+#define READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL (1 << 23)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -3456,13 +3457,14 @@ sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
 int replicaRdbVersion(client *replica);
 /* Full-sync compression policy: select the codec and gate replica eligibility on capability. */
-compressionAlgo replSelectFullSyncCompression(int replica_capa, bool socket_target);
+compressionAlgo replSelectFullSyncCompression(int replica_capa);
+bool isReplicaInCohort(client *replica, int req, int rdbver, compressionAlgo compr);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
 ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_len, size_t output_budget);
 bool replStreamHasPendingDecode(void);
-void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
+void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel, compressionAlgo target_algo);
 sds replicationSendAuth(connection *conn, const char *user, size_t user_len, const char *pass, size_t pass_len);
 sds receiveSynchronousResponse(connection *conn);
 ConnectionType *connTypeOfReplication(void);

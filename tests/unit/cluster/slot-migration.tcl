@@ -76,15 +76,18 @@ proc fail_server {server_id peer} {
     # timeout is reduced to make elections happen faster
     config_set_all_nodes cluster-node-timeout 1000
     pause_process [srv [expr -1*$server_id] pid]
-    wait_for_condition 200 100 {
-        [get_cluster_role $peer] eq "master"
-    } else {
-        resume_process [srv [expr -1*$server_id] pid]
-        config_set_all_nodes cluster-node-timeout $node_timeout
-        fail "R $peer didn't take over from R $server_id in time"
-    }
+    set wait_error [catch {
+        wait_for_condition 200 100 {
+            [get_cluster_role $peer] eq "master"
+        } else {
+            fail "R $peer didn't take over from R $server_id in time"
+        }
+    } wait_result wait_options]
     resume_process [srv [expr -1*$server_id] pid]
     config_set_all_nodes cluster-node-timeout $node_timeout
+    if {$wait_error} {
+        return -options $wait_options $wait_result
+    }
     wait_for_role $server_id slave
 }
 

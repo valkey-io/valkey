@@ -24,6 +24,7 @@ proc generate_collections {suffix elements} {
         $rd zadd zset$suffix $j $val
         $rd sadd set$suffix $val
         $rd xadd stream$suffix * item 1 value $val
+        $rd phset pathhash$suffix p/$j FIELDS 1 $j $val
     }
     $rd client reply on
     assert_equal OK [$rd read]
@@ -173,7 +174,8 @@ test "Fuzzer corrupt restore payloads" {
                         dump_server_log $srv
                     }
 
-                    puts "Server crashed (by signal: $by_signal), with payload: $printable_dump"
+                    # Report the error too, not every failure here is a crash.
+                    puts "Server crashed (by signal: $by_signal), with payload: $printable_dump, error: $err"
                     set print_commands true
                 }
             }

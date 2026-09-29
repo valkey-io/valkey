@@ -70,12 +70,22 @@ proc wait_for_role {srv_idx role} {
     wait_for_cluster_propagation
 }
 
-# restart a server and wait for it to come back online
-proc fail_server {server_id} {
+# Freeze $server_id until $peer has taken its shard over.
+proc fail_server {server_id peer} {
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    # timeout is reduced to make elections happen faster
+    config_set_all_nodes cluster-node-timeout 1000
     pause_process [srv [expr -1*$server_id] pid]
-    after [expr 3*$node_timeout]
+    wait_for_condition 200 100 {
+        [get_cluster_role $peer] eq "master"
+    } else {
+        resume_process [srv [expr -1*$server_id] pid]
+        config_set_all_nodes cluster-node-timeout $node_timeout
+        fail "R $peer didn't take over from R $server_id in time"
+    }
     resume_process [srv [expr -1*$server_id] pid]
+    config_set_all_nodes cluster-node-timeout $node_timeout
+    wait_for_role $server_id slave
 }
 
 proc migrate_slot {from to slot} {
@@ -111,7 +121,7 @@ proc failback {primary} {
 }
 
 # Restore the layout the tests assume.
-proc normalize_topology {pairs} {
+proc normalize_cluster {pairs} {
     foreach {primary replica} $pairs {
         if {[get_cluster_role $primary] eq "slave"} {
             # $replica took the shard over and never gave it back.
@@ -126,11 +136,8 @@ proc normalize_topology {pairs} {
     }
 }
 
-set node_timeout_ms [expr {$::valgrind ? 5000 : 1000}]
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
-start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-allow-replica-migration no cluster-node-timeout $node_timeout_ms]] {
-
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set shard_pairs {0 3 1 4 2 5}
     set R0_id [R 0 CLUSTER MYID]
     set R1_id [R 1 CLUSTER MYID]
@@ -161,10 +168,9 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Migration target is auto-updated after failover in target shard" {
+        normalize_cluster $shard_pairs
         # Trigger an auto-failover from R1 to R4
-        fail_server 1
-        # Wait for R1 to become a replica
-        wait_for_role 1 slave
+        fail_server 1 4
         # Validate final states
         wait_for_slot_state 0 "\[609->-$R4_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -180,11 +186,9 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Migration source is auto-updated after failover in source shard" {
-        normalize_topology $shard_pairs
+        normalize_cluster $shard_pairs
         # Trigger an auto-failover from R0 to R3
-        fail_server 0
-        # Wait for R0 to become a replica
-        wait_for_role 0 slave
+        fail_server 0 3
         # Validate final states
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R3_id\]"
@@ -200,7 +204,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Replica redirects key access in migrating slots" {
-        normalize_topology $shard_pairs
+        normalize_cluster $shard_pairs
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -214,7 +218,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Replica of migrating node returns ASK redirect after READONLY" {
-        normalize_topology $shard_pairs
+        normalize_cluster $shard_pairs
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -231,7 +235,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Replica of migrating node returns TRYAGAIN after READONLY" {
-        normalize_topology $shard_pairs
+        normalize_cluster $shard_pairs
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -248,7 +252,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
-        normalize_topology $shard_pairs
+        normalize_cluster $shard_pairs
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -266,7 +270,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "New replica inherits migrating slot" {
-        normalize_topology $shard_pairs
+        normalize_cluster $shard_pairs
         # Reset R3 to turn it into an empty node
         assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
         assert_equal {OK} [R 3 CLUSTER RESET]
@@ -281,7 +285,7 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "New replica inherits importing slot" {
-        normalize_topology $shard_pairs
+        normalize_cluster $shard_pairs
         # Reset R4 to turn it into an empty node
         assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
         assert_equal {OK} [R 4 CLUSTER RESET]
@@ -297,7 +301,6 @@ start_cluster 3 3 [list tags {external:skip cluster} overrides [list cluster-all
 }
 
 proc create_empty_shard {p r} {
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     assert_equal {OK} [R $p CLUSTER RESET]
     assert_equal {OK} [R $r CLUSTER RESET]
     assert_equal {OK} [R $p CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
@@ -308,9 +311,8 @@ proc create_empty_shard {p r} {
     wait_for_role $p master
 }
 
-start_cluster 3 5 [list tags {external:skip cluster} overrides [list cluster-allow-replica-migration no cluster-node-timeout $node_timeout_ms]] {
+start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
     set R1_id [R 1 CLUSTER MYID]
     set R2_id [R 2 CLUSTER MYID]
@@ -344,12 +346,9 @@ start_cluster 3 5 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Empty-shard migration target is auto-updated after failover in target shard" {
-        normalize_topology $shard_pairs
-        wait_for_role 6 master
+        normalize_cluster $shard_pairs
         # Trigger an auto-failover from R6 to R7
-        fail_server 6
-        # Wait for R6 to become a replica
-        wait_for_role 6 slave
+        fail_server 6 7
         # Validate final states
         wait_for_slot_state 0 "\[609->-$R7_id\]"
         wait_for_slot_state 6 "\[609-<-$R0_id\]"
@@ -365,12 +364,9 @@ start_cluster 3 5 [list tags {external:skip cluster} overrides [list cluster-all
     }
 
     test "Empty-shard migration source is auto-updated after failover in source shard" {
-        normalize_topology $shard_pairs
-        wait_for_role 0 master
+        normalize_cluster $shard_pairs
         # Trigger an auto-failover from R0 to R3
-        fail_server 0
-        # Wait for R0 to become a replica
-        wait_for_role 0 slave
+        fail_server 0 3
         # Validate final states
         wait_for_slot_state 0 "\[609->-$R6_id\]"
         wait_for_slot_state 6 "\[609-<-$R3_id\]"
@@ -388,7 +384,6 @@ start_cluster 3 5 [list tags {external:skip cluster} overrides [list cluster-all
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
     set R1_id [R 1 CLUSTER MYID]
     set R2_id [R 2 CLUSTER MYID]

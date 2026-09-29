@@ -43,6 +43,7 @@ typedef struct PrefetchCommandsBatch {
     size_t client_count;            /* Number of clients in the current batch */
     size_t max_prefetch_size;       /* Maximum number of keys to prefetch in a batch */
     size_t executed_commands;       /* Number of commands executed in the current batch */
+    size_t processing_depth;        /* Number of active batch processing calls */
     int *slots;                     /* Array of slots for each key */
     void **keys;                    /* Array of keys to prefetch in the current batch */
     client **clients;               /* Array of clients in the current batch */
@@ -88,8 +89,9 @@ void prefetchCommandsBatchInit(void) {
 
 int onMaxBatchSizeChange(const char **err) {
     UNUSED(err);
-    if (batch && batch->client_count > 0) {
-        /* We need to process the current batch before updating the size */
+    if (batch && (batch->client_count > 0 || batch->processing_depth > 0)) {
+        /* Defer resizing until queued commands and active processing calls are done.
+         * Recursive processing may empty the batch while outer calls still use it. */
         return 1;
     }
 
@@ -324,6 +326,8 @@ static void prefetchCommands(void) {
 void processClientsCommandsBatch(void) {
     if (!batch || batch->client_count == 0) return;
 
+    batch->processing_depth++;
+
     /* If executed_commands is not 0,
      * it means that we are in the middle of processing a batch and this is a recursive call */
     if (batch->executed_commands == 0) {
@@ -342,6 +346,7 @@ void processClientsCommandsBatch(void) {
     }
 
     resetCommandsBatch();
+    batch->processing_depth--;
 
     /* Handle the case where the max prefetch size has been changed. */
     if (batch->max_prefetch_size != (size_t)server.prefetch_batch_max_size) {

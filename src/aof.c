@@ -1589,7 +1589,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRioWithAutoDecompression(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL, aof_filepath) != RDB_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL, aof_filepath) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -2561,8 +2561,8 @@ int rewriteAppendOnlyFile(char *filename) {
     if (server.aof_use_rdb_preamble) {
         int error;
         compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
-        if (rdbSaveRioWithCompression(compression_algo, REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
-                                      RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        if (rdbSaveRio(compression_algo, REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
+                       RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }

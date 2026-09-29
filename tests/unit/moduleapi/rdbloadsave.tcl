@@ -152,13 +152,13 @@ start_server {tags {"modules"}} {
             file delete -force $failed_rdb
             exec mkfifo $failed_rdb
             # Closing the FIFO reader after one byte forces a write error while
-            # rdbSaveRioWithCompression is emitting the compressed RDB.
+            # rdbSaveRio is emitting the compressed RDB.
             exec dd if=$failed_rdb of=/dev/null bs=1 count=1 2>/dev/null &
 
             set loglines [count_log_lines 0]
             set failed [catch {r test.rdbsave $failed_rdb}]
             assert_equal 1 $failed
-            verify_log_message 0 "*Write error while saving DB to the disk(rdbSaveRioWithCompression):*" $loglines
+            verify_log_message 0 "*Write error while saving DB to the disk(rdbSaveRio):*" $loglines
             assert_equal 0 [file exists $failed_rdb]
             assert_equal PONG [r ping]
         } {

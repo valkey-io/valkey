@@ -20,6 +20,17 @@ permissions:
   contents: read
 
 jobs:
+  validate-commands-def:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Validate commands.def is up to date
+        run: |
+          python3 utils/generate-command-code.py
+          git diff --exit-code -- src/commands.def
+          git ls-files --error-unmatch src/commands.def > /dev/null
+
   test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
@@ -44,12 +55,6 @@ jobs:
           ./runtest --verbose --tags -slow --dump-logs
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
-      - name: validate commands.def up to date
-        run: |
-          touch src/commands/ping.json
-          make commands.def
-          dirty="$(git diff)"
-          if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
       - name: unit tests
         run: |
           make test-unit

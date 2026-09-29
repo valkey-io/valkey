@@ -81,8 +81,12 @@ char *rdbFileBeingLoaded = NULL; /* used for rdb checking on read error */
 extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
-int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
-static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
+static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
+                                            int rdbflags,
+                                            rdbSaveInfo *rsi,
+                                            rdbLoadingCtx *rdb_loading_ctx,
+                                            const char *filename);
+static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 void replicationEmptyDbCallback(hashtable *ht);
 
 /* Resolve the configured policy to an algorithm. The `yes` policy follows the
@@ -3566,12 +3570,19 @@ void rdbFreeStreamReader(rio *rdb, streamReader *reader) {
  * compressed reader limits source reads to the codec's input_hint so it does
  * not consume trailing data, allowing callers to continue with content such as
  * an old-style AOF tail. */
-int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
+static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
+                                            int rdbflags,
+                                            rdbSaveInfo *rsi,
+                                            rdbLoadingCtx *rdb_loading_ctx,
+                                            const char *filename) {
     streamReader stream_reader;
     compressionAlgo compression_algo = ALGO_NONE;
     int retval = RDB_FAILED;
 
-    bool skip_codec_checksum_validation = !server.rdb_checksum || server.skip_checksum_validation;
+    bool skip_codec_checksum_validation =
+        (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) ||
+        !server.rdb_checksum ||
+        server.skip_checksum_validation;
     rdbStreamReaderInitResult init_rc =
         rdbInitStreamReader(rdb, &stream_reader, skip_codec_checksum_validation, &compression_algo);
     if (init_rc == RDB_STREAM_READER_INIT_INCOMPATIBLE) {
@@ -3592,19 +3603,51 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
                   compressionAlgoName(compression_algo), filename);
     }
 
-    retval = rdbLoadRioInternal(rdb, rdbflags, rsi);
+    rio *prev_rio = server.loading_rio;
+    server.loading_rio = rdb;
+    retval = rdbLoadRioInternal(rdb, rdbflags, rsi, rdb_loading_ctx);
+    server.loading_rio = prev_rio;
     if (retval == RDB_OK && streamReaderFinish(&stream_reader) == C_ERR) {
-        if (stream_reader.error_kind == STREAM_READER_ERROR_CORRUPT) {
+        if (stream_reader.error_kind == STREAM_READER_ERROR_TRUNCATED) {
+            serverLog(LL_WARNING, "Compressed RDB stream from %s was truncated", filename);
+        } else if (stream_reader.error_kind == STREAM_READER_ERROR_CORRUPT) {
             /* Treat a corrupt frame end like mid-parse corruption via the fatal path. */
             rdbReportCorruptCompressedStream(filename);
         } else {
-            serverLog(LL_WARNING, "Compressed RDB stream in %s did not end cleanly", filename);
+            serverLog(LL_WARNING, "Compressed RDB stream from %s did not end cleanly", filename);
         }
+        retval = RDB_FAILED;
+    }
+    if (retval == RDB_OK &&
+        compression_algo != ALGO_NONE &&
+        rioCheckType(rdb) == RIO_TYPE_CONN &&
+        rdb->io.conn.read_limit != 0 &&
+        rdb->io.conn.read_so_far != rdb->io.conn.read_limit) {
+        serverLog(LL_WARNING,
+                  "Compressed RDB stream from %s ended before the announced "
+                  "transfer size; got %llu of %llu bytes",
+                  filename,
+                  (unsigned long long)rdb->io.conn.read_so_far,
+                  (unsigned long long)rdb->io.conn.read_limit);
         retval = RDB_FAILED;
     }
 
     rdbFreeStreamReader(rdb, &stream_reader);
     return retval;
+}
+
+int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
+    functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
+    rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
+    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, &loading_ctx, filename);
+}
+
+int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb,
+                                      int rdbflags,
+                                      rdbSaveInfo *rsi,
+                                      rdbLoadingCtx *rdb_loading_ctx) {
+    const char *filename = (rdbflags & RDBFLAGS_REPLICATION) ? "primary" : "RDB stream";
+    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, rdb_loading_ctx, filename);
 }
 
 /* Save the given functions_ctx to the rdb.
@@ -3651,27 +3694,6 @@ done:
     return res;
 }
 
-/* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
- * otherwise C_ERR is returned and 'errno' is set accordingly. */
-static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
-    functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
-    rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
-    int retval = rdbLoadRioWithLoadingCtxScopedRdb(rdb, rdbflags, rsi, &loading_ctx);
-    return retval;
-}
-
-/* Wrapper for rdbLoadRioWithLoadingCtx that manages a scoped RDB context.
- * This method wraps the rdbLoadRioWithLoadingCtx function, providing temporary
- * RDB context management. It sets a new current loading RDB, calls the wrapped
- * function, and then restores the previous loading RDB context. */
-int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx) {
-    rio *prev_rio = server.loading_rio;
-    server.loading_rio = rdb;
-    int retval = rdbLoadRioWithLoadingCtx(rdb, rdbflags, rsi, rdb_loading_ctx);
-    server.loading_rio = prev_rio;
-    return retval;
-}
-
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
  * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
@@ -3679,7 +3701,7 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
  * currently it only allow to set db object and functionLibCtx to which the data
  * will be loaded (in the future it might contains more such objects). */
-int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx) {
+static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx) {
     uint64_t dbid = 0;
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;

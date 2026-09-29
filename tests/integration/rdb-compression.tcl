@@ -501,9 +501,10 @@ start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcomp
 
             set damaged_base [file join $damaged_aof_dir [file tail $base_aof]]
             set original [read_binary_file $damaged_base]
-            write_binary_file $damaged_base \
-                [string range $original 0 [expr {[string length $original] / 2}]]
-            set truncated [read_binary_file $damaged_base]
+            # Remove the LZ4 end mark and content checksum, leaving the logical
+            # RDB complete so the failure is detected while finishing the frame.
+            set truncated [string range $original 0 end-8]
+            write_binary_file $damaged_base $truncated
             set damaged_manifest [file join $damaged_aof_dir "$appendfilename$::manifest_suffix"]
 
             set failed [catch {

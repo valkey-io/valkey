@@ -1668,10 +1668,9 @@ static void rdbCompressionFree(rio *rdb, streamWriter *writer) {
  *   rdbSaveRioInternal -> streamWriter -> rioWriteRaw -> rio backend
  *
  * rioWriteRaw() bypasses the attached writer so its output is not compressed
- * recursively. Streaming-compressed RDBs retain a zeroed logical CRC64 trailer;
- * when rdbchecksum is enabled, the codec frame supplies the integrity checksum.
- * When rdbchecksum is disabled, both the logical CRC64 and codec checksum are
- * skipped; plain RDBs likewise retain a zeroed CRC64 trailer. */
+ * recursively. The CRC64 trailer is zero whenever the stream is compressed or
+ * rdbchecksum is disabled; the codec checksum is written only when rdbchecksum
+ * is enabled. */
 int rdbSaveRio(compressionAlgo compression_algo, int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     streamWriter compression_writer;
     bool use_streaming_compression = compression_algo != ALGO_NONE && compression_algo != ALGO_LZF;
@@ -3572,7 +3571,7 @@ static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
                                             const char *filename) {
     streamReader stream_reader;
     compressionAlgo compression_algo = ALGO_NONE;
-    int retval = RDB_FAILED;
+    int retval;
 
     bool skip_codec_checksum_validation =
         (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) ||
@@ -3639,11 +3638,12 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
     return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, &loading_ctx, filename);
 }
 
-int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb,
-                                      int rdbflags,
-                                      rdbSaveInfo *rsi,
-                                      rdbLoadingCtx *rdb_loading_ctx) {
-    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, rdb_loading_ctx, "primary replication stream");
+int rdbLoadRioWithLoadingCtx(rio *rdb,
+                             int rdbflags,
+                             rdbSaveInfo *rsi,
+                             rdbLoadingCtx *rdb_loading_ctx,
+                             const char *filename) {
+    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, rdb_loading_ctx, filename);
 }
 
 /* Save the given functions_ctx to the rdb.

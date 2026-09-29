@@ -202,6 +202,7 @@ tags {"repl external:skip"} {
                 }
                 $primary config set rdbcompression $primary_mode
                 $primary config set repl-compression $primary_mode
+                set expected_sync_compression [expr {$primary_mode eq "no" ? "none" : $primary_mode}]
 
                 set key_prefix "rcomp-$primary_mode-$replica_mode"
                 for {set i 0} {$i < 40} {incr i} {
@@ -218,7 +219,7 @@ tags {"repl external:skip"} {
                     $replica replicaof $primary_host $primary_port
                     wait_for_sync $replica
                     wait_for_log_messages -1 \
-                        [list "*Starting BGSAVE for SYNC with target: disk*compression: $primary_mode*"] \
+                        [list "*Starting BGSAVE for SYNC with target: disk*compression: $expected_sync_compression*"] \
                         $primary_loglines 50 100
 
                     # The locally encoded sync RDB is reused without another rewrite.

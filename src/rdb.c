@@ -3565,11 +3565,11 @@ void rdbFreeStreamReader(rio *rdb, streamReader *reader) {
  * compressed reader limits source reads to the codec's input_hint so it does
  * not consume trailing data, allowing callers to continue with content such as
  * an old-style AOF tail. */
-static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
-                                            int rdbflags,
-                                            rdbSaveInfo *rsi,
-                                            rdbLoadingCtx *rdb_loading_ctx,
-                                            const char *filename) {
+int rdbLoadRioWithLoadingCtx(rio *rdb,
+                             int rdbflags,
+                             rdbSaveInfo *rsi,
+                             rdbLoadingCtx *rdb_loading_ctx,
+                             const char *filename) {
     streamReader stream_reader;
     compressionAlgo compression_algo = ALGO_NONE;
     int retval;
@@ -3636,15 +3636,7 @@ static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
     functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
     rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
-    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, &loading_ctx, filename);
-}
-
-int rdbLoadRioWithLoadingCtx(rio *rdb,
-                             int rdbflags,
-                             rdbSaveInfo *rsi,
-                             rdbLoadingCtx *rdb_loading_ctx,
-                             const char *filename) {
-    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, rdb_loading_ctx, filename);
+    return rdbLoadRioWithLoadingCtx(rdb, rdbflags, rsi, &loading_ctx, filename);
 }
 
 /* Save the given functions_ctx to the rdb.

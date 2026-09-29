@@ -381,9 +381,7 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
 #   {codec rdbchecksum}
 set aof_rewrite_matrix {}
 foreach mode $::rdbcompression_modes {
-    foreach checksum {yes no} {
-        lappend aof_rewrite_matrix [list $mode $checksum]
-    }
+    lappend aof_rewrite_matrix [list $mode yes] [list $mode no]
 }
 
 foreach case $aof_rewrite_matrix {
@@ -425,11 +423,9 @@ foreach case $aof_rewrite_matrix {
                 # valkey-check-aof and the server have separate loading paths.
                 # Verify that the server also resumes RESP parsing at exactly
                 # the first byte after the compressed frame.
-                start_server [list overrides [list \
-                    dir $old_style_dir \
-                    appendonly yes \
-                    aof-use-rdb-preamble yes \
-                    save ""] keep_persistence true] {
+                set overrides [list dir $old_style_dir appendonly yes \
+                                    aof-use-rdb-preamble yes save ""]
+                start_server [list overrides $overrides keep_persistence true] {
                     r select 0
                     assert_equal [string repeat "$key_prefix-value " 100] [r get "$key_prefix:key"]
                     assert_equal tail [r get "$key_prefix:old-style-tail"]
@@ -452,7 +448,7 @@ foreach case $aof_rewrite_matrix {
 }
 
 start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
-    test {BGREWRITEAOF converts a compressed AOF base to the legacy RDB format for downgrade} {
+    test {BGREWRITEAOF writes a new RDB base after changing rdbcompression} {
         r flushall
         r select 0
         set value [string repeat "downgrade-value " 100]
@@ -514,14 +510,12 @@ start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcomp
             assert_match "*RDB preamble of AOF file is not sane, aborting*" $result
             assert_equal $truncated [read_binary_file $damaged_base]
 
-            start_server [list overrides [list \
-                dir $damaged_dir \
-                appendonly yes \
-                appenddirname $appenddirname \
-                appendfilename $appendfilename \
-                aof-use-rdb-preamble yes \
-                aof-load-truncated yes \
-                save ""] keep_persistence true wait_ready false] {
+            set overrides [list dir $damaged_dir appendonly yes \
+                                appenddirname $appenddirname \
+                                appendfilename $appendfilename \
+                                aof-use-rdb-preamble yes \
+                                aof-load-truncated yes save ""]
+            start_server [list overrides $overrides keep_persistence true wait_ready false] {
                 set log [srv 0 stdout]
                 wait_for_condition 100 50 {
                     ![is_alive [srv pid]]

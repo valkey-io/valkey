@@ -22,10 +22,23 @@ static bool isScriptCallWriteCmd(struct serverCommand *cmd) {
     return ((cmd->proc == fcallCommand) || (cmd->proc == evalCommand) || (cmd->proc == evalShaCommand));
 }
 
+/* Some read commands also change the internal format (not great).  We need to treat these like
+ * write commands, blocking them from modifying the format while the background thread might be
+ * operating on the item.
+ *  - PFCOUNT - modifies the underlying string (and is replicated!)
+ *  - LINDEX/LRANGE/LPOS - may modify quicklist by LZF compress/uncompress */
+static bool isFormatChangingCommand(struct serverCommand *cmd) {
+    return ((cmd->proc == pfcountCommand) ||
+            (cmd->proc == lindexCommand) ||
+            (cmd->proc == lrangeCommand) ||
+            (cmd->proc == lposCommand) ||
+            (cmd->proc == sortroCommand));
+}
+
 /* The PFCOUNT command (which does NOT have the CMD_WRITE flag) modifies the underlying string and
  * is replicated as a write.  So it needs to be detected and handled specially. */
 static bool isWriteCmd(struct serverCommand *cmd) {
-    return ((cmd->flags & CMD_WRITE) || (cmd->proc == pfcountCommand) || (cmd->proc == execCommand) || (isScriptCallWriteCmd(cmd)));
+    return ((cmd->flags & CMD_WRITE) || isFormatChangingCommand(cmd) || (cmd->proc == execCommand) || (isScriptCallWriteCmd(cmd)));
 }
 
 // Returns true if the command is a deletion based command (DEL or UNLINK)
@@ -254,23 +267,6 @@ static const bgIteratorItem STATIC_ITEM_ITER_CLOSED = {.type = (bgIteratorItemTy
  *   + In db.c, if the object is reallocated, bgIteration_updateDbEntryPtr() is called.
  *   + In defrag.c, we don't defrag if there are multiple references (and we incr the refcount). */
 
-// Thomas Wang's 64-bit mix
-static uint64_t pointerHash(const void *key) {
-    uint64_t h = (uint64_t)(uintptr_t)key;
-    h = (~h) + (h << 21); // h = (h << 21) - h - 1;
-    h = h ^ (h >> 24);
-    h = (h + (h << 3)) + (h << 8); // h * 265
-    h = h ^ (h >> 14);
-    h = (h + (h << 2)) + (h << 4); // h * 21
-    h = h ^ (h >> 28);
-    h = h + (h << 31);
-    return h;
-}
-
-static int pointerCompare(const void *key1, const void *key2) {
-    return key1 == key2;
-}
-
 // This dict grows and shrinks constantly during the iteration.  Avoid constant rehashing.
 static int onlyAllowExpansion(size_t moreMem, double usedRatio) {
     UNUSED(moreMem);
@@ -279,14 +275,12 @@ static int onlyAllowExpansion(size_t moreMem, double usedRatio) {
 
 static dictType dictEntryPtrDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = pointerHash,
-    .keyCompare = pointerCompare,
+    .hashFunction = hashtablePointerHash,
     .resizeAllowed = onlyAllowExpansion,
     .entryDestructor = zfree};
 
 static hashtableType dbEntryPtrHashtableType = {
-    .hashFunction = pointerHash,
-    .keyCompare = pointerCompare,
+    .hashFunction = hashtablePointerHash,
     .resizeAllowed = onlyAllowExpansion};
 
 
@@ -1420,11 +1414,9 @@ static void returnAllItemsToMainThread(bgIterator *it) {
             break;
         case BGITERATOR_ITEM_SWAPDB:
             it->swapdb_queued--;
-            it->barrier_items--;
             break;
         case BGITERATOR_ITEM_FLUSHDB:
             it->flushdb_queued--;
-            it->barrier_items--;
             break;
 
         case BGITERATOR_ITEM_COMPLETE:
@@ -1900,6 +1892,7 @@ static bool anIteratorWillReplicateForThisCommand(void) {
 
 static bool expediteKeysForMultiExec(client *c, hashtable *waitingOnKeys) {
     serverAssert(c->cmd->proc == execCommand);
+    if (c->mstate == NULL) return false; // EXEC without MULTI
 
     /* For MULTI/EXEC, Valkey buffers all of the commands until hitting the EXEC.
      * At this point, the client holds all of the commands to be executed.  This function searches

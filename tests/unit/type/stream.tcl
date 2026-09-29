@@ -2029,12 +2029,15 @@ start_server {tags {"stream"}} {
 
 start_server {tags {"stream"} overrides {stream-node-max-entries 1}} {
     test {XTRIM MAXBYTES is limited unless LIMIT 0 is given} {
-        streamFill mystream 102
-        assert_equal 100 [r XTRIM mystream MAXBYTES 0]
-        assert_equal 2 [r XTRIM mystream MAXBYTES 0 LIMIT 0]
+        r del mystream1 mystream2
+        streamFill mystream1 102
+        assert_equal 100 [r XTRIM mystream1 MAXBYTES 0]
+        streamFill mystream2 102
+        assert_equal 102 [r XTRIM mystream2 MAXBYTES 0 LIMIT 0]
     }
 
     test {XTRIM MAXBYTES rejects a second strategy and negative bytes} {
+        r del mystream
         assert_error "*not compatible*" {r XTRIM mystream MAXLEN 5 MAXBYTES 100}
         assert_error "*not compatible*" {r XTRIM mystream MAXBYTES 1 MAXBYTES 2}
         assert_error "*>= 0*" {r XTRIM mystream MAXBYTES -1}
@@ -2044,7 +2047,7 @@ start_server {tags {"stream"} overrides {stream-node-max-entries 1}} {
         assert_error "*not an integer*" {r XTRIM mystream MAXBYTES 99999999999999999999}
     }
 
-    test {MAXBYTES thresholds above 4GiB are not truncated} {
+    test {MAXBYTES thresholds of 2^32 and above do not wrap on 32-bit builds} {
         r del mystream
         streamFill mystream 3
         assert_equal 0 [r XTRIM mystream MAXBYTES 4294967296 LIMIT 0]
@@ -2057,6 +2060,7 @@ start_server {tags {"stream"} overrides {stream-node-max-entries 1}} {
 
 start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}} {
     test {XTRIM with MAXBYTES option basic test} {
+        r del mystream
         streamFill mystream 20
         set bytes [streamAssertBytes mystream]
         set target [expr {$bytes / 2}]
@@ -2077,13 +2081,13 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
 
     test {XTRIM MAXBYTES stops before a node whose removal would undershoot} {
         # An oversized head node followed by ten uniform small nodes.
+        r del bignode smallnode mystream
         set big [string repeat x 1000]
         r XADD bignode 1-0 f $big
         r XADD bignode 2-0 f $big
         set B [streamAssertBytes bignode]
         streamFill smallnode 2
         set n [streamAssertBytes smallnode]
-        r del mystream
         r XADD mystream 1-0 f $big
         r XADD mystream 2-0 f $big
         for {set i 3} {$i <= 22} {incr i} {
@@ -2121,6 +2125,7 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
     }
 
     test {COPY and DEBUG RELOAD preserve tracked listpack bytes} {
+        r del "{mystream}src" "{mystream}copy"
         streamFill "{mystream}src" 10
         r COPY "{mystream}src" "{mystream}copy"
         streamAssertBytes "{mystream}copy"
@@ -2149,6 +2154,7 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
 
 start_server {tags {"stream needs:repl"} overrides {stream-node-max-entries 10}} {
     test {XADD with MAXBYTES propagates as MAXLEN} {
+        r del mystream
         streamFill mystream 300
         set repl [attach_to_replication_stream]
         set eid1 [r XADD mystream MAXBYTES 20000 * f v]
@@ -2224,6 +2230,7 @@ start_server {tags {"stream repl needs:debug external:skip"} overrides {stream-n
         test {MAXBYTES trims replicate to a differently configured replica} {
             $replica replicaof [srv -1 host] [srv -1 port]
             wait_for_sync $replica
+            $primary del mystream
             for {set i 1} {$i <= 40} {incr i} {
                 $primary XADD mystream $i-0 f [string repeat x 100]
             }

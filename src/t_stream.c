@@ -761,7 +761,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         if (trim_strategy == TRIM_STRATEGY_MAXLEN) {
             remove_node = s->length - entries >= maxlen;
         } else if (trim_strategy == TRIM_STRATEGY_MAXBYTES) {
-            remove_node = s->total_lp_bytes - lp_bytes >= maxbytes;
+            remove_node = (s->total_lp_bytes - lp_bytes) >= maxbytes;
         } else {
             /* Read the primary ID from the radix tree key. */
             streamDecodeID(ri.key, &primary_id);
@@ -1037,12 +1037,13 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
     } else {
         if (limit_given) {
             if (!args->approx_trim) {
-                /* LIMIT was provided without ~ */
+                /* LIMIT was provided without ~ or MAXBYTES */
                 addReplyError(c, "syntax error, LIMIT cannot be used without the special ~ option");
                 return -1;
             }
         } else {
-            /* User didn't provide LIMIT, we must set it. */
+            /* User didn't provide LIMIT, we must set it. MAXBYTES is always
+             * approximate, so it gets the same default as ~. */
             if (args->approx_trim) {
                 /* In order to prevent from trimming to do too much work and
                  * cause latency spikes we limit the amount of work it can do.

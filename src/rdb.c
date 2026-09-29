@@ -81,11 +81,6 @@ char *rdbFileBeingLoaded = NULL; /* used for rdb checking on read error */
 extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
-static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
-                                            int rdbflags,
-                                            rdbSaveInfo *rsi,
-                                            rdbLoadingCtx *rdb_loading_ctx,
-                                            const char *filename);
 static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 void replicationEmptyDbCallback(hashtable *ht);
 
@@ -3587,8 +3582,8 @@ static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
         rdbInitStreamReader(rdb, &stream_reader, skip_codec_checksum_validation, &compression_algo);
     if (init_rc == RDB_STREAM_READER_INIT_INCOMPATIBLE) {
         serverLog(LL_WARNING,
-                  "Invalid or unsupported RDB stream envelope in %s. "
-                  "The file may require a Valkey version with streaming RDB "
+                  "Invalid or unsupported RDB stream envelope from %s. "
+                  "The input may require a Valkey version with streaming RDB "
                   "compression support.",
                   filename);
         return RDB_INCOMPATIBLE;
@@ -3636,6 +3631,8 @@ static int rdbLoadRioWithLoadingCtxInternal(rio *rdb,
     return retval;
 }
 
+/* Load a plain or VCS-wrapped RDB, auto-detecting whole-stream compression.
+ * The filename is used only for diagnostic messages. */
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
     functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
     rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
@@ -3646,8 +3643,7 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb,
                                       int rdbflags,
                                       rdbSaveInfo *rsi,
                                       rdbLoadingCtx *rdb_loading_ctx) {
-    const char *filename = (rdbflags & RDBFLAGS_REPLICATION) ? "primary" : "RDB stream";
-    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, rdb_loading_ctx, filename);
+    return rdbLoadRioWithLoadingCtxInternal(rdb, rdbflags, rsi, rdb_loading_ctx, "primary replication stream");
 }
 
 /* Save the given functions_ctx to the rdb.

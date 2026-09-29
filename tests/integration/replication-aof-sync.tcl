@@ -183,6 +183,7 @@ tags {"repl external:skip"} {
     # The primary selects the disk-based sync codec, while the replica selects
     # the on-disk format that is reused as its AOF base.
     foreach case {
+        {no lz4}
         {lz4 lz4}
         {lz4 no}
         {lz4 zstd}

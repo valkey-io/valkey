@@ -37,6 +37,8 @@
 
 #include "visibility.h"
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -61,6 +63,19 @@ extern "C" {
     } while (0)
 
 LIBVALKEY_API int valkeyInitiateRdma(void);
+
+typedef struct valkeyRdmaStats {
+    uint64_t tx_bytes;
+    uint64_t tx_wait_for_rx_count;
+    uint64_t tx_wait_for_rx_ns;
+    uint64_t rx_window_reannounce_count; /* RegisterXferMemory after the initial handoff */
+    uint64_t tx_grow_request_count;      /* chunks that signalled RX-window pressure */
+    uint32_t tx_window_peak;             /* max announced server RX window seen */
+} valkeyRdmaStats;
+
+struct valkeyContext;
+LIBVALKEY_API int valkeyGetRdmaStats(struct valkeyContext *c, valkeyRdmaStats *stats);
+LIBVALKEY_API int valkeyResetRdmaStats(struct valkeyContext *c);
 
 #ifdef __cplusplus
 }

@@ -1599,7 +1599,7 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
-            /* The helper leaves fp at the first byte after the RDB, where an
+            /* rdbLoadRio() leaves fp at the first byte after the RDB, where an
              * old-style AOF tail starts. */
             valid_up_to = ftello(fp);
             loadingAbsProgress(valid_up_to);

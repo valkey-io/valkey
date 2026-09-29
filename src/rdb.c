@@ -104,8 +104,9 @@ compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
 }
 
 bool rdbHasFileSignature(const char *buf, size_t len) {
-    return (len >= 6 && memcmp(buf, "REDIS0", 6) == 0) ||
-           (len >= 6 && memcmp(buf, "VALKEY", 6) == 0) ||
+    return (len >= 6 &&
+            (memcmp(buf, "REDIS0", 6) == 0 ||
+             memcmp(buf, "VALKEY", 6) == 0)) ||
            (len >= VCS_MAGIC_SIZE && memcmp(buf, "VCS", VCS_MAGIC_SIZE) == 0);
 }
 

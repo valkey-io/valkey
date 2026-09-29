@@ -3900,9 +3900,7 @@ void parseInlineBuffer(client *c) {
     size_t querylen;
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
-    /* Search for end of line. Use memchr rather than strchr: an embedded NUL
-     * byte would otherwise stop the scan before any newline, so the client
-     * would never make progress on this line. */
+    /* Search for end of line */
     newline = memchr(c->querybuf + c->qb_pos, '\n', sdslen(c->querybuf) - c->qb_pos);
 
     /* Nothing to do without a \r\n */
@@ -3919,10 +3917,8 @@ void parseInlineBuffer(client *c) {
     /* Split the input buffer up to the \r\n */
     querylen = newline - (c->querybuf + c->qb_pos);
 
-    /* Reject a raw NUL byte in the line instead of silently truncating it:
-     * sdssplitargs() would stop parsing at the NUL and discard the rest of the
-     * command, so the client would believe a mutated command was executed.
-     * Binary payloads must use the quoted \x00 escape form. */
+    /* Reject a raw NUL byte in the line, because sdssplitargs() doesn't
+     * handle it. Binary payloads must use the quoted \x00 escape form. */
     if (memchr(c->querybuf + c->qb_pos, '\0', querylen)) {
         c->read_flags |= READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL;
         return;

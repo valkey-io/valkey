@@ -314,10 +314,10 @@ jobs:
           apt-get update && apt-get install -y make gcc-13 git cmake g++ python3
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
           cd libbacktrace && ./configure && make && make install
-      - name: Install gtest
-        run: apt-get install -y pkg-config libgtest-dev libgmock-dev
+      - name: Install build dependencies
+        run: apt-get install -y pkg-config libgtest-dev libgmock-dev libzstd-dev
       - name: make
-        run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
@@ -565,8 +565,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes BUILD_ZSTD=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -725,8 +727,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes BUILD_ZSTD=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -863,8 +867,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make valgrind SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -916,10 +922,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
-      - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+      - name: Install build dependencies
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev libzstd-dev
       - name: make
-        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -1966,10 +1972,10 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          apk add build-base git
+          apk add build-base git zstd-dev zstd-static
           cd libbacktrace && ./configure && make && make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test

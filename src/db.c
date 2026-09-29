@@ -225,13 +225,12 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, objectGetVal(key), -1);
-    // A brand new entry must start with zeroed metadata.
-    if (objectGetMetadataSize(val)) memset(objectGetMetadata(val), 0, objectGetMetadataSize(val));
     /* Track hash object if it has volatile fields (for active expiry).
      * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
     dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
+    bgIteration_dbEntryModified(val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
     *valref = val;
@@ -410,6 +409,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     } else {
         decrRefCount(old);
     }
+    bgIteration_dbEntryModified(new);
     *valref = new;
 }
 
@@ -451,7 +451,6 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
-    bgIteration_dbEntryModified(*valref);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }

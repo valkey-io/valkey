@@ -285,7 +285,7 @@ GeoHashFix52Bits geohashAlign52Bits(const GeoHashBits hash) {
  * we can simplify arcsin(sin(x)) to x.
  */
 double geohashGetLatDistance(double lat1d, double lat2d) {
-    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d) - deg_rad(lat1d));
+    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d - lat1d));
 }
 
 /* Calculate distance using haversine great circle distance formula. */

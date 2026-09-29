@@ -171,6 +171,14 @@ ssize_t compressionLz4DecompressFeed(streamDecompressor *decompressor,
     return (ssize_t)dst_size;
 }
 
+int compressionLz4DecompressorReset(streamDecompressor *decompressor) {
+    assert(decompressor->ctx != NULL);
+    LZ4F_resetDecompressionContext((LZ4F_dctx *)decompressor->ctx);
+    decompressor->frame_done = false;
+    decompressor->input_hint = LZ4F_HEADER_SIZE_MIN;
+    return C_OK;
+}
+
 void compressionLz4DecompressorFree(streamDecompressor *decompressor) {
     if (decompressor->ctx) {
         LZ4F_freeDecompressionContext((LZ4F_dctx *)decompressor->ctx);

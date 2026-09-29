@@ -86,7 +86,7 @@ void replicationEmptyDbCallback(hashtable *ht);
 
 /* Resolve the configured policy to an algorithm. The `yes` policy follows the
  * default algorithm, while explicit algorithm names remain pinned. */
-static compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
+compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
     switch (mode) {
     case RDB_COMPRESSION_NO:
         return ALGO_NONE;
@@ -96,6 +96,8 @@ static compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
         return ALGO_LZF;
     case RDB_COMPRESSION_LZ4:
         return ALGO_LZ4;
+    case RDB_COMPRESSION_ZSTD:
+        return ALGO_ZSTD;
     default:
         serverPanic("Unknown RDB compression mode: %d", mode);
     }
@@ -1677,7 +1679,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     int saved_errno;
     char *err_op; /* For a detailed log */
     compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
-    bool use_streaming_compression = compression_algo == ALGO_LZ4;
+    bool use_streaming_compression = compression_algo != ALGO_NONE && compression_algo != ALGO_LZF;
     /* Replication full sync uses the codec selected before the child was forked. */
     if (rdbflags & RDBFLAGS_REPLICATION) {
         compression_algo = server.rdb_child_sync_algo;
@@ -4152,7 +4154,7 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     /* Probe every on-disk RDB:
      *
      *   plain file: rewind probe, then rdbLoadRio -> rdb(file backend)
-     *   VCS file:   rdbLoadRio -> streamReader LZ4 decode  -> rdb(file backend)
+     *   VCS file:   rdbLoadRio -> streamReader codec decode -> rdb(file backend)
      *
      * Non-rewindable plain sources retain the streamReader passthrough path.
      * For VCS input the parser sees the header produced by the decoder. */
@@ -4297,7 +4299,7 @@ void killRDBChild(void) {
 
 /* Spawn an RDB child that writes the RDB to the sockets of the replicas
  * that are currently in REPLICA_STATE_WAIT_BGSAVE_START state. */
-int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
+int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSaveInfo *rsi) {
     listNode *ln;
     listIter li;
     pid_t childpid;
@@ -4336,7 +4338,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
      * Otherwise, use checksum for this RDB transfer.
      */
     int skip_rdb_checksum = 1;
-    int common_capa = -1;
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are in WAIT_BGSAVE_START state. */
     int connsnum = 0;
@@ -4353,10 +4354,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
         client *replica = ln->value;
         if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
             /* Check replica has the exact requirements */
-            if (replica->repl_data->replica_req != req) continue;
-            if (replicaRdbVersion(replica) != rdbver) continue;
-
-            common_capa &= replica->repl_data->replica_capa;
+            if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {
@@ -4378,11 +4376,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
         if (!connIsIntegrityChecked(replica->conn) || !(replica->repl_data->replica_capa & REPLICA_CAPA_SKIP_RDB_CHECKSUM))
             skip_rdb_checksum = 0;
     }
-
-    compressionAlgo sync_compression_algo =
-        connsnum > 0 ? replSelectFullSyncCompression(common_capa, true) : ALGO_NONE;
-    if (sync_compression_algo != ALGO_NONE)
-        serverLog(LL_NOTICE, "Diskless full sync with compression: %s", compressionAlgoName(sync_compression_algo));
 
     /* Create the child process. */
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
@@ -4407,7 +4400,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
 
         if (skip_rdb_checksum) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
 
-        retval = rdbSaveRioWithEOFMark(req, rdbver, &rdb, NULL, rsi, sync_compression_algo);
+        retval = rdbSaveRioWithEOFMark(req, rdbver, &rdb, NULL, rsi, compr);
         if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
 
         if (retval == C_OK) {

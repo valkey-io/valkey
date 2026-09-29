@@ -99,17 +99,33 @@ start_server {tags {"protocol network"}} {
         assert_error "*unbalanced*" {r read}
     }
 
-    test "Inline command with embedded NUL byte does not stall the connection" {
+    test "Inline command with an embedded NUL byte is rejected" {
         reconnect
-        # The NUL terminates argument parsing; the rest of the line up to the
-        # newline is discarded and the following command is still processed.
+        # A raw NUL byte is not valid in the inline protocol. The server must
+        # fail explicitly instead of silently truncating the command at the
+        # NUL (sdssplitargs() treats it as end of input), and close the
+        # connection like it does for other inline protocol errors.
         r write "set foo bar\x00 ex 100\r\n"
-        r write "ping\r\n"
+        r flush
+        assert_error "*NUL*" {r read}
+        wait_for_condition 100 10 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Connection not closed after embedded NUL protocol error"
+        }
+        # The truncated command must not have been executed.
+        reconnect
+        assert_equal 0 [r exists foo]
+    }
+
+    test {Inline command with a quoted \x00 escape still works} {
+        reconnect
+        # The quoted hex escape is the supported way to embed binary data in
+        # the inline protocol and must not be affected by the NUL rejection.
+        r write "set foo \"bar\\x00baz\"\r\n"
         r flush
         assert_equal "OK" [r read]
-        assert_equal "PONG" [r read]
-        assert_equal "bar" [r get foo]
-        assert_equal -1 [r ttl foo]
+        assert_equal 7 [r strlen foo]
     }
 
     test "Check CRLF when parsing the querybuf" {

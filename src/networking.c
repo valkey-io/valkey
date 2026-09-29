@@ -3624,6 +3624,9 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNBALANCED_QUOTES) {
         addReplyError(c, "Protocol error: unbalanced quotes in request");
         setProtocolError("unbalanced quotes in inline request", c);
+    } else if (flags & READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL) {
+        addReplyError(c, "Protocol error: embedded NUL byte in inline request");
+        setProtocolError("embedded NUL byte in inline request", c);
     } else if (flags & READ_FLAGS_ERROR_INVALID_CRLF) {
         addReplyError(c, "Protocol error: invalid CRLF in request");
         setProtocolError("invalid CRLF in request", c);
@@ -3648,7 +3651,7 @@ int isParsingError(client *c) {
                             READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
                             READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
                             READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT | READ_FLAGS_ERROR_UNBALANCED_QUOTES |
-                            READ_FLAGS_ERROR_INVALID_CRLF);
+                            READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL | READ_FLAGS_ERROR_INVALID_CRLF);
 }
 
 /* This function is called after the query-buffer was parsed.
@@ -3915,6 +3918,16 @@ void parseInlineBuffer(client *c) {
 
     /* Split the input buffer up to the \r\n */
     querylen = newline - (c->querybuf + c->qb_pos);
+
+    /* Reject a raw NUL byte in the line instead of silently truncating it:
+     * sdssplitargs() would stop parsing at the NUL and discard the rest of the
+     * command, so the client would believe a mutated command was executed.
+     * Binary payloads must use the quoted \x00 escape form. */
+    if (memchr(c->querybuf + c->qb_pos, '\0', querylen)) {
+        c->read_flags |= READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL;
+        return;
+    }
+
     argv = sdsnsplitargs(c->querybuf + c->qb_pos, querylen, &argc);
     if (argv == NULL) {
         c->read_flags |= READ_FLAGS_ERROR_UNBALANCED_QUOTES;

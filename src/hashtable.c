@@ -2147,17 +2147,9 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         size_t used_before = ht->used[0];
         bucket *b = &ht->tables[0][idx];
 
-        /* Advance cursor. Doing it here lets us prefetch the bucket the next
-         * call will visit while the callbacks for this bucket run. Scan order
-         * is not sequential in memory, so the hardware prefetcher can't. */
+        /* Advance cursor. Doing it here lets us prefetch the bucket for the next call */
         cursor = nextCursor(cursor, mask);
-        if (fn && cursor) {
-            /* The next bucket itself was prefetched by the previous call, so
-             * prefetch its entries now and the bucket after it. */
-            prefetchBucketForScan(&ht->tables[0][cursor & mask]);
-            size_t next_next = nextCursor(cursor, mask);
-            if (next_next) valkey_prefetch(&ht->tables[0][next_next & mask]);
-        }
+        if (cursor) valkey_prefetch(&ht->tables[0][cursor & mask]);
 
         do {
             if (fn && b->presence != 0) {
@@ -2228,6 +2220,9 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             /* Emit entries in the larger table at this cursor, if this index
              * hash't already been rehashed. */
             idx = cursor & mask_large;
+            /* Increment the reverse cursor not covered by the smaller mask. */
+            cursor = nextCursor(cursor, mask_large);
+            if (cursor) valkey_prefetch(&ht->tables[table_large][cursor & mask_large]);
             if (table_large == 1 || ht->rehash_idx == -1 || idx >= (size_t)ht->rehash_idx) {
                 size_t used_before = ht->used[table_large];
                 bucket *b = &ht->tables[table_large][idx];
@@ -2252,9 +2247,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                     compactBucketChain(ht, idx, table_large);
                 }
             }
-
-            /* Increment the reverse cursor not covered by the smaller mask. */
-            cursor = nextCursor(cursor, mask_large);
 
             /* Continue while bits covered by mask difference is non-zero. */
         } while (cursor & (mask_small ^ mask_large));

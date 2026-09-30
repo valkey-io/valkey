@@ -717,41 +717,46 @@ static int finishSocketBasedForklessSaveUsingCob(forklessSaveInfo *saveInfo) {
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
     serverAssert(rsiptr);
+    int ret = C_OK;
     if (rdbSaveInfoReplAuxFields(&saveInfo->save_rio, rsiptr) == -1) {
         serverLog(LL_WARNING, "forkless-save: error while writing AUX fields for replication, err=%s",
                   strerror(errno));
-        return C_ERR;
+        ret = C_ERR;
+        goto done;
     }
-    int err = rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE);
+    if (rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE) == C_ERR) {
+        serverLog(LL_WARNING, "forkless-save: error while writing RDB footer");
+        ret = C_ERR;
+        goto done;
+    }
     if (rdbWriteEofMarkEnd(&saveInfo->save_rio, saveInfo->u.repl.eofmark) == C_ERR) {
         serverLog(LL_WARNING, "forkless-save: error while writing valkey end eof string");
-        return C_ERR;
+        ret = C_ERR;
+        goto done;
     }
-    rioFlush(&saveInfo->save_rio);
 
     saveInfo->bytes_written = saveInfo->save_rio.processed_bytes;
 
-    if (err == C_OK) {
-        /* The COB is currently not sending. At this point, we set a STOP position after the end
-         * marker and re-enable COB writes. */
-        listRewind(saveInfo->u.repl.clients, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            client *c = listNodeValue(ln);
+    /* The COB is currently not sending. At this point, we set a STOP position after the end
+     * marker and re-enable COB writes. */
+    listRewind(saveInfo->u.repl.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
 
-            /* Don't write past the current point in the COB */
-            pauseCobSendAtCurrentPositionForAck(c);
+        /* Don't write past the current point in the COB */
+        pauseCobSendAtCurrentPositionForAck(c);
 
-            /* Start sending */
-            resumeReplicaWrites(c);
-        }
-
-        /* REPLCONF will be sent immediately after ACK is received */
-        fixReplicationOffset(saveInfo);
+        /* Start sending */
+        resumeReplicaWrites(c);
     }
 
+    /* REPLCONF will be sent immediately after ACK is received */
+    fixReplicationOffset(saveInfo);
+
+done:
     rioFlush(&saveInfo->save_rio); // Force from RIO buffer into COB
     rioFreeReplicaCOB(&saveInfo->save_rio);
-    return err;
+    return ret;
 }
 
 void forklessSaveComplete(bool terminated, void *privdata) {

@@ -545,10 +545,8 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
         hashtableCleanupIterator(&iter);
     }
 
-    if (type.shard) {
-        /* Shard pubsub ignores patterns. */
-        return receivers;
-    }
+    /* Shard publishes (SPUBLISH) also match patterns registered via PSUBSCRIBE.
+     * A pattern has no slot, so matching is local to the publishing node. */
 
     /* Send to clients listening to matching channels */
     di = dictGetIterator(server.pubsub_patterns);

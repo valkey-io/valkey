@@ -135,4 +135,52 @@ test "PUBSUB channels/shardchannels" {
     assert {[lsearch -exact $channel_list "\{channel.0\}3"] >= 0}
 }
 
+test "SPUBLISH matches a PSUBSCRIBE pattern on the slot-owning node" {
+    set cl [valkey_cluster 127.0.0.1:[srv 0 port]]
+    set slot [$cl cluster keyslot "channel.0"]
+    array set ownernode [$cl masternode_for_slot $slot]
+
+    set publishclient [valkey_client_by_addr $ownernode(host) $ownernode(port)]
+    set patclient [valkey_deferring_client_by_addr $ownernode(host) $ownernode(port)]
+
+    # A pattern has no hash slot, so PSUBSCRIBE binds to whichever node the
+    # client is connected to -- here, the node that owns channel.0's slot.
+    $patclient deferred 1
+    $patclient psubscribe "channel.*"
+    $patclient read
+
+    # SPUBLISH is slot-bound. On the owning node it runs and matches the
+    # local pattern subscriber.
+    assert_equal 1 [$publishclient spublish channel.0 hello]
+    set msg [$patclient read]
+    assert_equal {pmessage channel.* channel.0 hello} $msg
+
+    $cl close
+    $publishclient close
+    $patclient close
+}
+
+test "SPUBLISH on a non-owning node returns MOVED, so a pattern subscriber there is not reached" {
+    set cl [valkey_cluster 127.0.0.1:[srv 0 port]]
+    set slot [$cl cluster keyslot "channel.0"]
+    array set othernode [$cl masternode_notfor_slot $slot]
+
+    set otherclient [valkey_client_by_addr $othernode(host) $othernode(port)]
+    set patclient [valkey_deferring_client_by_addr $othernode(host) $othernode(port)]
+
+    # Pattern subscriber connected to a node that does NOT own channel.0's slot.
+    $patclient deferred 1
+    $patclient psubscribe "channel.*"
+    $patclient read
+
+    # SPUBLISH is redirected: this node does not own the slot, so it never
+    # runs the match here -- the local pattern subscriber gets nothing.
+    catch {$otherclient spublish channel.0 hello} err
+    assert_match {MOVED *} $err
+
+    $cl close
+    $otherclient close
+    $patclient close
+}
+
 } ;# start_cluster

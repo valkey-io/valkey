@@ -2379,11 +2379,12 @@ int freeClient(client *c) {
      * replica tracking now and mark it for close; the forkless save owns the
      * client and frees it when it is safe to do so. */
     if (c->flag.forkless_managed) {
-        if (c->flag.forkless_pending_close) return 0; /* Already marked, don't double-process. */
+        if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed))
+            return 0; /* Already marked, don't double-process. */
         serverLog(LL_NOTICE, "freeClient: primary trying to free client(%llu) owned by forkless save",
                   (unsigned long long)c->id);
         retireForklessManagedReplica(c);
-        c->flag.forkless_pending_close = 1;
+        atomic_store_explicit(&c->repl_data->forkless_pending_close, 1, memory_order_relaxed);
         return 0;
     }
 

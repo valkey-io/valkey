@@ -1279,9 +1279,8 @@ typedef struct ClientFlags {
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
-    uint64_t forkless_managed : 1;         /* Client is owned by forkless save, don't free */
-    uint64_t forkless_pending_close : 1;   /* Main thread wants this forkless-owned client closed;
-                                            * the forkless save frees it when safe. */
+    uint64_t forkless_managed : 1;         /* Client is owned by forkless save. Written only on the
+                                            * main thread. The save thread only reads it */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */
@@ -1348,6 +1347,8 @@ typedef struct ClientReplicationData {
     short replica_capa;                    /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
     int stop_send_data_until_ack;          /* Stop sending data to this replica until ACK received. */
     int using_cob;                         /* Networking uses private COB instead of shared repl buffer. */
+    _Atomic(int) forkless_pending_close;   /* Main thread asks the forkless save to hand this replica
+                                            * back for closing. Atomic (relaxed) since both threads access it without a lock. */
     size_t cob_pause_bufpos;               /* COB pause position: bufpos to drain to before suspending. */
     listNode *cob_pause_tail;              /* COB pause position: last reply list node to drain. */
     size_t cob_pause_objlen;               /* COB pause position: bytes to drain from tail node. */

@@ -311,11 +311,11 @@ static void freeClientsMarkedForCloseAfterBgThreadStopped(forklessSaveInfo *save
     listRewind(saveInfo->u.repl.clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
-        if (c->flag.forkless_pending_close) {
+        if (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
             listDelNode(saveInfo->u.repl.clients, ln);
             c->flag.forkless_managed = 0;
-            c->flag.forkless_pending_close = 0;
-            if (c->repl_data) c->repl_data->using_cob = 0;
+            atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
+            c->repl_data->using_cob = 0;
             freeClient(c);
         }
     }
@@ -331,7 +331,7 @@ static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveI
     listDelNode(saveInfo->u.repl.clients, ln);
 
     int remaining = listLength(saveInfo->u.repl.clients);
-    if (c->flag.forkless_pending_close) {
+    if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
         serverLog(LL_WARNING, "forkless-save: client(%llu) closed by primary. %d clients remain.",
                   (unsigned long long)c->id, remaining);
     } else {
@@ -349,8 +349,7 @@ static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveI
         serverLog(LL_WARNING, "forkless-save: error returning client(%llu) to non-blocking.", (unsigned long long)c->id);
     }
 
-    c->flag.forkless_managed = 0;
-    if (c->repl_data) c->repl_data->using_cob = 0;
+    /* Hand the client to the main thread for freeing. */
     mutexQueueAdd(saveInfo->foreground_queue, c);
 }
 
@@ -363,8 +362,9 @@ static void handleClosingClients(forklessSaveInfo *saveInfo) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         waitForClientIO(c);
-        if (c->flag.forkless_pending_close || !c->conn || connGetState(c->conn) != CONN_STATE_CONNECTED) {
-            if (c->flag.forkless_pending_close) {
+        int pending_close = c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed);
+        if (pending_close || !c->conn || connGetState(c->conn) != CONN_STATE_CONNECTED) {
+            if (pending_close) {
                 serverLog(LL_DEBUG, "forkless-save: detected pending close on client(%llu).",
                           (unsigned long long)c->id);
             }
@@ -958,7 +958,7 @@ static long long replicationMonitorTimeProc(struct aeEventLoop *eventLoop, long 
         serverLog(LL_WARNING, "forkless-save: client(%llu) ended replication early",
                   (unsigned long long)c->id);
         c->flag.forkless_managed = 0;
-        c->flag.forkless_pending_close = 0;
+        if (c->repl_data) atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
         if (c->repl_data) c->repl_data->using_cob = 0;
         if (c->repl_data) c->repl_data->repl_state = REPL_STATE_NONE;
         freeClient(c);
@@ -987,7 +987,7 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
     listRewind(saveInfo->u.repl.clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
-        if (c->flag.forkless_pending_close) {
+        if (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
             serverLog(LL_NOTICE, "forkless-save: skipping client(%llu) marked for closure in repl done",
                       (unsigned long long)c->id);
             continue;

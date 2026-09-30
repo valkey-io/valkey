@@ -290,6 +290,7 @@ uint8_t rioCheckType(rio *r);
 void rioInitWithConnset(rio *r, connection **conns, int numconns);
 void rioFreeConnset(rio *r);
 void rioFreeConnectionFromConnset(rio *r, connection *conn_to_free);
+int rioConnsetConnErrno(rio *r, connection *conn);
 void rioInitWithReplicaCOB(rio *r);
 void rioFreeReplicaCOB(rio *r);
 #endif

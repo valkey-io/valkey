@@ -363,9 +363,14 @@ static void handleClosingClients(forklessSaveInfo *saveInfo) {
         client *c = listNodeValue(ln);
         waitForClientIO(c);
         int pending_close = c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed);
-        if (pending_close || !c->conn || connGetState(c->conn) != CONN_STATE_CONNECTED) {
+        int connset_error = c->conn && rioCheckType(&saveInfo->save_rio) == RIO_TYPE_CONNSET &&
+                            rioConnsetConnErrno(&saveInfo->save_rio, c->conn);
+        if (pending_close || connset_error || !c->conn || connGetState(c->conn) != CONN_STATE_CONNECTED) {
             if (pending_close) {
                 serverLog(LL_DEBUG, "forkless-save: detected pending close on client(%llu).",
+                          (unsigned long long)c->id);
+            } else if (connset_error) {
+                serverLog(LL_WARNING, "forkless-save: client(%llu) connection error during stream, dropping.",
                           (unsigned long long)c->id);
             }
             dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);

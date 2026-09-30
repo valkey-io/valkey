@@ -889,3 +889,11 @@ void rioFreeConnectionFromConnset(rio *r, connection *conn_to_free) {
         }
     }
 }
+
+/* Return the connset error state (errno) for conn, or 0 if healthy/not found. */
+int rioConnsetConnErrno(rio *r, connection *conn) {
+    for (int i = 0; i < r->io.connset.numconns; i++) {
+        if (r->io.connset.conns[i] == conn) return r->io.connset.state[i];
+    }
+    return 0;
+}

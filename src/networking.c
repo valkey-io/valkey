@@ -453,18 +453,28 @@ void installClientWriteHandler(client *c) {
  * If we fail and there is more data to write, compared to what the socket
  * buffers can hold, then we'll really install the handler. */
 void putClientInPendingWriteQueue(client *c) {
+    /* A replica in a forkless full-sync may be in a state where it's paused until it
+     * ACKs the RDB, so don't schedule any writes to it until the ACK is received. */
+    if (c->flag.replica && c->repl_data && c->repl_data->stop_send_data_until_ack) return;
+
+    /* Client is in a state where its output may be scheduled for writing. */
+    int ready_to_write = !c->repl_data ||
+                         c->repl_data->repl_state == REPL_STATE_NONE ||
+                         (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack);
+    /* Slot migration may forbid installing the write handler right now. */
+    int slot_migration_allows = clusterSlotMigrationShouldInstallWriteHandler(c);
+    /* During a forkless socket full-sync a WAIT_BGSAVE_END replica has sync
+     * framing/header (and later the footer) buffered in its COB by the main
+     * thread; schedule it for writing so the event loop flushes that COB. */
+    int forkless_socket_sync = c->repl_data &&
+                               c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
+                               server.rdb_write_target == RDB_WRITE_TARGET_SOCKET &&
+                               server.cur_bgsave_type == RDB_BGSAVE_TYPE_FORKLESS;
+
     /* Schedule the client to write the output buffers to the socket only
      * if not already done and, for replicas, if the replica can actually receive
      * writes at this stage. */
-    if (c->flag.replica && c->repl_data && c->repl_data->stop_send_data_until_ack) return;
-    if (!c->flag.pending_write &&
-        (((!c->repl_data ||
-           c->repl_data->repl_state == REPL_STATE_NONE ||
-           (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack)) &&
-          clusterSlotMigrationShouldInstallWriteHandler(c)) ||
-         (!c->repl_data || (c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                            server.rdb_write_target == RDB_WRITE_TARGET_SOCKET &&
-                            server.cur_bgsave_type == RDB_BGSAVE_TYPE_FORKLESS)))) {
+    if (!c->flag.pending_write && ((ready_to_write && slot_migration_allows) || forkless_socket_sync)) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event

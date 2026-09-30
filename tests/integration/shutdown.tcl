@@ -5,11 +5,11 @@ test "Shutdown cleans up IO threads with pipelined commands" {
         set server_pid [srv 0 pid]
         set rd [valkey_deferring_client]
 
-        # Leave no module unload hook to drain the IO queues before shutdown.
-        foreach module [r module list] {
-            assert_equal {OK} [r module unload [dict get $module name]]
+        # Avoid Lua's unload hook draining the IO queues before shutdown.
+        set modules [lmap module [r module list] {dict get $module name}]
+        if {[lsearch -exact $modules lua] != -1} {
+            assert_equal {OK} [r module unload lua]
         }
-        assert_equal 0 [llength [r module list]]
 
         # Make the pipeline arrive in one read so SHUTDOWN can leave
         # batched argument-cleanup jobs queued.

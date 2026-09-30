@@ -90,6 +90,7 @@ static int writeDbSizeHints(forklessSaveInfo *saveInfo) {
 /* Forward declarations for helper functions */
 static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveInfo, client *c);
 static void handleClosingClients(forklessSaveInfo *saveInfo);
+static void freeAbandonedForklessReplica(client *c);
 static void waitForBuffersToDrain(forklessSaveInfo *saveInfo);
 static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo);
 
@@ -770,6 +771,16 @@ void forklessSaveComplete(bool terminated, void *privdata) {
     currentForklessSave = NULL;
 
     if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
+        /* Abandoned forkless replicas are usually freed by the timer proc, but
+         * drain the queue here too: anything queued after the last timer tick and
+         * before this sync completion must be freed now. */
+        if (saveInfo->foreground_queue) {
+            void *item;
+            while ((item = mutexQueuePop(saveInfo->foreground_queue, false)) != NULL) {
+                freeAbandonedForklessReplica((client *)item);
+            }
+        }
+
         /* Get rid of any clients which may have been closed after the bg thread completed. */
         freeClientsMarkedForCloseAfterBgThreadStopped(saveInfo);
         if (listLength(saveInfo->u.repl.clients) == 0) saveInfo->terminated = true;
@@ -944,6 +955,20 @@ int isForklessSaveInProgress(void) {
     return server.cur_bgsave_type == RDB_BGSAVE_TYPE_FORKLESS;
 }
 
+/* Free a replica the bg thread abandoned onto the foreground queue: clear the
+ * forkless flags, reset its repl state, and free it. Runs on the main thread. */
+static void freeAbandonedForklessReplica(client *c) {
+    serverAssert(onServerMainThread());
+    serverLog(LL_WARNING, "forkless-save: client(%llu) ended replication early", (unsigned long long)c->id);
+    c->flag.forkless_managed = 0;
+    if (c->repl_data) {
+        atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
+        c->repl_data->using_cob = 0;
+        c->repl_data->repl_state = REPL_STATE_NONE;
+    }
+    freeClient(c);
+}
+
 /* Timer proc that runs on the main thread during socket-based forkless save.
  * The bg thread may need to abandon unresponsive replicas, but can't free
  * clients from a non-main thread. It queues them to foreground_queue, and
@@ -965,13 +990,7 @@ static long long replicationMonitorTimeProc(struct aeEventLoop *eventLoop, long 
         }
 
         client *c = item;
-        serverLog(LL_WARNING, "forkless-save: client(%llu) ended replication early",
-                  (unsigned long long)c->id);
-        c->flag.forkless_managed = 0;
-        if (c->repl_data) atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
-        if (c->repl_data) c->repl_data->using_cob = 0;
-        if (c->repl_data) c->repl_data->repl_state = REPL_STATE_NONE;
-        freeClient(c);
+        freeAbandonedForklessReplica(c);
     }
     return REPLICATION_MONITOR_INTERVAL_MS;
 }

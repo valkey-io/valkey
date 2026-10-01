@@ -64,7 +64,8 @@ TEST_MODULES = \
     moduleauthtwo.so \
     rdbloadsave.so \
     crash.so \
-    cluster.so
+    cluster.so \
+    pausetest.so
 
 .PHONY: all
 

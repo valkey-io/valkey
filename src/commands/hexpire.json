@@ -1,6 +1,6 @@
 {
     "HEXPIRE": {
-        "summary": "Sets expiry time on hash fields.",
+        "summary": "Sets the expiration time of one or more hash fields in seconds.",
         "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",

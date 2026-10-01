@@ -68,7 +68,8 @@ TEST_MODULES = \
     crash.so \
     cluster.so \
     helloscripting.so \
-    deferred_reply.so
+    deferred_reply.so \
+    pausetest.so
 
 .PHONY: all
 

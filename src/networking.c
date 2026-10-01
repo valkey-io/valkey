@@ -965,11 +965,14 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
 
         if (len > 4096) len = 4096;
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
+        /* The error text may echo command arguments, which can be user data. */
+        const char *err = server.hide_user_data_from_log ? "*redacted*" : s;
+        int err_len = server.hide_user_data_from_log ? (int)strlen(err) : (int)len;
         serverLog(LL_WARNING,
                   "== CRITICAL == This %s is sending an error "
                   "to its %s: '%.*s' after processing the command "
                   "'%s'",
-                  from, to, (int)len, s, cmdname ? cmdname : "<unknown>");
+                  from, to, err_len, err, cmdname ? cmdname : "<unknown>");
         if (ctype == CLIENT_TYPE_PRIMARY && server.repl_backlog && server.repl_backlog->histlen > 0) {
             showLatestBacklog();
         }

@@ -71,7 +71,8 @@ TEST_MODULES = \
     cluster.so \
     helloscripting.so \
     unsupported_features.so \
-    deferred_reply.so
+    deferred_reply.so \
+    pausetest.so
 
 .PHONY: all
 

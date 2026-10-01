@@ -1,6 +1,6 @@
 {
     "HPEXPIRE": {
-        "summary": "Sets expiry time on hash object.",
+        "summary": "Sets the expiration time of one or more hash fields in milliseconds.",
         "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",

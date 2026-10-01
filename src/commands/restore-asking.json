@@ -95,6 +95,28 @@
                 "type": "integer",
                 "optional": true,
                 "since": "5.0.0"
+            },
+            {
+                "token": "METADATA",
+                "name": "metadata",
+                "type": "pure-token",
+                "optional": true
+            },
+            {
+                "name": "metadata-pair",
+                "type": "block",
+                "optional": true,
+                "multiple": true,
+                "arguments": [
+                    {
+                        "name": "module-name",
+                        "type": "string"
+                    },
+                    {
+                        "name": "metadata-value",
+                        "type": "string"
+                    }
+                ]
             }
         ],
         "reply_schema": {

@@ -2163,9 +2163,16 @@ keySpec DUMP_Keyspecs[1] = {
 };
 #endif
 
+/* DUMP format argument table */
+struct COMMAND_ARG DUMP_format_Subargs[] = {
+{MAKE_ARG("restore",ARG_TYPE_PURE_TOKEN,-1,"RESTORE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("restore-asking",ARG_TYPE_PURE_TOKEN,-1,"RESTORE-ASKING",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /* DUMP argument table */
 struct COMMAND_ARG DUMP_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("format",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=DUMP_format_Subargs},
 };
 
 /********** EXISTS ********************/
@@ -2795,6 +2802,12 @@ keySpec RESTORE_Keyspecs[1] = {
 };
 #endif
 
+/* RESTORE metadata_pair argument table */
+struct COMMAND_ARG RESTORE_metadata_pair_Subargs[] = {
+{MAKE_ARG("module-name",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("metadata-value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /* RESTORE argument table */
 struct COMMAND_ARG RESTORE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
@@ -2804,6 +2817,8 @@ struct COMMAND_ARG RESTORE_Args[] = {
 {MAKE_ARG("absttl",ARG_TYPE_PURE_TOKEN,-1,"ABSTTL",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("metadata",ARG_TYPE_PURE_TOKEN,-1,"METADATA",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("metadata-pair",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,2,NULL),.subargs=RESTORE_metadata_pair_Subargs},
 };
 
 /********** SCAN ********************/
@@ -9093,6 +9108,12 @@ keySpec RESTORE_ASKING_Keyspecs[1] = {
 };
 #endif
 
+/* RESTORE_ASKING metadata_pair argument table */
+struct COMMAND_ARG RESTORE_ASKING_metadata_pair_Subargs[] = {
+{MAKE_ARG("module-name",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("metadata-value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /* RESTORE_ASKING argument table */
 struct COMMAND_ARG RESTORE_ASKING_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
@@ -9102,6 +9123,8 @@ struct COMMAND_ARG RESTORE_ASKING_Args[] = {
 {MAKE_ARG("absttl",ARG_TYPE_PURE_TOKEN,-1,"ABSTTL",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("metadata",ARG_TYPE_PURE_TOKEN,-1,"METADATA",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("metadata-pair",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,2,NULL),.subargs=RESTORE_ASKING_metadata_pair_Subargs},
 };
 
 /********** ROLE ********************/
@@ -12694,7 +12717,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 /* generic */
 {MAKE_CMD("copy","Copies the value of a key to a new key.","O(N) worst case for collections, where N is the number of nested items. O(1) for string values.","6.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,COPY_History,0,COPY_Tips,0,copyCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,copyDbIdArgs,COPY_Keyspecs,2,NULL,4),.args=COPY_Args},
 {MAKE_CMD("del","Deletes one or more keys.","O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1).","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DEL_History,0,DEL_Tips,2,delCommand,-2,CMD_WRITE,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,DEL_Keyspecs,1,NULL,1),.args=DEL_Args},
-{MAKE_CMD("dump","Returns a serialized representation of the value stored at a key.","O(1) to access the key and additional O(N*M) to serialize it, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DUMP_History,0,DUMP_Tips,1,dumpCommand,2,CMD_READONLY,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,DUMP_Keyspecs,1,NULL,1),.args=DUMP_Args},
+{MAKE_CMD("dump","Returns a serialized representation of the value stored at a key.","O(1) to access the key and additional O(N*M) to serialize it, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DUMP_History,0,DUMP_Tips,1,dumpCommand,-2,CMD_READONLY,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,DUMP_Keyspecs,1,NULL,2),.args=DUMP_Args},
 {MAKE_CMD("exists","Determines whether one or more keys exist.","O(N) where N is the number of keys to check.","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,EXISTS_History,1,EXISTS_Tips,2,existsCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXISTS_Keyspecs,1,NULL,1),.args=EXISTS_Args},
 {MAKE_CMD("expire","Sets the expiration time of a key in seconds.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,EXPIRE_History,1,EXPIRE_Tips,0,expireCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,NULL,EXPIRE_Keyspecs,1,NULL,3),.args=EXPIRE_Args},
 {MAKE_CMD("expireat","Sets the expiration time of a key to a Unix timestamp.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,EXPIREAT_History,1,EXPIREAT_Tips,0,expireatCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,NULL,EXPIREAT_Keyspecs,1,NULL,3),.args=EXPIREAT_Args},
@@ -12711,7 +12734,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("randomkey","Returns a random key name from the database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RANDOMKEY_History,0,RANDOMKEY_Tips,3,randomkeyCommand,1,CMD_READONLY|CMD_TOUCHES_ARBITRARY_KEYS,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RANDOMKEY_Keyspecs,0,NULL,0)},
 {MAKE_CMD("rename","Renames a key and overwrites the destination.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RENAME_History,0,RENAME_Tips,0,renameCommand,3,CMD_WRITE,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RENAME_Keyspecs,2,NULL,2),.args=RENAME_Args},
 {MAKE_CMD("renamenx","Renames a key only when the target key name doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RENAMENX_History,1,RENAMENX_Tips,0,renamenxCommand,3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,NULL,RENAMENX_Keyspecs,2,NULL,2),.args=RENAMENX_Args},
-{MAKE_CMD("restore","Creates a key from the serialized representation of a value.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RESTORE_History,3,RESTORE_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_Keyspecs,1,NULL,7),.args=RESTORE_Args},
+{MAKE_CMD("restore","Creates a key from the serialized representation of a value.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RESTORE_History,3,RESTORE_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_Keyspecs,1,NULL,9),.args=RESTORE_Args},
 {MAKE_CMD("scan","Iterates over the key names in the database.","O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.","2.8.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SCAN_History,1,SCAN_Tips,3,scanCommand,-2,CMD_READONLY|CMD_TOUCHES_ARBITRARY_KEYS,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,SCAN_Keyspecs,0,NULL,4),.args=SCAN_Args},
 {MAKE_CMD("sort","Sorts the elements in a list, a set, or a sorted set, optionally storing the result.","O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SORT_History,0,SORT_Tips,0,sortCommand,-2,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_LIST|ACL_CATEGORY_SET|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,SORT_Keyspecs,3,sortGetKeys,7),.args=SORT_Args},
 {MAKE_CMD("sort_ro","Returns the sorted elements of a list, a set, or a sorted set.","O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).","7.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SORT_RO_History,0,SORT_RO_Tips,0,sortroCommand,-2,CMD_READONLY,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_LIST|ACL_CATEGORY_READ|ACL_CATEGORY_SET|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,SORT_RO_Keyspecs,2,sortROGetKeys,6),.args=SORT_RO_Args},
@@ -12847,7 +12870,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("psync","An internal command used in replication.",NULL,"2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,PSYNC_History,0,PSYNC_Tips,0,syncCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE|CMD_NO_MULTI|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,PSYNC_Keyspecs,0,NULL,2),.args=PSYNC_Args},
 {MAKE_CMD("replconf","An internal command for configuring the replication stream.","O(1)","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLCONF_History,0,REPLCONF_Tips,0,replconfCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLCONF_Keyspecs,0,NULL,0)},
 {MAKE_CMD("replicaof","Configures a server as replica of another, or promotes it to a primary.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLICAOF_History,0,REPLICAOF_Tips,0,replicaofCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLICAOF_Keyspecs,0,NULL,1),.args=REPLICAOF_Args},
-{MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_ASKING_Keyspecs,1,NULL,7),.args=RESTORE_ASKING_Args},
+{MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_ASKING_Keyspecs,1,NULL,9),.args=RESTORE_ASKING_Args},
 {MAKE_CMD("role","Returns the replication role.","O(1)","2.8.12",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ROLE_History,0,ROLE_Tips,0,roleCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_FAST,NULL,ROLE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("save","Synchronously saves the database(s) to disk.","O(N) where N is the total number of keys in all databases","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SAVE_History,0,SAVE_Tips,0,saveCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_NO_MULTI,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SAVE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("shutdown","Synchronously saves the database(s) to disk and shuts down the server.","O(N) when saving, where N is the total number of keys in all databases when saving data, otherwise O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SHUTDOWN_History,2,SHUTDOWN_Tips,0,shutdownCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_NO_MULTI|CMD_SENTINEL|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SHUTDOWN_Keyspecs,0,NULL,1),.args=SHUTDOWN_Args},

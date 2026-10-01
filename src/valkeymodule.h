@@ -925,6 +925,8 @@ typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvBlockedHandle;
  * exposed since you can't cast a function pointer to (void *). */
 typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
+typedef ValkeyModuleString *(*ValkeyModuleKeyMetaDumpFunc)(ValkeyModuleCtx *ctx, ValkeyModuleString *key);
+typedef int (*ValkeyModuleKeyMetaRestoreFunc)(ValkeyModuleCtx *ctx, ValkeyModuleString *key, ValkeyModuleString *metadata);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
 
 /* ValkeyModule_CallArgv Flags */
@@ -1984,6 +1986,9 @@ VALKEYMODULE_API int (*ValkeyModule_DictCompare)(ValkeyModuleDictIter *di,
 VALKEYMODULE_API int (*ValkeyModule_RegisterInfoFunc)(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RegisterAuthCallback)(ValkeyModuleCtx *ctx,
                                                            ValkeyModuleAuthCallback cb) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterKeyMetadata)(ValkeyModuleCtx *ctx,
+                                                         ValkeyModuleKeyMetaDumpFunc dump_func,
+                                                         ValkeyModuleKeyMetaRestoreFunc restore_func) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoAddSection)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoBeginDictField)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoEndDictField)(ValkeyModuleInfoCtx *ctx) VALKEYMODULE_ATTR;
@@ -2581,6 +2586,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(DictCompareC);
     VALKEYMODULE_GET_API(RegisterInfoFunc);
     VALKEYMODULE_GET_API(RegisterAuthCallback);
+    VALKEYMODULE_GET_API(RegisterKeyMetadata);
     VALKEYMODULE_GET_API(InfoAddSection);
     VALKEYMODULE_GET_API(InfoBeginDictField);
     VALKEYMODULE_GET_API(InfoEndDictField);

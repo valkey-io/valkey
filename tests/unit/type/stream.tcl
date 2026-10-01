@@ -420,6 +420,22 @@ start_server {
         assert_equal $res {{lestream {{3-18446744073709551615 {k5 v5}}}}}
     }
 
+    test {XREAD last element after deleting the last generated entry} {
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XADD lestream 2-0 k2 v2
+        r XADD lestream 3-0 k3 v3
+
+        assert_equal 1 [r XDEL lestream 3-0]
+        assert_equal {{lestream {{2-0 {k2 v2}}}}} [r XREAD STREAMS lestream +]
+
+        assert_equal 1 [r XDEL lestream 2-0]
+        assert_equal {{lestream {{1-0 {k1 v1}}}}} [r XREAD STREAMS lestream +]
+
+        assert_equal 1 [r XDEL lestream 1-0]
+        assert_equal {} [r XREAD STREAMS lestream +]
+    }
+
     test {XREAD last element from empty stream} {
         # should return nil
 

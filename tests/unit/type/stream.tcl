@@ -436,6 +436,13 @@ start_server {
         assert_equal {} [r XREAD STREAMS lestream +]
     }
 
+    test {XREAD last element after XSETID moves last ID forward} {
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XSETID lestream 5-0
+        assert_equal {{lestream {{1-0 {k1 v1}}}}} [r XREAD STREAMS lestream +]
+    }
+
     test {XREAD last element from empty stream} {
         # should return nil
 

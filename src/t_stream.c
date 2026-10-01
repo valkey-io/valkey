@@ -3437,6 +3437,63 @@ cleanup:
     if (ids != static_ids) zfree(ids);
 }
 
+typedef struct {
+    streamIterator si;
+    raxIterator next_ri;
+    streamID id;
+    streamID node_primary_id;
+    streamID next_primary_id;
+    int64_t numfields;
+    int has_entry;
+    int has_node_bound;
+    int has_next_node;
+} xautoclaimIterator;
+
+/* Find target while reusing the current stream entry and listpack position.
+ * PEL IDs are ordered, so both iterators only move forward. */
+static int xautoclaimIteratorFind(xautoclaimIterator *xi, stream *s, streamID *target) {
+    while (1) {
+        if (xi->si.lp &&
+            (!xi->has_node_bound || streamCompareID(&xi->si.primary_id, &xi->node_primary_id) != 0)) {
+            /* The next node's first ID bounds this node without scanning
+             * the fields of its last entry. */
+            if (!xi->has_node_bound || !xi->has_next_node ||
+                streamCompareID(&xi->si.primary_id, &xi->next_primary_id) != 0) {
+                raxSeek(&xi->next_ri, ">", xi->si.ri.key, xi->si.ri.key_len);
+            }
+            xi->has_next_node = raxNext(&xi->next_ri);
+            if (xi->has_next_node) streamDecodeID(xi->next_ri.key, &xi->next_primary_id);
+            xi->node_primary_id = xi->si.primary_id;
+            xi->has_node_bound = 1;
+        }
+        int past_node = xi->has_next_node && streamCompareID(target, &xi->next_primary_id) >= 0;
+
+        if (xi->has_entry) {
+            int cmp = streamCompareID(&xi->id, target);
+            if (cmp == 0) return 1;
+            if (cmp > 0) return 0;
+
+            /* GetID leaves the cursor at the first field. Skip unread fields
+             * before advancing to the next entry in the same listpack. */
+            if (!past_node) {
+                int64_t to_skip = (xi->si.entry_flags & STREAM_ITEM_FLAG_SAMEFIELDS) ? xi->numfields : xi->numfields * 2;
+                while (to_skip--) xi->si.lp_ele = lpNext(xi->si.lp, xi->si.lp_ele);
+            }
+            xi->has_entry = 0;
+        }
+
+        /* A sparse PEL can skip many stream entries. Seek past the current
+         * node instead of scanning all intervening listpacks. */
+        if (past_node) {
+            streamIteratorStop(&xi->si);
+            streamIteratorStart(&xi->si, s, target, NULL, 0);
+        }
+
+        xi->has_entry = streamIteratorGetID(&xi->si, &xi->id, &xi->numfields);
+        if (!xi->has_entry) return 0;
+    }
+}
+
 /* XAUTOCLAIM <key> <group> <consumer> <min-idle-time> <start> [COUNT <count>] [JUSTID]
  *
  * Changes ownership of one or multiple messages in the Pending Entries List
@@ -3527,6 +3584,12 @@ void xautoclaimCommand(client *c) {
     void *endidptr = addReplyDeferredLen(c);    /* reply[0] */
     void *arraylenptr = addReplyDeferredLen(c); /* reply[1] */
 
+    /* The loop changes PELs but not the stream, whose listpacks xi retains. */
+    stream *s = objectGetVal(o);
+    xautoclaimIterator xi = {0};
+    streamIteratorStart(&xi.si, s, &startid, NULL, 0);
+    raxStart(&xi.next_ri, s->rax);
+
     unsigned char startkey[sizeof(streamID)];
     streamEncodeID(startkey, &startid);
     raxIterator ri;
@@ -3542,7 +3605,7 @@ void xautoclaimCommand(client *c) {
         streamDecodeID(ri.key, &id);
 
         /* Item must exist for us to transfer it to another consumer. */
-        if (!streamEntryExists(objectGetVal(o), &id)) {
+        if (!xautoclaimIteratorFind(&xi, s, &id)) {
             /* Propagate this change (we are going to delete the NACK). */
             robj *idstr = createObjectFromStreamID(&id);
             streamPropagateXCLAIM(c, c->argv[1], group, c->argv[2], idstr, nack);
@@ -3587,7 +3650,17 @@ void xautoclaimCommand(client *c) {
         if (justid) {
             addReplyStreamID(c, &id);
         } else {
-            serverAssert(streamReplyWithRange(c, objectGetVal(o), &id, &id, 1, 0, NULL, NULL, STREAM_RWR_RAWENTRIES, NULL) == 1);
+            addReplyArrayLen(c, 2);
+            addReplyStreamID(c, &id);
+            addReplyArrayLen(c, xi.numfields * 2);
+            for (int64_t field = 0; field < xi.numfields; field++) {
+                unsigned char *key, *value;
+                int64_t key_len, value_len;
+                streamIteratorGetField(&xi.si, &key, &value, &key_len, &value_len);
+                addReplyBulkCBuffer(c, key, key_len);
+                addReplyBulkCBuffer(c, value, value_len);
+            }
+            xi.has_entry = 0;
         }
         arraylen++;
         count--;
@@ -3602,6 +3675,8 @@ void xautoclaimCommand(client *c) {
         modified = 1;
     }
 
+    streamIteratorStop(&xi.si);
+    raxStop(&xi.next_ri);
     if (modified) signalModifiedKey(c, c->db, c->argv[1]);
 
     /* We need to return the next entry as a cursor for the next XAUTOCLAIM call */

@@ -564,6 +564,7 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
             void *c;
             while (hashtableNext(&iter, &c)) {
                 addReplyPubsubPatMessage(c, pattern, channel, message);
+                if (type.shard) clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(c, slot);
                 updateClientMemUsageAndBucket(c);
                 receivers++;
             }

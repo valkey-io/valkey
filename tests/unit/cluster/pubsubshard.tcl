@@ -183,4 +183,35 @@ test "SPUBLISH on a non-owning node returns MOVED, so a pattern subscriber there
     $patclient close
 }
 
+test "SPUBLISH reaches a PSUBSCRIBE pattern on a replica in the owning shard" {
+    set cl [valkey_cluster 127.0.0.1:[srv 0 port]]
+    set slot [$cl cluster keyslot "channel.0"]
+    array set ownernode [$cl masternode_for_slot $slot]
+
+    # Locate the replica of the slot-owning primary.
+    set replicanodeinfo [$cl cluster replicas $ownernode(id)]
+    set addr [lindex [split [lindex [split $replicanodeinfo " "] 1] @] 0]
+    set replicahost [lindex [split $addr :] 0]
+    set replicaport [lindex [split $addr :] 1]
+
+    set publishclient [valkey_client_by_addr $ownernode(host) $ownernode(port)]
+    set patclient [valkey_deferring_client_by_addr $replicahost $replicaport]
+
+    # Pattern-only subscriber (no SSUBSCRIBE) connected to the replica. The
+    # primary forwards the SPUBLISH to its replica over the cluster bus; the
+    # replica must still match local patterns even with no shard-channel
+    # subscribers.
+    $patclient deferred 1
+    $patclient psubscribe "channel.*"
+    $patclient read
+
+    $publishclient spublish channel.0 hello
+    set msg [$patclient read]
+    assert_equal {pmessage channel.* channel.0 hello} $msg
+
+    $cl close
+    $publishclient close
+    $patclient close
+}
+
 } ;# start_cluster

@@ -36,6 +36,15 @@ start_server {tags {"benchmark network external:skip logreqres:skip"}} {
             default_set_get_checks
         }
 
+        test {benchmark: single request completes across write retries} {
+            # TLS negotiation can make the first write return zero. Retrying
+            # must not count the same request again and exhaust the -n limit.
+            set cmd [redisbenchmark $master_host $master_port "--dbnum 9 -c 1 -n 1 INCR counter"]
+            common_bench_setup $cmd
+            assert_equal 1 [r get counter]
+            assert_match {*calls=1,*} [cmdstat incr]
+        }
+
         test {benchmark: connecting using URI set,get} {
             set cmd [redisbenchmarkuri $master_host $master_port "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd

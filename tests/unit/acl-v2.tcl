@@ -106,6 +106,51 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*key*" $err
     }
 
+    test {EXEC conditions require read permission} {
+        r ACL SETUSER exec-condition-write-only on nopass %W~write* +@all
+        r set writecondition value
+        r del writelist
+        $r2 auth exec-condition-write-only password
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifeq writecondition value} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifne writecondition other} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec nx writecondition} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec xx writecondition} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        assert_error "EXECABORT*invalid check condition syntax*" {$r2 exec ifeq writecondition other invalid}
+        assert_equal 0 [r llen writelist]
+    }
+
+    test {EXEC condition keys check permissions on the active database} {
+        r ACL SETUSER exec-db-selector-user on nopass (db=1 +@all ~*) (db=0 +@all ~public*)
+        r select 0
+        r set secret secret-value
+        $r2 auth exec-db-selector-user password
+        $r2 select 0
+        $r2 multi
+        $r2 select 1
+        catch {$r2 exec ifeq secret guessed-value} err
+        assert_match "*NOPERM*key*" $err
+        r del secret
+    }
+
     test {Test separate read and write permissions} {
         r ACL SETUSER key-permission-RW on nopass %R~read* %W~write* +@all
         $r2 auth key-permission-RW password
@@ -452,6 +497,68 @@ start_server {tags {"acl external:skip"}} {
         assert_match {*has no permissions to access the 'write1' key*} [r ACL DRYRUN command-test GEORADIUS write1 longitude latitude radius M STORE write2]
     }
 
+    test {Test GEORADIUS duplicate STORE options check the final destination key} {
+        # Regression test: duplicate STORE/STOREDIST options must not let the
+        # ACL check only the first (decoy) destination. The command uses the
+        # LAST STORE/STOREDIST key, so the ACL must check that key too.
+        # 'protected:*' is not granted to this user, so any access to it denies.
+        r ACL setuser geo-store-dryrun +georadius +georadiusbymember %R~geo:* %W~scratch:*
+
+        # The last STORE/STOREDIST names the unauthorized 'protected:*' key,
+        # so the command must be denied on that key (not on the first decoy).
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STORE protected:dst]
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STOREDIST scratch:ok STOREDIST protected:dst]
+        # Mixed STORE then STOREDIST: the last one (STOREDIST) wins.
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STOREDIST protected:dst]
+        # The final destination wins even when the decoy is the unauthorized one:
+        # last key is allowed, so the command is allowed.
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE protected:dst STORE scratch:ok]
+        # Legitimate single/repeated allowed destination is not over-blocked.
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok]
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STORE scratch:ok]
+
+        # Same for GEORADIUSBYMEMBER.
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUSBYMEMBER geo:src member 1 km STORE scratch:ok STORE protected:dst]
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUSBYMEMBER geo:src member 1 km STORE scratch:ok]
+
+        r ACL deluser geo-store-dryrun
+    }
+
+    test {GEORADIUS duplicate STORE options cannot bypass key-level write ACL} {
+        # End-to-end regression test for the duplicate-STORE ACL bypass: an
+        # authenticated user with write access only to scratch:* must not be
+        # able to use a second STORE option to write/delete protected:*.
+        r del protected:dst
+        r geoadd geo:src 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+        r set protected:dst sentinel
+
+        r ACL SETUSER geo-store-bypass on nopass +georadius +georadiusbymember +acl|whoami %R~geo:* %W~scratch:*
+        $r2 auth geo-store-bypass password
+        assert_equal "geo-store-bypass" [$r2 acl whoami]
+
+        # Legitimate single STORE to an allowed key works (no over-block).
+        assert_equal 2 [$r2 georadius geo:src 13.361389 38.115556 500 km STORE scratch:ok]
+
+        # Duplicate STORE whose final destination is protected must be denied,
+        # and the protected key must be left untouched.
+        assert_error {*NOPERM*key*} {$r2 georadius geo:src 13.361389 38.115556 500 km STORE scratch:ok STORE protected:dst}
+        assert_error {*NOPERM*key*} {$r2 georadiusbymember geo:src Palermo 500 km STORE scratch:ok STORE protected:dst}
+
+        # Missing source would otherwise DELETE the destination key. Ensure the
+        # ACL still blocks it and protected:dst survives intact.
+        assert_error {*NOPERM*key*} {$r2 georadius geo:missing 0 0 1 km STORE scratch:ok STORE protected:dst}
+        assert_equal "sentinel" [r get protected:dst]
+
+        # cleanup (re-auth before deleting the user that $r2 is logged in as)
+        $r2 auth default password
+        r ACL deluser geo-store-bypass
+        r del geo:src scratch:ok protected:dst
+    }
+
     # Existence test commands are not marked as access since they are the result
     # of a lot of write commands. We therefore make the claim they can be executed
     # when either READ or WRITE flags are provided.
@@ -472,7 +579,7 @@ start_server {tags {"acl external:skip"}} {
     # Unlike existence test commands, intersection cardinality commands process the data
     # between keys and return an aggregated cardinality. therefore they have the access
     # requirement.
-    test {Intersection cardinaltiy commands are access commands} {
+    test {Intersection cardinality commands are access commands} {
         assert_equal "OK" [r ACL DRYRUN command-test SINTERCARD 2 read read]
         assert_match {*has no permissions to access the 'write' key*} [r ACL DRYRUN command-test SINTERCARD 2 write read]
         assert_match {*has no permissions to access the 'nothing' key*} [r ACL DRYRUN command-test SINTERCARD 2 nothing read]
@@ -566,6 +673,37 @@ start_server {tags {"acl external:skip"}} {
         r del v1 mylist
     }
     
+    test {Test SORT STORE destination that is named like an option} {
+        # Every decoy destination below is permitted, so the only reason to
+        # reject a command is the real destination the server writes to.
+        r ACL setuser test-sort-store on nopass ~allowed:* ~by ~get ~limit ~alpha +@all
+        r rpush allowed:src c b a
+
+        # A dedicated client, because deleting the user below kills it.
+        set r3 [valkey_client]
+        $r3 auth test-sort-store nopass
+
+        # A destination spelling an option that takes arguments hides the later
+        # STORE clause that SORT actually uses.
+        foreach keyword {by get limit} {
+            assert_equal "User test-sort-store has no permissions to access the 'forbidden:dst' key" \
+                [r ACL DRYRUN test-sort-store SORT allowed:src ALPHA STORE $keyword STORE forbidden:dst]
+            assert_error "*NOPERM*key*" {$r3 sort allowed:src ALPHA STORE $keyword STORE forbidden:dst}
+            assert_equal 0 [r exists forbidden:dst]
+        }
+
+        # A destination spelling STORE reports whatever follows it instead.
+        assert_equal "User test-sort-store has no permissions to access the 'store' key" \
+            [r ACL DRYRUN test-sort-store SORT allowed:src STORE store alpha]
+        assert_error "*NOPERM*key*" {$r3 sort allowed:src STORE store alpha}
+        assert_equal 0 [r exists store]
+
+        # cleanup
+        $r3 close
+        r ACL deluser test-sort-store
+        r del allowed:src
+    }
+
     test {Test DRYRUN with wrong number of arguments} {
         r ACL setuser test-dry-run +@all ~v*
         

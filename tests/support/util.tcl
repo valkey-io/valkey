@@ -22,6 +22,97 @@ proc randstring {min max {type binary}} {
     return $output
 }
 
+# Read and write files without applying Tcl text translations. These helpers
+# are shared by persistence tests that inspect or mutate serialized data.
+proc read_binary_file_prefix {path count} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set prefix [read $fd $count]
+    close $fd
+    return $prefix
+}
+
+proc read_binary_file {path} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+# Compare two files without reading them entirely into memory, and without relying
+# on an external tool like cmp, which isn't available in every test environment.
+proc files_are_identical {path1 path2} {
+    if {[file size $path1] != [file size $path2]} {
+        return 0
+    }
+    set fd1 [open $path1 r]
+    set fd2 [open $path2 r]
+    fconfigure $fd1 -translation binary
+    fconfigure $fd2 -translation binary
+    set identical 1
+    while {1} {
+        set chunk1 [read $fd1 65536]
+        set chunk2 [read $fd2 65536]
+        if {$chunk1 ne $chunk2} {
+            set identical 0
+            break
+        }
+        if {$chunk1 eq ""} break
+    }
+    close $fd1
+    close $fd2
+    return $identical
+}
+
+proc write_binary_file {path data} {
+    set fd [open $path w]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd $data
+    close $fd
+}
+
+# Create keys of all data types with predictable/consistent names for verification
+proc createComplexDatasetForVerification {r count {prefix ""}} {
+    for {set i 0} {$i < $count} {incr i} {
+        # String keys
+        {*}$r set ${prefix}before_$i "value_before_$i"
+        {*}$r set ${prefix}int_$i [expr {42 + $i}]
+        {*}$r set ${prefix}bits_$i "\x0f"
+        
+        # List keys
+        {*}$r lpush ${prefix}lst_$i "L2" "L1"
+        {*}$r rpush ${prefix}lst_$i "R1" "R2"
+        
+        # Set keys
+        {*}$r sadd ${prefix}set_$i "B1" "B2"
+        {*}$r sadd ${prefix}iset_$i 12 34
+        
+        # Sorted set keys
+        {*}$r zadd ${prefix}zset_$i 1 "Z1" 2 "Z2"
+        
+        # Hash keys
+        {*}$r hset ${prefix}hash_$i "H1" "a"
+        {*}$r hset ${prefix}hash_$i "H2" 1
+        
+        # HyperLogLog
+        {*}$r pfadd ${prefix}hll_$i "PF1"
+        
+        # Geo
+        {*}$r geoadd ${prefix}geo_$i -122.335167 47.608013 "seattle"
+        {*}$r geosearchstore ${prefix}geo_set_$i ${prefix}geo_$i FROMLONLAT -122.335167 47.608013 BYRADIUS 10 mi
+        
+        # Stream
+        {*}$r xadd ${prefix}stream_$i "*" "D1" "V1"
+        {*}$r xgroup create ${prefix}stream_$i ${prefix}group_$i 0 MKSTREAM
+    }
+}
+
+# Path of the RDB file a server saves to (dir + dbfilename).
+proc server_rdb_path {client} {
+    return [file join [lindex [$client config get dir] 1] [lindex [$client config get dbfilename] 1]]
+}
+
 # Useful for some test
 proc zlistAlikeSort {a b} {
     if {[lindex $a 0] > [lindex $b 0]} {return 1}
@@ -713,8 +804,16 @@ proc process_is_paused pid {
 }
 
 # Wait until the process enters a paused state.
-proc wait_process_paused pid {
-    wait_for_condition 50 100 {
+#
+# Callers that arm a self-stopping debug point (DEBUG PAUSE-AFTER-FORK,
+# DEBUG PAUSE-BEFORE-PSYNC) also wait for the server to reach it, which under
+# valgrind can take longer than 5 seconds. Scale the budget for them, but only
+# under valgrind so normal runs keep failing fast.
+proc wait_process_paused {pid {retries auto}} {
+    if {$retries eq "auto"} {
+        if {$::valgrind} {set retries 1000} else {set retries 50}
+    }
+    wait_for_condition $retries 100 {
         [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
@@ -724,7 +823,8 @@ proc wait_process_paused pid {
 
 proc pause_process pid {
     exec kill -SIGSTOP $pid
-    wait_process_paused $pid
+    # We sent the signal, so the stop is near-immediate. Keep the short budget.
+    wait_process_paused $pid 50
 }
 
 proc resume_process pid {
@@ -749,7 +849,10 @@ proc latencyrstat_percentiles {cmd r} {
     }
 }
 
-proc generate_fuzzy_traffic_on_key {key duration} {
+# When adding a new data type & its commands here, do create a key of that type
+# in generate_types in tests/integration/corrupt-dump-fuzzer.tcl, otherwise the
+# fuzzer has no coverage for it.
+proc fuzzy_traffic_commands_by_type {} {
     # Commands per type, blocking commands removed
     # TODO: extract these from COMMAND DOCS, and improve to include other types
     set string_commands {APPEND BITCOUNT BITFIELD BITOP BITPOS DECR DECRBY GET GETBIT GETRANGE GETSET INCR INCRBY INCRBYFLOAT MGET MSET MSETNX PSETEX SET SETBIT SETEX SETNX SETRANGE LCS STRLEN}
@@ -758,9 +861,18 @@ proc generate_fuzzy_traffic_on_key {key duration} {
     set list_commands {LINDEX LINSERT LLEN LPOP LPOS LPUSH LPUSHX LRANGE LREM LSET LTRIM RPOP RPOPLPUSH RPUSH RPUSHX}
     set set_commands {SADD SCARD SDIFF SDIFFSTORE SINTER SINTERSTORE SISMEMBER SMEMBERS SMOVE SPOP SRANDMEMBER SREM SSCAN SUNION SUNIONSTORE}
     set stream_commands {XACK XADD XCLAIM XDEL XGROUP XINFO XLEN XPENDING XRANGE XREAD XREADGROUP XREVRANGE XTRIM}
-    set commands [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands]
+    set pathhash_commands {PHCARD PHDEL PHDELPREFIX PHEXISTS PHGET PHGETALL PHLONGEST PHMGET PHMSET PHPREFIXES PHSCAN PHSET}
+    return [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands pathhash $pathhash_commands]
+}
+
+proc generate_fuzzy_traffic_on_key {key duration} {
+    set commands [fuzzy_traffic_commands_by_type]
 
     set type [r type $key]
+    # A type missing from the list above would fail with an opaque "key not known in dictionary" error.
+    if {![dict exists $commands $type]} {
+        error "generate_fuzzy_traffic_on_key: no command list for type '$type', add one to fuzzy_traffic_commands_by_type"
+    }
     set cmds [dict get $commands $type]
     set start_time [clock seconds]
     set sent {}
@@ -808,6 +920,15 @@ proc generate_fuzzy_traffic_on_key {key duration} {
             lappend cmd [randomValue]
             lappend cmd [randomValue]
             incr i 4
+        }
+        if {$cmd == "PHSET"} {
+            lappend cmd $key
+            lappend cmd [randomValue]
+            lappend cmd "FIELDS"
+            lappend cmd 1
+            lappend cmd [randomValue]
+            lappend cmd [randomValue]
+            incr i 6
         }
         for {} {$i < $arity} {incr i} {
             if {$i == $firstkey || $i == $lastkey} {
@@ -1077,6 +1198,17 @@ proc config_get_set {param value {options {}}} {
     return $config
 }
 
+# Return whether a CONFIG parameter accepts a value without changing its
+# current setting.
+proc config_value_supported {client param value} {
+    set old [lindex [$client config get $param] 1]
+    set supported [expr {[catch {$client config set $param $value}] == 0}]
+    if {$supported} {
+        $client config set $param $old
+    }
+    return $supported
+}
+
 proc delete_lines_with_pattern {filename tmpfilename pattern} {
     set fh_in [open $filename r]
     set fh_out [open $tmpfilename w]
@@ -1326,6 +1458,25 @@ proc memcmp {string1 string2} {
     return [expr {$len1 - $len2}]
 }
 
+# Execute body with a temporary config override, restoring the original
+# value even if the body fails.
+proc with_config {config value body} {
+    set old [lindex [r config get $config] 1]
+    r config set $config $value
+    catch {uplevel 1 $body} result opts
+    r config set $config $old
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Execute body and always run cleanup, preserving the body's completion status.
+proc with_cleanup {body cleanup} {
+    catch {uplevel 1 $body} result opts
+    uplevel 1 $cleanup
+    dict incr opts -level
+    return -options $opts $result
+}
+
 # Escape a string for use as a JSON string value.
 #
 # Beyond the characters with a short escape, every C0 control character has to
@@ -1348,4 +1499,56 @@ proc json_escape_string {s} {
         }
     }
     return $out
+}
+
+proc read_file {path} {
+    set fd [open $path r]
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_file {path content} {
+    set fd [open $path w]
+    puts $fd $content
+    close $fd
+}
+
+proc file_has_pattern {path pattern} {
+    if {![file exists $path]} {
+        return 0
+    }
+    return [regexp $pattern [read_file $path]]
+}
+
+proc cluster_nodes_conf_path {id} {
+    set dir [lindex [R $id config get dir] 1]
+    set conf [lindex [R $id config get cluster-config-file] 1]
+    return [file join $dir $conf]
+}
+
+# Return a finite operand `x` such that `x + x` overflows the server's `long double`.
+#
+# The width of `long double` is platform dependent, so no single constant works
+# everywhere:
+#
+#   x86-64 / aarch64 Linux   80-bit or 128-bit, LDBL_MAX ~1.19e4932
+#   Apple Silicon            long double == double, LDBL_MAX ~1.80e308
+#
+# Rather than branch on the build, ask the server: a value it cannot represent is
+# rejected when parsed as a long double, so the first candidate it accepts is the
+# right magnitude for this build.
+#
+# `level` selects the server instance, matching the convention of `r` (0 is the
+# current server, -1 the previous one, and so on).
+proc ldbl_overflow_operand {{level 0}} {
+    foreach candidate {1e4932 1e308} {
+        r $level set __ldbl_probe $candidate
+        if {![catch {r $level increx __ldbl_probe byfloat 0}]} {
+            r $level del __ldbl_probe
+            return $candidate
+        }
+    }
+    r $level del __ldbl_probe
+    error "no long double operand large enough to overflow on this platform"
 }

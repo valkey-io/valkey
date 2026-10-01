@@ -1638,11 +1638,19 @@ start_server {tags {"hashexpire"}} {
             if {$cmd eq "RESTORE"} {
                 assert_equal 2 [get_keys r]
                 assert_equal 2 [get_keys_with_volatile_items r]
+                # RESTORE rebuilds the object; the listpack is byte-identical
+                # but with libc malloc the allocation's usable size (what
+                # MEMORY USAGE reports) can differ by an allocator chunk.
+                # Assert what matters: the encoding is preserved, and memory
+                # stays in the same ballpark.
+                assert_encoding listpack $newhash
+                assert_range $memory_after [expr {$mem_before - 16}] [expr {$mem_before + 16}]
             } else {
                 assert_equal 1 [get_keys r]
                 assert_equal 1 [get_keys_with_volatile_items r]
+                # RENAME does not touch the object: memory must be identical.
+                assert_equal $mem_before $memory_after
             }
-            assert_equal $mem_before $memory_after
         } {} {needs:debug}
     }
 
@@ -1727,6 +1735,24 @@ start_server {tags {"hashexpire"}} {
         # Re-enable active expiry
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
+
+    set original_max [lindex [r config get hash-max-listpack-entries] 1]
+    r config set hash-max-listpack-entries 0
+    test {HMGET batch lookup skips expired hash fields} {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        r del hmgetbatchhfetest
+        r hset hmgetbatchhfetest alive value expired stale
+        assert_encoding hashtable hmgetbatchhfetest
+        assert_equal {1} [r hpexpire hmgetbatchhfetest 1 fields 1 expired]
+        after 2
+
+        assert_equal {value {} {}} [r hmget hmgetbatchhfetest alive expired missing]
+        assert_equal {} [r hget hmgetbatchhfetest expired]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+    r config set hash-max-listpack-entries $original_max
 
     test {HGETALL skips expired fields} {
         r FLUSHALL
@@ -4831,7 +4857,7 @@ start_server {tags {"hash"}} {
        r config set import-mode yes
        assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 3
-       assert_equal [r OBJECT ENCODING myhash] "hashtable"
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode no
        wait_for_condition 30 100 {
            [r hlen myhash] == 1
@@ -4981,6 +5007,181 @@ start_server {tags {"hashexpire"}} {
     } {OK} {needs:debug}
 }
 
+start_server {tags {"hash expire listpack"}} {
+    set original_max_value [lindex [r config get hash-max-listpack-value] 1]
+    set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+    r config set hash-max-listpack-entries 128
+
+    test "Volatile-count header tracks listpack expiry transitions" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2 f3 v3
+        assert_encoding listpack myhash
+        assert_equal 0 [get_keys_with_volatile_items r]
+
+        # 0 -> 1: first expiry creates the aggregate header
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 2 -> 1: add another, then persist one
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f2]
+        assert_equal {1} [r hpersist myhash FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 0: last volatile field persisted, header removed
+        assert_equal {1} [r hpersist myhash FIELDS 1 f2]
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal 3 [r hlen myhash]
+    }
+
+    test "Volatile-count header follows HDEL of a volatile field" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hexpire myhash 1000 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        r hdel myhash f1
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal {v2} [r hget myhash f2]
+    }
+
+    test "Volatile-count header survives RDB reload and DUMP/RESTORE" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hsetex myhash EX 1000 FIELDS 1 t1 x1
+        assert_encoding listpack myhash
+        r debug reload
+        assert_encoding listpack myhash
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+
+        set d [r dump myhash]
+        r del myhash
+        r restore myhash 0 $d
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+    } {} {needs:debug}
+
+    test "Volatile-count header cleared when active expiry reaps last field" {
+        r del myhash
+        r hset myhash f1 v1
+        r hpexpire myhash 50 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        wait_for_condition 50 100 {
+            [get_keys_with_volatile_items r] == 0
+        } else {
+            fail "volatile tracking not cleared after reap"
+        }
+    }
+
+    # A HASH_2 payload that makes the loader convert to a hashtable only after
+    # a volatile field has landed in the listpack: 'a' and 'b' are one byte and
+    # stay under the lowered value threshold, field 'cc' does not. The loader
+    # installs the aggregate volatile-count header after its listpack loop, so
+    # at conversion time the listpack does not have one yet.
+    r config set hash-max-listpack-value $original_max_value
+    r del myhash
+    r hset myhash a b cc dd
+    r hexpire myhash 1000 FIELDS 1 a
+    assert_encoding listpack myhash
+    set mid_load_payload [r dump myhash]
+    r config set hash-max-listpack-value 1
+
+    test "RESTORE tracks field TTLs when the load converts mid-listpack" {
+        r del myhash
+        r restore myhash 0 $mid_load_payload
+        assert_encoding hashtable myhash
+
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 a] 0] 1 1000
+        assert_equal 1 [r hdel myhash a]
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal {dd} [r hget myhash cc]
+    }
+
+    test "Field TTLs survive a save after a mid-listpack conversion" {
+        # An untracked expiry also makes the save pick RDB_TYPE_HASH over
+        # RDB_TYPE_HASH_2, dropping the TTL instead of crashing.
+        r del myhash
+        r restore myhash 0 $mid_load_payload
+        r debug reload
+        assert_range [lindex [r httl myhash FIELDS 1 a] 0] 1 1000
+    } {} {needs:debug}
+
+    test "Conversion carries an expired-but-unreaped field into the hashtable" {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        # Earlier tests in this block leave hash-max-listpack-value at 1
+        r config set hash-max-listpack-value $original_max_value
+        r config set hash-max-listpack-entries $original_max_entries
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hpexpire myhash 1 FIELDS 1 f1
+        wait_for_condition 100 10 {
+            [r hexists myhash f1] == 0
+        } else {
+            fail "Field f1 was never logically expired"
+        }
+        assert_encoding listpack myhash
+        # f1 is hidden from reads but still present and still counted
+        assert_equal 2 [r hlen myhash]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # A value over hash-max-listpack-value forces listpack -> hashtable.
+        # The conversion has to carry f1 over instead of dropping it: dropping
+        # it deletes a field as a side effect of an encoding change, with no
+        # HDEL propagated, no hexpired notification and no expired_fields bump.
+        r hset myhash f3 [string repeat x 128]
+        assert_encoding hashtable myhash
+        assert_equal 3 [r hlen myhash]
+        assert_equal 0 [r hexists myhash f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # f1 is the hash's only volatile field, so a conversion that dropped it
+        # would leave the db tracking the key as volatile while the object is
+        # not, and the field-expire cron would abort in fieldExpireScanCallback
+        # on hashTypeHasVolatileFields().
+        set initial_expired [info_field [r info stats] expired_fields]
+        r DEBUG SET-ACTIVE-EXPIRE 1
+        wait_for_active_expiry r myhash 2 $initial_expired 1
+        assert_equal {PONG} [r ping]
+        assert_equal 0 [get_keys_with_volatile_items r]
+    } {} {needs:debug}
+
+    test "Conversion does not leave field TTLs globally ignored" {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        r config set hash-max-listpack-value $original_max_value
+        r config set hash-max-listpack-entries 16
+        r del victimhash{t} otherhash{t}
+        r hset victimhash{t} g1 v1 g2 v2
+        r hpexpire victimhash{t} 1 FIELDS 1 g1
+        wait_for_condition 100 10 {
+            [r hexists victimhash{t} g1] == 0
+        } else {
+            fail "Field g1 was never logically expired"
+        }
+        assert_encoding listpack victimhash{t}
+
+        # Convert an unrelated hash by crossing hash-max-listpack-entries. That
+        # conversion is the last statement of hashTypeSet()'s listpack branch,
+        # which returns without running the ignore-TTL reset its hashtable
+        # branch ends with, so a conversion that leaves the ignore-TTL state set
+        # leaks it to every later listpack hash in the server.
+        for {set i 1} {$i <= 16} {incr i} { r hset otherhash{t} f$i v$i }
+        assert_encoding listpack otherhash{t}
+        r hset otherhash{t} f17 v17
+        assert_encoding hashtable otherhash{t}
+
+        # victimhash{t} was never touched, so g1 must still be hidden
+        assert_equal 0 [r hexists victimhash{t} g1]
+        assert_equal {} [r hget victimhash{t} g1]
+        assert_equal {g2 v2} [r hgetall victimhash{t}]
+
+        r config set hash-max-listpack-entries $original_max_entries
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    r config set hash-max-listpack-value $original_max_value
+    r config set hash-max-listpack-entries $original_max_entries
+}
+
 start_server {tags {"hashexpire"}} {
     # Regression: HPEXPIREAT with timestamps at/near the top of the int64 range
     # used to crash the server via the vset bucket-timestamp math. Two flows:
@@ -5033,4 +5234,112 @@ start_server {tags {"hashexpire"}} {
         assert_equal 127 [r HLEN myhash]
         r DEL myhash
     } {1}
+}
+
+start_server {tags {"hashexpire external:skip"}} {
+    # HGETEX changes field TTLs (and can delete a field via a past EXAT/PXAT),
+    # so its key spec requires both read and write permission on the key.
+    set r2 [valkey_client]
+
+    test {HGETEX under a read-only (%R~) ACL grant is denied} {
+        r DEL myhash
+        r HSET myhash f1 v1 f2 v2
+
+        r ACL SETUSER hgetex-ro on nopass %R~myhash* +@all
+        $r2 auth hgetex-ro password
+        assert_equal PONG [$r2 PING]
+
+        assert_equal "User hgetex-ro has no permissions to access the 'myhash' key" \
+            [r ACL DRYRUN hgetex-ro HGETEX myhash FIELDS 1 f1]
+
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash PERSIST FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EX 100 FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EXAT 1 FIELDS 1 f1}
+
+        assert_equal 2 [r HLEN myhash]
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal -1 [r HTTL myhash FIELDS 1 f1]
+    }
+
+    test {HGETEX under a write-only (%W~) ACL grant is denied} {
+        r DEL myhash
+        r HSET myhash f1 v1
+
+        r ACL SETUSER hgetex-wo on nopass %W~myhash* +@all
+        $r2 auth hgetex-wo password
+        assert_equal PONG [$r2 PING]
+
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EX 100 FIELDS 1 f1}
+    }
+
+    test {HGETEX with read+write (%RW~) ACL grant is permitted} {
+        r DEL myhash
+        r HSET myhash f1 v1 f2 v2
+
+        r ACL SETUSER hgetex-rw on nopass %RW~myhash* +@all
+        $r2 auth hgetex-rw password
+        assert_equal PONG [$r2 PING]
+
+        assert_equal v1 [$r2 HGETEX myhash FIELDS 1 f1]
+        assert_equal v1 [$r2 HGETEX myhash EX 1000 FIELDS 1 f1]
+        assert_morethan [r HTTL myhash FIELDS 1 f1] 0
+    }
+
+    $r2 close
+}
+
+start_server {tags {"hashexpire external:skip"}} {
+    start_server {tags {needs:repl external:skip}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test {Conversion of a hash holding an expired-but-unreaped field keeps the replica in sync} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+            # Keep the reaper off both sides so it cannot collect f1 before the
+            # conversion runs.
+            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            $replica DEBUG SET-ACTIVE-EXPIRE 0
+
+            # f4 carries a long TTL only so the hash still has a volatile field
+            # once f1 expires.
+            $primary HSET myhash f1 v1 f2 v2 f4 v4
+            $primary HPEXPIRE myhash 1 FIELDS 1 f1
+            $primary HPEXPIRE myhash 100000 FIELDS 1 f4
+            wait_for_condition 100 10 {
+                [$primary HEXISTS myhash f1] == 0
+            } else {
+                fail "Field f1 was never logically expired on the primary"
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal 3 [$primary HLEN myhash]
+            assert_equal 3 [$replica HLEN myhash]
+
+            # A value over hash-max-listpack-value converts on both sides.
+            $primary HSET myhash f3 [string repeat x 128]
+            wait_for_ofs_sync $primary $replica
+            assert_equal {hashtable} [$primary object encoding myhash]
+            assert_equal {hashtable} [$replica object encoding myhash]
+
+            # The primary must not drop f1 here. The replica keeps expired
+            # fields until the primary tells it to delete them, so a primary
+            # that forgets f1 during the conversion never sends that deletion
+            # and the two diverge for the life of the replication link.
+            assert_equal 4 [$primary HLEN myhash]
+            assert_equal [$primary HLEN myhash] [$replica HLEN myhash]
+
+            # With f1 carried over, the normal reaper deletes it and propagates
+            # the deletion, so both sides converge.
+            $primary DEBUG SET-ACTIVE-EXPIRE 1
+            $replica DEBUG SET-ACTIVE-EXPIRE 1
+            wait_for_active_expiry $primary myhash 3 $primary_initial_expired 1
+            wait_for_ofs_sync $primary $replica
+            assert_equal 3 [$replica HLEN myhash]
+            assert_equal {} [$replica HGET myhash f1]
+            assert_equal {f2 f3 f4} [lsort [$replica HKEYS myhash]]
+        } {} {needs:debug}
+    }
 }

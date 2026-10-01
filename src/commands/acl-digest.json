@@ -1,0 +1,27 @@
+{
+    "DIGEST": {
+        "summary": "Returns a fingerprint of the ACL rules currently in effect.",
+        "complexity": "O(N). Where N is the number of configured users.",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": 2,
+        "container": "ACL",
+        "function": "aclCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "reply_schema": {
+            "type": "string",
+            "description": "The hex representation of the digest of the rules currently in effect."
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

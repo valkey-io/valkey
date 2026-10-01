@@ -152,9 +152,9 @@ sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 
-unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
-void clusterSaveConfigOrDie(int do_fsync);
+int clusterSaveConfigFromBio(sds content, bool do_fsync);
+void clusterSaveConfigOrDie(bool do_fsync);
 int clusterDelSlot(int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);

@@ -78,7 +78,7 @@ unsigned int keyHashSlot(const char *key, int keylen) {
 
 /* If it can be inferred that the given glob-style pattern, as implemented in
  * stringmatchlen() in util.c, only can match keys belonging to a single slot,
- * that slot is returned. Otherwise -1 is returned. */
+ * that slot is returned. Otherwise, -1 is returned. */
 int patternHashSlot(char *pattern, int length) {
     int s = -1; /* index of the first '{' */
 
@@ -333,7 +333,7 @@ typedef struct migrateCachedSocket {
  *
  * This function is responsible of sending errors to the client if a
  * connection can't be established. In this case -1 is returned.
- * Otherwise on success the socket is returned, and the caller should not
+ * Otherwise, on success the socket is returned, and the caller should not
  * attempt to free it after usage.
  *
  * If the caller detects an error while using the socket, migrateCloseSocket()
@@ -365,8 +365,10 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
         dictDelete(server.migrate_cached_sockets, dictGetKey(de));
     }
 
-    /* Create the connection */
+    /* Create the connection and tag as high-priority so key/slot migration
+     * packets are not delayed by normal tenant commands. */
     conn = connCreate(connTypeOfCluster());
+    connSetPriority(conn, true);
     if (connBlockingConnect(conn, objectGetVal(host), atoi(objectGetVal(port)), timeout) != C_OK) {
         addReplyError(c, "-IOERR error or timeout connecting to the client");
         connClose(conn);
@@ -1068,8 +1070,14 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      * distributed system. */
 
     /* Determine transaction slot and return early on cross-slot. */
-    if (c->cmd->proc == execCommand && c->flag.multi) {
-        int slot = -1;
+    if (c->cmd->proc == execCommand) {
+        if (!c->flag.multi || c->flag.dirty_exec) return myself;
+
+        int slot = c->slot;
+        if (c->read_flags & READ_FLAGS_CROSSSLOT) {
+            if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
+            return NULL;
+        }
         for (i = 0; i < c->mstate->count; i++) {
             if (slot == -1) {
                 slot = c->mstate->commands[i].slot;
@@ -1122,7 +1130,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      *
      *   1. Go over all the keys to count existing keys and missing keys that we
      *      need for TRYAGAIN and ASK redirects.
-     *   2. Check for some commands that are forbiddedn during slot migration.
+     *   2. Check for some commands that are forbidden during slot migration.
      *
      * Skip this if we're not importing or migrating this slot. */
     if (!migrating_slot && !importing_slot) goto after_checking_each_key;
@@ -1130,9 +1138,6 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
     if (c->cmd->proc == execCommand) {
-        /* If CLIENT_MULTI flag is not set EXEC is just going to return an
-         * error. */
-        if (!c->flag.multi) return myself;
         ms = c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
@@ -1150,15 +1155,21 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     serverDb *currentDb = origDb;
 
     /* Check for multiple keys, existing keys, missing keys. */
-    for (i = 0; i < ms->count; i++) {
+    for (i = c->cmd->proc == execCommand ? -1 : 0; i < ms->count; i++) {
         struct serverCommand *mcmd;
         robj **margv;
         int margc, numkeys, j;
         keyReference *keyindex;
 
-        mcmd = ms->commands[i].cmd;
-        margc = ms->commands[i].argc;
-        margv = ms->commands[i].argv;
+        if (i == -1) {
+            mcmd = c->cmd;
+            margc = c->argc;
+            margv = c->argv;
+        } else {
+            mcmd = ms->commands[i].cmd;
+            margc = ms->commands[i].argc;
+            margv = ms->commands[i].argv;
+        }
 
         getKeysResult result;
         initGetKeysResult(&result);
@@ -1223,7 +1234,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
              * slot migration, the channel will be served from the source
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
-            int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
+            int flags = LOOKUP_NOEFFECTS; /* not client key access */
             if (!pubsubshard_included &&
                 (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand))) {
                 /* Multi/Exec validation happens on exec */
@@ -1353,7 +1364,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  *
  * If the client is found to be blocked into a hash slot this node no
  * longer handles, the client is sent a redirection error, and the function
- * returns 1. Otherwise 0 is returned and no operation is performed. */
+ * returns 1. Otherwise, 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
     if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
@@ -1636,6 +1647,8 @@ void resetClusterStats(void) {
     server.cluster->stats_bus_module_bytes_sent = 0;
     server.cluster->stats_bus_module_bytes_received = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->stat_cluster_links_established_inbound = 0;
+    server.cluster->stat_cluster_links_established_outbound = 0;
 }
 
 void clusterCommandFlushslot(client *c) {

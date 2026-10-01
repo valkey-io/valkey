@@ -16,10 +16,14 @@ import time
 import argparse
 import sys
 import signal
+import rdma_env
 
 RDMA_PORT = 6379
 IO_THREADS = 4
 BENCH_TIMEOUT = 120
+RXE_TEST_NETDEV = rdma_env.TEST_NETDEV
+RXE_TEST_DEVICE = "rxe_" + RXE_TEST_NETDEV
+RXE_TEST_IP = rdma_env.TEST_IP
 
 
 def build_program():
@@ -45,26 +49,15 @@ def ipaddr_from_iface(iface):
     return None
 
 
-def find_default_iface():
-    for interface in netifaces.interfaces():
-        if interface == "lo":
-            continue
-        addrs = netifaces.ifaddresses(interface)
-        if netifaces.AF_INET in addrs:
-            return interface
-    return None
-
-
-def is_rxe_device(ibclass, dev):
-    # RXE driver sets node_desc to "rxe" (see kernel drivers/infiniband/sw/rxe/rxe_verbs.c).
+def is_rdma_port_active(ibclass, dev):
     try:
-        with open(os.path.join(ibclass, dev, "node_desc")) as fp:
-            return fp.read().strip() == "rxe"
+        with open(os.path.join(ibclass, dev, "ports", "1", "state")) as fp:
+            return fp.read().strip().startswith("4:")
     except OSError:
         return False
 
 
-def find_rdma_ip_from_sysfs(rxe_only=False):
+def find_rdma_ip_from_sysfs(expected_dev=None):
     # Ex, /sys/class/infiniband/mlx5_0
     # Ex, /sys/class/infiniband/rxe_eth0
     # Ex, /sys/class/infiniband/siw_eth0
@@ -74,48 +67,56 @@ def find_rdma_ip_from_sysfs(rxe_only=False):
     except OSError:
         return None
 
-    candidates = sorted(devices)
-    if rxe_only:
-        candidates = [dev for dev in candidates if is_rxe_device(ibclass, dev)]
+    candidates = [expected_dev] if expected_dev else sorted(devices)
 
     for dev in candidates:
-        # Ex, /sys/class/infiniband/rxe_eth0/ports/1/gid_attrs/ndevs/0
-        netdev = ibclass + dev + "/ports/1/gid_attrs/ndevs/0"
+        if dev not in devices:
+            continue
+        if not is_rdma_port_active(ibclass, dev):
+            continue
+
+        # A RoCE device can expose several GID entries. Use one that has a
+        # non-zero GID and maps to a netdev with an IP address.
+        ndevs = os.path.join(ibclass, dev, "ports", "1", "gid_attrs", "ndevs")
         try:
-            with open(netdev) as fp:
-                iface = fp.readline().strip()
-            if not iface:
-                continue
-            ipaddr = ipaddr_from_iface(iface)
-            if ipaddr is None:
-                continue
-            print("Valkey Over RDMA test prepare " + dev + " <" + ipaddr + "> [OK]")
-            return ipaddr
+            gid_indexes = sorted(os.listdir(ndevs), key=int)
         except (OSError, ValueError):
             continue
+
+        for gid_index in gid_indexes:
+            try:
+                with open(os.path.join(ndevs, gid_index)) as fp:
+                    iface = fp.readline().strip()
+                with open(os.path.join(ibclass, dev, "ports", "1", "gids", gid_index)) as fp:
+                    gid = fp.readline().strip()
+            except OSError:
+                continue
+
+            if not iface or not gid.replace(":", "").strip("0"):
+                continue
+            if expected_dev and iface != RXE_TEST_NETDEV:
+                continue
+            ipaddr = ipaddr_from_iface(iface)
+            if ipaddr is None or (expected_dev and ipaddr != RXE_TEST_IP):
+                continue
+            print("Valkey Over RDMA test prepare " + dev + " <" + iface + " " + ipaddr + "> [OK]")
+            return ipaddr
 
     return None
 
 
 def find_rdma_dev(install_rxe=False):
-    # After rdma link add, gid_attrs/ndevs can lag behind the device node.
-    # Retry briefly when we just installed RXE. Prefer RXE over host NICs
-    # (e.g. GitHub Actions mana_0) which share an IP but fail rdma_resolve_addr.
-    retries = 10 if install_rxe else 1
+    # After rdma link add, the port and GID table can lag behind the device
+    # node. When RXE was installed for this test, require that exact device;
+    # an IP address alone cannot distinguish RXE from a hardware RDMA provider.
+    expected_dev = RXE_TEST_DEVICE if install_rxe else None
+    retries = 20 if install_rxe else 1
     for attempt in range(retries):
-        ipaddr = find_rdma_ip_from_sysfs(rxe_only=install_rxe)
+        ipaddr = find_rdma_ip_from_sysfs(expected_dev)
         if ipaddr is not None:
             return ipaddr
         if attempt + 1 < retries:
             time.sleep(0.2)
-
-    if install_rxe:
-        iface = find_default_iface()
-        if iface is not None:
-            ipaddr = ipaddr_from_iface(iface)
-            if ipaddr is not None:
-                print("Valkey Over RDMA test prepare rxe_" + iface + " <" + ipaddr + "> [OK]")
-                return ipaddr
 
     return None
 
@@ -242,8 +243,8 @@ def test_exit(retval, install_rxe):
 
     if install_rxe and not os.geteuid():
         rdma_env_py = os.path.dirname(os.path.abspath(__file__)) + "/rdma_env.py"
-        cmd = rdma_env_py + " -o cleanup"
-        subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).wait()
+        cmd = [rdma_env_py, "-o", "cleanup", "-i", RXE_TEST_NETDEV]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     sys.stdout.flush()
     sys.stderr.flush()
@@ -277,8 +278,8 @@ if __name__ == "__main__":
                 test_exit(1, False)
 
             rdma_env_py = os.path.dirname(os.path.abspath(__file__)) + "/rdma_env.py"
-            cmd = rdma_env_py + " -o setup -d rxe"
-            if subprocess.call(cmd, shell=True):
+            cmd = [rdma_env_py, "-o", "setup", "-d", "rxe"]
+            if subprocess.call(cmd):
                 print("Valkey Over RDMA setup RXE [FAILED]")
                 test_exit(1, args.install_rxe)
 

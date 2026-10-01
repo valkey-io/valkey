@@ -1,4 +1,5 @@
 #include "server.h"
+#include "ordered_index.h"
 #include "bio.h"
 #include "functions.h"
 #include "cluster.h"
@@ -141,9 +142,9 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
-    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(obj);
-        return zslGetLength(zs->zsl);
+        return orderedIndexLength(zs->oi);
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
@@ -171,6 +172,9 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
             raxStop(&ri);
         }
         return effort;
+    } else if (obj->type == OBJ_PATH_HASH) {
+        pathHashObject *path_hash = objectGetVal(obj);
+        return path_hash->index->numnodes + path_hash->num_fields;
     } else if (obj->type == OBJ_MODULE) {
         size_t effort = moduleGetFreeEffort(key, obj, dbid);
         /* If the module's free_effort returns 0, we will use asynchronous free

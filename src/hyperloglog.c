@@ -522,7 +522,7 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
  * automatically since they are implicitly null terminated.
  *
  * The function always succeed, however if as a result of the operation
- * the approximated cardinality changed, 1 is returned. Otherwise 0
+ * the approximated cardinality changed, 1 is returned. Otherwise, 0
  * is returned. */
 int hllDenseSet(uint8_t *registers, long index, uint8_t count) {
     uint8_t oldcount;
@@ -1660,7 +1660,7 @@ invalid:
     return C_ERR;
 }
 
-/* PFADD var ele ele ele ... ele => :0 or :1 */
+/* PFADD var ele ele ... ele => :0 or :1 */
 void pfaddCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     struct hllhdr *hdr;
@@ -1717,7 +1717,7 @@ void pfcountCommand(client *c) {
         for (j = 1; j < c->argc; j++) {
             /* Check type and size. */
             robj *o = lookupKeyRead(c->db, c->argv[j]);
-            if (o == NULL) continue; /* Assume empty HLL for non existing var.*/
+            if (o == NULL) continue; /* Assume empty HLL for nonexistent var.*/
             if (isHLLObjectOrReply(c, o) != C_OK) return;
 
             /* Merge with this HLL with our 'max' HLL by setting max[i]
@@ -1805,7 +1805,7 @@ void pfmergeCommand(client *c) {
     for (j = 1; j < c->argc; j++) {
         /* Check type and size. */
         robj *o = lookupKeyRead(c->db, c->argv[j]);
-        if (o == NULL) continue; /* Assume empty HLL for non existing var. */
+        if (o == NULL) continue; /* Assume empty HLL for nonexistent var. */
         if (isHLLObjectOrReply(c, o) != C_OK) return;
 
         /* If at least one involved HLL is dense, use the dense representation

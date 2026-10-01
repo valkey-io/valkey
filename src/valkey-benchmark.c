@@ -69,10 +69,10 @@
 #define MAX_LATENCY_PRECISION 4
 #define MAX_THREADS 500
 #define CLUSTER_SLOTS 16384
-#define CONFIG_LATENCY_HISTOGRAM_MIN_VALUE 10L              /* >= 10 usecs */
-#define CONFIG_LATENCY_HISTOGRAM_MAX_VALUE 3000000L         /* <= 3 secs(us precision) */
-#define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 3000000L /* <= 3 secs(us precision) */
-#define SHOW_THROUGHPUT_INTERVAL 250                        /* 250ms */
+#define CONFIG_LATENCY_HISTOGRAM_MIN_VALUE 10L               /* >= 10 usecs */
+#define CONFIG_LATENCY_HISTOGRAM_MAX_VALUE 60000000L         /* <= 60 secs(us precision) */
+#define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 60000000L /* <= 60 secs(us precision) */
+#define SHOW_THROUGHPUT_INTERVAL 250                         /* 250ms */
 
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
@@ -206,6 +206,7 @@ typedef struct _client {
     int slots_last_update;
     uint64_t paused : 1;
     uint64_t reuse : 1;
+    uint64_t request_started : 1; /* Request initialized, even if no bytes were written. */
 } *client;
 
 /* Threads. */
@@ -215,6 +216,13 @@ typedef struct benchmarkThread {
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
+    /* Per-thread latency histograms: recording into one shared histogram
+     * with hdr_record_value_atomic makes every command from every thread
+     * contend on the same counter cache lines. Each thread records into
+     * its own histograms lock-free; thread 0 folds them for live display
+     * and the main thread folds them after join for the final report. */
+    struct hdr_histogram *latency_histogram;
+    struct hdr_histogram *current_sec_latency_histogram;
 } benchmarkThread;
 
 /* Cluster. */
@@ -482,6 +490,48 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
+/* Batched per-thread accounting for config.requests_finished. A relaxed
+ * fetch_add per completed command from every thread turns the counter's
+ * cache line into a process-wide contention point at high rates (the same
+ * failure mode as the shared latency histogram). Each thread accumulates
+ * locally and publishes one fetch_add per REQUESTS_FINISHED_FLUSH_BATCH
+ * completions, so the line is written at ~rps/batch instead of ~rps; the
+ * per-command read below then almost always hits a Shared cached copy.
+ *
+ * The residue is flushed from each thread's showThroughput timer (so
+ * count-mode termination, detected from the global value, cannot stall on
+ * unpublished counts) and after aeMain() returns (so the final report is
+ * exact). Consequences of the batching: termination detection and the
+ * "stop recording latency at the end" gate can lag by up to
+ * batch * num_threads commands, and a warmup-boundary reset can carry over
+ * a residue of the same magnitude -- both are the same benign-race class
+ * as the surrounding relaxed counter resets. The warmup carry-over is an
+ * intentional, documented trade-off: with --threads and --warmup, completion
+ * accounting around the warmup boundary is exact only to within
+ * batch * num_threads (an exact boundary would reintroduce cross-thread
+ * coordination on the completion path -- the contention this design
+ * removes). Runs whose -n is small enough for this to matter are far below
+ * any meaningful measurement size; the limitation is stated in the --warmup
+ * help text. Single-threaded mode keeps the exact per-command path. */
+#define REQUESTS_FINISHED_FLUSH_BATCH 256
+static _Thread_local int pending_requests_finished = 0;
+
+static void flushRequestsFinished(void) {
+    if (pending_requests_finished > 0) {
+        atomic_fetch_add_explicit(&config.requests_finished, pending_requests_finished, memory_order_relaxed);
+        pending_requests_finished = 0;
+    }
+}
+
+static int addRequestFinished(void) {
+    if (config.num_threads == 0) {
+        return atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+    }
+    pending_requests_finished++;
+    if (pending_requests_finished >= REQUESTS_FINISHED_FLUSH_BATCH) flushRequestsFinished();
+    return atomic_load_explicit(&config.requests_finished, memory_order_relaxed) + pending_requests_finished;
+}
+
 static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
     if (count == 0) return;
 
@@ -587,9 +637,11 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
+    c->request_started = 0;
     c->pending = config.pipeline * c->seqlen;
+    /* RDMA registration can invoke writeHandler immediately. */
+    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
 }
 
 /* Scan buffer for {tag} placeholders and store positions */
@@ -789,7 +841,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                int requests_finished = addRequestFinished();
                 if (!isBenchmarkFinished(requests_finished)) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -801,14 +853,15 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                                              ? (long)c->latency
                                              : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     } else {
-                        hdr_record_value_atomic(config.latency_histogram, // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
-                        hdr_record_value_atomic(config.current_sec_latency_histogram,      // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
+                        benchmarkThread *thread = config.threads[c->thread_id];
+                        hdr_record_value(thread->latency_histogram, // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
+                        hdr_record_value(thread->current_sec_latency_histogram,     // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     }
                 }
                 c->pending--;
@@ -855,7 +908,11 @@ static long long awakenPausedClient(struct aeEventLoop *eventLoop, long long id,
         // When client acquires a token, try to write with `reuse`.
         c->paused = 0;
         c->reuse = 1;
-        writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
+        /* writeHandler may make no progress (EAGAIN) or only partially write.
+         * The pause path removed AE_WRITABLE, so invoke it through the normal
+         * registration helper: TCP retains a future writable wakeup and RDMA
+         * keeps its required register-then-kick behavior. */
+        createFileEvent(eventLoop, c->context->fd, AE_WRITABLE, writeHandler, c);
         listDelNode(paused_clients, ln);
     }
 
@@ -872,8 +929,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(fd);
     UNUSED(mask);
 
-    // When benchmark with rps control, and client is not reuse, try to acquire a token.
-    if (config.rps > 0 && c->reuse == 0) {
+    /* Acquire a token only for a new request not already resumed by the timer. */
+    if (config.rps > 0 && c->reuse == 0 && !c->request_started) {
         /* Acquire a token from the token bucket. */
         long long delay = acquireTokenOrWait(config.pipeline);
 
@@ -902,8 +959,10 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
     c->reuse = 0;
 
-    /* Initialize request when nothing was written. */
-    if (c->written == 0) {
+    /* Initialize each request only once. A would-block write can leave written
+     * at zero across callbacks, but must not consume another request or change
+     * the buffer (TLS retries also require the same write contents). */
+    if (!c->request_started) {
         /* Enforce upper bound to number of requests. */
         int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
                                                         config.pipeline * c->seqlen,
@@ -943,6 +1002,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
         c->latency = -1;
+        c->request_started = 1;
     }
     const ssize_t buflen = sdslen(c->obuf);
     const ssize_t writeLen = buflen - c->written;
@@ -952,20 +1012,27 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             /* Optimistically try to write before checking if the file descriptor
              * is actually writable. At worst we get EAGAIN. */
             const ssize_t nwritten = cliWriteConn(c->context, ptr, writeLen);
-            if (nwritten != writeLen) {
-                if (nwritten == -1 && errno != EAGAIN) {
-                    if (errno != EPIPE) fprintf(stderr, "Error writing to the server: %s\n", strerror(errno));
-                    freeClient(c);
-                    return;
-                } else if (nwritten > 0) {
-                    c->written += nwritten;
-                    return;
-                }
-            } else {
+            if (nwritten == writeLen) {
                 aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
                 createFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
                 return;
             }
+
+            if (nwritten > 0) {
+                c->written += nwritten;
+                return;
+            }
+
+            if (nwritten == -1 && errno != EAGAIN) {
+                if (errno != EPIPE) fprintf(stderr, "Error writing to the server: %s\n", strerror(errno));
+                freeClient(c);
+                return;
+            }
+
+            /* cliWriteConn reports a nonblocking would-block as zero. Leave
+             * the writable event armed: retrying here would spin this worker
+             * and prevent it from servicing replies and benchmark timers. */
+            return;
         }
     }
 }
@@ -1034,6 +1101,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     }
     c->paused = 0;
     c->reuse = 0;
+    c->request_started = 0;
     c->thread_id = thread_id;
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
@@ -1295,6 +1363,13 @@ static void startBenchmarkThreads(void) {
         }
     }
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
+    /* All threads have stopped: fold the per-thread latency histograms into
+     * the global histogram for exact final reporting. Reset it first --
+     * showThroughput may have populated it with approximate live merges. */
+    hdr_reset(config.latency_histogram);
+    for (i = 0; i < config.num_threads; i++) {
+        hdr_add(config.latency_histogram, config.threads[i]->latency_histogram);
+    }
 }
 
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
@@ -1364,12 +1439,22 @@ static benchmarkThread *createBenchmarkThread(int index) {
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
     thread->paused_clients = listCreate();
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->latency_histogram);                // Pointer to initialise
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE, // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->current_sec_latency_histogram);    // Pointer to initialise
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
+    if (thread->latency_histogram) hdr_close(thread->latency_histogram);
+    if (thread->current_sec_latency_histogram) hdr_close(thread->current_sec_latency_histogram);
     listRelease(thread->paused_clients);
     zfree(thread);
 }
@@ -1387,6 +1472,9 @@ static void freeBenchmarkThreads(void) {
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
     aeMain(thread->el);
+    /* Publish any batched completion residue: the final report reads
+     * config.requests_finished after all threads are joined. */
+    flushRequestsFinished();
     return NULL;
 }
 
@@ -2039,7 +2127,10 @@ usage:
         "                    Run benchmark for specified number of seconds\n"
         "                    (mutually exclusive with -n)\n"
         " --warmup <seconds> Run benchmark for specified warmup period before\n"
-        "                    recording data\n"
+        "                    recording data. With --threads, completed-request\n"
+        "                    accounting is batched per thread, so a small number\n"
+        "                    of pre-warmup completions may carry into the counted\n"
+        "                    total at the warmup boundary.\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -2095,6 +2186,9 @@ usage:
         " --rps <requests>   Limit the total number of requests per second.\n"
         "                    Default 0 (no limit)\n"
         " --seed <num>       Set the seed for random number generator.\n"
+        "                    With --threads, per-thread streams are seeded\n"
+        "                    deterministically but their order of first use\n"
+        "                    depends on thread scheduling.\n"
         "                    Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
@@ -2142,6 +2236,9 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
+    /* Publish this thread's batched completion count so global termination
+     * detection and the displayed totals stay fresh (see addRequestFinished). */
+    flushRequestsFinished();
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
@@ -2162,6 +2259,13 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
             atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
             atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
             hdr_reset(config.latency_histogram);
+            /* Per-thread histograms carry the recorded values now; clear them
+             * too. Concurrent recording may leak a warmup sample into the
+             * results -- same benign-race class as the counter resets above. */
+            for (int t = 0; t < config.num_threads; t++) {
+                hdr_reset(config.threads[t]->latency_histogram);
+                hdr_reset(config.threads[t]->current_sec_latency_histogram);
+            }
         }
     } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
@@ -2181,6 +2285,18 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         printf("clients: %d\r", config.liveclients);
         fflush(stdout);
         return SHOW_THROUGHPUT_INTERVAL;
+    }
+    if (config.num_threads) {
+        /* Use thread-0's own histograms for the live display line. This is
+         * race-free (showThroughput runs on thread-0's event loop, same thread
+         * that records into these histograms) and representative under uniform
+         * workloads. The final report folds all threads exactly after join. */
+        benchmarkThread *t0 = config.threads[0];
+        hdr_reset(config.latency_histogram);
+        hdr_add(config.latency_histogram, t0->latency_histogram);
+        hdr_reset(config.current_sec_latency_histogram);
+        hdr_add(config.current_sec_latency_histogram, t0->current_sec_latency_histogram);
+        hdr_reset(t0->current_sec_latency_histogram);
     }
     const float dt = (float)(current_tick - config.start) / 1000.0;
     const float rps = (float)requests_finished / dt;
@@ -2410,7 +2526,7 @@ int main(int argc, char **argv) {
             sds_args[argc] = readArgFromStdin();
             argc++;
         }
-        /* Setup argument length */
+        /* Set up argument length */
         argvlen = zmalloc(argc * sizeof(size_t));
         for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
         /* RESP-encode the command(s) given on the syntax

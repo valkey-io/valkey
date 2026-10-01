@@ -1182,3 +1182,182 @@ start_cluster 1 3 {tags {external:skip cluster} overrides {cluster-node-timeout 
     }
 
 } ;# start_cluster 1 3
+
+# Offsets alone cannot attest a replica's dataset. Exercise donor-side rejection
+# and config history with a single sibling, so selection is deterministic.
+start_cluster 1 2 {tags {external:skip cluster} overrides {cluster-node-timeout 3000 repl-ping-replica-period 1}} {
+    set primary_id [R 0 cluster myid]
+    R 1 readonly
+    R 2 readonly
+    wait_node_synced 1
+    wait_node_synced 2
+
+    foreach mode {writable writable-reverted evicting evicting-reverted} {
+        test "DONOR SAFETY - Reject $mode sibling snapshots" {
+            # Start every case from an authoritative full sync.
+            R 1 config set replica-read-only yes replica-ignore-maxmemory yes maxmemory 0
+            R 1 cluster replicate no one
+            R 1 cluster replicate $primary_id
+            wait_node_synced 1
+            R 0 flushall
+            for {set i 0} {$i < 100} {incr i} {
+                R 0 set "safety:$i" [string repeat x 8192]
+            }
+            wait_for_ofs_sync [srv 0 client] [srv -1 client]
+            set evictions [get_info 1 evicted_keys]
+            if {[string match writable* $mode]} {
+                R 1 config set replica-read-only no
+                R 1 flushall
+                assert_equal 0 [R 1 exists safety:0]
+            } else {
+                R 1 config set replica-ignore-maxmemory no maxmemory-policy allkeys-lru maxmemory 1
+                wait_for_condition 100 10 {
+                    [get_info 1 evicted_keys] > $evictions && [R 1 dbsize] == 0
+                } else {
+                    fail "Sibling did not evict its local dataset"
+                }
+            }
+            assert_equal 1 [R 0 exists safety:0]
+            if {[string match *reverted $mode]} {
+                R 1 config set replica-read-only yes replica-ignore-maxmemory yes maxmemory 0
+                set full_syncs [get_info 0 sync_full]
+                R 1 client kill type primary
+                wait_node_synced 1
+                assert_equal $full_syncs [get_info 0 sync_full]
+            }
+            assert_error "*Sibling snapshot is not consistent*" {R 1 replconf sibling-sync $primary_id}
+
+            R 2 cluster replicate no one
+            R 2 config set cluster-prefer-sync-from-replica yes
+            set primary_syncs [get_info 0 sync_full]
+            set sibling_syncs [get_info 1 sync_full]
+            set lines [count_log_lines -2]
+            R 2 cluster replicate $primary_id
+            wait_node_synced 2
+            wait_for_log_messages -2 [list "*donor rejected snapshot attestation*"] $lines 1000 10
+            assert {[get_info 0 sync_full] > $primary_syncs}
+            assert_equal $sibling_syncs [get_info 1 sync_full]
+            for {set i 0} {$i < 100} {incr i} {
+                assert_equal [R 0 get "safety:$i"] [R 2 get "safety:$i"]
+            }
+        }
+    }
+
+    test "DONOR SAFETY - Rejected attestation falls back to the primary" {
+        R 1 config set replica-read-only yes replica-ignore-maxmemory yes maxmemory 0
+        R 1 cluster replicate no one
+        R 1 cluster replicate $primary_id
+        wait_node_synced 1
+        R 2 cluster replicate no one
+        set primary_syncs [get_info 0 sync_full]
+        set sibling_syncs [get_info 1 sync_full]
+        # Reject the handshake as an older or incompatible donor would.
+        R 1 acl setuser default -replconf
+        try {
+            R 2 cluster replicate $primary_id
+            wait_node_synced 2
+            assert {[get_info 0 sync_full] > $primary_syncs}
+            assert_equal $sibling_syncs [get_info 1 sync_full]
+            assert_equal [R 0 get safety:0] [R 2 get safety:0]
+        } finally {
+            R 1 acl setuser default +replconf
+        }
+    }
+
+    test "DONOR SAFETY - Authoritative full sync restores sibling eligibility" {
+        R 1 config set replica-read-only no
+        R 1 flushall
+        R 1 config set replica-read-only yes
+        assert_error "*Sibling snapshot is not consistent*" {R 1 replconf sibling-sync $primary_id}
+        R 1 cluster replicate no one
+        R 1 cluster replicate $primary_id
+        wait_node_synced 1
+        set donor_id [R 1 cluster myid]
+        wait_for_condition 100 20 {
+            [observed_replication_offset 2 $donor_id] > 0 &&
+            [get_observed_primary_id 2 $donor_id] eq $primary_id
+        } else {
+            fail "Restored donor eligibility did not propagate through gossip"
+        }
+        R 2 cluster replicate no one
+        set primary_syncs [get_info 0 sync_full]
+        set sibling_syncs [get_info 1 sync_full]
+        R 2 cluster replicate $primary_id
+        wait_node_synced 2
+        assert_equal $primary_syncs [get_info 0 sync_full]
+        assert {[get_info 1 sync_full] > $sibling_syncs}
+        assert_equal [R 0 get safety:0] [R 2 get safety:0]
+    }
+
+    test "DONOR SAFETY - Unsafe config disconnects an attested sync client" {
+        set donor [valkey [srv -1 host] [srv -1 port] 0 $::tls]
+        try {
+            assert_equal OK [$donor replconf sibling-sync $primary_id]
+            R 1 config set replica-ignore-maxmemory no
+            assert_error "*" {$donor ping}
+            R 1 config set replica-ignore-maxmemory yes
+            assert_error "*Sibling snapshot is not consistent*" {R 1 replconf sibling-sync $primary_id}
+        } finally {
+            catch {$donor close}
+            R 1 config set replica-ignore-maxmemory yes
+        }
+    }
+}
+
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-node-timeout 3000 repl-ping-replica-period 1}} {
+    test "CACHE SAFETY - Empty replica reattach discards deferred primary history" {
+        R 0 set cache-safety-key authoritative
+        wait_node_synced 1
+        wait_for_ofs_sync [srv 0 client] [srv -1 client]
+        set primary_id [R 0 cluster myid]
+        set full_syncs [get_info 0 sync_full]
+
+        # Model the deferred free caused by a pending I/O-thread read. Once
+        # CLUSTER REPLICATE NO ONE empties the dataset, its history is unusable.
+        R 1 debug force-free-primary-async 1
+        R 1 cluster replicate no one
+        assert_equal 0 [R 1 dbsize]
+        R 1 cluster replicate $primary_id
+        wait_node_synced 1
+        R 1 readonly
+        assert_equal authoritative [R 1 get cache-safety-key]
+        assert {[get_info 0 sync_full] > $full_syncs}
+    }
+}
+
+start_cluster 1 2 {tags {external:skip cluster} overrides {cluster-node-timeout 3000 repl-ping-replica-period 1}} {
+    test "DONOR SAFETY - Deferred old primary cannot bypass sibling attestation" {
+        R 0 set deferred-safety-key authoritative
+        wait_node_synced 1
+        wait_node_synced 2
+        wait_for_ofs_sync [srv 0 client] [srv -1 client]
+        wait_for_ofs_sync [srv 0 client] [srv -2 client]
+        set primary_id [R 0 cluster myid]
+        set donor_id [R 1 cluster myid]
+        wait_for_condition 100 20 {
+            [observed_replication_offset 2 $donor_id] > 0
+        } else {
+            fail "Donor offset did not propagate through gossip"
+        }
+        R 1 config set replica-read-only no
+        R 1 flushall
+        assert_equal 0 [R 1 dbsize]
+        assert_equal 1 [R 0 exists deferred-safety-key]
+        R 2 config set cluster-prefer-sync-from-replica yes
+        set lines [count_log_lines -2]
+
+        # Keep the old primary alive through both the detach and reattach.
+        # Its eventual free must not abort or downgrade the new sibling link.
+        R 2 multi
+        R 2 debug force-free-primary-async 1
+        R 2 cluster replicate no one
+        R 2 debug force-free-primary-async 1
+        R 2 cluster replicate $primary_id
+        R 2 debug force-free-primary-async 0
+        assert_equal {OK OK OK OK OK} [R 2 exec]
+        wait_node_synced 2
+        R 2 readonly
+        assert_equal authoritative [R 2 get deferred-safety-key]
+        wait_for_log_messages -2 [list "*donor rejected snapshot attestation*"] $lines 1000 10
+    }
+}

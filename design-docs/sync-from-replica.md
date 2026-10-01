@@ -148,6 +148,28 @@ N selects the best sibling from the primary's replica list in cluster state:
 
 **Who picks:** N picks, using cluster gossip data available after CLUSTER MEET. Primary-side selection (P picks the best S) would be more accurate but requires new protocol and is deferred to a future enhancement.
 
+Selection uses gossip only as a candidate list. Before PSYNC, N sends
+`REPLCONF sibling-sync <primary-node-id>` on the command channel and, for
+dual-channel replication, on the RDB channel. S must explicitly accept it.
+An unknown or rejected option makes N fall back to P. This requirement applies
+only to this optimization; ordinary chained replication keeps its existing
+behavior.
+
+A donor must be connected to the same cluster primary, be read-only, and ignore
+maxmemory. Its dataset must also have been established by a full sync from the
+topology primary or an attested sibling while those settings remained safe.
+Replication IDs and offsets alone cannot detect replica-local writes or eviction.
+Enabling writes or local eviction revokes donor eligibility and disconnects
+attested sync clients, including handshakes and both dual-channel connections.
+Changing the replication target also revokes eligibility. Changing the settings
+back or performing a partial resync does not restore eligibility. An authoritative full sync with safe settings does restore it.
+
+The safety state is runtime only and starts unverified after restart. A replica
+that reloads persistence and reconnects with PSYNC cannot donate until an
+authoritative full sync establishes its dataset. Full sync from an ordinary
+chained replica does not establish eligibility either. These conservative cases
+use the normal full sync from P.
+
 **If no eligible sibling:** fall back to normal full sync from P. The feature is best-effort, not mandatory.
 
 ## rdb-only BGSAVE Piggybacking Bug
@@ -155,6 +177,13 @@ N selects the best sibling from the primary's replica list in cluster state:
 When a sibling has a BGSAVE already in progress and a new rdb-only client attaches to it, the offset from `+FULLRESYNC` is from the original BGSAVE trigger time. But rdb-only clients do not get the output buffer copy. The offset is stale because the RDB content is ahead of the offset, which can duplicate non-idempotent commands such as INCR, LPUSH, and SADD.
 
 **Fix:** Never attach rdb-only sync requests to an existing BGSAVE. Force `WAIT_BGSAVE_START` and trigger a fresh BGSAVE. This ensures the offset in `+FULLRESYNC` matches the RDB content exactly.
+
+Replica promotion teardown cannot cache a primary connection that is being
+freed asynchronously. When a new target requires full sync, any existing cached
+primary is also discarded. Deferred clients are detached from `server.primary`,
+and client-free callbacks only affect the current primary connection. They cannot
+cancel a newly selected sibling handshake or bypass its attestation. In particular, `CLUSTER REPLICATE NO ONE` empties the
+dataset, so reattachment must never PSYNC using the discarded dataset's offset.
 
 ## Failure Modes
 

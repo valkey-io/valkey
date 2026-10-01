@@ -1358,6 +1358,7 @@ typedef struct ClientReplicationData {
     _Atomic(int) forkless_pending_close; /* Main thread asks the forkless save to hand this replica
                                           * back for closing. Atomic (relaxed) since both threads access it without a lock. */
     short replica_req;                   /* Replica requirements: REPLICA_REQ_* */
+    bool sibling_sync;                   /* Requires an authoritative sibling snapshot. */
     uint64_t associated_rdb_client_id;   /* The client id of this replica's rdb connection */
     time_t rdb_client_disconnect_time;   /* Time of the first freeClient call on this client. Used for delaying free. */
     listNode *ref_repl_buf_node;         /* Referenced node of replication buffer blocks,
@@ -2339,6 +2340,8 @@ struct valkeyServer {
     int repl_serve_stale_data;            /* Serve stale data when link is down? */
     int repl_replica_ro;                  /* Replica is read only? */
     int repl_replica_ignore_maxmemory;    /* If true replicas do not evict. */
+    bool repl_sibling_donor_safe;         /* Dataset established by an authoritative full sync. */
+    bool repl_sibling_full_sync_safe;     /* No unsafe settings during the current full sync. */
     time_t repl_down_since;               /* Unix time at which link with primary went down */
     int repl_disable_tcp_nodelay;         /* Disable TCP_NODELAY after SYNC? */
     int repl_mptcp;                       /* Use Multipath TCP for replica on client side */
@@ -3468,6 +3471,7 @@ void replicationCron(void);
 int replicationAbortSiblingSync(void);
 /* Forget sibling sync state when the caller establishes its own target. */
 void replicationDiscardSiblingSync(void);
+void replicationInvalidateSiblingDonor(void);
 /* Switch from the sibling back to the primary after the sibling stream drains. */
 void replicationMaybeSwitchToPrimaryAfterSiblingSync(void);
 /* Cancel an active replication handshake; reconnect when requested and possible. */

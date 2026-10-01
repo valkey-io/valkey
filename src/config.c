@@ -2932,6 +2932,13 @@ static int updateClusterState(const char **err) {
     return 1;
 }
 
+static int updateSiblingDonorSafety(const char **err) {
+    UNUSED(err);
+    if (!server.repl_replica_ro || !server.repl_replica_ignore_maxmemory)
+        replicationInvalidateSiblingDonor();
+    return 1;
+}
+
 static int updateClusterPreferSyncFromReplica(const char **err) {
     UNUSED(err);
     /* Sibling discovery relies on cluster gossip, so outside cluster mode the
@@ -3494,8 +3501,8 @@ standardConfig static_configs[] = {
     createBoolConfig("aof-timestamp-enabled", NULL, MODIFIABLE_CONFIG, server.aof_timestamp_enabled, 0, NULL, NULL),
     createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 1, NULL, NULL),
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, server.repl_serve_stale_data, 1, NULL, NULL),
-    createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, NULL),
-    createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, NULL),
+    createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, updateSiblingDonorSafety),
+    createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, updateSiblingDonorSafety),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, server.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
     createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
     createBoolConfig("forkless-infrastructure-enabled", NULL, IMMUTABLE_CONFIG, server.forkless_infrastructure_enabled, 0, NULL, NULL),

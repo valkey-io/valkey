@@ -81,6 +81,10 @@ typedef enum ValkeyRdmaOpcode {
 #define VALKEY_RDMA_SYNCIO_RES 10
 #define VALKEY_RDMA_INVALID_OPCODE 0xffff
 #define VALKEY_RDMA_KEEPALIVE_MS 3000
+/* Largest payload posted inline, and the inline size requested at QP creation:
+ * 256 - 16 (ctrl) - 16 (raddr) - 4 (inline header). A bigger inlined WQE no
+ * longer fits the 256-byte BlueFlame buffer of current mlx5 NICs. */
+#define VALKEY_RDMA_BF_MAX_INLINE (256 - 16 - 16 - 4)
 
 
 typedef struct rdma_connection {
@@ -117,6 +121,7 @@ typedef struct RdmaContext {
     uint32_t tx_length; /* remote transfer buffer length */
     uint32_t tx_offset; /* remote transfer buffer offset */
     uint32_t tx_ops;    /* operations on remote transfer */
+    uint32_t tx_inline; /* largest payload to post inline */
 
     /* RX */
     RdmaXfer rx;
@@ -372,13 +377,25 @@ static int rdmaCreateResource(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     init_attr.cap.max_recv_wr = VALKEY_RDMA_MAX_WQE;
     init_attr.cap.max_send_sge = device_attr.max_sge;
     init_attr.cap.max_recv_sge = 1;
+    init_attr.cap.max_inline_data = VALKEY_RDMA_BF_MAX_INLINE;
     init_attr.qp_type = IBV_QPT_RC;
     init_attr.send_cq = cq;
     init_attr.recv_cq = cq;
     ret = rdma_create_qp(cm_id, pd, &init_attr);
     if (ret) {
+        /* the device may not support inline data, try again without it */
+        init_attr.cap.max_inline_data = 0;
+        ret = rdma_create_qp(cm_id, pd, &init_attr);
+    }
+    if (ret) {
         serverLog(LL_WARNING, "RDMA: create qp failed: %s", strerror(errno));
         return C_ERR;
+    }
+
+    /* rdma_create_qp() writes the granted inline data size back into init_attr */
+    ctx->tx_inline = init_attr.cap.max_inline_data;
+    if (ctx->tx_inline > VALKEY_RDMA_BF_MAX_INLINE) {
+        ctx->tx_inline = VALKEY_RDMA_BF_MAX_INLINE;
     }
 
     if (rdmaSetupIoBuf(ctx, cm_id)) {
@@ -1323,6 +1340,10 @@ static size_t connRdmaSend(connection *conn, const void *data, size_t data_len) 
     send_wr.num_sge = 1;
     send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     send_wr.send_flags = (++ctx->tx_ops % (VALKEY_RDMA_MAX_WQE / 2)) ? 0 : IBV_SEND_SIGNALED;
+    /* post a small payload inline: the NIC then does not read it from memory */
+    if (data_len <= ctx->tx_inline) {
+        send_wr.send_flags |= IBV_SEND_INLINE;
+    }
     send_wr.imm_data = htonl(data_len);
     send_wr.wr.rdma.remote_addr = (uint64_t)(uintptr_t)remote_addr;
     send_wr.wr.rdma.rkey = ctx->tx_key;

@@ -198,16 +198,21 @@ $(WRAP_DIR):
 # llvm-objcopy then wrote an object without the renames.
 define wrap-object
 	@mkdir -p $(dir $@)
-	@if file $< | grep -q "LLVM bitcode"; then \
-		$(WRAP_CC) -c -x ir $< -o $(WRAP_DIR)/$*_temp.o && \
-		python3 generate-redefine-syms.py --nm llvm-nm $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms && \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@ && \
-		rm -f $(WRAP_DIR)/$*_temp.o; \
+	@set -e; \
+	if file $< | grep -q "LLVM.*bitcode"; then \
+		native=$(WRAP_DIR)/$*_temp.o; \
+		$(CC) -c -x ir $< -o $$native; \
 	else \
-		python3 generate-redefine-syms.py --nm llvm-nm $< > $(WRAP_DIR)/$*-wrap-syms && \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
-	fi
-	@rm -f $(WRAP_DIR)/$*-wrap-syms
+		native=$<; \
+	fi; \
+	if [ "$(REDEFINE_SYMS)" = yes ]; then \
+		python3 generate-redefine-syms.py --nm llvm-nm $$native > $(WRAP_DIR)/$*-wrap-syms; \
+		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $$native $@; \
+		rm -f $(WRAP_DIR)/$*-wrap-syms; \
+	elif [ "$$native" != "$@" ]; then \
+		cp $$native $@; \
+	fi; \
+	rm -f $(WRAP_DIR)/$*_temp.o
 endef
 
 # Wrap server library objects

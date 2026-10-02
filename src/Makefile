@@ -57,20 +57,6 @@ endif
 WARN=-Wall -W -Wno-missing-field-initializers -Werror=deprecated-declarations -Wstrict-prototypes -Werror=undef
 OPT=$(OPTIMIZATION)
 
-# On macOS the unit tests turn the LLVM bitcode of the server objects into native objects with llc.
-# llc only understands bitcode from its own LLVM, so the matching Homebrew toolchain is used.
-ifeq ($(uname_S),Darwin)
-ifeq ($(origin CC),default)
-	BREW_CLANG := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/clang /usr/local/opt/llvm/bin/clang))
-	ifneq ($(BREW_CLANG),)
-		CC := $(BREW_CLANG)
-		CXX := $(BREW_CLANG)++
-		AR := $(dir $(BREW_CLANG))llvm-ar
-		RANLIB := $(dir $(BREW_CLANG))llvm-ranlib
-	endif
-endif
-endif
-
 # Detect if the compiler supports C11 _Atomic.
 # NUMBER_SIGN_CHAR is a workaround to support both GNU Make 4.3 and older versions.
 NUMBER_SIGN_CHAR := \#

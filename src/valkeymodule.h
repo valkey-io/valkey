@@ -2167,7 +2167,7 @@ VALKEYMODULE_API size_t (*ValkeyModule_MallocUsableSize)(void *ptr) VALKEYMODULE
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeString)(ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeDict)(ValkeyModuleDict *dict) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleUser *(*ValkeyModule_CreateModuleUser)(const char *name)VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_FreeModuleUser)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_FreeModuleUser)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetContextUser)(ValkeyModuleCtx *ctx,
                                                      const ValkeyModuleUser *user) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_SetModuleUserACL)(ValkeyModuleUser *user, const char *acl) VALKEYMODULE_ATTR;
@@ -2192,14 +2192,14 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckPermissions)(ValkeyModuleUser *user,
                                                          int argc,
                                                          int dbid,
                                                          ValkeyModuleACLLogEntryReason *denial_reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
-                                                     ValkeyModuleUser *user,
-                                                     ValkeyModuleString *object,
-                                                     ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntryByUserName)(ValkeyModuleCtx *ctx,
-                                                               ValkeyModuleString *user,
-                                                               ValkeyModuleString *object,
-                                                               ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
+                                                    ValkeyModuleUser *user,
+                                                    ValkeyModuleString *object,
+                                                    ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLAddLogEntryByUserName)(ValkeyModuleCtx *ctx,
+                                                              ValkeyModuleString *user,
+                                                              ValkeyModuleString *object,
+                                                              ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_AuthenticateClientWithACLUser)(ValkeyModuleCtx *ctx,
                                                                    const char *name,
                                                                    size_t len,

@@ -33,3 +33,13 @@
    ...
    fun:allocBioJob
 }
+
+{
+   <bio_cluster_save_tmpfilename_in_flight_at_exit>
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:realloc
+   ...
+   fun:clusterSaveConfigImpl
+   fun:clusterSaveConfigFromBio
+}

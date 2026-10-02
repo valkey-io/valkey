@@ -367,10 +367,10 @@ static void *IOThreadMain(void *myid) {
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
     serverSetCpuAffinity(server.server_cpulist);
+    thread_id = (int)id;
     initSharedQueryBuf();
     pthread_cleanup_push(cleanupThreadResources, NULL);
 
-    thread_id = (int)id;
     void *batch_jobs[BATCH_SIZE];
     int processed = 0;
     monotime work_start_time = 0;

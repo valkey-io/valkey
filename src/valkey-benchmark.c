@@ -156,6 +156,7 @@ typedef struct _client {
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
+    uint64_t request_started : 1; /* Request initialized, even if no bytes were written. */
 } *client;
 
 /* Threads. */
@@ -388,9 +389,10 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
+    c->request_started = 0;
     c->pending = config.pipeline;
+    aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
 }
 
 static void randomizeClientKey(client c) {
@@ -569,8 +571,10 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(fd);
     UNUSED(mask);
 
-    /* Initialize request when nothing was written. */
-    if (c->written == 0) {
+    /* Initialize each request only once. A would-block write can leave written
+     * at zero across callbacks, but must not consume another request or change
+     * the buffer (TLS retries also require the same write contents). */
+    if (!c->request_started) {
         /* Enforce upper bound to number of requests. */
         int requests_issued = atomic_fetch_add_explicit(&config.requests_issued, config.pipeline, memory_order_relaxed);
         if (requests_issued >= config.requests) {
@@ -583,6 +587,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
         c->latency = -1;
+        c->request_started = 1;
     }
     const ssize_t buflen = sdslen(c->obuf);
     const ssize_t writeLen = buflen - c->written;
@@ -592,20 +597,27 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             /* Optimistically try to write before checking if the file descriptor
              * is actually writable. At worst we get EAGAIN. */
             const ssize_t nwritten = cliWriteConn(c->context, ptr, writeLen);
-            if (nwritten != writeLen) {
-                if (nwritten == -1 && errno != EAGAIN) {
-                    if (errno != EPIPE) fprintf(stderr, "Error writing to the server: %s\n", strerror(errno));
-                    freeClient(c);
-                    return;
-                } else if (nwritten > 0) {
-                    c->written += nwritten;
-                    return;
-                }
-            } else {
+            if (nwritten == writeLen) {
                 aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
                 aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
                 return;
             }
+
+            if (nwritten > 0) {
+                c->written += nwritten;
+                return;
+            }
+
+            if (nwritten == -1 && errno != EAGAIN) {
+                if (errno != EPIPE) fprintf(stderr, "Error writing to the server: %s\n", strerror(errno));
+                freeClient(c);
+                return;
+            }
+
+            /* cliWriteConn reports a nonblocking would-block as zero. Leave
+             * the writable event armed: retrying here would spin this worker
+             * and prevent it from servicing replies and benchmark timers. */
+            return;
         }
     }
 }
@@ -675,6 +687,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             exit(1);
         }
     }
+    c->request_started = 0;
     c->thread_id = thread_id;
     /* Suppress hiredis cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;

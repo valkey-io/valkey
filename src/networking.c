@@ -966,8 +966,12 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         if (len > 4096) len = 4096;
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
         /* The error text may echo command arguments, which can be user data. */
-        const char *err = server.hide_user_data_from_log ? "*redacted*" : s;
-        int err_len = server.hide_user_data_from_log ? (int)strlen(err) : (int)len;
+        const char *err = s;
+        int err_len = (int)len;
+        if (server.hide_user_data_from_log) {
+            err = objectGetVal(shared.redacted);
+            err_len = (int)sdslen(err);
+        }
         serverLog(LL_WARNING,
                   "== CRITICAL == This %s is sending an error "
                   "to its %s: '%.*s' after processing the command "

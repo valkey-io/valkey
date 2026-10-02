@@ -1757,7 +1757,7 @@ start_server {tags {"repl" "external:skip"}} {
             assert_equal "PONG" [r ping]
 
             if {$hide} {
-                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: '\\*redacted\\*'*" $lines
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: '(redacted)'*" $lines
                 verify_no_log_message 0 "*secretvalue*" $lines
             } else {
                 verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *secretvalue*" $lines

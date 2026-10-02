@@ -6576,10 +6576,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     if (replicate && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)) && isPausedActions(PAUSE_ACTION_REPLICA)) {
         errno = ENOSPC;
         if (error_as_call_replies) {
-            reply_error_msg = sdscatfmt(sdsempty(),
-                                        "Write command '%S' was "
-                                        "called while the server is paused for writes.",
-                                        c->cmd->fullname);
+            sds msg = sdscatfmt(sdsempty(),
+                                "Write command '%S' was "
+                                "called while the server is paused for writes.",
+                                c->cmd->fullname);
+            reply = callReplyCreateError(msg, ctx);
         }
         goto cleanup;
     }

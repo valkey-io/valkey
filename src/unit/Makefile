@@ -183,7 +183,7 @@ define wrap-object
 	@set -e; \
 	if file $< | grep -q "LLVM.*bitcode"; then \
 		native=$(WRAP_DIR)/$*_temp.o; \
-		llc $< -filetype=obj -o $$native; \
+		$(CC) -c -x ir $< -o $$native; \
 	else \
 		native=$<; \
 	fi; \

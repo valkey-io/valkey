@@ -33,6 +33,7 @@
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
 #define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
+#define CLUSTER_TODO_FIRE_MODULE_TOPOLOGY_EVENT (1 << 7)
 
 /* I/O state for threaded cluster bus offload. */
 typedef enum {

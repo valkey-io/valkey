@@ -67,6 +67,21 @@ start_server {tags {"keyspace"}} {
         append res [r exists newkey]
     } {10}
 
+    test {EXISTS does not update keyspace hits or misses} {
+        r set existskey value
+        set info [r info stats]
+        set hits_before [getInfoProperty $info keyspace_hits]
+        set misses_before [getInfoProperty $info keyspace_misses]
+        r exists existskey
+        r exists nonexistingkey
+        set info [r info stats]
+        set hits_after [getInfoProperty $info keyspace_hits]
+        set misses_after [getInfoProperty $info keyspace_misses]
+        assert_equal $hits_before $hits_after
+        assert_equal $misses_before $misses_after
+        r del existskey
+    }
+
     test {Zero length value in key. SET/GET/EXISTS} {
         r set emptykey {}
         set res [r get emptykey]

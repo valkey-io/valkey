@@ -732,11 +732,12 @@ start_server {tags {"zset"}} {
 
         test "Negative LIMIT offset in score range - $encoding" {
             create_zset zset {1 a 2 b 3 c}
+            set long_min [expr {-(1 << ([s arch_bits] - 1))}]
             assert_equal {} [r zrange zset 3 1 BYSCORE REV LIMIT -2 2]
             assert_equal {} [r zrevrangebyscore zset 3 1 LIMIT -2 2]
             assert_equal {} [r zrange zset 1 3 BYSCORE LIMIT -1 2]
             assert_equal {} [r zrangebyscore zset 1 3 LIMIT -1 2]
-            assert_equal {} [r zrange zset 3 1 BYSCORE REV LIMIT -9223372036854775808 2]
+            assert_equal {} [r zrange zset 3 1 BYSCORE REV LIMIT $long_min 2]
             assert_equal {a b c} [r zrange zset 1 3 BYSCORE LIMIT 0 -1]
             r zadd zrange_dst 10 old
             assert_equal 0 [r zrangestore zrange_dst zset 3 1 BYSCORE REV LIMIT -2 2]
@@ -926,11 +927,12 @@ start_server {tags {"zset"}} {
 
         test "Negative LIMIT offset in lex range - $encoding" {
             create_zset zset {0 a 0 b 0 c}
+            set long_min [expr {-(1 << ([s arch_bits] - 1))}]
             assert_equal {} [r zrange zset \[c \[a BYLEX REV LIMIT -2 2]
             assert_equal {} [r zrevrangebylex zset \[c \[a LIMIT -2 2]
             assert_equal {} [r zrange zset \[a \[c BYLEX LIMIT -1 2]
             assert_equal {} [r zrangebylex zset \[a \[c LIMIT -1 2]
-            assert_equal {} [r zrange zset \[c \[a BYLEX REV LIMIT -9223372036854775808 2]
+            assert_equal {} [r zrange zset \[c \[a BYLEX REV LIMIT $long_min 2]
             assert_equal {a b c} [r zrange zset \[a \[c BYLEX LIMIT 0 -1]
             r zadd zrange_dst 10 old
             assert_equal 0 [r zrangestore zrange_dst zset \[c \[a BYLEX REV LIMIT -2 2]

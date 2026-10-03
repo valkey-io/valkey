@@ -487,6 +487,7 @@ static void shutdownIOThread(int id) {
         serverLog(LL_WARNING, "IO thread(tid:%lu) can not be joined: %s", (unsigned long)tid, strerror(err));
     } else {
         serverLog(LL_NOTICE, "IO thread(tid:%lu) terminated", (unsigned long)tid);
+        if (!server.crashed) serverAssert(!isSharedQueryBufRegistered(id));
     }
     pthread_mutex_destroy(&io_threads_mutex[id]);
 

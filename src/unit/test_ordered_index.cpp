@@ -131,6 +131,31 @@ class OrderedIndexTest : public ::testing::Test {
         return node;
     }
 
+    /* Insert a string literal at given integer score. */
+    OrderedIndexItem *insertInt64(int64_t score, const char *ele) {
+        return orderedIndexInsertInt64(oi, score, ele, strlen(ele));
+    }
+
+    /* Assert next iterator element has expected integer score. */
+    OrderedIndexItem *assertNextInt64Score(OrderedIndexIterator *iter, int64_t expected) {
+        OrderedIndexItem *pos = orderedIndexNext(iter);
+        EXPECT_NE(pos, nullptr);
+        if (pos) {
+            EXPECT_EQ(orderedIndexItemGetScoreInt64(pos), expected);
+        }
+        return pos;
+    }
+
+    /* Assert prev iterator element has expected integer score. */
+    OrderedIndexItem *assertPrevInt64Score(OrderedIndexIterator *iter, int64_t expected) {
+        OrderedIndexItem *pos = orderedIndexPrev(iter);
+        EXPECT_NE(pos, nullptr);
+        if (pos) {
+            EXPECT_EQ(orderedIndexItemGetScoreInt64(pos), expected);
+        }
+        return pos;
+    }
+
     /* Insert N sequential elements ("key0"..."keyN-1") at scores 0..N-1. */
     void populateSequential(int n) {
         for (int i = 0; i < n; i++) {
@@ -2734,4 +2759,155 @@ TEST_F(OrderedIndexTest, HtConsistency_ByLex_EmptyRange) {
     sdsfree(min);
     sdsfree(max);
     simHtFree(&simulatedHt);
+}
+
+/* ========== Int64 score tests ========== */
+
+TEST_F(OrderedIndexTest, Int64OrderingAcrossFullRange) {
+    insertInt64(1, "one");
+    insertInt64(INT64_MIN, "min");
+    insertInt64(INT64_MAX, "max");
+    insertInt64(-1, "minus_one");
+    insertInt64(0, "zero");
+    verifyOI();
+
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    assertElement(assertNextInt64Score(&iter, INT64_MIN), "min");
+    assertElement(assertNextInt64Score(&iter, -1), "minus_one");
+    assertElement(assertNextInt64Score(&iter, 0), "zero");
+    assertElement(assertNextInt64Score(&iter, 1), "one");
+    assertElement(assertNextInt64Score(&iter, INT64_MAX), "max");
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+}
+
+TEST_F(OrderedIndexTest, Int64ScoresAbove2Pow53StayDistinct) {
+    int64_t base = (int64_t)1 << 53;
+    /* As a double, base + 1 rounds to base. */
+    ASSERT_EQ((int64_t)(double)(base + 1), base);
+
+    /* Element names sort opposite to the scores, so the order below can only
+     * come from the scores being distinct. */
+    insertInt64(base + 1, "a");
+    insertInt64(base, "b");
+    insertInt64(INT64_MAX, "c");
+    insertInt64(INT64_MAX - 1, "d");
+
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    assertElement(assertNextInt64Score(&iter, base), "b");
+    assertElement(assertNextInt64Score(&iter, base + 1), "a");
+    assertElement(assertNextInt64Score(&iter, INT64_MAX - 1), "d");
+    assertElement(assertNextInt64Score(&iter, INT64_MAX), "c");
+    orderedIndexResetIterator(&iter);
+
+    ASSERT_EQ(orderedIndexCountScoreRangeInt64(oi, base + 1, base + 1, 0, 0), 1UL);
+}
+
+TEST_F(OrderedIndexTest, Int64UpdateScore) {
+    OrderedIndexItem *item = insertInt64(10, "a");
+    insertInt64(20, "b");
+
+    item = orderedIndexUpdateScoreInt64(oi, item, INT64_MAX);
+    ASSERT_EQ(orderedIndexItemGetScoreInt64(item), INT64_MAX);
+    ASSERT_EQ(orderedIndexGetIndex(oi, item), 1UL);
+    verifyOI();
+
+    item = orderedIndexUpdateScoreInt64(oi, item, INT64_MIN);
+    ASSERT_EQ(orderedIndexItemGetScoreInt64(item), INT64_MIN);
+    ASSERT_EQ(orderedIndexGetIndex(oi, item), 0UL);
+    verifyOI();
+}
+
+TEST_F(OrderedIndexTest, Int64BatchInsertCreateSetScoreInsert) {
+    int64_t base = (int64_t)1 << 53;
+    OrderedIndexItem *item = orderedIndexItemCreateInt64(0, "a", 1);
+    orderedIndexItemSetScoreInt64(item, base + 1);
+    ASSERT_EQ(orderedIndexInsertItem(oi, item), item);
+    insertInt64(base, "b");
+    verifyOI();
+
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    assertElement(assertNextInt64Score(&iter, base), "b");
+    assertElement(assertNextInt64Score(&iter, base + 1), "a");
+    orderedIndexResetIterator(&iter);
+}
+
+TEST_F(OrderedIndexTest, Int64CountAndDeleteScoreRangeAtExtremes) {
+    insertInt64(INT64_MIN, "min");
+    insertInt64(-1, "minus_one");
+    insertInt64(0, "zero");
+    insertInt64(1, "one");
+    insertInt64(INT64_MAX, "max");
+
+    ASSERT_EQ(orderedIndexCountScoreRangeInt64(oi, INT64_MIN, INT64_MAX, 0, 0), 5UL);
+    ASSERT_EQ(orderedIndexCountScoreRangeInt64(oi, INT64_MIN, INT64_MAX, 1, 1), 3UL);
+    ASSERT_EQ(orderedIndexCountScoreRangeInt64(oi, INT64_MAX, INT64_MAX, 0, 0), 1UL);
+    ASSERT_EQ(orderedIndexCountScoreRangeInt64(oi, INT64_MAX, INT64_MAX, 1, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountScoreRangeInt64(oi, 0, INT64_MAX, 0, 1), 2UL);
+
+    ASSERT_EQ(orderedIndexDeleteRangeByScoreInt64(oi, 1, INT64_MAX, 0, 0, NULL, NULL), 2UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByScoreInt64(oi, INT64_MIN, 0, 1, 1, NULL, NULL), 1UL);
+    verifyOI();
+    ASSERT_ALL_ELEMENTS("min", "zero");
+}
+
+TEST_F(OrderedIndexTest, Int64SeekToScoreRangeAtExtremes) {
+    insertInt64(INT64_MIN, "min");
+    insertInt64(0, "zero");
+    insertInt64(INT64_MAX, "max");
+
+    OrderedIndexIterator iter;
+
+    /* Reverse with an inclusive INT64_MAX bound starts at the INT64_MAX item. */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRangeInt64(&iter, INT64_MIN, INT64_MAX, 0, 0, -1);
+    assertElement(assertPrevInt64Score(&iter, INT64_MAX), "max");
+    assertElement(assertPrevInt64Score(&iter, 0), "zero");
+    assertElement(assertPrevInt64Score(&iter, INT64_MIN), "min");
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* Reverse with an exclusive INT64_MAX bound skips it. */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRangeInt64(&iter, INT64_MIN, INT64_MAX, 0, 1, -1);
+    assertElement(assertPrevInt64Score(&iter, 0), "zero");
+    orderedIndexResetIterator(&iter);
+
+    /* Forward from an inclusive INT64_MIN bound starts at the INT64_MIN item. */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRangeInt64(&iter, INT64_MIN, INT64_MAX, 0, 0, 0);
+    assertElement(assertNextInt64Score(&iter, INT64_MIN), "min");
+    orderedIndexResetIterator(&iter);
+
+    /* Forward from an exclusive min just below INT64_MAX finds only INT64_MAX. */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRangeInt64(&iter, INT64_MAX - 1, INT64_MAX, 1, 0, 0);
+    assertElement(assertNextInt64Score(&iter, INT64_MAX), "max");
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* A range that excludes its only point is empty. */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRangeInt64(&iter, INT64_MAX, INT64_MAX, 1, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+}
+
+TEST_F(OrderedIndexTest, Int64LexRangeInMaxScoreBucket) {
+    /* INT64_MAX packs to the all-ones score prefix, which has no next score
+     * bucket to bound the "+" sentinel with. */
+    insertInt64(INT64_MAX, "a");
+    insertInt64(INT64_MAX, "b");
+    insertInt64(INT64_MAX, "c");
+
+    sds b = sdsnew("b");
+    ASSERT_EQ(orderedIndexCountLexRange(oi, b, shared.maxstring, 0, 0), 2UL);
+    ASSERT_EQ(orderedIndexCountLexRange(oi, b, shared.maxstring, 1, 0), 1UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, b, shared.maxstring, 0, 0, NULL, NULL), 2UL);
+    sdsfree(b);
+    verifyOI();
+    ASSERT_ALL_ELEMENTS("a");
 }

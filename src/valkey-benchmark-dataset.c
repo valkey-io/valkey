@@ -24,9 +24,30 @@ static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
     "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
 
+/* Base64 decoding lookup table */
+static const unsigned char b64_decode_table[256] = {
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62, 255, 255, 255, 63,
+    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 255, 255, 255, 0, 255, 255,
+    255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 255, 255, 255, 255, 255,
+    255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+    41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255};
+
 /* Forward declarations */
 static bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc);
 static sds getFieldValue(const char *row, int column_index, char delimiter);
+static unsigned char *base64Decode(const char *input, size_t input_len, size_t *out_len);
+static bool fieldStripBase64Suffix(const char *field_start, size_t *field_name_len);
 static bool csvDiscoverFields(dataset *ds);
 static bool csvLoadDocuments(dataset *ds, int verbose);
 static bool shouldStopLoading(dataset *ds);
@@ -125,6 +146,7 @@ bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
             if (!field_end) break;
 
             size_t field_name_len = field_end - field_start;
+            fieldStripBase64Suffix(field_start, &field_name_len);
             sds field_name = sdsnewlen(field_start, field_name_len);
 
             int field_idx = -1;
@@ -170,7 +192,11 @@ sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, in
     }
 
     char *cmd = NULL;
-    int len = valkeyFormatCommandArgv(&cmd, template_argc, (const char **)processed_argv, NULL);
+    size_t argvlen[template_argc];
+    for (int i = 0; i < template_argc; i++) {
+        argvlen[i] = sdslen(processed_argv[i]);
+    }
+    int len = valkeyFormatCommandArgv(&cmd, template_argc, (const char **)processed_argv, argvlen);
     if (len == -1) {
         for (int i = 0; i < template_argc; i++) {
             sdsfree(processed_argv[i]);
@@ -236,6 +262,73 @@ static sds getFieldValue(const char *row, int column_index, char delimiter) {
     }
 
     return sdsempty();
+}
+
+static bool fieldStripBase64Suffix(const char *field_start, size_t *field_name_len) {
+    if (*field_name_len > BASE64_SUFFIX_LEN &&
+        !memcmp(field_start + *field_name_len - BASE64_SUFFIX_LEN, BASE64_SUFFIX, BASE64_SUFFIX_LEN)) {
+        *field_name_len -= BASE64_SUFFIX_LEN;
+        return true;
+    }
+    return false;
+}
+
+static unsigned char *base64Decode(const char *input, size_t input_len, size_t *out_len) {
+    *out_len = 0;
+
+    if (input_len == 0 || input_len % 4 != 0) {
+        if (input_len != 0) {
+            fprintf(stderr, "Warning: skipping :base64 field, length %zu is not a multiple of 4\n", input_len);
+        }
+        return zmalloc(1);
+    }
+
+    /* Padding ('=') is only ever valid as the last one or two characters. */
+    size_t padding = 0;
+    if (input[input_len - 1] == '=') padding++;
+    if (input[input_len - 2] == '=') padding++;
+    size_t capacity = (input_len / 4) * 3 - padding;
+
+    unsigned char *output = zmalloc(capacity ? capacity : 1);
+    size_t i = 0, j = 0;
+
+    while (i < input_len) {
+        int last_quartet = (i + 4 == input_len);
+        unsigned char raw[4];
+        for (int k = 0; k < 4; k++) {
+            unsigned char ch = (unsigned char)input[i++];
+            if (ch == '=') {
+                int valid_pad = last_quartet && ((padding == 1 && k == 3) || (padding == 2 && k >= 2));
+                if (!valid_pad) {
+                    fprintf(stderr, "Warning: skipping :base64 field, misplaced '=' padding\n");
+                    zfree(output);
+                    return zmalloc(1);
+                }
+                raw[k] = 0;
+                continue;
+            }
+            unsigned char v = b64_decode_table[ch];
+            if (v == 255) {
+                fprintf(stderr, "Warning: skipping :base64 field, invalid character '%c'\n", ch);
+                zfree(output);
+                return zmalloc(1);
+            }
+            raw[k] = v;
+        }
+
+        if (last_quartet && ((padding == 2 && (raw[1] & 0x0f) != 0) || (padding == 1 && (raw[2] & 0x03) != 0))) {
+            fprintf(stderr, "Warning: skipping :base64 field, non-canonical padding bits\n");
+            zfree(output);
+            return zmalloc(1);
+        }
+
+        if (j < capacity) output[j++] = (raw[0] << 2) | (raw[1] >> 4);
+        if (j < capacity) output[j++] = (raw[1] << 4) | (raw[2] >> 2);
+        if (j < capacity) output[j++] = (raw[2] << 6) | raw[3];
+    }
+
+    *out_len = capacity;
+    return output;
 }
 
 static bool csvDiscoverFields(dataset *ds) {
@@ -389,30 +482,48 @@ static sds replaceOccurrence(sds processed_arg, const char *pos, const char *rep
 static sds processFieldsInArg(dataset *ds, sds arg, int record_index) {
     if (!strstr(arg, FIELD_PREFIX)) return arg;
 
-    /* Loop through all field placeholders in the argument */
-    while (strstr(arg, FIELD_PREFIX)) {
-        const char *field_pos = strstr(arg, FIELD_PREFIX);
+    /* Scan the original (text) template once with a moving cursor and build the
+     * result sequentially.  */
+    sds result = sdsempty();
+    const char *cursor = arg;
+    const char *arg_end = arg + sdslen(arg);
+
+    while (cursor < arg_end) {
+        const char *field_pos = strstr(cursor, FIELD_PREFIX);
+        if (!field_pos) break;
+
         const char *field_start = field_pos + FIELD_PREFIX_LEN;
         const char *field_end = strstr(field_start, FIELD_SUFFIX);
         if (!field_end) break;
 
         size_t field_name_len = field_end - field_start;
+        bool needs_decode = fieldStripBase64Suffix(field_start, &field_name_len);
+
         int field_idx = findFieldIndex(ds, field_start, field_name_len);
         if (field_idx == -1) break;
 
+        /* Emit the literal text between the cursor and this placeholder. */
+        result = sdscatlen(result, cursor, field_pos - cursor);
+
         const char *field_value = extractDatasetFieldValue(ds, field_idx, record_index);
-        size_t before_len = field_pos - arg;
-        const char *after_start = field_end + FIELD_SUFFIX_LEN;
+        if (needs_decode) {
+            size_t decoded_len;
+            unsigned char *decoded = base64Decode(field_value, sdslen(field_value), &decoded_len);
+            result = sdscatlen(result, decoded, decoded_len);
+            zfree(decoded);
+        } else {
+            result = sdscatlen(result, field_value, sdslen(field_value));
+        }
 
-        sds result = sdsnewlen(arg, before_len);
-        result = sdscat(result, field_value);
-        result = sdscat(result, after_start);
-
-        sdsfree(arg);
-        arg = result;
+        cursor = field_end + FIELD_SUFFIX_LEN;
     }
 
-    return arg;
+    /* Append whatever text remains after the last substitution (or the whole
+     * unmodified tail if we stopped early on an unresolved placeholder). */
+    result = sdscatlen(result, cursor, arg_end - cursor);
+
+    sdsfree(arg);
+    return result;
 }
 
 static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement) {

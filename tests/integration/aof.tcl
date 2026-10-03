@@ -283,13 +283,13 @@ tags {"aof external:skip logreqres:skip"} {
     ## Test that the server exits when the AOF contains a unknown command
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand set foo hello]
-        append_to_aof [formatCommand bla foo hello]
+        append_to_aof [formatCommand blah foo hello]
         append_to_aof [formatCommand set foo hello]
     }
 
     start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
         test "Unknown command: Server should have logged an error" {
-            wait_for_log_messages 0 {"*unknown command 'bla'*"} 0 10 1000
+            wait_for_log_messages 0 {"*unknown command 'blah'*"} 0 10 1000
         }
     }
 

@@ -1,0 +1,32 @@
+# systemd socket unit for valkey-server socket activation
+#
+# Socket activation allows valkey-server to be restarted without causing
+# ECONNREFUSED for clients: systemd holds the listening sockets open across
+# restarts, so in-flight connections simply wait in the kernel backlog while
+# the new process starts up.
+#
+# Usage:
+#   systemctl enable --now valkey-server.socket
+#   systemctl enable valkey-server.service
+#
+# Valkey auto-detects the inherited sockets by matching each fd against the
+# configured port / unix socket path.  No special configuration in valkey.conf
+# is required.  The server must be compiled with libsystemd (USE_SYSTEMD=yes,
+# the default when libsystemd-dev is installed).
+#
+# Adapt ListenStream= to match your valkey.conf (port and/or unixsocket).
+# Add or remove lines as needed.
+#
+# Please refer to systemd.socket(5) for more information.
+
+[Unit]
+Description=Valkey data structure server socket
+
+[Socket]
+# TCP port (matches 'port' in valkey.conf, default 6379)
+ListenStream=6379
+# Unix domain socket (uncomment and set to match 'unixsocket' in valkey.conf)
+#ListenStream=/run/valkey/valkey.sock
+
+[Install]
+WantedBy=sockets.target

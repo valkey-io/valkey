@@ -24,6 +24,13 @@ OPTIMIZATION?=-O3
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
 		OPTIMIZATION+=-flto
+		ifneq ($(uname_S),Darwin)
+			# -ffat-lto-objects needs clang >= 17
+			FAT_LTO_OBJECTS := $(findstring -ffat-lto-objects,$(shell sh -c '$(CC) --help'))
+			ifneq (,$(FAT_LTO_OBJECTS))
+				OPTIMIZATION+=-ffat-lto-objects
+			endif
+		endif
 	else
 		OPTIMIZATION+=-flto=auto -ffat-lto-objects
 	endif
@@ -729,6 +736,10 @@ all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
 persist-settings: distclean
+	echo CC=$(CC) >> .make-settings
+	echo CXX=$(CXX) >> .make-settings
+	echo AR=$(AR) >> .make-settings
+	echo RANLIB=$(RANLIB) >> .make-settings
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
@@ -855,7 +866,7 @@ distclean: clean
 test: $(ALL_BUILD_PREREQUISITES)
 	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
-test-unit:
+test-unit: $(ENGINE_LIB_NAME)
 	@(cd unit && $(MAKE) test-unit)
 
 # valkey-unit-gtests

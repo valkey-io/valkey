@@ -281,25 +281,31 @@ static inline int lpEncodeGetType(unsigned char *ele, uint32_t size, unsigned ch
  * of the previous element of size 'l', in the target buffer 'buf'.
  * The function returns the number of bytes used to encode it, from
  * 1 to 5. If 'buf' is NULL the function just returns the number of bytes
- * needed in order to encode the backlen. */
+ * needed in order to encode the backlen.
+ *
+ * l equal to 16383, 2097151 or 268435455 is encoded in one byte more than it
+ * strictly needs, its leading group of seven bits being zero. That is wasteful
+ * but deliberate: it is the only form every version and every external reader
+ * of the format accepts, so it is what we keep writing. Readers must handle
+ * both widths, see lpBacklenBytes(). */
 static inline unsigned long lpEncodeBacklen(unsigned char *buf, uint64_t l) {
     if (l <= 127) {
         if (buf) buf[0] = l;
         return 1;
-    } else if (l <= 16383) {
+    } else if (l < 16383) {
         if (buf) {
             buf[0] = l >> 7;
             buf[1] = (l & 127) | 128;
         }
         return 2;
-    } else if (l <= 2097151) {
+    } else if (l < 2097151) {
         if (buf) {
             buf[0] = l >> 14;
             buf[1] = ((l >> 7) & 127) | 128;
             buf[2] = (l & 127) | 128;
         }
         return 3;
-    } else if (l <= 268435455) {
+    } else if (l < 268435455) {
         if (buf) {
             buf[0] = l >> 21;
             buf[1] = ((l >> 14) & 127) | 128;
@@ -319,18 +325,55 @@ static inline unsigned long lpEncodeBacklen(unsigned char *buf, uint64_t l) {
     }
 }
 
+/* Return the number of bytes occupied by the backlen field of an entry whose
+ * encoded length, header plus data and backlen excluded, is 'l'. 'backlen'
+ * must point at the first byte of that field, the byte right after the entry
+ * data.
+ *
+ * For l equal to 16383, 2097151 or 268435455 the field occurs with two widths:
+ * the minimal number of seven-bit groups, written by 9.1.0 through 9.1.2, and
+ * one group more, written by every other version. Both must be read, and the
+ * leading group tells them apart, since it is zero only in the wider form.
+ * The width is derived here rather than from lpEncodeBacklen(), so that it
+ * stays correct whichever form the encoder emits, and the extra byte read is
+ * confined to those three lengths. */
+static inline unsigned long lpBacklenBytes(uint64_t l, const unsigned char *backlen) {
+    if (unlikely(l == 16383 || l == 2097151 || l == 268435455)) {
+        /* Minimal width for these three: 2, 3 and 4 seven-bit groups. */
+        unsigned long minimal = 4;
+        if (l == 16383) {
+            minimal = 2;
+        } else if (l == 2097151) {
+            minimal = 3;
+        }
+        return backlen[0] == 0 ? minimal + 1 : minimal;
+    }
+    return lpEncodeBacklen(NULL, l);
+}
+
 /* Decode the backlen and returns it. If the encoding looks invalid (more than
- * 5 bytes are used), UINT64_MAX is returned to report the problem. */
-static inline uint64_t lpDecodeBacklen(unsigned char *p) {
+ * 5 bytes are used), UINT64_MAX is returned to report the problem. When 'bytes'
+ * is not NULL the number of bytes the field occupies is stored there, on that
+ * error return as well, since callers add the width to a pointer before they
+ * can inspect the value. Decoding runs backwards from the last byte of the
+ * field and stops at the first byte without the continuation bit, so the count
+ * is exact for both widths. */
+static inline uint64_t lpDecodeBacklen(unsigned char *p, unsigned long *bytes) {
     uint64_t val = 0;
     uint64_t shift = 0;
+    unsigned long used = 1;
     do {
         val |= (uint64_t)(p[0] & 127) << shift;
         if (!(p[0] & 128)) break;
         shift += 7;
         p--;
-        if (shift > 28) return UINT64_MAX;
+        used++;
+        if (shift > 28) {
+            if (bytes) *bytes = used;
+            return UINT64_MAX;
+        }
     } while (1);
+    if (bytes) *bytes = used;
     return val;
 }
 
@@ -408,7 +451,7 @@ static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
  * it does not return NULL when the EOF element is encountered. */
 unsigned char *lpSkip(unsigned char *p) {
     unsigned long entrylen = lpCurrentEncodedSizeUnsafe(p);
-    entrylen += lpEncodeBacklen(NULL, entrylen);
+    entrylen += lpBacklenBytes(entrylen, p + entrylen);
     p += entrylen;
     return p;
 }
@@ -442,8 +485,9 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
     assert(p);
     while (p - lp != LP_HDR_SIZE) {
         p--; /* Seek the first backlen byte of the last element. */
-        uint64_t prevlen = lpDecodeBacklen(p);
-        prevlen += lpEncodeBacklen(NULL, prevlen);
+        unsigned long backlen_bytes = 0;
+        uint64_t prevlen = lpDecodeBacklen(p, &backlen_bytes);
+        prevlen += backlen_bytes;
         p -= prevlen - 1; /* Seek the first byte of the previous entry. */
         /* Skip metadata entries, see lpNext(). */
         if (likely(!LP_ENCODING_IS_TAGGED(p[0]))) return p;
@@ -579,7 +623,7 @@ lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t 
         if (entry_size) *entry_size = LP_ENCODING_7BIT_UINT_ENTRY_SIZE;
     } else if (LP_ENCODING_IS_6BIT_STR(p[0])) {
         *count = LP_ENCODING_6BIT_STR_LEN(p);
-        if (entry_size) *entry_size = 1 + *count + lpEncodeBacklen(NULL, *count + 1);
+        if (entry_size) *entry_size = 1 + *count + lpBacklenBytes(*count + 1, p + *count + 1);
         return p + 1;
     } else if (LP_ENCODING_IS_13BIT_INT(p[0])) {
         uval = ((p[0] & 0x1f) << 8) | p[1];
@@ -609,11 +653,11 @@ lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t 
         if (entry_size) *entry_size = LP_ENCODING_64BIT_INT_ENTRY_SIZE;
     } else if (LP_ENCODING_IS_12BIT_STR(p[0])) {
         *count = LP_ENCODING_12BIT_STR_LEN(p);
-        if (entry_size) *entry_size = 2 + *count + lpEncodeBacklen(NULL, *count + 2);
+        if (entry_size) *entry_size = 2 + *count + lpBacklenBytes(*count + 2, p + *count + 2);
         return p + 2;
     } else if (LP_ENCODING_IS_32BIT_STR(p[0])) {
         *count = LP_ENCODING_32BIT_STR_LEN(p);
-        if (entry_size) *entry_size = 5 + *count + lpEncodeBacklen(NULL, *count + 5);
+        if (entry_size) *entry_size = 5 + *count + lpBacklenBytes(*count + 5, p + *count + 5);
         return p + 5;
     } else {
         uval = 12345678900000000ULL + p[0];
@@ -849,7 +893,7 @@ static unsigned char *lpInsertImpl(unsigned char *lp,
     uint32_t replaced_len = 0;
     if (where == LP_REPLACE) {
         replaced_len = lpCurrentEncodedSizeUnsafe(p);
-        replaced_len += lpEncodeBacklen(NULL, replaced_len);
+        replaced_len += lpBacklenBytes(replaced_len, p + replaced_len);
         ASSERT_INTEGRITY_LEN(lp, p, replaced_len);
     }
 
@@ -1375,7 +1419,11 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
 
     /* get the entry length and encoded backlen. */
     unsigned long entrylen = lpCurrentEncodedSizeUnsafe(p);
-    unsigned long encodedBacklen = lpEncodeBacklen(NULL, entrylen);
+
+    /* the first backlen byte tells the two backlen widths apart, so make sure
+     * it is in range before lpBacklenBytes() reads it. */
+    if (OUT_OF_RANGE(p + entrylen)) return 0;
+    unsigned long encodedBacklen = lpBacklenBytes(entrylen, p + entrylen);
     entrylen += encodedBacklen;
 
     /* make sure the entry doesn't reach outside the edge of the listpack */
@@ -1384,9 +1432,12 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
     /* move to the next entry */
     p += entrylen;
 
-    /* make sure the encoded length at the end patches the one at the beginning. */
-    uint64_t prevlen = lpDecodeBacklen(p - 1);
+    /* make sure the encoded length at the end patches the one at the beginning,
+     * and that the field is as wide as the forward scan assumed. */
+    unsigned long backlen_bytes = 0;
+    uint64_t prevlen = lpDecodeBacklen(p - 1, &backlen_bytes);
     if (prevlen + encodedBacklen != entrylen) return 0;
+    if (backlen_bytes != encodedBacklen) return 0;
 
     *pp = p;
     return 1;
@@ -1686,7 +1737,7 @@ void lpRepr(unsigned char *lp) {
     while (p) {
         uint32_t encoded_size_bytes = lpCurrentEncodedSizeBytes(p);
         uint32_t encoded_size = lpCurrentEncodedSizeUnsafe(p);
-        unsigned long back_len = lpEncodeBacklen(NULL, encoded_size);
+        unsigned long back_len = lpBacklenBytes(encoded_size, p + encoded_size);
         printf("{\n"
                "\taddr: 0x%08lx,\n"
                "\tindex: %2d,\n"

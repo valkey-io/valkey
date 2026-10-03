@@ -71,6 +71,11 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, mstime_t now, int didx) 
         enterExecutionUnit(1, 0);
         sds key = objectGetKey(val);
         robj *keyobj = createStringObject(key, sdslen(key));
+        mstime_t lag = now - t;
+        if (lag > 0) {
+            server.stat_expire_lag_sum += lag;
+            server.stat_expire_lag_count++;
+        }
         deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, didx);
         decrRefCount(keyobj);
         server.dirty++;

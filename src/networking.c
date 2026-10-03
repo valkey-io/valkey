@@ -1602,21 +1602,34 @@ void addReplyBulkCString(client *c, const char *s) {
     }
 }
 
+static void _addReplyBulkLongLong(client *c, long long ll) {
+    char buf[64];
+    const int number_offset = 5; /* strlen("$20\r\n") */
+    int len = ll2string(buf + number_offset, sizeof(buf) - number_offset - 2, ll);
+    int start = len < 10 ? 1 : 0;
+
+    buf[start] = '$';
+    if (len < 10) {
+        buf[2] = '0' + len;
+    } else {
+        buf[1] = '0' + len / 10;
+        buf[2] = '0' + len % 10;
+    }
+    buf[3] = '\r';
+    buf[4] = '\n';
+    buf[number_offset + len] = '\r';
+    buf[number_offset + len + 1] = '\n';
+    _addReplyToBufferOrList(c, buf + start, number_offset + len + 2 - start);
+}
+
 /* Add a long long as a bulk reply */
 void addReplyBulkLongLong(client *c, long long ll) {
-    char buf[64];
-    int len;
-
-    len = ll2string(buf, 64, ll);
-    addReplyBulkCBuffer(c, buf, len);
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyBulkLongLong(c, ll);
 }
 
 void addWritePreparedReplyBulkLongLong(writePreparedClient *wpc, long long ll) {
-    char buf[64];
-    int len;
-
-    len = ll2string(buf, 64, ll);
-    addWritePreparedReplyBulkCBuffer(wpc, buf, len);
+    _addReplyBulkLongLong((client *)wpc, ll);
 }
 
 /* Reply with a verbatim type having the specified extension.

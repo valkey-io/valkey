@@ -272,7 +272,7 @@
 #define ZIPLIST_MAX_SAFETY_SIZE (1 << 30)
 int ziplistSafeToAdd(unsigned char *zl, size_t add) {
     size_t len = zl ? ziplistBlobLen(zl) : 0;
-    if (len + add > ZIPLIST_MAX_SAFETY_SIZE) return 0;
+    if (add > ZIPLIST_MAX_SAFETY_SIZE || len > ZIPLIST_MAX_SAFETY_SIZE - add) return 0;
     return 1;
 }
 

@@ -963,6 +963,28 @@ TEST_F(ZiplistTest, DISABLED_ziplistBenchmarkziplistValidateIntegrity) {
  * To run this test explicitly, use:
  *   ./src/unit/valkey-unit-gtests --gtest_filter=ZiplistTest.DISABLED_ziplistBenchmarkziplistCompareWithString --gtest_also_run_disabled_tests
  */
+TEST_F(ZiplistTest, ziplistSafeToAddOverflow) {
+    unsigned char *zl = ziplistNew();
+    size_t len = ziplistBlobLen(zl);
+    const size_t max_size = (size_t)1 << 30;
+    struct {
+        size_t add;
+        int expected;
+    } cases[] = {
+        {0, 1},
+        {max_size - len, 1},
+        {max_size - len + 1, 0},
+        {SIZE_MAX - len, 0},
+        {SIZE_MAX - len + 1, 0},
+        {SIZE_MAX, 0},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ASSERT_EQ(ziplistSafeToAdd(zl, cases[i].add), cases[i].expected);
+    }
+    zfree(zl);
+}
+
 TEST_F(ZiplistTest, DISABLED_ziplistBenchmarkziplistCompareWithString) {
     unsigned char *zl = ziplistNew();
     int iteration = accurate ? 100000 : 100;

@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __SCRIPT_H_
-#define __SCRIPT_H_
+#ifndef SCRIPT_H
+#define SCRIPT_H
 
 #include "valkeymodule.h"
 
@@ -129,4 +129,4 @@ void scriptClusterSlotStatsInvalidateSlotIfApplicable(void);
 
 sds scriptGetRunningEngineName(void);
 
-#endif /* __SCRIPT_H_ */
+#endif /* SCRIPT_H */

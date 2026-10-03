@@ -30,8 +30,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _REDIS_DEBUGMACRO_H_
-#define _REDIS_DEBUGMACRO_H_
+#ifndef REDIS_DEBUGMACRO_H
+#define REDIS_DEBUGMACRO_H
 
 #include <stdio.h>
 #define D(...)                                                    \
@@ -43,4 +43,4 @@
         fclose(fp);                                               \
     } while (0)
 
-#endif /* _REDIS_DEBUGMACRO_H_ */
+#endif /* REDIS_DEBUGMACRO_H */

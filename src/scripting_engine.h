@@ -1,5 +1,5 @@
-#ifndef _SCRIPTING_ENGINE_H_
-#define _SCRIPTING_ENGINE_H_
+#ifndef SCRIPTING_ENGINE_H
+#define SCRIPTING_ENGINE_H
 
 #include "server.h"
 #include "valkeymodule.h"
@@ -138,4 +138,4 @@ int scriptingEngineDebuggerPendingChildren(void);
 void scriptingEngineDebuggerKillForkedSessions(void);
 
 
-#endif /* _SCRIPTING_ENGINE_H_ */
+#endif /* SCRIPTING_ENGINE_H */

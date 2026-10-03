@@ -1027,15 +1027,15 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
 /* Helper to handle root cleanup after delete */
 static void fbtreePostDeleteCleanup(fbtreeIndex *fbt) {
     if (getSubtreeSize(fbt->root) == 0) {
-        zfree(fbt->root);
+        /* An emptied inner root still owns its spilled prefix buffer. */
+        freeEmptyNodeAlreadyUnlinked(fbt->root);
         fbt->root = NULL;
         fbt->leftmost_leaf = NULL;
         fbt->rightmost_leaf = NULL;
     } else if (!fbt->root->is_leaf && fbt->root->num_items == 1) {
-        innerNode *old_root = (innerNode *)fbt->root;
-        fbt->root = old_root->children[0];
-        innerNodeFreePrefix(old_root);
-        zfree(old_root);
+        node *old_root = fbt->root;
+        fbt->root = ((innerNode *)old_root)->children[0];
+        freeEmptyNodeAlreadyUnlinked(old_root);
     }
 }
 
@@ -1303,6 +1303,34 @@ const_sds fbtreePrev(fbtreeIterator *iterator) {
         it->current_index = it->leaf_count;
     }
     it->state = ITER_BEFORE_START;
+    return NULL;
+}
+
+const_sds fbtreePeekNext(fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt || it->state == ITER_PAST_END) return NULL;
+
+    leafNode *leaf = it->current_leaf ? it->current_leaf : it->fbt->leftmost_leaf;
+    int index = it->current_leaf ? it->current_index : 0;
+    while (leaf) {
+        if (index < leaf->header.num_items) return leaf->values[index];
+        leaf = leaf->next;
+        index = 0;
+    }
+    return NULL;
+}
+
+const_sds fbtreePeekPrev(fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt || it->state == ITER_BEFORE_START) return NULL;
+
+    leafNode *leaf = it->current_leaf ? it->current_leaf : it->fbt->rightmost_leaf;
+    int index = it->current_leaf ? it->current_index : (leaf ? leaf->header.num_items : 0);
+    while (leaf) {
+        if (index > 0) return leaf->values[index - 1];
+        leaf = leaf->prev;
+        index = leaf ? leaf->header.num_items : 0;
+    }
     return NULL;
 }
 

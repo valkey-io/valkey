@@ -1,0 +1,83 @@
+{
+    "LPOPIF": {
+        "summary": "Returns and removes an element from the beginning of a list only if it matches a given value. Deletes the list if the last element was popped.",
+        "complexity": "O(1)",
+        "group": "list",
+        "since": "9.0.0",
+        "arity": 4,
+        "function": "lpopifCommand",
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "LIST",
+            "WRITE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "DELETE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "Key does not exist.",
+                    "type": "null"
+                },
+                {
+                    "description": "The value of the popped element.",
+                    "type": "string"
+                },
+                {
+                    "description": "The condition is not satisfied.",
+                    "const": 0
+                }
+            ]
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "flag",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "eq",
+                        "type": "pure-token",
+                        "token": "EQ"
+                    },
+                    {
+                        "name": "ne",
+                        "type": "pure-token",
+                        "token": "NE"
+                    }
+                ]
+            },
+            {
+                "name": "value",
+                "type": "string"
+            }
+        ]
+    }
+}

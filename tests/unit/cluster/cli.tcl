@@ -32,6 +32,14 @@ start_multiple_servers 3 [list overrides $base_conf] {
     }
 }
 
+start_cluster 3 0 {tags {tls:skip external:skip cluster singledb ipv6} overrides {bind {127.0.0.1 ::1}}} {
+    test {valkey-cli --cluster check accepts bracketed IPv6 address} {
+        set endpoint [format {[::1]:%s} [srv 0 port]]
+        set result [exec $::VALKEY_CLI_BIN --cluster check $endpoint]
+        assert_match {*All 16384 slots covered*} $result
+    }
+}
+
 foreach use_atomic_slot_migration {0 1} {
 
 # start three servers

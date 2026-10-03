@@ -168,12 +168,23 @@ proc verify_replica_online {master replica_idx max_retry} {
     } 
 }
 
+proc replica_value_matches_or_is_loading {replica key expected} {
+    if {[catch {$replica get $key} replica_val]} {
+        if {[string match {LOADING *} $replica_val]} {
+            return 0
+        }
+        return -code error $replica_val
+    }
+    return [expr {$replica_val eq $expected}]
+}
+
 proc wait_for_value_to_propagate_to_replica {master replica key} {
     set val [$master get $key]
     wait_for_condition 50 500 {
-                ([$replica get $key] eq $val)
+        [replica_value_matches_or_is_loading $replica $key $val]
     } else {
-        error "Key $key did not propagate. Expected $val but got [$replica get $key]"
+        catch {$replica get $key} replica_val
+        error "Key $key did not propagate. Expected $val but got $replica_val"
     }
 }
 

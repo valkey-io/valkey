@@ -50,6 +50,8 @@ static void exitScriptTimedoutMode(scriptRunCtx *run_ctx) {
     blockingOperationEnds();
     /* if we are a replica and we have an active primary, set it for continue processing */
     if (server.primary_host && server.primary) queueClientForReprocessing(server.primary);
+    /* Resume any deferred commands from normal clients */
+    unblockPostponedClients();
 }
 
 static void enterScriptTimedoutMode(scriptRunCtx *run_ctx) {

@@ -1,5 +1,5 @@
-#ifndef __ALLOCATOR_DEFRAG_H
-#define __ALLOCATOR_DEFRAG_H
+#ifndef VALKEY_ALLOCATOR_DEFRAG_H
+#define VALKEY_ALLOCATOR_DEFRAG_H
 
 #if defined(USE_JEMALLOC)
 #include <jemalloc/jemalloc.h>

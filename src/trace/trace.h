@@ -14,8 +14,8 @@
  * ==========================================================================
  */
 
-#if !defined(__VALKEY_TRACE_H__)
-#define __VALKEY_TRACE_H__
+#if !defined(VALKEY_TRACE_H)
+#define VALKEY_TRACE_H
 
 #include "trace_aof.h"
 #include "trace_cluster.h"
@@ -40,4 +40,4 @@ pid_t do_fork(void);
     } while (0)
 #endif
 
-#endif /* __VALKEY_TRACE_H__ */
+#endif /* VALKEY_TRACE_H */

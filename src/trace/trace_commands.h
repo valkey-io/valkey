@@ -23,7 +23,7 @@
 #define LTTNG_UST_TRACEPOINT_INCLUDE "./trace_commands.h"
 
 #if !defined(__VALKEY_TRACE_COMMANDS_H__) || defined(LTTNG_UST_TRACEPOINT_HEADER_MULTI_READ)
-#define __VALKEY_TRACE_COMMANDS_H__
+#define VALKEY_TRACE_COMMANDS_H
 
 #include <lttng/tracepoint.h>
 
@@ -77,8 +77,8 @@ LTTNG_UST_TRACEPOINT_EVENT(
 
 #else /* USE_LTTNG */
 
-#ifndef __VALKEY_TRACE_COMMANDS_H__
-#define __VALKEY_TRACE_COMMANDS_H__
+#ifndef VALKEY_TRACE_COMMANDS_H
+#define VALKEY_TRACE_COMMANDS_H
 
 /* avoid compiler warning on empty source file */
 static inline void __valkey_commands_trace(void) {

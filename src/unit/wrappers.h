@@ -33,8 +33,8 @@
 extern "C" {
 #endif
 
-#ifndef __WRAPPERS_H
-#define __WRAPPERS_H
+#ifndef VALKEY_WRAPPERS_H
+#define VALKEY_WRAPPERS_H
 // C/C++ cross-compatibility definitions:
 // Some C keywords or built-in types (e.g., _Atomic, _Bool) are not
 // recognized or have different meanings in C++. To allow C headers

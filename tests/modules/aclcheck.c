@@ -424,6 +424,30 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_SetCommandACLCategories(test_add_new_aclcategories, "foocategory") == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    
+
+    if (ValkeyModule_AddACLCategory(ctx, "add_acl") == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_AddCommandACLCategories(ctx, "set", "add_acl") == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_AddCommandACLCategories(ctx, "config", "add_acl") == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_AddCommandACLCategories(ctx, "memory|usage", "add_acl") == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_AddCommandACLCategories(ctx, "aclcheck.module.command.test.add.new.aclcategories", "add_acl") == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_AddCommandACLCategories(ctx, "fail_command", "add_acl") != VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
     return VALKEYMODULE_OK;
 }

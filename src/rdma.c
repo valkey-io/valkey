@@ -84,6 +84,32 @@ typedef enum ValkeyRdmaOpcode {
 /* XXX: MLX5(16 + 16 + 4)/RXE(0) adapted */
 #define VALKEY_RDMA_VENDOR_INLINE_DATA (36)
 #define VALKEY_RDMA_MAX_INLINE_DATA (256 - VALKEY_RDMA_VENDOR_INLINE_DATA)
+#define VALKEY_RDMA_INLINE_DATA_STEP (16)
+/* The verbs API cannot report the inline data limit. Devices whose kernel driver has a fixed limit
+ * try it first: Intel irdma 216, 101 or 48 depending on the generation (101 on the E810, 48 on the
+ * X722; drivers/infiniband/hw/irdma/ig3rdma_hw.h, user.h, i40iw_hw.h), Alibaba erdma 96
+ * (drivers/infiniband/hw/erdma/erdma_verbs.h). Other devices start at VALKEY_RDMA_MAX_INLINE_DATA,
+ * and any refused size steps down by VALKEY_RDMA_INLINE_DATA_STEP until one is accepted.
+ * libfabric's verbs provider also probes the limit (vrb_find_max_inline()). */
+static const struct {
+    uint32_t vendor_id;
+    uint32_t max_inline;
+} rdmaInlineLimits[] = {{0x8086, 216}, {0x8086, 101}, {0x8086, 48}, {0x1ded, 96}};
+
+/* Inline size to request: on the first try, size capped at the vendor's first known limit; after a
+ * refusal, the vendor's next smaller known limit, else one step smaller. */
+static uint32_t rdmaInlineData(uint32_t vendor_id, uint32_t size, int refused) {
+    for (size_t i = 0; i < sizeof(rdmaInlineLimits) / sizeof(rdmaInlineLimits[0]); i++) {
+        uint32_t limit = rdmaInlineLimits[i].max_inline;
+        if (rdmaInlineLimits[i].vendor_id == vendor_id && (!refused || limit < size)) {
+            return limit < size ? limit : size;
+        }
+    }
+    if (refused) {
+        size = size > VALKEY_RDMA_INLINE_DATA_STEP ? size - VALKEY_RDMA_INLINE_DATA_STEP : 0;
+    }
+    return size;
+}
 
 
 typedef struct rdma_connection {
@@ -333,6 +359,7 @@ static int rdmaCreateResource(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     struct ibv_cq *cq = NULL;
     struct ibv_pd *pd = NULL;
     int comp_vector = rdma_config->completion_vector;
+    uint32_t max_inline;
 
     ret = ibv_query_device(cm_id->verbs, &device_attr);
     if (ret) {
@@ -371,19 +398,20 @@ static int rdmaCreateResource(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     ctx->cq = cq;
     ibv_req_notify_cq(cq, 0);
 
+    max_inline = rdmaInlineData(device_attr.vendor_id, VALKEY_RDMA_MAX_INLINE_DATA, 0);
     memset(&init_attr, 0, sizeof(init_attr));
     init_attr.cap.max_send_wr = VALKEY_RDMA_MAX_WQE;
     init_attr.cap.max_recv_wr = VALKEY_RDMA_MAX_WQE;
     init_attr.cap.max_send_sge = device_attr.max_sge;
     init_attr.cap.max_recv_sge = 1;
-    init_attr.cap.max_inline_data = VALKEY_RDMA_MAX_INLINE_DATA;
+    init_attr.cap.max_inline_data = max_inline;
     init_attr.qp_type = IBV_QPT_RC;
     init_attr.send_cq = cq;
     init_attr.recv_cq = cq;
     ret = rdma_create_qp(cm_id, pd, &init_attr);
-    if (ret) {
-        /* the device may not support inline data, try again without it */
-        init_attr.cap.max_inline_data = 0;
+    while (ret && max_inline) {
+        max_inline = rdmaInlineData(device_attr.vendor_id, max_inline, 1);
+        init_attr.cap.max_inline_data = max_inline;
         ret = rdma_create_qp(cm_id, pd, &init_attr);
     }
     if (ret) {

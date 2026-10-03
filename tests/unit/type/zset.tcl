@@ -730,6 +730,20 @@ start_server {tags {"zset"}} {
             assert_equal {i0}          [r zrevrangebyscore zset 20 0 LIMIT 20 5]
         }
 
+        test "Negative LIMIT offset in score range - $encoding" {
+            create_zset zset {1 a 2 b 3 c}
+            set long_min [expr {-(1 << ([s arch_bits] - 1))}]
+            assert_equal {} [r zrange zset 3 1 BYSCORE REV LIMIT -2 2]
+            assert_equal {} [r zrevrangebyscore zset 3 1 LIMIT -2 2]
+            assert_equal {} [r zrange zset 1 3 BYSCORE LIMIT -1 2]
+            assert_equal {} [r zrangebyscore zset 1 3 LIMIT -1 2]
+            assert_equal {} [r zrange zset 3 1 BYSCORE REV LIMIT $long_min 2]
+            assert_equal {a b c} [r zrange zset 1 3 BYSCORE LIMIT 0 -1]
+            r zadd zrange_dst 10 old
+            assert_equal 0 [r zrangestore zrange_dst zset 3 1 BYSCORE REV LIMIT -2 2]
+            assert_equal 0 [r exists zrange_dst]
+        }
+
         test "ZRANGEBYSCORE with LIMIT and WITHSCORES - $encoding" {
             create_default_zset
             assert_equal {e 4 f 5} [r zrangebyscore zset 2 5 LIMIT 2 3 WITHSCORES]
@@ -909,6 +923,20 @@ start_server {tags {"zset"}} {
             assert_equal {elephant down} [r zrevrangebylex zset + \[a LIMIT 15 2]
             assert_equal {bar alpha} [r zrevrangebylex zset + - LIMIT 18 6]
             assert_equal {hill great foo} [r zrevrangebylex zset + \[c LIMIT 12 3]
+        }
+
+        test "Negative LIMIT offset in lex range - $encoding" {
+            create_zset zset {0 a 0 b 0 c}
+            set long_min [expr {-(1 << ([s arch_bits] - 1))}]
+            assert_equal {} [r zrange zset \[c \[a BYLEX REV LIMIT -2 2]
+            assert_equal {} [r zrevrangebylex zset \[c \[a LIMIT -2 2]
+            assert_equal {} [r zrange zset \[a \[c BYLEX LIMIT -1 2]
+            assert_equal {} [r zrangebylex zset \[a \[c LIMIT -1 2]
+            assert_equal {} [r zrange zset \[c \[a BYLEX REV LIMIT $long_min 2]
+            assert_equal {a b c} [r zrange zset \[a \[c BYLEX LIMIT 0 -1]
+            r zadd zrange_dst 10 old
+            assert_equal 0 [r zrangestore zrange_dst zset \[c \[a BYLEX REV LIMIT -2 2]
+            assert_equal 0 [r exists zrange_dst]
         }
 
         test "ZRANGEBYLEX with/without XX - $encoding" {

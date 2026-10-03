@@ -1372,9 +1372,9 @@ void hincrbyfloatCommand(client *c) {
     }
 }
 
-static void addHashFieldToReply(client *c, robj *o, sds field) {
+static void addHashFieldToPreparedReply(writePreparedClient *wpc, robj *o, sds field) {
     if (o == NULL) {
-        addReplyNull(c);
+        addWritePreparedReplyNull(wpc);
         return;
     }
 
@@ -1384,32 +1384,38 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK) {
         if (vstr) {
-            addReplyBulkCBuffer(c, vstr, vlen);
+            addWritePreparedReplyBulkCBuffer(wpc, vstr, vlen);
         } else {
-            addReplyBulkLongLong(c, vll);
+            addWritePreparedReplyBulkLongLong(wpc, vll);
         }
     } else {
-        addReplyNull(c);
+        addWritePreparedReplyNull(wpc);
     }
+}
+
+static void addHashFieldToReply(client *c, robj *o, sds field) {
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
+    addHashFieldToPreparedReply(wpc, o, field);
 }
 
 #define HMGET_FIND_BATCH_SIZE 16
 static_assert(HMGET_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
               "HMGET batch size exceeds hashtable batch lookup limit");
 
-static void addHashEntryToReply(client *c, const entry *hash_entry) {
+static void addHashEntryToReply(writePreparedClient *wpc, const entry *hash_entry) {
     if (hash_entry == NULL) {
-        addReplyNull(c);
+        addWritePreparedReplyNull(wpc);
         return;
     }
 
     size_t len = 0;
     char *value = entryGetValue(hash_entry, &len);
     serverAssert(value != NULL);
-    addReplyBulkCBuffer(c, value, len);
+    addWritePreparedReplyBulkCBuffer(wpc, value, len);
 }
 
-static void hmgetReplyWithHashtable(client *c, hashtable *ht, robj **fields, size_t count) {
+static void hmgetReplyWithHashtable(writePreparedClient *wpc, hashtable *ht, robj **fields, size_t count) {
     const void *keys[HMGET_FIND_BATCH_SIZE];
     void *found_entries[HMGET_FIND_BATCH_SIZE];
     while (count) {
@@ -1422,7 +1428,7 @@ static void hmgetReplyWithHashtable(client *c, hashtable *ht, robj **fields, siz
         uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
 
         for (size_t i = 0; i < batch; i++) {
-            addHashEntryToReply(c, (result >> i) & 1 ? found_entries[i] : NULL);
+            addHashEntryToReply(wpc, (result >> i) & 1 ? found_entries[i] : NULL);
         }
 
         fields += batch;
@@ -1447,23 +1453,25 @@ void hmgetCommand(client *c) {
 
     if (checkType(c, o, OBJ_HASH)) return;
 
-    addReplyArrayLen(c, count);
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
+    addWritePreparedReplyArrayLen(wpc, count);
 
     if (o == NULL) {
         for (size_t i = 0; i < count; i++) {
-            addReplyNull(c);
+            addWritePreparedReplyNull(wpc);
         }
         return;
     }
 
     /* Prefer hashtable batch lookup to improve performance. */
     if (o->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
-        hmgetReplyWithHashtable(c, objectGetVal(o), c->argv + 2, count);
+        hmgetReplyWithHashtable(wpc, objectGetVal(o), c->argv + 2, count);
         return;
     }
 
     for (size_t i = 0; i < count; i++) {
-        addHashFieldToReply(c, o, objectGetVal(c->argv[i + 2]));
+        addHashFieldToPreparedReply(wpc, o, objectGetVal(c->argv[i + 2]));
     }
 }
 

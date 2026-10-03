@@ -2969,9 +2969,15 @@ static int updateClusterAvailabilityZone(const char **err) {
 static int applyTlsCfg(const char **err) {
     UNUSED(err);
 
+    ConnectionType *con_type = connectionTypeTls();
+    if (!con_type) {
+        *err = "TLS configuration is not available.";
+        return 0;
+    }
+
     /* If TLS is enabled, try to configure OpenSSL. */
     if ((server.tls_port || server.tls_replication || server.tls_cluster) &&
-        connTypeConfigure(connectionTypeTls(), &server.tls_ctx_config, 1) == C_ERR) {
+        connTypeConfigure(con_type, &server.tls_ctx_config, 1) == C_ERR) {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }
@@ -2980,8 +2986,13 @@ static int applyTlsCfg(const char **err) {
 }
 
 static int applyTLSPort(const char **err) {
-    /* Configure TLS in case it wasn't enabled */
-    if (connTypeConfigure(connectionTypeTls(), &server.tls_ctx_config, 0) == C_ERR) {
+    ConnectionType *con_type = connectionTypeTls();
+    if (!con_type) {
+        *err = "TLS configuration is not available.";
+        return 0;
+    }
+
+    if (connTypeConfigure(con_type, &server.tls_ctx_config, 0) == C_ERR) {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }

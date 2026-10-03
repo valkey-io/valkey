@@ -10996,6 +10996,7 @@ struct COMMAND_ARG XACKDEL_Args[] = {
 commandHistory XADD_History[] = {
 {"6.2.0","Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option."},
 {"7.0.0","Added support for the `<ms>-*` explicit ID form."},
+{"9.2.0","Added the `MAXBYTES` trimming strategy."},
 };
 #endif
 
@@ -11013,23 +11014,34 @@ keySpec XADD_Keyspecs[1] = {
 };
 #endif
 
-/* XADD trim strategy argument table */
-struct COMMAND_ARG XADD_trim_strategy_Subargs[] = {
+/* XADD trim strategy_selector maxlen_or_minid strategy argument table */
+struct COMMAND_ARG XADD_trim_strategy_selector_maxlen_or_minid_strategy_Subargs[] = {
 {MAKE_ARG("maxlen",ARG_TYPE_PURE_TOKEN,-1,"MAXLEN",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("minid",ARG_TYPE_PURE_TOKEN,-1,"MINID",NULL,"6.2.0",CMD_ARG_NONE,0,NULL)},
 };
 
-/* XADD trim operator argument table */
-struct COMMAND_ARG XADD_trim_operator_Subargs[] = {
+/* XADD trim strategy_selector maxlen_or_minid operator argument table */
+struct COMMAND_ARG XADD_trim_strategy_selector_maxlen_or_minid_operator_Subargs[] = {
 {MAKE_ARG("equal",ARG_TYPE_PURE_TOKEN,-1,"=",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("approximately",ARG_TYPE_PURE_TOKEN,-1,"~",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* XADD trim strategy_selector maxlen_or_minid argument table */
+struct COMMAND_ARG XADD_trim_strategy_selector_maxlen_or_minid_Subargs[] = {
+{MAKE_ARG("strategy",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XADD_trim_strategy_selector_maxlen_or_minid_strategy_Subargs},
+{MAKE_ARG("operator",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=XADD_trim_strategy_selector_maxlen_or_minid_operator_Subargs},
+{MAKE_ARG("threshold",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* XADD trim strategy_selector argument table */
+struct COMMAND_ARG XADD_trim_strategy_selector_Subargs[] = {
+{MAKE_ARG("maxlen-or-minid",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=XADD_trim_strategy_selector_maxlen_or_minid_Subargs},
+{MAKE_ARG("maxbytes",ARG_TYPE_INTEGER,-1,"MAXBYTES",NULL,"9.2.0",CMD_ARG_NONE,0,NULL)},
+};
+
 /* XADD trim argument table */
 struct COMMAND_ARG XADD_trim_Subargs[] = {
-{MAKE_ARG("strategy",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XADD_trim_strategy_Subargs},
-{MAKE_ARG("operator",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=XADD_trim_operator_Subargs},
-{MAKE_ARG("threshold",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("strategy-selector",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XADD_trim_strategy_selector_Subargs},
 {MAKE_ARG("count",ARG_TYPE_INTEGER,-1,"LIMIT",NULL,"6.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
@@ -11049,7 +11061,7 @@ struct COMMAND_ARG XADD_data_Subargs[] = {
 struct COMMAND_ARG XADD_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("nomkstream",ARG_TYPE_PURE_TOKEN,-1,"NOMKSTREAM",NULL,"6.2.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("trim",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,4,NULL),.subargs=XADD_trim_Subargs},
+{MAKE_ARG("trim",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=XADD_trim_Subargs},
 {MAKE_ARG("id-selector",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XADD_id_selector_Subargs},
 {MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=XADD_data_Subargs},
 };
@@ -11738,6 +11750,7 @@ struct COMMAND_ARG XSETID_Args[] = {
 /* XTRIM history */
 commandHistory XTRIM_History[] = {
 {"6.2.0","Added the `MINID` trimming strategy and the `LIMIT` option."},
+{"9.2.0","Added the `MAXBYTES` trimming strategy."},
 };
 #endif
 
@@ -11755,30 +11768,41 @@ keySpec XTRIM_Keyspecs[1] = {
 };
 #endif
 
-/* XTRIM trim strategy argument table */
-struct COMMAND_ARG XTRIM_trim_strategy_Subargs[] = {
+/* XTRIM trim strategy_selector maxlen_or_minid strategy argument table */
+struct COMMAND_ARG XTRIM_trim_strategy_selector_maxlen_or_minid_strategy_Subargs[] = {
 {MAKE_ARG("maxlen",ARG_TYPE_PURE_TOKEN,-1,"MAXLEN",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("minid",ARG_TYPE_PURE_TOKEN,-1,"MINID",NULL,"6.2.0",CMD_ARG_NONE,0,NULL)},
 };
 
-/* XTRIM trim operator argument table */
-struct COMMAND_ARG XTRIM_trim_operator_Subargs[] = {
+/* XTRIM trim strategy_selector maxlen_or_minid operator argument table */
+struct COMMAND_ARG XTRIM_trim_strategy_selector_maxlen_or_minid_operator_Subargs[] = {
 {MAKE_ARG("equal",ARG_TYPE_PURE_TOKEN,-1,"=",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("approximately",ARG_TYPE_PURE_TOKEN,-1,"~",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* XTRIM trim strategy_selector maxlen_or_minid argument table */
+struct COMMAND_ARG XTRIM_trim_strategy_selector_maxlen_or_minid_Subargs[] = {
+{MAKE_ARG("strategy",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XTRIM_trim_strategy_selector_maxlen_or_minid_strategy_Subargs},
+{MAKE_ARG("operator",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=XTRIM_trim_strategy_selector_maxlen_or_minid_operator_Subargs},
+{MAKE_ARG("threshold",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* XTRIM trim strategy_selector argument table */
+struct COMMAND_ARG XTRIM_trim_strategy_selector_Subargs[] = {
+{MAKE_ARG("maxlen-or-minid",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=XTRIM_trim_strategy_selector_maxlen_or_minid_Subargs},
+{MAKE_ARG("maxbytes",ARG_TYPE_INTEGER,-1,"MAXBYTES",NULL,"9.2.0",CMD_ARG_NONE,0,NULL)},
+};
+
 /* XTRIM trim argument table */
 struct COMMAND_ARG XTRIM_trim_Subargs[] = {
-{MAKE_ARG("strategy",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XTRIM_trim_strategy_Subargs},
-{MAKE_ARG("operator",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=XTRIM_trim_operator_Subargs},
-{MAKE_ARG("threshold",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("strategy-selector",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XTRIM_trim_strategy_selector_Subargs},
 {MAKE_ARG("count",ARG_TYPE_INTEGER,-1,"LIMIT",NULL,"6.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /* XTRIM argument table */
 struct COMMAND_ARG XTRIM_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("trim",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,4,NULL),.subargs=XTRIM_trim_Subargs},
+{MAKE_ARG("trim",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XTRIM_trim_Subargs},
 };
 
 /********** APPEND ********************/
@@ -12913,7 +12937,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 /* stream */
 {MAKE_CMD("xack","Returns the number of messages that were successfully acknowledged by the consumer group member of a stream.","O(1) for each message ID processed.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XACK_History,0,XACK_Tips,0,xackCommand,-4,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XACK_Keyspecs,1,NULL,3),.args=XACK_Args},
 {MAKE_CMD("xackdel","Acknowledge and (if possible) delete stream message(s).","O(1) for each single item to delete in the stream, regardless of the stream size","9.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XACKDEL_History,0,XACKDEL_Tips,0,xackdelCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_WRITE|ACL_CATEGORY_STREAM,NULL,XACKDEL_Keyspecs,1,NULL,6),.args=XACKDEL_Args},
-{MAKE_CMD("xadd","Appends a new message to a stream. Creates the key if it doesn't exist.","O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XADD_History,2,XADD_Tips,1,xaddCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XADD_Keyspecs,1,NULL,5),.args=XADD_Args},
+{MAKE_CMD("xadd","Appends a new message to a stream. Creates the key if it doesn't exist.","O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XADD_History,3,XADD_Tips,1,xaddCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XADD_Keyspecs,1,NULL,5),.args=XADD_Args},
 {MAKE_CMD("xautoclaim","Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to a consumer group member.","O(1) if COUNT is small.","6.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XAUTOCLAIM_History,1,XAUTOCLAIM_Tips,1,xautoclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XAUTOCLAIM_Keyspecs,1,NULL,7),.args=XAUTOCLAIM_Args},
 {MAKE_CMD("xclaim","Changes, or acquires, ownership of a message in a consumer group, as if the message was delivered to a consumer group member.","O(log N) with N being the number of messages in the PEL of the consumer group.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XCLAIM_History,0,XCLAIM_Tips,1,xclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XCLAIM_Keyspecs,1,NULL,11),.args=XCLAIM_Args},
 {MAKE_CMD("xdel","Returns the number of messages after removing them from a stream.","O(1) for each single item to delete in the stream, regardless of the stream size.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XDEL_History,0,XDEL_Tips,0,xdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XDEL_Keyspecs,1,NULL,2),.args=XDEL_Args},
@@ -12927,7 +12951,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("xreadgroup","Returns new or historical messages from a stream for a consumer in a group. Blocks until a message is available otherwise.","For each stream mentioned: O(M) with M being the number of elements returned. If M is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1). On the other side when XREADGROUP blocks, XADD will pay the O(N) time in order to serve the N clients blocked on the stream getting new data.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XREADGROUP_History,0,XREADGROUP_Tips,0,xreadCommand,-7,CMD_BLOCKING|CMD_WRITE,ACL_CATEGORY_BLOCKING|ACL_CATEGORY_SLOW|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XREADGROUP_Keyspecs,1,xreadGetKeys,5),.args=XREADGROUP_Args},
 {MAKE_CMD("xrevrange","Returns the messages from a stream within a range of IDs in reverse order.","O(N) with N being the number of elements returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1).","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XREVRANGE_History,1,XREVRANGE_Tips,0,xrevrangeCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_STREAM,NULL,XREVRANGE_Keyspecs,1,NULL,4),.args=XREVRANGE_Args},
 {MAKE_CMD("xsetid","An internal command for replicating stream values.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XSETID_History,1,XSETID_Tips,0,xsetidCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XSETID_Keyspecs,1,NULL,4),.args=XSETID_Args},
-{MAKE_CMD("xtrim","Deletes messages from the beginning of a stream.","O(N), with N being the number of evicted entries. Constant times are very small however, since entries are organized in macro nodes containing multiple entries that can be released with a single deallocation.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XTRIM_History,1,XTRIM_Tips,1,xtrimCommand,-4,CMD_WRITE,ACL_CATEGORY_SLOW|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XTRIM_Keyspecs,1,NULL,2),.args=XTRIM_Args},
+{MAKE_CMD("xtrim","Deletes messages from the beginning of a stream.","O(N), with N being the number of evicted entries. Constant times are very small however, since entries are organized in macro nodes containing multiple entries that can be released with a single deallocation.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XTRIM_History,2,XTRIM_Tips,1,xtrimCommand,-4,CMD_WRITE,ACL_CATEGORY_SLOW|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XTRIM_Keyspecs,1,NULL,2),.args=XTRIM_Args},
 /* string */
 {MAKE_CMD("append","Appends a string to the value of a key. Creates the key if it doesn't exist.","O(1). The amortized time complexity is O(1) assuming the appended value is small and the already present value is of any size, since the dynamic string library used by the server will double the free space available on every reallocation.","2.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,APPEND_History,0,APPEND_Tips,0,appendCommand,3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,APPEND_Keyspecs,1,NULL,2),.args=APPEND_Args},
 {MAKE_CMD("decr","Decrements the integer value of a key by one. Uses 0 as initial value if the key doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,DECR_History,0,DECR_Tips,0,decrCommand,2,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,DECR_Keyspecs,1,NULL,1),.args=DECR_Args},

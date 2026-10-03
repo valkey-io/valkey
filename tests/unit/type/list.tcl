@@ -1971,6 +1971,14 @@ foreach {type large} [array get largevalue] {
         test "LSET out of range index - $type" {
             assert_error ERR*range* {r lset mylist 10 foo}
         }
+
+        test "LSET does not truncate large indexes - $type" {
+            create_$type mylist "a $large"
+            foreach index {4294967295 4294967296 -4294967296 -4294967297} {
+                assert_error ERR*range* {r lset mylist $index changed}
+                assert_equal "a $large" [r lrange mylist 0 -1]
+            }
+        }
     }
 
     test {LSET against nonexistent key} {

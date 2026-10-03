@@ -1,7 +1,10 @@
 # This test suite tests shutdown behavior.
 
 test "Shutdown cleans up IO threads with pipelined commands" {
-    start_server {overrides {save "" enable-module-command local io-threads 4 io-threads-always-active yes}} {
+    # Workers allocate their query buffers even while parked. Keep them parked
+    # under Valgrind to check cleanup without scheduler starvation.
+    set always_active [expr {$::valgrind ? "no" : "yes"}]
+    start_server [list overrides [list save "" enable-module-command local io-threads 4 io-threads-always-active $always_active]] {
         set server_pid [srv 0 pid]
         set rd [valkey_deferring_client]
 

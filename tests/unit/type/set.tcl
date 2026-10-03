@@ -1254,7 +1254,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 }
 } ;# run_solo
 
-start_server {config "minimal.conf" tags {"set" "external:skip"} overrides {io-threads 4 io-threads-always-active yes set-max-listpack-entries 0}} {
+start_server {config "minimal.conf" tags {"set" "external:skip" "valgrind:skip"} overrides {io-threads 4 io-threads-always-active yes set-max-listpack-entries 0}} {
     test "Set nested prefetch - SISMEMBER correctness with pipelined commands" {
         for {set i 0} {$i < 200} {incr i} {
             r sadd myset "member:$i"

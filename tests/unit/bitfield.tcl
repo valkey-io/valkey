@@ -259,5 +259,42 @@ start_server {tags {"repl external:skip"}} {
             catch {$slave bitfield_ro bits set u8 0 100 get u8 0} err
             assert_match {*ERR BITFIELD_RO only supports the GET subcommand*} $err
         }
+
+        test {BITFIELD OVERFLOW FAIL on new key creates key on primary and is propagated} {
+            # u8 max is 255; SET u8 300 overflows. With OVERFLOW FAIL the write is
+            # skipped and nil is returned, but lookupStringForBitCommand has already
+            # created the (zero-padded) key on the primary. That create is a
+            # modification and must be propagated, or the replica never sees the key.
+            assert_equal {{}} [$master bitfield k OVERFLOW FAIL SET u8 0 300]
+
+            # Key exists on the master and is replicated.
+            assert_equal 1 [$master exists k]
+            wait_for_ofs_sync $master $slave
+            assert_equal 1 [$slave exists k]
+        }
+
+        test {BITFIELD OVERFLOW FAIL that resizes an existing key is propagated to the replica} {
+            # Pre-create a small (1-byte) string that is already replicated.
+            $master setbit k2 0 1
+            wait_for_ofs_sync $master $slave
+            assert_equal 1 [$slave exists k2]
+            assert_equal 1 [$slave strlen k2]
+
+            # SET u8 at offset 100 grows the (zero-padded) value before the
+            # overflow check runs. u8 max is 255; SET u8 300 overflows, so with
+            # OVERFLOW FAIL the write is skipped and nil is returned -- but the
+            # key has already been resized on the primary. The resize is itself a
+            # modification: it must bump the dirty counter and be replicated, or
+            # primary/replica sizes diverge.
+            assert_equal {{}} [$master bitfield k2 OVERFLOW FAIL SET u8 100 300]
+
+            set master_len [$master strlen k2]
+            assert {$master_len > 1}
+
+            # The resize must have been replicated, so the replica reports the
+            # same (grown) length.
+            wait_for_ofs_sync $master $slave
+            assert_equal $master_len [$slave strlen k2]
+        }
     }
 }

@@ -1209,6 +1209,14 @@ static void prefetchNextBucketEntries(iter *iter, bucket *current_bucket) {
     }
 }
 
+/* Prefetches the entries of the given bucket and its child bucket, if any, so
+ * that the cache misses taken by the scan callback overlap instead of being
+ * paid one after another. */
+static void prefetchBucketForScan(bucket *b) {
+    prefetchBucketEntries(b);
+    if (b->chained) valkey_prefetch(getChildBucket(b));
+}
+
 /* Prefetches the values associated with the entries in the given bucket by
  * calling the entryPrefetchValue callback in the hashtableType */
 static void prefetchBucketValues(bucket *b, hashtable *ht) {
@@ -2138,8 +2146,14 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         size_t idx = cursor & mask;
         size_t used_before = ht->used[0];
         bucket *b = &ht->tables[0][idx];
+
+        /* Advance cursor. Doing it here lets us prefetch the bucket for the next call */
+        cursor = nextCursor(cursor, mask);
+        if (cursor) valkey_prefetch(&ht->tables[0][cursor & mask]);
+
         do {
             if (fn && b->presence != 0) {
+                prefetchBucketForScan(b);
                 int pos;
                 for (pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                     if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
@@ -2159,9 +2173,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         if (ht->used[0] < used_before) {
             compactBucketChain(ht, idx, 0);
         }
-
-        /* Advance cursor. */
-        cursor = nextCursor(cursor, mask);
     } else {
         int table_small, table_large;
         if (ht->bucket_exp[0] <= ht->bucket_exp[1]) {
@@ -2183,6 +2194,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             bucket *b = &ht->tables[table_small][idx];
             do {
                 if (fn && b->presence) {
+                    prefetchBucketForScan(b);
                     for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                         if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                             void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
@@ -2208,11 +2220,15 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             /* Emit entries in the larger table at this cursor, if this index
              * hash't already been rehashed. */
             idx = cursor & mask_large;
+            /* Increment the reverse cursor not covered by the smaller mask. */
+            cursor = nextCursor(cursor, mask_large);
+            if (cursor) valkey_prefetch(&ht->tables[table_large][cursor & mask_large]);
             if (table_large == 1 || ht->rehash_idx == -1 || idx >= (size_t)ht->rehash_idx) {
                 size_t used_before = ht->used[table_large];
                 bucket *b = &ht->tables[table_large][idx];
                 do {
                     if (fn && b->presence) {
+                        prefetchBucketForScan(b);
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                             if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                                 void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
@@ -2231,9 +2247,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                     compactBucketChain(ht, idx, table_large);
                 }
             }
-
-            /* Increment the reverse cursor not covered by the smaller mask. */
-            cursor = nextCursor(cursor, mask_large);
 
             /* Continue while bits covered by mask difference is non-zero. */
         } while (cursor & (mask_small ^ mask_large));

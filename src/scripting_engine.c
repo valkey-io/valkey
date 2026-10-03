@@ -824,9 +824,12 @@ static sds *wrapText(const char *text, size_t max_len, size_t *count) {
             char *lastspace = strrchr(line, ' ');
             if (lastspace != NULL) {
                 *lastspace = 0;
+                p += (lastspace - line) + 1;
+            } else {
+                /* A single word longer than the wrap width: hard-break it. */
+                p += max_len;
+                while (*p == ' ') p++;
             }
-
-            p += (lastspace - line) + 1;
         } else {
             p += len;
         }
@@ -838,6 +841,11 @@ static sds *wrapText(const char *text, size_t max_len, size_t *count) {
     }
 
     return lines;
+}
+
+/* Wrapper function for gtest to access static internals. */
+sds *testOnlyWrapText(const char *text, size_t max_len, size_t *count) {
+    return wrapText(text, max_len, count);
 }
 
 static void printCommandHelp(const debuggerCommand *command,

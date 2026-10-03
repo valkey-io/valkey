@@ -44,6 +44,8 @@
 #include "cluster_migrateslots.h"
 #include "io_threads.h"
 #include "rdb_transcoder.h"
+#include "bgiteration.h"
+#include "forkless.h"
 
 #include <memory.h>
 #include <stddef.h>
@@ -565,6 +567,11 @@ int canFeedReplicaReplBuffer(client *replica) {
     /* Don't feed replicas that are still waiting for BGSAVE to start. */
     if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) return 0;
 
+    /* Don't feed replicas that are syncing via forkless-save-to-socket. Replication
+     * data is inlined into the RDB stream by the iterator, so the shared replication
+     * buffer is not needed for these clients. */
+    if (replica->flag.forkless_managed && isForklessSaveInProgress()) return 0;
+
     return 1;
 }
 
@@ -657,6 +664,30 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 
     /* Set the offset of the first byte we have in the backlog. */
     server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
+}
+
+/* Retire a replica client that is owned by a forkless save from the server's
+ * replication tracking. The client object is left alive (the forkless save is
+ * still using its connection) and will be freed later by the save; this only
+ * removes it from the shared replica state so the rest of the server stops
+ * treating it as an attached replica: it is taken out of
+ * server.replicas / server.monitors, the derived replica counters are
+ * refreshed, its replica/monitor flags are cleared and its referenced
+ * replication buffer is released. */
+void retireForklessManagedReplica(client *c) {
+    list *client_list = (c->flag.monitor) ? server.monitors : server.replicas;
+    listNode *ln = listSearchKey(client_list, c);
+    serverAssert(ln != NULL);
+    listDelNode(client_list, ln);
+
+    if (!(c->flag.monitor)) {
+        if (listLength(server.replicas) == 0) server.repl_no_replicas_since = server.unixtime;
+        refreshGoodReplicasCount();
+    }
+    c->flag.replica = 0;
+    c->flag.monitor = 0;
+
+    freeReplicaReferencedReplBuffer(c);
 }
 
 /* Free replication buffer blocks that are referenced by this client. */
@@ -1268,6 +1299,20 @@ bool isReplicaInCohort(client *replica, int req, int rdbver, compressionAlgo com
            replSelectFullSyncCompression(replica->repl_data->replica_capa) == compr;
 }
 
+/* Set up every WAIT_BGSAVE_START replica of this cohort for full resync at the
+ * given initial offset */
+static void setupCohortReplicasForFullResync(int req, int rdbver, compressionAlgo compr, long long offset) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (replica->repl_data->repl_state != REPLICA_STATE_WAIT_BGSAVE_START) continue;
+        if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
+        replicationSetupReplicaForFullResync(replica, offset);
+    }
+}
+
 /* Start a BGSAVE for replication goals, which is, selecting the disk or
  * socket target depending on the configuration.
  *
@@ -1313,12 +1358,39 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         goto error;
     }
 
-    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s using: %s, compression: %s",
-              socket_target ? "replicas sockets" : "disk",
-              (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync",
-              compressionAlgoName(sync_compression_algo));
+    int chosen_save_type = resolveBgsaveType();
+    if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !(mincapa & REPLICA_CAPA_INBAND_REPL)) {
+        serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: replica does not support inline replication");
+        chosen_save_type = RDB_BGSAVE_TYPE_FORK;
+    }
 
-    if (socket_target) {
+    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s using: %s, compression: %s, method: %s",
+              (socket_target) ? "replicas sockets" : "disk",
+              (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync",
+              compressionAlgoName(sync_compression_algo),
+              (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) ? "forkless" : "fork");
+
+    /* Set up this cohort's replicas for full resync before the save, in one place
+     * for every path. Forkless socket starts at offset -1, since the real offset is
+     * sent via REPLCONF psync-offset at the end of the RDB transfer. On failure the
+     * error label unwinds the setup. */
+    long long offset =
+        (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && socket_target) ? -1 : getPsyncInitialOffset();
+    setupCohortReplicasForFullResync(req, rdbver, sync_compression_algo, offset);
+
+    if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
+        if (socket_target) {
+            if (forklessSaveToSockets() == C_ERR) {
+                fail_msg = "Can't start the forkless process for a diskless full sync";
+                goto error;
+            }
+        } else {
+            if (forklessSaveToDisk(server.rdb_filename) == C_ERR) {
+                fail_msg = "Can't start the forkless process for a disk-based full sync";
+                goto error;
+            }
+        }
+    } else if (socket_target) {
         if (rdbSaveToReplicasSockets(req, rdbver, sync_compression_algo, rsiptr) == C_ERR) {
             fail_msg = "Can't start the child process for a diskless full sync";
             goto error;
@@ -1336,38 +1408,27 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     }
     if (server.debug_pause_after_fork) debugPauseProcess();
 
-    /* If the target is socket, rdbSaveToReplicasSockets() already setup the replicas
-     * for a full resync. For a disk target do it now, and remember that dump.rdb was
-     * generated for replication so that we can later delete the file if needed. Note
-     * that we don't set the flag if the feature is disabled, otherwise it would never
-     * be cleared: the file is not deleted. This way if the user enables it later with
-     * CONFIG SET, we are fine. */
-    if (!socket_target) {
-        if (server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
-        listRewind(server.replicas, &li);
-        while ((ln = listNext(&li))) {
-            client *replica = ln->value;
-
-            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
-                if (!isReplicaInCohort(replica, req, rdbver, sync_compression_algo)) continue;
-                replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
-            }
-        }
-    }
+    /* Remember that dump.rdb was generated for replication so that we can later
+     * delete the file if needed. Note that we don't set the flag if the feature is
+     * disabled, otherwise it would never be cleared: the file is not deleted. This
+     * way if the user enables it later with CONFIG SET, we are fine. */
+    if (!socket_target && server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
 
     return C_OK;
 
 error:
     /* Remove the replicas of this cohort waiting for a full resynchronization from
      * the list of replicas, inform them with an error about what happened, close the
-     * connection ASAP. The other cohorts are served by their own rounds. */
+     * connection ASAP. The other cohorts are served by their own rounds. Setup may
+     * have already advanced them to WAIT_BGSAVE_END, so clean up both states. */
     serverAssert(fail_msg != NULL);
     serverLog(LL_WARNING, "BGSAVE for replication failed: %s", fail_msg);
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
 
-        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START ||
+            replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
             if (!isReplicaInCohort(replica, req, rdbver, sync_compression_algo)) continue;
             replica->repl_data->repl_state = REPL_STATE_NONE;
             replica->flag.replica = 0;
@@ -1690,7 +1751,7 @@ void freeClientReplicationData(client *c) {
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
  *
- * - capa <eof|psync2|dual-channel|skip-rdb-checksum|lz4|zstd>
+ * - capa <eof|psync2|dual-channel|skip-rdb-checksum|lz4|zstd|inband-repl>
  * What is the capabilities of this instance.
  * eof: supports EOF-style RDB transfer for diskless replication.
  * psync2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
@@ -1699,6 +1760,7 @@ void freeClientReplicationData(client *c) {
  *                    a connection that has integrity checks (such as TLS).
  * lz4: accepts LZ4 streaming-compressed replication payloads.
  * zstd: accepts Zstd streaming-compressed replication payloads.
+ * inband-repl: supports RDB_OPCODE_UPDATE for inline replication during forkless save.
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it
@@ -1786,6 +1848,8 @@ void replconfCommand(client *c) {
             /* "zstd": the replica accepts Zstd streaming-compressed replication payloads. */
             else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_ZSTD_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_ZSTD;
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_INBAND_REPL_STR))
+                c->repl_data->replica_capa |= REPLICA_CAPA_INBAND_REPL;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
@@ -1810,7 +1874,10 @@ void replconfCommand(client *c) {
              * quick check first (instead of waiting for the next ACK. */
             if (server.child_type == CHILD_TYPE_RDB && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END)
                 checkChildrenDone();
-            if (c->repl_data->repl_start_cmd_stream_on_ack && c->repl_data->repl_state == REPLICA_STATE_ONLINE) replicaStartCommandStream(c);
+            if (c->repl_data->repl_start_cmd_stream_on_ack && c->repl_data->repl_state == REPLICA_STATE_ONLINE) {
+                resumeReplicaWrites(c);
+                replicaStartCommandStream(c);
+            }
             if (c->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD) {
                 if (!replicaPutOnline(c)) freeClientAsync(c);
             }
@@ -1905,12 +1972,58 @@ void replconfCommand(client *c) {
 
             if (c->repl_data->replica_nodeid) sdsfree(c->repl_data->replica_nodeid);
             c->repl_data->replica_nodeid = sdsdup(objectGetVal(c->argv[j + 1]));
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "psync-offset")) {
+            if (!(c->flag.primary)) {
+                serverLog(LL_DEBUG, "REPLCONF PSYNC-OFFSET was called from a non primary client. Ignoring it.");
+                return;
+            }
+            long long offset;
+            if ((getLongLongFromObject(c->argv[j + 1], &offset) != C_OK)) {
+                serverLog(LL_WARNING, "Unable to parse psync replication offset");
+                return;
+            }
+            if (server.wait_for_psync_offset) {
+                serverLog(LL_NOTICE,
+                          "Received a request to update primary reploff for psync, new psync offset: %lld.", offset);
+                server.primary_initial_offset = offset;
+                server.primary_repl_offset = offset;
+                server.repl_backlog->offset = server.primary_repl_offset + 1;
+                server.wait_for_psync_offset = 0;
+                server.primary->repl_data->read_reploff = offset + sdslen(c->querybuf) - c->qb_applied;
+                server.skip_psync_offset = 1;
+            } else {
+                serverLog(LL_WARNING, "Received unexpected request to update primary reploff for psync. Ignoring it.");
+            }
+            /* Note: this command does not reply anything! */
+            return;
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)objectGetVal(c->argv[j]));
             return;
         }
     }
     addReply(c, shared.ok);
+}
+
+/* Suspend sending data to a replica until we receive a REPLCONF ACK.
+ * Used by forkless-save-to-socket: after the RDB+EOF is queued in the COB,
+ * we pause sending so the replica sees a clean EOF boundary. */
+void suspendReplicaWritesUntilAck(client *replica) {
+    serverAssert(getClientType(replica) == CLIENT_TYPE_REPLICA);
+    replica->repl_data->stop_send_data_until_ack = 1;
+
+    if (replica->flag.pending_write) {
+        listUnlinkNode(server.clients_pending_write, &replica->clients_pending_write_node);
+        replica->flag.pending_write = 0;
+    }
+}
+
+/* Resume sending data to a replica after ACK received. */
+void resumeReplicaWrites(client *replica) {
+    serverAssert(getClientType(replica) == CLIENT_TYPE_REPLICA);
+    if (!replica->repl_data->stop_send_data_until_ack) return;
+    replica->repl_data->stop_send_data_until_ack = 0;
+
+    putClientInPendingWriteQueue(replica);
 }
 
 /* This function puts a replica in the online state, and should be called just
@@ -1924,6 +2037,7 @@ void replconfCommand(client *c) {
  * the return value indicates that the replica should be disconnected.
  * */
 int replicaPutOnline(client *replica) {
+    resumeReplicaWrites(replica);
     if (replica->flag.repl_rdbonly) {
         replica->repl_data->repl_state = REPLICA_STATE_RDB_TRANSMITTED;
         /* The client asked for RDB only so we should close it ASAP */
@@ -3965,6 +4079,9 @@ int replicaSendPsyncCommand(connection *conn) {
      * client structure representing the primary into server.primary. */
     server.primary_initial_offset = -1;
 
+    /* Reset skip_psync_offset when a new sync starts. */
+    server.skip_psync_offset = 0;
+
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         /* While in dual channel replication, we should use our prepared repl id and offset. */
         psync_replid = server.repl_provisional_primary.replid;
@@ -4062,6 +4179,11 @@ int replicaProcessPsyncReply(connection *conn) {
             memcpy(server.primary_replid, replid, offset - replid - 1);
             server.primary_replid[CONFIG_RUN_ID_SIZE] = '\0';
             server.primary_initial_offset = strtoll(offset, NULL, 10);
+            /* Primary sends repl offset -1 for forkless full sync */
+            if (server.primary_initial_offset == -1) {
+                server.wait_for_psync_offset = 1;
+                server.primary_initial_offset = 0;
+            }
             serverLog(LL_NOTICE, "Full resync from primary: %s:%lld", server.primary_replid,
                       server.primary_initial_offset);
         }
@@ -4348,8 +4470,8 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
 
     // we can ignore primary's conditions when sending capa (is_primary_stream_verified=1)
     int send_skip_rdb_checksum_capa = replicationSupportSkipRDBChecksum(conn, useDisklessLoad(), 1);
-    char *argv[13] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-    size_t lens[13] = {8, 4, 3, 4, 6, 0, 0, 0, 0, 0, 0, 0, 0};
+    char *argv[15] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    size_t lens[15] = {8, 4, 3, 4, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     int argc = 5;
     if (send_skip_rdb_checksum_capa) {
         argv[argc] = "capa";
@@ -4359,6 +4481,13 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         lens[argc] = strlen(REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR);
         argc++;
     }
+    /* This build understands RDB_OPCODE_UPDATE for inline replication. */
+    argv[argc] = "capa";
+    lens[argc] = strlen("capa");
+    argc++;
+    argv[argc] = REPLICA_CAPA_INBAND_REPL_STR;
+    lens[argc] = strlen(REPLICA_CAPA_INBAND_REPL_STR);
+    argc++;
     if (server.dual_channel_replication) {
         argv[argc] = "capa";
         lens[argc] = strlen("capa");
@@ -4863,6 +4992,7 @@ int connectWithPrimary(void) {
 
     server.repl_transfer_lastio = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTING;
+    server.wait_for_psync_offset = 0;
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync started");
     return C_OK;
 }

@@ -758,6 +758,47 @@ start_server {tags {"acl external:skip"}} {
         assert {[dict get $entry object] eq {1}}
     }
 
+    test {SCRIPT subcommands are not granted by @keyspace or @read} {
+        # The SCRIPT subcommands are DB-scoped, but they must stay reachable only
+        # via @scripting. Granting them through @keyspace/@read would silently
+        # widen every existing selector built from those categories, notably
+        # letting a read-only user retrieve arbitrary script bodies via
+        # SCRIPT SHOW.
+        r AUTH default ""
+        r ACL SETUSER scriptless on >pw ~* +@read +@write +@keyspace
+        set rd [valkey_client]
+        $rd AUTH scriptless pw
+
+        assert_error {*NOPERM*} {$rd SCRIPT LOAD "return 1"}
+        assert_error {*NOPERM*} {$rd SCRIPT SHOW e0e1f9fabfc9d4800c877a703b823ac0578ff8db}
+        assert_error {*NOPERM*} {$rd SCRIPT EXISTS e0e1f9fabfc9d4800c877a703b823ac0578ff8db}
+        assert_error {*NOPERM*} {$rd SCRIPT FLUSH}
+
+        $rd close
+        r ACL DELUSER scriptless
+    } {1}
+
+    test {SCRIPT subcommands respect the ACL db= selector} {
+        r ACL SETUSER dbscript on >pw ~* +@all db=9
+        set rd [valkey_client]
+        # AUTH does not reset the selected DB, so this user lands on a database
+        # its selector does not cover.
+        $rd SELECT 0
+        $rd AUTH dbscript pw
+
+        assert_error {*NOPERM*} {$rd SCRIPT LOAD "return 1"}
+        assert_error {*NOPERM*} {$rd SCRIPT SHOW e0e1f9fabfc9d4800c877a703b823ac0578ff8db}
+        assert_error {*NOPERM*} {$rd SCRIPT EXISTS e0e1f9fabfc9d4800c877a703b823ac0578ff8db}
+        assert_error {*NOPERM*} {$rd SCRIPT FLUSH}
+
+        $rd SELECT 9
+        assert_equal {e0e1f9fabfc9d4800c877a703b823ac0578ff8db} [$rd SCRIPT LOAD "return 1"]
+
+        $rd close
+        r AUTH default ""
+        r ACL DELUSER dbscript
+    } {1} {singledb:skip}
+
     test {ACL LOG RESET is able to flush the entries in the log} {
         r ACL LOG RESET
         assert {[llength [r ACL LOG]] == 0}

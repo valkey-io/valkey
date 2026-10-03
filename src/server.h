@@ -1340,6 +1340,7 @@ typedef struct ClientReplicationData {
     int replica_version;                 /* Version on the form 0xMMmmpp. */
     short replica_capa;                  /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
     short replica_req;                   /* Replica requirements: REPLICA_REQ_* */
+    bool sibling_sync;                   /* Requires an authoritative sibling snapshot. */
     uint64_t associated_rdb_client_id;   /* The client id of this replica's rdb connection */
     time_t rdb_client_disconnect_time;   /* Time of the first freeClient call on this client. Used for delaying free. */
     listNode *ref_repl_buf_node;         /* Referenced node of replication buffer blocks,
@@ -2232,54 +2233,57 @@ struct valkeyServer {
     int shutdown_on_sigterm; /* Shutdown flags configured for SIGTERM. */
 
     /* Replication (primary) */
-    char replid[CONFIG_RUN_ID_SIZE + 1];        /* My current replication ID. */
-    char replid2[CONFIG_RUN_ID_SIZE + 1];       /* replid inherited from primary*/
-    long long primary_repl_offset;              /* My current replication offset */
-    long long second_replid_offset;             /* Accept offsets up to this for replid2. */
-    _Atomic(long long) fsynced_reploff_pending; /* Largest replication offset to
-                                                 * potentially have been fsynced, applied to
-                                                   fsynced_reploff only when AOF state is AOF_ON
-                                                   (not during the initial rewrite) */
-    long long fsynced_reploff;                  /* Largest replication offset that has been confirmed to be fsynced */
-    int replicas_eldb;                          /* Last SELECTed DB in replication output */
-    int repl_ping_replica_period;               /* Primary pings the replica every N seconds */
-    replBacklog *repl_backlog;                  /* Replication backlog for partial syncs */
-    long long repl_backlog_size;                /* Backlog circular buffer size */
-    replDataBuf pending_repl_data;              /* Replication data buffer for dual-channel-replication */
-    time_t repl_backlog_time_limit;             /* Time without replicas after the backlog
-                                                   gets released. */
-    time_t repl_no_replicas_since;              /* We have no replicas since that time.
-                                                 Only valid if server.replicas len is 0. */
-    int repl_min_replicas_to_write;             /* Min number of replicas to write. */
-    int repl_min_replicas_max_lag;              /* Max lag of <count> replicas to write. */
-    int repl_good_replicas_count;               /* Number of replicas with lag <= max_lag. */
-    int repl_diskless_sync;                     /* Primary send RDB to replicas sockets directly. */
-    int repl_diskless_load;                     /* Replica parse RDB directly from the socket.
-                                                 * see REPL_DISKLESS_LOAD_* enum */
-    int repl_diskless_sync_delay;               /* Delay to start a diskless repl BGSAVE. */
-    int repl_diskless_sync_max_replicas;        /* Max replicas for diskless repl BGSAVE
-                                                 * delay (start sooner if they all connect). */
-    int dual_channel_replication;               /* Config used to determine if the replica should
-                                                 * use dual channel replication for full syncs. */
-    _Atomic(int) replica_bio_disk_save_state;   /* Flag set by the bio thread to indicate that the
-                                                 * RDB save to disk has completed, or failed */
-    _Atomic(bool) replica_bio_abort_save;       /* Flag set by main thread, used to signal to replica's
-                                                 * disk-saving bio thread to abort the save */
-    long long bio_stat_net_repl_input_bytes;    /* Used to calculate stat_net_repl_input_bytes on the
-                                                 * replica's bio thread without touching main thread vars */
-    off_t bio_repl_transfer_size;               /* Used to calculate bio_repl_transfer_size on the
-                                                 * replica's bio thread without touching main thread vars */
-    off_t bio_repl_transfer_read;               /* Used to calculate bio_repl_transfer_read on the
-                                                 * replica's bio thread without touching main thread vars */
-    int wait_before_rdb_client_free;            /* Grace period in seconds for replica main channel
-                                                 * to establish psync. */
-    int debug_pause_after_fork;                 /* Debug param that pauses the main process
-                                                 * after a replication fork() (for bgsave). */
-    int debug_pause_before_psync;               /* Replica pauses (SIGSTOP) right before
-                                                 * sending PSYNC to its primary. */
-    size_t repl_buffer_mem;                     /* The memory of replication buffer. */
-    list *repl_buffer_blocks;                   /* Replication buffers blocks list
-                                                 * (serving replica clients and repl backlog) */
+    char replid[CONFIG_RUN_ID_SIZE + 1];           /* My current replication ID. */
+    char replid2[CONFIG_RUN_ID_SIZE + 1];          /* replid inherited from primary*/
+    long long primary_repl_offset;                 /* My current replication offset */
+    long long second_replid_offset;                /* Accept offsets up to this for replid2. */
+    _Atomic(long long) fsynced_reploff_pending;    /* Largest replication offset to
+                                                    * potentially have been fsynced, applied to
+                                                      fsynced_reploff only when AOF state is AOF_ON
+                                                      (not during the initial rewrite) */
+    long long fsynced_reploff;                     /* Largest replication offset that has been confirmed to be fsynced */
+    int replicas_eldb;                             /* Last SELECTed DB in replication output */
+    int repl_ping_replica_period;                  /* Primary pings the replica every N seconds */
+    replBacklog *repl_backlog;                     /* Replication backlog for partial syncs */
+    long long repl_backlog_size;                   /* Backlog circular buffer size */
+    replDataBuf pending_repl_data;                 /* Replication data buffer for dual-channel-replication */
+    time_t repl_backlog_time_limit;                /* Time without replicas after the backlog
+                                                      gets released. */
+    time_t repl_no_replicas_since;                 /* We have no replicas since that time.
+                                                    Only valid if server.replicas len is 0. */
+    int repl_min_replicas_to_write;                /* Min number of replicas to write. */
+    int repl_min_replicas_max_lag;                 /* Max lag of <count> replicas to write. */
+    int repl_good_replicas_count;                  /* Number of replicas with lag <= max_lag. */
+    int repl_diskless_sync;                        /* Primary send RDB to replicas sockets directly. */
+    int repl_diskless_load;                        /* Replica parse RDB directly from the socket.
+                                                    * see REPL_DISKLESS_LOAD_* enum */
+    int repl_diskless_sync_delay;                  /* Delay to start a diskless repl BGSAVE. */
+    int repl_diskless_sync_max_replicas;           /* Max replicas for diskless repl BGSAVE
+                                                    * delay (start sooner if they all connect). */
+    int dual_channel_replication;                  /* Config used to determine if the replica should
+                                                    * use dual channel replication for full syncs. */
+    bool cluster_syncing_from_sibling;             /* Transient sync-from-replica is in progress. */
+    long long cluster_sync_sibling_initial_offset; /* Sibling offset recorded after RDB load. */
+    long long cluster_sync_sibling_target_offset;  /* Highest primary offset observed during sibling sync. */
+    _Atomic(int) replica_bio_disk_save_state;      /* Flag set by the bio thread to indicate that the
+                                                    * RDB save to disk has completed, or failed */
+    _Atomic(bool) replica_bio_abort_save;          /* Flag set by main thread, used to signal to replica's
+                                                    * disk-saving bio thread to abort the save */
+    long long bio_stat_net_repl_input_bytes;       /* Used to calculate stat_net_repl_input_bytes on the
+                                                    * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_size;                  /* Used to calculate bio_repl_transfer_size on the
+                                                    * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_read;                  /* Used to calculate bio_repl_transfer_read on the
+                                                    * replica's bio thread without touching main thread vars */
+    int wait_before_rdb_client_free;               /* Grace period in seconds for replica main channel
+                                                    * to establish psync. */
+    int debug_pause_after_fork;                    /* Debug param that pauses the main process
+                                                    * after a replication fork() (for bgsave). */
+    int debug_pause_before_psync;                  /* Replica pauses (SIGSTOP) right before
+                                                    * sending PSYNC to its primary. */
+    size_t repl_buffer_mem;                        /* The memory of replication buffer. */
+    list *repl_buffer_blocks;                      /* Replication buffers blocks list
+                                                    * (serving replica clients and repl backlog) */
     /* Replication (replica) */
     char *primary_user;     /* AUTH with this user and primary_auth with primary */
     sds primary_auth;       /* AUTH with this password with primary */
@@ -2311,6 +2315,8 @@ struct valkeyServer {
     int repl_serve_stale_data;            /* Serve stale data when link is down? */
     int repl_replica_ro;                  /* Replica is read only? */
     int repl_replica_ignore_maxmemory;    /* If true replicas do not evict. */
+    bool repl_sibling_donor_safe;         /* Dataset established by an authoritative full sync. */
+    bool repl_sibling_full_sync_safe;     /* No unsafe settings during the current full sync. */
     time_t repl_down_since;               /* Unix time at which link with primary went down */
     int repl_disable_tcp_nodelay;         /* Disable TCP_NODELAY after SYNC? */
     int repl_mptcp;                       /* Use Multipath TCP for replica on client side */
@@ -2420,6 +2426,7 @@ struct valkeyServer {
     int cluster_require_full_coverage;                     /* If true, put the cluster down if
                                                               there is at least an uncovered slot.*/
     int cluster_replica_no_failover;                       /* Replica failover policy (NO/YES/IF_EMPTY). */
+    int cluster_prefer_sync_from_replica;                  /* Seed new cluster replicas from a sibling replica. */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
     char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
     char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */
@@ -3417,6 +3424,18 @@ void freeReplicaReferencedReplBuffer(client *replica);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
 void updateReplicasWaitingBgsave(int bgsaveerr, int type);
 void replicationCron(void);
+/* Abort an in-progress sibling sync and retarget replication to the cluster
+ * primary; C_ERR (no state changed) when the topology has no primary. */
+int replicationAbortSiblingSync(void);
+/* Forget sibling sync state when the caller establishes its own target. */
+void replicationDiscardSiblingSync(void);
+void replicationInvalidateSiblingDonor(void);
+/* Switch from the sibling back to the primary after the sibling stream drains. */
+void replicationMaybeSwitchToPrimaryAfterSiblingSync(void);
+/* Cancel an active replication handshake; reconnect when requested and possible. */
+int cancelReplicationHandshake(int reconnect);
+/* Start connecting to the configured primary endpoint. */
+int connectWithPrimary(void);
 void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);
 void replicationCachePrimary(client *c);

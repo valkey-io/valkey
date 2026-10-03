@@ -2338,6 +2338,7 @@ void createSharedObjects(void) {
     shared.srem = createSharedString("SREM");
     shared.xgroup = createSharedString("XGROUP");
     shared.xclaim = createSharedString("XCLAIM");
+    shared.xnack = createSharedString("XNACK");
     shared.xdel = createSharedString("XDEL");
     shared.xack = createSharedString("XACK");
     shared.script = createSharedString("SCRIPT");
@@ -2358,6 +2359,9 @@ void createSharedObjects(void) {
     shared.time = createSharedString("TIME");
     shared.retrycount = createSharedString("RETRYCOUNT");
     shared.force = createSharedString("FORCE");
+    shared.fail = createSharedString("FAIL");
+    shared.ids = createSharedString("IDS");
+    shared.one = createSharedString("1");
     shared.justid = createSharedString("JUSTID");
     shared.entriesread = createSharedString("ENTRIESREAD");
     shared.lastid = createSharedString("LASTID");

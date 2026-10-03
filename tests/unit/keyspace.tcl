@@ -646,6 +646,58 @@ foreach {type large} [array get largevalue] {
         r KEYS [string repeat "*?" 50000]
     } {}
 
+    test {KEYS with large character class after '*' does not stall the server} {
+        r flushdb
+        # The key must NOT match: if it matched at string position 0, the
+        # enclosing '*' would never backtrack and the class would only be
+        # parsed once even by the unpatched matcher, so the test wouldn't
+        # exercise the O(class size x string length) path at all. A long
+        # non-matching key forces '*' to retry the class test at every
+        # position before giving up, which is what made the unpatched
+        # matcher stall.
+        #
+        # The key length and bound below are chosen from measurements
+        # against the actual unpatched matcher (not just estimated), so
+        # this reliably fails without the fix rather than merely running
+        # fast enough to pass by accident on quick hardware:
+        #   unpatched, 40000-char class, non-matching key of length
+        #     40000     ->   ~1.2s
+        #     200000    ->   ~6.0s   (scales with key length, as expected
+        #                             for an O(class size x key length) bug)
+        #     1000000   ->  ~30s     (extrapolated)
+        #   fixed, same class, any of the above key lengths -> ~20ms
+        # A 1,000,000-char key and a 5s bound leaves about 250x headroom
+        # under the fixed matcher's measured time and about 6x headroom
+        # over the unpatched matcher's extrapolated time, so the bound
+        # should hold even on much slower or faster CI hardware than was
+        # used to measure it.
+        r set [string repeat "a" 1000000] 1
+        set pattern "*\[[string repeat "z" 40000]\]"
+        set start [clock milliseconds]
+        set res [r keys $pattern]
+        set elapsed [expr {[clock milliseconds] - $start}]
+        assert_equal {} $res
+        assert {$elapsed < 5000}
+    }
+
+    test {KEYS pattern caching agrees with the uncached matcher on ranges and negation} {
+        r flushdb
+        # All keys are exactly 3 chars, matching the "<class>zz" patterns
+        # below with no slack: a leading '*' can therefore only ever match
+        # zero characters, so "*<class>zz" (cache-eligible: '*' followed by
+        # '[') and "<class>zz" (no '*', always the inline parser) must
+        # return identical results. This cross-checks the two code paths,
+        # including the high-byte range case that previously diverged
+        # because of a signed/unsigned char mismatch between them.
+        r mset azz 1 mzz 1 zzz 1 Azz 1 "!zz" 1
+        r set "\xffzz" 1
+        foreach class [list {[a-z]} {[^a-c]} "\[a-\xff\]"] {
+            set with_star [lsort [r keys "*${class}zz"]]
+            set without_star [lsort [r keys "${class}zz"]]
+            assert_equal $with_star $without_star
+        }
+    }
+
 }
 
 start_cluster 1 0 {tags {"keyspace external:skip cluster"}} {

@@ -25,6 +25,7 @@ static_assert(sizeof(OrderedIndexIterator) >= sizeof(fbtreeIterator),
 static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int inclusive);
 static void skipElements(fbtreeIterator *fbt_iter, long count, int reverse);
 static sds packLexBound(uint64_t score_prefix, const_sds element);
+static sds packLexUpperSentinel(fbtreeIndex *fbt, uint64_t score_prefix, bool *max_ex);
 
 /* ==========================================================================
  * Score Normalization
@@ -59,14 +60,33 @@ static inline double sortableToScore(uint64_t be) {
     return score;
 }
 
-/* Pack score and element into sds: [8-byte sortable score][element] */
-static sds packScoreElement(double score, const char *ele, size_t ele_len) {
-    uint64_t sortable = scoreToSortable(score);
+/* Converts a signed 64-bit integer score to the same 8-byte big-endian sortable
+ * form. Two's complement already orders negative values correctly, so flipping
+ * the sign bit is enough. The integer and double encodings are not comparable
+ * with each other: an index must hold scores of only one kind.
+ *
+ * Unlike doubles, INT64_MAX maps to the all-ones sortable, so code that steps
+ * to the next sortable value must guard against wrapping. */
+static inline uint64_t int64ToSortable(int64_t score) {
+    return htonu64((uint64_t)score ^ (1ULL << 63));
+}
+
+static inline int64_t sortableToInt64(uint64_t be) {
+    return (int64_t)(ntohu64(be) ^ (1ULL << 63));
+}
+
+/* Pack a sortable score prefix and element into sds: [8-byte sortable score][element] */
+static sds packSortableElement(uint64_t sortable, const char *ele, size_t ele_len) {
     size_t total = SCORE_SIZE + ele_len;
     sds packed = sdsnewlen(NULL, total);
     memcpy(packed, &sortable, SCORE_SIZE);
     memcpy(packed + SCORE_SIZE, ele, ele_len);
     return packed;
+}
+
+/* Pack score and element into sds: [8-byte sortable score][element] */
+static sds packScoreElement(double score, const char *ele, size_t ele_len) {
+    return packSortableElement(scoreToSortable(score), ele, ele_len);
 }
 
 static inline const char *unpackElement(const_sds packed, size_t *len) {
@@ -78,6 +98,12 @@ static inline double unpackScore(const_sds packed) {
     uint64_t sortable;
     memcpy(&sortable, packed, SCORE_SIZE);
     return sortableToScore(sortable);
+}
+
+static inline int64_t unpackInt64Score(const_sds packed) {
+    uint64_t sortable;
+    memcpy(&sortable, packed, SCORE_SIZE);
+    return sortableToInt64(sortable);
 }
 
 /* ==========================================================================
@@ -101,17 +127,31 @@ OrderedIndexItem *orderedIndexInsert(OrderedIndex *oi, double score, const char 
     return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)oi, packed);
 }
 
+OrderedIndexItem *orderedIndexInsertInt64(OrderedIndex *oi, int64_t score, const char *ele, size_t len) {
+    sds packed = packSortableElement(int64ToSortable(score), ele, len);
+    return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)oi, packed);
+}
+
 void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item) {
     fbtreeDelete((fbtreeIndex *)oi, (const_sds)item);
 }
 
-OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore) {
+/* Re-insert 'item' under a new sortable score prefix. */
+static OrderedIndexItem *updateSortable(OrderedIndex *oi, OrderedIndexItem *item, uint64_t sortable) {
     const_sds packed = (const_sds)item;
     size_t ele_len;
     const char *ele = unpackElement(packed, &ele_len);
-    sds new_packed = packScoreElement(newscore, ele, ele_len);
+    sds new_packed = packSortableElement(sortable, ele, ele_len);
     fbtreeDelete((fbtreeIndex *)oi, packed);
     return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)oi, new_packed);
+}
+
+OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore) {
+    return updateSortable(oi, item, scoreToSortable(newscore));
+}
+
+OrderedIndexItem *orderedIndexUpdateScoreInt64(OrderedIndex *oi, OrderedIndexItem *item, int64_t newscore) {
+    return updateSortable(oi, item, int64ToSortable(newscore));
 }
 
 OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *oi) {
@@ -130,8 +170,17 @@ OrderedIndexItem *orderedIndexItemCreate(double score, const char *ele, size_t l
     return (OrderedIndexItem *)packScoreElement(score, ele, len);
 }
 
+OrderedIndexItem *orderedIndexItemCreateInt64(int64_t score, const char *ele, size_t len) {
+    return (OrderedIndexItem *)packSortableElement(int64ToSortable(score), ele, len);
+}
+
 void orderedIndexItemSetScore(OrderedIndexItem *item, double score) {
     uint64_t sortable = scoreToSortable(score);
+    memcpy((char *)item, &sortable, SCORE_SIZE);
+}
+
+void orderedIndexItemSetScoreInt64(OrderedIndexItem *item, int64_t score) {
+    uint64_t sortable = int64ToSortable(score);
     memcpy((char *)item, &sortable, SCORE_SIZE);
 }
 
@@ -161,6 +210,13 @@ static void rangeDeleteCallback(sds item, void *ctx) {
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata) {
     uint64_t min_sortable = scoreToSortable(min);
     uint64_t max_sortable = scoreToSortable(max);
+    rangeDeleteArgs args = {on_delete, privdata};
+    return fbtreeDeleteRangeByScore((fbtreeIndex *)oi, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex, rangeDeleteCallback, &args);
+}
+
+unsigned long orderedIndexDeleteRangeByScoreInt64(OrderedIndex *oi, int64_t min, int64_t max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata) {
+    uint64_t min_sortable = int64ToSortable(min);
+    uint64_t max_sortable = int64ToSortable(max);
     rangeDeleteArgs args = {on_delete, privdata};
     return fbtreeDeleteRangeByScore((fbtreeIndex *)oi, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex, rangeDeleteCallback, &args);
 }
@@ -198,17 +254,7 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
 
     bool max_ex_eff = max_ex;
     if (max == shared.maxstring) {
-        /* No single-byte suffix can bound its own continuations under lex
-         * order (a strict prefix sorts before them), so bound the range with
-         * the next score bucket's prefix, exclusive. Valid scores never map
-         * to an all-ones sortable (that bit pattern is a NaN), so the
-         * increment cannot wrap. */
-        uint64_t native = ntohu64(score_prefix);
-        native++;
-        uint64_t next_prefix = htonu64(native);
-        max_packed = sdsnewlen(NULL, SCORE_SIZE);
-        memcpy(max_packed, &next_prefix, SCORE_SIZE);
-        max_ex_eff = true;
+        max_packed = packLexUpperSentinel(fbt, score_prefix, &max_ex_eff);
     } else {
         size_t max_len = sdslen(max);
         max_packed = sdsnewlen(NULL, SCORE_SIZE + max_len);
@@ -257,6 +303,10 @@ double orderedIndexItemGetScore(const OrderedIndexItem *item) {
     return unpackScore((const_sds)item);
 }
 
+int64_t orderedIndexItemGetScoreInt64(const OrderedIndexItem *item) {
+    return unpackInt64Score((const_sds)item);
+}
+
 unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex) {
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
 
@@ -267,6 +317,12 @@ unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, do
     uint64_t lo = scoreToSortable(min);
     uint64_t hi = scoreToSortable(max);
     return fbtreeCountRangeByScore(fbt, (const char *)&lo, (const char *)&hi, min_ex, max_ex);
+}
+
+unsigned long orderedIndexCountScoreRangeInt64(const OrderedIndex *oi, int64_t min, int64_t max, bool min_ex, bool max_ex) {
+    uint64_t lo = int64ToSortable(min);
+    uint64_t hi = int64ToSortable(max);
+    return fbtreeCountRangeByScore((fbtreeIndex *)oi, (const char *)&lo, (const char *)&hi, min_ex, max_ex);
 }
 
 unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex) {
@@ -299,14 +355,7 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
         min_packed = packLexBound(score_prefix, min);
     }
     if (max == shared.maxstring) {
-        /* See orderedIndexDeleteRangeByLex: a byte suffix cannot bound its
-         * own continuations; use the next score prefix, exclusive. */
-        uint64_t native = ntohu64(score_prefix);
-        native++;
-        uint64_t next_prefix = htonu64(native);
-        max_packed = sdsnewlen(NULL, SCORE_SIZE);
-        memcpy(max_packed, &next_prefix, SCORE_SIZE);
-        max_ex_eff = true;
+        max_packed = packLexUpperSentinel(fbt, score_prefix, &max_ex_eff);
     } else {
         max_packed = packLexBound(score_prefix, max);
     }
@@ -382,6 +431,26 @@ static sds packLexBound(uint64_t score_prefix, const_sds element) {
     return packed;
 }
 
+/* Build the upper bound standing for the maxstring sentinel within the score
+ * bucket 'score_prefix', and set *max_ex to its inclusivity. No byte suffix can
+ * bound its own continuations under lex order (a strict prefix sorts before
+ * them), so the bound is normally the next bucket's prefix, exclusive. The
+ * all-ones prefix (INT64_MAX in an integer-scored index) has no next bucket,
+ * but then every item from that prefix onward is in the bucket, so the last
+ * item, inclusive, bounds the range. The index must not be empty. */
+static sds packLexUpperSentinel(fbtreeIndex *fbt, uint64_t score_prefix, bool *max_ex) {
+    uint64_t native = ntohu64(score_prefix);
+    if (native == UINT64_MAX) {
+        *max_ex = false;
+        return sdsdup(fbtreePeekMax(fbt));
+    }
+    uint64_t next_prefix = htonu64(native + 1);
+    sds packed = sdsnewlen(NULL, SCORE_SIZE);
+    memcpy(packed, &next_prefix, SCORE_SIZE);
+    *max_ex = true;
+    return packed;
+}
+
 /* ==========================================================================
  * Iterator
  * ========================================================================== */
@@ -416,9 +485,11 @@ void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
  *     starts at the max element, -2 at the one below it, and so on. (Callers map
  *     a reverse LIMIT offset N to -N - 1.)
  * If the resulting position is outside [min, max] or the index bounds, the
- * iterator is reset (empty result). */
-void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset) {
-    fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
+ * iterator is reset (empty result).
+ *
+ * The bounds are sortable score prefixes in native byte order, so they compare
+ * as the scores they encode. */
+static void seekToSortableRange(fbtreeIterator *fbt_iter, uint64_t min, uint64_t max, bool min_ex, bool max_ex, long offset) {
     fbtreeIndex *fbt = fbtreeIteratorGetIndex(fbt_iter);
     if (!fbt) return;
 
@@ -427,27 +498,23 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
         return;
     }
 
-    uint64_t sortable;
-    if (offset >= 0) {
-        sortable = scoreToSortable(min);
-        if (min_ex) {
-            /* Next representable score: scoreToSortable is order-preserving, so
-             * +1 in native byte order is nextafter(score, +inf). */
-            uint64_t native = ntohu64(sortable);
-            native++;
-            sortable = htonu64(native);
-        }
-    } else {
-        sortable = scoreToSortable(max);
-        if (!max_ex) {
-            /* Next representable score — seek past max so prev() returns it. */
-            uint64_t native = ntohu64(sortable);
-            native++;
-            sortable = htonu64(native);
-        }
-    }
     unsigned long len = fbtreeLength(fbt);
-    long base = fbtreeSeekToScore((const char *)&sortable, fbt_iter);
+    long base;
+    if (offset >= 0) {
+        /* Seek to the first element >= min, or > min if exclusive. The sortable
+         * form is order-preserving, so +1 is the next representable score.
+         * min < max here, so an exclusive min cannot be the all-ones maximum. */
+        uint64_t bound = htonu64(min_ex ? min + 1 : min);
+        base = fbtreeSeekToScore((const char *)&bound, fbt_iter);
+    } else if (!max_ex && max == UINT64_MAX) {
+        /* Nothing sorts above an inclusive all-ones max (INT64_MAX in an
+         * integer-scored index), so every element is at or below it. */
+        base = (long)len;
+    } else {
+        /* Seek past max so prev() returns the last element <= max (or < max). */
+        uint64_t bound = htonu64(max_ex ? max : max + 1);
+        base = fbtreeSeekToScore((const char *)&bound, fbt_iter);
+    }
     long target = offset + base;
 
     if (target < 0 || (unsigned long)target >= len) {
@@ -458,7 +525,9 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
     /* Validate the element at target is within [min, max]. */
     const_sds item = fbtreeGetAtRank(fbt, (unsigned long)target);
     if (item) {
-        double score = unpackScore(item);
+        uint64_t sortable;
+        memcpy(&sortable, item, SCORE_SIZE);
+        uint64_t score = ntohu64(sortable);
         if (score > max || (max_ex && score == max) ||
             score < min || (min_ex && score == min)) {
             fbtreeResetIterator(fbt_iter);
@@ -468,6 +537,14 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
 
     /* Position cursor: next() returns target for forward, prev() for reverse. */
     fbtreeSeekToRank(fbt_iter, (unsigned long)target + (offset < 0 ? 1 : 0));
+}
+
+void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset) {
+    seekToSortableRange((fbtreeIterator *)iter, ntohu64(scoreToSortable(min)), ntohu64(scoreToSortable(max)), min_ex, max_ex, offset);
+}
+
+void orderedIndexSeekToScoreRangeInt64(OrderedIndexIterator *iter, int64_t min, int64_t max, bool min_ex, bool max_ex, long offset) {
+    seekToSortableRange((fbtreeIterator *)iter, ntohu64(int64ToSortable(min)), ntohu64(int64ToSortable(max)), min_ex, max_ex, offset);
 }
 
 /* Position the iterator to begin a lex-range scan. 'offset' follows the same

@@ -50,6 +50,7 @@ TEST_MODULES = \
     keyspecs.so \
     hash.so \
     hash_stringref.so \
+    stringops.so \
     zset.so \
     stream.so \
     mallocsize.so \

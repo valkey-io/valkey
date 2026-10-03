@@ -2521,6 +2521,9 @@ void initServerConfig(void) {
     server.loading_rio = NULL;
     server.repl_full_sync_start_time = 0;
     server.repl_full_sync_complete_duration_ms = -1;
+    server.repl_full_sync_in_progress = 0;
+    server.repl_full_sync_failures = 0;
+    server.repl_sync_retry_at = 0;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;

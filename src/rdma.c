@@ -1339,8 +1339,6 @@ static size_t connRdmaSend(connection *conn, const void *data, size_t data_len) 
         return C_ERR;
     }
 
-    memcpy(addr, data, data_len);
-
     sge.addr = (uint64_t)(uintptr_t)addr;
     sge.lkey = ctx->tx.mr->lkey;
     sge.length = data_len;
@@ -1350,7 +1348,11 @@ static size_t connRdmaSend(connection *conn, const void *data, size_t data_len) 
     send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     send_wr.send_flags = (++ctx->tx_ops % (VALKEY_RDMA_MAX_WQE / 2)) ? 0 : IBV_SEND_SIGNALED;
     if (data_len <= ctx->tx_inline) {
+        /* ibv_post_send() copies inline data into the WQE and ignores the lkey, so skip the transfer buffer */
         send_wr.send_flags |= IBV_SEND_INLINE;
+        sge.addr = (uint64_t)(uintptr_t)data;
+    } else {
+        memcpy(addr, data, data_len);
     }
     send_wr.imm_data = htonl(data_len);
     send_wr.wr.rdma.remote_addr = (uint64_t)(uintptr_t)remote_addr;

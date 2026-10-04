@@ -93,11 +93,12 @@ list(REMOVE_ITEM GTEST_SRCS "${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.cpp")
 # The same Makefile build also writes generated_wrappers.hpp there. The test files
 # use '#include "generated_wrappers.hpp"', which is looked up in the directory of
 # the including file first, so that copy shadows the generated header and no
-# include path can override it. Stop with a clear message instead of compiling
-# the test files against an out of date header.
+# include path can override it. Remove it, so the test files are compiled against
+# the generated header. This is safe for the Makefile build, which regenerates
+# both files on every run.
 if (EXISTS "${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.hpp")
-    message(FATAL_ERROR "${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.hpp is left over from a Makefile "
-                        "build and would shadow the generated header. Remove it with: make -C src/unit clean")
+    message(STATUS "Removing ${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.hpp left over from a Makefile build")
+    file(REMOVE "${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.hpp")
 endif ()
 
 # Create GoogleTest executable (C++ code compiled with C++ compiler)

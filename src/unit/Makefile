@@ -145,15 +145,22 @@ $(WRAP_DIR):
 # so it always matches: $(CC) for the server objects and $(CXX) for the test
 # objects. No -O flag is passed, because the IR is already optimized and this
 # step only needs code generation, which is what llc did.
+#
+# llvm-nm is passed explicitly: Homebrew LLVM installs no plain 'nm', so 'nm'
+# would be Apple's. The CMake build (wrap-objects.py) uses llvm-nm as well.
+#
+# The steps are joined with && so that a failing step stops the build. With ';'
+# a failure in generate-redefine-syms.py left an empty syms file, and
+# llvm-objcopy then wrote an object without the renames.
 define wrap-object
 	@mkdir -p $(dir $@)
 	@if file $< | grep -q "LLVM bitcode"; then \
-		$(WRAP_CC) -c -x ir $< -o $(WRAP_DIR)/$*_temp.o; \
-		python3 generate-redefine-syms.py $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms; \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@; \
+		$(WRAP_CC) -c -x ir $< -o $(WRAP_DIR)/$*_temp.o && \
+		python3 generate-redefine-syms.py --nm llvm-nm $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms && \
+		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@ && \
 		rm -f $(WRAP_DIR)/$*_temp.o; \
 	else \
-		python3 generate-redefine-syms.py $< > $(WRAP_DIR)/$*-wrap-syms; \
+		python3 generate-redefine-syms.py --nm llvm-nm $< > $(WRAP_DIR)/$*-wrap-syms && \
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
 	fi
 	@rm -f $(WRAP_DIR)/$*-wrap-syms

@@ -25,7 +25,7 @@ import os
 import subprocess
 
 import wrapper_util
-from wrapper_util import find_wrapper_functions_in_header
+from wrapper_util import defined_text_symbols, find_wrapper_functions_in_header, redefine_syms_lines
 
 # Magic numbers of LLVM bitcode files (raw bitcode and bitcode wrapper).
 BITCODE_MAGIC = (b"BC\xc0\xde", b"\xde\xc0\x17\x0b")
@@ -35,35 +35,6 @@ def is_bitcode(object_file):
     """Return True if 'object_file' is LLVM bitcode instead of a Mach-O object."""
     with open(object_file, "rb") as f:
         return f.read(4) in BITCODE_MAGIC
-
-
-def defined_text_symbols(nm, object_file):
-    """Return the set of global text symbols defined by 'object_file'."""
-    output = subprocess.run(
-        [nm, "--defined-only", "--extern-only", object_file],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-
-    symbols = set()
-    for line in output.splitlines():
-        fields = line.split()
-        # Format: <address> T <symbol>
-        if len(fields) == 3 and fields[1] == "T":
-            symbols.add(fields[2])
-    return symbols
-
-
-def write_redefine_syms(methods, defined_symbols, syms_file):
-    """Write the symbol renaming rules for llvm-objcopy '--redefine-syms'."""
-    with open(syms_file, "w") as f:
-        for method in methods:
-            # On macOS, C symbols carry a leading underscore.
-            if method.name in defined_symbols or "_" + method.name in defined_symbols:
-                f.write("_{0} ___real_{0}\n".format(method.name))
-            else:
-                f.write("_{0} ___wrap_{0}\n".format(method.name))
 
 
 def is_up_to_date(target, dependencies):
@@ -106,7 +77,8 @@ def wrap_object(args, methods, object_file, output_file):
 
     syms_file = output_file + "-wrap-syms"
     partial_output = output_file + ".partial.o"
-    write_redefine_syms(methods, defined_text_symbols(args.nm, source), syms_file)
+    with open(syms_file, "w") as f:
+        f.writelines(redefine_syms_lines(methods, defined_text_symbols(args.nm, source)))
     subprocess.run(
         [args.objcopy, "--redefine-syms=" + syms_file, source, partial_output],
         check=True,

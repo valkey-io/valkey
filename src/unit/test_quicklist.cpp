@@ -1236,6 +1236,37 @@ TEST_F(QuicklistTest, quicklistNumbersOnlyListRead) {
     ASSERT_EQ(err, 0u);
 }
 
+TEST_F(QuicklistTest, quicklistCompareDecodedEntries) {
+    quicklist *ql = quicklistNew(2, 0);
+    quicklistPushTail(ql, (char *)"42", 2);
+    quicklistPushTail(ql, (char *)"042", 3);
+    quicklistPushTail(ql, (char *)"-7", 2);
+    quicklistPushTail(ql, (char *)"word", 4);
+
+    quicklistIter *iter = quicklistGetIterator(ql, AL_START_HEAD);
+    quicklistEntry entry;
+    EXPECT_TRUE(quicklistNext(iter, &entry));
+    EXPECT_TRUE(quicklistCompare(&entry, (unsigned char *)"42", 2));
+    EXPECT_FALSE(quicklistCompare(&entry, (unsigned char *)"042", 3));
+    EXPECT_FALSE(quicklistCompare(&entry, (unsigned char *)"9223372036854775808", 19));
+
+    EXPECT_TRUE(quicklistNext(iter, &entry));
+    EXPECT_TRUE(quicklistCompare(&entry, (unsigned char *)"042", 3));
+    EXPECT_FALSE(quicklistCompare(&entry, (unsigned char *)"42", 2));
+
+    EXPECT_TRUE(quicklistNext(iter, &entry));
+    EXPECT_TRUE(quicklistCompare(&entry, (unsigned char *)"-7", 2));
+    EXPECT_FALSE(quicklistCompare(&entry, (unsigned char *)"word", 4));
+
+    EXPECT_TRUE(quicklistNext(iter, &entry));
+    EXPECT_TRUE(quicklistCompare(&entry, (unsigned char *)"word", 4));
+    EXPECT_FALSE(quicklistCompare(&entry, (unsigned char *)"-7", 2));
+    EXPECT_FALSE(quicklistNext(iter, &entry));
+
+    quicklistReleaseIterator(iter);
+    quicklistRelease(ql);
+}
+
 TEST_F(QuicklistTest, quicklistNumbersLargerListRead) {
     for (int _i = 0; _i < option_count; _i++) {
         long long start = mstime();

@@ -487,6 +487,30 @@ start_server {
     }
 
 foreach {type large} [array get largevalue] {
+    test "List search compares integer and string entries - $type" {
+        create_$type ql "1 2 01 -2 abc $large 2"
+
+        assert_equal {1 6} [r LPOS ql 2 COUNT 0]
+        assert_equal 0 [r LPOS ql 1]
+        assert_equal 2 [r LPOS ql 01]
+        assert_equal 4 [r LPOS ql abc]
+        assert_equal 5 [r LPOS ql $large]
+        assert_equal {} [r LPOS ql 9223372036854775808]
+
+        assert_equal 8 [r LINSERT ql BEFORE -2 mark]
+        assert_equal 3 [r LPOS ql mark]
+        assert_equal 9 [r LINSERT ql BEFORE 01 text]
+        assert_equal 2 [r LPOS ql text]
+
+        assert_equal 2 [r LREM ql 0 2]
+        assert_equal 1 [r LREM ql 0 abc]
+        assert_equal 1 [r LREM ql 0 01]
+        assert_equal 0 [r LREM ql 0 9223372036854775808]
+        assert_equal 0 [r LPOS ql 1]
+    }
+}
+
+foreach {type large} [array get largevalue] {
     test "LPOS basic usage - $type" {
         r DEL mylist
         r RPUSH mylist a b c $large 2 3 c c

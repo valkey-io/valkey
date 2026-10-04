@@ -2891,6 +2891,8 @@ void refreshMaxmemory(void) {
         const char *err;
         unsigned long long old_maxmemory = server.maxmemory;
         if (resolveMaxmemory(&err) == C_ERR) {
+            /* Retry this limit on the next tick until it can be applied. */
+            server.cgroup_memory_limit = old_limit;
             serverLog(LL_WARNING, "Unable to refresh maxmemory: %s", err);
             return;
         }

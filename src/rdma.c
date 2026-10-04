@@ -84,6 +84,8 @@ typedef enum ValkeyRdmaOpcode {
 /* XXX: MLX5(16 + 16 + 4)/RXE(0) adapted */
 #define VALKEY_RDMA_VENDOR_INLINE_DATA (36)
 #define VALKEY_RDMA_MAX_INLINE_DATA (256 - VALKEY_RDMA_VENDOR_INLINE_DATA)
+/* XXX: some devices take less, e.g. Intel E810 (irdma) accepts at most 101 */
+#define VALKEY_RDMA_MIN_INLINE_DATA (64)
 
 
 typedef struct rdma_connection {
@@ -381,6 +383,11 @@ static int rdmaCreateResource(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     init_attr.send_cq = cq;
     init_attr.recv_cq = cq;
     ret = rdma_create_qp(cm_id, pd, &init_attr);
+    if (ret) {
+        /* the device may support less inline data, try a smaller size */
+        init_attr.cap.max_inline_data = VALKEY_RDMA_MIN_INLINE_DATA;
+        ret = rdma_create_qp(cm_id, pd, &init_attr);
+    }
     if (ret) {
         /* the device may not support inline data, try again without it */
         init_attr.cap.max_inline_data = 0;

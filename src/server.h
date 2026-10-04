@@ -170,7 +170,7 @@ struct ValkeyModule;
 #define CONFIG_DEFAULT_PID_FILE "/var/run/valkey.pid"
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
 #define CONFIG_DEFAULT_BINDADDR \
-    {"*", "-::*"}
+    { "*", "-::*" }
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
@@ -1732,7 +1732,8 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                /* Replication offset. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT \
+    { -1, 0, "0000000000000000000000000000000000000000", -1 }
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -2347,6 +2348,8 @@ struct valkeyServer {
     anetSubnet *priority_subnets_array;         /* Compiled priority subnets array */
     int priority_subnets_count;                 /* Count of compiled priority subnets */
     unsigned long long maxmemory;               /* Max number of memory bytes to use */
+    unsigned long long maxmemory_config;        /* Configured byte limit, when not a percentage */
+    int maxmemory_percent;                      /* Percentage of effective memory, or 0 for bytes */
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
     ssize_t maxmemory_scripts;                  /* Memory limit for cached EVAL scripts */
     int maxmemory_policy;                       /* Policy for key eviction */
@@ -2499,7 +2502,9 @@ struct valkeyServer {
     /* Assert & bug reporting */
     int watchdog_period; /* Software watchdog period in ms. 0 = off */
     /* System hardware info */
-    size_t system_memory_size; /* Total memory in system as reported by OS */
+    size_t system_memory_size;              /* Total memory in system as reported by OS */
+    unsigned long long cgroup_memory_limit; /* ULLONG_MAX when no cgroup memory limit */
+    int cgroup_memory_error;                /* Suppress repeated warnings while detection fails */
     /* TLS Configuration */
     int tls_cluster;
     int tls_replication;
@@ -3923,6 +3928,8 @@ int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *optio
 void rewriteConfigMarkAsProcessed(struct rewriteConfigState *state, const char *option);
 int rewriteConfig(char *path, int force_write);
 void initConfigValues(void);
+int initMaxmemory(void);
+void refreshMaxmemory(void);
 void removeConfig(sds name);
 sds getConfigDebugInfo(void);
 int allowProtectedAction(int config, client *c);

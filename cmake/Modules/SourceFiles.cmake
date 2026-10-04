@@ -4,6 +4,7 @@
 
 # valkey-server source files
 set(VALKEY_SERVER_SRCS
+    ${CMAKE_SOURCE_DIR}/src/cgroup.c
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
     ${CMAKE_SOURCE_DIR}/src/forkless.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c

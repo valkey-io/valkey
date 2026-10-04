@@ -1634,6 +1634,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     cronUpdateMemoryStats();
 
+    run_with_period(1000) refreshMaxmemory();
+
     /* Refresh the cached daylight-saving info periodically every 1 second.
      * This is only used to render log timestamps, so it doesn't need to be
      * updated on every event-loop wakeup. */
@@ -2419,6 +2421,10 @@ void initServerConfig(void) {
     char *default_bindaddr[CONFIG_DEFAULT_BINDADDR_COUNT] = CONFIG_DEFAULT_BINDADDR;
 
     initConfigValues();
+    server.maxmemory = server.maxmemory_config = 0;
+    server.maxmemory_percent = 0;
+    server.cgroup_memory_limit = ULLONG_MAX;
+    server.cgroup_memory_error = 0;
     updateCachedTime(1);
     server.cmd_time_snapshot = server.mstime;
     getRandomHexChars(server.runid, CONFIG_RUN_ID_SIZE);
@@ -3102,6 +3108,7 @@ void initServer(void) {
     server.postponed_clients = listCreate();
     server.events_processed_while_blocked = 0;
     server.system_memory_size = zmalloc_get_memory_size();
+    if (initMaxmemory() == C_ERR) exit(1);
     server.blocked_last_cron = 0;
     server.blocking_op_nesting = 0;
     server.thp_enabled = 0;
@@ -3264,6 +3271,7 @@ void initServer(void) {
         serverLog(LL_WARNING, "Warning: 32 bit instance detected but no memory limit set. Setting 3 GB maxmemory limit "
                               "with 'noeviction' policy now.");
         server.maxmemory = 3072LL * (1024 * 1024); /* 3 GB */
+        server.maxmemory_config = server.maxmemory;
         server.maxmemory_policy = MAXMEMORY_NO_EVICTION;
     }
 
@@ -6675,6 +6683,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "allocator_muzzy:%zu\r\n", server.cron_malloc_stats.allocator_muzzy,
                 "total_system_memory:%lu\r\n", (unsigned long)total_system_mem,
                 "total_system_memory_human:%s\r\n", total_system_hmem,
+                "cgroup_memory_limit:%llu\r\n", server.cgroup_memory_limit == ULLONG_MAX ? 0 : server.cgroup_memory_limit,
                 "used_memory_lua:%lld\r\n", memory_lua, /* deprecated, renamed to used_memory_vm_eval */
                 "used_memory_vm_eval:%lld\r\n", memory_lua,
                 "used_memory_lua_human:%s\r\n", used_memory_lua_hmem, /* deprecated */

@@ -1605,8 +1605,11 @@ void addReplyBulkCString(client *c, const char *s) {
 static void _addReplyBulkLongLong(client *c, long long ll) {
     char buf[64];
     const int number_offset = 5; /* strlen("$20\r\n") */
-    int len = ll2string(buf + number_offset, sizeof(buf) - number_offset, ll);
+    char *number = buf + number_offset;
+    int len = ll2string(number, sizeof(buf) - number_offset, ll);
     int start = len < 10 ? 1 : 0;
+    buf[len] = '\r';
+    buf[len + 1] = '\n';
 
     buf[start] = '$';
     if (len < 10) {
@@ -1617,8 +1620,6 @@ static void _addReplyBulkLongLong(client *c, long long ll) {
     }
     buf[3] = '\r';
     buf[4] = '\n';
-    buf[number_offset + len] = '\r';
-    buf[number_offset + len + 1] = '\n';
     _addReplyToBufferOrList(c, buf + start, number_offset + len + 2 - start);
 }
 

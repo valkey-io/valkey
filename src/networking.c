@@ -1608,8 +1608,8 @@ static void _addReplyBulkLongLong(client *c, long long ll) {
     char *number = buf + number_offset;
     int len = ll2string(number, sizeof(buf) - number_offset, ll);
     int start = len < 10 ? 1 : 0;
-    buf[len] = '\r';
-    buf[len + 1] = '\n';
+    number[len] = '\r';
+    number[len + 1] = '\n';
 
     buf[start] = '$';
     if (len < 10) {

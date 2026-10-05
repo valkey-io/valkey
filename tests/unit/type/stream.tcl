@@ -2028,12 +2028,12 @@ start_server {tags {"stream"}} {
 }
 
 start_server {tags {"stream"} overrides {stream-node-max-entries 1}} {
-    test {XTRIM MAXBYTES is limited unless LIMIT 0 is given} {
-        r del mystream1 mystream2
-        streamFill mystream1 102
-        assert_equal 100 [r XTRIM mystream1 MAXBYTES 0]
-        streamFill mystream2 102
-        assert_equal 102 [r XTRIM mystream2 MAXBYTES 0 LIMIT 0]
+    test {XTRIM MAXBYTES applies the default LIMIT only with ~} {
+        foreach {op deleted} {~ 100 = 102 {} 102} {
+            r del mystream
+            streamFill mystream 102
+            assert_equal $deleted [r XTRIM mystream MAXBYTES {*}$op 0]
+        }
     }
 
     test {XTRIM MAXBYTES rejects a second strategy and negative bytes} {
@@ -2042,16 +2042,15 @@ start_server {tags {"stream"} overrides {stream-node-max-entries 1}} {
         assert_error "*not compatible*" {r XTRIM mystream MAXBYTES 1 MAXBYTES 2}
         assert_error "*>= 0*" {r XTRIM mystream MAXBYTES -1}
         assert_error "*>= 0*" {r XTRIM mystream MAXBYTES 0 LIMIT -1}
-        assert_error "*not an integer*" {r XTRIM mystream MAXBYTES ~ 100}
-        assert_error "*not an integer*" {r XTRIM mystream MAXBYTES = 100}
+        assert_error "*LIMIT cannot be used without the special ~ option*" {r XTRIM mystream MAXBYTES 0 LIMIT 10}
         assert_error "*not an integer*" {r XTRIM mystream MAXBYTES 99999999999999999999}
     }
 
     test {MAXBYTES thresholds of 2^32 and above do not wrap on 32-bit builds} {
         r del mystream
         streamFill mystream 3
-        assert_equal 0 [r XTRIM mystream MAXBYTES 4294967296 LIMIT 0]
-        assert_equal 0 [r XTRIM mystream MAXBYTES 4294967424 LIMIT 0]
+        assert_equal 0 [r XTRIM mystream MAXBYTES 4294967296]
+        assert_equal 0 [r XTRIM mystream MAXBYTES 4294967424]
         r XADD mystream MAXBYTES 4294967296 4-0 f v
         r XADD mystream MAXBYTES 4294967424 5-0 f v
         assert_equal 5 [r XLEN mystream]
@@ -2081,7 +2080,9 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
 
     test {XTRIM MAXBYTES stops before a node whose removal would undershoot} {
         # An oversized head node followed by ten uniform small nodes.
-        r del bignode smallnode mystream
+        r del bignode
+        r del smallnode
+        r del mystream
         set big [string repeat x 1000]
         r XADD bignode 1-0 f $big
         r XADD bignode 2-0 f $big
@@ -2159,9 +2160,9 @@ start_server {tags {"stream needs:repl"} overrides {stream-node-max-entries 10}}
         set repl [attach_to_replication_stream]
         set eid1 [r XADD mystream MAXBYTES 20000 * f v]
         set len1 [r XLEN mystream]
-        set eid2 [r XADD mystream MAXBYTES 10000 LIMIT 20 * f v]
+        set eid2 [r XADD mystream MAXBYTES ~ 10000 LIMIT 20 * f v]
         set len2 [r XLEN mystream]
-        set eid3 [r XADD mystream MAXBYTES 1000000 * f v]
+        set eid3 [r XADD mystream MAXBYTES = 1000000 * f v]
         set len3 [r XLEN mystream]
         assert {$len1 < 301}
         assert_equal [expr {$len1 - 19}] $len2
@@ -2169,8 +2170,8 @@ start_server {tags {"stream needs:repl"} overrides {stream-node-max-entries 10}}
         assert_replication_stream $repl [list \
             {select *} \
             "xadd mystream MAXLEN $len1 $eid1 f v" \
-            "xadd mystream MAXLEN $len2 $eid2 f v" \
-            "xadd mystream MAXLEN $len3 $eid3 f v"]
+            "xadd mystream MAXLEN = $len2 $eid2 f v" \
+            "xadd mystream MAXLEN = $len3 $eid3 f v"]
         close_replication_stream $repl
     }
 
@@ -2180,11 +2181,11 @@ start_server {tags {"stream needs:repl"} overrides {stream-node-max-entries 10}}
         set repl [attach_to_replication_stream]
         r XTRIM mystream MAXBYTES 20000
         set len1 [r XLEN mystream]
-        assert_equal 20 [r XTRIM mystream MAXBYTES 10000 LIMIT 20]
+        assert_equal 20 [r XTRIM mystream MAXBYTES ~ 10000 LIMIT 20]
         assert_replication_stream $repl [list \
             {select *} \
             "xtrim mystream MAXLEN $len1" \
-            "xtrim mystream MAXLEN [expr {$len1 - 20}]"]
+            "xtrim mystream MAXLEN = [expr {$len1 - 20}]"]
         close_replication_stream $repl
     }
 }
@@ -2196,8 +2197,8 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes}} {
             r config set stream-node-max-entries 10
             r del mystream
             streamFill mystream 100
-            r XADD mystream MAXBYTES 0 LIMIT 20 101-0 f v
-            assert_equal 20 [r XTRIM mystream MAXBYTES 0 LIMIT 20]
+            r XADD mystream MAXBYTES ~ 0 LIMIT 20 101-0 f v
+            assert_equal 20 [r XTRIM mystream MAXBYTES ~ 0 LIMIT 20]
             r XADD mystream MAXBYTES 1000000 102-0 f v
             set range [r XRANGE mystream - +]
             assert_equal 62 [llength $range]
@@ -2237,8 +2238,8 @@ start_server {tags {"stream repl needs:debug external:skip"} overrides {stream-n
             set total [lindex [$primary debug stream-bytes mystream] 0]
             assert {[$primary XTRIM mystream MAXBYTES [expr {$total / 2}]] > 0}
             $primary XADD mystream MAXBYTES 1000000 41-0 f v
-            $primary XADD mystream MAXBYTES 0 LIMIT 4 42-0 f v
-            $primary XTRIM mystream MAXBYTES 0 LIMIT 6
+            $primary XADD mystream MAXBYTES ~ 0 LIMIT 4 42-0 f v
+            $primary XTRIM mystream MAXBYTES ~ 0 LIMIT 6
             wait_for_ofs_sync $primary $replica
             assert_equal [$primary XRANGE mystream - +] [$replica XRANGE mystream - +]
             foreach srv [list $primary $replica] {

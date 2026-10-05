@@ -3992,7 +3992,9 @@ void parseInlineBuffer(client *c) {
 /* Helper function. Record protocol error details in server log,
  * and set the client as CLIENT_CLOSE_AFTER_REPLY and
  * CLIENT_PROTOCOL_ERROR. */
-#define PROTO_DUMP_LEN 128
+/* sdscatrepr() can expand each byte to 4 chars ("\x00"), so keep the sample
+ * small enough for the log line to stay well within LOG_MAX_LEN. */
+#define PROTO_DUMP_LEN 64
 static void setProtocolError(const char *errstr, client *c) {
     if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c)) {
         sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);

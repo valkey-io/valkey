@@ -380,6 +380,18 @@ start_server {tags {"protocol network external:skip"} overrides {loglevel verbos
         assert_error "*expected '\$', got 'f'*" {r read}
         wait_for_log_messages 0 {"*Protocol error*Query buffer: \"foo*x00bar*"} 0 10 100
     }
+
+    test "Protocol error log samples both ends of a large binary query buffer" {
+        reconnect
+        # Long client info plus a fully escaped sample must not exceed the log line limit.
+        r client setname [string repeat n 150]
+        set payload "foo[string repeat \000 200]bar\r\n"
+        r write "*3\r\n\$3\r\nSET\r\n\$1\r\nx\r\n$payload"
+        r flush
+        assert_error "*expected '\$', got 'f'*" {r read}
+        # The line must end with the closing quote of the tail, i.e. not be truncated.
+        wait_for_log_messages 0 {"*Protocol error*Query buffer: \"foo*x00\" (... more 144 bytes ...) \"*x00bar*r*n\""} 0 10 100
+    }
 }
 
 start_server {tags {"regression"}} {

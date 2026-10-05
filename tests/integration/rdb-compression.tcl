@@ -10,18 +10,22 @@ proc read_dump_rdb_header_bytes {client} {
     return [read_binary_file_prefix [dump_rdb_path $client] 8]
 }
 
-proc assert_rdb_envelope {client mode} {
-    binary scan [read_binary_file_prefix [dump_rdb_path $client] 7] cu* bytes
+proc assert_rdb_file_envelope {path mode} {
+    binary scan [read_binary_file_prefix $path 7] cu* bytes
     set codec [dict get {lz4 1 zstd 2} $mode]
     # V C S / envelope version / codec / reserved / RDB stream kind.
     assert_equal [list 86 67 83 1 $codec 0 1] $bytes
 }
 
-proc assert_lz4_rdb_checksum_flags {client expected} {
+proc assert_rdb_envelope {client mode} {
+    assert_rdb_file_envelope [dump_rdb_path $client] $mode
+}
+
+proc assert_lz4_file_checksum_flags {path expected} {
     set vcs_envelope_size 7
     set lz4_frame_magic_size 4
     set frame_flg_offset [expr {$vcs_envelope_size + $lz4_frame_magic_size}]
-    binary scan [read_binary_file_prefix [dump_rdb_path $client] [expr {$frame_flg_offset + 1}]] cu* bytes
+    binary scan [read_binary_file_prefix $path [expr {$frame_flg_offset + 1}]] cu* bytes
     # LZ4 frame magic 0x184D2204 is stored in little-endian byte order.
     assert_equal [list 4 34 77 24] [lrange $bytes $vcs_envelope_size [expr {$frame_flg_offset - 1}]]
     set frame_flg [lindex $bytes $frame_flg_offset]
@@ -32,15 +36,27 @@ proc assert_lz4_rdb_checksum_flags {client expected} {
     assert_equal $expected $has_content_checksum
 }
 
-proc assert_zstd_rdb_checksum_flag {client expected} {
+proc assert_zstd_file_checksum_flag {path expected} {
     # The Zstd frame descriptor follows the seven-byte VCS envelope and
     # four-byte frame magic; bit 2 declares a content checksum.
     set frame_descriptor_offset 11
-    binary scan [read_binary_file_prefix [dump_rdb_path $client] [expr {$frame_descriptor_offset + 1}]] cu* bytes
+    binary scan [read_binary_file_prefix $path [expr {$frame_descriptor_offset + 1}]] cu* bytes
     assert_equal [list 86 67 83 1 2 0 1] [lrange $bytes 0 6]
     assert_equal [list 40 181 47 253] [lrange $bytes 7 10]
     set frame_descriptor [lindex $bytes $frame_descriptor_offset]
     assert_equal $expected [expr {($frame_descriptor & 0x04) != 0}]
+}
+
+proc assert_rdb_file_checksum_flags {path mode expected} {
+    if {$mode eq "zstd"} {
+        assert_zstd_file_checksum_flag $path $expected
+    } else {
+        assert_lz4_file_checksum_flags $path $expected
+    }
+}
+
+proc assert_rdb_checksum_flags {client mode expected} {
+    assert_rdb_file_checksum_flags [dump_rdb_path $client] $mode $expected
 }
 
 set ::rdbcompression_zstd_supported 0
@@ -72,9 +88,7 @@ start_server {overrides {save "" enable-debug-command local}} {
             set digest [debug_digest]
             assert_equal "OK" [r save]
             assert_rdb_envelope r $mode
-            if {$mode eq "lz4"} {
-                assert_lz4_rdb_checksum_flags r 1
-            }
+            assert_rdb_checksum_flags r $mode 1
             set loglines [count_log_lines 0]
             assert_equal "OK" [r debug reload nosave]
             verify_log_message 0 "*Logical RDB CRC64 skipped for streaming-compressed input*" $loglines
@@ -350,11 +364,7 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
 
             r save
             assert_rdb_envelope r $mode
-            if {$mode eq "zstd"} {
-                assert_zstd_rdb_checksum_flag r 0
-            } else {
-                assert_lz4_rdb_checksum_flags r 0
-            }
+            assert_rdb_checksum_flags r $mode 0
             set digest [debug_digest]
             set loglines [count_log_lines 0]
             assert_equal "OK" [r debug reload nosave]
@@ -367,21 +377,156 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
     }
 }
 
-start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
-    test {AOF rewrite RDB preamble remains plain with LZ4 stream snapshots} {
-        r set aof-lz4:key [string repeat "aof-lz4-value " 100]
-        set digest [debug_digest]
+# Each matrix row needs its own server because rdbchecksum is immutable.
+#   {codec rdbchecksum}
+set aof_rewrite_matrix {}
+foreach mode $::rdbcompression_modes {
+    lappend aof_rewrite_matrix [list $mode yes] [list $mode no]
+}
 
+foreach case $aof_rewrite_matrix {
+    lassign $case mode checksum
+    start_server [list overrides [list save "" appendonly yes aof-use-rdb-preamble yes \
+                                      rdbcompression $mode rdbchecksum $checksum]] {
+        test "AOF rewrite with [string toupper $mode] compression and rdbchecksum $checksum round-trips every load path" {
+            r flushall
+            r select 0
+            set key_prefix "aof-$mode-$checksum"
+            r set "$key_prefix:key" [string repeat "$key_prefix-value " 100]
+
+            r bgrewriteaof
+            waitForBgrewriteaof r
+
+            set base_aof [get_base_aof_path r]
+            assert {[file exists $base_aof]}
+            assert_rdb_file_envelope $base_aof $mode
+            assert_rdb_file_checksum_flags $base_aof $mode [expr {$checksum eq "yes"}]
+
+            set dir [lindex [r config get dir] 1]
+            set appenddirname [lindex [r config get appenddirname] 1]
+            set appendfilename [lindex [r config get appendfilename] 1]
+            set manifest [file join $dir $appenddirname $appendfilename$::manifest_suffix]
+            assert_match "*All AOF files and manifest are valid*" [exec $::VALKEY_CHECK_AOF_BIN $manifest]
+
+            # The decoder must stop at the compressed frame boundary so an
+            # old-style AOF can continue with a RESP tail in the same file.
+            set old_style_dir [file join $dir "compressed-preamble-$mode-$checksum"]
+            set old_style_aof [file join $old_style_dir "appendonly.aof"]
+            with_cleanup {
+                file mkdir $old_style_dir
+                set old_style_data [read_binary_file $base_aof]
+                append old_style_data [formatCommand set "$key_prefix:old-style-tail" tail]
+                write_binary_file $old_style_aof $old_style_data
+                assert_match "*RDB preamble is OK, proceeding with AOF tail*is valid*" \
+                    [exec $::VALKEY_CHECK_AOF_BIN $old_style_aof]
+
+                # valkey-check-aof and the server have separate loading paths.
+                # Verify that the server also resumes RESP parsing at exactly
+                # the first byte after the compressed frame.
+                set overrides [list dir $old_style_dir appendonly yes \
+                                    aof-use-rdb-preamble yes save ""]
+                start_server [list overrides $overrides keep_persistence true] {
+                    r select 0
+                    assert_equal [string repeat "$key_prefix-value " 100] [r get "$key_prefix:key"]
+                    assert_equal tail [r get "$key_prefix:old-style-tail"]
+                }
+            } {
+                file delete -force $old_style_dir
+            }
+
+            # Keep data in the incremental AOF too, so restart covers both files.
+            r set "$key_prefix:incremental" tail
+            set digest [debug_digest]
+
+            restart_server 0 true false
+            r select 0
+            assert_equal $digest [debug_digest]
+            assert_equal [string repeat "$key_prefix-value " 100] [r get "$key_prefix:key"]
+            assert_equal tail [r get "$key_prefix:incremental"]
+        }
+    }
+}
+
+start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
+    test {BGREWRITEAOF writes a new RDB base after changing rdbcompression} {
+        r flushall
+        r select 0
+        set value [string repeat "downgrade-value " 100]
+        r set downgrade:key $value
+
+        r bgrewriteaof
+        waitForBgrewriteaof r
+        assert_rdb_file_envelope [get_base_aof_path r] lz4
+
+        assert_equal "OK" [r config set rdbcompression yes]
+        assert_equal "OK" [r config rewrite]
+        r bgrewriteaof
+        waitForBgrewriteaof r
+        assert_equal "VALKEY" [read_binary_file_prefix [get_base_aof_path r] 6]
+
+        set digest [debug_digest]
+        restart_server 0 true false
+        r select 0
+        assert_equal "yes" [lindex [r config get rdbcompression] 1]
+        assert_equal $digest [debug_digest]
+        assert_equal $value [r get downgrade:key]
+    }
+}
+
+# Codec-level tests above cover malformed and truncated frames for every
+# supported codec. This test specifically verifies AOF recovery policy: a
+# damaged RDB base is never treated as a repairable RESP-tail truncation.
+start_server {overrides {save "" appendonly yes aof-use-rdb-preamble yes rdbcompression lz4}} {
+    test {A truncated compressed AOF base cannot be repaired or loaded as a truncated RESP tail} {
+        r flushall
+        r select 0
+        r set damaged-aof-base:key [string repeat "damaged-aof-base-value " 100]
         r bgrewriteaof
         waitForBgrewriteaof r
 
         set base_aof [get_base_aof_path r]
-        assert {[file exists $base_aof]}
-        assert_equal "VALKEY" [string range [read_binary_file_prefix $base_aof 7] 0 5]
+        set dir [lindex [r config get dir] 1]
+        set appenddirname [lindex [r config get appenddirname] 1]
+        set appendfilename [lindex [r config get appendfilename] 1]
+        set damaged_dir [file join $dir "damaged-compressed-aof"]
+        set damaged_aof_dir [file join $damaged_dir $appenddirname]
 
-        restart_server 0 true false
-        assert_equal $digest [debug_digest]
-        assert_equal [string repeat "aof-lz4-value " 100] [r get aof-lz4:key]
+        with_cleanup {
+            file mkdir $damaged_dir
+            file copy -force [file join $dir $appenddirname] $damaged_dir
+
+            set damaged_base [file join $damaged_aof_dir [file tail $base_aof]]
+            set original [read_binary_file $damaged_base]
+            # Remove the LZ4 end mark and content checksum, leaving the logical
+            # RDB complete so the failure is detected while finishing the frame.
+            set truncated [string range $original 0 end-8]
+            write_binary_file $damaged_base $truncated
+            set damaged_manifest [file join $damaged_aof_dir "$appendfilename$::manifest_suffix"]
+
+            set failed [catch {
+                exec $::VALKEY_CHECK_AOF_BIN --fix $damaged_manifest << "y\n"
+            } result]
+            assert_equal 1 $failed
+            assert_match "*RDB preamble of AOF file is not sane, aborting*" $result
+            assert_equal $truncated [read_binary_file $damaged_base]
+
+            set overrides [list dir $damaged_dir appendonly yes \
+                                appenddirname $appenddirname \
+                                appendfilename $appendfilename \
+                                aof-use-rdb-preamble yes \
+                                aof-load-truncated yes save ""]
+            start_server [list overrides $overrides keep_persistence true wait_ready false] {
+                set log [srv 0 stdout]
+                wait_for_condition 100 50 {
+                    ![is_alive [srv pid]]
+                } else {
+                    fail "Server loaded a truncated compressed AOF base"
+                }
+                assert_equal 1 [count_message_lines $log "Corrupt streaming-compressed RDB input"]
+            }
+        } {
+            file delete -force $damaged_dir
+        }
     }
 }
 
@@ -393,7 +538,7 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
 
-        test {Full sync remains compatible when rdbcompression is lz4} {
+        test {Full sync diverts to diskless when rdbcompression differs from the wire codec} {
             $primary config set rdbcompression lz4
             $primary config set rdb-del-sync-files no
             $primary flushall
@@ -403,8 +548,9 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
 
             $primary config set repl-diskless-sync-delay 0
             $replica config set repl-diskless-load swapdb
-            # Keep the replica non-capable so this covers the cohort downgrade.
-            $replica config set rdbcompression no
+            # The replica does not enable replication compression, so its
+            # negotiated wire codec is plaintext while the primary stores lz4.
+            $replica config set repl-compression no
 
             foreach diskless {no yes} {
                 $replica replicaof no one
@@ -413,6 +559,7 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
                 # Prevent partial resynchronization from bypassing the RDB path
                 # on the second iteration.
                 $primary debug change-repl-id
+                set primary_loglines [count_log_lines 0]
 
                 $replica replicaof $primary_host $primary_port
                 wait_for_sync $replica
@@ -420,10 +567,19 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
                 assert_equal [$primary debug digest] [$replica debug digest]
                 assert_equal [string repeat "payload42 " 40] [$replica get repl:42]
 
-                if {$diskless eq "no"} {
-                    assert {[file exists [dump_rdb_path $primary]]}
-                    assert_equal "VALKEY" [string range [read_dump_rdb_header_bytes $primary] 0 5]
-                }
+                # rdbcompression lz4 but the replica's wire codec is plaintext:
+                # the mismatch forces a diskless (socket target) sync even when
+                # repl-diskless-sync is no, so dump.rdb is never written in the
+                # wrong (plaintext) format, and rdbcompression does not leak into
+                # the diskless wire (which follows repl-compression).
+                wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: replicas sockets*"} $primary_loglines 50 100
+                verify_no_log_message 0 "*target: replicas sockets*compression: lz4*" $primary_loglines
+            }
+
+            # The mismatch never wrote a plaintext dump.rdb; any snapshot that
+            # exists must be in the configured lz4 (VCS) format.
+            if {[file exists [dump_rdb_path $primary]]} {
+                assert_equal "VCS" [string range [read_dump_rdb_header_bytes $primary] 0 2]
             }
 
             $primary set repl:post-sync "after-sync"

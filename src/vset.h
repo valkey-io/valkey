@@ -2,6 +2,7 @@
 #define VOLATILESET_H
 
 #include <stddef.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 #include "hashtable.h"
@@ -72,8 +73,13 @@
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
 /* Callback to be optionally provided to vsetRemoveExpired. when item is removed from the vset this callback will also be applied. */
 typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
-// vset is just a pointer to a bucket
-typedef void *vset;
+// vset is a tagged bucket with its size property
+typedef struct vset {
+    /* tagged root bucket, a bucket which is NULL can't be used and must be
+     * reinitialized with vsetInit */
+    void *bucket;
+    size_t size; /* number of tracked entries */
+} vset;
 
 typedef uint8_t vsetIterator[600];
 

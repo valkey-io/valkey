@@ -67,65 +67,51 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
                 .flags = VALKEYMODULE_CMD_ARG_OPTIONAL,
                 .subargs = (ValkeyModuleCommandArg[]){
                     {
-                        .name = "strategy-selector",
+                        .name = "strategy",
                         .type = VALKEYMODULE_ARG_TYPE_ONEOF,
                         .subargs = (ValkeyModuleCommandArg[]){
                             {
-                                .name = "maxlen-or-minid",
-                                .type = VALKEYMODULE_ARG_TYPE_BLOCK,
-                                .subargs = (ValkeyModuleCommandArg[]){
-                                    {
-                                        .name = "strategy",
-                                        .type = VALKEYMODULE_ARG_TYPE_ONEOF,
-                                        .subargs = (ValkeyModuleCommandArg[]){
-                                            {
-                                                .name = "maxlen",
-                                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
-                                                .token = "MAXLEN",
-                                            },
-                                            {
-                                                .name = "minid",
-                                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
-                                                .token = "MINID",
-                                                .since = "6.2.0",
-                                            },
-                                            {0}
-                                        }
-                                    },
-                                    {
-                                        .name = "operator",
-                                        .type = VALKEYMODULE_ARG_TYPE_ONEOF,
-                                        .flags = VALKEYMODULE_CMD_ARG_OPTIONAL,
-                                        .subargs = (ValkeyModuleCommandArg[]){
-                                            {
-                                                .name = "equal",
-                                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
-                                                .token = "="
-                                            },
-                                            {
-                                                .name = "approximately",
-                                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
-                                                .token = "~"
-                                            },
-                                            {0}
-                                        }
-                                    },
-                                    {
-                                        .name = "threshold",
-                                        .type = VALKEYMODULE_ARG_TYPE_STRING,
-                                        .display_text = "threshold" /* Just for coverage, doesn't have a visible effect */
-                                    },
-                                    {0}
-                                }
+                                .name = "maxlen",
+                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
+                                .token = "MAXLEN",
+                            },
+                            {
+                                .name = "minid",
+                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
+                                .token = "MINID",
+                                .since = "6.2.0",
                             },
                             {
                                 .name = "maxbytes",
-                                .type = VALKEYMODULE_ARG_TYPE_INTEGER,
+                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
                                 .token = "MAXBYTES",
-                                .since = "9.2.0"
+                                .since = "9.2.0",
                             },
                             {0}
                         }
+                    },
+                    {
+                        .name = "operator",
+                        .type = VALKEYMODULE_ARG_TYPE_ONEOF,
+                        .flags = VALKEYMODULE_CMD_ARG_OPTIONAL,
+                        .subargs = (ValkeyModuleCommandArg[]){
+                            {
+                                .name = "equal",
+                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
+                                .token = "="
+                            },
+                            {
+                                .name = "approximately",
+                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
+                                .token = "~"
+                            },
+                            {0}
+                        }
+                    },
+                    {
+                        .name = "threshold",
+                        .type = VALKEYMODULE_ARG_TYPE_STRING,
+                        .display_text = "threshold" /* Just for coverage, doesn't have a visible effect */
                     },
                     {
                         .name = "count",

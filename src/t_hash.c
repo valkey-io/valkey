@@ -1467,14 +1467,16 @@ void hmgetCommand(client *c) {
     }
 }
 
-/* Loading and the replication stream ignore field expiry, so propagate only the fields the command changed.
- * Every field before the first skipped one changed, so the new argv starts with them, at 'dst'. */
-static robj **createChangedFieldsArgv(client *c, int size, int dst, int first, int skipped) {
-    robj **new_argv = zmalloc(sizeof(robj *) * size);
-    for (int i = first; i < skipped; i++) {
+/* Loading and the replication stream ignore field expiry, so the propagated command must omit the expired fields.
+ * The command cannot tell expired fields from missing fields, so it skips both. Allocate the new argv and copy the
+ * fields before the first skipped one into it, at 'dst'. */
+static robj **createChangedFieldsArgv(client *c, size_t size, int dst, int fields_index, int first_skipped, int *argc) {
+    robj **new_argv = zcalloc(sizeof(robj *) * size);
+    for (int i = fields_index; i < first_skipped; i++) {
         new_argv[dst++] = c->argv[i];
         incrRefCount(c->argv[i]);
     }
+    *argc = dst;
     return new_argv;
 }
 
@@ -1492,10 +1494,7 @@ void hdelCommand(client *c) {
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, objectGetVal(c->argv[j]))) {
             if (skipped) {
-                if (!new_argv) {
-                    new_argv = createChangedFieldsArgv(c, c->argc, 2, 2, skipped);
-                    new_argc = skipped;
-                }
+                if (!new_argv) new_argv = createChangedFieldsArgv(c, c->argc, 2, 2, skipped, &new_argc);
                 new_argv[new_argc++] = c->argv[j];
                 incrRefCount(c->argv[j]);
             }
@@ -1515,7 +1514,8 @@ void hdelCommand(client *c) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
-        if (new_argv) {
+        if (skipped) {
+            if (!new_argv) new_argv = createChangedFieldsArgv(c, c->argc, 2, 2, skipped, &new_argc);
             new_argv[0] = shared.hdel;
             new_argv[1] = c->argv[1];
             incrRefCount(c->argv[1]);
@@ -1570,10 +1570,7 @@ void hgetdelCommand(client *c) {
         if (o == NULL) continue;
         if (hashTypeDelete(o, objectGetVal(c->argv[i]))) {
             if (skipped) {
-                if (!new_argv) {
-                    new_argv = createChangedFieldsArgv(c, 2 + num_fields, 2, fields_index, skipped);
-                    new_argc = 2 + skipped - fields_index;
-                }
+                if (!new_argv) new_argv = createChangedFieldsArgv(c, 2 + num_fields, 2, fields_index, skipped, &new_argc);
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
             }
@@ -1594,7 +1591,8 @@ void hgetdelCommand(client *c) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
-        if (new_argv) {
+        if (skipped) {
+            if (!new_argv) new_argv = createChangedFieldsArgv(c, 2 + num_fields, 2, fields_index, skipped, &new_argc);
             new_argv[0] = shared.hdel;
             new_argv[1] = c->argv[1];
             incrRefCount(c->argv[1]);
@@ -2317,8 +2315,6 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
     }
 
     bool has_volatile_fields = hashTypeHasVolatileFields(obj);
-    /* A past 'when' propagates as HDEL of the expired fields instead. */
-    bool filter_updated = has_volatile_fields && !checkAlreadyExpired(when);
 
     initDeferredReplyBuffer(c);
 
@@ -2329,10 +2325,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
         expiryModificationResult result = hashTypeSetExpire(obj, objectGetVal(c->argv[fields_index + i]), when, flag);
         if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) {
             if (skipped) {
-                if (!new_argv) {
-                    new_argv = createChangedFieldsArgv(c, c->argc, fields_index, fields_index, skipped);
-                    new_argc = skipped;
-                }
+                if (!new_argv)
+                    new_argv = createChangedFieldsArgv(c, c->argc, fields_index, fields_index, skipped, &new_argc);
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);
             }
@@ -2351,7 +2345,7 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
             /* we treat this case exactly as active expiration. */
             server.stat_expiredfields++;
             expired++;
-        } else if (filter_updated && !skipped) {
+        } else if (has_volatile_fields && result == EXPIRATION_MODIFICATION_NOT_EXIST && !skipped) {
             skipped = fields_index + i;
         }
         addReplyLongLong(c, result);
@@ -2366,12 +2360,14 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
         } else if (updated) {
-            if (new_argv) {
+            if (skipped) {
+                if (!new_argv)
+                    new_argv = createChangedFieldsArgv(c, c->argc, fields_index, fields_index, skipped, &new_argc);
                 for (i = 0; i < fields_index - 1; i++) {
                     new_argv[i] = c->argv[i];
                     incrRefCount(c->argv[i]);
                 }
-                new_argv[fields_index - 1] = createStringObjectFromLongLong(updated);
+                new_argv[fields_index - 1] = createStringObjectFromLongLong(new_argc - fields_index);
                 replaceClientCommandVector(c, new_argc, new_argv);
             }
             /* Propagate as HPEXPIREAT millisecond-timestamp
@@ -2468,16 +2464,14 @@ void hpersistCommand(client *c) {
         result = hashTypePersist(hash, objectGetVal(c->argv[fields_index]));
         if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) {
             if (skipped) {
-                if (!new_argv) {
-                    new_argv = createChangedFieldsArgv(c, c->argc, first_field, first_field, skipped);
-                    new_argc = skipped;
-                }
+                if (!new_argv)
+                    new_argv = createChangedFieldsArgv(c, c->argc, first_field, first_field, skipped, &new_argc);
                 new_argv[new_argc++] = c->argv[fields_index];
                 incrRefCount(c->argv[fields_index]);
             }
             server.dirty++;
             changes++;
-        } else if (has_volatile_fields && !skipped) {
+        } else if (has_volatile_fields && result == EXPIRATION_MODIFICATION_NOT_EXIST && !skipped) {
             skipped = fields_index;
         }
         addReplyLongLong(c, result);
@@ -2486,12 +2480,13 @@ void hpersistCommand(client *c) {
         if (has_volatile_fields != hashTypeHasVolatileFields(hash)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, hash);
         }
-        if (new_argv) {
+        if (skipped) {
+            if (!new_argv) new_argv = createChangedFieldsArgv(c, c->argc, first_field, first_field, skipped, &new_argc);
             for (int i = 0; i < first_field - 1; i++) {
                 new_argv[i] = c->argv[i];
                 incrRefCount(c->argv[i]);
             }
-            new_argv[first_field - 1] = createStringObjectFromLongLong(changes);
+            new_argv[first_field - 1] = createStringObjectFromLongLong(new_argc - first_field);
             replaceClientCommandVector(c, new_argc, new_argv);
         }
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);

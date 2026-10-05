@@ -5351,6 +5351,22 @@ start_server {tags {"hashexpire needs:debug external:skip"}} {
     r debug set-active-expire 0
     set exat [get_long_expire_value HEXPIREAT]
 
+    # myhash holds live and live2 with a TTL, nottl without one, and an expired
+    # field that the server does not serve.
+    proc setup_expired_field_stream {encoding} {
+        r flushall
+        r hset myhash nottl v
+        r hsetex myhash PX 100000 FIELDS 2 live v live2 v
+        r hsetex myhash PX 1 FIELDS 1 expired v
+        wait_for_condition 50 10 {
+            [r hexists myhash expired] == 0
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        assert_equal 4 [r hlen myhash]
+        assert_encoding $encoding myhash
+    }
+
     foreach {encoding max_entries} {listpack 128 hashtable 0} {
         r config set hash-max-listpack-entries $max_entries
 
@@ -5362,18 +5378,33 @@ start_server {tags {"hashexpire needs:debug external:skip"}} {
             HPERSIST "hpersist myhash FIELDS 2 expired live" "hpersist myhash FIELDS 1 live" \
             HEXPIREAT "hexpireat myhash $exat XX GT FIELDS 2 expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
             {HPERSIST multiple} "hpersist myhash FIELDS 4 live expired missing live2" "hpersist myhash FIELDS 2 live live2" \
-            {HEXPIREAT multiple} "hexpireat myhash $exat XX GT FIELDS 4 live expired missing live2" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 live live2"] {
-            test "$name propagates only the fields it changed - $encoding" {
-                r flushall
-                r hsetex myhash PX 100000 FIELDS 2 live v live2 v
-                r hsetex myhash PX 1 FIELDS 1 expired v
-                after 20
-                assert_equal 0 [r hexists myhash expired]
-                assert_equal 3 [r hlen myhash]
-                assert_encoding $encoding myhash
+            {HEXPIREAT multiple} "hexpireat myhash $exat XX GT FIELDS 4 live expired missing live2" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 live live2" \
+            {HDEL trailing} "hdel myhash live expired" "hdel myhash live" \
+            {HGETDEL trailing} "hgetdel myhash FIELDS 2 live expired" "hdel myhash live" \
+            {HPERSIST trailing} "hpersist myhash FIELDS 2 live expired" "hpersist myhash FIELDS 1 live" \
+            {HEXPIREAT trailing} "hexpireat myhash $exat XX GT FIELDS 2 live expired" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
+            {HPERSIST no TTL} "hpersist myhash FIELDS 3 nottl expired live" "hpersist myhash FIELDS 2 nottl live" \
+            {HEXPIREAT condition not met} "hexpireat myhash $exat XX GT FIELDS 3 nottl expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 nottl live"] {
+            test "$name does not propagate the expired field - $encoding" {
+                setup_expired_field_stream $encoding
                 set repl [attach_to_replication_stream]
                 r {*}$cmd
                 assert_replication_stream $repl [list {select *} $expected]
+                close_replication_stream $repl
+            }
+        }
+
+        foreach {name cmd} [list \
+            HDEL "hdel myhash expired missing" \
+            HGETDEL "hgetdel myhash FIELDS 2 expired missing" \
+            HPERSIST "hpersist myhash FIELDS 2 expired missing" \
+            HEXPIREAT "hexpireat myhash $exat XX GT FIELDS 2 expired missing"] {
+            test "$name that changes no field propagates nothing - $encoding" {
+                setup_expired_field_stream $encoding
+                set repl [attach_to_replication_stream]
+                r {*}$cmd
+                r set marker 1
+                assert_replication_stream $repl {{select *} {set marker 1}}
                 close_replication_stream $repl
             }
         }
@@ -5396,7 +5427,11 @@ start_server {tags {"hashexpire external:skip"}} {
             $primary flushall
             $primary hsetex myhash PX 100000 FIELDS 1 live v
             $primary hsetex myhash PX 1 FIELDS 1 expired v
-            after 20
+            wait_for_condition 50 10 {
+                [$primary hexists myhash expired] == 0
+            } else {
+                fail "Hash is showing expired elements"
+            }
             wait_for_ofs_sync $primary $replica
             assert_equal {} [$primary hget myhash expired]
             assert_equal {} [$replica hget myhash expired]
@@ -5434,7 +5469,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 setup_expired_field $primary $replica
 
                 # The primary deletes live and keeps the key for the stored expired field.
-                assert_equal 1 [$primary hdel myhash expired live]
+                assert_equal 1 [$primary hdel myhash live expired]
                 wait_for_ofs_sync $primary $replica
 
                 assert_equal 1 [$primary exists myhash]
@@ -5464,8 +5499,11 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
         r flushall
         r hsetex myhash PX 100000 FIELDS 1 live v
         r hsetex myhash PX 1 FIELDS 1 expired v
-        after 20
-        assert_equal {} [r hget myhash expired]
+        wait_for_condition 50 10 {
+            [r hexists myhash expired] == 0
+        } else {
+            fail "Hash is showing expired elements"
+        }
     }
 
     foreach {encoding max_entries} {listpack 128 hashtable 0} {

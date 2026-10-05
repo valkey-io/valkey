@@ -1605,7 +1605,7 @@ void addReplyBulkCString(client *c, const char *s) {
 static void _addReplyBulkLongLong(client *c, long long ll) {
     char buf[64];
     const int number_offset = 5; /* strlen("$20\r\n") */
-    int len = ll2string(buf + number_offset, sizeof(buf) - number_offset - 2, ll);
+    int len = ll2string(buf + number_offset, sizeof(buf) - number_offset, ll);
     int start = len < 10 ? 1 : 0;
 
     buf[start] = '$';
@@ -7334,3 +7334,4 @@ void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcn
 void testOnlyTrimReplyUnusedTailSpace(client *c) {
     trimReplyUnusedTailSpace(c);
 }
+

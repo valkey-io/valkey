@@ -10,8 +10,12 @@
 
 #include <cstddef>
 #include <cstring>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 extern "C" {
+#include "anet.h"
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "connhelpers.h"
@@ -34,6 +38,21 @@ typedef struct TestMsgBlock {
         clusterMsgLight msg_light;
     } data[1];
 } TestMsgBlock;
+
+/* A fake connection type that, like TLS, has no stateless I/O, so a link
+ * built on it takes the half duplex dispatch path. */
+static int fakeTlsConnGetType(void) {
+    return CONN_TYPE_TLS;
+}
+
+static ConnectionType *fakeTlsConnType(void) {
+    static ConnectionType ct;
+    ct = *fakeConnType();
+    ct.get_type = fakeTlsConnGetType;
+    ct.write_stateless = NULL;
+    ct.read_stateless = NULL;
+    return &ct;
+}
 
 class ClusterIOOffloadTest : public ::testing::Test {
   protected:
@@ -105,6 +124,31 @@ class ClusterIOOffloadTest : public ::testing::Test {
         link->conn = &fc->conn;
         connSetPrivateData(link->conn, link);
         owned_links[owned_links_count++] = link;
+        return link;
+    }
+
+    /* A link whose read and write jobs stay mutually exclusive. */
+    clusterLink *makeHalfDuplexLink() {
+        clusterLink *link = makeLink();
+        link->conn->type = fakeTlsConnType();
+        return link;
+    }
+
+    /* A link on a real TCP connection type over one end of a socketpair. The
+     * other end is returned in peer_fd and must be closed by the caller. */
+    clusterLink *makeSocketLink(int *peer_fd) {
+        if (connectionByType(CONN_TYPE_SOCKET) == NULL) connTypeInitialize();
+        int fds[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return NULL;
+        anetNonBlock(NULL, fds[0]);
+        connection *conn = connCreateAccepted(connectionByType(CONN_TYPE_SOCKET), fds[0], NULL);
+        conn->state = CONN_STATE_CONNECTED;
+        conn->owner_kind = CONN_OWNER_CLUSTER_LINK;
+        clusterLink *link = createClusterLink(NULL);
+        link->conn = conn;
+        connSetPrivateData(conn, link);
+        owned_links[owned_links_count++] = link;
+        *peer_fd = fds[1];
         return link;
     }
 
@@ -396,7 +440,7 @@ TEST_F(ClusterIOOffloadTest, ReadJobStopsAtReadBudget) {
     EXPECT_LT(fc->read_pos, stream);
 
     /* Garbage bytes, so framing reports a bad header and the link is torn down. */
-    EXPECT_EQ(link->io_result, CLUSTER_IO_BAD_HEADER);
+    EXPECT_EQ(link->io_read_result, CLUSTER_IO_BAD_HEADER);
     processIOThreadsResponses();
     releaseLinkOwnership(link);
 }
@@ -508,7 +552,7 @@ TEST_F(ClusterIOOffloadTest, WriteOffloadEagainKeepsLink) {
     clusterLink *link = makeLink();
     fakeConnection *fc = (fakeConnection *)link->conn;
     enqueueFakeMsg(link);
-    fc->error = 1; /* connWrite returns -1 with the state left CONNECTED. */
+    fc->error = 1; /* The write returns -1 with errno set to EAGAIN. */
 
     ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
     runInlineWorkerAndDrain(clusterWriteJob, link);
@@ -527,7 +571,7 @@ TEST_F(ClusterIOOffloadTest, WriteCompletionPopsOnlyVisibleNodes) {
     link->io_refs = 1;
     link->io_nodes_sent = 1;
     link->io_head_offset = 0;
-    link->io_result = CLUSTER_IO_OK;
+    link->io_write_result = CLUSTER_IO_OK;
 
     clusterHandleWriteCompletion(link);
 
@@ -542,7 +586,7 @@ TEST_F(ClusterIOOffloadTest, WriteCompletionPartialSendUpdatesHeadOffset) {
     link->io_refs = 1;
     link->io_nodes_sent = 0;
     link->io_head_offset = 7;
-    link->io_result = CLUSTER_IO_OK;
+    link->io_write_result = CLUSTER_IO_OK;
 
     clusterHandleWriteCompletion(link);
 
@@ -666,7 +710,7 @@ TEST_F(ClusterIOOffloadTest, PoolInactiveCountsFallback) {
 }
 
 TEST_F(ClusterIOOffloadTest, DispatchDeferredWhileJobInFlight) {
-    clusterLink *link = makeLink();
+    clusterLink *link = makeHalfDuplexLink();
     enqueueFakeMsg(link);
 
     ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
@@ -681,6 +725,287 @@ TEST_F(ClusterIOOffloadTest, DispatchDeferredWhileJobInFlight) {
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 0LL);
 
     runInlineWorkerAndDrain(clusterWriteJob, link);
+}
+
+/* --- Full duplex links ------------------------------------------------ */
+
+/* A plain link dispatches a read while a write is in flight, but still never
+ * runs two jobs of the same kind. */
+TEST_F(ClusterIOOffloadTest, FullDuplexDispatchesReadAndWriteConcurrently) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedReadableSocket(fc);
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_PENDING);
+    EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_PENDING);
+    EXPECT_EQ(link->io_refs, 2);
+    EXPECT_EQ(link->io_read_deferred, 0);
+    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 2u);
+    EXPECT_EQ(fc->postpone_state, CONN_POSTPONE_READ | CONN_POSTPONE_WRITE);
+
+    EXPECT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    EXPECT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 2u);
+    EXPECT_EQ(link->io_refs, 2);
+    EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 0LL);
+
+    /* Both workers finish before either completion is consumed. */
+    clusterReadJob(link);
+    clusterWriteJob(link);
+    processIOThreadsResponses();
+
+    EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_refs, 0);
+    EXPECT_EQ(listLength(link->send_msg_queue), 0UL);
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(fc->postpone_state, 0);
+    EXPECT_EQ(fc->update_calls, 1);
+}
+
+/* The first completion must not resume connection updates while the other
+ * job still uses the connection. */
+TEST_F(ClusterIOOffloadTest, FullDuplexKeepsUpdatesPostponedUntilLastCompletion) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedReadableSocket(fc);
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_PENDING);
+    EXPECT_EQ(link->io_refs, 1);
+    EXPECT_EQ(fc->postpone_state, CONN_POSTPONE_READ);
+    EXPECT_EQ(fc->update_calls, 0);
+
+    runInlineWorkerAndDrain(clusterReadJob, link);
+    EXPECT_EQ(link->io_refs, 0);
+    EXPECT_EQ(fc->postpone_state, 0);
+    EXPECT_EQ(fc->update_calls, 1);
+}
+
+/* A read that hits EOF must not clobber the result of a concurrent write, and
+ * the teardown it triggers must wait for the write to complete. */
+TEST_F(ClusterIOOffloadTest, FullDuplexReadEofDefersFreeUntilWriteCompletes) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedOneCompletePacket(fc);
+    fc->eof = 1;
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+
+    clusterReadJob(link);
+    clusterWriteJob(link);
+    EXPECT_EQ(link->io_read_result, CLUSTER_IO_EOF);
+    EXPECT_EQ(link->io_write_result, CLUSTER_IO_OK);
+    EXPECT_EQ(link->io_nodes_sent, 1);
+
+    processIOThreadsResponses();
+    releaseLinkOwnership(link);
+
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_GE(fc->close_calls, 1);
+}
+
+/* The jobs of a full duplex link share the connection, so neither may write
+ * its state: a hard error is only reported through the job result. */
+TEST_F(ClusterIOOffloadTest, FullDuplexJobsLeaveConnectionStateAlone) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedOneCompletePacket(fc);
+    fc->fail_read = 1;
+    fc->fail_write = 1;
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+
+    clusterReadJob(link);
+    clusterWriteJob(link);
+    EXPECT_EQ(link->io_read_result, CLUSTER_IO_READ_ERROR);
+    EXPECT_EQ(link->io_write_result, CLUSTER_IO_WRITE_ERROR);
+    EXPECT_EQ(fc->conn.state, CONN_STATE_CONNECTED);
+
+    processIOThreadsResponses();
+    releaseLinkOwnership(link);
+
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_GE(fc->close_calls, 1);
+}
+
+/* Nor may a job read the state to tell EAGAIN from an error, since the main
+ * thread may change it while the job runs. */
+TEST_F(ClusterIOOffloadTest, FullDuplexJobsClassifyEagainByErrno) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedReadableSocket(fc);
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+
+    fc->conn.state = CONN_STATE_ERROR;
+    clusterReadJob(link);
+    fc->error = 1; /* The write makes no progress: -1 with errno set to EAGAIN. */
+    clusterWriteJob(link);
+    fc->error = 0;
+    fc->conn.state = CONN_STATE_CONNECTED;
+
+    EXPECT_EQ(link->io_read_result, CLUSTER_IO_OK);
+    EXPECT_EQ(link->io_write_result, CLUSTER_IO_OK);
+    EXPECT_EQ(link->io_nodes_sent, 0);
+    EXPECT_EQ(link->io_head_offset, 0u);
+    processIOThreadsResponses();
+    EXPECT_EQ(fc->close_calls, 0);
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(listLength(link->send_msg_queue), 1UL);
+    EXPECT_EQ(link->head_msg_send_offset, 0u);
+    EXPECT_NE(link->conn->write_handler, (ConnectionCallbackFunc)NULL);
+}
+
+static void *runClusterWriteJob(void *link) {
+    clusterWriteJob((clusterLink *)link);
+    return NULL;
+}
+
+/* Both jobs on real threads at once. Under a thread sanitizer build this
+ * catches any state the two jobs share. */
+TEST_F(ClusterIOOffloadTest, FullDuplexJobsRunOnSeparateThreads) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedThreePacketsAndTail(fc);
+    for (int i = 0; i < 8; i++) enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+
+    pthread_t writer;
+    ASSERT_EQ(pthread_create(&writer, NULL, runClusterWriteJob, link), 0);
+    clusterReadJob(link);
+    ASSERT_EQ(pthread_join(writer, NULL), 0);
+    processIOThreadsResponses();
+
+    EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_refs, 0);
+    EXPECT_EQ(listLength(link->send_msg_queue), 0UL);
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST], 1LL);
+}
+
+/* The same over the real TCP connection type: a socket read and write run at
+ * once, EAGAIN on the drained socket is not an error, and EOF still is. */
+TEST_F(ClusterIOOffloadTest, FullDuplexJobsOnRealSocket) {
+    int peer;
+    clusterLink *link = makeSocketLink(&peer);
+    ASSERT_NE(link, (clusterLink *)NULL);
+    ASSERT_TRUE(clusterLinkIOFullDuplex(link));
+
+    unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
+    for (int i = 0; i < 2; i++) ASSERT_EQ(write(peer, pkt, CLUSTERMSG_MIN_LEN), (ssize_t)CLUSTERMSG_MIN_LEN);
+    zfree(pkt);
+    const int msgs = 8;
+    const uint32_t msg_len = 64;
+    for (int i = 0; i < msgs; i++) enqueueFakeMsg(link, msg_len);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    pthread_t writer;
+    ASSERT_EQ(pthread_create(&writer, NULL, runClusterWriteJob, link), 0);
+    clusterReadJob(link);
+    ASSERT_EQ(pthread_join(writer, NULL), 0);
+    EXPECT_EQ(link->io_read_result, CLUSTER_IO_OK);
+    EXPECT_EQ(link->io_write_result, CLUSTER_IO_OK);
+    EXPECT_EQ(link->conn->state, CONN_STATE_CONNECTED);
+    processIOThreadsResponses();
+
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 2LL);
+    EXPECT_EQ(listLength(link->send_msg_queue), 0UL);
+    char sink[1024];
+    EXPECT_EQ(read(peer, sink, sizeof(sink)), (ssize_t)(msgs * msg_len));
+
+    /* The peer hangs up: the next read job reports EOF and frees the link. */
+    close(peer);
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    clusterReadJob(link);
+    EXPECT_EQ(link->io_read_result, CLUSTER_IO_EOF);
+    processIOThreadsResponses();
+    releaseLinkOwnership(link);
+}
+
+/* --- Half duplex links ------------------------------------------------ */
+
+/* Without stateless I/O the jobs fall back to the connection state, as the
+ * synchronous path does: a hard error moves it out of CONNECTED. */
+TEST_F(ClusterIOOffloadTest, HalfDuplexReadErrorClosesLink) {
+    clusterLink *link = makeHalfDuplexLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedOneCompletePacket(fc);
+    fc->fail_read = 1;
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    clusterReadJob(link);
+    EXPECT_EQ(link->io_read_result, CLUSTER_IO_READ_ERROR);
+    processIOThreadsResponses();
+    releaseLinkOwnership(link);
+
+    EXPECT_GE(fc->close_calls, 1);
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+}
+
+TEST_F(ClusterIOOffloadTest, HalfDuplexWriteEagainKeepsLink) {
+    clusterLink *link = makeHalfDuplexLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    enqueueFakeMsg(link);
+    fc->error = 1; /* connWrite returns -1 with the state left CONNECTED. */
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+
+    EXPECT_EQ(fc->close_calls, 0);
+    EXPECT_EQ(listLength(link->send_msg_queue), 1UL);
+}
+
+TEST_F(ClusterIOOffloadTest, HalfDuplexWriteHardErrorClosesLink) {
+    clusterLink *link = makeHalfDuplexLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    enqueueFakeMsg(link);
+    fc->fail_write = 1;
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+    releaseLinkOwnership(link);
+
+    EXPECT_GE(fc->close_calls, 1);
+}
+
+/* With the read side busy, an inbox-full write rollback must leave the read's
+ * postpone in place. */
+TEST_F(ClusterIOOffloadTest, FullDuplexWriteRollbackKeepsReadPostponed) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedReadableSocket(fc);
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    testOnlyFillIOThreadInbox();
+
+    EXPECT_EQ(trySendClusterWriteToIOThreads(link), C_ERR);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_PENDING);
+    EXPECT_EQ(link->io_refs, 1);
+    EXPECT_EQ(fc->postpone_state, CONN_POSTPONE_READ);
+
+    runInlineWorkerAndDrain(clusterReadJob, link);
+    EXPECT_EQ(fc->postpone_state, 0);
 }
 
 /* --- Buffer limit and deferred teardown ------------------------------- */
@@ -709,10 +1034,10 @@ TEST_F(ClusterIOOffloadTest, BufferLimitCountsSendQueue) {
     EXPECT_EQ(server.cluster->stat_cluster_links_buffer_limit_exceeded, 1ULL);
 }
 
-/* Without the fairness yield, a link whose send queue never drains re-claims the
- * link on every iteration and inbound packets are never applied. */
+/* Without the fairness yield, a half duplex link whose send queue never drains
+ * re-claims the link on every iteration and inbound packets are never applied. */
 TEST_F(ClusterIOOffloadTest, BusySendQueueDoesNotStarveReads) {
-    clusterLink *link = makeLink();
+    clusterLink *link = makeHalfDuplexLink();
     fakeConnection *fc = (fakeConnection *)link->conn;
     fc->buf_size = 8; /* Smaller than the message, so the queue stays backlogged. */
     seedReadableSocket(fc);
@@ -741,7 +1066,7 @@ TEST_F(ClusterIOOffloadTest, BusySendQueueDoesNotStarveReads) {
 
 /* The yield is one-shot: with no read waiting, writes dispatch back to back. */
 TEST_F(ClusterIOOffloadTest, WriteDispatchNotYieldedWithoutDeferredRead) {
-    clusterLink *link = makeLink();
+    clusterLink *link = makeHalfDuplexLink();
     enqueueFakeMsg(link);
 
     ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
@@ -778,7 +1103,7 @@ TEST_F(ClusterIOOffloadTest, ReadCompletionFinalizesDeferredFree) {
     link->async_close = 1;
     link->io_read_state = CLUSTER_LINK_IO_PENDING;
     link->io_refs = 1;
-    link->io_result = CLUSTER_IO_OK;
+    link->io_read_result = CLUSTER_IO_OK;
 
     clusterHandleReadCompletion(link);
     releaseLinkOwnership(link);

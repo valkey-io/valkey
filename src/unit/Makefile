@@ -183,8 +183,9 @@ $(WRAP_DIR):
 # We use a compiler for that, not llc. The bitcode carries the version of
 # whichever clang produced it, and an llc of a different version cannot
 # read it: it fails with "error: Invalid record" or "Unsupported stack probing
-# method" for every object. No -O flag is passed, because the IR is already
-# optimized and this step only needs code generation, which is what llc did.
+# method" for every object. The server's -O level is passed: without it the
+# compiler generates -O0 code (llc defaults to -O2), which made LZF in the
+# sanitizer builds about twice as slow.
 #
 # llvm-nm is passed explicitly: Homebrew LLVM installs no plain 'nm', so 'nm'
 # would be Apple's. The CMake build (wrap-objects.py) uses llvm-nm as well.
@@ -197,7 +198,7 @@ define wrap-object
 	@set -e; \
 	if file $< | grep -q "LLVM.*bitcode"; then \
 		native=$(WRAP_DIR)/$*_temp.o; \
-		$(CC) -c -x ir $< -o $$native; \
+		$(CC) $(filter -O%,$(SERVER_OPT)) -c -x ir $< -o $$native; \
 	else \
 		native=$<; \
 	fi; \

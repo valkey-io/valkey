@@ -54,6 +54,24 @@ static int frozenFind(spaceSavingManager *m, const char *name, int dbid, uint64_
     return 0;
 }
 
+/* Like frozenFind, also returning the secondary accumulator. */
+static int frozenFind2(spaceSavingManager *m, const char *name, int dbid, uint64_t *count, uint64_t *error, uint64_t *count2) {
+    int n = spaceSavingManagerCount(m);
+    for (int i = 0; i < n; i++) {
+        sds key = NULL;
+        int db = 0;
+        uint64_t c = 0, e = 0, c2 = 0;
+        spaceSavingManagerAt2(m, i, &key, &db, &c, &e, &c2);
+        if (db == dbid && key != NULL && strcmp(key, name) == 0) {
+            if (count) *count = c;
+            if (error) *error = e;
+            if (count2) *count2 = c2;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Freeze the live window by advancing exactly one window length. Returns the new
  * "now". */
 static uint64_t freezeOnce(spaceSavingManager *m, uint64_t now_us) {
@@ -448,11 +466,12 @@ TEST(SpaceSaving, SamplingPercentageSurvivesADroppedWindow) {
     spaceSavingManagerRelease(m);
 }
 
-/* Record one observation of `name` in database `dbid` carrying `weight` — the
- * weighted entry point traffic tracking uses. */
-static void recordNameWeighted(spaceSavingManager *m, const char *name, int dbid, uint64_t weight) {
+/* Record one observation of `name` in database `dbid` carrying `weight`, of
+ * which `weight2` is the secondary-accumulator component — the weighted entry
+ * point traffic tracking uses. */
+static void recordNameWeighted(spaceSavingManager *m, const char *name, int dbid, uint64_t weight, uint64_t weight2) {
     sds k = sdsnew(name);
-    recordSpaceSavingManagerSampleWeighted(m, k, dbid, weight);
+    recordSpaceSavingManagerSampleWeighted(m, k, dbid, weight, weight2);
     sdsfree(k);
 }
 
@@ -467,9 +486,9 @@ TEST(SpaceSaving, WeightedSamplesAccumulateWeights) {
     spaceSavingManager *m = spaceSavingManagerCreate(4, WINDOW_US, 0);
     ASSERT_NE(m, nullptr);
 
-    recordNameWeighted(m, "big", 0, 1000);
-    recordNameWeighted(m, "big", 0, 500);
-    recordNameWeighted(m, "small", 0, 3);
+    recordNameWeighted(m, "big", 0, 1000, 0);
+    recordNameWeighted(m, "big", 0, 500, 0);
+    recordNameWeighted(m, "small", 0, 3, 0);
     recordName(m, "counted", 0); /* the unweighted entry point still weighs 1 */
 
     freezeOnce(m, 0);
@@ -507,7 +526,7 @@ TEST(SpaceSaving, WeightedErrorBandContainsTrueWeight) {
     for (int r = 0; r < 10; r++) {
         for (int i = 0; i < nkeys; i++) {
             if (true_weights[i] / 10 > (uint64_t)r) {
-                recordNameWeighted(m, names[i], 0, 10);
+                recordNameWeighted(m, names[i], 0, 10, 0);
                 total += 10;
             }
         }
@@ -558,8 +577,8 @@ TEST(SpaceSaving, FewHeavyObservationsOutrankManyLightOnes) {
     ASSERT_GT(huge_bytes, total / (uint64_t)k) << "huge must exceed N/K to be guaranteed tracked";
 
     for (int i = 0; i < 5000; i++) {
-        recordNameWeighted(m, "tiny", 0, 10);
-        if (i % 1000 == 0) recordNameWeighted(m, "huge", 0, 1000000);
+        recordNameWeighted(m, "tiny", 0, 10, 0);
+        if (i % 1000 == 0) recordNameWeighted(m, "huge", 0, 1000000, 0);
     }
 
     freezeOnce(m, 0);
@@ -616,6 +635,52 @@ TEST(SpaceSaving, FrozenDurationIsTheRealSpanIncludingRotationLag) {
     ASSERT_EQ(frozenFind(m, "c", 0, NULL, NULL), 1);
     EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), WINDOW_US)
         << "the window must be measured from the reset, not from creation";
+
+    spaceSavingManagerRelease(m);
+}
+
+/* ---------------------------------------------------------------------------
+ * The secondary accumulator: an exact, caller-chosen component of the weight
+ * (traffic tracking uses it for the write-direction split). It must accumulate
+ * independently of the primary, stay untouched by the unweighted API, and
+ * restart from the new identity's own observations on eviction — unlike the
+ * primary count, which inherits the evicted minimum.
+ * --------------------------------------------------------------------------*/
+TEST(SpaceSaving, SecondaryAccumulatorIsExactAndRestartsOnEviction) {
+    const int k = 2;
+    spaceSavingManager *m = spaceSavingManagerCreate(k, WINDOW_US, 0);
+    ASSERT_NE(m, nullptr);
+
+    /* Accumulation: (1000, 300) then (500, 200) gives count 1500 / count2 500.
+     * The unweighted API contributes nothing to the secondary. */
+    recordNameWeighted(m, "a", 0, 1000, 300);
+    recordNameWeighted(m, "a", 0, 500, 200);
+    recordName(m, "a", 0);
+    recordNameWeighted(m, "b", 0, 50, 50);
+
+    freezeOnce(m, 0);
+    uint64_t count = 0, count2 = 0;
+    ASSERT_EQ(frozenFind2(m, "a", 0, &count, NULL, &count2), 1);
+    EXPECT_EQ(count, 1501u);
+    EXPECT_EQ(count2, 500u);
+    ASSERT_EQ(frozenFind2(m, "b", 0, &count, NULL, &count2), 1);
+    EXPECT_EQ(count, 50u);
+    EXPECT_EQ(count2, 50u) << "a full-write observation charges its whole weight as secondary";
+
+    /* Eviction: the live window is fresh, so refill both slots first, then
+     * overflow with "e" to evict the smaller ("c", count 10). The primary
+     * inherits c's minimum (10 + 7 = 17) but the secondary must restart from
+     * e's own observation only (7, not 4 + 7). */
+    uint64_t now = WINDOW_US;
+    recordNameWeighted(m, "c", 0, 10, 4);
+    recordNameWeighted(m, "d", 0, 50, 50);
+    recordNameWeighted(m, "e", 0, 7, 7);
+    now = freezeOnce(m, now);
+    ASSERT_EQ(frozenFind2(m, "e", 0, &count, NULL, &count2), 1);
+    EXPECT_EQ(count, 17u) << "the primary inherits the evicted minimum (10 + 7)";
+    EXPECT_EQ(count2, 7u) << "the secondary must NOT inherit; it counts only e's own observations";
+    EXPECT_LE(count2, count) << "the secondary is a component of the primary";
+    EXPECT_EQ(frozenFind(m, "c", 0, NULL, NULL), 0) << "the evicted key is gone";
 
     spaceSavingManagerRelease(m);
 }

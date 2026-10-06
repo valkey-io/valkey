@@ -31,6 +31,12 @@
  *    is not charged — an accepted underestimate of a small path.
  *  - deletions move no bytes and are not charged.
  *  - module values are not charged (their size callback has unbounded cost).
+ * Each entry splits its bytes by direction — read_bytes_per_second (egress:
+ * values sent out) vs write_bytes_per_second (ingress: values stored) — via the
+ * manager's secondary accumulator, because the two directions have different
+ * causes and different fixes. Ranking stays by the combined total, so the
+ * top-K guarantee is unchanged; the split is exact for the observations a slot
+ * recorded but does not carry an error band.
  * Sampling compensates globally: the reported rate scales the sampled weight
  * back up by 100/percentage, as hot-key detection does for counts.
  * --------------------------------------------------------------------------*/
@@ -115,14 +121,16 @@ static uint64_t trafficEstimateValueBytes(robj *key, robj *val, int dbid) {
     return (uint64_t)objectComputeSize(key, val, TRAFFIC_SIZE_ESTIMATE_SAMPLES, dbid);
 }
 
-/* Charge `weight` estimated bytes of `key` in `dbid`. Weight-0 observations
- * (misses, module values) are skipped: they would only churn slots. */
-static void trafficRecordSample(robj *key, int dbid, uint64_t weight) {
+/* Charge `weight` estimated bytes of `key` in `dbid`, of which `weight_write`
+ * moves in the write (ingress) direction; the rest is read (egress). Weight-0
+ * observations (misses, module values) are skipped: they would only churn
+ * slots. */
+static void trafficRecordSample(robj *key, int dbid, uint64_t weight, uint64_t weight_write) {
     spaceSavingManager *m = server.traffic_manager;
     if (!m || !key || weight == 0) return;
     sds k = objectGetVal(key);
     if (!k) return;
-    recordSpaceSavingManagerSampleWeighted(m, k, dbid, weight);
+    recordSpaceSavingManagerSampleWeighted(m, k, dbid, weight, weight_write);
 }
 
 /* Charge a sampled read of `key` in `dbid` whose lookup returned `val`.
@@ -137,16 +145,19 @@ void trafficRecordLookup(robj *key, int dbid, int lookup_flags, robj *val) {
     if (!trafficEnabled() || (lookup_flags & (LOOKUP_NOHOTKEYS | LOOKUP_WRITE))) return;
     if (!trafficShouldRecord()) return;
     if (!bernoulliSampleHit(server.traffic_sampling_percentage)) return;
-    trafficRecordSample(key, dbid, trafficEstimateValueBytes(key, val, dbid));
+    uint64_t bytes = trafficEstimateValueBytes(key, val, dbid);
+    trafficRecordSample(key, dbid, bytes, 0); /* a read moves egress bytes only */
 }
 
 /* Charge a sampled write of `key` in `dbid` storing value `val` — the setKey
- * path, so both a fresh key and an overwrite are charged the bytes written. */
+ * path, so both a fresh key and an overwrite are charged the bytes written,
+ * all of it in the write (ingress) direction. */
 void trafficRecordSetKey(robj *key, int dbid, robj *val) {
     if (!trafficEnabled()) return;
     if (!trafficShouldRecord()) return;
     if (!bernoulliSampleHit(server.traffic_sampling_percentage)) return;
-    trafficRecordSample(key, dbid, trafficEstimateValueBytes(key, val, dbid));
+    uint64_t bytes = trafficEstimateValueBytes(key, val, dbid);
+    trafficRecordSample(key, dbid, bytes, bytes);
 }
 
 /* ===========================================================================
@@ -195,7 +206,8 @@ static uint64_t trafficEstimateBytesPerSecond(uint64_t count, uint64_t error, in
 
 typedef struct {
     sds key;
-    uint64_t bps;
+    uint64_t bps;       /* combined bytes per second (the ranking key) */
+    uint64_t write_bps; /* ingress share; the rest of bps is egress */
     int dbid;
 } trafficCollected;
 
@@ -237,9 +249,14 @@ void trafficGetCommand(client *c) {
     int frozen_pct = spaceSavingManagerFrozenSamplingPercentage(m);
     uint64_t frozen_duration_us = spaceSavingManagerFrozenDurationUs(m);
     for (int i = 0; i < cap; i++) {
-        uint64_t count, error;
-        spaceSavingManagerAt(m, i, &arr[i].key, &arr[i].dbid, &count, &error);
+        uint64_t count, error, count2;
+        spaceSavingManagerAt2(m, i, &arr[i].key, &arr[i].dbid, &count, &error, &count2);
         arr[i].bps = trafficEstimateBytesPerSecond(count, error, frozen_pct, frozen_duration_us);
+        /* The write share is an exact observed subset (no error band): reuse
+         * the same estimator with a zero error. count2 <= count - error keeps
+         * the read remainder non-negative. */
+        arr[i].write_bps = trafficEstimateBytesPerSecond(count2, 0, frozen_pct, frozen_duration_us);
+        if (arr[i].write_bps > arr[i].bps) arr[i].write_bps = arr[i].bps;
     }
 
     qsort(arr, cap, sizeof(trafficCollected), trafficCollectedCmpDesc);
@@ -247,13 +264,17 @@ void trafficGetCommand(client *c) {
     int limit = cap < server.traffic_top_k ? cap : server.traffic_top_k;
     addReplyArrayLen(c, limit);
     for (int j = 0; j < limit; j++) {
-        addReplyMapLen(c, 3);
+        addReplyMapLen(c, 5);
         addReplyBulkCString(c, "key");
         addReplyBulkCBuffer(c, arr[j].key, sdslen(arr[j].key));
         addReplyBulkCString(c, "db");
         addReplyLongLong(c, arr[j].dbid);
         addReplyBulkCString(c, "bytes_per_second");
         addReplyLongLong(c, arr[j].bps);
+        addReplyBulkCString(c, "read_bytes_per_second");
+        addReplyLongLong(c, arr[j].bps - arr[j].write_bps);
+        addReplyBulkCString(c, "write_bytes_per_second");
+        addReplyLongLong(c, arr[j].write_bps);
     }
     zfree(arr);
 }
@@ -270,8 +291,9 @@ void trafficHelpCommand(client *c) {
         "GET",
         "    Return the keys that moved the most estimated bytes in the last",
         "    completed window, ordered by estimated bytes per second (descending).",
-        "    Each entry reports the key name, the database it was accessed in, and",
-        "    the estimated bytes per second.",
+        "    Each entry reports the key name, the database it was accessed in,",
+        "    the estimated bytes per second, and its split into read (egress)",
+        "    and write (ingress) bytes per second.",
         "RESET",
         "    Clear all collected traffic statistics.",
         NULL,
@@ -306,6 +328,14 @@ static uint64_t trafficLastWindowDurationUs(void) {
     return server.traffic_manager ? spaceSavingManagerFrozenDurationUs(server.traffic_manager) : 0;
 }
 
+/* Bytes sampled in the in-progress window so far. Partial by definition — the
+ * window has not closed — which is the point: a human (or a dashboards probe)
+ * can watch traffic accumulate in real time instead of waiting for the freeze
+ * that makes it reportable. 0 when tracking is disabled. */
+static uint64_t trafficLiveWindowBytes(void) {
+    return server.traffic_manager ? spaceSavingManagerLiveTotal(server.traffic_manager) : 0;
+}
+
 /* Append the fields of the INFO "traffic" section. The caller emits the
  * section header; this owns which fields the section carries. */
 sds genTrafficInfoString(sds info) {
@@ -317,6 +347,8 @@ sds genTrafficInfoString(sds info) {
     info =
         sdscatprintf(info, "traffic_last_window_duration_ms:%llu\r\n",
                      (unsigned long long)(trafficLastWindowDurationUs() / 1000));
+    /* The real-time peek into the still-open window. */
+    info = sdscatprintf(info, "traffic_live_window_bytes:%llu\r\n", (unsigned long long)trafficLiveWindowBytes());
     return info;
 }
 

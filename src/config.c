@@ -3617,7 +3617,7 @@ standardConfig static_configs[] = {
     createIntConfig("hotkeys-window-seconds", NULL, MODIFIABLE_CONFIG, 1, 300, server.hotkeys_window_seconds, 1, INTEGER_CONFIG, NULL, hotkeysWindowCallback),
     createIntConfig("traffic-sampling-percentage", NULL, MODIFIABLE_CONFIG, 1, 100, server.traffic_sampling_percentage, 1, INTEGER_CONFIG, NULL, trafficSamplingCallback),
     createIntConfig("traffic-top-k", NULL, MODIFIABLE_CONFIG, 0, 1000, server.traffic_top_k, 0, INTEGER_CONFIG, NULL, trafficTopKCallback),
-    createIntConfig("traffic-window-seconds", NULL, MODIFIABLE_CONFIG, 1, 300, server.traffic_window_seconds, 1, INTEGER_CONFIG, NULL, trafficWindowCallback),
+    createIntConfig("traffic-window-seconds", NULL, MODIFIABLE_CONFIG, 1, 300, server.traffic_window_seconds, 10, INTEGER_CONFIG, NULL, trafficWindowCallback),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),

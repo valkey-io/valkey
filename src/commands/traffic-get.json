@@ -35,6 +35,14 @@
                     "bytes_per_second": {
                         "description": "Estimated bytes per second moved by this key over the last completed window (sampled; reads and whole-value writes)",
                         "type": "integer"
+                    },
+                    "read_bytes_per_second": {
+                        "description": "Estimated egress bytes per second (values read out) over the last completed window",
+                        "type": "integer"
+                    },
+                    "write_bytes_per_second": {
+                        "description": "Estimated ingress bytes per second (values written) over the last completed window; exact for the sampled observations behind this entry",
+                        "type": "integer"
                     }
                 }
             }

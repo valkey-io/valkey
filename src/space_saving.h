@@ -70,19 +70,29 @@ void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us);
  * free of any clock read. */
 void recordSpaceSavingManagerSample(spaceSavingManager *m, sds key, int dbid);
 /* Weighted variant: one observation carrying `weight` (e.g. estimated bytes a
- * key access moved). Same semantics otherwise. */
-void recordSpaceSavingManagerSampleWeighted(spaceSavingManager *m, sds key, int dbid, uint64_t weight);
+ * key access moved), of which `weight2` is a caller-chosen component tracked in
+ * a secondary accumulator (e.g. the write-bytes share of an access; pass 0 for
+ * none). The secondary is exact but partial: it counts only observations
+ * recorded into the slot under its current identity, and an eviction restarts
+ * it. Same semantics otherwise. */
+void recordSpaceSavingManagerSampleWeighted(spaceSavingManager *m, sds key, int dbid, uint64_t weight, uint64_t weight2);
 /* Number of items in the last completed (frozen) window. */
 int spaceSavingManagerCount(spaceSavingManager *m);
 /* Read the i-th item of the frozen window (0 <= i < count). Out-params may be
  * NULL; `*key` remains owned by the module and is valid until the next mutating
  * call. Slots are unordered. */
 void spaceSavingManagerAt(spaceSavingManager *m, int i, sds *key, int *dbid, uint64_t *count, uint64_t *error);
+/* Extended read of the i-th frozen item that also returns the secondary
+ * accumulator (0 when never recorded); out-params may be NULL. */
+void spaceSavingManagerAt2(spaceSavingManager *m, int i, sds *key, int *dbid, uint64_t *count, uint64_t *error, uint64_t *count2);
 /* Remove every item for which `pred(key, dbid, arg)` is non-zero, from BOTH the
  * live and frozen windows. */
 void spaceSavingManagerRemoveIf(spaceSavingManager *m, int (*pred)(sds key, int dbid, void *arg), void *arg);
 /* Total weight recorded in the last completed (frozen) window (N). */
 uint64_t spaceSavingManagerFrozenTotal(spaceSavingManager *m);
+/* Total weight recorded in the in-progress (live) window so far — partial by
+ * definition; a real-time peek before the freeze. */
+uint64_t spaceSavingManagerLiveTotal(spaceSavingManager *m);
 
 /* Record the sampling percentage that the current (live) window's counts are
  * being gathered under. It travels with the window when it is frozen, so a

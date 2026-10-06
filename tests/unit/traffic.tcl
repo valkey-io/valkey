@@ -48,6 +48,14 @@ start_server {tags {"traffic external:skip"}} {
         return $_trhk
     }
 
+    test "Default traffic window is 10 seconds" {
+        # Assert before anything in this file touches the config: the default
+        # must be human-friendly (a fresh report every ~11s), while monitoring
+        # users align it to their scrape interval.
+        assert_equal [lindex [r config get traffic-window-seconds] 1] "10"
+        assert_equal [lindex [r config get traffic-top-k] 1] "0"
+    }
+
     test "Enable traffic tracking" {
         tr_enable
         assert_equal [lindex [r config get traffic-top-k] 1] "16"
@@ -106,7 +114,7 @@ start_server {tags {"traffic external:skip"}} {
 
         set traffic [tr_wait_traffic]
         set first [lindex $traffic 0]
-        assert_equal [lsort [dict keys $first]] {bytes_per_second db key}
+        assert_equal [lsort [dict keys $first]] {bytes_per_second db key read_bytes_per_second write_bytes_per_second}
 
         # Descending by bytes_per_second.
         set prev -1
@@ -147,6 +155,53 @@ start_server {tags {"traffic external:skip"}} {
         # reads must have landed in the captured window (loose bound against
         # window splits).
         assert {[dict get $e bytes_per_second] > 20 * 100000}
+    }
+
+    test "Entries split bytes into read and write directions" {
+        r traffic reset
+        set big [tr_value 100000]
+        r set tr_dir_read $big
+        r set tr_dir_write a
+        # Drop the setup charges; keep only the deliberate load below.
+        r traffic reset
+        for {set i 0} {$i < 50} {incr i} {
+            r get tr_dir_read
+            r set tr_dir_write $big
+        }
+
+        set traffic [tr_wait_traffic]
+        set rd [tr_entry $traffic tr_dir_read]
+        set wr [tr_entry $traffic tr_dir_write]
+        assert {$rd ne "" && $wr ne ""}
+
+        # Read-heavy: all egress, no writes since the reset.
+        assert {[dict get $rd write_bytes_per_second] == 0}
+        assert {[dict get $rd read_bytes_per_second] > 10 * 100000}
+
+        # Write-heavy: ingress dominates; write lookups charge no egress.
+        assert {[dict get $wr write_bytes_per_second] > 10 * 100000}
+        assert {[dict get $wr write_bytes_per_second] > [dict get $wr read_bytes_per_second] * 10}
+
+        # The split adds up to the combined figure.
+        foreach e $traffic {
+            assert_equal [dict get $e bytes_per_second] \
+                [expr {[dict get $e read_bytes_per_second] + [dict get $e write_bytes_per_second]}]
+        }
+    }
+
+    test "INFO traffic exposes the live window" {
+        r traffic reset
+        r set tr_live [tr_value 100000]
+        r traffic reset
+        # Charge the live window immediately before reading it; retry in case a
+        # rotation lands between the access and the read.
+        set live 0
+        for {set i 0} {$i < 20} {incr i} {
+            r get tr_live
+            if {[regexp {traffic_live_window_bytes:(\d+)} [r info traffic] - live] && $live > 0} break
+            after 50
+        }
+        assert {$live > 0}
     }
 
     test "A fresh key's write is captured without any read" {

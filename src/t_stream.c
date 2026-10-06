@@ -686,7 +686,7 @@ typedef struct {
     /* TRIM_STRATEGY_MINID options */
     streamID minid; /* Trim by ID (No stream entries with ID < 'minid' will remain) */
     /* TRIM_STRATEGY_MAXBYTES options */
-    long long maxbytes; /* Minimum listpack bytes retained when nodes are removed. */
+    long long maxbytes; /* The total listpack size in bytes to retain. */
 } streamAddTrimArgs;
 
 #define TRIM_STRATEGY_NONE 0
@@ -913,6 +913,28 @@ int64_t streamTrimByID(stream *s, streamID minid, int approx) {
     return streamTrim(s, &args);
 }
 
+/* Parse the optional ~ or = after the trimming strategy token at argv[i].
+ * Returns the index of the threshold argument, or -1 after replying if a
+ * strategy was already given. */
+static int streamParseTrimStrategyOrReply(client *c, streamAddTrimArgs *args, int strategy, int i) {
+    if (args->trim_strategy != TRIM_STRATEGY_NONE) {
+        addReplyError(c, "syntax error, MAXLEN, MINID and MAXBYTES options at the same time are not compatible");
+        return -1;
+    }
+    int moreargs = (c->argc - 1) - i;
+    args->approx_trim = 0;
+    char *next = objectGetVal(c->argv[i + 1]);
+    if (moreargs >= 2 && next[0] == '~' && next[1] == '\0') {
+        args->approx_trim = 1;
+        i++;
+    } else if (moreargs >= 2 && next[0] == '=' && next[1] == '\0') {
+        i++;
+    }
+    args->trim_strategy = strategy;
+    args->trim_strategy_arg_idx = i + 1;
+    return i + 1;
+}
+
 /* Parse the arguments of XADD/XTRIM.
  *
  * See streamAddTrimArgs for more details about the arguments handled.
@@ -935,70 +957,24 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
              * creation. */
             break;
         } else if (!strcasecmp(opt, "maxlen") && moreargs) {
-            if (args->trim_strategy != TRIM_STRATEGY_NONE) {
-                addReplyError(c, "syntax error, MAXLEN, MINID and MAXBYTES options at the same time are not compatible");
-                return -1;
-            }
-            args->approx_trim = 0;
-            char *next = objectGetVal(c->argv[i + 1]);
-            /* Check for the form MAXLEN ~ <count>. */
-            if (moreargs >= 2 && next[0] == '~' && next[1] == '\0') {
-                args->approx_trim = 1;
-                i++;
-            } else if (moreargs >= 2 && next[0] == '=' && next[1] == '\0') {
-                i++;
-            }
-            if (getLongLongFromObjectOrReply(c, c->argv[i + 1], &args->maxlen, NULL) != C_OK) return -1;
+            if ((i = streamParseTrimStrategyOrReply(c, args, TRIM_STRATEGY_MAXLEN, i)) < 0) return -1;
+            if (getLongLongFromObjectOrReply(c, c->argv[i], &args->maxlen, NULL) != C_OK) return -1;
 
             if (args->maxlen < 0) {
                 addReplyError(c, "The MAXLEN argument must be >= 0.");
                 return -1;
             }
-            i++;
-            args->trim_strategy = TRIM_STRATEGY_MAXLEN;
-            args->trim_strategy_arg_idx = i;
         } else if (!strcasecmp(opt, "minid") && moreargs) {
-            if (args->trim_strategy != TRIM_STRATEGY_NONE) {
-                addReplyError(c, "syntax error, MAXLEN, MINID and MAXBYTES options at the same time are not compatible");
-                return -1;
-            }
-            args->approx_trim = 0;
-            char *next = objectGetVal(c->argv[i + 1]);
-            /* Check for the form MINID ~ <id> */
-            if (moreargs >= 2 && next[0] == '~' && next[1] == '\0') {
-                args->approx_trim = 1;
-                i++;
-            } else if (moreargs >= 2 && next[0] == '=' && next[1] == '\0') {
-                i++;
-            }
-
-            if (streamParseStrictIDOrReply(c, c->argv[i + 1], &args->minid, 0, NULL) != C_OK) return -1;
-
-            i++;
-            args->trim_strategy = TRIM_STRATEGY_MINID;
-            args->trim_strategy_arg_idx = i;
+            if ((i = streamParseTrimStrategyOrReply(c, args, TRIM_STRATEGY_MINID, i)) < 0) return -1;
+            if (streamParseStrictIDOrReply(c, c->argv[i], &args->minid, 0, NULL) != C_OK) return -1;
         } else if (!strcasecmp(opt, "maxbytes") && moreargs) {
-            if (args->trim_strategy != TRIM_STRATEGY_NONE) {
-                addReplyError(c, "syntax error, MAXLEN, MINID and MAXBYTES options at the same time are not compatible");
-                return -1;
-            }
-            args->approx_trim = 0;
-            char *next = objectGetVal(c->argv[i + 1]);
-            if (moreargs >= 2 && next[0] == '~' && next[1] == '\0') {
-                args->approx_trim = 1;
-                i++;
-            } else if (moreargs >= 2 && next[0] == '=' && next[1] == '\0') {
-                i++;
-            }
-            if (getLongLongFromObjectOrReply(c, c->argv[i + 1], &args->maxbytes, NULL) != C_OK) return -1;
+            if ((i = streamParseTrimStrategyOrReply(c, args, TRIM_STRATEGY_MAXBYTES, i)) < 0) return -1;
+            if (getLongLongFromObjectOrReply(c, c->argv[i], &args->maxbytes, NULL) != C_OK) return -1;
 
             if (args->maxbytes < 0) {
                 addReplyError(c, "The MAXBYTES argument must be >= 0.");
                 return -1;
             }
-            i++;
-            args->trim_strategy = TRIM_STRATEGY_MAXBYTES;
-            args->trim_strategy_arg_idx = i;
         } else if (!strcasecmp(opt, "limit") && moreargs) {
             /* Note about LIMIT: If it was not provided by the caller we set
              * it to 100*server.stream_node_max_entries, and that's to prevent the
@@ -2098,9 +2074,9 @@ void streamRewriteTrimArgument(client *c, stream *s, int trim_strategy, int idx)
     decrRefCount(arg);
 }
 
-/* Listpack bytes depend on node layout, which a replica or an AOF reload may
- * not share, so MAXBYTES is propagated as an exact MAXLEN with the resulting
- * length. */
+/* Approximate and MAXBYTES trims depend on node layout, which a replica or an
+ * AOF reload may not share, so they are propagated as an exact MAXLEN or MINID
+ * with the resulting length or first ID. */
 static void streamRewriteApproxTrim(client *c, stream *s, streamAddTrimArgs *args) {
     int idx = args->trim_strategy_arg_idx;
     if (args->trim_strategy == TRIM_STRATEGY_MAXBYTES) {

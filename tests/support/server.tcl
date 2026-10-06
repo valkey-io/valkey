@@ -449,7 +449,7 @@ proc run_external_server_test {code overrides} {
         dict set saved_config $param [lindex [r config get $param] 1]
         r config set $param $val
 
-        # If we enable appendonly, wait for for rewrite to complete. This is
+        # If we enable appendonly, wait for rewrite to complete. This is
         # required for tests that begin with a bg* command which will fail if
         # the rewriteaof operation is not completed at this point.
         if {$param == "appendonly" && $val == "yes"} {
@@ -710,6 +710,8 @@ proc start_server {options {code undefined}} {
             set err {}
             append err [exec cat $stdout] "\n" [exec cat $stderr]
             start_server_error $executable $config_file $err
+            set ::singledb $old_singledb
+            set ::tags [lrange $::tags 0 end-[llength $tags]]
             return
         }
         set server_started 1

@@ -45,7 +45,7 @@ rax *TrackingTable = NULL;
 rax *PrefixTable = NULL;
 uint64_t TrackingTableTotalItems = 0; /* Total number of IDs stored across
                                          the whole tracking table. This gives
-                                         an hint about the total memory we
+                                         a hint about the total memory we
                                          are using server side for CSC. */
 robj *TrackingChannelName;
 
@@ -61,7 +61,7 @@ typedef struct bcastState {
 /* Remove the tracking state from the client 'c'. Note that there is not much
  * to do for us here, if not to decrement the counter of the clients in
  * tracking mode, because we just store the ID of the client in the tracking
- * table, so we'll remove the ID reference in a lazy way. Otherwise when a
+ * table, so we'll remove the ID reference in a lazy way. Otherwise, when a
  * client with many entries in the table is removed, it would cost a lot of
  * time to do the cleanup. */
 void disableTracking(client *c) {
@@ -423,6 +423,14 @@ void trackingInvalidateKey(client *c, robj *keyobj, int bcast) {
     raxRemove(TrackingTable, (unsigned char *)key, keylen, NULL);
 }
 
+/* Whether any tracking (client-side-caching) key invalidation is pending
+ * flush. A tiny accessor over server.tracking_pending_keys rather than
+ * having callers reach into the list themselves, so this file stays the
+ * sole owner of how pending invalidations are tracked. */
+bool trackingHasPendingKeyInvalidations(void) {
+    return listLength(server.tracking_pending_keys) > 0;
+}
+
 void trackingHandlePendingKeyInvalidations(void) {
     if (!listLength(server.tracking_pending_keys)) return;
 
@@ -497,6 +505,10 @@ void trackingInvalidateKeysOnFlush(int async) {
     }
 }
 
+/* Maximum time in microseconds a single call to trackingLimitUsedSlots()
+ * spends invalidating keys. */
+#define TRACKING_EVICTION_TIME_LIMIT_US 500
+
 /* Tracking forces the server to remember information about which client may have
  * certain keys. In workloads where there are a lot of reads, but keys are
  * hardly modified, the amount of information we have to remember server side
@@ -521,6 +533,8 @@ void trackingLimitUsedSlots(void) {
      * we do here is proportional to the number of times we entered this
      * function and found that we are still over the limit. */
     int effort = 100 * (timeout_counter + 1);
+    monotime timer;
+    elapsedStart(&timer);
 
     /* We just remove one key after another by using a random walk. */
     raxIterator ri;
@@ -538,6 +552,10 @@ void trackingLimitUsedSlots(void) {
             raxStop(&ri);
             return; /* Return ASAP: we are again under the limit. */
         }
+        /* A key can be tracked by any number of clients, so the number of
+         * keys does not bound the work. Stop on time as well, the next calls
+         * continue the eviction. */
+        if (elapsedUs(timer) > TRACKING_EVICTION_TIME_LIMIT_US) break;
     }
 
     /* If we reach this point, we were not able to go under the configured

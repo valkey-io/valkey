@@ -27,11 +27,17 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "entry.h"
+#include "expire.h"
+#include "listpack.h"
+#include "sds.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
+#include "util.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -601,7 +607,7 @@ int persistAofManifest(aofManifest *am) {
     return ret;
 }
 
-/* Called in `loadAppendOnlyFiles` when we upgrade from a old version of the server.
+/* Called in `loadAppendOnlyFiles` when we upgrade from an old version of the server.
  *
  * 1) Create AOF directory use 'server.aof_dirname' as the name.
  * 2) Use 'server.aof_filename' to construct a BASE type aofInfo and add it to
@@ -964,7 +970,7 @@ int startAppendOnly(void) {
     serverAssert(server.aof_state == AOF_OFF);
 
     server.aof_state = AOF_WAIT_REWRITE;
-    if (hasActiveChildProcess() && server.child_type != CHILD_TYPE_AOF) {
+    if (hasActiveSaveOrChild() && server.child_type != CHILD_TYPE_AOF) {
         server.aof_rewrite_scheduled = 1;
         serverLog(LL_NOTICE, "AOF was enabled but there is already another background operation. An AOF background was "
                              "scheduled to start when possible.");
@@ -1227,7 +1233,7 @@ void flushAppendOnlyFile(int force) {
                  * than two seconds this is still ok. Postpone again. */
                 return;
             }
-            /* Otherwise fall through, and go write since we can't wait
+            /* Otherwise, fall through, and go write since we can't wait
              * over two seconds. */
             server.aof_delayed_fsync++;
             serverLog(LL_NOTICE, "Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer "
@@ -1492,6 +1498,10 @@ struct client *createAOFClient(void) {
 
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 
+    /* The AOF client is not subject to ACL checks because all commands present
+     * in the AOF file must be replayed. */
+    c->user = NULL;
+
     /*
      * The AOF client should never be blocked (unlike primary
      * replication connection).
@@ -1560,11 +1570,12 @@ int loadSingleAppendOnlyFile(char *filename) {
     fakeClient = createAOFClient();
     server.current_client = server.executing_client = fakeClient;
 
-    /* Check if the AOF file is in RDB format (it may be RDB encoded base AOF
-     * or old style RDB-preamble AOF). In that case we need to load the RDB file
-     * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
-    char sig[6]; /* "REDIS" or "VALKEY" */
-    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS0", 6) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
+    /* Check if the AOF starts with a plain or streaming-compressed RDB (it may
+     * be an RDB-encoded base AOF or old-style RDB-preamble AOF). In that case,
+     * load the RDB and then continue with any old-style AOF tail. */
+    char sig[6]; /* "REDIS0", "VALKEY", or the three-byte "VCS" prefix. */
+    size_t siglen = fread(sig, 1, sizeof(sig), fp);
+    if (!rdbHasFileSignature(sig, siglen)) {
         /* Not in RDB format, seek back at 0 offset. */
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {
@@ -1578,7 +1589,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != RDB_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL, aof_filepath) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1588,8 +1599,11 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
-            loadingAbsProgress(ftello(fp));
-            last_progress_report_size = ftello(fp);
+            /* rdbLoadRio() leaves fp at the first byte after the RDB, where an
+             * old-style AOF tail starts. */
+            valid_up_to = ftello(fp);
+            loadingAbsProgress(valid_up_to);
+            last_progress_report_size = valid_up_to;
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
     }
@@ -1703,11 +1717,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
-    if (fakeClient->flag.multi) {
-        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
-        valid_up_to = valid_before_multi;
-        goto uxeof;
-    }
+    if (fakeClient->flag.multi) goto uxeof;
 
 loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). */
     loadingIncrProgress(ftello(fp) - last_progress_report_size);
@@ -1722,6 +1732,10 @@ readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
     }
 
 uxeof: /* Unexpected AOF end of file. */
+    if (fakeClient->flag.multi) {
+        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
+        valid_up_to = valid_before_multi;
+    }
     if (server.aof_load_truncated) {
         serverLog(LL_WARNING, "!!! Warning: short read while loading the AOF file %s!!!", filename);
         serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %llu !!!", filename,
@@ -2020,13 +2034,13 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-    } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
+            OrderedIndexItem *node = next;
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
@@ -2036,8 +2050,10 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            sds ele = zslGetNodeElement(node);
-            if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement(node, &ele, &ele_len);
+            if (!rioWriteBulkDouble(r, orderedIndexItemGetScore(node)) || !rioWriteBulkString(r, ele, ele_len)) {
                 hashtableCleanupIterator(&iter);
                 return 0;
             }
@@ -2082,37 +2098,44 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
-    long long count = 0, volatile_items = 0, non_volatile_items;
+    long long count = 0, non_volatile_items;
+    sds field, value;
+
     /* First serialize volatile items if exist */
     if (hashTypeHasVolatileFields(o)) {
         hashTypeInitVolatileIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
-            long long expiry = entryGetExpiry(hi.next);
-            sds field = entryGetField(hi.next);
-            size_t value_len;
-            char *value = entryGetValue(hi.next, &value_len);
-            if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
-            if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
-            if (rioWriteBulkObject(r, key) == 0) return 0;
-            if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
-            if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
-            if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
-            if (rioWriteBulkLongLong(r, 1) == 0) return 0;
-            if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-            if (rioWriteBulkString(r, value, value_len) == 0) return 0;
-            volatile_items++;
+            long long expiry = hashTypeCurrentExpiry(o, &hi);
+            field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+            value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+            if (expiry > commandTimeSnapshot()) {
+                if (rioWriteBulkCount(r, '*', 8) == 0) goto werr;
+                if (rioWriteBulkString(r, "HSETEX", 6) == 0) goto werr;
+                if (rioWriteBulkObject(r, key) == 0) goto werr;
+                if (rioWriteBulkString(r, "PXAT", 4) == 0) goto werr;
+                if (rioWriteBulkLongLong(r, expiry) == 0) goto werr;
+                if (rioWriteBulkString(r, "FIELDS", 6) == 0) goto werr;
+                if (rioWriteBulkLongLong(r, 1) == 0) goto werr;
+                if (rioWriteBulkString(r, field, sdslen(field)) == 0) goto werr;
+                if (rioWriteBulkString(r, value, sdslen(value)) == 0) goto werr;
+            }
+            sdsfree(field);
+            sdsfree(value);
         }
         hashTypeResetIterator(&hi);
     }
-    non_volatile_items = hashTypeLength(o) - volatile_items;
-    hashTypeInitIterator(o, &hi);
-    while (hashTypeNext(&hi) != C_ERR) {
-        if (volatile_items > 0 && entryHasExpiry(hi.next))
-            continue;
 
+    /* Write the persistent (no-TTL) fields as HMSET batches. The batch
+     * header needs the count of fields the persistent iterator will emit:
+     * total fields minus ALL volatile ones (expired-unreaped included,
+     * since the iterator skips those too). */
+    non_volatile_items = hashTypeLength(o) - hashTypeVolatileCount(o);
+
+    hashTypeInitPersistentIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
+        /* If new vector write the HMSET command first */
         if (count == 0) {
             int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
-
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
                 !rioWriteBulkObject(r, key)) {
                 hashTypeResetIterator(&hi);
@@ -2120,6 +2143,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             }
         }
 
+        /* Iterate till we reach the batch size */
         if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
             hashTypeResetIterator(&hi);
             return 0;
@@ -2127,9 +2151,14 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
         non_volatile_items--;
     }
-
     hashTypeResetIterator(&hi);
     return 1;
+
+werr:
+    sdsfree(field);
+    sdsfree(value);
+    hashTypeResetIterator(&hi);
+    return 0;
 }
 
 /* Helper for rewriteStreamObject() that generates a bulk string into the
@@ -2382,6 +2411,8 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
         if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_STREAM) {
         if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        if (rewritePathHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_MODULE) {
         if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {
@@ -2529,7 +2560,9 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
+        if (rdbSaveRio(compression_algo, REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
+                       RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }
@@ -2590,7 +2623,7 @@ werr:
 int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveSaveOrChild()) return C_ERR;
 
     if (dirCreateIfMissing(server.aof_dirname) == -1) {
         serverLog(LL_WARNING, "Can't open or create append-only dir %s: %s", server.aof_dirname, strerror(errno));
@@ -2660,7 +2693,7 @@ int rewriteAppendOnlyFileBackground(void) {
 void bgrewriteaofCommand(client *c) {
     if (server.child_type == CHILD_TYPE_AOF) {
         addReplyError(c, "Background append only file rewriting already in progress");
-    } else if (hasActiveChildProcess() || server.in_exec) {
+    } else if (hasActiveSaveOrChild() || server.in_exec) {
         server.aof_rewrite_scheduled = 1;
         /* When manually triggering AOFRW we reset the count
          * so that it can be executed immediately. */

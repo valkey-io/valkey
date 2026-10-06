@@ -70,13 +70,16 @@ static void monotonicInit_x86linux(void) {
         clock_gettime(CLOCK_MONOTONIC, &end);
 
         uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
+        /* Discard if TSC went backwards (core migration across unsynced TSCs). */
+        if (tsc_end <= tsc_start || elapsed_us == 0) continue;
         uint64_t tsc_elapsed = tsc_end - tsc_start;
         double sample_ticks_per_us = (double)tsc_elapsed / (double)elapsed_us;
         uint64_t sample_mult = (uint64_t)((double)(1ULL << MONO_FPMULT_SHIFT) / sample_ticks_per_us);
 
         /* Use the minimum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy
-         * because mono_ticks_speed represents an inverse relationship of ticks_per_us. */
-        if (sample_mult < mono_ticks_speed) {
+         * because mono_ticks_speed represents an inverse relationship of ticks_per_us.
+         * Skip a zero multiplier: it would always win the minimum and freeze the clock. */
+        if (sample_mult != 0 && sample_mult < mono_ticks_speed) {
             mono_ticks_speed = sample_mult;
         }
     }
@@ -98,7 +101,7 @@ static void monotonicInit_x86linux(void) {
     }
     regfree(&constTscRegex);
 
-    if (mono_ticks_speed == UINT64_MAX) {
+    if (mono_ticks_speed == UINT64_MAX || mono_ticks_speed == 0) {
         fprintf(stderr, "monotonic: x86 linux, unable to determine clock rate");
         return;
     }

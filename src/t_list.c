@@ -388,18 +388,6 @@ int listTypeReplaceAtIndex(robj *o, int index, robj *value) {
     return replaced;
 }
 
-/* Compare the given object with the entry at the current position. */
-int listTypeEqual(listTypeEntry *entry, robj *o) {
-    serverAssertWithInfo(NULL, o, sdsEncodedObject(o));
-    if (entry->li->encoding == OBJ_ENCODING_QUICKLIST) {
-        return quicklistCompare(&entry->entry, objectGetVal(o), sdslen(objectGetVal(o)));
-    } else if (entry->li->encoding == OBJ_ENCODING_LISTPACK) {
-        return lpCompare(entry->lpe, objectGetVal(o), sdslen(objectGetVal(o)));
-    } else {
-        serverPanic("Unknown list encoding");
-    }
-}
-
 /* A list scan compares every entry against the same value. */
 typedef struct {
     sds value;
@@ -423,6 +411,7 @@ static inline int listTypeEqualCached(listTypeEntry *entry, listTypeMatchCache *
         lval = entry->entry.longval;
     } else {
         unsigned int slen;
+        /* listTypeNext never returns the listpack EOF marker as an entry. */
         unsigned char *vstr = lpGetValue(entry->lpe, &slen, &lval);
         if (vstr) return slen == cache->len && memcmp(vstr, cache->value, cache->len) == 0;
     }

@@ -154,15 +154,27 @@ void trafficRecordSetKey(robj *key, int dbid, robj *val) {
  * ==========================================================================*/
 
 /* Compute (a * b) / c rounded to nearest, without overflowing the intermediate
- * product. Uses a 128-bit intermediate where the compiler has one. Mirrors
+ * product. Uses a 128-bit intermediate where the compiler has one; the 64-bit
+ * fallback is divide-first (see the comment on it below). Mirrors
  * hotkeysMulDivRound() in hotkeys.c; see the independence note on
- * trafficShouldRecord(). */
-static uint64_t trafficMulDivRound(uint64_t a, uint64_t b, uint64_t c) {
+ * trafficShouldRecord(). Exposed for unit tests. */
+uint64_t trafficMulDivRound(uint64_t a, uint64_t b, uint64_t c) {
+    if (c == 0) return 0;
 #ifdef __SIZEOF_INT128__
     __uint128_t num = (__uint128_t)a * b;
     return (uint64_t)((num + c / 2) / c);
 #else
-    return (a * b + c / 2) / c;
+    /* Overflow-safe fallback for compilers without a 128-bit type: divide
+     * before multiplying. (a*b)/c == (a/c)*b + ((a%c)*b)/c, where (a/c)*b is
+     * bounded by the (fitted) result and (a%c)*b < c*b. Unlike the hot-key
+     * count path, byte weights reach a wrap-around with ordinary values: 172
+     * sampled accesses to a 512 MiB value inside a one-second window already
+     * put twice_midpoint * 1e8 near 2^64. c*b stays below 2^64 because every
+     * caller uses b == 1e8 and c <= 2 * 100 * 300e6 (max sampling % x max
+     * window), so c * b <= 6e18. */
+    uint64_t q = a / c;
+    uint64_t r = a % c;
+    return q * b + (r * b + c / 2) / c;
 #endif
 }
 

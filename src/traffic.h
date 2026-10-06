@@ -36,6 +36,10 @@ void trafficPurgeAll(void);
 void trafficPurgeSlot(int slot);
 void trafficPurgeDb(int dbid);
 
+/* (a * b) / c rounded to nearest with an overflow-safe 64-bit fallback.
+ * Exposed for unit tests; see traffic.c for the bounds argument. */
+uint64_t trafficMulDivRound(uint64_t a, uint64_t b, uint64_t c);
+
 /* Charge a sampled read of `key` in database `dbid` whose lookup returned `val`
  * (NULL on a miss — nothing was read, so no bytes are charged). `lookup_flags`
  * are the LOOKUP_* flags of the lookup; write lookups are charged by

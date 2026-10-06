@@ -603,7 +603,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "modify new keys during forkless bgsave" {
         
         # Populate database with all data types
-        createComplexDatasetForVerification r 20
+        createComplexDatasetForVerification r 200
         set original_keys [r dbsize]
         
         # Start forkless save with very slow save (high delay per key)
@@ -654,7 +654,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         assert_equal [r dbsize] $original_keys
         
         # Verify all original data types preserved
-        for {set i 0} {$i < 20} {incr i} {
+        for {set i 0} {$i < 200} {incr i} {
             assert_equal [r get before_$i] "value_before_$i"
             assert_equal [r get int_$i] [expr {42 + $i}]
             assert_equal [r llen lst_$i] 4

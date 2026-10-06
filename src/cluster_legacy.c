@@ -7635,8 +7635,9 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
 /* Generate the slot topology for all nodes and store the slot range information
  * in the slot_info_pairs array on the node. This is used to improve the efficiency
  * of clusterGenNodesDescription() because it removes looping of the slot space
- * for generating the slot info for each node individually. */
-void clusterGenNodesSlotsInfo(int filter) {
+ * for generating the slot info for each node individually. If only_node is
+ * non-NULL, generate ranges only for that node. */
+void clusterGenNodesSlotsInfo(int filter, clusterNode *only_node) {
     clusterNode *n = NULL;
     int start = -1;
 
@@ -7652,7 +7653,7 @@ void clusterGenNodesSlotsInfo(int filter) {
         /* Generate slots info when occur different node with start
          * or end of slot. */
         if (i == CLUSTER_SLOTS || n != server.cluster->slots[i]) {
-            if (!(n->flags & filter)) {
+            if (!(n->flags & filter) && (!only_node || n == only_node)) {
                 if (!n->slot_info_pairs) {
                     n->slot_info_pairs = zmalloc(2 * n->numslots * sizeof(uint16_t));
                 }
@@ -7694,7 +7695,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
     dictEntry *de;
 
     /* Generate all nodes slots info firstly. */
-    clusterGenNodesSlotsInfo(filter);
+    clusterGenNodesSlotsInfo(filter, NULL);
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
@@ -7922,56 +7923,81 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
-/* Add to the output buffer of the given client,
- * an array of slot (start, end) pair owned by the shard,
- * an array of the primary and set of replica(s) along with information about each node,
- * and shard id.
- */
+/* Shared by SHARDS and MYSHARD so both commands use the same shard map format.
+ * The caller generates slot ranges before calling this function, which releases
+ * the temporary slot data as each node is emitted. The member list is borrowed. */
+static void addShardReply(client *c, list *nodes, const char *shard_id) {
+    serverAssert(listLength(nodes) > 0);
+    addReplyMapLen(c, 3);
+    addReplyBulkCString(c, "slots");
+
+    /* Slot ranges belong to the slot-owning member, which may differ from the
+     * node serving this request when the client connects to a replica. Keep
+     * ranges from failed members until the slot table assigns them elsewhere. */
+    clusterNode *node = NULL;
+    listIter li;
+    listRewind(nodes, &li);
+    for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+        node = listNodeValue(ln);
+        if (node->slot_info_pairs) {
+            break;
+        }
+    }
+
+    if (node && node->slot_info_pairs != NULL) {
+        /* Each range is an inclusive start/end pair in a flat array. */
+        serverAssert((node->slot_info_pairs_count % 2) == 0);
+        addReplyArrayLen(c, node->slot_info_pairs_count);
+        for (int i = 0; i < node->slot_info_pairs_count; i++) {
+            addReplyLongLong(c, (unsigned long)node->slot_info_pairs[i]);
+        }
+    } else {
+        /* A shard without assigned slots still reports its members and ID. */
+        addReplyArrayLen(c, 0);
+    }
+
+    addReplyBulkCString(c, "nodes");
+    addReplyArrayLen(c, listLength(nodes));
+    listRewind(nodes, &li);
+    /* Include every member regardless of role or health. Clear temporary slot
+     * data for all members, even though only one member supplied the ranges. */
+    for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+        clusterNode *n = listNodeValue(ln);
+        addNodeDetailsToShardReply(c, n);
+        clusterFreeNodesSlotsInfo(n);
+    }
+    addReplyBulkCString(c, "id");
+    addReplyBulkCBuffer(c, shard_id, CLUSTER_NAMELEN);
+}
+
 void clusterCommandShards(client *c) {
     addReplyArrayLen(c, dictSize(server.cluster->shards));
-    /* This call will add slot_info_pairs to all nodes */
-    clusterGenNodesSlotsInfo(0);
+    clusterGenNodesSlotsInfo(0, NULL);
     dictIterator *di = dictGetSafeIterator(server.cluster->shards);
     for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
-        list *nodes = dictGetVal(de);
-        serverAssert(listLength(nodes) > 0);
-        addReplyMapLen(c, 3);
-        addReplyBulkCString(c, "slots");
-
-        /* Find a node which has the slot information served by this shard. */
-        clusterNode *n = NULL;
-        listIter li;
-        listRewind(nodes, &li);
-        for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
-            n = listNodeValue(ln);
-            if (n->slot_info_pairs) {
-                break;
-            }
-        }
-
-        if (n && n->slot_info_pairs != NULL) {
-            serverAssert((n->slot_info_pairs_count % 2) == 0);
-            addReplyArrayLen(c, n->slot_info_pairs_count);
-            for (int i = 0; i < n->slot_info_pairs_count; i++) {
-                addReplyLongLong(c, (unsigned long)n->slot_info_pairs[i]);
-            }
-        } else {
-            /* If no slot info pair is provided, the node owns no slots */
-            addReplyArrayLen(c, 0);
-        }
-
-        addReplyBulkCString(c, "nodes");
-        addReplyArrayLen(c, listLength(nodes));
-        listRewind(nodes, &li);
-        for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
-            clusterNode *n = listNodeValue(ln);
-            addNodeDetailsToShardReply(c, n);
-            clusterFreeNodesSlotsInfo(n);
-        }
-        addReplyBulkCString(c, "id");
-        addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);
+        addShardReply(c, dictGetVal(de), dictGetKey(de));
     }
     dictReleaseIterator(di);
+}
+
+void clusterCommandMyShard(client *c) {
+    /* Use shard membership so primaries and replicas describe the same shard. */
+    list *nodes = clusterGetNodesInMyShard(myself);
+    serverAssert(nodes != NULL);
+
+    /* Match SHARDS by choosing the first member with slots, including a failed
+     * primary. A shard with no slots needs no slot-table scan. */
+    listIter li;
+    listRewind(nodes, &li);
+    for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+        clusterNode *n = listNodeValue(ln);
+        if (n->numslots) {
+            clusterGenNodesSlotsInfo(0, n);
+            break;
+        }
+    }
+    /* MYSHARD returns the shard map directly, without SHARDS' outer array. */
+    addShardReply(c, nodes, myself->shard_id);
 }
 
 sds genClusterInfoString(sds info) {

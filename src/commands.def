@@ -811,6 +811,25 @@ struct COMMAND_ARG CLUSTER_MIGRATESLOTS_Args[] = {
 #define CLUSTER_MYID_Keyspecs NULL
 #endif
 
+/********** CLUSTER MYSHARD ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLUSTER MYSHARD history */
+#define CLUSTER_MYSHARD_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLUSTER MYSHARD tips */
+const char *CLUSTER_MYSHARD_Tips[] = {
+"nondeterministic_output",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLUSTER MYSHARD key specs */
+#define CLUSTER_MYSHARD_Keyspecs NULL
+#endif
+
 /********** CLUSTER MYSHARDID ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -1168,6 +1187,7 @@ struct COMMAND_STRUCT CLUSTER_Subcommands[] = {
 {MAKE_CMD("meet","Forces a node to handshake with another node.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MEET_History,1,CLUSTER_MEET_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CLUSTER_MEET_Keyspecs,0,NULL,3),.args=CLUSTER_MEET_Args},
 {MAKE_CMD("migrateslots","Migrate the given slots from this node to the specified nodes.","O(N) where N is the total number of the slots between all start slot and end slot arguments.","9.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MIGRATESLOTS_History,0,CLUSTER_MIGRATESLOTS_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE|CMD_ALL_DBS,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CLUSTER_MIGRATESLOTS_Keyspecs,0,NULL,1),.args=CLUSTER_MIGRATESLOTS_Args},
 {MAKE_CMD("myid","Returns the ID of a node.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MYID_History,0,CLUSTER_MYID_Tips,0,clusterCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,CLUSTER_MYID_Keyspecs,0,NULL,0)},
+{MAKE_CMD("myshard","Returns the slot ranges and nodes in the current shard.","O(S + N) where S is the number of cluster slots and N is the number of nodes in the current shard","9.2.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MYSHARD_History,0,CLUSTER_MYSHARD_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,CLUSTER_MYSHARD_Keyspecs,0,NULL,0)},
 {MAKE_CMD("myshardid","Returns the shard ID of a node.","O(1)","7.2.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MYSHARDID_History,0,CLUSTER_MYSHARDID_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,CLUSTER_MYSHARDID_Keyspecs,0,NULL,0)},
 {MAKE_CMD("nodes","Returns the cluster configuration for a node.","O(N) where N is the total number of Cluster nodes","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_NODES_History,0,CLUSTER_NODES_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,CLUSTER_NODES_Keyspecs,0,NULL,0)},
 {MAKE_CMD("replicas","Lists the replica nodes of a primary node.","O(N) where N is the number of replicas.","5.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_REPLICAS_History,0,CLUSTER_REPLICAS_Tips,1,clusterCommand,3,CMD_ADMIN|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CLUSTER_REPLICAS_Keyspecs,0,NULL,1),.args=CLUSTER_REPLICAS_Args},

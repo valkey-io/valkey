@@ -141,7 +141,13 @@ WRAP_DIR := wrapped
 VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
 ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
 
-# Symbol interposition does not survive LLVM LTO when -ffat-lto-objects is missing.
+# With plain -flto clang leaves the server objects as pure bitcode, and symbol
+# interposition cannot see through bitcode, neither via the linker's --wrap nor by
+# rewriting symbols, so they are staged back into native code below. GCC keeps a
+# native copy in its objects through -ffat-lto-objects and needs none of this.
+# clang is deliberately not given that flag, as the native copy it emits keeps the
+# sanitizer module constructor in a COMDAT group, which the linker discards when
+# linking without the LTO plugin, leaving its .init_array reference dangling.
 CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 NEEDS_UNWRAP :=
 ifeq (clang,$(CLANG))
@@ -181,10 +187,10 @@ $(WRAP_DIR):
 # are LLVM bitcode and must be turned into real native objects first.
 #
 # We use a compiler for that, not llc. The bitcode carries the version of
-# whichever clang produced it, and an llc of a different version cannot
+# whichever clang produced it, and the llc of a different version cannot
 # read it: it fails with "error: Invalid record" or "Unsupported stack probing
 # method" for every object. The server's -O level is passed: without it the
-# compiler generates -O0 code (llc defaults to -O2), which made LZF in the
+# compiler generates -O0 code (llc defaults to -O2), which makes LZF in the
 # sanitizer builds about twice as slow.
 #
 # llvm-nm is passed explicitly: Homebrew LLVM installs no plain 'nm', so 'nm'

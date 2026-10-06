@@ -7335,4 +7335,3 @@ void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcn
 void testOnlyTrimReplyUnusedTailSpace(client *c) {
     trimReplyUnusedTailSpace(c);
 }
-

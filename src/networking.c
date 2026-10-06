@@ -1558,83 +1558,50 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-/* Emit a complete bulk string ($<len>\r\n<data>\r\n) into the client's static
- * reply buffer with a single append, or return false to let the caller fall back
- * to the generic path.
+/* Payload-size threshold (in bytes) below which addWritePreparedReplyBulkCBuffer()
+ * fuses the bulk header, payload and trailing CRLF into one stack buffer and
+ * appends them with a single _addReplyToBufferOrList() call.
  *
  * The generic path splits every bulk string into three appends (header, data,
- * trailing CRLF), each of which re-walks the buffer-or-list logic. For
- * commands that emit many small bulk strings back to back (HGETALL over a
- * large hash being the motivating case) that bookkeeping dominates the
- * command cost. Fusing the three appends keeps the common case to a single
- * bounds check and two memcpy calls.
- *
- * Only handles the plain (non copy-avoiding) static buffer; everything else
- * falls back to the generic path.
- *
- * Sanitizer suppression: c->buf_usable_size is determined by
- * zmalloc_usable_size() and may exceed the declared size of c->buf. Writing
- * into that extra space confuses the sanitizer and generates a false positive
- * out-of-bounds error (same as _addReplyPayloadToBuffer). */
-VALKEY_NO_SANITIZE("bounds")
-static bool tryAddBulkCBufferFast(client *c, const void *p, size_t len) {
-    /* The generic path drops replies for such clients; don't bypass that. */
-    if (unlikely(c->flag.close_after_reply)) return false;
-    /* Replica clients must never generate replies; let the generic path log
-     * the invalid use and disconnect them. */
-    if (unlikely(getClientType(c) == CLIENT_TYPE_REPLICA)) return false;
-    /* Deferred replies and push messages are routed somewhere other than
-     * c->buf; leave those to the generic path. */
-    if (unlikely(isDeferredReplyEnabled(c) || c->flag.pushing)) return false;
-    /* Once the reply list is in use the static buffer is closed for writes. */
-    if (listLength(c->reply) > 0) return false;
-    if (unlikely(server.debug_client_enforce_reply_list)) return false;
-
-    /* An empty buffer has no encoding decided yet; decide it here exactly as
-     * _addReplyToBuffer() would, so that copy avoidance keeps working when it
-     * is enabled (e.g. by the I/O thread count). Encoded buffers carry
-     * per-chunk payload headers which the fused write below does not produce,
-     * so they take the generic path. */
-    if (c->bufpos == 0) c->flag.buf_encoded = isCopyAvoidPreferred(c, NULL);
-    if (c->flag.buf_encoded) return false;
-
-    /* Build the "$<len>\r\n" header. */
-    char hdr[LONG_STR_SIZE + 3];
-    size_t hdr_len;
-    if (len < OBJ_SHARED_BULKHDR_LEN) {
-        /* Reuse the shared "$<len>\r\n" strings for small lengths. */
-        hdr_len = OBJ_SHARED_HDR_STRLEN(len);
-        memcpy(hdr, objectGetVal(shared.bulkhdr[len]), hdr_len);
-    } else {
-        hdr[0] = '$';
-        int n = ll2string(hdr + 1, sizeof(hdr) - 1, (long long)len);
-        hdr[n + 1] = '\r';
-        hdr[n + 2] = '\n';
-        hdr_len = n + 3;
-    }
-
-    size_t total = hdr_len + len + 2;
-    if (total > c->buf_usable_size - (size_t)c->bufpos) return false;
-
-    c->net_output_bytes_curr_cmd += total;
-    /* Must run before bufpos advances: it snapshots the current buffer
-     * position as the start of this command's reply (see logreqres.c). */
-    reqresSaveClientReplyOffset(c);
-
-    char *dst = c->buf + c->bufpos;
-    memcpy(dst, hdr, hdr_len);
-    memcpy(dst + hdr_len, p, len);
-    dst[hdr_len + len] = '\r';
-    dst[hdr_len + len + 1] = '\n';
-    c->bufpos += total;
-    /* We update the buffer peak after appending the reply to the buffer. */
-    if (c->buf_peak < (size_t)c->bufpos) c->buf_peak = (size_t)c->bufpos;
-    return true;
-}
+ * trailing CRLF), each of which re-walks the buffer-or-list bookkeeping. For
+ * commands that emit many small bulk strings back to back (HGETALL over a large
+ * hash being the motivating case) that per-append overhead dominates the command
+ * cost. Fusing copies the payload once more (into the stack buffer), so the limit
+ * is kept small enough that the extra copy is cheap and the temporary stays on
+ * the stack. The field and value sizes that dominate hash replies fall well under
+ * it; larger payloads take the three-call path below, where a single large memcpy
+ * per append already amortizes the bookkeeping and a stack copy would not pay. */
+#define BULK_REPLY_FUSE_LIMIT 512
 
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
     client *c = (client *)wpc;
-    if (tryAddBulkCBufferFast(c, p, len)) return;
+    if (len <= BULK_REPLY_FUSE_LIMIT) {
+        /* Build "$<len>\r\n" + payload + "\r\n" in one buffer and hand it to
+         * _addReplyToBufferOrList() once. That function still makes every
+         * placement decision (close_after_reply, replica, deferred/push,
+         * reply-list spillover, encoded/copy-avoid buffers, output-byte and
+         * reqres accounting), so the fused path behaves exactly like the three
+         * separate appends below while touching that bookkeeping only once. */
+        char buf[LONG_STR_SIZE + 3 + BULK_REPLY_FUSE_LIMIT + 2];
+        char *dst = buf;
+        if (len < OBJ_SHARED_BULKHDR_LEN) {
+            /* Reuse the shared "$<len>\r\n" strings for small lengths. */
+            size_t hdr_len = OBJ_SHARED_HDR_STRLEN(len);
+            memcpy(dst, objectGetVal(shared.bulkhdr[len]), hdr_len);
+            dst += hdr_len;
+        } else {
+            *dst++ = '$';
+            dst += ll2string(dst, LONG_STR_SIZE, (long long)len);
+            *dst++ = '\r';
+            *dst++ = '\n';
+        }
+        memcpy(dst, p, len);
+        dst += len;
+        *dst++ = '\r';
+        *dst++ = '\n';
+        _addReplyToBufferOrList(c, buf, (size_t)(dst - buf));
+        return;
+    }
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);

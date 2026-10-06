@@ -146,9 +146,7 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 NEEDS_UNWRAP :=
 ifeq (clang,$(CLANG))
 ifneq (,$(findstring -flto,$(SERVER_OPT)))
-ifeq (,$(findstring -ffat-lto-objects,$(SERVER_OPT)))
 NEEDS_UNWRAP := yes
-endif
 endif
 endif
 

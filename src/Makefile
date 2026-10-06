@@ -24,13 +24,6 @@ OPTIMIZATION?=-O3
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
 		OPTIMIZATION+=-flto
-		ifneq ($(uname_S),Darwin)
-			# -ffat-lto-objects needs clang >= 17
-			FAT_LTO_OBJECTS := $(findstring -ffat-lto-objects,$(shell sh -c '$(CC) --help'))
-			ifneq (,$(FAT_LTO_OBJECTS))
-				OPTIMIZATION+=-ffat-lto-objects
-			endif
-		endif
 	else
 		OPTIMIZATION+=-flto=auto -ffat-lto-objects
 	endif

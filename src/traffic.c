@@ -35,10 +35,20 @@
  * values sent out) vs write_bytes_per_second (ingress: values stored) — via the
  * manager's secondary accumulator, because the two directions have different
  * causes and different fixes. Ranking stays by the combined total, so the
- * top-K guarantee is unchanged; the split is exact for the observations a slot
- * recorded but does not carry an error band.
+ * top-K guarantee is unchanged. The split is derived ONLY from observations
+ * recorded under the entry's current identity: the slot's [count - error]
+ * lower bound is exactly the weight observed here (insert, hit and eviction
+ * all preserve that invariant), so eviction-inherited uncertainty is reported
+ * separately as unattributed_bytes_per_second instead of being silently
+ * booked as reads.
  * Sampling compensates globally: the reported rate scales the sampled weight
  * back up by 100/percentage, as hot-key detection does for counts.
+ *
+ * A second manager aggregates the same observations by SOURCE instead of by
+ * key: TRAFFIC GET CLIENTS ranks clients (by name when CLIENT SETNAME was
+ * used, else by ip:port) so bandwidth can be attributed to the connection
+ * producing it. Behind a proxy every client looks like the proxy itself;
+ * source attribution then belongs at the proxy.
  * --------------------------------------------------------------------------*/
 
 /* Element probes per container size estimate — the same bound MEMORY USAGE
@@ -53,15 +63,19 @@ static spaceSavingManager *trafficCreateManager(void) {
     return m;
 }
 
+/* The by-source (clients) manager aggregates the same observations as the
+ * by-key one; identity is the client name when set, else its peer id. */
+
 /* ===========================================================================
  * Invalidation helpers
  * ==========================================================================*/
 
 void trafficPurgeAll(void) {
-    if (!server.traffic_manager) return;
-    /* Reset preserves the live window's sampling percentage, so there is
+    if (!server.traffic_manager && !server.traffic_clients_manager) return;
+    /* Reset preserves the live windows' sampling percentage, so there is
      * nothing to re-establish here. */
-    spaceSavingManagerReset(server.traffic_manager, getMonotonicUs());
+    if (server.traffic_manager) spaceSavingManagerReset(server.traffic_manager, getMonotonicUs());
+    if (server.traffic_clients_manager) spaceSavingManagerReset(server.traffic_clients_manager, getMonotonicUs());
 }
 
 /* Periodic maintenance from databasesCron: close any window that has fully
@@ -70,6 +84,7 @@ void trafficPurgeAll(void) {
  * No-op when tracking is disabled. */
 void trafficCron(void) {
     if (server.traffic_manager) spaceSavingManagerRotate(server.traffic_manager, getMonotonicUs());
+    if (server.traffic_clients_manager) spaceSavingManagerRotate(server.traffic_clients_manager, getMonotonicUs());
 }
 
 /* The cluster hash slot is not stored per entry — it is derived from the key
@@ -121,16 +136,26 @@ static uint64_t trafficEstimateValueBytes(robj *key, robj *val, int dbid) {
     return (uint64_t)objectComputeSize(key, val, TRAFFIC_SIZE_ESTIMATE_SAMPLES, dbid);
 }
 
-/* Charge `weight` estimated bytes of `key` in `dbid`, of which `weight_write`
- * moves in the write (ingress) direction; the rest is read (egress). Weight-0
- * observations (misses, module values) are skipped: they would only churn
- * slots. */
+/* Identity for the by-source view: the client's name when one was set, else
+ * its cached peer id (ip:port). Both are borrowed from the client, which
+ * outlives this call; the manager copies the string only when a slot is
+ * committed to it. */
+static sds trafficClientIdentity(void) {
+    client *cl = server.current_client;
+    if (cl->name) return objectGetVal(cl->name);
+    return (sds)getClientPeerId(cl);
+}
+
 static void trafficRecordSample(robj *key, int dbid, uint64_t weight, uint64_t weight_write) {
-    spaceSavingManager *m = server.traffic_manager;
-    if (!m || !key || weight == 0) return;
-    sds k = objectGetVal(key);
-    if (!k) return;
-    recordSpaceSavingManagerSampleWeighted(m, k, dbid, weight, weight_write);
+    if (weight == 0) return;
+    if (server.traffic_manager && key) {
+        sds k = objectGetVal(key);
+        if (k) recordSpaceSavingManagerSampleWeighted(server.traffic_manager, k, dbid, weight, weight_write);
+    }
+    if (server.traffic_clients_manager) {
+        sds identity = trafficClientIdentity();
+        if (identity) recordSpaceSavingManagerSampleWeighted(server.traffic_clients_manager, identity, 0, weight, weight_write);
+    }
 }
 
 /* Charge a sampled read of `key` in `dbid` whose lookup returned `val`.
@@ -196,7 +221,7 @@ uint64_t trafficMulDivRound(uint64_t a, uint64_t b, uint64_t c) {
  * the window's MEASURED duration, not the configured length — rotation runs on
  * serverCron, so a window is closed at or after its nominal boundary and holds
  * the traffic of that whole real interval. Mirrors hotkeysEstimateQps() in
- * hotkeys.c. */
+ * hotkeys.c. Pass error == 0 to scale an exactly-observed weight. */
 static uint64_t trafficEstimateBytesPerSecond(uint64_t count, uint64_t error, int sample_percentage, uint64_t duration_us) {
     if (sample_percentage <= 0 || duration_us == 0) return 0;
     uint64_t twice_midpoint = 2 * count - error;
@@ -205,9 +230,11 @@ static uint64_t trafficEstimateBytesPerSecond(uint64_t count, uint64_t error, in
 }
 
 typedef struct {
-    sds key;
-    uint64_t bps;       /* combined bytes per second (the ranking key) */
-    uint64_t write_bps; /* ingress share; the rest of bps is egress */
+    sds key;                   /* key name, or the client identity in the clients view */
+    uint64_t bps;              /* combined bytes per second (the ranking key) */
+    uint64_t read_bps;         /* egress share, from observations under this identity */
+    uint64_t write_bps;        /* ingress share, from observations under this identity */
+    uint64_t unattributed_bps; /* eviction-inherited uncertainty; no direction */
     int dbid;
 } trafficCollected;
 
@@ -219,19 +246,19 @@ static int trafficCollectedCmpDesc(const void *a, const void *b) {
     return 0;
 }
 
-void trafficGetCommand(client *c) {
-    /* Report an empty result rather than an error when tracking is off, as
-     * HOTKEYS GET does: a polling client has one shape to parse and does not
-     * have to match on an error string to tell "disabled" from "no traffic". */
-    if (!trafficEnabled()) {
-        addReplyArrayLen(c, 0);
-        return;
-    }
-    /* Tracking is enabled, so the manager must already exist (created by
-     * trafficInit / the config callbacks whenever top-k is turned on). */
-    spaceSavingManager *m = server.traffic_manager;
-    serverAssert(m != NULL);
-
+/* Read the frozen window of `m`, estimate per-second figures, sort descending
+ * by the combined figure and reply up to top-k entries. `clients_view` labels
+ * the identity field "client" and drops the db (a source has no database).
+ *
+ * Direction split: only observations recorded under the entry's current
+ * identity are attributed. count - error is EXACTLY that observed weight
+ * (insert, hit and eviction all preserve the invariant), count2 is its write
+ * share, and the read share is the remainder — so a key that was evicted into
+ * a slot reports zero reads even though its combined estimate inherited the
+ * predecessor's mass. The inherited uncertainty (half the error band) is
+ * reported as unattributed_bytes_per_second rather than booked as either
+ * direction, and the three fields add up to bytes_per_second exactly. */
+static void trafficReportManager(client *c, spaceSavingManager *m, int clients_view) {
     /* Close any window that has fully elapsed so we report the latest
      * completed window. */
     spaceSavingManagerRotate(m, getMonotonicUs());
@@ -252,11 +279,21 @@ void trafficGetCommand(client *c) {
         uint64_t count, error, count2;
         spaceSavingManagerAt2(m, i, &arr[i].key, &arr[i].dbid, &count, &error, &count2);
         arr[i].bps = trafficEstimateBytesPerSecond(count, error, frozen_pct, frozen_duration_us);
-        /* The write share is an exact observed subset (no error band): reuse
-         * the same estimator with a zero error. count2 <= count - error keeps
-         * the read remainder non-negative. */
         arr[i].write_bps = trafficEstimateBytesPerSecond(count2, 0, frozen_pct, frozen_duration_us);
-        if (arr[i].write_bps > arr[i].bps) arr[i].write_bps = arr[i].bps;
+        /* The observed (non-inherited) read weight: the lower bound minus the
+         * observed write share. count2 <= count - error holds by construction,
+         * so this never underflows. */
+        uint64_t read_weight = (count - error) - count2;
+        arr[i].read_bps = trafficEstimateBytesPerSecond(read_weight, 0, frozen_pct, frozen_duration_us);
+        /* Rounding of the three estimates can let read+write exceed the
+         * combined figure by one; shave the excess off read so the reply keeps
+         * exact additivity and stays non-negative. */
+        uint64_t excess = arr[i].read_bps + arr[i].write_bps > arr[i].bps
+                              ? arr[i].read_bps + arr[i].write_bps - arr[i].bps
+                              : 0;
+        if (excess > arr[i].read_bps) excess = arr[i].read_bps;
+        arr[i].read_bps -= excess;
+        arr[i].unattributed_bps = arr[i].bps - arr[i].read_bps - arr[i].write_bps;
     }
 
     qsort(arr, cap, sizeof(trafficCollected), trafficCollectedCmpDesc);
@@ -264,19 +301,48 @@ void trafficGetCommand(client *c) {
     int limit = cap < server.traffic_top_k ? cap : server.traffic_top_k;
     addReplyArrayLen(c, limit);
     for (int j = 0; j < limit; j++) {
-        addReplyMapLen(c, 5);
-        addReplyBulkCString(c, "key");
+        addReplyMapLen(c, clients_view ? 5 : 6);
+        addReplyBulkCString(c, clients_view ? "client" : "key");
         addReplyBulkCBuffer(c, arr[j].key, sdslen(arr[j].key));
-        addReplyBulkCString(c, "db");
-        addReplyLongLong(c, arr[j].dbid);
+        if (!clients_view) {
+            addReplyBulkCString(c, "db");
+            addReplyLongLong(c, arr[j].dbid);
+        }
         addReplyBulkCString(c, "bytes_per_second");
         addReplyLongLong(c, arr[j].bps);
         addReplyBulkCString(c, "read_bytes_per_second");
-        addReplyLongLong(c, arr[j].bps - arr[j].write_bps);
+        addReplyLongLong(c, arr[j].read_bps);
         addReplyBulkCString(c, "write_bytes_per_second");
         addReplyLongLong(c, arr[j].write_bps);
+        addReplyBulkCString(c, "unattributed_bytes_per_second");
+        addReplyLongLong(c, arr[j].unattributed_bps);
     }
     zfree(arr);
+}
+
+/* TRAFFIC GET [CLIENTS]: the per-key view by default, the per-source view with
+ * CLIENTS. */
+void trafficGetCommand(client *c) {
+    int clients_view = 0;
+    if (c->argc >= 3) {
+        if (c->argc > 3 || strcasecmp(objectGetVal(c->argv[2]), "CLIENTS") != 0) {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+        clients_view = 1;
+    }
+    /* Report an empty result rather than an error when tracking is off, as
+     * HOTKEYS GET does: a polling client has one shape to parse and does not
+     * have to match on an error string to tell "disabled" from "no traffic". */
+    if (!trafficEnabled()) {
+        addReplyArrayLen(c, 0);
+        return;
+    }
+    /* Tracking is enabled, so both managers must already exist (created by
+     * trafficInit / the config callbacks whenever top-k is turned on). */
+    spaceSavingManager *m = clients_view ? server.traffic_clients_manager : server.traffic_manager;
+    serverAssert(m != NULL);
+    trafficReportManager(c, m, clients_view);
 }
 
 void trafficResetCommand(client *c) {
@@ -288,12 +354,14 @@ void trafficResetCommand(client *c) {
 
 void trafficHelpCommand(client *c) {
     const char *help[] = {
-        "GET",
+        "GET [CLIENTS]",
         "    Return the keys that moved the most estimated bytes in the last",
         "    completed window, ordered by estimated bytes per second (descending).",
         "    Each entry reports the key name, the database it was accessed in,",
-        "    the estimated bytes per second, and its split into read (egress)",
-        "    and write (ingress) bytes per second.",
+        "    the estimated bytes per second, and its split into read (egress),",
+        "    write (ingress) and unattributed (eviction-inherited) bytes per",
+        "    second. With CLIENTS, rank the sources of the traffic instead:",
+        "    client names when CLIENT SETNAME was used, else ip:port.",
         "RESET",
         "    Clear all collected traffic statistics.",
         NULL,
@@ -359,19 +427,29 @@ sds genTrafficInfoString(sds info) {
  * when tracking is disabled (no manager). Use TRAFFIC RESET to discard
  * everything. */
 static void trafficManagerReconfigure(void) {
-    if (!server.traffic_manager) return;
-    spaceSavingManagerReconfigure(server.traffic_manager, server.traffic_top_k,
-                                  (uint64_t)server.traffic_window_seconds * 1000000ULL, getMonotonicUs());
-    spaceSavingManagerSetLiveSamplingPercentage(server.traffic_manager, server.traffic_sampling_percentage);
+    spaceSavingManager *ms[2] = {server.traffic_manager, server.traffic_clients_manager};
+    for (int i = 0; i < 2; i++) {
+        if (!ms[i]) continue;
+        spaceSavingManagerReconfigure(ms[i], server.traffic_top_k, (uint64_t)server.traffic_window_seconds * 1000000ULL,
+                                      getMonotonicUs());
+        spaceSavingManagerSetLiveSamplingPercentage(ms[i], server.traffic_sampling_percentage);
+    }
 }
 
 /* Create or free the manager to match the enabled state. */
 static void trafficManagerSetEnabled(int enabled) {
-    if (enabled && !server.traffic_manager) {
-        server.traffic_manager = trafficCreateManager();
-    } else if (!enabled && server.traffic_manager) {
-        spaceSavingManagerRelease(server.traffic_manager);
-        server.traffic_manager = NULL;
+    if (enabled) {
+        if (!server.traffic_manager) server.traffic_manager = trafficCreateManager();
+        if (!server.traffic_clients_manager) server.traffic_clients_manager = trafficCreateManager();
+    } else {
+        if (server.traffic_manager) {
+            spaceSavingManagerRelease(server.traffic_manager);
+            server.traffic_manager = NULL;
+        }
+        if (server.traffic_clients_manager) {
+            spaceSavingManagerRelease(server.traffic_clients_manager);
+            server.traffic_clients_manager = NULL;
+        }
     }
 }
 

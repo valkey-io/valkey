@@ -114,7 +114,8 @@ start_server {tags {"traffic external:skip"}} {
 
         set traffic [tr_wait_traffic]
         set first [lindex $traffic 0]
-        assert_equal [lsort [dict keys $first]] {bytes_per_second db key read_bytes_per_second write_bytes_per_second}
+        assert_equal [lsort [dict keys $first]] \
+            {bytes_per_second db key read_bytes_per_second unattributed_bytes_per_second write_bytes_per_second}
 
         # Descending by bytes_per_second.
         set prev -1
@@ -182,11 +183,36 @@ start_server {tags {"traffic external:skip"}} {
         assert {[dict get $wr write_bytes_per_second] > 10 * 100000}
         assert {[dict get $wr write_bytes_per_second] > [dict get $wr read_bytes_per_second] * 10}
 
-        # The split adds up to the combined figure.
+        # The split adds up to the combined figure, including the
+        # eviction-inherited share.
         foreach e $traffic {
             assert_equal [dict get $e bytes_per_second] \
-                [expr {[dict get $e read_bytes_per_second] + [dict get $e write_bytes_per_second]}]
+                [expr {[dict get $e read_bytes_per_second] + [dict get $e write_bytes_per_second] +
+                       [dict get $e unattributed_bytes_per_second]}]
         }
+    }
+
+    test "Eviction-inherited uncertainty is not booked as reads" {
+        r traffic reset
+        r config set traffic-top-k 1
+        set big [tr_value 100000]
+        r set ev_a $big
+        r traffic reset
+        # A single read fills the one slot; the write of another key then
+        # evicts it, so B's combined estimate inherits A's mass while B itself
+        # was only ever written to.
+        r get ev_a
+        r set ev_b x
+        set traffic [tr_wait_traffic]
+        set b [tr_entry $traffic ev_b]
+        assert {$b ne ""}
+        assert_equal [dict get $b read_bytes_per_second] 0 "B was never read"
+        assert {[dict get $b write_bytes_per_second] < 100}
+        assert {[dict get $b unattributed_bytes_per_second] > 40000}
+        assert_equal [dict get $b bytes_per_second] \
+            [expr {[dict get $b read_bytes_per_second] + [dict get $b write_bytes_per_second] +
+                   [dict get $b unattributed_bytes_per_second]}]
+        r config set traffic-top-k 16
     }
 
     test "INFO traffic exposes the live window" {
@@ -399,6 +425,55 @@ start_server {tags {"traffic external:skip"}} {
         set help [r traffic help]
         assert_match "*GET*" $help
         assert_match "*RESET*" $help
+    }
+
+    test "TRAFFIC GET CLIENTS falls back to ip:port for unnamed clients" {
+        # The test connection has no name yet, so its traffic is attributed to
+        # its ip:port.
+        r traffic reset
+        set big [tr_value 100000]
+        r set cl_unnamed $big
+        r traffic reset
+        for {set i 0} {$i < 50} {incr i} { r get cl_unnamed }
+        set clients {}
+        wait_for_condition 50 100 {
+            [llength [set clients [r traffic get clients]]] > 0
+        } else {
+            fail "no client traffic reported within the timeout"
+        }
+        set e [lindex $clients 0]
+        assert_equal [lsort [dict keys $e]] \
+            {bytes_per_second client read_bytes_per_second unattributed_bytes_per_second write_bytes_per_second}
+        assert {[regexp {(127\.0\.0\.1|unix)} [dict get $e client]]}
+        assert {[dict get $e read_bytes_per_second] > 20 * 100000}
+        # The same observation charged the by-key view too.
+        set keys [r traffic get]
+        assert {[tr_entry $keys cl_unnamed] ne ""}
+    }
+
+    test "TRAFFIC GET CLIENTS attributes traffic by client name" {
+        r traffic reset
+        set big [tr_value 100000]
+        r set cl_named $big
+        r traffic reset
+        r client setname traffic_test_app
+        for {set i 0} {$i < 50} {incr i} { r get cl_named }
+        set clients {}
+        wait_for_condition 50 100 {
+            [llength [set clients [r traffic get clients]]] > 0
+        } else {
+            fail "no client traffic reported within the timeout"
+        }
+        set e [lindex $clients 0]
+        assert_equal [dict get $e client] "traffic_test_app"
+        assert_equal [dict get $e write_bytes_per_second] 0
+        assert_equal [dict get $e unattributed_bytes_per_second] 0
+        r client setname ""
+    }
+
+    test "Invalid TRAFFIC GET argument" {
+        catch {r traffic get bogus} err
+        assert_match "*syntax*" $err
     }
 
     test "TRAFFIC GET is callable from scripts" {

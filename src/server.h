@@ -2550,6 +2550,7 @@ struct valkeyServer {
     int traffic_top_k;               /* Number of top keys to track by bytes (Space-Saving K); 0 disables tracking. */
     int traffic_window_seconds;      /* Length of the bytes-per-second accounting window in seconds. */
     struct spaceSavingManager *traffic_manager;
+    struct spaceSavingManager *traffic_clients_manager;
 };
 
 #define MAX_KEYS_BUFFER 256

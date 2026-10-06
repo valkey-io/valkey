@@ -1,10 +1,10 @@
 {
     "GET": {
-        "summary": "Get the keys that moved the most estimated bytes in the last completed window, ordered by estimated bytes per second descending",
+        "summary": "Get the keys (or, with CLIENTS, the client sources) that moved the most estimated bytes in the last completed window, ordered by estimated bytes per second descending",
         "complexity": "O(N) where N is the number of keys in the traffic history",
         "group": "server",
         "since": "9.2.0",
-        "arity": 2,
+        "arity": -2,
         "function": "trafficGetCommand",
         "command_flags": [
             "ADMIN",
@@ -21,31 +21,76 @@
             "description": "Keys that moved the most estimated bytes in the last completed window, ordered by estimated bytes per second (descending)",
             "type": "array",
             "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "key": {
-                        "description": "Key name",
-                        "type": "string"
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "key": {
+                                "description": "Key name",
+                                "type": "string"
+                            },
+                            "db": {
+                                "description": "Database id",
+                                "type": "integer"
+                            },
+                            "bytes_per_second": {
+                                "description": "Estimated bytes per second moved by this key over the last completed window (sampled; reads and whole-value writes)",
+                                "type": "integer"
+                            },
+                            "read_bytes_per_second": {
+                                "description": "Estimated egress bytes per second (values read out) over the last completed window",
+                                "type": "integer"
+                            },
+                            "write_bytes_per_second": {
+                                "description": "Estimated ingress bytes per second (values written) over the last completed window; exact for the sampled observations behind this entry",
+                                "type": "integer"
+                            },
+                            "unattributed_bytes_per_second": {
+                                "description": "Eviction-inherited uncertainty carried by this entry; reported separately so it is not booked as either direction",
+                                "type": "integer"
+                            }
+                        }
                     },
-                    "db": {
-                        "description": "Database id",
-                        "type": "integer"
-                    },
-                    "bytes_per_second": {
-                        "description": "Estimated bytes per second moved by this key over the last completed window (sampled; reads and whole-value writes)",
-                        "type": "integer"
-                    },
-                    "read_bytes_per_second": {
-                        "description": "Estimated egress bytes per second (values read out) over the last completed window",
-                        "type": "integer"
-                    },
-                    "write_bytes_per_second": {
-                        "description": "Estimated ingress bytes per second (values written) over the last completed window; exact for the sampled observations behind this entry",
-                        "type": "integer"
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "client": {
+                                "description": "Client name or ip:port",
+                                "type": "string"
+                            },
+                            "bytes_per_second": {
+                                "description": "Estimated bytes per second moved by this source",
+                                "type": "integer"
+                            },
+                            "read_bytes_per_second": {
+                                "description": "Estimated egress bytes per second",
+                                "type": "integer"
+                            },
+                            "write_bytes_per_second": {
+                                "description": "Estimated ingress bytes per second",
+                                "type": "integer"
+                            },
+                            "unattributed_bytes_per_second": {
+                                "description": "Eviction-inherited uncertainty carried by this entry",
+                                "type": "integer"
+                            }
+                        }
                     }
-                }
+                ]
             }
-        }
+        },
+        "arguments": [
+            {
+                "name": "CLIENTS",
+                "type": "string",
+                "optional": true,
+                "enum": [
+                    "CLIENTS"
+                ],
+                "description": "Rank traffic sources (client names, else ip:port) instead of keys"
+            }
+        ]
     }
 }

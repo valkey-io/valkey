@@ -45,7 +45,7 @@ TEST(Traffic, MulDivRoundMatchesWideReference) {
     /* Fixed table crossing several magnitudes, including values whose a*b
      * exceeds 2^64 (the fallback must agree with the wide path). */
     const uint64_t as[8] = {1u, 999u, 1000003u, 576460752303423488u,
-                            172u * 512u * 1024u * 1024u, /* 92,274,688,000 */
+                            172ULL * 512ULL * 1024ULL * 1024ULL, /* 92,341,796,864 */
                             1800000000000u, 0xFFFFFFFFFFFFFFFFu, 1u};
     const uint64_t bs[4] = {1u, 100000000u, 4294967296u, 1000000000000000u};
     const uint64_t cs[5] = {1u, 2u * 1000000u, 997u, 60000000000u, 0xFFFFFFFFFFFFFFFFu};
@@ -64,7 +64,7 @@ TEST(Traffic, MulDivRoundMatchesWideReference) {
 
 TEST(Traffic, MulDivRoundDoesNotWrapOnByteScaleInputs) {
     /* The scenario from review: a one-second window sampled 172 accesses of a
-     * 512 MiB value at 100%, so twice_midpoint ~= 2 * 92,274,688,000 and the
+     * 512 MiB value at 100%, so twice_midpoint ~= 2 * 92,341,796,864 and the
      * numerator twice_midpoint * 1e8 ~= 1.8e19 — past 2^64. The wrapped
      * fallback would return a small number and misorder the leaderboard. */
     const uint64_t twice_midpoint = 2ULL * 172ULL * 512ULL * 1024ULL * 1024ULL;

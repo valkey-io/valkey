@@ -2214,8 +2214,9 @@ static long hashTypeReplyNonVolatileHashtable(writePreparedClient *wpc, robj *o,
          * entry pointer itself, already prefetched in phase 1. */
         if (flags & OBJ_HASH_VALUE) {
             for (int i = 0; i < batch_count; i++) {
-                size_t vlen;
-                valkey_prefetch(entryGetValue(batch[i], &vlen));
+                /* Only the value pointer is prefetched here; its length is
+                 * read in phase 3, so pass NULL for the out-param. */
+                valkey_prefetch(entryGetValue(batch[i], NULL));
             }
         }
 
@@ -2255,9 +2256,8 @@ void genericHgetallCommand(client *c, int flags) {
      * than the header itself: addReplyDeferredLen() parks a placeholder node
      * on the reply list, and once that list is non-empty every subsequent
      * reply bypasses the client's static buffer and goes through
-     * heap-allocated reply blocks. This holds for listpack-encoded hashes
-     * (which cannot hold volatile fields at all) as well as hashtable-encoded
-     * ones without volatile fields. */
+     * heap-allocated reply blocks. This holds for listpack-encoded and
+     * hashtable-encoded hashes without volatile fields. */
     unsigned long length = 0;
     void *replylen = NULL;
     bool exact_len = !hashTypeHasVolatileFields(o);

@@ -38,6 +38,7 @@
 
 #include "server.h"
 #include "hotkeys.h"
+#include "traffic.h"
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "cluster_slot_stats.h"
@@ -1760,6 +1761,7 @@ void clusterReset(int hard) {
 
     /* Unassign all the slots. */
     hotkeysPurgeAll(); /* Bulk purge before individual clusterDelSlot calls */
+    trafficPurgeAll();
     for (j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
 
     /* Recreate shards dict */
@@ -7143,6 +7145,7 @@ int clusterDelSlot(int slot) {
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     clusterSlotStatReset(slot);
     hotkeysPurgeSlot(slot);
+    trafficPurgeSlot(slot);
     return C_OK;
 }
 
@@ -8149,6 +8152,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
      * drop their hot-key state too. Sampling was suppressed during the loop via
      * server_del_keys_in_slot (see hotkeysShouldRecord). */
     hotkeysPurgeSlot(hashslot);
+    trafficPurgeSlot(hashslot);
     server.server_del_keys_in_slot = 0;
     serverAssert(server.execution_nesting == before_execution_nesting);
     return j;

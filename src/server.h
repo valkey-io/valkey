@@ -2545,6 +2545,11 @@ struct valkeyServer {
     int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
     int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkeys_manager;
+    /* Per-key traffic tracking parameters (independent of hot key detection) */
+    int traffic_sampling_percentage; /* Percentage (1-100) of key accesses sampled for traffic tracking. */
+    int traffic_top_k;               /* Number of top keys to track by bytes (Space-Saving K); 0 disables tracking. */
+    int traffic_window_seconds;      /* Length of the bytes-per-second accounting window in seconds. */
+    struct spaceSavingManager *traffic_manager;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -4501,6 +4506,9 @@ void failoverCommand(client *c);
 void hotkeysGetCommand(client *c);
 void hotkeysResetCommand(client *c);
 void hotkeysHelpCommand(client *c);
+void trafficGetCommand(client *c);
+void trafficResetCommand(client *c);
+void trafficHelpCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

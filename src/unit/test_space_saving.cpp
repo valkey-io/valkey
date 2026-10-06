@@ -448,6 +448,136 @@ TEST(SpaceSaving, SamplingPercentageSurvivesADroppedWindow) {
     spaceSavingManagerRelease(m);
 }
 
+/* Record one observation of `name` in database `dbid` carrying `weight` — the
+ * weighted entry point traffic tracking uses. */
+static void recordNameWeighted(spaceSavingManager *m, const char *name, int dbid, uint64_t weight) {
+    sds k = sdsnew(name);
+    recordSpaceSavingManagerSampleWeighted(m, k, dbid, weight);
+    sdsfree(k);
+}
+
+/* ---------------------------------------------------------------------------
+ * Weighted Space-Saving (the traffic-tracking use). Weights replace the +1 per
+ * observation; the band and N/K guarantees must hold over the summed weight.
+ * --------------------------------------------------------------------------*/
+
+/* Weights accumulate: a slot's count is the sum of the weights recorded for it
+ * and the window total is the sum over all observations, unweighted or not. */
+TEST(SpaceSaving, WeightedSamplesAccumulateWeights) {
+    spaceSavingManager *m = spaceSavingManagerCreate(4, WINDOW_US, 0);
+    ASSERT_NE(m, nullptr);
+
+    recordNameWeighted(m, "big", 0, 1000);
+    recordNameWeighted(m, "big", 0, 500);
+    recordNameWeighted(m, "small", 0, 3);
+    recordName(m, "counted", 0); /* the unweighted entry point still weighs 1 */
+
+    freezeOnce(m, 0);
+    uint64_t count = 0, error = 0;
+    ASSERT_EQ(frozenFind(m, "big", 0, &count, &error), 1);
+    EXPECT_EQ(count, 1500u);
+    EXPECT_EQ(error, 0u) << "no eviction, so the sum is exact";
+    ASSERT_EQ(frozenFind(m, "small", 0, &count, NULL), 1);
+    EXPECT_EQ(count, 3u);
+    ASSERT_EQ(frozenFind(m, "counted", 0, &count, NULL), 1);
+    EXPECT_EQ(count, 1u);
+    /* The window total is the summed weight, 1000+500+3+1. */
+    EXPECT_EQ(spaceSavingManagerFrozenTotal(m), 1504u);
+
+    spaceSavingManagerRelease(m);
+}
+
+/* Across evictions, the [count - error, count] band must contain the item's
+ * true summed weight, exactly as it contains the true count in the unweighted
+ * case. */
+TEST(SpaceSaving, WeightedErrorBandContainsTrueWeight) {
+    const int k = 3;
+    /* Six distinct keys into three slots with distinct weights forces repeated
+     * eviction under weight pressure. */
+    const int nkeys = 6;
+    const char *names[nkeys] = {"w0", "w1", "w2", "w3", "w4", "w5"};
+    const uint64_t true_weights[nkeys] = {100, 80, 60, 40, 20, 10};
+
+    spaceSavingManager *m = spaceSavingManagerCreate(k, WINDOW_US, 0);
+    ASSERT_NE(m, nullptr);
+
+    /* Interleave so evictions happen throughout: round r records every key
+     * whose remaining weight still covers a 10-unit slice. */
+    uint64_t total = 0;
+    for (int r = 0; r < 10; r++) {
+        for (int i = 0; i < nkeys; i++) {
+            if (true_weights[i] / 10 > (uint64_t)r) {
+                recordNameWeighted(m, names[i], 0, 10);
+                total += 10;
+            }
+        }
+    }
+    ASSERT_EQ(total, 310u); /* 100+80+60+40+20+10 */
+
+    freezeOnce(m, 0);
+    EXPECT_EQ(spaceSavingManagerFrozenTotal(m), total);
+    ASSERT_LE(spaceSavingManagerCount(m), k);
+
+    int n = spaceSavingManagerCount(m);
+    for (int i = 0; i < n; i++) {
+        sds key = NULL;
+        int db = 0;
+        uint64_t count = 0, error = 0;
+        spaceSavingManagerAt(m, i, &key, &db, &count, &error);
+        ASSERT_NE(key, nullptr);
+
+        int idx = -1;
+        for (int j = 0; j < nkeys; j++)
+            if (strcmp(key, names[j]) == 0) idx = j;
+        ASSERT_NE(idx, -1) << "frozen window reported an unknown key";
+
+        uint64_t truth = true_weights[idx];
+        EXPECT_LE(error, count) << "key " << key;
+        EXPECT_LE(count - error, truth) << "key " << key;
+        EXPECT_GE(count, truth) << "key " << key;
+    }
+
+    spaceSavingManagerRelease(m);
+}
+
+/* The traffic scenario the weighted stream exists for: a key observed rarely
+ * but carrying a large weight (a big value read a few times) must outrank and
+ * be tracked ahead of a key observed often with tiny weights (a small value
+ * read constantly) — the reverse of the unweighted ranking. */
+TEST(SpaceSaving, FewHeavyObservationsOutrankManyLightOnes) {
+    const int k = 2;
+    spaceSavingManager *m = spaceSavingManagerCreate(k, WINDOW_US, 0);
+    ASSERT_NE(m, nullptr);
+
+    /* "huge": 5 accesses x 1,000,000 bytes. "tiny": 5000 accesses x 10 bytes.
+     * Byte totals: 5,000,000 vs 50,000 — huge holds over N/K, so it must be
+     * tracked even though tiny's access count is 1000x higher. */
+    const uint64_t huge_bytes = 5ULL * 1000000ULL;
+    const uint64_t tiny_bytes = 5000ULL * 10ULL;
+    const uint64_t total = huge_bytes + tiny_bytes;
+    ASSERT_GT(huge_bytes, total / (uint64_t)k) << "huge must exceed N/K to be guaranteed tracked";
+
+    for (int i = 0; i < 5000; i++) {
+        recordNameWeighted(m, "tiny", 0, 10);
+        if (i % 1000 == 0) recordNameWeighted(m, "huge", 0, 1000000);
+    }
+
+    freezeOnce(m, 0);
+    EXPECT_EQ(spaceSavingManagerFrozenTotal(m), total);
+
+    uint64_t count = 0, error = 0;
+    ASSERT_EQ(frozenFind(m, "huge", 0, &count, &error), 1) << "a key above N/K by weight must be tracked";
+    EXPECT_LE(count - error, huge_bytes);
+    EXPECT_GE(count, huge_bytes);
+
+    /* And it ranks first: its (lower-bound) byte total beats tiny's. */
+    uint64_t tiny_count = 0, tiny_error = 0;
+    ASSERT_EQ(frozenFind(m, "tiny", 0, &tiny_count, &tiny_error), 1);
+    EXPECT_GT(count - error, tiny_count) << "5 heavy accesses must outrank 5000 light ones";
+
+    spaceSavingManagerRelease(m);
+}
+
 /* ---------------------------------------------------------------------------
  * A window reports the interval it REALLY accumulated over, not its configured
  * length. Rotation is timer-driven, so it runs at or after the nominal

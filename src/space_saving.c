@@ -88,9 +88,13 @@ static void spaceSavingWindowRelease(spaceSavingWindow *w) {
     zfree(w);
 }
 
-static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbid) {
+/* Record one observation of `weight` (weighted Space-Saving: a plain count is
+ * the weight == 1 special case). The [count - error, count] band and the N/K
+ * guarantee are weight-agnostic — they hold over the summed weight just as they
+ * hold over summed ones. */
+static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbid, uint64_t weight) {
     if (!w || !key) return;
-    w->total++;
+    w->total += weight;
     uint32_t h = spaceSavingHashItem(key, dbid);
 
     /* Single pass: look for an existing slot (fast-rejecting on the cached hash
@@ -101,7 +105,7 @@ static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbi
     for (int i = 0; i < w->size; i++) {
         spaceSavingSlot *e = &w->slots[i];
         if (e->hash == h && e->dbid == dbid && sdscmp(e->key, key) == 0) {
-            e->count += 1;
+            e->count += weight;
             return;
         }
         if (e->count < min_count) {
@@ -110,25 +114,25 @@ static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbi
         }
     }
 
-    /* Room available: insert with count = 1, error = 0. */
+    /* Room available: insert with count = weight, error = 0. */
     if (w->size < w->capacity) {
         spaceSavingSlot *e = &w->slots[w->size++];
         e->key = sdsdup(key);
         e->dbid = dbid;
         e->hash = h;
-        e->count = 1;
+        e->count = weight;
         e->error = 0;
         return;
     }
 
     /* Full: evict the smallest-count slot. The new item inherits count = the
-     * evicted count + 1; error records the maximum possible overestimate. */
+     * evicted count + weight; error records the maximum possible overestimate. */
     spaceSavingSlot *e = &w->slots[min_idx];
     sdsfree(e->key);
     e->key = sdsdup(key);
     e->dbid = dbid;
     e->hash = h;
-    e->count = min_count + 1;
+    e->count = min_count + weight;
     e->error = min_count;
 }
 
@@ -278,7 +282,12 @@ void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us) {
 
 void recordSpaceSavingManagerSample(spaceSavingManager *m, sds key, int dbid) {
     if (!m) return;
-    recordSpaceSavingWindowSample(m->live, key, dbid);
+    recordSpaceSavingWindowSample(m->live, key, dbid, 1);
+}
+
+void recordSpaceSavingManagerSampleWeighted(spaceSavingManager *m, sds key, int dbid, uint64_t weight) {
+    if (!m) return;
+    recordSpaceSavingWindowSample(m->live, key, dbid, weight);
 }
 
 int spaceSavingManagerCount(spaceSavingManager *m) {

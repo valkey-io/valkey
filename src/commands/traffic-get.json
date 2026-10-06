@@ -1,0 +1,43 @@
+{
+    "GET": {
+        "summary": "Get the keys that moved the most estimated bytes in the last completed window, ordered by estimated bytes per second descending",
+        "complexity": "O(N) where N is the number of keys in the traffic history",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": 2,
+        "function": "trafficGetCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "container": "TRAFFIC",
+        "reply_schema": {
+            "description": "Keys that moved the most estimated bytes in the last completed window, ordered by estimated bytes per second (descending)",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "key": {
+                        "description": "Key name",
+                        "type": "string"
+                    },
+                    "db": {
+                        "description": "Database id",
+                        "type": "integer"
+                    },
+                    "bytes_per_second": {
+                        "description": "Estimated bytes per second moved by this key over the last completed window (sampled; reads and whole-value writes)",
+                        "type": "integer"
+                    }
+                }
+            }
+        }
+    }
+}

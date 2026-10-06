@@ -33,6 +33,7 @@ Committers listed in alphabetical order by their github ID.
 | Jim Brunner         | @JimB123           | Amazon      |
 | Ricardo Dias        | @rjd15372          | Percona     |
 | Sarthak Aggarwal    | @sarthakaggarwal97 | Amazon      |
+| Rain Valentine      | @rainsupreme       | Amazon      |
 
 ## Former Maintainers and Committers 
 

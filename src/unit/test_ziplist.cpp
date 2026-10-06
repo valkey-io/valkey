@@ -959,10 +959,6 @@ TEST_F(ZiplistTest, DISABLED_ziplistBenchmarkziplistValidateIntegrity) {
     zfree(zl);
 }
 
-/* This is a benchmark test for ziplistCompare with string.
- * To run this test explicitly, use:
- *   ./src/unit/valkey-unit-gtests --gtest_filter=ZiplistTest.DISABLED_ziplistBenchmarkziplistCompareWithString --gtest_also_run_disabled_tests
- */
 TEST_F(ZiplistTest, ziplistSafeToAddOverflow) {
     unsigned char *zl = ziplistNew();
     size_t len = ziplistBlobLen(zl);
@@ -985,6 +981,10 @@ TEST_F(ZiplistTest, ziplistSafeToAddOverflow) {
     zfree(zl);
 }
 
+/* This is a benchmark test for ziplistCompare with string.
+ * To run this test explicitly, use:
+ *   ./src/unit/valkey-unit-gtests --gtest_filter=ZiplistTest.DISABLED_ziplistBenchmarkziplistCompareWithString --gtest_also_run_disabled_tests
+ */
 TEST_F(ZiplistTest, DISABLED_ziplistBenchmarkziplistCompareWithString) {
     unsigned char *zl = ziplistNew();
     int iteration = accurate ? 100000 : 100;

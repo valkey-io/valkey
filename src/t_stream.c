@@ -3797,8 +3797,9 @@ static void xdelGenericCommand(client *c, xdelVariant variant) {
                 del_ids[del_count++] = *id;
                 if (streamCompareID(id, &s->first_id) == 0) first_entry = 1;
                 if (streamCompareID(id, &s->max_deleted_entry_id) > 0) s->max_deleted_entry_id = *id;
-            } else if (array_reply) {
-                /* Entry does not exist in the stream. */
+            } else if (array_reply && (!acked_flags || !acked_flags[j])) {
+                /* Entry does not exist in the stream and was never pending
+                 * in the target group. */
                 resps[j] = -1;
             }
         }

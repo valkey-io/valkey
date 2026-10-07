@@ -1112,6 +1112,48 @@ start_server {
         assert_equal 0 [lindex $pend 0]
     }
 
+    test {XACKDEL KEEPREF returns 1 when stream entry was already removed via XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # XDEL removes the stream entry but leaves the PEL entry intact
+        r XDEL testxadstream 1-0
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+
+        # XACKDEL clears the PEL and still returns 1 even though already deleted
+        set ids [r XACKDEL testxadstream testxadgrp1 KEEPREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # Check that XACKDEL KEEPREF removes the dangling PEL entry left after XDEL
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 0 [lindex $pend 0]
+    }
+
+    test {XACKDEL DELREF returns 1 when stream entry was already removed via XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # XDEL removes the stream entry but leaves the PEL entry intact
+        r XDEL testxadstream 1-0
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+
+        # XACKDEL clears the PEL and still returns 1 even though already deleted
+        set ids [r XACKDEL testxadstream testxadgrp1 DELREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # Check that XACKDEL DELREF removes the dangling PEL entry left after XDEL
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 0 [lindex $pend 0]
+    }
+
     test {XACKDEL ACKED with a single consumer group deletes the entry} {
         r DEL testxadstream
         r XADD testxadstream 1-0 f v

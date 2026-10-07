@@ -1154,6 +1154,21 @@ start_server {
         assert_equal 0 [lindex $pend 0]
     }
 
+    test {XACKDEL DELREF returns -1 when stream entry was deleted and was never pending in target group} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XGROUP CREATE testxadstream testxadgrp2 0
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        assert_equal 1 [lindex [r XPENDING testxadstream testxadgrp2] 0]
+
+        r XDEL testxadstream 1-0
+        set ids [r XACKDEL testxadstream testxadgrp1 DELREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal 1 [lindex [r XPENDING testxadstream testxadgrp2] 0]
+    }
+
     test {XACKDEL ACKED with a single consumer group deletes the entry} {
         r DEL testxadstream
         r XADD testxadstream 1-0 f v

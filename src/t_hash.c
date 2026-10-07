@@ -1418,6 +1418,7 @@ static void addHashEntryToReply(writePreparedClient *wpc, const entry *hash_entr
 static void hmgetReplyWithHashtable(writePreparedClient *wpc, hashtable *ht, robj **fields, size_t count) {
     const void *keys[HMGET_FIND_BATCH_SIZE];
     void *found_entries[HMGET_FIND_BATCH_SIZE];
+    client *c = (client *)wpc;
     while (count) {
         size_t batch = count > HMGET_FIND_BATCH_SIZE ? HMGET_FIND_BATCH_SIZE : count;
 
@@ -1429,6 +1430,7 @@ static void hmgetReplyWithHashtable(writePreparedClient *wpc, hashtable *ht, rob
 
         for (size_t i = 0; i < batch; i++) {
             addHashEntryToReply(wpc, (result >> i) & 1 ? found_entries[i] : NULL);
+            if (c->flag.close_asap) return;
         }
 
         fields += batch;
@@ -1456,10 +1458,12 @@ void hmgetCommand(client *c) {
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
     addWritePreparedReplyArrayLen(wpc, count);
+    if (c->flag.close_asap) return;
 
     if (o == NULL) {
         for (size_t i = 0; i < count; i++) {
             addWritePreparedReplyNull(wpc);
+            if (c->flag.close_asap) return;
         }
         return;
     }
@@ -1472,6 +1476,7 @@ void hmgetCommand(client *c) {
 
     for (size_t i = 0; i < count; i++) {
         addHashFieldToPreparedReply(wpc, o, objectGetVal(c->argv[i + 2]));
+        if (c->flag.close_asap) return;
     }
 }
 

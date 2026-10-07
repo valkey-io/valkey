@@ -75,6 +75,12 @@ If you're contributing code to the Valkey project in any other form, including
 sending a code fragment or patch via private email or public discussion groups,
 you need to ensure that the contribution is in accordance with the DCO.
 
+## Use of AI tools
+
+You own the quality of the code that you submit to the project. The Valkey
+project doesn't impose any limitations on the use of AI tooling as long as the
+contribution meets the quality bar of the project.
+
 ## How to provide a patch or a new feature
 
 1. If it is a major feature or a semantical change, please don't start coding

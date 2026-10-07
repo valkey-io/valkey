@@ -35,7 +35,7 @@ start_server {tags {"modules"}} {
     }
 
     test "Busy module name" {
-        assert_error {ERR Error loading the extension. Please check the server logs.} {r module load $testmodule}
+        assert_error {ERR Error loading module: module initialization failed, module name is busy} {r module load $testmodule}
         verify_log_message 0 "*Module name is busy*" 0
     }
 

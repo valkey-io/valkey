@@ -1,7 +1,9 @@
 set testmodule [file normalize tests/modules/defragtest.so]
 
 start_server {tags {"modules"} overrides {{save ""}}} {
-    r module load $testmodule 10000
+    # Load with 10000 global strings and a global defrag step limit of 100, so
+    # the global callback must resume across many invocations via its cursor.
+    r module load $testmodule 10000 100
     r config set active-defrag-ignore-bytes 1
     r config set active-defrag-threshold-lower 0
     r config set active-defrag-cycle-min 99
@@ -40,6 +42,34 @@ start_server {tags {"modules"} overrides {{save ""}}} {
             after 2000
             set info [r info defragtest_stats]
             assert {[getInfoProperty $info defragtest_global_attempts] > 0}
+        }
+
+        test {Module defrag: global defrag resumes via cursor} {
+            r flushdb
+            r frag.resetstats
+
+            # With the module's global step limit, the 10000 global strings
+            # can't be defragged in one invocation, so the callback must be
+            # re-invoked and resume from its saved cursor. This exercises the
+            # endtime + per-module cursor forwarded to the global callback.
+            after 2000
+            set info [r info defragtest_stats]
+            assert {[getInfoProperty $info defragtest_global_resumes] > 0}
+            assert_equal 0 [getInfoProperty $info defragtest_global_wrong_cursor]
+        }
+
+        test {Module defrag: global defrag is revisited on later cycles} {
+            r flushdb
+            r frag.resetstats
+
+            # Once the callback finishes a pass it resets its cursor to 0 (done).
+            # A finished module is skipped for the rest of that cycle but must be
+            # revisited on later cycles, so over time the callback runs many more
+            # times than the single pass needed to walk all global strings.
+            after 3000
+            set info [r info defragtest_stats]
+            assert {[getInfoProperty $info defragtest_global_attempts] > 10000}
+            assert_equal 0 [getInfoProperty $info defragtest_global_wrong_cursor]
         }
     }
 }

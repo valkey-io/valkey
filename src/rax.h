@@ -142,7 +142,7 @@ typedef struct rax {
  * field for space concerns, so we use the auxiliary stack when needed. */
 #define RAX_STACK_STATIC_ITEMS 32
 typedef struct raxStack {
-    void **stack;           /* Points to static_items or an heap allocated array. */
+    void **stack;           /* Points to static_items or a heap allocated array. */
     size_t items, maxitems; /* Number of items contained and total space. */
     /* Up to RAXSTACK_STACK_ITEMS items we avoid to allocate on the heap
      * and use this static array of pointers instead. */
@@ -164,6 +164,11 @@ typedef struct raxStack {
  *
  * This is currently only supported in forward iterations (raxNext) */
 typedef int (*raxNodeCallback)(raxNode **noderef);
+
+/* Callback invoked for every stored key that is a prefix of a query. The
+ * key bytes are query[0..key_len), so only the length and associated value
+ * need to be passed. Return non-zero to continue walking, zero to stop. */
+typedef int (*raxPrefixCallback)(size_t key_len, void *data, void *context);
 
 /* Radix tree iterator state is encapsulated into this data structure. */
 #define RAX_ITER_STATIC_LEN 128
@@ -192,6 +197,8 @@ int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
+int raxFindLongestPrefix(rax *rax, unsigned char *s, size_t len, size_t *matched_len, void **value);
+size_t raxForEachPrefix(rax *rax, unsigned char *s, size_t len, raxPrefixCallback callback, void *context);
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);

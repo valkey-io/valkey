@@ -44,7 +44,7 @@
 
 /* Write the specified payload to 'fd'. If writing the whole payload will be
  * done within 'timeout' milliseconds the operation succeeds and 'size' is
- * returned. Otherwise the operation fails, -1 is returned, and an unspecified
+ * returned. Otherwise, the operation fails, -1 is returned, and an unspecified
  * partial write could be performed against the file descriptor. */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout) {
     ssize_t nwritten, ret = size;
@@ -79,7 +79,7 @@ ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout) {
 
 /* Read the specified amount of bytes from 'fd'. If all the bytes are read
  * within 'timeout' milliseconds the operation succeed and 'size' is returned.
- * Otherwise the operation fails, -1 is returned, and an unspecified amount of
+ * Otherwise, the operation fails, -1 is returned, and an unspecified amount of
  * data could be read from the file descriptor. */
 ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout) {
     ssize_t nread, totread = 0;

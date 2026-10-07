@@ -162,7 +162,7 @@ proc execute_test_code {__testname filename code} {
     send_data_packet $::test_server_fd done "$__testname"
 }
 
-# Setup a list to hold a stack of server configs. When calls to start_server
+# Set up a list to hold a stack of server configs. When calls to start_server
 # are nested, use "srv 0 pid" to get the pid of the inner server. To access
 # outer servers, use "srv -1 pid" etcetera.
 set ::servers {}
@@ -655,10 +655,9 @@ proc write_test_failures {} {
             set error_msg $failed
         }
 
-        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
-        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
-        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
-        set status [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $status]
+        foreach var {test_name test_file error_msg status} {
+            set $var [json_escape_string [set $var]]
+        }
 
         lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"$status\",\"error\":\"$error_msg\"\}"
     }
@@ -668,6 +667,10 @@ proc write_test_failures {} {
         file mkdir $outdir
     }
     set fp [open $::failures_output_file w]
+    # JSON is UTF-8. Left on the system encoding, which some CI containers set
+    # to a single-byte locale, a non-ASCII byte in a message is written in that
+    # encoding and the consumer cannot decode the file.
+    fconfigure $fp -encoding utf-8
     puts $fp "\[[join $failures ","]\]"
     close $fp
 }

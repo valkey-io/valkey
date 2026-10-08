@@ -73,6 +73,33 @@
 #define REDIS_TLS_PROTO_DEFAULT (REDIS_TLS_PROTO_TLSv1_2)
 #endif
 
+/* Support for the tls-groups configuration directive.
+ *
+ * Ported from redis/redis#15556; adapted for Valkey naming.
+ *
+ * CONN_TLS_SUPPORTS_GROUPS is set when the linked OpenSSL provides an API
+ * to configure named groups on a context.  Two equivalent API names exist
+ * across OpenSSL versions:
+ *   SSL_CTX_set1_groups_list   (OpenSSL >= 1.1.1)
+ *   SSL_CTX_set1_curves_list   (older alias)
+ * Build with -DTLS_NO_GROUPS to disable this feature explicitly.
+ * If neither API is present and TLS_NO_GROUPS is not set the build fails so
+ * that an operator-requested group list is never silently discarded. */
+#ifdef TLS_NO_GROUPS
+# define CONN_TLS_SUPPORTS_GROUPS 0
+#elif defined(SSL_CTX_set1_groups_list)
+# define CONN_TLS_SUPPORTS_GROUPS 1
+# define valkeyTlsCtxSetGroupsList(ctx, list) \
+    SSL_CTX_set1_groups_list((ctx), (list))
+#elif defined(SSL_CTX_set1_curves_list)
+# define CONN_TLS_SUPPORTS_GROUPS 1
+# define valkeyTlsCtxSetGroupsList(ctx, list) \
+    SSL_CTX_set1_curves_list((ctx), (list))
+#else
+# error "tls-groups requires SSL_CTX_set1_groups_list or SSL_CTX_set1_curves_list. "\
+       "Build with -DTLS_NO_GROUPS to disable."
+#endif
+
 SSL_CTX *valkey_tls_ctx = NULL;
 SSL_CTX *valkey_tls_client_ctx = NULL;
 
@@ -730,6 +757,24 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
 #ifdef TLS1_3_VERSION
     if (ctx_config->ciphersuites && !SSL_CTX_set_ciphersuites(ctx, ctx_config->ciphersuites)) {
         serverLog(LL_WARNING, "Failed to configure ciphersuites: %s", ctx_config->ciphersuites);
+        goto error;
+    }
+#endif
+
+#if CONN_TLS_SUPPORTS_GROUPS
+    if (ctx_config->groups != NULL) {
+        if (!valkeyTlsCtxSetGroupsList(ctx, ctx_config->groups)) {
+            serverLog(LL_WARNING,
+                      "TLS group list '%s' was rejected by OpenSSL",
+                      ctx_config->groups);
+            goto error;
+        }
+    }
+#else
+    if (ctx_config->groups != NULL) {
+        serverLog(LL_WARNING, "tls-groups is set but this build does not support "
+                              "SSL_CTX_set1_groups_list; recompile without -DTLS_NO_GROUPS "
+                              "or upgrade OpenSSL");
         goto error;
     }
 #endif

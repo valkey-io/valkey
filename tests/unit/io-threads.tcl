@@ -171,3 +171,55 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         assert_equal {PONG} [r ping]
     }
 }
+
+start_server {config "minimal.conf" tags {"scripting" "external:skip" "valgrind:skip"} overrides {io-threads 5 io-threads-always-active yes busy-reply-threshold 1}} {
+    # Use a long-running Lua script to reproduce the crash when disabling
+    # prefetching. See PR 4803 for other affected scenarios.
+    test {Disabling prefetching during reentrant batch processing does not free an active batch} {
+        set server_pid [s process_id]
+
+        set cfg [valkey_deferring_client]
+        set ev [valkey_deferring_client]
+        set rds {}
+        for {set i 0} {$i < 16} {incr i} {
+            lappend rds [valkey_deferring_client]
+        }
+
+        for {set round 0} {$round < 50} {incr round} {
+            if {[catch {r config set prefetch-batch-max-size 16} res]} {
+                fail "server is gone at round $round: $res"
+            }
+            assert_equal {OK} $res
+
+            pause_process $server_pid
+
+            [lindex $rds 0] get a
+            $cfg config set prefetch-batch-max-size 0
+            $ev eval {local x = 0 for i=1,2000000 do x = x + i end return x} 0
+            foreach rd [lrange $rds 1 end] {
+                $rd get a
+            }
+
+            resume_process $server_pid
+            assert_equal 2000001000000 [$ev read]
+
+            if {[catch {$cfg read} res]} {
+                assert_match "BUSY*" $res
+            } else {
+                assert_equal {OK} $res
+            }
+            foreach rd $rds {
+                if {[catch {$rd read} res]} {
+                    assert_match "BUSY*" $res
+                } else {
+                    assert_equal {} $res
+                }
+            }
+        }
+
+        foreach rd [list $cfg $ev {*}$rds] {
+            $rd close
+        }
+        assert_equal {PONG} [r ping]
+    }
+}

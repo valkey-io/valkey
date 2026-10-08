@@ -4623,7 +4623,7 @@ static inline int getCommandType(client *c, struct serverCommand *cmd) {
     if (cmd->proc == helloCommand) {
         /* HELLO [protover [AUTH username password] [SETNAME clientname]] is AUTH if it authenticates. */
         for (int j = 2; j < c->argc - 2; j++) {
-            if (!strcasecmp(objectGetVal(c->argv[j]), "AUTH")) return CMD_KIND_AUTH;
+            if (!strcasecmp((const char *)objectGetVal(c->argv[j]), "AUTH")) return CMD_KIND_AUTH;
         }
     }
     return CMD_KIND_OTHER;

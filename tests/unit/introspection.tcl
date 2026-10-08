@@ -1328,6 +1328,7 @@ start_server {tags {"introspection"}} {
             syslog-facility
             databases
             cluster-databases
+            script-cache-per-db
             io-threads
             logfile
             unixsocketperm

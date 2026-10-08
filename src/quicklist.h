@@ -118,8 +118,11 @@ typedef struct quicklist {
 typedef struct quicklistIter {
     quicklist *quicklist;
     quicklistNode *current;
-    unsigned char *zi; /* points to the current element */
-    long offset;       /* offset in current listpack */
+    unsigned char *zi;               /* points to the current element */
+    unsigned char *decompressed_buf; /* iterator-owned uncompressed buffer when sitting on an LZF node;
+                                      * entry->value and entry->zi point into this buffer until the
+                                      * iterator moves to another node, is reset, or is released. */
+    long offset;                     /* offset in current listpack */
     int direction;
 } quicklistIter;
 

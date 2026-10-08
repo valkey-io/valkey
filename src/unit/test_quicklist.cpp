@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <sys/time.h>
+#include <vector>
 
 extern "C" {
 #include "fmacros.h"
@@ -1802,4 +1803,246 @@ TEST_F(QuicklistTest, quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUI
     zfree(s);
 
 #endif
+}
+
+static quicklist *createCompressedTestQuicklist(int num_entries) {
+    quicklist *ql = quicklistNew(2, 1); /* 2 elements per node, compress depth = 1 */
+    char buf[128];
+    for (int i = 0; i < num_entries; i++) {
+        /* Make strings > MIN_COMPRESS_BYTES (48) and repetitive so LZF compresses them */
+        snprintf(buf, sizeof(buf), "valkey-compressible-element-prefix-0000000000000000000000000000-%04d", i);
+        quicklistPushTail(ql, buf, strlen(buf));
+    }
+    return ql;
+}
+
+TEST_F(QuicklistTest, quicklistReadIterationDoesNotMutateCompressedNodes) {
+    const int num_entries = 20;
+    quicklist *ql = createCompressedTestQuicklist(num_entries);
+    ASSERT_EQ(ql->len, 10ul);
+
+    /* Verify interior nodes (all except head and tail) are LZF compressed */
+    std::vector<quicklistNode *> interior_nodes;
+    std::vector<unsigned char *> original_entries;
+    for (quicklistNode *n = ql->head->next; n != ql->tail; n = n->next) {
+        ASSERT_EQ(n->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+        ASSERT_EQ(n->recompress, 0u);
+        interior_nodes.push_back(n);
+        original_entries.push_back(n->entry);
+    }
+    ASSERT_EQ(interior_nodes.size(), (size_t)8);
+
+    /* Run two concurrent iterators (forward and reverse) across the compressed quicklist.
+     * Note: At i == 10, fwd steps onto node 5 (which rev visited at i == 9) so fwd_entry.value
+     * points into node 5's uncompressed data, and then rev steps off node 5 onto node 4.
+     * Under the old in-place decompression/recompression, rev stepping off node 5 recompressed
+     * node 5 and freed its raw buffer while fwd_entry.value still pointed into it (triggering
+     * a heap-use-after-free on the memcmp(fwd_entry.value, ...) below). */
+    quicklistIter *fwd = quicklistGetIterator(ql, AL_START_HEAD);
+    quicklistIter *rev = quicklistGetIterator(ql, AL_START_TAIL);
+    quicklistEntry fwd_entry, rev_entry;
+
+    for (int i = 0; i < num_entries; i++) {
+        ASSERT_EQ(quicklistNext(fwd, &fwd_entry), 1);
+        ASSERT_EQ(quicklistNext(rev, &rev_entry), 1);
+
+        char expected_fwd[128], expected_rev[128];
+        snprintf(expected_fwd, sizeof(expected_fwd),
+                 "valkey-compressible-element-prefix-0000000000000000000000000000-%04d", i);
+        snprintf(expected_rev, sizeof(expected_rev),
+                 "valkey-compressible-element-prefix-0000000000000000000000000000-%04d", num_entries - 1 - i);
+
+        ASSERT_EQ(fwd_entry.sz, strlen(expected_fwd));
+        ASSERT_EQ(memcmp(fwd_entry.value, expected_fwd, fwd_entry.sz), 0);
+        ASSERT_EQ(rev_entry.sz, strlen(expected_rev));
+        ASSERT_EQ(memcmp(rev_entry.value, expected_rev, rev_entry.sz), 0);
+
+        /* Verify interior nodes remain LZF compressed with their entry pointers unchanged */
+        for (size_t j = 0; j < interior_nodes.size(); j++) {
+            ASSERT_EQ(interior_nodes[j]->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+            ASSERT_EQ(interior_nodes[j]->recompress, 0u);
+            ASSERT_EQ(interior_nodes[j]->entry, original_entries[j]);
+        }
+    }
+
+    ASSERT_EQ(quicklistNext(fwd, &fwd_entry), 0);
+    ASSERT_EQ(quicklistNext(rev, &rev_entry), 0);
+    quicklistReleaseIterator(fwd);
+    quicklistReleaseIterator(rev);
+
+    /* Also verify quicklistGetIteratorEntryAtIdx on a compressed interior node does not mutate */
+    quicklistEntry idx_entry;
+    quicklistIter *idx_iter = quicklistGetIteratorEntryAtIdx(ql, 10, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    ASSERT_EQ(idx_entry.node->recompress, 0u);
+    quicklistReleaseIterator(idx_iter);
+
+    /* Verify read traversal does not opportunistically recompress a RAW interior node */
+    quicklistNode *raw_interior_node = ql->head->next;
+    ASSERT_TRUE(testOnlyQuicklistDecompressNode(raw_interior_node));
+    raw_interior_node->attempted_compress = 0;
+    raw_interior_node->recompress = 0;
+    fwd = quicklistGetIterator(ql, AL_START_HEAD);
+    while (quicklistNext(fwd, &fwd_entry)) {
+    }
+    quicklistReleaseIterator(fwd);
+    ASSERT_EQ(raw_interior_node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_RAW);
+    ASSERT_EQ(raw_interior_node->attempted_compress, 0u);
+    ASSERT_EQ(raw_interior_node->recompress, 0u);
+
+    quicklistRelease(ql);
+}
+
+TEST_F(QuicklistTest, quicklistReadIterationCompressedPlainNodes) {
+    /* Verify compressed PLAIN nodes (large elements) are read without in-place mutation */
+    quicklist *plain_ql = quicklistNew(-1, 1); /* -1 fill = 4KB max listpack size; >4KB becomes PLAIN node */
+    size_t plain_sz = 8192;
+    char *plain_buf = (char *)zmalloc(plain_sz);
+    for (int i = 0; i < 5; i++) {
+        memset(plain_buf, 'A' + i, plain_sz);
+        quicklistPushTail(plain_ql, plain_buf, plain_sz);
+    }
+    ASSERT_EQ(plain_ql->len, 5ul);
+    for (quicklistNode *n = plain_ql->head->next; n != plain_ql->tail; n = n->next) {
+        ASSERT_TRUE(QL_NODE_IS_PLAIN(n));
+        ASSERT_EQ(n->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    }
+
+    quicklistEntry fwd_entry;
+    quicklistIter *fwd = quicklistGetIterator(plain_ql, AL_START_HEAD);
+    int idx = 0;
+    while (quicklistNext(fwd, &fwd_entry)) {
+        ASSERT_EQ(fwd_entry.sz, plain_sz);
+        ASSERT_EQ(((char *)fwd_entry.value)[0], 'A' + idx);
+        for (quicklistNode *n = plain_ql->head->next; n != plain_ql->tail; n = n->next) {
+            ASSERT_EQ(n->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+            ASSERT_EQ(n->recompress, 0u);
+        }
+        idx++;
+    }
+    ASSERT_EQ(idx, 5);
+    quicklistReleaseIterator(fwd);
+
+    /* Replace a compressed PLAIN interior node with another large element */
+    quicklistEntry idx_entry;
+    quicklistIter *idx_iter = quicklistGetIteratorEntryAtIdx(plain_ql, 2, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_TRUE(QL_NODE_IS_PLAIN(idx_entry.node));
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    memset(plain_buf, 'Z', plain_sz);
+    quicklistReplaceEntry(idx_iter, &idx_entry, plain_buf, plain_sz);
+    ASSERT_TRUE(QL_NODE_IS_PLAIN(idx_entry.node));
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    ASSERT_EQ(idx_entry.node->recompress, 0u);
+    quicklistReleaseIterator(idx_iter);
+
+    /* Replace a compressed PLAIN interior node with a small compressible element */
+    idx_iter = quicklistGetIteratorEntryAtIdx(plain_ql, 2, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_EQ(idx_entry.sz, plain_sz);
+    ASSERT_EQ(((char *)idx_entry.value)[0], 'Z');
+    const char *small_elem = "valkey-compressible-small-replacement-00000000000000000000000000";
+    quicklistReplaceEntry(idx_iter, &idx_entry, (void *)small_elem, strlen(small_elem));
+    quicklistReleaseIterator(idx_iter);
+
+    idx_iter = quicklistGetIteratorEntryAtIdx(plain_ql, 2, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_FALSE(QL_NODE_IS_PLAIN(idx_entry.node));
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    ASSERT_EQ(idx_entry.node->recompress, 0u);
+    ASSERT_EQ(idx_entry.sz, strlen(small_elem));
+    ASSERT_EQ(memcmp(idx_entry.value, small_elem, idx_entry.sz), 0);
+    quicklistReleaseIterator(idx_iter);
+
+    zfree(plain_buf);
+    quicklistRelease(plain_ql);
+}
+
+TEST_F(QuicklistTest, quicklistMutatingIterationPromotesCompressedNodes) {
+    const int num_entries = 20;
+    quicklist *ql = createCompressedTestQuicklist(num_entries);
+    ASSERT_EQ(ql->len, 10ul);
+
+    /* Mutate through quicklistReplaceEntry and verify it promotes, replaces, and recompresses */
+    quicklistEntry idx_entry;
+    quicklistIter *idx_iter = quicklistGetIteratorEntryAtIdx(ql, 10, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    ASSERT_EQ(idx_entry.node->recompress, 0u);
+    const char *replacement = "valkey-compressible-replacement-00000000000000000000000000000000-0010";
+    quicklistReplaceEntry(idx_iter, &idx_entry, (void *)replacement, strlen(replacement));
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    ASSERT_EQ(idx_entry.node->recompress, 0u);
+    quicklistReleaseIterator(idx_iter);
+
+    /* Verify quicklistDelEntry promotes node during iteration and recompresses on release.
+     * Note: each node has fill=2 elements, so deleting 1 element leaves idx_entry.node alive. */
+    idx_iter = quicklistGetIteratorEntryAtIdx(ql, 10, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_EQ(idx_entry.sz, strlen(replacement));
+    ASSERT_EQ(memcmp(idx_entry.value, replacement, idx_entry.sz), 0);
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    quicklistDelEntry(idx_iter, &idx_entry);
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_RAW);
+    ASSERT_EQ(idx_entry.node->recompress, 1u);
+    quicklistReleaseIterator(idx_iter);
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    ASSERT_EQ(idx_entry.node->recompress, 0u);
+
+    /* Verify quicklistInsertAfter on a compressed interior node promotes, inserts, and recompresses */
+    idx_iter = quicklistGetIteratorEntryAtIdx(ql, 10, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    const char *inserted = "valkey-compressible-inserted-0000000000000000000000000000000000-0010";
+    quicklistInsertAfter(idx_iter, &idx_entry, (void *)inserted, strlen(inserted));
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    ASSERT_EQ(idx_entry.node->recompress, 0u);
+    ASSERT_EQ(quicklistNext(idx_iter, &idx_entry), 0);
+    quicklistReleaseIterator(idx_iter);
+
+    /* Delete all elements of a compressed interior node while iterating forward */
+    quicklistNode *target_node = ql->head->next->next;
+    ASSERT_EQ(target_node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    unsigned long count_before = ql->count;
+    unsigned int target_count = target_node->count;
+    quicklistEntry fwd_entry;
+    quicklistIter *fwd = quicklistGetIterator(ql, AL_START_HEAD);
+    while (quicklistNext(fwd, &fwd_entry)) {
+        if (fwd_entry.node == target_node) {
+            quicklistDelEntry(fwd, &fwd_entry);
+        }
+    }
+    quicklistReleaseIterator(fwd);
+    ASSERT_EQ(ql->count, count_before - target_count);
+
+    /* Delete all elements of a compressed interior node while iterating in reverse (AL_START_TAIL) */
+    target_node = ql->tail->prev->prev;
+    ASSERT_EQ(target_node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    count_before = ql->count;
+    target_count = target_node->count;
+    quicklistEntry rev_entry;
+    quicklistIter *rev = quicklistGetIterator(ql, AL_START_TAIL);
+    while (quicklistNext(rev, &rev_entry)) {
+        if (rev_entry.node == target_node) {
+            quicklistDelEntry(rev, &rev_entry);
+        }
+    }
+    quicklistReleaseIterator(rev);
+    ASSERT_EQ(ql->count, count_before - target_count);
+
+    /* Verify inserting a large element (>MAX_LISTPACK_BYTES) on a compressed interior node
+     * splits the node, resets the iterator, and leaves no dangling recompress flag. */
+    idx_iter = quicklistGetIteratorEntryAtIdx(ql, 4, &idx_entry);
+    ASSERT_NE(idx_iter, nullptr);
+    ASSERT_EQ(idx_entry.node->encoding, (unsigned int)QUICKLIST_NODE_ENCODING_LZF);
+    size_t large_sz = 10000; /* > 8KB (MAX_LISTPACK_BYTES) so isLargeElement() is true even with positive fill */
+    char *large_buf = (char *)zmalloc(large_sz);
+    memset(large_buf, 'L', large_sz);
+    quicklistInsertAfter(idx_iter, &idx_entry, large_buf, large_sz);
+    ASSERT_EQ(quicklistNext(idx_iter, &idx_entry), 0);
+    quicklistReleaseIterator(idx_iter);
+    zfree(large_buf);
+
+    quicklistRelease(ql);
 }

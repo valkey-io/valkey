@@ -353,7 +353,7 @@ void streamLogListpackContent(unsigned char *lp) {
     }
 }
 
-/* Convert the specified stream entry ID as a 128 bit big endian number, so
+/* Convert the specified stream entry ID as a 128 bit big-endian number, so
  * that the IDs can be sorted lexicographically. */
 void streamEncodeID(void *buf, streamID *id) {
     uint64_t e[2];
@@ -487,7 +487,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
 
     /* We have to add the key into the radix tree in lexicographic order,
      * to do so we consider the ID as a single 128 bit number written in
-     * big endian, so that the most significant bytes are the first ones. */
+     * big-endian, so that the most significant bytes are the first ones. */
     uint64_t rax_key[2]; /* Key in the radix tree containing the listpack.*/
     streamID primary_id; /* ID of the primary entry in the listpack. */
 

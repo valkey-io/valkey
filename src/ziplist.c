@@ -15,7 +15,7 @@
  *
  * <zlbytes> <zltail> <zllen> <entry> <entry> ... <entry> <zlend>
  *
- * NOTE: all fields are stored in little endian, if not specified otherwise.
+ * NOTE: all fields are stored in little-endian, if not specified otherwise.
  *
  * <uint32_t zlbytes> is an unsigned integer to hold the number of bytes that
  * the ziplist occupies, including the four bytes of the zlbytes field itself.
@@ -66,7 +66,7 @@
  * Or alternatively if the previous entry length is greater than 253 bytes
  * the following encoding is used:
  *
- * 0xFE <4 bytes unsigned little endian prevlen> <encoding> <entry>
+ * 0xFE <4 bytes unsigned little-endian prevlen> <encoding> <entry>
  *
  * The encoding field of the entry depends on the content of the
  * entry. When the entry is a string, the first 2 bits of the encoding first
@@ -82,13 +82,13 @@
  *      "pppppp" represents the unsigned 6 bit length.
  * |01pppppp|qqqqqqqq| - 2 bytes
  *      String value with length less than or equal to 16383 bytes (14 bits).
- *      IMPORTANT: The 14 bit number is stored in big endian.
+ *      IMPORTANT: The 14 bit number is stored in big-endian.
  * |10000000|qqqqqqqq|rrrrrrrr|ssssssss|tttttttt| - 5 bytes
  *      String value with length greater than or equal to 16384 bytes.
  *      Only the 4 bytes following the first byte represents the length
  *      up to 2^32-1. The 6 lower bits of the first byte are not used and
  *      are set to zero.
- *      IMPORTANT: The 32 bit number is stored in big endian.
+ *      IMPORTANT: The 32 bit number is stored in big-endian.
  * |11000000| - 3 bytes
  *      Integer encoded as int16_t (2 bytes).
  * |11010000| - 5 bytes
@@ -106,7 +106,7 @@
  * |11111111| - End of ziplist special entry.
  *
  * Like for the ziplist header, all the integers are represented in little
- * endian byte order, even when this code is compiled in big endian systems.
+ * endian byte order, even when this code is compiled in big-endian systems.
  *
  * EXAMPLES OF ACTUAL ZIPLISTS
  * ===========================

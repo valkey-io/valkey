@@ -13,7 +13,7 @@ It supports a wide range of native structures and an extensible plugin system fo
 # Building Valkey using `Makefile`
 
 Valkey can be compiled and used on Linux, macOS, OpenBSD, NetBSD, FreeBSD.
-We support big endian and little endian architectures, and both 32 bit
+We support big-endian and little-endian architectures, and both 32 bit
 and 64 bit systems.
 
 It may compile on Solaris derived systems (for instance SmartOS) but our

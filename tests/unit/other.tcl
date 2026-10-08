@@ -602,7 +602,7 @@ start_server {tags {"other external:skip"}} {
             set cmdline [read_proc_title [srv 0 pid]]
 
             assert_equal "TEST" [lindex $cmdline 0]
-            assert_match "*/valkey-server" [lindex $cmdline 1]
+            assert_match "*/valkey-server$::VALKEY_PROG_SUFFIX" [lindex $cmdline 1]
 
             if {$::tls} {
                 set expect_port [srv 0 pport]

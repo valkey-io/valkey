@@ -1,7 +1,7 @@
 {
     "DIGEST": {
         "summary": "Returns a fingerprint of the ACL rules currently in effect.",
-        "complexity": "O(N). Where N is the number of configured users.",
+        "complexity": "O(N). Where N is the number of configured users and roles.",
         "group": "server",
         "since": "9.2.0",
         "arity": 2,

@@ -75,6 +75,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, mstime_t now, int didx) 
         decrRefCount(keyobj);
         server.dirty++;
         exitExecutionUnit();
+        if (server.latency_tracking_enabled) updateExpireLagHistogram(&server.expire_lag_active_histogram, t, now);
         return 1;
     } else {
         return 0;

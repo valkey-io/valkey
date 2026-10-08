@@ -81,6 +81,7 @@ stream *streamNew(void) {
     s->max_deleted_entry_id.seq = 0;
     s->max_deleted_entry_id.ms = 0;
     s->entries_added = 0;
+    s->total_lp_bytes = 0;
     s->cgroups = NULL; /* Created on demand to save memory when not used. */
     return s;
 }
@@ -193,6 +194,7 @@ robj *streamDup(robj *o) {
     new_s->last_id = s->last_id;
     new_s->max_deleted_entry_id = s->max_deleted_entry_id;
     new_s->entries_added = s->entries_added;
+    new_s->total_lp_bytes = s->total_lp_bytes;
     raxStop(&ri);
 
     if (s->cgroups == NULL) return sobj;
@@ -544,6 +546,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
             lp = lpShrinkToFit(lp);
             if (ri.data != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
             lp = NULL;
+            lp_bytes = 0;
         }
     }
 
@@ -654,6 +657,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     if (ri.data != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
     s->length++;
     s->entries_added++;
+    s->total_lp_bytes += lpBytes(lp) - lp_bytes;
     s->last_id = id;
     if (s->length == 1) s->first_id = id;
     if (added_id) *added_id = id;
@@ -669,7 +673,7 @@ typedef struct {
 
     /* XADD + XTRIM common options */
     int trim_strategy;         /* TRIM_STRATEGY_* */
-    int trim_strategy_arg_idx; /* Index of the count in MAXLEN/MINID, for rewriting. */
+    int trim_strategy_arg_idx; /* Index of the trim threshold, for rewriting. */
     int limit_arg_idx;         /* Index of the LIMIT token in argv if it was given,
                                 * 0 otherwise. Used to strip the redundant LIMIT
                                 * option when rewriting the command for propagation. */
@@ -681,11 +685,14 @@ typedef struct {
     long long maxlen; /* After trimming, leave stream at this length . */
     /* TRIM_STRATEGY_MINID options */
     streamID minid; /* Trim by ID (No stream entries with ID < 'minid' will remain) */
+    /* TRIM_STRATEGY_MAXBYTES options */
+    long long maxbytes; /* The total listpack size in bytes to retain. */
 } streamAddTrimArgs;
 
 #define TRIM_STRATEGY_NONE 0
 #define TRIM_STRATEGY_MAXLEN 1
 #define TRIM_STRATEGY_MINID 2
+#define TRIM_STRATEGY_MAXBYTES 3
 
 /* Trim the stream 's' according to args->trim_strategy, and return the
  * number of elements removed from the stream. The 'approx' option, if non-zero,
@@ -694,36 +701,42 @@ typedef struct {
  * entries with IDs < 'id' in case of MINID (or more elements than 'maxlen'
  * in case of MAXLEN), and elements are only removed if we can remove
  * a *whole* node of the radix tree. The elements are removed from the head
- * of the stream (older elements).
+ * of the stream (older elements). MAXBYTES only removes whole nodes, with or
+ * without 'approx', so the stream may keep more than 'maxbytes' bytes.
  *
  * The function may return zero if:
  *
  * 1) The minimal entry ID of the stream is already < 'id' (MINID); or
- * 2) The stream is already shorter or equal to the specified max length (MAXLEN); or
- * 3) The 'approx' option is true and the head node did not have enough elements
- *    to be deleted.
+ * 2) The stream is already at or below the specified max length (MAXLEN) or
+ *    max bytes (MAXBYTES); or
+ * 3) The head node cannot be removed whole, and 'approx' is true or the
+ *    strategy is MAXBYTES.
  *
  * args->limit is the maximum number of entries to delete. The purpose is to
  * prevent this function from taking to long.
  * If 'limit' is 0 then we do not limit the number of deleted entries.
  * Much like the 'approx', if 'limit' is smaller than the number of entries
  * that should be trimmed, there is a chance we will still have entries with
- * IDs < 'id' (or number of elements >= maxlen in case of MAXLEN).
+ * IDs < 'id' (or more elements than 'maxlen' in case of MAXLEN, or more bytes
+ * than 'maxbytes' in case of MAXBYTES).
  */
 int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
     size_t maxlen = args->maxlen;
     streamID *id = &args->minid;
+    uint64_t maxbytes = (uint64_t)args->maxbytes;
     int approx = args->approx_trim;
     int64_t limit = args->limit;
     int trim_strategy = args->trim_strategy;
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
+    if (trim_strategy == TRIM_STRATEGY_MAXBYTES && s->total_lp_bytes <= maxbytes) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0 && !approx && limit == 0) {
         int64_t deleted = s->length;
         raxFreeWithCallback(s->rax, lpFreeVoid);
         s->rax = raxNew();
         s->length = 0;
+        s->total_lp_bytes = 0;
         s->first_id.ms = 0;
         s->first_id.seq = 0;
         return deleted;
@@ -742,12 +755,15 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
         /* Check if we exceeded the amount of work we could do */
         if (limit && (deleted + entries) > limit) break;
+        size_t lp_bytes = lpBytes(lp);
 
         /* Check if we can remove the whole node. */
         int remove_node;
         streamID primary_id = {0}; /* For MINID */
         if (trim_strategy == TRIM_STRATEGY_MAXLEN) {
             remove_node = s->length - entries >= maxlen;
+        } else if (trim_strategy == TRIM_STRATEGY_MAXBYTES) {
+            remove_node = (s->total_lp_bytes - lp_bytes) >= maxbytes;
         } else {
             /* Read the primary ID from the radix tree key. */
             streamDecodeID(ri.key, &primary_id);
@@ -761,6 +777,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         }
 
         if (remove_node) {
+            s->total_lp_bytes -= lp_bytes;
             lpFree(lp);
             raxRemove(s->rax, ri.key, ri.key_len, NULL);
             raxSeek(&ri, ">=", ri.key, ri.key_len);
@@ -770,8 +787,9 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         }
 
         /* If we cannot remove a whole element, and approx is true,
-         * stop here. */
-        if (approx) break;
+         * stop here. Entries deleted inside a node keep their bytes in the
+         * listpack, so MAXBYTES always stops here. */
+        if (approx || trim_strategy == TRIM_STRATEGY_MAXBYTES) break;
 
         /* Now we have to trim entries from within 'lp' */
         int64_t deleted_from_lp = 0;
@@ -859,6 +877,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
         /* Update the listpack with the new pointer. */
         raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+        s->total_lp_bytes += lpBytes(lp) - lp_bytes;
 
         break; /* If we are here, there was enough to delete in the current
                   node, so no need to go to the next node. */
@@ -894,6 +913,28 @@ int64_t streamTrimByID(stream *s, streamID minid, int approx) {
     return streamTrim(s, &args);
 }
 
+/* Parse the optional ~ or = after the trimming strategy token at argv[i].
+ * Returns the index of the threshold argument, or -1 after replying if a
+ * strategy was already given. */
+static int streamParseTrimStrategyOrReply(client *c, streamAddTrimArgs *args, int strategy, int i) {
+    if (args->trim_strategy != TRIM_STRATEGY_NONE) {
+        addReplyError(c, "syntax error, MAXLEN, MINID and MAXBYTES options at the same time are not compatible");
+        return -1;
+    }
+    int moreargs = (c->argc - 1) - i;
+    args->approx_trim = 0;
+    char *next = objectGetVal(c->argv[i + 1]);
+    if (moreargs >= 2 && next[0] == '~' && next[1] == '\0') {
+        args->approx_trim = 1;
+        i++;
+    } else if (moreargs >= 2 && next[0] == '=' && next[1] == '\0') {
+        i++;
+    }
+    args->trim_strategy = strategy;
+    args->trim_strategy_arg_idx = i + 1;
+    return i + 1;
+}
+
 /* Parse the arguments of XADD/XTRIM.
  *
  * See streamAddTrimArgs for more details about the arguments handled.
@@ -916,48 +957,24 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
              * creation. */
             break;
         } else if (!strcasecmp(opt, "maxlen") && moreargs) {
-            if (args->trim_strategy != TRIM_STRATEGY_NONE) {
-                addReplyError(c, "syntax error, MAXLEN and MINID options at the same time are not compatible");
-                return -1;
-            }
-            args->approx_trim = 0;
-            char *next = objectGetVal(c->argv[i + 1]);
-            /* Check for the form MAXLEN ~ <count>. */
-            if (moreargs >= 2 && next[0] == '~' && next[1] == '\0') {
-                args->approx_trim = 1;
-                i++;
-            } else if (moreargs >= 2 && next[0] == '=' && next[1] == '\0') {
-                i++;
-            }
-            if (getLongLongFromObjectOrReply(c, c->argv[i + 1], &args->maxlen, NULL) != C_OK) return -1;
+            if ((i = streamParseTrimStrategyOrReply(c, args, TRIM_STRATEGY_MAXLEN, i)) < 0) return -1;
+            if (getLongLongFromObjectOrReply(c, c->argv[i], &args->maxlen, NULL) != C_OK) return -1;
 
             if (args->maxlen < 0) {
                 addReplyError(c, "The MAXLEN argument must be >= 0.");
                 return -1;
             }
-            i++;
-            args->trim_strategy = TRIM_STRATEGY_MAXLEN;
-            args->trim_strategy_arg_idx = i;
         } else if (!strcasecmp(opt, "minid") && moreargs) {
-            if (args->trim_strategy != TRIM_STRATEGY_NONE) {
-                addReplyError(c, "syntax error, MAXLEN and MINID options at the same time are not compatible");
+            if ((i = streamParseTrimStrategyOrReply(c, args, TRIM_STRATEGY_MINID, i)) < 0) return -1;
+            if (streamParseStrictIDOrReply(c, c->argv[i], &args->minid, 0, NULL) != C_OK) return -1;
+        } else if (!strcasecmp(opt, "maxbytes") && moreargs) {
+            if ((i = streamParseTrimStrategyOrReply(c, args, TRIM_STRATEGY_MAXBYTES, i)) < 0) return -1;
+            if (getLongLongFromObjectOrReply(c, c->argv[i], &args->maxbytes, NULL) != C_OK) return -1;
+
+            if (args->maxbytes < 0) {
+                addReplyError(c, "The MAXBYTES argument must be >= 0.");
                 return -1;
             }
-            args->approx_trim = 0;
-            char *next = objectGetVal(c->argv[i + 1]);
-            /* Check for the form MINID ~ <id> */
-            if (moreargs >= 2 && next[0] == '~' && next[1] == '\0') {
-                args->approx_trim = 1;
-                i++;
-            } else if (moreargs >= 2 && next[0] == '=' && next[1] == '\0') {
-                i++;
-            }
-
-            if (streamParseStrictIDOrReply(c, c->argv[i + 1], &args->minid, 0, NULL) != C_OK) return -1;
-
-            i++;
-            args->trim_strategy = TRIM_STRATEGY_MINID;
-            args->trim_strategy_arg_idx = i;
         } else if (!strcasecmp(opt, "limit") && moreargs) {
             /* Note about LIMIT: If it was not provided by the caller we set
              * it to 100*server.stream_node_max_entries, and that's to prevent the
@@ -1270,6 +1287,7 @@ void streamIteratorGetField(streamIterator *si,
 void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
     unsigned char *lp = si->lp;
     int64_t aux;
+    size_t lp_bytes = lpBytes(lp);
 
     /* We do not really delete the entry here. Instead we mark it as
      * deleted by flagging it, and also incrementing the count of the
@@ -1287,6 +1305,7 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
     if (aux == 1) {
         /* If this is the last element in the listpack, we can remove the whole
          * node. */
+        si->stream->total_lp_bytes -= lp_bytes;
         lpFree(lp);
         raxRemove(si->stream->rax, si->ri.key, si->ri.key_len, NULL);
     } else {
@@ -1298,6 +1317,7 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
 
         /* Update the listpack with the new pointer. */
         if (si->lp != lp) raxInsert(si->stream->rax, si->ri.key, si->ri.key_len, lp, NULL);
+        si->stream->total_lp_bytes += lpBytes(lp) - lp_bytes;
     }
 
     /* Update the number of entries counter. */
@@ -2054,6 +2074,26 @@ void streamRewriteTrimArgument(client *c, stream *s, int trim_strategy, int idx)
     decrRefCount(arg);
 }
 
+/* Approximate and MAXBYTES trims depend on node layout, which a replica or an
+ * AOF reload may not share, so they are propagated as an exact MAXLEN or MINID
+ * with the resulting length or first ID. */
+static void streamRewriteApproxTrim(client *c, stream *s, streamAddTrimArgs *args) {
+    int idx = args->trim_strategy_arg_idx;
+    if (args->trim_strategy == TRIM_STRATEGY_MAXBYTES) {
+        int token_idx = idx - 1;
+        char *op = objectGetVal(c->argv[token_idx]);
+        if ((op[0] == '~' || op[0] == '=') && op[1] == '\0') {
+            if (args->approx_trim) streamRewriteApproxSpecifier(c, token_idx);
+            token_idx--;
+        }
+        rewriteClientCommandArgument(c, token_idx, shared.maxlen);
+        streamRewriteTrimArgument(c, s, TRIM_STRATEGY_MAXLEN, idx);
+    } else {
+        streamRewriteApproxSpecifier(c, idx - 1);
+        streamRewriteTrimArgument(c, s, args->trim_strategy, idx);
+    }
+}
+
 /* Drop the two-argument "LIMIT <count>" option from the rewritten command.
  *
  * Once we have rewritten "MAXLEN ~ N" to "MAXLEN = <resulting-len>",
@@ -2089,8 +2129,8 @@ void streamRewriteStripLimit(client *c, int limit_idx) {
     decrRefCount(limit_val);
 }
 
-/* XADD key [(MAXLEN [~|=] <count> | MINID [~|=] <id>) [LIMIT <entries>]] [NOMKSTREAM] <ID or *> [field value] [field
- * value] ... */
+/* XADD key [(MAXLEN [~|=] <count> | MINID [~|=] <id> | MAXBYTES [~|=] <bytes>) [LIMIT <entries>]] [NOMKSTREAM]
+ * <ID or *> [field value] [field value] ... */
 void xaddCommand(client *c) {
     /* Parse options. */
     streamAddTrimArgs parsed_args;
@@ -2149,14 +2189,8 @@ void xaddCommand(client *c) {
         if (streamTrim(s, &parsed_args)) {
             notifyKeyspaceEvent(NOTIFY_STREAM, "xtrim", c->argv[1], c->db->id);
         }
-        if (parsed_args.approx_trim) {
-            /* In case our trimming was limited (by LIMIT or by ~) we must
-             * re-write the relevant trim argument to make sure there will be
-             * no inconsistencies in AOF loading or in the replica.
-             * It's enough to check only args->approx because there is no
-             * way LIMIT is given without the ~ option. */
-            streamRewriteApproxSpecifier(c, parsed_args.trim_strategy_arg_idx - 1);
-            streamRewriteTrimArgument(c, s, parsed_args.trim_strategy, parsed_args.trim_strategy_arg_idx);
+        if (parsed_args.approx_trim || parsed_args.trim_strategy == TRIM_STRATEGY_MAXBYTES) {
+            streamRewriteApproxTrim(c, s, &parsed_args);
 
             if (parsed_args.limit_arg_idx) {
                 serverAssert(parsed_args.limit_arg_idx < idpos);
@@ -3994,6 +4028,10 @@ void xackdelCommand(client *c) {
  *                             with IDs smaller than 'id'. Use ~ before the
  *                             count in order to demand approximated trimming
  *                             (like XADD MINID option).
+ * MAXBYTES [~|=] <bytes>   -- Remove whole nodes from the head while at least
+ *                             'bytes' listpack bytes would remain. Use ~
+ *                             before the bytes in order to apply LIMIT
+ *                             (like XADD MAXBYTES option).
  *
  * Other options:
  *
@@ -4020,14 +4058,8 @@ void xtrimCommand(client *c) {
     int64_t deleted = streamTrim(s, &parsed_args);
     if (deleted) {
         notifyKeyspaceEvent(NOTIFY_STREAM, "xtrim", c->argv[1], c->db->id);
-        if (parsed_args.approx_trim) {
-            /* In case our trimming was limited (by LIMIT or by ~) we must
-             * re-write the relevant trim argument to make sure there will be
-             * no inconsistencies in AOF loading or in the replica.
-             * It's enough to check only args->approx because there is no
-             * way LIMIT is given without the ~ option. */
-            streamRewriteApproxSpecifier(c, parsed_args.trim_strategy_arg_idx - 1);
-            streamRewriteTrimArgument(c, s, parsed_args.trim_strategy, parsed_args.trim_strategy_arg_idx);
+        if (parsed_args.approx_trim || parsed_args.trim_strategy == TRIM_STRATEGY_MAXBYTES) {
+            streamRewriteApproxTrim(c, s, &parsed_args);
 
             if (parsed_args.limit_arg_idx) {
                 streamRewriteStripLimit(c, parsed_args.limit_arg_idx);

@@ -10,6 +10,10 @@
             [
                 "6.2.0",
                 "Added the `MINID` trimming strategy and the `LIMIT` option."
+            ],
+            [
+                "9.2.0",
+                "Added the `MAXBYTES` trimming strategy."
             ]
         ],
         "command_flags": [
@@ -67,6 +71,12 @@
                                 "type": "pure-token",
                                 "token": "MINID",
                                 "since": "6.2.0"
+                            },
+                            {
+                                "name": "maxbytes",
+                                "type": "pure-token",
+                                "token": "MAXBYTES",
+                                "since": "9.2.0"
                             }
                         ]
                     },

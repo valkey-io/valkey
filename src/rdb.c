@@ -3028,6 +3028,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 zfree(lp);
                 return NULL;
             }
+            s->total_lp_bytes += lp_size;
         }
         /* Load total number of items inside the stream. */
         s->length = rdbLoadLen(rdb, NULL);

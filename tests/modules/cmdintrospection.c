@@ -34,6 +34,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
              * XADD). */
             {"6.2.0", "Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option."},
             {"7.0.0", "Added support for the `<ms>-*` explicit ID form."},
+            {"9.2.0", "Added the `MAXBYTES` trimming strategy."},
             {0}
         },
         .key_specs = (ValkeyModuleCommandKeySpec[]){
@@ -79,6 +80,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
                                 .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
                                 .token = "MINID",
                                 .since = "6.2.0",
+                            },
+                            {
+                                .name = "maxbytes",
+                                .type = VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
+                                .token = "MAXBYTES",
+                                .since = "9.2.0",
                             },
                             {0}
                         }

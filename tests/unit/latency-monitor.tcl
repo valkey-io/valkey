@@ -243,9 +243,9 @@ start_server {tags {"latency-monitor needs:latency"}} {
         r config resetstat
         set rd [valkey_deferring_client]
         $rd multi
-        $rd set mtk v
-        $rd get mtk
-        $rd incr mtn
+        $rd set "{mt}k" v
+        $rd get "{mt}k"
+        $rd incr "{mt}n"
         $rd exec
         $rd flush
         assert_equal {OK} [$rd read]
@@ -258,6 +258,32 @@ start_server {tags {"latency-monitor needs:latency"}} {
         assert {[e2e_has_samples other]}
         assert {![e2e_has_samples write]}
         assert {![e2e_has_samples read]}
+        r config set latency-tracking-features cmd
+    }
+
+    test {E2E latency records commands of Pub/Sub clients} {
+        r config set latency-tracking-features "cmd e2e"
+        set rd [valkey_deferring_client]
+        $rd subscribe e2e-chain
+        assert_equal {subscribe e2e-chain 1} [$rd read]
+        r config resetstat
+        $rd ping
+        $rd ping
+        $rd ping
+        $rd flush
+        assert_equal {pong {}} [$rd read]
+        assert_equal {pong {}} [$rd read]
+        assert_equal {pong {}} [$rd read]
+        $rd close
+        # The 3 PINGs (other) of the subscribed client. Besides them, "other" holds the CONFIG
+        # RESETSTAT of r and at most one sample per earlier poll, so at least 3 must be the PINGs.
+        set polls 0
+        wait_for_condition 50 100 {
+            [incr polls] > 0 && [dict exists [set histogram [r latency e2e_histogram]] other] &&
+            [dict get $histogram other calls] - $polls >= 3
+        } else {
+            fail "e2e samples were not recorded for a Pub/Sub client: [r latency e2e_histogram]"
+        }
         r config set latency-tracking-features cmd
     }
 

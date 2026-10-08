@@ -18,7 +18,8 @@ void latencyE2eResetAllClients(void);
 
 /* Stamp the read time of a client's next batch. */
 static inline void latencyE2eRecordReadEvent(client *c) {
-    if (c->flag.monitor || getClientType(c) != CLIENT_TYPE_NORMAL) {
+    int type = getClientType(c);
+    if (c->flag.monitor || unlikely(type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB)) {
         if (c->latency_e2e) c->latency_e2e->cur_read_time = 0;
     } else {
         if (unlikely(!c->latency_e2e)) c->latency_e2e = zcalloc(sizeof(latencyE2e));

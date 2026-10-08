@@ -550,7 +550,8 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE 21
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED 22
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED 23
-#define _VALKEYMODULE_EVENT_NEXT 24 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_CLUSTER_TOPOLOGY_CHANGE 24
+#define _VALKEYMODULE_EVENT_NEXT 25 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -613,7 +614,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_CommandResultSuccess = {VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS, 1},
                                ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1},
                                ValkeyModuleEvent_CommandResultRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 1},
-                               ValkeyModuleEvent_CommandResultACLRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, 1};
+                               ValkeyModuleEvent_CommandResultACLRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, 1},
+                               ValkeyModuleEvent_ClusterTopologyChange = {VALKEYMODULE_EVENT_CLUSTER_TOPOLOGY_CHANGE, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0

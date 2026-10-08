@@ -32,8 +32,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __LISTPACK_H
-#define __LISTPACK_H
+#ifndef LISTPACK_H
+#define LISTPACK_H
 
 #include <stdlib.h>
 #include <stdint.h>

@@ -31,8 +31,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __DICT_H
-#define __DICT_H
+#ifndef DICT_H
+#define DICT_H
 
 #include "hashtable.h"
 #include "zmalloc.h"
@@ -295,4 +295,4 @@ static inline dictEntry *dictNext(dictIterator *iter) {
     return NULL;
 }
 
-#endif /* __DICT_H */
+#endif /* DICT_H */

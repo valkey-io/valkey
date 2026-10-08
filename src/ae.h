@@ -30,8 +30,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __AE_H__
-#define __AE_H__
+#ifndef AE_H
+#define AE_H
 
 #include "monotonic.h"
 #include <pthread.h>

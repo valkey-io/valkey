@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __COMMANDLOG_H__
-#define __COMMANDLOG_H__
+#ifndef COMMANDLOG_H
+#define COMMANDLOG_H
 
 #include "server.h"
 
@@ -49,4 +49,4 @@ typedef struct commandlogEntry {
 /* Exported API */
 void commandlogInit(void);
 
-#endif /* __COMMANDLOG_H__ */
+#endif /* COMMANDLOG_H */

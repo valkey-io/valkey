@@ -1,5 +1,5 @@
-#ifndef _ENTRY_H_
-#define _ENTRY_H_
+#ifndef ENTRY_H
+#define ENTRY_H
 
 /* Ensure feature macros from fmacros.h are active even if entry.h is
  * included before server.h */

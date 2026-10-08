@@ -1923,10 +1923,10 @@ TEST_F(OrderedIndexTest, PointerDeleteCollapsesSpilledPrefixSubtree) {
     enum { N = 5000,
            PREFIX = 300 };
     static OrderedIndexItem *items[N];
-    char buf[PREFIX + 8];
+    char buf[PREFIX + 12];
     memset(buf, 'p', PREFIX);
     for (int i = 0; i < N; i++) {
-        snprintf(buf + PREFIX, 8, "%05d", i);
+        snprintf(buf + PREFIX, 12, "%05d", i);
         items[i] = orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
     }
     ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
@@ -1940,16 +1940,16 @@ TEST_F(OrderedIndexTest, RangeDeleteCollapsesSpilledPrefixSubtree) {
      * paths instead of item-by-item deletion. */
     enum { N = 5000,
            PREFIX = 300 };
-    char buf[PREFIX + 8];
+    char buf[PREFIX + 12];
     memset(buf, 'p', PREFIX);
     for (int i = 0; i < N; i++) {
-        snprintf(buf + PREFIX, 8, "%05d", i);
+        snprintf(buf + PREFIX, 12, "%05d", i);
         orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
     }
 
-    snprintf(buf + PREFIX, 8, "%05d", 500);
+    snprintf(buf + PREFIX, 12, "%05d", 500);
     sds min = sdsnewlen(buf, PREFIX + 5);
-    snprintf(buf + PREFIX, 8, "%05d", 4000);
+    snprintf(buf + PREFIX, 12, "%05d", 4000);
     sds max = sdsnewlen(buf, PREFIX + 5);
     ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, NULL, NULL), 3501UL);
     ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), (unsigned long)(N - 3501));
@@ -1966,16 +1966,16 @@ TEST_F(OrderedIndexTest, SameLeafRangeDeleteCollapsesSpilledPrefixSubtree) {
      * inner nodes that empty along the way (LeakSanitizer verifies). */
     enum { N = 5000,
            PREFIX = 300 };
-    char buf[PREFIX + 8];
+    char buf[PREFIX + 12];
     memset(buf, 'p', PREFIX);
     for (int i = 0; i < N; i++) {
-        snprintf(buf + PREFIX, 8, "%05d", i);
+        snprintf(buf + PREFIX, 12, "%05d", i);
         orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
     }
     ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
 
     for (int i = 0; i < N; i++) {
-        snprintf(buf + PREFIX, 8, "%05d", i);
+        snprintf(buf + PREFIX, 12, "%05d", i);
         sds member = sdsnewlen(buf, PREFIX + 5);
         ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, member, member, 0, 0, NULL, NULL), 1UL);
         sdsfree(member);
@@ -2001,7 +2001,7 @@ TEST_F(OrderedIndexTest, EstimateStructureMemoryTracksTreeShape) {
     static char big[BIG];
     memset(big, 'b', BIG);
     for (int i = 0; i < N; i++) {
-        snprintf(big, 8, "%06d", i);
+        snprintf(big, 12, "%06d", i);
         big[7] = 'x';
         orderedIndexInsert(oi, 1.0, big, BIG);
     }
@@ -2015,7 +2015,7 @@ TEST_F(OrderedIndexTest, EstimateStructureMemoryTracksTreeShape) {
      * loose at the low end because the single root inner node is a fixed
      * cost that dominates small trees. */
     for (int i = N; i < N * 10; i++) {
-        snprintf(big, 8, "%06d", i);
+        snprintf(big, 12, "%06d", i);
         big[7] = 'x';
         orderedIndexInsert(oi, 1.0, big, BIG);
     }

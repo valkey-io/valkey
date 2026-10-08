@@ -26,6 +26,8 @@ typedef struct bulkStrRef {
     sds str;
 } bulkStrRef;
 
+/* Fields of this packed struct may be misaligned, so tests cast them to values
+ * before passing them to ASSERT_EQ, which binds its arguments by reference. */
 typedef struct __attribute__((__packed__)) payloadHeader {
     size_t payload_len;
     size_t reply_len;
@@ -488,7 +490,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToBuffer) {
 
     payloadHeader *header1 = c->last_header;
     ASSERT_EQ(header1->payload_type, BULK_STR_REF);
-    ASSERT_EQ(header1->payload_len, PTRS_LEN);
+    ASSERT_EQ((size_t)header1->payload_len, PTRS_LEN);
 
     robj *ptr;
     memcpy(&ptr, c->buf + sizeof(payloadHeader), sizeof(ptr));
@@ -500,7 +502,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToBuffer) {
     /* 2 offloads expected in c->buf */
     ASSERT_EQ(c->bufpos, sizeof(payloadHeader) + 2 * PTRS_LEN);
     ASSERT_EQ(header1->payload_type, BULK_STR_REF);
-    ASSERT_EQ(header1->payload_len, 2 * PTRS_LEN);
+    ASSERT_EQ((size_t)header1->payload_len, 2 * PTRS_LEN);
 
     memcpy(&ptr, c->buf + sizeof(payloadHeader) + PTRS_LEN, sizeof(ptr));
     ASSERT_EQ(obj2, ptr);
@@ -513,16 +515,16 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToBuffer) {
     /* 2 offloads and plain reply expected in c->buf. So 2 headers expected as well */
     ASSERT_EQ(c->bufpos, 2 * sizeof(payloadHeader) + 2 * PTRS_LEN + plain_len);
     ASSERT_EQ(header1->payload_type, BULK_STR_REF);
-    ASSERT_EQ(header1->payload_len, 2 * PTRS_LEN);
+    ASSERT_EQ((size_t)header1->payload_len, 2 * PTRS_LEN);
     payloadHeader *header2 = c->last_header;
     ASSERT_EQ(header2->payload_type, PLAIN_REPLY);
-    ASSERT_EQ(header2->payload_len, plain_len);
+    ASSERT_EQ((size_t)header2->payload_len, plain_len);
 
     /* Add more plain replies. Check same plain reply header updated properly */
     for (int i = 0; i < 9; ++i) _addReplyToBufferOrList(c, plain, plain_len);
     ASSERT_EQ(c->bufpos, 2 * sizeof(payloadHeader) + 2 * PTRS_LEN + 10 * plain_len);
     ASSERT_EQ(header2->payload_type, PLAIN_REPLY);
-    ASSERT_EQ(header2->payload_len, plain_len * 10);
+    ASSERT_EQ((size_t)header2->payload_len, plain_len * 10);
 
     /* Test 3: Add one more bulk offload to the buffer */
     testOnlyAddBulkStrRefToBufferOrList(c, obj);
@@ -584,7 +586,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToList) {
     ASSERT_EQ(blk->used, sizeof(payloadHeader) + PTRS_LEN);
     payloadHeader *header1 = blk->last_header;
     ASSERT_EQ(header1->payload_type, BULK_STR_REF);
-    ASSERT_EQ(header1->payload_len, PTRS_LEN);
+    ASSERT_EQ((size_t)header1->payload_len, PTRS_LEN);
 
     robj *ptr;
     memcpy(&ptr, blk->buf + sizeof(payloadHeader), sizeof(ptr));
@@ -596,7 +598,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToList) {
     ASSERT_EQ(listLength(c->reply), 1u);
     ASSERT_EQ(blk->used, sizeof(payloadHeader) + 2 * PTRS_LEN);
     ASSERT_EQ(header1->payload_type, BULK_STR_REF);
-    ASSERT_EQ(header1->payload_len, 2 * PTRS_LEN);
+    ASSERT_EQ((size_t)header1->payload_len, 2 * PTRS_LEN);
 
     /* Test 3: Add plain replies to cause reply list grow */
     while (reply_len < blk->size - blk->used) _addReplyToBufferOrList(c, reply, reply_len);

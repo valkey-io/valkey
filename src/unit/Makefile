@@ -2,6 +2,9 @@ CXX ?= g++
 AR ?= ar
 SERVER_AR ?= $(AR)
 -include ../.make-settings
+# The server objects were built with the parent's OPT, so capture it before OPT
+# is redefined below for the test objects.
+SERVER_OPT := $(OPT)
 OPT=-Og -g
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 
@@ -134,13 +137,30 @@ else
 endif
 endif
 
+WRAP_DIR := wrapped
+VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
+ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
+
+# With plain -flto clang leaves the server objects as pure bitcode, and symbol
+# interposition cannot see through bitcode, neither via the linker's --wrap nor by
+# rewriting symbols, so they are staged back into native code below. GCC keeps a
+# native copy in its objects through -ffat-lto-objects and needs none of this.
+# clang is deliberately not given that flag, as the native copy it emits keeps the
+# sanitizer module constructor in a COMDAT group, which the linker discards when
+# linking without the LTO plugin, leaving its .init_array reference dangling.
+CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
+NEEDS_UNWRAP :=
+ifeq (clang,$(CLANG))
+ifneq (,$(findstring -flto,$(SERVER_OPT)))
+NEEDS_UNWRAP := yes
+endif
+endif
+
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
 # by copying all object files into the wrapped/ folder and applying symbol redefinitions.
 ifeq ($(uname_S), Darwin)
-WRAP_DIR := wrapped
-VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
-ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
+REDEFINE_SYMS := yes
 TEST_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ALL_OBJECTS))
 
 # Homebrew does not add llvm/bin to PATH by default, so we check the standard
@@ -151,21 +171,27 @@ ifneq ($(BREW_LLVM_BIN),)
 else
   $(error LLVM tools not found. Install via: brew install llvm)
 endif
+endif
+
+ifneq (,$(REDEFINE_SYMS)$(NEEDS_UNWRAP))
+SERVER_LINK_LIB := $(VALKEY_SERVER_WRAP_LIB)
+else
+SERVER_LINK_LIB := $(VALKEY_SERVER_LIB)
+endif
 
 $(WRAP_DIR):
 	@mkdir -p $(WRAP_DIR)
 
 # Turns one object into a wrapped object. When the server is built with -flto,
 # which the default -O3 turns on (see OPTIMIZATION in ../Makefile), the objects
-# are LLVM bitcode and must be turned into real Mach-O objects first.
+# are LLVM bitcode and must be turned into real native objects first.
 #
 # We use a compiler for that, not llc. The bitcode carries the version of
-# whichever clang produced it, and a Homebrew llc of a different version cannot
+# whichever clang produced it, and the llc of a different version cannot
 # read it: it fails with "error: Invalid record" or "Unsupported stack probing
-# method" for every object. $(WRAP_CC) is the compiler that produced the bitcode,
-# so it always matches: $(CC) for the server objects and $(CXX) for the test
-# objects. No -O flag is passed, because the IR is already optimized and this
-# step only needs code generation, which is what llc did.
+# method" for every object. The server's -O level is passed: without it the
+# compiler generates -O0 code (llc defaults to -O2), which makes LZF in the
+# sanitizer builds about twice as slow.
 #
 # llvm-nm is passed explicitly: Homebrew LLVM installs no plain 'nm', so 'nm'
 # would be Apple's. The CMake build (wrap-objects.py) uses llvm-nm as well.
@@ -175,31 +201,35 @@ $(WRAP_DIR):
 # llvm-objcopy then wrote an object without the renames.
 define wrap-object
 	@mkdir -p $(dir $@)
-	@if file $< | grep -q "LLVM bitcode"; then \
-		$(WRAP_CC) -c -x ir $< -o $(WRAP_DIR)/$*_temp.o && \
-		python3 generate-redefine-syms.py --nm llvm-nm $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms && \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@ && \
-		rm -f $(WRAP_DIR)/$*_temp.o; \
+	@set -e; \
+	if file $< | grep -q "LLVM.*bitcode"; then \
+		native=$(WRAP_DIR)/$*_temp.o; \
+		$(CC) $(filter -O%,$(SERVER_OPT)) -c -x ir $< -o $$native; \
 	else \
-		python3 generate-redefine-syms.py --nm llvm-nm $< > $(WRAP_DIR)/$*-wrap-syms && \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
-	fi
-	@rm -f $(WRAP_DIR)/$*-wrap-syms
+		native=$<; \
+	fi; \
+	if [ "$(REDEFINE_SYMS)" = yes ]; then \
+		python3 generate-redefine-syms.py --nm llvm-nm $$native > $(WRAP_DIR)/$*-wrap-syms; \
+		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $$native $@; \
+		rm -f $(WRAP_DIR)/$*-wrap-syms; \
+	elif [ "$$native" != "$@" ]; then \
+		cp $$native $@; \
+	fi; \
+	rm -f $(WRAP_DIR)/$*_temp.o
 endef
 
 # Wrap server library objects
-$(ENGINE_SERVER_WRAP_OBJ): WRAP_CC := $(CC)
 $(ENGINE_SERVER_WRAP_OBJ): $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
-	$(wrap-object)
-
-# Wrap test objects, so that calls to wrapped functions are redirected to __wrap_*
-$(TEST_WRAP_OBJ): WRAP_CC := $(CXX)
-$(TEST_WRAP_OBJ): $(WRAP_DIR)/%.o: %.o $(WRAP_DIR) generated_wrappers.o
 	$(wrap-object)
 
 $(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) generated_wrappers.o
 	@rm -f $@
 	$(SERVER_AR) rcs $@ $(ENGINE_SERVER_WRAP_OBJ)
+
+ifeq ($(uname_S), Darwin)
+# Wrap test objects, so that calls to wrapped functions are redirected to __wrap_*
+$(TEST_WRAP_OBJ): $(WRAP_DIR)/%.o: %.o $(WRAP_DIR) generated_wrappers.o
+	$(wrap-object)
 endif
 
 # Ensure Valkey server library is built
@@ -274,7 +304,7 @@ valkey-unit-gtests: $(TEST_WRAP_OBJ) generated_wrappers.o $(VALKEY_SERVER_WRAP_L
 		-o $@ $^ $(LD_LIBS) \
 		-lm -pthread -ldl
 else
-valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS)
+valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(SERVER_LINK_LIB) $(FINAL_LIBS)
 	$(CXX) -g $(LDFLAGS) -fno-lto \
 		$(OVERRIDES) \
 		-Wall -Wno-deprecated-declarations \

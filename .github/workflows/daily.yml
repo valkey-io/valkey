@@ -317,7 +317,7 @@ jobs:
       - name: Install build dependencies
         run: apt-get install -y pkg-config libgtest-dev libgmock-dev libzstd-dev
       - name: make
-        run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests CC=gcc SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
@@ -1104,7 +1104,7 @@ jobs:
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -1173,7 +1173,7 @@ jobs:
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
+        run: make all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror'
       - name: testprep
         run: |
           sudo apt-get update
@@ -1259,7 +1259,7 @@ jobs:
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
+        run: make all-with-unit-tests SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
       - name: testprep
         run: |
           sudo apt-get update
@@ -1328,7 +1328,7 @@ jobs:
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes
+        run: make all-with-unit-tests SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -1410,7 +1410,7 @@ jobs:
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update

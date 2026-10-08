@@ -4004,36 +4004,34 @@ void parseInlineBuffer(client *c) {
 /* Helper function. Record protocol error details in server log,
  * and set the client as CLIENT_CLOSE_AFTER_REPLY and
  * CLIENT_PROTOCOL_ERROR. */
-#define PROTO_DUMP_LEN 128
+/* sdscatrepr() can expand each byte to 4 chars ("\x00"), so keep the sample
+ * small enough for the log line to stay well within LOG_MAX_LEN. */
+#define PROTO_DUMP_LEN 64
 static void setProtocolError(const char *errstr, client *c) {
     if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c)) {
         sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
-        /* Sample some protocol to given an idea about what was inside. */
-        char buf[256];
-        buf[0] = '\0';
+        /* Sample some protocol to give an idea about what was inside.
+         * Use sdscatrepr() so that binary data (e.g. null bytes) is escaped
+         * instead of truncating the sample. */
+        sds buf = sdsempty();
         if (server.hide_user_data_from_log) {
-            snprintf(buf, sizeof(buf), "*redacted*");
-        } else {
-            if (c->querybuf && sdslen(c->querybuf) - c->qb_pos < PROTO_DUMP_LEN) {
-                snprintf(buf, sizeof(buf), "'%s'", c->querybuf + c->qb_pos);
-            } else if (c->querybuf) {
-                snprintf(buf, sizeof(buf), "'%.*s' (... more %zu bytes ...) '%.*s'",
-                         PROTO_DUMP_LEN / 2, c->querybuf + c->qb_pos, sdslen(c->querybuf) - c->qb_pos - PROTO_DUMP_LEN,
-                         PROTO_DUMP_LEN / 2, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2);
-            }
-
-            /* Remove non printable chars. */
-            char *p = buf;
-            while (*p != '\0') {
-                if (!isprint(*p)) *p = '.';
-                p++;
+            buf = sdscat(buf, "*redacted*");
+        } else if (c->querybuf) {
+            size_t len = sdslen(c->querybuf) - c->qb_pos;
+            if (len <= PROTO_DUMP_LEN) {
+                buf = sdscatrepr(buf, c->querybuf + c->qb_pos, len);
+            } else {
+                buf = sdscatrepr(buf, c->querybuf + c->qb_pos, PROTO_DUMP_LEN / 2);
+                buf = sdscatprintf(buf, " (... more %zu bytes ...) ", len - PROTO_DUMP_LEN);
+                buf = sdscatrepr(buf, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2, PROTO_DUMP_LEN / 2);
             }
         }
         /* Log all the client and protocol info. */
         int loglevel = (isReplicatedClient(c)) ? LL_WARNING : LL_VERBOSE;
         serverLog(loglevel, "Protocol error (%s) from client: %s. Query buffer: %s", errstr, client, buf);
         sdsfree(client);
+        sdsfree(buf);
     }
     c->flag.close_after_reply = 1;
     c->flag.protocol_error = 1;

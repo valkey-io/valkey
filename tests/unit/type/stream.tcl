@@ -1619,6 +1619,18 @@ start_server {
         assert_equal "0-0" [dict get $reply recorded-first-entry-id]
     }
 
+    test {XTRIM and XADD with MAXLEN of 2^32 or more do not trim} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        assert_equal 0 [r XTRIM mystream MAXLEN 4294967296]
+        assert_equal 0 [r XTRIM mystream MAXLEN 4294967297]
+        r XADD mystream MAXLEN 4294967296 3-0 f v
+        assert_equal 3 [r XLEN mystream]
+        r XADD mystream MAXLEN 4294967297 4-0 f v
+        assert_equal 4 [r XLEN mystream]
+    }
+
     test {XADD with LIMIT consecutive calls} {
         r del mystream
         r config set stream-node-max-entries 10

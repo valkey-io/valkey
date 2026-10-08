@@ -15,6 +15,12 @@
  * supports O(log N) insertion, deletion, score update, rank lookup, and
  * range queries by score, rank, or lexicographic bounds.
  *
+ * Functions with an Int64 suffix take exact signed 64-bit integer scores
+ * instead. Integer and double scores use incompatible orderings, so a given
+ * index must hold only one kind, and the caller must use the matching
+ * functions for every score-based operation on it. Operations that do not take
+ * or return a score (rank, lex range, iteration) work with either kind.
+ *
  * IMPORTANT: An OrderedIndex does NOT enforce element uniqueness --
  * duplicate (score, element) pairs are stored as separate items. It is
  * designed to be used alongside a companion hashtable that provides O(1)
@@ -63,6 +69,7 @@ void orderedIndexFree(OrderedIndex *oi);
  * require uniqueness (e.g. ZSET) enforce it externally via a companion
  * hashtable. */
 OrderedIndexItem *orderedIndexInsert(OrderedIndex *oi, double score, const char *ele, size_t len);
+OrderedIndexItem *orderedIndexInsertInt64(OrderedIndex *oi, int64_t score, const char *ele, size_t len);
 
 /* Remove an item from the index and free it. */
 void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item);
@@ -72,6 +79,7 @@ void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item);
  * if the item was repositioned. Always returns a valid pointer; callers can
  * compare old vs returned to detect whether the item moved. */
 OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore);
+OrderedIndexItem *orderedIndexUpdateScoreInt64(OrderedIndex *oi, OrderedIndexItem *item, int64_t newscore);
 
 /* Remove and return the first (lowest-score) item without freeing it. */
 OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *oi);
@@ -91,6 +99,7 @@ void orderedIndexItemFree(OrderedIndexItem *item);
  * orderedIndexInsertItem. This avoids O(log N) repositioning per score
  * update during the aggregation phase. */
 OrderedIndexItem *orderedIndexItemCreate(double score, const char *ele, size_t len);
+OrderedIndexItem *orderedIndexItemCreateInt64(int64_t score, const char *ele, size_t len);
 
 /* Set the score on an item that is NOT in any index. This is O(1) because
  * no repositioning is needed -- the item has no position yet.
@@ -99,6 +108,7 @@ OrderedIndexItem *orderedIndexItemCreate(double score, const char *ele, size_t l
  * sort order. Use orderedIndexUpdateScore for in-index items (which handles
  * repositioning). */
 void orderedIndexItemSetScore(OrderedIndexItem *item, double score);
+void orderedIndexItemSetScoreInt64(OrderedIndexItem *item, int64_t score);
 
 /* Insert a pre-created item into the index (the final step of the
  * batch-insert workflow). The index takes ownership of the item.
@@ -110,6 +120,7 @@ OrderedIndexItem *orderedIndexInsertItem(OrderedIndex *oi, OrderedIndexItem *ite
  * For each removed item, on_delete is called (if non-NULL) with the item and
  * privdata before the item is freed. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata);
+unsigned long orderedIndexDeleteRangeByScoreInt64(OrderedIndex *oi, int64_t min, int64_t max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata);
 
 /* Delete all items with rank in [start, end] (0-based, inclusive).
  * For each removed item, on_delete is called (if non-NULL) with the item and
@@ -147,9 +158,11 @@ void orderedIndexItemGetElement(const OrderedIndexItem *item, const char **ptr, 
 
 /* Get the score of an item. */
 double orderedIndexItemGetScore(const OrderedIndexItem *item);
+int64_t orderedIndexItemGetScoreInt64(const OrderedIndexItem *item);
 
 /* Count items with score in [min, max] (or exclusive if min_ex/max_ex). */
 unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex);
+unsigned long orderedIndexCountScoreRangeInt64(const OrderedIndex *oi, int64_t min, int64_t max, bool min_ex, bool max_ex);
 
 /* Count items with element in lex range [min, max] (or exclusive if
  * min_ex/max_ex). Only meaningful when all items share the same score. */
@@ -198,6 +211,7 @@ void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index);
  *   range; prev() returns that item. If offset exceeds the range, prev()
  *   returns NULL. */
 void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset);
+void orderedIndexSeekToScoreRangeInt64(OrderedIndexIterator *iter, int64_t min, int64_t max, bool min_ex, bool max_ex, long offset);
 
 /* Position the cursor within a lex range. Offset semantics same as score
  * range. Only meaningful when all items in the range share the same score. */

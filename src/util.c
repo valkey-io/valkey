@@ -1249,20 +1249,29 @@ sds getAbsolutePath(char *filename) {
     return abspath;
 }
 
-/*
- * Gets the proper timezone in a more portable fashion
- * i.e timezone variables are linux specific.
- */
-long getTimeZone(void) {
-#if defined(__linux__) || defined(__sun)
-    return timezone;
-#else
-    struct timezone tz;
+/* Offset of local time east of UTC in seconds at instant 'now', derived from
+ * the C library's own conversion: the difference between the local and UTC
+ * broken-down times of the same instant. This is the actual offset in effect,
+ * so daylight saving is included whatever form it takes: one hour, half an
+ * hour (Lord Howe Island) or "negative DST" (Europe/Dublin, where tzdata
+ * models winter as the DST period). Callers cache it and refresh it
+ * periodically instead of inferring it from tm_isdst.
+ *
+ * Only uses functions in POSIX (no tm_gmtoff, no timegm); works with the
+ * 'timezone' global absent (BSD, macOS) or meaningless (Emscripten). */
+long utcOffsetFromLocaltime(time_t now) {
+    struct tm local, utc;
+    localtime_r(&now, &local);
+    gmtime_r(&now, &utc);
 
-    gettimeofday(NULL, &tz);
-
-    return tz.tz_minuteswest * 60L;
-#endif
+    long east = (local.tm_hour - utc.tm_hour) * 3600L + (local.tm_min - utc.tm_min) * 60L + (local.tm_sec - utc.tm_sec);
+    /* The two dates may straddle midnight (and a year boundary); a difference in
+     * day-of-year of more than one day can only be the year wrap. */
+    int day_diff = local.tm_yday - utc.tm_yday;
+    if (day_diff > 1) day_diff = -1;
+    if (day_diff < -1) day_diff = 1;
+    east += day_diff * 86400L;
+    return east;
 }
 
 /* Return true if the specified path is just a file basename without any

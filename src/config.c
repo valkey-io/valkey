@@ -28,9 +28,16 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "io_threads.h"
 #include "sds.h"
 #include "server.h"
+#include "cgroup.h"
 #include "hotkeys.h"
 #include "cluster.h"
 #include "connection.h"
@@ -2475,8 +2482,8 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     }
 
 #define createSpecialConfig(name, alias, modifiable, setfn, getfn, rewritefn, applyfn) \
-    {.type = SPECIAL_CONFIG,                                                           \
-     embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
+    { .type = SPECIAL_CONFIG,                                                          \
+      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn) }
 
 static int isValidBgsaveDefaultMethod(int val, const char **err) {
     /* During startup config parsing the directives are applied one by one, so
@@ -2747,13 +2754,112 @@ static int updateReplBacklogSize(const char **err) {
     return 1;
 }
 
-static int updateMaxmemory(const char **err) {
-    UNUSED(err);
+/* Keep the configured representation separate from the byte limit used by
+ * eviction. In particular, percentages cannot be encoded as negative values
+ * in maxmemory: its full unsigned range is part of the config interface. */
+static int setConfigMaxmemoryOption(standardConfig *config, sds *argv, int argc, const char **err) {
+    UNUSED(config);
+    UNUSED(argc);
+    size_t len = sdslen(argv[0]);
+    int percent = 0;
+    unsigned long long bytes = 0;
+    if (len && argv[0][len - 1] == '%') {
+        long long value;
+        if (!string2ll(argv[0], len - 1, &value) || value < 1 || value > 100) {
+            *err = "percentage argument must be between 1 and 100";
+            return 0;
+        }
+        percent = value;
+    } else {
+        int memerr;
+        bytes = memtoull(argv[0], &memerr);
+        if (memerr) {
+            *err = "argument must be a memory or percent value";
+            return 0;
+        }
+    }
+    if (server.maxmemory_percent == percent && server.maxmemory_config == bytes) return 2;
+    server.maxmemory_percent = percent;
+    server.maxmemory_config = bytes;
+    return 1;
+}
+
+static sds getConfigMaxmemoryOption(standardConfig *config) {
+    UNUSED(config);
+    if (server.maxmemory_percent) return sdscatprintf(sdsempty(), "%d%%", server.maxmemory_percent);
+    return sdscatprintf(sdsempty(), "%llu", server.maxmemory_config);
+}
+
+static void rewriteConfigMaxmemoryOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+    UNUSED(config);
+    if (server.maxmemory_percent)
+        rewriteConfigPercentOption(state, name, server.maxmemory_percent, 0);
+    else
+        rewriteConfigBytesOption(state, name, server.maxmemory_config, 0);
+}
+
+static int refreshCgroupMemoryLimit(void) {
+    unsigned long long limit;
+    int result = cgroupGetMemoryLimit(&limit);
+    /* A host without cgroups uses physical RAM. Losing access to a previously
+     * detected limit, however, must not silently raise a running server's budget. */
+    if (result == -1 || (result == 1 && server.cgroup_memory_limit != ULLONG_MAX)) {
+        if (!server.cgroup_memory_error)
+            serverLog(LL_WARNING, "Unable to read the cgroup memory limit; retaining the last known limit.");
+        server.cgroup_memory_error = 1;
+        return C_ERR;
+    }
+    server.cgroup_memory_error = 0;
+    server.cgroup_memory_limit = limit;
+    return C_OK;
+}
+
+static unsigned long long effectiveMemoryLimit(void) {
+    if (server.cgroup_memory_limit != ULLONG_MAX) return server.cgroup_memory_limit;
+    return server.system_memory_size;
+}
+
+static int resolveMaxmemory(const char **err) {
+    unsigned long long bytes = server.maxmemory_config;
+    if (server.maxmemory_percent) {
+        unsigned long long limit = effectiveMemoryLimit();
+        /* Divide before multiplying to avoid overflowing large limits. */
+        bytes = (limit / 100) * server.maxmemory_percent + (limit % 100) * server.maxmemory_percent / 100;
+        if (!bytes) {
+            *err = "cannot resolve maxmemory percentage to a positive memory limit";
+            return C_ERR;
+        }
+    }
+    server.maxmemory = bytes;
+    return C_OK;
+}
+
+static void warnMaxmemoryExceedsLimit(void) {
+    unsigned long long limit = effectiveMemoryLimit();
+    if (server.maxmemory && limit && server.maxmemory > limit)
+        serverLog(LL_WARNING, "WARNING: maxmemory (%llu) exceeds the effective memory limit (%llu). "
+                              "The operating system may terminate the process before eviction can occur.",
+                  server.maxmemory, limit);
+}
+
+/* Startup resolves the limit before loading data, without scheduling eviction
+ * events against a server that is not yet fully initialized. */
+int initMaxmemory(void) {
+    const char *err = "cannot read the cgroup memory limit for percentage-based maxmemory";
+    if ((refreshCgroupMemoryLimit() == C_ERR && server.maxmemory_percent) || resolveMaxmemory(&err) == C_ERR) {
+        serverLog(LL_WARNING, "Failed to initialize maxmemory: %s", err);
+        return C_ERR;
+    }
+    warnMaxmemoryExceedsLimit();
+    return C_OK;
+}
+
+static void applyMaxmemory(void) {
     if (server.maxmemory) {
         size_t used = zmalloc_used_memory() - freeMemoryGetNotCountedMemory();
         if (server.maxmemory < used) {
             serverLog(LL_WARNING,
-                      "WARNING: the new maxmemory value set via CONFIG SET (%llu) is smaller than the current memory "
+                      "WARNING: the new maxmemory value (%llu) is smaller than the current memory "
                       "usage (%zu). This will result in key eviction and/or the inability to accept new write commands "
                       "depending on the maxmemory-policy.",
                       server.maxmemory, used);
@@ -2763,7 +2869,48 @@ static int updateMaxmemory(const char **err) {
     /* maxmemory-scripts can be a percentage of maxmemory, in that case the
      * scripts eviction limit changed together with maxmemory. */
     if (server.maxmemory_scripts < 0) startScriptsEvictionTimeProc();
+}
+
+static int updateMaxmemory(const char **err) {
+    int cgroup_error = refreshCgroupMemoryLimit() == C_ERR;
+    if (resolveMaxmemory(err) == C_ERR) return 0;
+    warnMaxmemoryExceedsLimit();
+    applyMaxmemory();
+    /* During CONFIG SET rollback, restore the effective byte limit from the
+     * last known cgroup value even if the fresh cgroup read failed. The
+     * original operation still fails so a new percentage is not accepted
+     * without successful cgroup detection. */
+    if (cgroup_error && server.maxmemory_percent) {
+        *err = "cannot read the cgroup memory limit for percentage-based maxmemory";
+        return 0;
+    }
     return 1;
+}
+
+void refreshMaxmemory(void) {
+    unsigned long long old_limit = server.cgroup_memory_limit;
+    if (refreshCgroupMemoryLimit() == C_ERR) return;
+    int limit_changed = old_limit != server.cgroup_memory_limit;
+    if (server.maxmemory_percent) {
+        const char *err;
+        unsigned long long old_maxmemory = server.maxmemory;
+        if (resolveMaxmemory(&err) == C_ERR) {
+            /* Retry this limit on the next tick until it can be applied. */
+            if (limit_changed) server.cgroup_memory_limit = old_limit;
+            serverLog(LL_WARNING, "Unable to refresh maxmemory: %s", err);
+            return;
+        }
+        if (old_maxmemory != server.maxmemory) {
+            if (limit_changed)
+                serverLog(LL_NOTICE, "Effective memory limit changed: updating maxmemory (%d%%) from %llu to %llu bytes.",
+                          server.maxmemory_percent, old_maxmemory, server.maxmemory);
+            else
+                serverLog(LL_NOTICE, "Reconciling maxmemory (%d%%) from %llu to %llu bytes.", server.maxmemory_percent,
+                          old_maxmemory, server.maxmemory);
+            applyMaxmemory();
+        }
+    }
+    if (limit_changed) warnMaxmemoryExceedsLimit();
 }
 
 static int updateGoodReplicas(const char **err) {
@@ -3651,7 +3798,21 @@ standardConfig static_configs[] = {
     createLongLongConfig("cluster-manual-failover-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.cluster_mf_timeout, 5000, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned Long Long configs */
-    createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),
+    /* Custom callbacks preserve the percentage separately from effective bytes,
+     * while keeping the unsigned numeric metadata exposed by CONFIG INFO. */
+    {
+        embedCommonConfig("maxmemory", NULL, MODIFIABLE_CONFIG)
+            embedConfigInterface(numericConfigInit, setConfigMaxmemoryOption, getConfigMaxmemoryOption, rewriteConfigMaxmemoryOption, updateMaxmemory)
+                .type = NUMERIC_CONFIG,
+        .data.numeric = {
+            .lower_bound = 0,
+            .upper_bound = ULLONG_MAX,
+            .default_value = 0,
+            .flags = MEMORY_CONFIG,
+            .numeric_type = NUMERIC_TYPE_ULONG_LONG,
+            .config.ull = &server.maxmemory_config,
+        },
+    },
     createULongLongConfig("cluster-link-sendbuf-limit", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.cluster_link_msg_queue_limit_bytes, 0, MEMORY_CONFIG, NULL, NULL),
 
     /* Size_t configs */

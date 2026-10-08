@@ -223,6 +223,14 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     return ret;
 }
 
+static int connSocketWriteStateless(connection *conn, const void *data, size_t data_len) {
+    return write(conn->fd, data, data_len);
+}
+
+static int connSocketReadStateless(connection *conn, void *buf, size_t buf_len) {
+    return read(conn->fd, buf, buf_len);
+}
+
 static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
     int ret = C_OK;
 
@@ -489,6 +497,8 @@ static ConnectionType CT_Socket = {
     .write = connSocketWrite,
     .writev = connSocketWritev,
     .read = connSocketRead,
+    .write_stateless = connSocketWriteStateless,
+    .read_stateless = connSocketReadStateless,
     .set_write_handler = connSocketSetWriteHandler,
     .set_read_handler = connSocketSetReadHandler,
     .get_last_error = connSocketGetLastError,

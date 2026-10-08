@@ -1868,7 +1868,8 @@ clusterLink *createClusterLink(clusterNode *node) {
     link->io_write_state = CLUSTER_LINK_IO_IDLE;
     link->async_close = 0;
     link->io_refs = 0;
-    link->io_result = CLUSTER_IO_OK;
+    link->io_read_result = CLUSTER_IO_OK;
+    link->io_write_result = CLUSTER_IO_OK;
 
     /* Async write snapshot/result */
     link->io_last_send_block = NULL;
@@ -9223,8 +9224,29 @@ bool isAnySlotInManualMigratingState(void) {
  * These run on I/O threads. They must NOT touch clusterNode, clusterState,
  * server.stat_cluster_links_memory, or any main-thread-only structure.
  *
- * Read and write jobs are mutually exclusive per link, so the shared
- * io_result field still has only one writer at a time. */
+ * On a full duplex link (see clusterLinkIOFullDuplex()) a read job and a write
+ * job may run at the same time. Each one only touches its own side of the
+ * link: rcvbuf and the read framing/result fields for reads, the send queue
+ * snapshot and the write result fields for writes. They also share the
+ * connection, so they use the stateless I/O variants and tell EAGAIN from a
+ * real error by errno: neither job may read or write the connection state. */
+
+static int clusterJobRead(clusterLink *link, void *buf, size_t len) {
+    if (clusterLinkIOFullDuplex(link)) return connReadStateless(link->conn, buf, len);
+    return connRead(link->conn, buf, len);
+}
+
+static int clusterJobWrite(clusterLink *link, const void *data, size_t len) {
+    if (clusterLinkIOFullDuplex(link)) return connWriteStateless(link->conn, data, len);
+    return connWrite(link->conn, data, len);
+}
+
+/* Whether a -1 from clusterJobRead()/clusterJobWrite() only means that no
+ * progress is possible right now. Must be called right after the I/O call. */
+static int clusterJobIOWouldBlock(clusterLink *link) {
+    if (clusterLinkIOFullDuplex(link)) return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+    return connGetState(link->conn) == CONN_STATE_CONNECTED;
+}
 
 /* I/O thread worker: read bytes from a cluster link's connection, grow the
  * receive buffer as needed, frame packets, and post a completion.
@@ -9241,7 +9263,7 @@ void clusterReadJob(clusterLink *link) {
 
     /* I/O thread invariant: we must be in PENDING state. */
     serverAssert(link->io_read_state == CLUSTER_LINK_IO_PENDING);
-    serverAssert(link->io_write_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(clusterLinkIOFullDuplex(link) || link->io_write_state == CLUSTER_LINK_IO_IDLE);
 
     /* The link holds a connection for as long as an I/O job can be in flight:
      * link->conn is only cleared on the immediate free path, which is
@@ -9261,7 +9283,7 @@ void clusterReadJob(clusterLink *link) {
         }
 
         size_t avail = link->rcvbuf_alloc - rcvbuf_len;
-        ssize_t nread = connRead(conn, link->rcvbuf + rcvbuf_len, avail);
+        ssize_t nread = clusterJobRead(link, link->rcvbuf + rcvbuf_len, avail);
 
         if (nread > 0) {
             link->rcvbuf_len = rcvbuf_len + nread;
@@ -9276,7 +9298,7 @@ void clusterReadJob(clusterLink *link) {
         }
 
         /* nread == -1 */
-        if (connGetState(conn) == CONN_STATE_CONNECTED) {
+        if (clusterJobIOWouldBlock(link)) {
             /* EAGAIN — no more data right now, that's fine. */
             break;
         }
@@ -9305,7 +9327,7 @@ void clusterReadJob(clusterLink *link) {
     }
 
     /* Post result and completion to the main thread. */
-    link->io_result = result;
+    link->io_read_result = result;
     sendToMainThread(link, JOB_RES_CLUSTER_READ);
 }
 
@@ -9329,7 +9351,7 @@ void clusterWriteJob(clusterLink *link) {
 
     /* I/O thread invariant: we must be in PENDING state. */
     serverAssert(link->io_write_state == CLUSTER_LINK_IO_PENDING);
-    serverAssert(link->io_read_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(clusterLinkIOFullDuplex(link) || link->io_read_state == CLUSTER_LINK_IO_IDLE);
 
     /* See clusterReadJob(): link->conn outlives any in-flight I/O job. */
     serverAssert(conn != NULL);
@@ -9343,9 +9365,9 @@ void clusterWriteJob(clusterLink *link) {
         size_t msg_len = ntohl(msg->totlen);
         size_t msg_offset = head_offset;
 
-        ssize_t nwritten = connWrite(conn, (char *)msg + msg_offset, msg_len - msg_offset);
+        ssize_t nwritten = clusterJobWrite(link, (char *)msg + msg_offset, msg_len - msg_offset);
         if (nwritten <= 0) {
-            if (nwritten == -1 && connGetState(conn) == CONN_STATE_CONNECTED) {
+            if (nwritten == -1 && clusterJobIOWouldBlock(link)) {
                 break; /* EAGAIN */
             }
             result = CLUSTER_IO_WRITE_ERROR;
@@ -9367,7 +9389,7 @@ void clusterWriteJob(clusterLink *link) {
 
     link->io_nodes_sent = nodes_sent;
     link->io_head_offset = head_offset;
-    link->io_result = result;
+    link->io_write_result = result;
     sendToMainThread(link, JOB_RES_CLUSTER_WRITE);
 }
 
@@ -9392,15 +9414,20 @@ void clusterHandleReadCompletion(clusterLink *link) {
 
     /* Apply deferred connection state transitions. Even if freeClusterLink()
      * was called while the job was in flight, link->conn remains valid until
-     * the final async_close teardown runs after the last completion. */
+     * the final async_close teardown runs after the last completion. A write
+     * job still in flight keeps the updates postponed until it completes. */
     if (conn) {
-        connSetPostponeUpdateState(conn, 0);
-        connUpdateState(conn);
+        if (link->io_write_state == CLUSTER_LINK_IO_IDLE) {
+            connSetPostponeUpdateState(conn, 0);
+            connUpdateState(conn);
+        } else {
+            connSetPostponeUpdateState(conn, CONN_POSTPONE_WRITE);
+        }
     }
 
     /* Transition back to idle and release the I/O ref. */
     serverAssert(link->io_read_state == CLUSTER_LINK_IO_PENDING);
-    serverAssert(link->io_write_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(clusterLinkIOFullDuplex(link) || link->io_write_state == CLUSTER_LINK_IO_IDLE);
     serverAssert(link->io_refs > 0);
     link->io_read_state = CLUSTER_LINK_IO_IDLE;
     link->io_refs--;
@@ -9421,7 +9448,7 @@ void clusterHandleReadCompletion(clusterLink *link) {
         return;
     }
 
-    clusterIOResult result = link->io_result;
+    clusterIOResult result = link->io_read_result;
 
     /* Handle error results: log and tear down the link. */
     if (result == CLUSTER_IO_BAD_HEADER || result == CLUSTER_IO_BAD_LENGTH) {
@@ -9458,15 +9485,20 @@ void clusterHandleReadCompletion(clusterLink *link) {
 void clusterHandleWriteCompletion(clusterLink *link) {
     connection *conn = link->conn;
 
-    /* Apply deferred connection state transitions. */
+    /* Apply deferred connection state transitions. A read job still in
+     * flight keeps the updates postponed until it completes. */
     if (conn) {
-        connSetPostponeUpdateState(conn, 0);
-        connUpdateState(conn);
+        if (link->io_read_state == CLUSTER_LINK_IO_IDLE) {
+            connSetPostponeUpdateState(conn, 0);
+            connUpdateState(conn);
+        } else {
+            connSetPostponeUpdateState(conn, CONN_POSTPONE_READ);
+        }
     }
 
     /* Transition back to idle and release the I/O ref. */
     serverAssert(link->io_write_state == CLUSTER_LINK_IO_PENDING);
-    serverAssert(link->io_read_state == CLUSTER_LINK_IO_IDLE);
+    serverAssert(clusterLinkIOFullDuplex(link) || link->io_read_state == CLUSTER_LINK_IO_IDLE);
     serverAssert(link->io_refs > 0);
     link->io_write_state = CLUSTER_LINK_IO_IDLE;
     link->io_refs--;
@@ -9518,7 +9550,7 @@ void clusterHandleWriteCompletion(clusterLink *link) {
         return;
     }
 
-    clusterIOResult result = link->io_result;
+    clusterIOResult result = link->io_write_result;
 
     /* Handle write error: log and tear down the link. */
     if (result == CLUSTER_IO_WRITE_ERROR) {

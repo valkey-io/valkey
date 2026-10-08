@@ -33,6 +33,7 @@
  */
 #include "server.h"
 #include "hotkeys.h"
+#include "traffic.h"
 #include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
@@ -1431,6 +1432,9 @@ void databasesCron(void) {
     /* Close any elapsed hot-key detection window, so a completed window is
      * frozen on schedule even when there is no traffic. */
     hotkeysCron();
+
+    /* Close any elapsed traffic tracking window the same way. */
+    trafficCron();
 }
 
 static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
@@ -3298,6 +3302,9 @@ void initServer(void) {
 
     /* Initialization hotkey */
     hotkeysInit();
+
+    /* Initialization traffic tracking (independent of hot-key detection) */
+    trafficInit();
 
     /* Initialize priority subnets if configured */
     if (updatePrioritySubnets(server.priority_subnets) != C_OK) {
@@ -7183,6 +7190,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Hotkeys\r\n");
         info = genHotkeysInfoString(info);
+    }
+
+    /* Traffic */
+    if (all_sections || (dictFind(section_dict, "traffic") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Traffic\r\n");
+        info = genTrafficInfoString(info);
     }
 
     /* Throttling */

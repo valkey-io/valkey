@@ -108,15 +108,15 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_Init(ctx, "pausetest", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx, "PAUSETEST.TIMER_CALL", PauseTestTimerCall_Command, "write", 0, 0, 0) ==
+    if (ValkeyModule_CreateCommand(ctx, "PAUSETEST.TIMER_CALL", PauseTestTimerCall_Command, "", 0, 0, 0) ==
         VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx, "PAUSETEST.TIMER_REPLICATE", PauseTestTimerReplicate_Command, "write", 0, 0,
-                                   0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "PAUSETEST.TIMER_REPLICATE", PauseTestTimerReplicate_Command, "", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx, "PAUSETEST.TIMER_VERBATIM", PauseTestTimerVerbatim_Command, "write", 0, 0, 0) ==
+    if (ValkeyModule_CreateCommand(ctx, "PAUSETEST.TIMER_VERBATIM", PauseTestTimerVerbatim_Command, "", 0, 0, 0) ==
         VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 

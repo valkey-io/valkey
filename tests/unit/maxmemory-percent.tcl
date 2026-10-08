@@ -1,7 +1,7 @@
 proc expected_maxmemory_percent {percent} {
     set limit [s total_system_memory]
     set cgroup_limit [s cgroup_memory_limit]
-    if {$cgroup_limit != 0 && ($limit == 0 || $cgroup_limit < $limit)} {
+    if {$cgroup_limit != 0} {
         set limit $cgroup_limit
     }
     return [expr {$limit * $percent / 100}]

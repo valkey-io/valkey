@@ -2815,10 +2815,8 @@ static int refreshCgroupMemoryLimit(void) {
 }
 
 static unsigned long long effectiveMemoryLimit(void) {
-    unsigned long long limit = server.system_memory_size;
-    if ((!limit || server.cgroup_memory_limit < limit) && server.cgroup_memory_limit != ULLONG_MAX)
-        limit = server.cgroup_memory_limit;
-    return limit;
+    if (server.cgroup_memory_limit != ULLONG_MAX) return server.cgroup_memory_limit;
+    return server.system_memory_size;
 }
 
 static int resolveMaxmemory(const char **err) {
@@ -2874,35 +2872,45 @@ static void applyMaxmemory(void) {
 }
 
 static int updateMaxmemory(const char **err) {
-    if (refreshCgroupMemoryLimit() == C_ERR && server.maxmemory_percent) {
-        *err = "cannot read the cgroup memory limit for percentage-based maxmemory";
-        return 0;
-    }
+    int cgroup_error = refreshCgroupMemoryLimit() == C_ERR;
     if (resolveMaxmemory(err) == C_ERR) return 0;
     warnMaxmemoryExceedsLimit();
     applyMaxmemory();
+    /* During CONFIG SET rollback, restore the effective byte limit from the
+     * last known cgroup value even if the fresh cgroup read failed. The
+     * original operation still fails so a new percentage is not accepted
+     * without successful cgroup detection. */
+    if (cgroup_error && server.maxmemory_percent) {
+        *err = "cannot read the cgroup memory limit for percentage-based maxmemory";
+        return 0;
+    }
     return 1;
 }
 
 void refreshMaxmemory(void) {
     unsigned long long old_limit = server.cgroup_memory_limit;
-    if (refreshCgroupMemoryLimit() == C_ERR || old_limit == server.cgroup_memory_limit) return;
+    if (refreshCgroupMemoryLimit() == C_ERR) return;
+    int limit_changed = old_limit != server.cgroup_memory_limit;
     if (server.maxmemory_percent) {
         const char *err;
         unsigned long long old_maxmemory = server.maxmemory;
         if (resolveMaxmemory(&err) == C_ERR) {
             /* Retry this limit on the next tick until it can be applied. */
-            server.cgroup_memory_limit = old_limit;
+            if (limit_changed) server.cgroup_memory_limit = old_limit;
             serverLog(LL_WARNING, "Unable to refresh maxmemory: %s", err);
             return;
         }
         if (old_maxmemory != server.maxmemory) {
-            serverLog(LL_NOTICE, "Effective memory limit changed: updating maxmemory (%d%%) from %llu to %llu bytes.",
-                      server.maxmemory_percent, old_maxmemory, server.maxmemory);
+            if (limit_changed)
+                serverLog(LL_NOTICE, "Effective memory limit changed: updating maxmemory (%d%%) from %llu to %llu bytes.",
+                          server.maxmemory_percent, old_maxmemory, server.maxmemory);
+            else
+                serverLog(LL_NOTICE, "Reconciling maxmemory (%d%%) from %llu to %llu bytes.", server.maxmemory_percent,
+                          old_maxmemory, server.maxmemory);
             applyMaxmemory();
         }
     }
-    warnMaxmemoryExceedsLimit();
+    if (limit_changed) warnMaxmemoryExceedsLimit();
 }
 
 static int updateGoodReplicas(const char **err) {

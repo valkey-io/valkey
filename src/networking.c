@@ -650,6 +650,10 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
      * add anything more to the static buffer. */
     if (listLength(c->reply) > 0) return 0;
 
+    if (payload_type == PLAIN_REPLY && !c->bufpos) {
+        c->flag.buf_encoded = isCopyAvoidPreferred(c, NULL);
+    }
+
     size_t available = c->buf_usable_size - c->bufpos;
     size_t reply_len = min(available, len);
     if (c->flag.buf_encoded) {
@@ -667,9 +671,6 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
 
 static size_t _addReplyToBuffer(client *c, const char *s, size_t len) {
     if (!len) return 0;
-    if (!c->bufpos) {
-        c->flag.buf_encoded = isCopyAvoidPreferred(c, NULL);
-    }
     return _addReplyPayloadToBuffer(c, s, len, PLAIN_REPLY);
 }
 

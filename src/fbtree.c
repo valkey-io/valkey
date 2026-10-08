@@ -1349,7 +1349,7 @@ void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
 
 /* Find child index for score lookup (8-byte prefix).
  * Compares the full prefix at each node (up to SCORE_SIZE bytes). */
-static int findChildIndexByScore(innerNode *inner, const char *score) {
+static int findChildIndexByScore(innerNode *inner, const char score[static SCORE_SIZE]) {
     /* Compare prefix bytes (up to 8) */
     if (inner->prefix_len > 0) {
         size_t cmp_len = inner->prefix_len < SCORE_SIZE ? inner->prefix_len : SCORE_SIZE;
@@ -1386,7 +1386,7 @@ static int findChildIndexByScore(innerNode *inner, const char *score) {
 }
 
 /* Binary search in leaf for first element with score >= given score */
-static int leafNodeBinarySearchByScore(leafNode *leaf, const char *score) {
+static int leafNodeBinarySearchByScore(leafNode *leaf, const char score[static SCORE_SIZE]) {
     int left = 0, right = leaf->header.num_items;
     while (left < right) {
         int mid = (left + right) / 2;
@@ -1825,10 +1825,12 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
      * in range, every per-level loop below finds no boundary-untouched
      * work and no middle children to free, and the function falls through
      * having deleted (and returned) zero elements. */
-    int split_depth = bp->shared_depth - 1;
-    if (bp->end_idx < 0 && bp->start_leaf == bp->end_leaf) return 0;
 
     /* --- Phase 1: Boundaries diverged. Process the split. --- */
+    /* Every caller routes a same-leaf range to deleteRangeSameLeaf, so the
+     * two boundary leaves are always distinct here. */
+    assert(bp->start_leaf != bp->end_leaf);
+    int split_depth = bp->shared_depth - 1;
     innerNode *split_node = (innerNode *)bp->shared_path[split_depth];
     int li = bp->shared_left_idx[split_depth];
     int ri = bp->shared_right_idx[split_depth];
@@ -2156,7 +2158,7 @@ static bool scorePrefixNext(const char in[static SCORE_SIZE], char out[static SC
  * Used for the rare unbounded-upper edge (the upper bound reaches past the
  * largest representable score prefix) where a shared two-boundary descent has
  * no finite hi key. */
-static unsigned long lowerBoundRankByScore(fbtreeIndex *fbt, const char *score) {
+static unsigned long lowerBoundRankByScore(fbtreeIndex *fbt, const char score[static SCORE_SIZE]) {
     fbtreeIterator iterator;
     fbtreeInitIterator(&iterator, fbt);
     long rank = fbtreeSeekToScore(score, &iterator);
@@ -2176,12 +2178,12 @@ static unsigned long lowerBoundRankByScore(fbtreeIndex *fbt, const char *score) 
  * above a value), which is what makes the range duplicate-safe: a run of
  * elements sharing a score is included or excluded as a unit even when it spans
  * several leaves. */
-static bool scoreRangeBounds(const char *min_score,
-                             const char *max_score,
+static bool scoreRangeBounds(const char min_score[static SCORE_SIZE],
+                             const char max_score[static SCORE_SIZE],
                              int min_ex,
                              int max_ex,
-                             char lo[SCORE_SIZE],
-                             char hi[SCORE_SIZE],
+                             char lo[static SCORE_SIZE],
+                             char hi[static SCORE_SIZE],
                              bool *hi_unbounded) {
     *hi_unbounded = false;
 
@@ -2209,7 +2211,7 @@ static bool scoreRangeBounds(const char *min_score,
  * out-of-order core overlap them instead of serializing 2*log2(leaf) misses.
  * Mirrors resolveBothIdxPrefetch but resolves pure lower bounds (both edges are
  * "first >= key"), which is the half-open form the score range needs. */
-static void lowerBoundBothByScore(const leafNode *lo_leaf, const char *lo, const leafNode *hi_leaf, const char *hi, int *out_lo_idx, int *out_hi_idx) {
+static void lowerBoundBothByScore(const leafNode *lo_leaf, const char lo[static SCORE_SIZE], const leafNode *hi_leaf, const char hi[static SCORE_SIZE], int *out_lo_idx, int *out_hi_idx) {
     int llo = 0, lhi = lo_leaf->header.num_items;
     int hlo = 0, hhi = hi_leaf->header.num_items;
     while (llo < lhi || hlo < hhi) {
@@ -2246,7 +2248,7 @@ static void lowerBoundBothByScore(const leafNode *lo_leaf, const char *lo, const
  * descent. Because both edges are lower bounds the window is duplicate-score
  * safe: hi marks the first element excluded from the range, so an equal-score
  * run is kept or dropped as a unit even when it continues into the next leaf. */
-static bool scoreRangeSharedDescent(fbtreeIndex *fbt, const char *lo, const char *hi, BoundaryPaths *bp, int *out_hi_idx, unsigned long *out_start_rank, unsigned long *out_end_rank) {
+static bool scoreRangeSharedDescent(fbtreeIndex *fbt, const char lo[static SCORE_SIZE], const char hi[static SCORE_SIZE], BoundaryPaths *bp, int *out_hi_idx, unsigned long *out_start_rank, unsigned long *out_end_rank) {
     bool same_leaf = buildBoundaryPaths(fbt, bp, lo, hi, findChildByScoreWrapper);
 
     int lo_idx, hi_idx;

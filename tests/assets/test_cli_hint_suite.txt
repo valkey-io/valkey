@@ -11,7 +11,7 @@
 "DECRBY " "key decrement"
 
 # Command with optional arg: INCREX
-"INCREX xyz " "[NX|XX] [EX ex|PX px|EXAT unix-time-seconds|PXAT unix-time-milliseconds] [BYINT integer|BYFLOAT float]"
+"INCREX xyz " "[NX|XX] [EX ex|PX px|EXAT unix-time-seconds|PXAT unix-time-milliseconds|PERSIST] [ENX] [BYINT integer|BYFLOAT float] [LBOUND lowerbound] [UBOUND upperbound] [SATURATE]"
 
 # Command with optional arg: LPOP key [count]
 "LPOP key " "[count]"

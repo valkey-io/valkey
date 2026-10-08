@@ -36,9 +36,9 @@
  *             that increase a counter indicating how many times the string key was changed.
  *             In addition, it increase another counter that counts the total changes that
  *             was made on all strings keys.
- * * EXPIRED - the module register to expired event and set post notification job that that
+ * * EXPIRED - the module register to expired event and set post notification job that
  *             counts the total number of expired events.
- * * EVICTED - the module register to evicted event and set post notification job that that
+ * * EVICTED - the module register to evicted event and set post notification job that
  *             counts the total number of evicted events.
  *
  * In addition, the module register a new command, 'postnotification.async_set', that performs a set

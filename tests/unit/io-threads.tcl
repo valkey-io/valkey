@@ -173,8 +173,8 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
 }
 
 start_server {config "minimal.conf" tags {"scripting" "external:skip" "valgrind:skip"} overrides {io-threads 5 io-threads-always-active yes busy-reply-threshold 1}} {
-    # Reproduce a crash when changing the prefetch batch size via CONFIG SET
-    # in combination with a long-running Lua script. See PR 4803.
+    # Use a long-running Lua script to reproduce the crash when disabling
+    # prefetching. See PR 4803 for other affected scenarios.
     test {Disabling prefetching during reentrant batch processing does not free an active batch} {
         set server_pid [s process_id]
 

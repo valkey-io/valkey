@@ -64,6 +64,8 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c,
                                            streamConsumer *consumer);
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq, int *seq_given);
 int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
+int streamParseNumIDSOrReply(client *c, int argi, int arg_endi, size_t *id_count);
+uint64_t streamConsumerPublicCount(streamCG *cg);
 
 /* -----------------------------------------------------------------------
  * Low level stream encoding: a radix tree of listpacks.
@@ -1849,6 +1851,14 @@ size_t streamReplyWithRange(client *c,
     return arraylen;
 }
 
+/* Increment the delivery counter of a NACK / PEL entry, clamping to LLONG_MAX
+ * to avoid overflowing RESP integer size. */
+static void streamIncrDeliveryCount(streamNACK *nack) {
+    if (nack->delivery_count < (uint64_t)LLONG_MAX) {
+        nack->delivery_count++;
+    }
+}
+
 /* This is a helper function for streamReplyWithRange() when called with
  * group and consumer arguments, but with a range that is referring to already
  * delivered messages. In this case we just emit messages that are already
@@ -1893,7 +1903,7 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c,
         } else {
             streamNACK *nack = ri.data;
             nack->delivery_time = commandTimeSnapshot();
-            nack->delivery_count++;
+            streamIncrDeliveryCount(nack);
         }
         arraylen++;
     }
@@ -2669,6 +2679,20 @@ streamConsumer *streamLookupConsumer(streamCG *cg, sds name) {
     return consumer;
 }
 
+/* Get the number of consumers within a stream consumer group. This excludes
+ * the "dummy" consumer group potentially created during XNACK ... FORCE. */
+uint64_t streamConsumerPublicCount(streamCG *cg) {
+    sds emptyname = sdsempty();
+    streamConsumer *dummy = streamLookupConsumer(cg, emptyname);
+    sdsfree(emptyname);
+
+    uint64_t nconsumers = raxSize(cg->consumers);
+    if (dummy != NULL) {
+        nconsumers -= 1;
+    }
+    return nconsumers;
+}
+
 /* Delete the consumer specified in the consumer group 'cg'. */
 void streamDelConsumer(streamCG *cg, streamConsumer *consumer) {
     /* Iterate all the consumer pending messages, deleting every corresponding
@@ -2842,7 +2866,7 @@ void xgroupCommand(client *c) {
     } else if (!strcasecmp(opt, "DELCONSUMER") && c->argc == 5) {
         long long pending = 0;
         streamConsumer *consumer = streamLookupConsumer(cg, objectGetVal(c->argv[4]));
-        if (consumer) {
+        if (consumer && sdslen(consumer->name) > 0) { /* ignore dummy consumer */
             /* Delete the consumer and returns the number of pending messages
              * that were yet associated with such a consumer. */
             pending = raxSize(consumer->pel);
@@ -3161,6 +3185,223 @@ void xpendingCommand(client *c) {
     }
 }
 
+/* Parse and validate numids argument for stream commands, ex. XACKDEL, XDELEX,
+ * XNACK, etc.
+ *
+ *   IDS <numids> <id...> [trailing?...]
+ *   ^---- argi           ^---- arg_endi
+ *
+ * NUMIDS must be a positive integer. argi is the offset in command argv of the
+ * IDS token and arg_endi is the end of id array / start of trailing options.
+ */
+int streamParseNumIDSOrReply(client *c, int argi, int arg_endi, size_t *id_count) {
+    /* Assert IDS token. */
+    if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return C_ERR;
+    }
+
+    /* Parse number of ids & confirm positive */
+    long long ll;
+    if (getLongLongFromObject(c->argv[argi + 1], &ll) != C_OK || ll <= 0) {
+        addReplyError(c, "Number of IDs must be a positive integer");
+        return C_ERR;
+    }
+
+    /* Validate numids matches remaining arg count. */
+    if (ll != (long long)arg_endi - argi - 1) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return C_ERR;
+    }
+
+    *id_count = (size_t)ll;
+    return C_OK;
+}
+
+/* Propagate the effect of XNACK commands via RETRYCOUNT & FORCE to ensure no
+ * drift in edge cases of AOF/Replication. */
+void streamPropagateXNACK(client *c, robj *key, robj *groupname, streamID *id, streamNACK *nack) {
+    /* Generate an XNACK with absolute, idempotent values:
+     *
+     * XNACK <key> <group> FAIL IDS 1 <id> RETRYCOUNT <count> FORCE
+     *
+     * This ensures not only that the PEL entry is created in the consumer
+     * (FORCE), but also that all properties are set: XNACK per-se sets
+     * delivery_time to 0, and RETRYCOUNT sets the delivery_count. */
+    robj *argv[10];
+    argv[0] = shared.xnack;
+    argv[1] = key;
+    argv[2] = groupname;
+    argv[3] = shared.fail;
+    argv[4] = shared.ids;
+    argv[5] = shared.one;
+    argv[6] = createObjectFromStreamID(id);
+    argv[7] = shared.retrycount;
+    argv[8] = createStringObjectFromLongLong(nack->delivery_count);
+    argv[9] = shared.force;
+
+    alsoPropagate(c->db->id, argv, 10, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+
+    decrRefCount(argv[6]);
+    decrRefCount(argv[8]);
+}
+
+/* NACK modes. */
+typedef enum {
+    NACKMODE_SILENT = 0,
+    NACKMODE_FAIL,
+    NACKMODE_FATAL
+} streamNACKMode;
+
+/* XNACK <key> <group> [SILENT | FAIL | FATAL] IDS <numids> <id> <id> ... <id>
+ *      [RETRYCOUNT <count>] [FORCE]
+ *
+ * For one or more entries in consumer group's PEL, set the delivery time to 0
+ * causing it to be immediately eligible for reclaim via XCLAIM/XAUTOCLAIM.
+ * The mode option (SILENT, FAIL, FATAL) allows further control over the
+ * delivery count.
+ *
+ * The trailing options are intended for internal use only, enabling
+ * AOF/replication of each message NACK'd specifying the exact delivery_count.
+ *
+ * Return value of the command is the number of messages successfully NACK'd.
+ */
+void xnackCommand(client *c) {
+    /* --- Argument parsing ------------------------------------------------ */
+    streamCG *group = NULL;
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (o) {
+        if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
+        group = streamLookupCG(objectGetVal(o), objectGetVal(c->argv[2]));
+    }
+
+    /* No key or group? Send an error given that the group creation
+     * is mandatory. */
+    if (o == NULL || group == NULL) {
+        addReplyErrorFormat(c,
+                            "-NOGROUP No such key '%s' or "
+                            "consumer group '%s'",
+                            (char *)objectGetVal(c->argv[1]), (char *)objectGetVal(c->argv[2]));
+        return;
+    }
+    stream *s = objectGetVal(o);
+
+    /* Parse optional NACK mode: [SILENT | FAIL | FATAL] */
+    streamNACKMode mode;
+    if (strcasecmp(objectGetVal(c->argv[3]), "SILENT") == 0) {
+        mode = NACKMODE_SILENT;
+    } else if (strcasecmp(objectGetVal(c->argv[3]), "FAIL") == 0) {
+        mode = NACKMODE_FAIL;
+    } else if (strcasecmp(objectGetVal(c->argv[3]), "FATAL") == 0) {
+        mode = NACKMODE_FATAL;
+    } else {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    /* Check for trailing options */
+    bool force_mode = false;
+    size_t arg_endi = c->argc - 1;
+    if (strcasecmp(objectGetVal(c->argv[arg_endi]), "FORCE") == 0) {
+        force_mode = true;
+        arg_endi--;
+    }
+
+    long long retrycount = -1;
+    if (strcasecmp(objectGetVal(c->argv[arg_endi - 1]), "RETRYCOUNT") == 0) {
+        if (getLongLongFromObject(c->argv[arg_endi], &retrycount) != C_OK || retrycount < 0) {
+            addReplyError(c, "value is not an integer or out of range");
+            return;
+        }
+        arg_endi -= 2;
+    }
+
+    /* Parse and validate fragment: IDS <numids> */
+    size_t id_count;
+    if (streamParseNumIDSOrReply(c, 4, arg_endi, &id_count) != C_OK) {
+        return;
+    }
+
+    /* --- Parse IDS array -------------------------------------------------- */
+    streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
+    streamID *ids = static_ids;
+    if (id_count > STREAMID_STATIC_VECTOR_LEN) {
+        ids = zmalloc(sizeof(streamID) * id_count);
+    }
+
+    for (size_t j = 0; j < id_count; j++) {
+        if (streamParseStrictIDOrReply(c, c->argv[6 + j], &ids[j], 0, NULL) != C_OK) goto cleanup;
+    }
+
+    /* --- NACK each message ------------------------------------------------ */
+    preventCommandPropagation(c);
+    long long nacked = 0;
+    for (size_t j = 0; j < id_count; j++) {
+        streamID id = ids[j];
+        unsigned char buf[sizeof(streamID)];
+        streamEncodeID(buf, &id);
+
+        /* Lookup the ID in the group PEL. */
+        void *result = NULL;
+        if (!raxFind(group->pel, buf, sizeof(buf), &result)) {
+            if (!force_mode || !streamEntryExists(s, &id)) {
+                continue;
+            }
+
+            /* Create the NACK. */
+            sds emptyname = sdsempty();
+            streamConsumer *consumer = streamLookupConsumer(group, emptyname);
+            if (consumer == NULL) {
+                consumer = streamCreateConsumer(group, emptyname, c->argv[1], c->db->id, SCC_DEFAULT);
+            }
+            sdsfree(emptyname); /* streamCreateConsumer dups the name; safe to free. */
+
+            result = streamCreateNACK(consumer);
+            raxInsert(group->pel, buf, sizeof(buf), result, NULL);
+            raxInsert(consumer->pel, buf, sizeof(buf), result, NULL);
+        }
+
+        /* Release the NACK back for immediate reclaim */
+        streamNACK *nack = result;
+        nack->delivery_time = 0;
+        nacked++;
+
+        /* Manage delivery_count based on the MODE */
+        switch (mode) {
+        case NACKMODE_SILENT:
+            if (nack->delivery_count > 0) {
+                nack->delivery_count--;
+            }
+            break;
+        case NACKMODE_FATAL:
+            nack->delivery_count = LLONG_MAX;
+            break;
+        case NACKMODE_FAIL:
+            /* NOOP; keep delivery_count the same */
+            break;
+        }
+
+        /* Honor RETRYCOUNT override */
+        if (retrycount >= 0) {
+            nack->delivery_count = retrycount;
+        }
+
+        /* Propagate XNACK in absolute terms to avoid drift. */
+        streamPropagateXNACK(c, c->argv[1], c->argv[2], &id, nack);
+    }
+
+    if (nacked > 0) {
+        server.dirty += nacked;
+        signalModifiedKey(c, c->db, c->argv[1]);
+    }
+
+    addReplyLongLong(c, nacked);
+
+cleanup:
+    if (ids != static_ids) zfree(ids);
+    return;
+}
+
 /* XCLAIM <key> <group> <consumer> <min-idle-time> <ID-1> <ID-2>
  *        [IDLE <milliseconds>] [TIME <mstime>] [RETRYCOUNT <count>]
  *        [FORCE] [JUSTID]
@@ -3400,7 +3641,7 @@ void xclaimCommand(client *c) {
             if (retrycount >= 0) {
                 nack->delivery_count = retrycount;
             } else if (!justid) {
-                nack->delivery_count++;
+                streamIncrDeliveryCount(nack);
             }
             if (nack->consumer != consumer) {
                 /* Add the entry in the new consumer local PEL. */
@@ -3575,7 +3816,7 @@ void xautoclaimCommand(client *c) {
         /* Update the consumer and idle time. */
         nack->delivery_time = now;
         /* Increment the delivery attempts counter unless JUSTID option provided */
-        if (!justid) nack->delivery_count++;
+        if (!justid) streamIncrDeliveryCount(nack);
 
         if (nack->consumer != consumer) {
             /* Add the entry in the new consumer local PEL. */
@@ -3689,27 +3930,11 @@ static void xdelGenericCommand(client *c, xdelVariant variant) {
             mode = PELMODE_ACKED;
         }
 
-        /* Expect IDS token. */
-        if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
-            addReplyErrorObject(c, shared.syntaxerr);
+        /* Parse and validate fragment: IDS <numids> */
+        if (streamParseNumIDSOrReply(c, argi, c->argc - 1, &id_count) != C_OK) {
             return;
         }
-        argi++; /* past IDS */
-
-        /* Parse and validate numids: must be a positive integer. */
-        long long ll;
-        if (getLongLongFromObject(c->argv[argi], &ll) != C_OK || ll <= 0) {
-            addReplyError(c, "Number of IDs must be a positive integer");
-            return;
-        }
-        argi++; /* past numids */
-
-        /* Validate numids matches remaining arg count. */
-        if (ll != c->argc - argi) {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-        id_count = (size_t)ll;
+        argi += 2; /* past IDS <numids> */
     }
 
     /* --- Missing key / group early exit ---------------------------------- */
@@ -4186,12 +4411,16 @@ void xinfoReplyWithStreamInfo(client *c, stream *s) {
 
                 /* Consumers */
                 addReplyBulkCString(c, "consumers");
-                addReplyArrayLen(c, raxSize(cg->consumers));
+                addReplyArrayLen(c, streamConsumerPublicCount(cg));
                 raxIterator ri_consumers;
                 raxStart(&ri_consumers, cg->consumers);
                 raxSeek(&ri_consumers, "^", NULL, 0);
                 while (raxNext(&ri_consumers)) {
                     streamConsumer *consumer = ri_consumers.data;
+                    if (sdslen(consumer->name) < 1) {
+                        continue;
+                    }
+
                     addReplyMapLen(c, 5);
 
                     /* Consumer name */
@@ -4290,13 +4519,18 @@ void xinfoCommand(client *c) {
             return;
         }
 
-        addReplyArrayLen(c, raxSize(cg->consumers));
+        /* Return list of consumers */
+        addReplyArrayLen(c, streamConsumerPublicCount(cg));
         raxIterator ri;
         raxStart(&ri, cg->consumers);
         raxSeek(&ri, "^", NULL, 0);
         mstime_t now = commandTimeSnapshot();
         while (raxNext(&ri)) {
             streamConsumer *consumer = ri.data;
+            if (sdslen(consumer->name) < 1) {
+                continue;
+            }
+
             mstime_t inactive = consumer->active_time != -1 ? now - consumer->active_time : consumer->active_time;
             mstime_t idle = now - consumer->seen_time;
             if (idle < 0) idle = 0;
@@ -4329,7 +4563,7 @@ void xinfoCommand(client *c) {
             addReplyBulkCString(c, "name");
             addReplyBulkCBuffer(c, ri.key, ri.key_len);
             addReplyBulkCString(c, "consumers");
-            addReplyLongLong(c, raxSize(cg->consumers));
+            addReplyLongLong(c, streamConsumerPublicCount(cg));
             addReplyBulkCString(c, "pending");
             addReplyLongLong(c, raxSize(cg->pel));
             addReplyBulkCString(c, "last-delivered-id");

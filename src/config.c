@@ -671,6 +671,9 @@ void loadServerConfigFromString(sds config) {
         err = "replicaof directive not allowed in cluster mode";
         goto loaderr;
     }
+    if (server.cluster_prefer_sync_from_replica && !server.cluster_enabled) {
+        serverLog(LL_WARNING, "cluster-prefer-sync-from-replica has no effect when cluster mode is disabled");
+    }
     if (server.bgsave_default_method == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
         err = "'bgsave-default-method forkless' can only be selected when the server was started with "
               "'forkless-infrastructure-enabled yes'";
@@ -2917,6 +2920,24 @@ static int updateClusterState(const char **err) {
     return 1;
 }
 
+static int updateSiblingDonorSafety(const char **err) {
+    UNUSED(err);
+    if (!server.repl_replica_ro || !server.repl_replica_ignore_maxmemory)
+        replicationInvalidateSiblingDonor();
+    return 1;
+}
+
+static int updateClusterPreferSyncFromReplica(const char **err) {
+    UNUSED(err);
+    /* Sibling discovery relies on cluster gossip, so outside cluster mode the
+     * config is a no-op; warn instead of failing so a shared config file can
+     * still be used for standalone instances. */
+    if (server.cluster_prefer_sync_from_replica && !server.cluster_enabled) {
+        serverLog(LL_WARNING, "cluster-prefer-sync-from-replica has no effect when cluster mode is disabled");
+    }
+    return 1;
+}
+
 int updateClusterFlags(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfFlags();
@@ -3469,8 +3490,8 @@ standardConfig static_configs[] = {
     createBoolConfig("aof-timestamp-enabled", NULL, MODIFIABLE_CONFIG, server.aof_timestamp_enabled, 0, NULL, NULL),
     createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 1, NULL, NULL),
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, server.repl_serve_stale_data, 1, NULL, NULL),
-    createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, NULL),
-    createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, NULL),
+    createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, updateSiblingDonorSafety),
+    createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, updateSiblingDonorSafety),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, server.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
     createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
     createBoolConfig("forkless-infrastructure-enabled", NULL, IMMUTABLE_CONFIG, server.forkless_infrastructure_enabled, 0, NULL, NULL),
@@ -3484,6 +3505,7 @@ standardConfig static_configs[] = {
     createBoolConfig("use-exit-on-panic", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.use_exit_on_panic, 0, NULL, NULL),
     createBoolConfig("disable-thp", NULL, IMMUTABLE_CONFIG, server.disable_thp, 1, NULL, NULL),
     createBoolConfig("cluster-allow-replica-migration", NULL, MODIFIABLE_CONFIG, server.cluster_allow_replica_migration, 1, NULL, NULL),
+    createBoolConfig("cluster-prefer-sync-from-replica", NULL, MODIFIABLE_CONFIG, server.cluster_prefer_sync_from_replica, 0, NULL, updateClusterPreferSyncFromReplica),
     createBoolConfig("replica-announced", NULL, MODIFIABLE_CONFIG, server.replica_announced, 1, NULL, NULL),
     createBoolConfig("latency-tracking", NULL, MODIFIABLE_CONFIG, server.latency_tracking_enabled, 1, NULL, NULL),
     createBoolConfig("aof-disable-auto-gc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.aof_disable_auto_gc, 0, NULL, updateAofAutoGCEnabled),

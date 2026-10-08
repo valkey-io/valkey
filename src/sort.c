@@ -191,6 +191,18 @@ int sortCompare(const void *s1, const void *s2) {
     return server.sort_desc ? -cmp : cmp;
 }
 
+/* Create a string object for the member stored at a sorted set listpack entry.
+ * Integer-encoded members become integer-encoded objects, which every SORT
+ * consumer (numeric scoring, comparison, pattern substitution) accepts. */
+static robj *zsetListpackEntryToObject(unsigned char *eptr) {
+    unsigned char *vstr;
+    unsigned int vlen;
+    long long vlong;
+
+    vstr = lpGetValue(eptr, &vlen, &vlong);
+    return vstr ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLong(vlong);
+}
+
 /* The SORT command is the most complex command in Valkey. Warning: this code
  * is optimized for speed and a bit less for readability */
 void sortCommandGeneric(client *c, int readonly) {
@@ -323,14 +335,16 @@ void sortCommandGeneric(client *c, int readonly) {
         sortby = NULL;
     }
 
-    /* Destructively convert encoded sorted sets for SORT. */
-    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_BTREE);
-
-    /* Obtain the length of the object to sort. */
+    /* Obtain the length of the object to sort.
+     *
+     * SORT must not modify the object being sorted: a background iterator
+     * (forkless save) may be reading its value memory concurrently, and
+     * only commands classified as writes are blocked from touching in-use
+     * keys. Every encoding is therefore consumed in place below. */
     switch (sortval->type) {
     case OBJ_LIST: vectorlen = listTypeLength(sortval); break;
     case OBJ_SET: vectorlen = setTypeSize(sortval); break;
-    case OBJ_ZSET: vectorlen = hashtableSize(((zset *)objectGetVal(sortval))->ht); break;
+    case OBJ_ZSET: vectorlen = zsetLength(sortval); break;
     default: vectorlen = 0; serverPanic("Bad SORT type"); /* Avoid GCC warning */
     }
 
@@ -414,40 +428,82 @@ void sortCommandGeneric(client *c, int readonly) {
          *
          * Note that in this case we also handle LIMIT here in a direct
          * way, just getting the required range, as an optimization. */
-
-        zset *zs = objectGetVal(sortval);
-        OrderedIndexIterator iter;
-        orderedIndexInitIterator(&iter, zs->oi);
-        OrderedIndexItem *ln;
         int rangelen = vectorlen;
 
-        /* Check if starting point is trivial, before doing log(N) lookup. */
-        if (desc) {
-            long zsetlen = hashtableSize(((zset *)objectGetVal(sortval))->ht);
-            orderedIndexSeekToIndex(&iter, zsetlen - start);
-            ln = orderedIndexPrev(&iter);
-        } else {
-            if (start > 0) {
-                orderedIndexSeekToIndex(&iter, start);
-            }
-            ln = orderedIndexNext(&iter);
-        }
+        if (sortval->encoding == OBJ_ENCODING_LISTPACK) {
+            unsigned char *zl = objectGetVal(sortval);
+            unsigned char *eptr = NULL, *sptr = NULL;
 
-        while (rangelen--) {
-            serverAssertWithInfo(c, sortval, ln != NULL);
-            const char *ele;
-            size_t ele_len;
-            orderedIndexItemGetElement(ln, &ele, &ele_len);
-            vector[j].obj = createStringObject(ele, ele_len);
-            vector[j].u.score = 0;
-            vector[j].u.cmpobj = NULL;
-            j++;
-            ln = desc ? orderedIndexPrev(&iter) : orderedIndexNext(&iter);
+            /* Each element occupies two listpack entries (member, score). */
+            if (rangelen > 0) {
+                if (desc)
+                    eptr = lpSeek(zl, -2 - (2 * start));
+                else
+                    eptr = lpSeek(zl, 2 * start);
+                serverAssertWithInfo(c, sortval, eptr != NULL);
+                sptr = lpNext(zl, eptr);
+            }
+
+            while (rangelen--) {
+                serverAssertWithInfo(c, sortval, eptr != NULL && sptr != NULL);
+                vector[j].obj = zsetListpackEntryToObject(eptr);
+                vector[j].u.score = 0;
+                vector[j].u.cmpobj = NULL;
+                j++;
+                if (desc)
+                    zzlPrev(zl, &eptr, &sptr);
+                else
+                    zzlNext(zl, &eptr, &sptr);
+            }
+        } else if (sortval->encoding == OBJ_ENCODING_BTREE) {
+            zset *zs = objectGetVal(sortval);
+            OrderedIndexIterator iter;
+            orderedIndexInitIterator(&iter, zs->oi);
+            OrderedIndexItem *ln;
+
+            /* Check if starting point is trivial, before doing log(N) lookup. */
+            if (desc) {
+                orderedIndexSeekToIndex(&iter, zsetLength(sortval) - start);
+                ln = orderedIndexPrev(&iter);
+            } else {
+                if (start > 0) {
+                    orderedIndexSeekToIndex(&iter, start);
+                }
+                ln = orderedIndexNext(&iter);
+            }
+
+            while (rangelen--) {
+                serverAssertWithInfo(c, sortval, ln != NULL);
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(ln, &ele, &ele_len);
+                vector[j].obj = createStringObject(ele, ele_len);
+                vector[j].u.score = 0;
+                vector[j].u.cmpobj = NULL;
+                j++;
+                ln = desc ? orderedIndexPrev(&iter) : orderedIndexNext(&iter);
+            }
+        } else {
+            serverPanic("Unknown sorted set encoding");
         }
         /* Fix start/end: output code is not aware of this optimization. */
         end -= start;
         start = 0;
+    } else if (sortval->type == OBJ_ZSET && sortval->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(sortval);
+        unsigned char *eptr = lpSeek(zl, 0), *sptr = NULL;
+
+        if (eptr != NULL) sptr = lpNext(zl, eptr);
+        while (eptr != NULL) {
+            serverAssertWithInfo(c, sortval, sptr != NULL);
+            vector[j].obj = zsetListpackEntryToObject(eptr);
+            vector[j].u.score = 0;
+            vector[j].u.cmpobj = NULL;
+            j++;
+            zzlNext(zl, &eptr, &sptr);
+        }
     } else if (sortval->type == OBJ_ZSET) {
+        serverAssertWithInfo(c, sortval, sortval->encoding == OBJ_ENCODING_BTREE);
         hashtable *ht = ((zset *)objectGetVal(sortval))->ht;
         hashtableIterator iter;
         hashtableInitIterator(&iter, ht, 0);

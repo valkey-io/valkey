@@ -187,7 +187,7 @@ foreach command {SORT SORT_RO} {
         assert_equal [r sort zset by nosort limit -10 100] {a c e b d}
     }
 
-    test "SORT sorted set skiplist BY nosort should retain ordering" {
+    test "SORT sorted set btree BY nosort should retain ordering" {
         with_config zset-max-ziplist-entries 0 {
             r del zset
             r zadd zset 1 a
@@ -201,7 +201,7 @@ foreach command {SORT SORT_RO} {
         }
     }
 
-    test "SORT sorted set skiplist BY nosort + LIMIT" {
+    test "SORT sorted set btree BY nosort + LIMIT" {
         with_config zset-max-ziplist-entries 0 {
             r del zset
             r zadd zset 1 a
@@ -219,7 +219,7 @@ foreach command {SORT SORT_RO} {
         }
     }
 
-    test "SORT sorted set skiplist with BY pattern" {
+    test "SORT sorted set btree" {
         with_config zset-max-ziplist-entries 0 {
             r del zset
             r zadd zset 1 a
@@ -229,6 +229,84 @@ foreach command {SORT SORT_RO} {
             r zadd zset 3 e
             assert_encoding btree zset
             assert_equal [r sort zset alpha desc] {e d c b a}
+        }
+    }
+
+    foreach command {SORT SORT_RO} {
+        test "$command does not change the encoding of a sorted set" {
+            # Hash-tagged keys keep the BY/GET pattern keys in the sorted set's
+            # slot, so the pattern assertions also run in cluster mode.
+            foreach {maxentries enc} {128 listpack 0 btree} {
+                with_config zset-max-ziplist-entries $maxentries {
+                    r del "{s}zset"
+                    r zadd "{s}zset" 1 a 5 b 2 c 10 d 3 e
+                    r mset "{s}w_a" 3 "{s}w_b" 1 "{s}w_c" 2 "{s}w_d" 5 "{s}w_e" 4
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" alpha desc] {e d c b a}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by nosort asc] {a c e b d}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by nosort desc limit 1 2] {b e}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by "{s}w_*"] {b c a e d}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by nosort get "{s}w_*"] {3 2 4 1 5}
+                    assert_encoding $enc "{s}zset"
+                    assert_equal [r $command "{s}zset" by "{s}w_*" get # get "{s}w_*"] {b 1 c 2 a 3 e 4 d 5}
+                    assert_encoding $enc "{s}zset"
+                }
+            }
+        }
+
+        test "$command sorted set with integer members (listpack and btree)" {
+            foreach {maxentries enc} {128 listpack 0 btree} {
+                with_config zset-max-ziplist-entries $maxentries {
+                    r del zset
+                    r zadd zset 1 10 2 5 3 100 4 7
+                    assert_encoding $enc zset
+                    assert_equal [r $command zset] {5 7 10 100}
+                    assert_equal [r $command zset desc] {100 10 7 5}
+                    assert_equal [r $command zset by nosort] {10 5 100 7}
+                    assert_equal [r $command zset by nosort desc] {7 100 5 10}
+                    assert_equal [r $command zset by nosort limit 1 2] {5 100}
+                    assert_equal [r $command zset by nosort desc limit 1 2] {100 5}
+                    assert_equal [r $command zset alpha] {10 100 5 7}
+                    assert_encoding $enc zset
+                }
+            }
+        }
+    }
+
+    foreach command {SORT SORT_RO} {
+        test "$command sorted set: listpack and btree encodings produce identical results" {
+            array unset sres
+            foreach {maxentries enc} {128 listpack 0 btree} {
+                with_config zset-max-ziplist-entries $maxentries {
+                    r del zset
+                    set args {}
+                    for {set i 0} {$i < 50} {incr i} {
+                        lappend args [expr {($i * 37) % 101}] "m[expr {($i * 53) % 97}]"
+                    }
+                    r zadd zset {*}$args
+                    assert_encoding $enc zset
+                    set sres($enc,alpha) [r $command zset alpha]
+                    set sres($enc,alpha_desc) [r $command zset alpha desc]
+                    set sres($enc,nosort) [r $command zset by nosort]
+                    set sres($enc,nosort_desc) [r $command zset by nosort desc]
+                    set sres($enc,limit) [r $command zset by nosort limit 7 13]
+                    set sres($enc,limit_desc) [r $command zset by nosort desc limit 7 13]
+                    set sres($enc,edge_limit) [r $command zset by nosort limit 49 5]
+                    set sres($enc,over_limit) [r $command zset by nosort limit 60 5]
+                    assert_encoding $enc zset
+                }
+            }
+            foreach k {alpha alpha_desc nosort nosort_desc limit limit_desc edge_limit over_limit} {
+                assert_equal $sres(listpack,$k) $sres(btree,$k) "mismatch for $k"
+            }
+            assert_equal 50 [llength $sres(listpack,alpha)]
+            assert_equal 13 [llength $sres(listpack,limit)]
+            assert_equal 1 [llength $sres(listpack,edge_limit)]
+            assert_equal 0 [llength $sres(listpack,over_limit)]
         }
     }
 

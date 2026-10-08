@@ -5,158 +5,72 @@
  */
 
 #include "server.h"
+#include "latency_e2e.h"
 
-/* Flush the content of the aggregation table to the command histograms. */
-static void latencyE2eFlushTable(latencyE2eTable *t, monotime write_time) {
-    int64_t duration_ns = (int64_t)(write_time - t->cmd_read_time) * 1000;
-    for (int i = 0; i < t->nslots; i++) {
-        updateCommandLatencyE2eHistogram(&t->cmds[i]->latency_e2e_histogram, duration_ns, t->counts[i]);
-    }
+/* Names of the command kinds (CMD_KIND_*), as reported in INFO and LATENCY E2E_HISTOGRAM. */
+const char *cmdKindNames[CMD_KIND_TOTAL] = {"write", "read", "auth", "other"};
+
+/* Samples are patched together across clients as that helps avoiding stalls related to cache misses. */
+#define LATENCY_E2E_SAMPLES 256
+static struct {
+    uint64_t duration_us;
+    latencyE2eCounter counter;
+} latency_e2e_samples[LATENCY_E2E_SAMPLES];
+static int latency_e2e_samples_count = 0;
+
+/* Finalize the current table. */
+void latencyE2eFinalize(client *c) {
+    latencyE2e *l = c->latency_e2e;
+
+    /* Untracked, or no samples. */
+    if (!l || l->current.aggregated == 0) return;
+
+    /* The previous pending table is still waiting for its write, flush it in place. */
+    if (l->pending.aggregated) latencyE2eFlushTable(&l->pending, l->pending_read_time, getMonotonicUs());
+
+    l->pending = l->current;
+    l->pending_read_time = l->current_read_time;
+    /* current_read_time is kept: commands of the current batch may still be recorded (e.g.
+     * commands queued after a blocking command). */
+    l->current.aggregated = 0;
 }
 
-/* Flush the aggregation table, clear it & reset it. */
-static void latencyE2eFlushTableAndReset(client *c, latencyE2eTable *table) {
-    if (table->nslots > 0) {
-        latencyE2eFlushTable(table, c->latency_e2e.cur_write_time);
-        /* reset table for next cycle of commands. */
-        memset(table->cmds, 0, sizeof(table->cmds));
-        table->nslots = 0;
-    }
-    table->boundary = -1ULL;
+/* Flush the table into the samples waiting for their histogram update, and clear it. */
+void latencyE2eFlushTable(latencyE2eCounter *table, monotime read_time, monotime end_time) {
+    if (unlikely(latency_e2e_samples_count == LATENCY_E2E_SAMPLES)) latencyE2eUpdateHistograms();
+    latency_e2e_samples[latency_e2e_samples_count].duration_us = end_time - read_time;
+    latency_e2e_samples[latency_e2e_samples_count].counter = *table;
+    latency_e2e_samples_count++;
+    table->aggregated = 0;
 }
 
-/* Obtain a fresh table for end-to-end latency recording. If already at capacity, flush the oldest table early. */
-static latencyE2eTable *latencyE2eOpenTable(client *c) {
-    if (c->latency_e2e.tables == NULL) {
-        c->latency_e2e.tables = listCreate();
-        listSetFreeMethod(c->latency_e2e.tables, zfree);
-    }
-
-    /* Flush & reuse the oldest. */
-    if (listLength(c->latency_e2e.tables) >= LATENCY_E2E_MAX_TABLES) {
-        listNode *ln = listLast(c->latency_e2e.tables);
-        latencyE2eTable *oldest = listNodeValue(ln);
-
-        listUnlinkNode(c->latency_e2e.tables, ln);
-        listLinkNodeHead(c->latency_e2e.tables, ln);
-        latencyE2eFlushTableAndReset(c, oldest);
-        oldest->cmd_read_time = c->latency_e2e.cur_cmd_time;
-        c->latency_e2e.open = oldest;
-        return oldest;
-    }
-
-    /* check if the top table went through latencyE2eFlushTableAndReset. */
-    if (listLength(c->latency_e2e.tables) != 0) {
-        latencyE2eTable *table = listNodeValue(listFirst(c->latency_e2e.tables));
-        if (table->boundary == -1ULL) {
-            table->cmd_read_time = c->latency_e2e.cur_cmd_time;
-            c->latency_e2e.open = table;
-            return table;
+/* Record the waiting samples into the kind histograms. */
+void latencyE2eUpdateHistograms(void) {
+    struct hdr_histogram **histograms = server.latency_e2e_histogram;
+    for (int j = 0; j < latency_e2e_samples_count; j++) {
+        int64_t duration_ns = latency_e2e_samples[j].duration_us * 1000;
+        latencyE2eCounter counter = latency_e2e_samples[j].counter;
+        for (int i = 0; i < CMD_KIND_TOTAL; i++) {
+            if (counter.item[i]) updateCommandLatencyHistogramCount(&histograms[i], duration_ns, counter.item[i]);
         }
     }
-
-    latencyE2eTable *table = zcalloc(sizeof(*table));
-    table->boundary = -1ULL;
-    table->cmd_read_time = c->latency_e2e.cur_cmd_time;
-    c->latency_e2e.open = table;
-    listAddNodeHead(c->latency_e2e.tables, table);
-    return table;
+    latency_e2e_samples_count = 0;
 }
 
-/* Add a sample of the command to the current table. */
-void latencyE2eRecordCommand(client *c, struct serverCommand *cmd) {
-    latencyE2eTable *table = c->latency_e2e.open;
-    if (table == NULL || table->boundary != -1ULL) table = latencyE2eOpenTable(c);
-
-    /* Aggregate into an existing slot for this command if present. */
-    for (int i = 0; i < LATENCY_E2E_MAX_SLOTS; i++) {
-        if (table->cmds[i] == cmd) {
-            table->counts[i]++;
-            return;
-        }
-        if (table->cmds[i] == NULL) {
-            table->cmds[i] = cmd;
-            table->counts[i] = 1;
-            table->nslots++;
-            return;
-        }
-    }
-
-    /* If more than 9 unique command types per batch, the 9th+ command will be dropped silently from the tracking table. */
+/* Drop the samples waiting for their histogram update. */
+void latencyE2eDropSamples(void) {
+    latency_e2e_samples_count = 0;
 }
 
-/* Flush and remove every table whose replies are fully written. */
-void latencyE2eFlushCompleted(client *c) {
-    if (listLength(c->latency_e2e.tables) == 1) {
-        /* Fast path: single table, flushed in place & reuse. */
-        latencyE2eTable *table = listNodeValue(listFirst(c->latency_e2e.tables));
-        if (table->boundary != -1ULL && table->boundary <= c->latency_e2e.reply_blocks_removed) {
-            latencyE2eFlushTableAndReset(c, table);
-        }
-    } else {
-        listIter li;
-        listRewindTail(c->latency_e2e.tables, &li);
-
-        listNode *ln;
-        while ((ln = listNext(&li))) {
-            latencyE2eTable *table = listNodeValue(ln);
-            if (table->boundary > c->latency_e2e.reply_blocks_removed) break;
-            if (ln->next == NULL) {
-                /* reuse last aggregation table to avoid future allocations. */
-                latencyE2eFlushTableAndReset(c, table);
-            } else if (table->boundary != -1ULL) {
-                latencyE2eFlushTable(table, c->latency_e2e.cur_write_time);
-                listDelNode(c->latency_e2e.tables, ln);
-            }
-        }
-    }
+/* Drop the client's buffered samples and read/write times. */
+void latencyE2eReset(client *c) {
+    if (c->latency_e2e) memset(c->latency_e2e, 0, sizeof(*c->latency_e2e));
 }
 
-/* Release all data related to end-to-end latency tracking.
- * Any samples still buffered (e.g. a client disconnected) are dropped. */
-void latencyE2eRelease(client *c) {
-    if (c->latency_e2e.tables == NULL) return;
-    listRelease(c->latency_e2e.tables);
-    c->latency_e2e.tables = NULL;
-    c->latency_e2e.open = NULL;
-}
-
-/* After a client write: close the current aggregation table to edits and flush any table whose replies are fully written. */
-void latencyE2ePostClientWrite(client *c) {
-    if (c->latency_e2e.tables == NULL || c->nwritten <= 0) return;
-
-    if (!server.latency_tracking_enable_e2e) {
-        latencyE2eRelease(c);
-        return;
-    }
-
-    if (c->latency_e2e.open != NULL && c->latency_e2e.open->nslots > 0) {
-        latencyE2eTable *table = c->latency_e2e.open;
-        table->boundary = c->latency_e2e.reply_block_watermark;
-        /* Let the next command execution handle the creations of a new aggregation table. */
-        c->latency_e2e.open = NULL;
-    }
-
-    latencyE2eFlushCompleted(c);
-}
-
-/* After a replica write: replicas are never tracked, so free any tables allocated before the role was known. */
-void latencyE2ePostReplicaWrite(client *c) {
-    if (c->latency_e2e.tables == NULL) return;
-
-    /* Feature is not needed for replica clients, free memory. */
-    latencyE2eRelease(c);
-    /* Avoid future tracking allocations. */
-    c->latency_e2e.cur_read_time = 0;
-}
-
-/* Called when a module is unloaded, before its registered commands are freed.
- * Aggregation tables hold raw serverCommand* values which might are freed during the module unloading. */
-void latencyE2eModuleUnload(void) {
+/* Drop the tracking state of every client. */
+void latencyE2eResetAllClients(void) {
     listIter li;
     listNode *ln;
     listRewind(server.clients, &li);
-    while ((ln = listNext(&li))) {
-        latencyE2eRelease(listNodeValue(ln));
-    }
+    while ((ln = listNext(&li))) latencyE2eReset(listNodeValue(ln));
 }

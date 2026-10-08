@@ -753,10 +753,6 @@ typedef enum {
                                                  * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th \
                                                  * (or 1%) of any value. The total size per histogram should sit around 40 KiB Bytes. */
 
-/* End-to-end latency histogram per command init settings. */
-#define LATENCY_E2E_HISTOGRAM_MIN_VALUE 1L           /* >= 1 nanosec */
-#define LATENCY_E2E_HISTOGRAM_MAX_VALUE 10000000000L /* <= 10 secs */
-#define LATENCY_E2E_HISTOGRAM_PRECISION 2            /* 2 significant digits, as with the latency histogram. */
 
 /* Latency-tracking feature flags (server.latency_tracking_features). Select which latency metrics. */
 #define LATENCY_TRACK_CMD (1 << 0) /* command processing-time histogram */
@@ -1409,35 +1405,30 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
-/* end to end latency structure & definitions. */
-#ifndef LATENCY_E2E_MAX_SLOTS
-/* Maximum number of unique commands tracked in a single batch. */
-/* Note: This is kept low to enable GCC optimization of unrolling the loop defined in latencyE2eRecordCommand. */
-#define LATENCY_E2E_MAX_SLOTS 8
-#endif
+/* Command kinds tracked by the end-to-end latency histograms (server.latency_e2e_histogram). */
+#define CMD_KIND_WRITE 0
+#define CMD_KIND_READ 1
+#define CMD_KIND_AUTH 2
+#define CMD_KIND_OTHER 3
+#define CMD_KIND_TOTAL 4
+extern const char *cmdKindNames[CMD_KIND_TOTAL];
 
-/* Max number of aggregation tables per client.
- * Each table is retired once its replies are fully written. */
-#define LATENCY_E2E_MAX_TABLES 4
+typedef struct latencyE2eCounter {
+    union {
+        uint16_t item[CMD_KIND_TOTAL]; /* Samples per command kind. */
+        uint64_t aggregated;           /* All kinds at once: non-zero <=> the table has samples. */
+    };
+} latencyE2eCounter;
 
-/* service time aggregation table. */
-typedef struct latencyE2eTable {
-    struct serverCommand *cmds[LATENCY_E2E_MAX_SLOTS];
-    int counts[LATENCY_E2E_MAX_SLOTS]; /* Number of samples per occupied slot. */
-    int nslots;                        /* Number of occupied slots. */
-    monotime cmd_read_time;            /* Arrival time of this table's commands. */
-    uint64_t boundary;                 /* reply_blocks_removed value at which this table's replies
-                                        * are fully written; -1ULL while the table is still accepting new samples. */
-} latencyE2eTable;
-
+/* Per-client aggregation tables, one batch each. The current table accepts the samples of the
+ * current batch; finalizing moves them to the pending table, where they wait for their write. */
 typedef struct latencyE2e {
-    monotime cur_read_time;         /* Arrival time of the most recent socket read. */
-    monotime cur_cmd_time;          /* Current command batch read time. */
-    monotime cur_write_time;        /* The latest write time associated with the client. */
-    uint64_t reply_block_watermark; /* reply_blocks_removed value at which current responses are flushed out. */
-    uint64_t reply_blocks_removed;  /* Monotonic count of reply blocks drained from c->reply. */
-    list *tables;                   /* Lazily allocated aggregation tables. */
-    latencyE2eTable *open;          /* Current aggregation table. */
+    latencyE2eCounter pending;  /* Finalized samples awaiting their write; non-zero <=> finalized. */
+    monotime pending_read_time; /* Read time of the batch in the pending table. */
+    monotime current_read_time; /* Read time of the batch in the current table; 0 while untracked. */
+    latencyE2eCounter current;  /* Samples of the current batch, always accepting. */
+    monotime cur_read_time;     /* Event loop wake time of the most recent socket read. */
+    monotime cur_write_time;    /* The latest write time associated with the client. */
 } latencyE2e;
 
 typedef struct client {
@@ -1479,9 +1470,7 @@ typedef struct client {
     size_t buf_usable_size;              /* Usable size of buffer. */
     list *reply;                         /* List of reply objects to send to the client. */
     listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
-    size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread. */
-    size_t io_reply_len;                 /* Client reply block count when sent to IO thread.  */
-    monotime io_event_loop_wakeup_time;  /* Snapshot of the event loop wakeup_time. */
+    size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread */
     LastWrittenBuf io_last_written;      /* Track state for last written buffer */
     unsigned long long reply_bytes;      /* Tot bytes of objects in reply list. */
     listNode clients_pending_write_node; /* list node in clients_pending_write or in clients_pending_io_write list */
@@ -1526,7 +1515,6 @@ typedef struct client {
     int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
-    latencyE2e latency_e2e;
     /* In updateClientMemoryUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each
@@ -1555,6 +1543,7 @@ typedef struct client {
     listNode *throttle_node;           /* Node in throttler's client_queue */
     monotime throttle_start;           /* When this client was queued for throttling */
     struct trendCalculator *cob_trend; /* Per-replica COB size trend (NULL if not replica) */
+    latencyE2e *latency_e2e;           /* End-to-end latency tracking. */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -2162,9 +2151,6 @@ struct valkeyServer {
     int pause_cron;                            /* Don't run cron tasks (debug) */
     int dict_resizing;                         /* Whether to allow main dict and expired dict to be resized (debug) */
     int latency_tracking_enabled;              /* 1 if extended latency tracking is enabled, 0 otherwise. */
-    int latency_tracking_features;             /* Bitmask of LATENCY_TRACK_* metrics to record when tracking is enabled. */
-    int latency_tracking_enable_cmd;           /* Tracking of processing time is enabled. */
-    int latency_tracking_enable_e2e;           /* Tracking of end to end time is enabled. */
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
@@ -2591,6 +2577,12 @@ struct valkeyServer {
     int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
     int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkeys_manager;
+    /* Latency tracking features. */
+    int latency_tracking_features;   /* Bitmask of LATENCY_TRACK_* metrics to record when tracking is enabled. */
+    int latency_tracking_enable_cmd; /* Tracking of processing time is enabled. */
+    int latency_tracking_enable_e2e; /* Tracking of end to end time is enabled. */
+    /* End-to-end latency histograms, one per command kind. */
+    struct hdr_histogram *latency_e2e_histogram[CMD_KIND_TOTAL];
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2934,9 +2926,7 @@ struct serverCommand {
     sds fullname;     /* Includes parent name if any: "parentcmd|childcmd". Unchanged if command is renamed. */
     sds current_name; /* Same as fullname, becomes a separate string if command is renamed. */
     struct hdr_histogram
-        *latency_histogram; /* Points to the command latency command histogram (unit of time nanosecond). */
-    struct hdr_histogram
-        *latency_e2e_histogram;    /* Points to the command end to end latency command histogram (unit of time nanosecond). */
+        *latency_histogram;        /* Points to the command latency command histogram (unit of time nanosecond). */
     keySpec legacy_range_key_spec; /* The legacy (first,last,step) key spec is
                                     * still maintained (if applicable) so that
                                     * we can still support the reply format of
@@ -3746,14 +3736,9 @@ void forceCommandPropagation(client *c, int flags);
 void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
-void latencyE2eRecordCommand(client *c, struct serverCommand *cmd);
-void latencyE2eRelease(client *c);
-void latencyE2ePostClientWrite(client *c);
-void latencyE2ePostReplicaWrite(client *c);
-void latencyE2eModuleUnload(void);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
-void updateCommandLatencyE2eHistogram(struct hdr_histogram **latency_e2e_histogram, int64_t duration_hist, long long count);
+void updateCommandLatencyHistogramCount(struct hdr_histogram **latency_histogram, int64_t duration_hist, long long count);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
@@ -4629,5 +4614,19 @@ int iAmPrimary(void);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
+
+/* Classify a command by type (CMD_KIND_*): write, read, auth or other. */
+static inline int getCommandType(client *c, struct serverCommand *cmd) {
+    if (cmd->flags & CMD_WRITE) return CMD_KIND_WRITE;
+    if (cmd->flags & CMD_READONLY) return CMD_KIND_READ;
+    if (cmd->proc == authCommand) return CMD_KIND_AUTH;
+    if (cmd->proc == helloCommand) {
+        /* HELLO [protover [AUTH username password] [SETNAME clientname]] is AUTH if it authenticates. */
+        for (int j = 2; j < c->argc - 2; j++) {
+            if (!strcasecmp(objectGetVal(c->argv[j]), "AUTH")) return CMD_KIND_AUTH;
+        }
+    }
+    return CMD_KIND_OTHER;
+}
 
 #endif

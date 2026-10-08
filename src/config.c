@@ -31,6 +31,7 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "server.h"
+#include "latency_e2e.h"
 #include "hotkeys.h"
 #include "cluster.h"
 #include "connection.h"
@@ -2684,8 +2685,11 @@ static int isValidProcTitleTemplate(char *val, const char **err) {
 /* precompute the effective latency-tracking flags. */
 int updateLatencyTrackingFlags(const char **err) {
     UNUSED(err);
+    int was_e2e_enabled = server.latency_tracking_enable_e2e;
     server.latency_tracking_enable_cmd = server.latency_tracking_enabled && (server.latency_tracking_features & LATENCY_TRACK_CMD);
     server.latency_tracking_enable_e2e = server.latency_tracking_enabled && (server.latency_tracking_features & LATENCY_TRACK_E2E);
+    /* Drop samples buffered while enabled, so they aren't flushed with stale times on re-enable. */
+    if (was_e2e_enabled && !server.latency_tracking_enable_e2e) latencyE2eResetAllClients();
     return 1;
 }
 

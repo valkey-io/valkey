@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "latency_e2e.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "cluster_migrateslots.h"
@@ -326,11 +327,11 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     return server.min_string_size_copy_avoid_threaded && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid_threaded;
 }
 
-/* record write for end-to-end latency. */
+/* Record a write for end-to-end latency. */
 static inline void latencyE2eClientWrite(client *c) {
-    if (server.latency_tracking_enable_e2e && c->nwritten > 0) {
-        c->latency_e2e.cur_write_time = getMonotonicUs();
-        c->latency_e2e.reply_block_watermark = c->latency_e2e.reply_blocks_removed + (inMainThread() ? listLength(c->reply) : c->io_reply_len);
+    if (server.latency_tracking_enable_e2e && c->nwritten > 0 && c->latency_e2e) {
+        c->latency_e2e->cur_write_time = getMonotonicUs();
+        if (inMainThread()) latencyE2eFinalize(c);
     }
 }
 
@@ -432,11 +433,10 @@ client *createClient(connection *conn) {
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
-    c->io_reply_len = 0;
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
-    memset(&c->latency_e2e, 0, sizeof(c->latency_e2e));
+    c->latency_e2e = NULL;
     return c;
 }
 
@@ -2486,9 +2486,9 @@ int freeClient(client *c) {
     if (c->lib_ver) decrRefCount(c->lib_ver);
     freeClientMultiState(c);
     if (c->cob_trend) trendCalculator_free(c->cob_trend);
-    latencyE2eRelease(c);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
+    zfree(c->latency_e2e);
     zfree(c);
     return 1;
 }
@@ -3448,7 +3448,6 @@ static void _postWriteToClient(client *c) {
         if (last_written) return;
     }
 
-    unsigned long length = listLength(c->reply);
     listIter iter;
     listNode *next;
     listRewind(c->reply, &iter);
@@ -3475,11 +3474,8 @@ static void _postWriteToClient(client *c) {
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
         }
-        if (last_written) break;
+        if (last_written) return;
     }
-
-    /* Count drained reply blocks. */
-    c->latency_e2e.reply_blocks_removed += (length - listLength(c->reply));
 }
 
 /* Updates the client's memory usage and bucket and server stats after writing.
@@ -3488,7 +3484,6 @@ static void _postWriteToClient(client *c) {
 int postWriteToClient(client *c) {
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
-    c->io_reply_len = 0;
     /* Update total number of writes on server */
     server.stat_total_writes_processed++;
     if (getClientType(c) != CLIENT_TYPE_REPLICA) {
@@ -3496,7 +3491,6 @@ int postWriteToClient(client *c) {
         latencyE2ePostClientWrite(c);
     } else {
         postWriteToReplica(c);
-        latencyE2ePostReplicaWrite(c);
     }
 
     if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
@@ -3874,7 +3868,6 @@ void resetClientIOState(client *c) {
     c->flag.pending_command = 0;
     c->io_last_bufpos = 0;
     c->io_last_reply_block = NULL;
-    c->io_reply_len = 0;
 }
 
 /* Initializes the shared query buffer to a new sds with the default capacity.
@@ -4694,6 +4687,9 @@ int processInputBuffer(client *c) {
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
             prepareCommandQueue(c);
+            if (server.latency_tracking_enable_e2e && (c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
+                latencyE2eInitialize(c);
+            }
             popped_from_queue = false;
         } else {
             popped_from_queue = true;
@@ -4735,11 +4731,6 @@ int processInputBuffer(client *c) {
     }
 
     return C_OK;
-}
-
-static inline int latencyE2eTracks(client *c) {
-    if (c->flag.monitor) return 0;
-    return getClientType(c) == CLIENT_TYPE_NORMAL;
 }
 
 /* This function can be called from the main-thread or from the IO-thread.
@@ -4814,12 +4805,8 @@ static bool readToQueryBuf(client *c) {
         return false;
     }
 
-    /* 0 Is used to avoid future allocations on non-tracked clients. */
-    monotime wakeup_time = 0;
-    if (server.latency_tracking_enable_e2e && latencyE2eTracks(c)) {
-        wakeup_time = inMainThread() ? server.el->wakeup_time : c->io_event_loop_wakeup_time;
-    }
-    c->latency_e2e.cur_read_time = wakeup_time;
+    /* IO-thread reads were already stamped when dispatched. */
+    if (inMainThread() && server.latency_tracking_enable_e2e) latencyE2eRecordReadEvent(c);
 
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
@@ -7121,6 +7108,11 @@ int processClientIOReadsDone(client *c) {
     /* On read error - stop here. */
     if (handleReadResult(c) == C_ERR) {
         return needs_post_read_update;
+    }
+
+    /* A command parsed by the IO thread starts a new batch, its command queue was empty. */
+    if (server.latency_tracking_enable_e2e && (c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
+        latencyE2eInitialize(c);
     }
 
     if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {

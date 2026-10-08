@@ -1138,6 +1138,28 @@ TEST_F(ListpackTest, listpackLpValidateIntegrity) {
     lpFree(lp);
 }
 
+TEST_F(ListpackTest, listpackSafeToAddOverflow) {
+    unsigned char *lp = lpNew(0);
+    size_t len = lpBytes(lp);
+    const size_t max_size = (size_t)1 << 30;
+    struct {
+        size_t add;
+        int expected;
+    } cases[] = {
+        {0, 1},
+        {max_size - len, 1},
+        {max_size - len + 1, 0},
+        {SIZE_MAX - len, 0},
+        {SIZE_MAX - len + 1, 0},
+        {SIZE_MAX, 0},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ASSERT_EQ(lpSafeToAdd(lp, cases[i].add), cases[i].expected);
+    }
+    lpFree(lp);
+}
+
 TEST_F(ListpackTest, listpackNumberOfElementsExceedsLP_HDR_NUMELE_UNKNOWN) {
     /* Test number of elements exceeds LP_HDR_NUMELE_UNKNOWN */
     unsigned char *lp;

@@ -36,6 +36,41 @@ start_cluster 3 3 {tags {external:skip cluster}} {
         assert_equal $shard_0_slot_coverage [dict get [get_node_info_from_shard $node_0_id $validation_node "shard"] "slots"]
     }
 
+    test "CLUSTER MYSHARD matches the local CLUSTER SHARDS entry on a primary and replica" {
+        set shard_id [R $primary_node CLUSTER MYSHARDID]
+        set primary_id [R $primary_node CLUSTER MYID]
+        set replica_id [R $replica_node CLUSTER MYID]
+
+        foreach node [list $primary_node $replica_node] {
+            set expected [get_node_info_from_shard [R $node CLUSTER MYID] $node "shard"]
+            set shard [R $node CLUSTER MYSHARD]
+            assert_equal $shard_id [dict get $shard id]
+            assert_equal $shard_0_slot_coverage [dict get $shard slots]
+
+            set expected_nodes {}
+            foreach member [dict get $expected nodes] {
+                assert {[string is wideinteger -strict [dict get $member replication-offset]]}
+                dict unset member replication-offset
+                lappend expected_nodes $member
+            }
+            set actual_nodes {}
+            foreach member [dict get $shard nodes] {
+                assert {[string is wideinteger -strict [dict get $member replication-offset]]}
+                dict unset member replication-offset
+                lappend actual_nodes $member
+            }
+            dict set expected nodes $expected_nodes
+            dict set shard nodes $actual_nodes
+            assert_equal $expected $shard
+
+            set ids {}
+            foreach member $actual_nodes {
+                lappend ids [dict get $member id]
+            }
+            assert_equal [lsort [list $primary_id $replica_id]] [lsort $ids]
+        }
+    }
+
     test "Kill a node and tell the replica to immediately takeover" {
         pause_process [srv $primary_node pid]
         R $replica_node CLUSTER failover force
@@ -51,6 +86,10 @@ start_cluster 3 3 {tags {external:skip cluster}} {
 
     test "CLUSTER SHARDS slot response is non-empty when primary node fails" {
         assert_equal $shard_0_slot_coverage [dict get [get_node_info_from_shard $node_0_id $validation_node "shard"] "slots"]
+    }
+
+    test "CLUSTER MYSHARD retains slot ranges after failover" {
+        assert_equal $shard_0_slot_coverage [dict get [R $replica_node CLUSTER MYSHARD] slots]
     }
 }
 # Initial slot distribution for split-slot cluster tests.
@@ -117,6 +156,7 @@ test "Verify information about the shards" {
 
     # Verify on each node (primary/replica), the response of the `CLUSTER SLOTS` command is consistent.
     for {set ref 0} {$ref < $::cluster_master_nodes + $::cluster_replica_nodes} {incr ref} {
+        assert_equal [lindex $slots $ref] [dict get [R $ref CLUSTER MYSHARD] slots]
         for {set i 0} {$i < $::cluster_master_nodes + $::cluster_replica_nodes} {incr i} {
             assert_equal [lindex $slots $i] [dict get [get_node_info_from_shard [lindex $ids $i] $ref "shard"] slots]
             assert_equal "host-$i.com" [dict get [get_node_info_from_shard [lindex $ids $i] $ref "node"] hostname]

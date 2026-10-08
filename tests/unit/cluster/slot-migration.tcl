@@ -408,6 +408,50 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
+start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+    set R0_id [R 0 CLUSTER MYID]
+    set R1_id [R 1 CLUSTER MYID]
+
+    test "Replica clears importing state after missing finalization during full sync" {
+        migrate_slot 1 0 9000
+        wait_for_slot_state 2 "\[9000-<-$R1_id\]"
+
+        R 0 CONFIG SET min-replicas-to-write 0
+        R 0 CONFIG SET repl-backlog-size 1024
+        R 0 CONFIG SET repl-diskless-sync yes
+        R 0 CONFIG SET repl-diskless-sync-delay 0
+        R 2 CONFIG SET key-load-delay 1000
+        R 2 CONFIG SET loading-process-events-interval-bytes 1024
+        R 2 CONFIG REWRITE
+
+        pause_process [srv -2 pid]
+        set value [string repeat A 1024]
+        for {set j 0} {$j < 2000} {incr j} {
+            R 0 SET "{aga}$j" $value
+        }
+        resume_process [srv -2 pid]
+        restart_server -2 true false
+        reconnect -2
+
+        wait_for_condition 500 10 {
+            [s -2 master_sync_in_progress] eq 1
+        } else {
+            fail "Replica did not start a full sync"
+        }
+
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 9000 NODE $R0_id]
+        wait_for_slot_state 2 "\[9000-<-$R1_id\]"
+        assert_equal 1 [s -2 master_sync_in_progress]
+
+        wait_for_condition 1000 10 {
+            [s -2 master_sync_in_progress] eq 0
+        } else {
+            fail "Replica did not finish full sync"
+        }
+        wait_for_slot_state 2 ""
+    }
+}
+
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 

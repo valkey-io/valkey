@@ -1484,10 +1484,16 @@ void addReplyPushLen(client *c, long length) {
 }
 
 void addReplyNull(client *c) {
+    if (prepareClientToWrite(c) != C_OK) return;
+    addWritePreparedReplyNull((writePreparedClient *)c);
+}
+
+void addWritePreparedReplyNull(writePreparedClient *wpc) {
+    client *c = (client *)wpc;
     if (c->resp == 2) {
-        addReplyProto(c, "$-1\r\n", 5);
+        _addReplyToBufferOrList(c, "$-1\r\n", 5);
     } else {
-        addReplyProto(c, "_\r\n", 3);
+        _addReplyToBufferOrList(c, "_\r\n", 3);
     }
 }
 

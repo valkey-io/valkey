@@ -753,6 +753,11 @@ typedef enum {
                                                  * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th \
                                                  * (or 1%) of any value. The total size per histogram should sit around 40 KiB Bytes. */
 
+
+/* Latency-tracking feature flags (server.latency_tracking_features). Select which latency metrics. */
+#define LATENCY_TRACK_CMD (1 << 0) /* command processing-time histogram */
+#define LATENCY_TRACK_E2E (1 << 1) /* per-command end-to-end (service) time histogram */
+
 /* Busy module flags, see busy_module_yield_flags */
 #define BUSY_MODULE_YIELD_NONE (0)
 #define BUSY_MODULE_YIELD_EVENTS (1 << 0)
@@ -1400,6 +1405,32 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
+/* Command kinds tracked by the end-to-end latency histograms (server.latency_e2e_histogram). */
+#define CMD_KIND_WRITE 0
+#define CMD_KIND_READ 1
+#define CMD_KIND_AUTH 2
+#define CMD_KIND_OTHER 3
+#define CMD_KIND_TOTAL 4
+extern const char *cmdKindNames[CMD_KIND_TOTAL];
+
+typedef struct latencyE2eCounter {
+    union {
+        uint16_t item[CMD_KIND_TOTAL]; /* Samples per command kind. */
+        uint64_t aggregated;           /* All kinds at once: non-zero <=> the table has samples. */
+    };
+} latencyE2eCounter;
+
+/* Per-client aggregation tables, one batch each. The current table accepts the samples of the
+ * current batch; finalizing moves them to the pending table, where they wait for their write. */
+typedef struct latencyE2e {
+    latencyE2eCounter pending;  /* Finalized samples awaiting their write; non-zero <=> finalized. */
+    monotime pending_read_time; /* Read time of the batch in the pending table. */
+    monotime current_read_time; /* Read time of the batch in the current table; 0 while untracked. */
+    latencyE2eCounter current;  /* Samples of the current batch, always accepting. */
+    monotime cur_read_time;     /* Event loop wake time of the most recent socket read. */
+    monotime cur_write_time;    /* The latest write time associated with the client. */
+} latencyE2e;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1512,6 +1543,7 @@ typedef struct client {
     listNode *throttle_node;           /* Node in throttler's client_queue */
     monotime throttle_start;           /* When this client was queued for throttling */
     struct trendCalculator *cob_trend; /* Per-replica COB size trend (NULL if not replica) */
+    latencyE2e *latency_e2e;           /* End-to-end latency tracking. */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -2545,6 +2577,12 @@ struct valkeyServer {
     int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
     int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkeys_manager;
+    /* Latency tracking features. */
+    int latency_tracking_features;   /* Bitmask of LATENCY_TRACK_* metrics to record when tracking is enabled. */
+    int latency_tracking_enable_cmd; /* Tracking of processing time is enabled. */
+    int latency_tracking_enable_e2e; /* Tracking of end to end time is enabled. */
+    /* End-to-end latency histograms, one per command kind. */
+    struct hdr_histogram *latency_e2e_histogram[CMD_KIND_TOTAL];
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3700,6 +3738,7 @@ void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
+void updateCommandLatencyHistogramCount(struct hdr_histogram **latency_histogram, int64_t duration_hist, long long count);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
@@ -3916,6 +3955,7 @@ typedef enum {
 } configType;
 
 void loadServerConfig(char *filename, char config_from_stdin, char *options);
+int updateLatencyTrackingFlags(const char **err);
 void appendServerSaveParams(time_t seconds, int changes);
 void resetServerSaveParams(void);
 struct rewriteConfigState; /* Forward declaration to export API. */
@@ -4574,5 +4614,19 @@ int iAmPrimary(void);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
+
+/* Classify a command by type (CMD_KIND_*): write, read, auth or other. */
+static inline int getCommandType(client *c, struct serverCommand *cmd) {
+    if (cmd->flags & CMD_WRITE) return CMD_KIND_WRITE;
+    if (cmd->flags & CMD_READONLY) return CMD_KIND_READ;
+    if (cmd->proc == authCommand) return CMD_KIND_AUTH;
+    if (cmd->proc == helloCommand) {
+        /* HELLO [protover [AUTH username password] [SETNAME clientname]] is AUTH if it authenticates. */
+        for (int j = 2; j < c->argc - 2; j++) {
+            if (!strcasecmp((const char *)objectGetVal(c->argv[j]), "AUTH")) return CMD_KIND_AUTH;
+        }
+    }
+    return CMD_KIND_OTHER;
+}
 
 #endif

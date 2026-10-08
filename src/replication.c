@@ -34,6 +34,7 @@
  */
 
 #include "server.h"
+#include "latency_e2e.h"
 #include "sds.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
@@ -1371,6 +1372,9 @@ error:
             if (!isReplicaInCohort(replica, req, rdbver, sync_compression_algo)) continue;
             replica->repl_data->repl_state = REPL_STATE_NONE;
             replica->flag.replica = 0;
+            /* Samples buffered before it became a replica were never flushed,
+             * drop them rather than flushing them with the error reply. */
+            latencyE2eReset(replica);
             listDelNode(server.replicas, ln);
             addReplyError(replica, fail_msg);
             replica->flag.close_after_reply = 1;

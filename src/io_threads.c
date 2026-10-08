@@ -13,6 +13,7 @@
 #include "connection.h"
 #include "queues.h"
 #include "server.h"
+#include "latency_e2e.h"
 #include <sys/resource.h>
 
 #define IO_MPSC_QUEUE_SIZE 16384
@@ -692,6 +693,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
+    if (server.latency_tracking_enable_e2e) latencyE2eRecordReadEvent(c);
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     jobPriority qidx = getJobPriority(c);
@@ -750,6 +752,8 @@ int trySendWriteToIOThreads(client *c) {
     }
 
     serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
+
+    if (server.latency_tracking_enable_e2e) latencyE2eFinalize(c);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;

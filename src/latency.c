@@ -35,6 +35,7 @@
 
 #include "server.h"
 #include "hdr_histogram.h"
+#include "latency_e2e.h"
 
 /* Dictionary type for latency events. */
 
@@ -527,6 +528,22 @@ void fillCommandCDF(client *c, struct hdr_histogram *histogram) {
     setDeferredMapLen(c, replylen, samples);
 }
 
+/* latencyCommand() helper to produce, for every command kind with samples, the cumulative
+ * distribution of its end-to-end latencies, with the buckets of fillCommandCDF. */
+void latencyE2eFillCDF(client *c) {
+    latencyE2eUpdateHistograms();
+    void *replylen = addReplyDeferredLen(c);
+    int kinds_with_data = 0;
+    for (int j = 0; j < CMD_KIND_TOTAL; j++) {
+        if (server.latency_e2e_histogram[j]) {
+            addReplyBulkCString(c, cmdKindNames[j]);
+            fillCommandCDF(c, server.latency_e2e_histogram[j]);
+            kinds_with_data++;
+        }
+    }
+    setDeferredMapLen(c, replylen, kinds_with_data);
+}
+
 /* latencyCommand() helper to produce for all commands,
  * a per command cumulative distribution of latencies. */
 void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data) {
@@ -678,6 +695,8 @@ sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
  * LATENCY RESET: reset data of a specified event or all the data if no event provided.
  * LATENCY HISTOGRAM: return a cumulative distribution of latencies in the format of a histogram for the specified
  * command names.
+ * LATENCY E2E_HISTOGRAM: return a cumulative distribution of end-to-end latencies in the format of a histogram for
+ * every command kind.
  */
 void latencyCommand(client *c) {
     struct latencyTimeSeries *ts;
@@ -733,6 +752,9 @@ void latencyCommand(client *c) {
         } else {
             latencySpecificCommandsFillCDF(c);
         }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "e2e_histogram") && c->argc == 2) {
+        /* LATENCY E2E_HISTOGRAM */
+        latencyE2eFillCDF(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "help") && c->argc == 2) {
         const char *help[] = {
             "DOCTOR",
@@ -749,6 +771,9 @@ void latencyCommand(client *c) {
             "HISTOGRAM [COMMAND ...]",
             "    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
             "    If no commands are specified then all histograms are replied.",
+            "E2E_HISTOGRAM",
+            "    Return a cumulative distribution of end-to-end latencies in the format of a histogram for every",
+            "    command kind (write, read, auth, other).",
             NULL,
         };
         addReplyHelp(c, help);

@@ -204,14 +204,14 @@ int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "attrib"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_STRING) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 (it might be a string but it contains attribute) */
+    /* make sure we cannot reply to resp2 client with resp3 (it might be a string but it contains attribute) */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     if (!TestMatchReply(reply,"Some real reply following the attribute")) goto fail;
 
     reply = ValkeyModule_CallReplyAttribute(reply);
     if (!reply || ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_ATTRIBUTE) goto fail;
-    /* make sure we can not reply to resp2 client with resp3 attribute */
+    /* make sure we cannot reply to resp2 client with resp3 attribute */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
     if (ValkeyModule_CallReplyLength(reply) != 1) goto fail;
 
@@ -273,7 +273,7 @@ int TestCallResp3Map(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     reply = ValkeyModule_Call(ctx,"HGETALL","3c" ,"myhash"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_MAP) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 map */
+    /* make sure we cannot reply to resp2 client with resp3 map */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     long long items = ValkeyModule_CallReplyLength(reply);
@@ -305,7 +305,7 @@ int TestCallResp3Bool(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "true"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_BOOL) goto fail;
-    /* make sure we can not reply to resp2 client with resp3 bool */
+    /* make sure we cannot reply to resp2 client with resp3 bool */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     if (!ValkeyModule_CallReplyBool(reply)) goto fail;
@@ -331,7 +331,7 @@ int TestCallResp3Null(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "null"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_NULL) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 null */
+    /* make sure we cannot reply to resp2 client with resp3 null */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     ValkeyModule_ReplyWithSimpleString(ctx,"OK");
@@ -394,7 +394,7 @@ int TestCallResp3Double(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "double"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_DOUBLE) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 double*/
+    /* make sure we cannot reply to resp2 client with resp3 double*/
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     double d = ValkeyModule_CallReplyDouble(reply);
@@ -421,7 +421,7 @@ int TestCallResp3BigNumber(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "bignum"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_BIG_NUMBER) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 big number */
+    /* make sure we cannot reply to resp2 client with resp3 big number */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     size_t len;
@@ -444,7 +444,7 @@ int TestCallResp3Verbatim(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "verbatim"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_VERBATIM_STRING) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 verbatim string */
+    /* make sure we cannot reply to resp2 client with resp3 verbatim string */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     const char* format;
@@ -471,7 +471,7 @@ int TestCallResp3Set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     reply = ValkeyModule_Call(ctx,"smembers","3c" ,"myset"); // N stands for resp 3 reply
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_SET) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 set */
+    /* make sure we cannot reply to resp2 client with resp3 set */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     long long items = ValkeyModule_CallReplyLength(reply);

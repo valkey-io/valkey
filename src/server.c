@@ -2437,7 +2437,6 @@ void initServerConfig(void) {
     for (j = 0; j < CONFIG_DEFAULT_BINDADDR_COUNT; j++) server.bindaddr[j] = zstrdup(default_bindaddr[j]);
     memset(server.listeners, 0x00, sizeof(server.listeners));
     server.active_expire_enabled = 1;
-    server.forkless_infrastructure_enabled = 0;
     server.lazy_expire_disabled = 0;
     server.skip_checksum_validation = 0;
     server.loading = 0;

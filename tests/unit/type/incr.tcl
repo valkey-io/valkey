@@ -350,6 +350,7 @@ start_server {tags {"incr"}} {
         assert_error "ERR value is not a valid float" {r increx foo byfloat 1}
     }
 
+    # Valgrind on x86 can return a finite result for 1e4932 + 1e4932.
     test {INCREX BYFLOAT positive arithmetic overflow returns [curr_val, 0]} {
         set big [ldbl_overflow_operand]
         r del foo
@@ -359,7 +360,7 @@ start_server {tags {"incr"}} {
         set res [r increx foo byfloat $big]
         assert_equal 0 [lindex $res 1]
         assert_equal $big [r get foo]
-    }
+    } {} {valgrind:skip}
     test {INCREX BYFLOAT negative arithmetic overflow returns [curr_val, 0]} {
         set big [ldbl_overflow_operand]
         r del foo
@@ -368,7 +369,7 @@ start_server {tags {"incr"}} {
         set res [r increx foo byfloat -$big]
         assert_equal 0 [lindex $res 1]
         assert_equal -$big [r get foo]
-    }
+    } {} {valgrind:skip}
     test {INCREX BYFLOAT overflow preserves existing TTL} {
         set big [ldbl_overflow_operand]
         r del foo
@@ -376,7 +377,7 @@ start_server {tags {"incr"}} {
         r increx foo byfloat $big
         assert_range [r ttl foo] 1 100
         assert_equal $big [r get foo]
-    }
+    } {} {valgrind:skip}
     test {INCREX BYFLOAT overflow does not apply the command's expiration} {
         set big [ldbl_overflow_operand]
         # A rejected operation should not set a TTL on a key that has none...
@@ -389,7 +390,7 @@ start_server {tags {"incr"}} {
         r set foo $big ex 100
         r increx foo byfloat $big ex 60
         assert_range [r ttl foo] 61 100
-    }
+    } {} {valgrind:skip}
 
     test {INCREX reports the increment that was actually applied} {
         # A long double cannot represent every integer at these magnitudes, so

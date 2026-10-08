@@ -7529,8 +7529,11 @@ int serverFork(int purpose) {
     }
 
     int childpid;
+    sharedQueryBufBeforeFork();
     ustime_t start = ustime();
-    if ((childpid = valkey_fork()) == 0) {
+    childpid = valkey_fork();
+    sharedQueryBufAfterFork();
+    if (childpid == 0) {
         /* Child.
          *
          * The order of setting things up follows some reasoning:

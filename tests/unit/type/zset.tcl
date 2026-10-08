@@ -3362,7 +3362,7 @@ start_server {tags {"zset"}} {
     }
 }
 
-start_server {config "minimal.conf" tags {"zset" "external:skip"} overrides {io-threads 4 io-threads-always-active yes zset-max-listpack-entries 0}} {
+start_server {config "minimal.conf" tags {"zset" "external:skip" "valgrind:skip"} overrides {io-threads 4 io-threads-always-active yes zset-max-listpack-entries 0}} {
     test "Zset nested prefetch - ZSCORE correctness with pipelined commands" {
         for {set i 0} {$i < 200} {incr i} {
             r zadd myzset $i "member:$i"

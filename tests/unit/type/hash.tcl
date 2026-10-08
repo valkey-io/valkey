@@ -962,7 +962,7 @@ start_server {tags {"hash"}} {
     } {} {valgrind:skip}
 }
 
-start_server {config "minimal.conf" tags {"hash" "external:skip"} overrides {io-threads 4 io-threads-always-active yes hash-max-listpack-entries 0}} {
+start_server {config "minimal.conf" tags {"hash" "external:skip" "valgrind:skip"} overrides {io-threads 4 io-threads-always-active yes hash-max-listpack-entries 0}} {
     test "Hash nested prefetch - HGET correctness with pipelined commands" {
         for {set i 0} {$i < 200} {incr i} {
             r hset myhash "field:$i" "value:$i"

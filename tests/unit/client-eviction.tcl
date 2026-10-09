@@ -251,21 +251,39 @@ start_server {} {
     test "client evicted due to client tracking prefixes" {
         r flushdb
         set rr [valkey_client]
+        # RESP3 so the client can still run CLIENT TRACKING after subscribing below
+        $rr hello 3
 
-        # Since tracking prefixes list is a small overhead this test uses a minimal maxmemory-clients config
-        set temp_maxmemory_clients 200000
+        # The tracking prefixes list is only charged ~12 bytes per rax node , and registering a prefix scans
+        # all existing ones, so the cost grows quadratically with the number of prefixes. Since maxmemory-clients
+        # can't go below 128kb (see getClientEvictionLimit), pad the client  with pubsub channel names to get close
+        # to the limit, so only a couple thousand prefixes are needed to trigger eviction.
+        set temp_maxmemory_clients [kb 128]
         r config set maxmemory-clients $temp_maxmemory_clients
+        # The headroom must absorb the reply buffers being resized by clientsCron while we pad.
+        set headroom [kb 20]
+        set c 0
+        while {[set gap [expr {$temp_maxmemory_clients - $headroom - [clients_sum tot-mem]}]] > 0} {
+            $rr subscribe [string repeat x [expr {min($gap, [kb 8])}]][incr c]
+        }
 
-        # Append tracking prefixes until list maxes out maxmemory clients and causes client eviction
-        # Combine more prefixes in each command to speed up the test. Because we did not actually count
-        # the memory usage of all prefixes, see getClientMemoryUsage, so we can not use larger prefixes
-        # to speed up the test here.
+        # Append tracking prefixes until list maxes out maxmemory clients and causes client eviction.
+        # Send many prefixes per command to reduce the number of round trips.
+        set prefixes_per_cmd 100
+        set n 0
         catch {
-            for {set j 0} {$j < $temp_maxmemory_clients} {incr j} {
-                $rr client tracking on prefix [format a%09s $j] prefix [format b%09s $j] prefix [format c%09s $j] bcast
+            for {set j 0} {$j < 100} {incr j} {
+                set cmd [list client tracking on bcast]
+                for {set k 0} {$k < $prefixes_per_cmd} {incr k} {
+                    lappend cmd prefix [format %010d $n]
+                    incr n
+                }
+                $rr {*}$cmd
             }
         } e
         assert_match {I/O error reading reply} $e
+        # Eviction must have been driven by the prefix list, not by the padding
+        assert {$j > 0}
         $rr close
 
         # Restore config for next tests

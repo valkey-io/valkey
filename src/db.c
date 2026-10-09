@@ -1086,14 +1086,11 @@ void keysScanCallback(void *privdata, void *entry, int didx) {
     addScanDataItem(data->result, (const char *)key, sdslen(key));
 }
 
-/* This callback is used by scanGenericCommand in order to collect elements
- * returned by the dictionary iterator into a list. */
+/* Collect borrowed keys and values for SET and HASH hashtable scans. */
 void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
     stringRef val = {NULL, 0};
     sds key = NULL;
-    const char *zset_ptr = NULL;
-    size_t zset_ele_len = 0;
 
     robj *o = data->o;
     data->sampled++;
@@ -1105,9 +1102,6 @@ void hashtableScanCallback(void *privdata, void *entry) {
     /* get key, value */
     if (o->type == OBJ_SET) {
         key = (sds)entry;
-    } else if (o->type == OBJ_ZSET) {
-        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &zset_ptr, &zset_ele_len);
-        /* zset data is copied after filtering */
     } else if (objectGetType(o) == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
@@ -1119,27 +1113,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* Filter element if it does not match the pattern. */
     if (data->pattern) {
-        const char *match_ptr = (o->type == OBJ_ZSET) ? zset_ptr : key;
-        size_t match_len = (o->type == OBJ_ZSET) ? zset_ele_len : sdslen(key);
-        if (!stringmatchlen(data->pattern, sdslen(data->pattern), match_ptr, match_len, 0)) {
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
             return;
-        }
-    }
-
-    /* zset data must be copied. Do this after filtering to avoid unneeded
-     * allocations. */
-    if (o->type == OBJ_ZSET) {
-        /* zset data is copied */
-        const char *ptr;
-        size_t ele_len;
-        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &ptr, &ele_len);
-        key = sdsnewlen(ptr, ele_len);
-        if (!data->only_keys) {
-            char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore((const OrderedIndexItem *)entry), LD_STR_AUTO);
-            sds tmp = sdsnewlen(buf, len);
-            val.buf = (const char *)tmp;
-            val.len = sdslen(tmp);
         }
     }
 
@@ -1147,6 +1122,24 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (val.buf) {
         addScanDataItem(data->result, val.buf, val.len);
     }
+}
+
+/* Keep stable ZSET item pointers until the reply is written, avoiding member
+ * and score copies during the scan. */
+static void zsetScanReferenceCallback(void *privdata, void *entry) {
+    scanData *data = privdata;
+    data->sampled++;
+    if (data->pattern || !HAS_BUILTIN_PREFETCH) {
+        const char *element;
+        size_t len;
+        orderedIndexItemGetElement(entry, &element, &len);
+        if (data->pattern && !stringmatchlen(data->pattern, sdslen(data->pattern), element, len, 0)) return;
+    } else {
+        /* Warm the item for the reply without loading its length twice. */
+        valkey_prefetch(entry);
+    }
+    OrderedIndexItem **item = vectorPush(data->result);
+    *item = entry;
 }
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
@@ -1287,9 +1280,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
 
     /* Handle the case of kvstore, dict or hashtable. */
     hashtable *ht = NULL;
-    /* Set a free callback for the contents of the collected keys list if they
-     * are deep copied temporary strings. We must not free them if they are just
-     * a shallow copy - a pointer to the actual data in the data structure */
+    int use_zset_item_refs = 0;
+    /* Free temporary strings from compact encodings. */
     void (*free_callback)(sds) = sdsfree;
     if (o == NULL) {
         free_callback = NULL;
@@ -1302,10 +1294,10 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
-        /* scanning ZSET allocates temporary strings even though it's a dict */
-        free_callback = sdsfree;
+        free_callback = NULL;
+        use_zset_item_refs = 1;
     }
-    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, use_zset_item_refs ? sizeof(OrderedIndexItem *) : sizeof(stringRef));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1354,7 +1346,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             if (o == NULL) {
                 cursor = kvstoreScan(c->db->keys, cursor, slot, final_slot, keysScanCallback, NULL, &data);
             } else {
-                cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
+                cursor = hashtableScan(ht, cursor,
+                                       use_zset_item_refs ? zsetScanReferenceCallback : hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < opts->count);
     } else if (o->type == OBJ_SET) {
@@ -1429,12 +1422,25 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         addReplyBulkLongLong(c, cursor);
     }
 
-    addReplyArrayLen(c, vectorLen(&result));
-    for (uint32_t i = 0; i < vectorLen(&result); i++) {
-        stringRef *key = vectorGet(&result, i);
-        addReplyBulkCBuffer(c, key->buf, key->len);
-        if (free_callback) {
-            free_callback((sds)(key->buf));
+    if (use_zset_item_refs) {
+        addReplyArrayLen(c, (long)vectorLen(&result) * (opts->only_keys ? 1 : 2));
+        for (uint32_t i = 0; i < vectorLen(&result); i++) {
+            OrderedIndexItem *item = *(OrderedIndexItem **)vectorGet(&result, i);
+            const char *element;
+            size_t len;
+            orderedIndexItemGetElement(item, &element, &len);
+            addReplyBulkCBuffer(c, element, len);
+            if (opts->only_keys) continue;
+            char buf[MAX_LONG_DOUBLE_CHARS];
+            int score_len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore(item), LD_STR_AUTO);
+            addReplyBulkCBuffer(c, buf, score_len);
+        }
+    } else {
+        addReplyArrayLen(c, vectorLen(&result));
+        for (uint32_t i = 0; i < vectorLen(&result); i++) {
+            stringRef *key = vectorGet(&result, i);
+            addReplyBulkCBuffer(c, key->buf, key->len);
+            if (free_callback) free_callback((sds)(key->buf));
         }
     }
 

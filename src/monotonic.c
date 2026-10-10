@@ -47,11 +47,14 @@ static monotime getMonotonicUs_x86(void) {
     return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
 }
 
-/* Only use RDTSC when the kernel itself selected tsc as clocksource. */
-static int kernelClocksourceIsTsc(void) {
+/* Read current_clocksource into name. Returns 1 if it is tsc. */
+static int kernelClocksourceIsTsc(char *name, size_t namelen) {
     char buf[64];
     size_t len;
-    FILE *f = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
+    FILE *f;
+
+    snprintf(name, namelen, "unknown");
+    f = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
     if (f == NULL) return 0;
     if (fgets(buf, sizeof(buf), f) == NULL) {
         fclose(f);
@@ -61,6 +64,8 @@ static int kernelClocksourceIsTsc(void) {
 
     len = strlen(buf);
     while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' ')) buf[--len] = '\0';
+    if (len == 0) return 0;
+    snprintf(name, namelen, "%s", buf);
     return strcmp(buf, "tsc") == 0;
 }
 
@@ -72,9 +77,10 @@ static void monotonicInit_x86linux(void) {
     regmatch_t pmatch[nmatch];
     int constantTsc = 0;
     int rc;
+    char clocksource[64];
 
-    if (!kernelClocksourceIsTsc()) {
-        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is not tsc");
+    if (!kernelClocksourceIsTsc(clocksource, sizeof(clocksource))) {
+        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is %s, not using TSC", clocksource);
         return;
     }
 

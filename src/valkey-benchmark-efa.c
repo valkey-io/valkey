@@ -33,6 +33,8 @@
 /* A u64 is at most 20 decimal digits, so every substituted value fits the token
  * exactly and no RESP length changes after the template is built. */
 #define WIDE_TOKEN_LEN 20
+/* sizeof(struct efa_ep_addr). fi_av_insert expects this length on efa. */
+#define EFA_ADDRESS_LEN 32
 static const char RKEY_TOKEN[] = "__efa_rkey__";
 static const char ADDR_TOKEN[] = "__efa_addr__";
 static const char LEN_TOKEN[] = "__efa_len__";
@@ -334,6 +336,12 @@ void efaHandleHelloReply(const valkeyReply *reply) {
         size_t len = decodeHex(element->str, element->len, address);
         if (len == 0) {
             fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is not hex: %s\n", i, element->str);
+            exit(1);
+        }
+        /* tcp addresses are sockaddrs of varying length. Efa has a fixed size. */
+        if (fabric.info->addr_format == FI_ADDR_EFA && len != EFA_ADDRESS_LEN) {
+            fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is %zu bytes, not %d: %s\n", i, len,
+                    EFA_ADDRESS_LEN, element->str);
             exit(1);
         }
         if (peerKnown(address, len)) {

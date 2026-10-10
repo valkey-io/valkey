@@ -2151,7 +2151,7 @@ int parseOptions(int argc, char **argv) {
 #ifdef USE_EFA
             config.efa_provider = argv[++i];
 #else
-            fprintf(stderr, "%s is not supported. Rebuild with USE_EFA=yes\n", argv[i]);
+            fprintf(stderr, "%s is not supported. Rebuild with BUILD_EFA=yes\n", argv[i]);
             exit(1);
 #endif
         } else if (!strcmp(argv[i], "--efa-bind")) {

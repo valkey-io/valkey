@@ -1022,13 +1022,14 @@ void keysCommand(client *c) {
 
 /* Data used by the dict scan callback. */
 typedef struct {
-    vector *result; /* elements that collect from dict */
-    robj *o;        /* o must be a hash/set/zset object, NULL means current db */
-    serverDb *db;   /* database currently being scanned */
-    long long type; /* the particular type when scan the db */
-    sds pattern;    /* pattern string, NULL means no pattern */
-    long sampled;   /* cumulative number of keys sampled */
-    int only_keys;  /* set to 1 means to return keys only */
+    vector *result;      /* elements that collect from dict */
+    robj *o;             /* o must be a hash/set/zset object, NULL means current db */
+    serverDb *db;        /* database currently being scanned */
+    long long type;      /* the particular type when scan the db */
+    sds pattern;         /* pattern string, NULL means no pattern */
+    long sampled;        /* cumulative number of keys sampled */
+    long reply_elements; /* number of elements to send for hash references */
+    int only_keys;       /* set to 1 means to return keys only */
 } scanData;
 
 /* Helper function to compare key type in scan commands */
@@ -1147,6 +1148,27 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (val.buf) {
         addScanDataItem(data->result, val.buf, val.len);
     }
+}
+
+/* Keep hash entry references until the reply is built in this command, and
+ * warm values for that reply. */
+static void hashScanReferenceCallback(void *privdata, void *entryptr) {
+    scanData *data = privdata;
+    data->sampled++;
+
+    if (data->pattern) {
+        sds field = entryGetField(entryptr);
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), field, sdslen(field), 0)) return;
+    }
+
+    data->reply_elements++;
+    char *value = entryGetValue(entryptr, NULL);
+    if (value) {
+        data->reply_elements++;
+        valkey_prefetch(value);
+    }
+    entry **item = vectorPush(data->result);
+    *item = entryptr;
 }
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
@@ -1287,6 +1309,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
 
     /* Handle the case of kvstore, dict or hashtable. */
     hashtable *ht = NULL;
+    int use_hash_entry_refs = 0;
+    long hash_reply_elements = 0;
     /* Set a free callback for the contents of the collected keys list if they
      * are deep copied temporary strings. We must not free them if they are just
      * a shallow copy - a pointer to the actual data in the data structure */
@@ -1299,13 +1323,14 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
     } else if (objectGetType(o) == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
+        use_hash_entry_refs = !opts->only_keys;
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
-    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, use_hash_entry_refs ? sizeof(entry *) : sizeof(stringRef));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1354,9 +1379,11 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             if (o == NULL) {
                 cursor = kvstoreScan(c->db->keys, cursor, slot, final_slot, keysScanCallback, NULL, &data);
             } else {
-                cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
+                cursor = hashtableScan(ht, cursor,
+                                       use_hash_entry_refs ? hashScanReferenceCallback : hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < opts->count);
+        hash_reply_elements = data.reply_elements;
     } else if (o->type == OBJ_SET) {
         char *str;
         char buf[LONG_STR_SIZE];
@@ -1429,12 +1456,28 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         addReplyBulkLongLong(c, cursor);
     }
 
-    addReplyArrayLen(c, vectorLen(&result));
-    for (uint32_t i = 0; i < vectorLen(&result); i++) {
-        stringRef *key = vectorGet(&result, i);
-        addReplyBulkCBuffer(c, key->buf, key->len);
-        if (free_callback) {
-            free_callback((sds)(key->buf));
+    if (use_hash_entry_refs) {
+        writePreparedClient *wpc = prepareClientForFutureWrites(c);
+        if (wpc) {
+            addWritePreparedReplyArrayLen(wpc, hash_reply_elements);
+            for (uint32_t i = 0; i < vectorLen(&result); i++) {
+                if (c->flag.close_asap) break;
+                entry *item = *(entry **)vectorGet(&result, i);
+                sds field = entryGetField(item);
+                addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
+                size_t len;
+                char *value = entryGetValue(item, &len);
+                if (value) addWritePreparedReplyBulkCBuffer(wpc, value, len);
+            }
+        }
+    } else {
+        addReplyArrayLen(c, vectorLen(&result));
+        for (uint32_t i = 0; i < vectorLen(&result); i++) {
+            stringRef *key = vectorGet(&result, i);
+            addReplyBulkCBuffer(c, key->buf, key->len);
+            if (free_callback) {
+                free_callback((sds)(key->buf));
+            }
         }
     }
 

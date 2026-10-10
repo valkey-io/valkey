@@ -1950,12 +1950,19 @@ start_server {config "minimal.conf" tags {"introspection external:skip"} overrid
     } {} {needs:debug}
 }
 
-start_server {tags {introspection external:skip}} {
-
-    catch {r config set tls-port 6798}
-    catch {r config set tls-cluster yes}
-    catch {r config set tls-replication yes}
-    assert_equal "PONG" [r ping]
+if {!$::tls} {
+    start_server {tags {introspection external:skip}} {
+        assert_error {*ERR CONFIG SET failed (possibly related to argument 'tls-port')*} {
+            r config set tls-port 6798
+        }
+        assert_error {*ERR CONFIG SET failed (possibly related to argument 'tls-cluster')*} {
+            r config set tls-cluster yes
+        }
+        assert_error {*ERR CONFIG SET failed (possibly related to argument 'tls-replication')*} {
+            r config set tls-replication yes
+        }
+        assert_equal "PONG" [r ping]
+    }
 }
 
 test {config during loading} {

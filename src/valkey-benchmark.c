@@ -838,18 +838,6 @@ static long long acquireTokenOrWait(int tokens) {
 static void clientDone(client c) {
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     if (isBenchmarkFinished(requests_finished)) {
-#ifdef USE_EFA
-        /* Closing an EFA connection while other clients still have server writes
-         * in flight fails those writes. Stop issuing but keep connections
-         * open; freeAllClients drains and tears them down once nothing is in flight. */
-        if (config.efa_provider) {
-            aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
-            aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
-            aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-            aeStop(el);
-            return;
-        }
-#endif
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
         return;
@@ -1280,12 +1268,12 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     }
 
 #ifdef USE_EFA
-    /* Each client gets its own region.
-     * Substitution is fixed length, so the placeholder offsets should be valid. */
+    /* Each client gets its own region, written at offsets taken from the
+     * template, since a clone's buffer already holds another client's numbers. */
     c->efa_region = NULL;
     if (config.efa_provider) {
         c->efa_region = efaRegisterRegion();
-        efaSubstituteRegion(c->efa_region, c->obuf + c->prefixlen, sdslen(c->obuf) - c->prefixlen);
+        efaSubstituteRegion(c->efa_region, c->obuf + c->prefixlen, config.pipeline);
     }
 #endif
 
@@ -1519,6 +1507,9 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     }
 
     initPlaceholders(cmd, len);
+#ifdef USE_EFA
+    if (config.efa_provider) efaInitPlaceholders(cmd, len);
+#endif
     if (config.num_threads) initBenchmarkThreads();
 
     if (config.rps > 0) {

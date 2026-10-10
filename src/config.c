@@ -2947,7 +2947,6 @@ static int updateClusterAvailabilityZone(const char **err) {
 }
 
 static int applyTlsCfg(const char **err) {
-    UNUSED(err);
 
     ConnectionType *con_type = connectionTypeTls();
     if (!con_type) {

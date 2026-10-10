@@ -245,25 +245,59 @@ void efaReleaseRegion(efaRegion *region) {
     zfree(region);
 }
 
-static void substitute(char *buf, size_t len, const char *wide, uint64_t value) {
-    char text[WIDE_TOKEN_LEN + 1];
-    snprintf(text, sizeof(text), "%020" PRIu64, value);
-    char *end = buf + len;
-    for (char *at = buf; at + WIDE_TOKEN_LEN <= end; at++) {
+enum tokenField {
+    TOKEN_RKEY,
+    TOKEN_ADDR,
+    TOKEN_LEN,
+};
+
+typedef struct {
+    size_t offset;
+    enum tokenField field;
+} tokenSlot;
+
+static struct {
+    size_t cmd_len;
+    size_t count;
+    tokenSlot *slots;
+} tokens;
+
+static void findTokens(const char *cmd, size_t cmd_len, const char *wide, enum tokenField field) {
+    const char *end = cmd + cmd_len;
+    for (const char *at = cmd; at + WIDE_TOKEN_LEN <= end; at++) {
         /* memchr jumps to the next candidate; the tokens never contain '\0'. */
         at = memchr(at, wide[0], end - at);
         if (!at || at + WIDE_TOKEN_LEN > end) return;
         if (memcmp(at, wide, WIDE_TOKEN_LEN) == 0) {
-            memcpy(at, text, WIDE_TOKEN_LEN);
+            tokens.slots = zrealloc(tokens.slots, (tokens.count + 1) * sizeof(*tokens.slots));
+            tokens.slots[tokens.count].offset = at - cmd;
+            tokens.slots[tokens.count].field = field;
+            tokens.count++;
             at += WIDE_TOKEN_LEN - 1;
         }
     }
 }
 
-void efaSubstituteRegion(const efaRegion *region, char *buf, size_t len) {
-    substitute(buf, len, RKEY_WIDE, region->rkey);
-    substitute(buf, len, ADDR_WIDE, region->remote_address);
-    substitute(buf, len, LEN_WIDE, region->length);
+void efaInitPlaceholders(const char *cmd, size_t cmd_len) {
+    zfree(tokens.slots);
+    memset(&tokens, 0, sizeof(tokens));
+    tokens.cmd_len = cmd_len;
+    findTokens(cmd, cmd_len, RKEY_WIDE, TOKEN_RKEY);
+    findTokens(cmd, cmd_len, ADDR_WIDE, TOKEN_ADDR);
+    findTokens(cmd, cmd_len, LEN_WIDE, TOKEN_LEN);
+}
+
+void efaSubstituteRegion(const efaRegion *region, char *cmd_data, int cmd_count) {
+    char text[3][WIDE_TOKEN_LEN + 1];
+    snprintf(text[TOKEN_RKEY], sizeof(text[TOKEN_RKEY]), "%020" PRIu64, region->rkey);
+    snprintf(text[TOKEN_ADDR], sizeof(text[TOKEN_ADDR]), "%020" PRIu64, region->remote_address);
+    snprintf(text[TOKEN_LEN], sizeof(text[TOKEN_LEN]), "%020" PRIu64, (uint64_t)region->length);
+    for (int cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
+        char *cmd = cmd_data + cmd_index * tokens.cmd_len;
+        for (size_t i = 0; i < tokens.count; i++) {
+            memcpy(cmd + tokens.slots[i].offset, text[tokens.slots[i].field], WIDE_TOKEN_LEN);
+        }
+    }
 }
 
 sds efaLocalAddressHex(void) {

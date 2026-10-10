@@ -36,9 +36,14 @@ sds efaExpandPlaceholders(sds arg);
 efaRegion *efaRegisterRegion(void);
 void efaReleaseRegion(efaRegion *region);
 
-/* Overwrite the widened placeholders in `buf` with this region's
- * zero-padded rkey, remote address and length. */
-void efaSubstituteRegion(const efaRegion *region, char *buf, size_t len);
+/* Record where the widened placeholders sit in the unsubstituted
+ * `cmd` template. Call before creating clients, like initPlaceholders. */
+void efaInitPlaceholders(const char *cmd, size_t cmd_len);
+
+/* Write this region's zero-padded rkey, remote address and length at the
+ * recorded offsets in each of the `cmd_count` copies of the command in
+ * `cmd_data`. */
+void efaSubstituteRegion(const efaRegion *region, char *cmd_data, int cmd_count);
 
 /* The benchmark's fabric address as the module's HELLO wants it. */
 sds efaLocalAddressHex(void);

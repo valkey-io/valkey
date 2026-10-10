@@ -62,6 +62,10 @@
 #include "cli_common.h"
 #include "mt19937-64.h"
 #include "valkey-benchmark-dataset.h"
+#ifdef USE_EFA
+#include <poll.h>
+#include "valkey-benchmark-efa.h"
+#endif
 
 #define UNUSED(V) ((void)V)
 #define RANDPTR_INITIAL_SIZE 8
@@ -172,6 +176,10 @@ static struct config {
     int template_argc;
     sds *template_argv;
     int has_field_placeholders;
+    /* valkey-large-object EFA support. NULL provider means it is disabled. */
+    const char *efa_provider;
+    const char *efa_bind;
+    long long efa_buffer_len;
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -204,6 +212,9 @@ typedef struct _client {
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
+#ifdef USE_EFA
+    efaRegion *efa_region; /* This client's registered buffer, the RMA target. */
+#endif
     uint64_t paused : 1;
     uint64_t reuse : 1;
     uint64_t request_started : 1; /* Request initialized, even if no bytes were written. */
@@ -383,6 +394,24 @@ cleanup:
     valkeyFree(ctx);
     return NULL;
 }
+
+#ifdef USE_EFA
+/* One BLOB.HELLO per server before clients are created. The connection is kept open
+ * for the life of the process. */
+static void efaHandshake(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
+    valkeyContext *ctx = getValkeyContext(ct, ip_or_path, port);
+    if (ctx == NULL) exit(1);
+    sds hex = efaLocalAddressHex();
+    valkeyReply *reply = valkeyCommand(ctx, "BLOB.HELLO %s", hex);
+    sdsfree(hex);
+    if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
+        fprintf(stderr, "BLOB.HELLO failed: %s\n", reply ? reply->str : ctx->errstr);
+        exit(1);
+    }
+    efaHandleHelloReply(reply);
+    freeReplyObject(reply);
+}
+#endif
 
 
 static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
@@ -614,6 +643,9 @@ static void freeClient(client c) {
     if (c->paused) releasePausedClient(c);
     sdsfree(c->obuf);
     zfree(c->stagptr);
+#ifdef USE_EFA
+    efaReleaseRegion(c->efa_region);
+#endif
     zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
     config.liveclients--;
@@ -623,7 +655,61 @@ static void freeClient(client c) {
     if (config.num_threads) pthread_mutex_unlock(&(config.liveclients_mutex));
 }
 
+#ifdef USE_EFA
+/* Freeing a client requires its regions to quiesce.
+ * Runs after the event loops stop. */
+static void efaDrainAllClients(void) {
+    if (config.efa_provider == NULL) return;
+    size_t client_count = listLength(config.clients);
+    if (client_count == 0) return;
+    struct pollfd *poll_set = zmalloc(client_count * sizeof(*poll_set));
+    client *waiting = zmalloc(client_count * sizeof(*waiting));
+    long long deadline = mstime() + 5000;
+
+    for (;;) {
+        size_t waiting_count = 0;
+        listNode *ln = config.clients->head;
+        while (ln) {
+            client c = ln->value;
+            ln = ln->next;
+            if (c->context == NULL || c->context->err) continue;
+            /* Replies already buffered before the event loop stopped. */
+            void *reply = NULL;
+            while (0 < c->pending && valkeyGetReply(c->context, &reply) == VALKEY_OK && reply != NULL) {
+                freeReplyObject(reply);
+                reply = NULL;
+                c->pending--;
+            }
+            if (c->pending <= 0 || c->context->err) continue;
+            poll_set[waiting_count].fd = c->context->fd;
+            poll_set[waiting_count].events = POLLIN;
+            poll_set[waiting_count].revents = 0;
+            waiting[waiting_count] = c;
+            waiting_count++;
+        }
+        long long remaining = deadline - mstime();
+        if (waiting_count == 0 || remaining <= 0) break;
+        if (1000 < remaining) remaining = 1000;
+        int ready = poll(poll_set, waiting_count, (int)remaining);
+        if (ready <= 0) {
+            if (remaining == 1000) break; /* probably anything else isn't coming */
+            continue;
+        }
+        for (size_t i = 0; i < waiting_count; i++) {
+            if (poll_set[i].revents == 0) continue;
+            /* On error the next pass sees context->err and skips the client. */
+            (void)valkeyBufferRead(waiting[i]->context);
+        }
+    }
+    zfree(poll_set);
+    zfree(waiting);
+}
+#endif
+
 static void freeAllClients(void) {
+#ifdef USE_EFA
+    efaDrainAllClients();
+#endif
     listNode *ln = config.clients->head, *next;
 
     while (ln) {
@@ -1161,6 +1247,17 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         c->prefix_pending++;
     }
 
+#ifdef USE_EFA
+    /* Open this connection's session. */
+    if (config.efa_provider) {
+        char *buf = NULL;
+        int len = efaFormatHello(&buf);
+        c->obuf = sdscatlen(c->obuf, buf, len);
+        free(buf);
+        c->prefix_pending++;
+    }
+#endif
+
     c->prefixlen = sdslen(c->obuf);
     /* Append the request itself. */
     if (from) {
@@ -1169,6 +1266,16 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     } else {
         for (int j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
     }
+
+#ifdef USE_EFA
+    /* Each client gets its own region, written at offsets taken from the
+     * template, since a clone's buffer already holds another client's numbers. */
+    c->efa_region = NULL;
+    if (config.efa_provider) {
+        c->efa_region = efaRegisterRegion();
+        efaSubstituteRegion(c->efa_region, c->obuf + c->prefixlen, config.pipeline);
+    }
+#endif
 
     c->written = 0;
     c->seqlen = seqlen;
@@ -1400,6 +1507,9 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     }
 
     initPlaceholders(cmd, len);
+#ifdef USE_EFA
+    if (config.efa_provider) efaInitPlaceholders(cmd, len);
+#endif
     if (config.num_threads) initBenchmarkThreads();
 
     if (config.rps > 0) {
@@ -2036,6 +2146,24 @@ int parseOptions(int argc, char **argv) {
             sdsfreesplitres(modes, count);
         } else if (!strcmp(argv[i], "--mptcp")) {
             config.mptcp = 1;
+        } else if (!strcmp(argv[i], "--efa-provider")) {
+            if (lastarg) goto invalid;
+#ifdef USE_EFA
+            config.efa_provider = argv[++i];
+#else
+            fprintf(stderr, "%s is not supported. Rebuild with BUILD_EFA=yes\n", argv[i]);
+            exit(1);
+#endif
+        } else if (!strcmp(argv[i], "--efa-bind")) {
+            if (lastarg) goto invalid;
+            config.efa_bind = argv[++i];
+        } else if (!strcmp(argv[i], "--efa-buffer")) {
+            if (lastarg) goto invalid;
+            config.efa_buffer_len = atoll(argv[++i]);
+            if (config.efa_buffer_len < 1) {
+                fprintf(stderr, "--efa-buffer must be a positive byte count\n");
+                exit(1);
+            }
         } else if (!strcmp(argv[i], "--")) {
             /* End of options. */
             return i + 1;
@@ -2082,6 +2210,18 @@ usage:
     rdma_usage =
 #ifdef USE_RDMA
         " --rdma             Establish a RDMA connection.\n"
+#endif
+#ifdef USE_EFA
+        " --efa-provider <efa-direct|tcp>\n"
+        "                    valkey-large-object module support. Sends BLOB.HELLO on every\n"
+        "                    connection and replaces __efa_rkey__ __efa_addr__ __efa_len__\n"
+        "                    in the command with the client's registered buffer.\n"
+        "                    Requires a command line.\n"
+        " --efa-buffer <bytes>\n"
+        "                    Registered buffer per client (default: the -d size). Must\n"
+        "                    hold the object; BLOB.SET transfers this many bytes.\n"
+        " --efa-bind <addr>  Source address for the tcp provider (module fabric-provider\n"
+        "                    Emulated). Not used with efa-direct.\n"
 #endif
         "";
 
@@ -2449,11 +2589,26 @@ int main(int argc, char **argv) {
     config.template_argc = 0;
     config.template_argv = NULL;
     config.has_field_placeholders = 0;
+    config.efa_provider = NULL;
+    config.efa_bind = NULL;
+    config.efa_buffer_len = 0;
     resetPlaceholders();
 
     i = parseOptions(argc, argv);
     argc -= i;
     argv += i;
+
+#ifdef USE_EFA
+    if (config.efa_provider) {
+        if (argc == 0 || config.dataset_file || config.idlemode || config.fuzz_mode) {
+            fprintf(stderr, "--efa-provider needs a command line with __efa_* placeholders and "
+                            "is incompatible with --dataset, -I and --fuzz\n");
+            exit(1);
+        }
+        if (config.efa_buffer_len == 0) config.efa_buffer_len = config.datasize;
+        efaInit(config.efa_provider, config.efa_bind, (size_t)config.efa_buffer_len);
+    }
+#endif
 
     /* Setup dataset if specified */
     if (config.dataset_file) {
@@ -2583,6 +2738,13 @@ int main(int argc, char **argv) {
                 sds_args[i] = newarg;
                 argvlen[i] = sdslen(sds_args[i]);
             }
+#ifdef USE_EFA
+            else if (config.efa_provider && strstr(sds_args[i], "__efa_")) {
+                /* Template widened so the bulk length is final. */
+                sds_args[i] = efaExpandPlaceholders(sds_args[i]);
+                argvlen[i] = sdslen(sds_args[i]);
+            }
+#endif
             /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
         }
         if (seq_len <= 0 || malformed_segment) {
@@ -2642,6 +2804,9 @@ int main(int argc, char **argv) {
             if (node->server_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
+#ifdef USE_EFA
+            if (config.efa_provider) efaHandshake(config.ct, node->ip, node->port);
+#endif
         }
         printf("\n");
         /* Automatically set thread number to node count if not specified
@@ -2652,6 +2817,9 @@ int main(int argc, char **argv) {
         if (config.server_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
+#ifdef USE_EFA
+        if (config.efa_provider) efaHandshake(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+#endif
     }
     if (config.num_threads > 0) {
         pthread_mutex_init(&(config.liveclients_mutex), NULL);

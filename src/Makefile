@@ -439,6 +439,19 @@ ifeq ($(BUILD_RDMA),module)
 	RDMA_MODULE_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE) -DBUILD_RDMA_MODULE=$(BUILD_MODULE) $(RDMA_LIBS)
 endif
 
+# valkey-benchmark's support for valkey-large-object module.
+EFA_LIBS=
+EFA_BENCHMARK_OBJ=
+ifeq ($(BUILD_EFA),yes)
+	EFA_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libfabric && echo $$?)
+	ifneq ($(EFA_PKGCONFIG),0)
+		$(error BUILD_EFA=yes requires libfabric via pkg-config)
+	endif
+	FINAL_CFLAGS+=-DUSE_EFA $(shell $(PKG_CONFIG) --cflags libfabric)
+	EFA_LIBS=$(shell $(PKG_CONFIG) --libs libfabric)
+	EFA_BENCHMARK_OBJ=valkey-benchmark-efa.o
+endif
+
 ifndef V
     define MAKE_INSTALL
         @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$(1)$(ENDCOLOR) 1>&2
@@ -689,6 +702,7 @@ ENGINE_BENCHMARK_OBJ = \
     util.o \
     valkey-benchmark.o \
     valkey-benchmark-dataset.o \
+    $(EFA_BENCHMARK_OBJ) \
     valkey_strtod.o \
     zmalloc.o
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
@@ -737,6 +751,7 @@ persist-settings: distclean
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo OPENSSL_PREFIX=$(OPENSSL_PREFIX) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
+	echo BUILD_EFA=$(BUILD_EFA) >> .make-settings
 	echo BUILD_ZSTD=$(BUILD_ZSTD) >> .make-settings
 	echo ZSTD_PREFIX=$(ZSTD_PREFIX) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
@@ -807,7 +822,7 @@ $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
 
 # valkey-benchmark
 $(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS) $(EFA_LIBS)
 
 DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)

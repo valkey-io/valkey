@@ -14,18 +14,30 @@ proc client_throttled {r wid} {
     string match {*h*} $flags
 }
 
-# Keep issuing writes until the writer client is observed being throttled.
+# Grow the replica's output buffer on the primary by nkeys x valsize bytes using a single EVAL.
+proc grow_replica_cob {r nkeys valsize} {
+    $r eval {
+        local v = string.rep('x', tonumber(ARGV[2]))
+        for i = 1, tonumber(ARGV[1]) do
+            redis.call('set', 'key:' .. i, v)
+        end
+    } 0 $nkeys $valsize
+}
+
+proc nudge_writer_throttled {r writer wid} {
+    grow_replica_cob $writer 200 1
+    expr {[client_throttled $r $wid] &&
+          [getInfoProperty [{*}$r info debug] repl_throttle_current_clients] > 0}
+}
+
+# Issue small write bursts until the writer client is observed being throttled.
 proc wait_throttled_client {r writer wid} {
-    for {set k 0} {$k < 1000} {incr k} {
-        for {set j 0} {$j < 500} {incr j} {
-            $writer set nudge v
-        }
-        if {[client_throttled $r $wid] &&
-            [getInfoProperty [{*}$r info debug] repl_throttle_current_clients] > 0} {
-            return 1
-        }
+    wait_for_condition 100 50 {
+        [nudge_writer_throttled $r $writer $wid]
+    } else {
+        return 0
     }
-    return 0
+    return 1
 }
 
 # Set up primary/replica replication with throttling enabled and a COB limit configured.
@@ -93,10 +105,8 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             $writer CLIENT ID
             set wid [$writer read]
 
-            # Flood writes to grow the replica's COB and activate the throttler.
-            for {set i 0} {$i < 5000} {incr i} {
-                $writer set key:$i [string repeat x 1000]
-            }
+            # Fill the replica's COB (5MB) to activate the throttler.
+            grow_replica_cob $primary 5000 1000
             wait_for_condition 50 100 {
                 [throttle_rate $primary] >= 0
             } else {
@@ -137,34 +147,10 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
 
             pause_process $replica_pid
 
-            set activated 0
-            set payload [string repeat w 2000]
-            for {set i 0} {$i < 200 && !$activated} {incr i} {
-                for {set j 0} {$j < 200} {incr j} {
-                    $writer set key:$j $payload
-                }
-                if {[throttle_rate $primary] >= 0} {
-                    set activated 1
-                }
-            }
-            if {!$activated} {
-                resume_process $replica_pid
-                fail "throttler never began queueing clients"
-            }
+            # Push 30MB into the replica's COB. This is well above the 1mb soft limit and
+            # well below the 1024mb hard limit, so the replica's COB lands in between.
+            grow_replica_cob $primary 30 [expr {1 * 1024 * 1024}]
 
-            # Write 30MB total (30 x 1MB values). This is well above the 1mb
-            # soft limit and well below the 1024mb hard limit, so the replica's
-            # COB lands in between.
-            set value_size [expr {1 * 1024 * 1024}]
-            set num_writes 30
-            for {set i 0} {$i < $num_writes} {incr i} {
-                $writer set key:$i [string repeat x $value_size]
-            }
-
-            if {[status $primary connected_slaves] != 1} {
-                resume_process $replica_pid
-                fail "replica was disconnected while above soft but below hard COB limit"
-            }
             wait_for_condition 50 100 {
                 [throttle_rate $primary] >= 0
             } else {
@@ -174,6 +160,18 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             if {![wait_throttled_client $primary $writer $wid]} {
                 resume_process $replica_pid
                 fail "client was not throttled while the replica's COB was growing"
+            }
+
+            # Outlive the 1 second soft limit window: the throttler must exempt the replica
+            # from the soft limit while it converges, so the replica must stay connected.
+            after 1500
+            if {[status $primary connected_slaves] != 1} {
+                resume_process $replica_pid
+                fail "replica was disconnected while above soft but below hard COB limit"
+            }
+            if {[throttle_rate $primary] < 0} {
+                resume_process $replica_pid
+                fail "throttler stopped while the replica remained above the soft COB limit"
             }
 
             $writer close
@@ -191,30 +189,23 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
 
             pause_process $replica_pid
 
-            set activated 0
-            set payload [string repeat w 2000]
-            for {set i 0} {$i < 200 && !$activated} {incr i} {
-                for {set j 0} {$j < 200} {incr j} {
-                    $writer set key:$j $payload
-                }
-                if {[throttle_rate $primary] >= 0} {
-                    set activated 1
-                }
+            set steps 0
+            while {[throttle_rate $primary] < 0 && [incr steps] <= 20} {
+                grow_replica_cob $primary 200 2000
+                wait_for_condition 3 50 {
+                    [throttle_rate $primary] >= 0
+                } else {} ;
             }
-            if {!$activated} {
+            if {[throttle_rate $primary] < 0} {
                 resume_process $replica_pid
                 fail "throttler never began queueing clients"
             }
 
             # Write 100MB total (100 x 1MB values). This is well above the 10mb
             # hard limit, so the replica will be disconnected.
-            set value_size [expr {1 * 1024 * 1024}]
-            set num_writes 100
-            for {set i 0} {$i < $num_writes} {incr i} {
-                $writer set key:$i [string repeat x $value_size]
-            }
+            grow_replica_cob $writer 100 [expr {1 * 1024 * 1024}]
 
-            wait_for_condition 50 100 {
+            wait_for_condition 100 100 {
                 [throttle_rate $primary] == -1 &&
                 ![client_throttled $primary $wid] &&
                 [status $primary connected_slaves] == 0
@@ -237,9 +228,7 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             set wid [$writer read]
 
             # Activate throttling.
-            for {set i 0} {$i < 5000} {incr i} {
-                $writer set fkey:$i [string repeat z 1000]
-            }
+            grow_replica_cob $primary 5000 1000
             wait_for_condition 50 100 {
                 [throttle_rate $primary] >= 0
             } else {
@@ -278,9 +267,7 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             set wid [$writer read]
 
             # Activate throttling.
-            for {set i 0} {$i < 5000} {incr i} {
-                $writer set key:$i [string repeat w 1000]
-            }
+            grow_replica_cob $primary 5000 1000
             wait_for_condition 50 100 {
                 [throttle_rate $primary] >= 0
             } else {
@@ -316,9 +303,7 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             set wid [$writer read]
 
             # Activate throttling.
-            for {set i 0} {$i < 5000} {incr i} {
-                $writer set key:$i [string repeat w 1000]
-            }
+            grow_replica_cob $primary 5000 1000
             wait_for_condition 50 100 {
                 [throttle_rate $primary] >= 0
             } else {
@@ -365,44 +350,30 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             wait_for_blocked_client
             pause_process $replica_pid
 
-            # Drive the replica COB up with a deferring writer until the throttler
-            # queues this client.
+            # Drive the replica COB up and get a deferring writer queued by the throttler.
             set writer [valkey_deferring_client]
             $writer CLIENT ID
             set wid [$writer read]
-            set throttled 0
-            set payload [string repeat w 2000]
-            for {set i 0} {$i < 200 && !$throttled} {incr i} {
-                for {set j 0} {$j < 200} {incr j} {
-                    $writer set key:$j $payload
-                }
-                if {[client_throttled $primary $wid]} {
-                    set throttled 1
-                }
-            }
-            if {!$throttled} {
+            grow_replica_cob $primary 5000 1000
+            wait_for_condition 50 100 {
+                [throttle_rate $primary] >= 0
+            } else {
                 resume_process $replica_pid
                 fail "throttler never began queueing clients"
             }
-
-            # Deferring hosers that never read their replies, so the token bucket
-            # is empty and the throttler queue is non-empty when the LPUSH lands.
-            set writers {}
-            for {set i 0} {$i < 4} {incr i} {
-                lappend writers [valkey_deferring_client]
+            if {![wait_throttled_client $primary $writer $wid]} {
+                resume_process $replica_pid
+                fail "Client is not throttled."
             }
 
             # Nothing may be read from the primary between this burst and the
             # LPUSH. Commands are processed in arrival order, so the LPUSH lands
             # behind the burst.
-            foreach w $writers {
-                for {set j 0} {$j < 500} {incr j} {
-                    $w set key:$j $payload
-                }
-            }
             set pusher [valkey_deferring_client]
             $pusher lpush mylist v
 
+            # Let the replica drain so the throttler releases its queue. The LPUSH then
+            # runs and unblocks the BLPOP that was blocked before throttling started.
             resume_process $replica_pid
             wait_for_sync $replica
             wait_replica_online $primary
@@ -413,7 +384,6 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             catch {$blocker close}
             catch {$pusher close}
             catch {$writer close}
-            foreach w $writers { catch {$w close} }
             teardown_throttle_replication $primary $replica
         }
     }

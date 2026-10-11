@@ -152,7 +152,7 @@ start_server {tags {"modules"}} {
             file delete -force $failed_rdb
             exec mkfifo $failed_rdb
             # Closing the FIFO reader after one byte forces a write error while
-            # rdbSaveRio is emitting the streaming-compressed RDB.
+            # rdbSaveRio is emitting the compressed RDB.
             exec dd if=$failed_rdb of=/dev/null bs=1 count=1 2>/dev/null &
 
             set loglines [count_log_lines 0]

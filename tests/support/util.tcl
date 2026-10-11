@@ -40,6 +40,31 @@ proc read_binary_file {path} {
     return $data
 }
 
+# Compare two files without reading them entirely into memory, and without relying
+# on an external tool like cmp, which isn't available in every test environment.
+proc files_are_identical {path1 path2} {
+    if {[file size $path1] != [file size $path2]} {
+        return 0
+    }
+    set fd1 [open $path1 r]
+    set fd2 [open $path2 r]
+    fconfigure $fd1 -translation binary
+    fconfigure $fd2 -translation binary
+    set identical 1
+    while {1} {
+        set chunk1 [read $fd1 65536]
+        set chunk2 [read $fd2 65536]
+        if {$chunk1 ne $chunk2} {
+            set identical 0
+            break
+        }
+        if {$chunk1 eq ""} break
+    }
+    close $fd1
+    close $fd2
+    return $identical
+}
+
 proc write_binary_file {path data} {
     set fd [open $path w]
     fconfigure $fd -translation binary
@@ -824,7 +849,10 @@ proc latencyrstat_percentiles {cmd r} {
     }
 }
 
-proc generate_fuzzy_traffic_on_key {key duration} {
+# When adding a new data type & its commands here, do create a key of that type
+# in generate_types in tests/integration/corrupt-dump-fuzzer.tcl, otherwise the
+# fuzzer has no coverage for it.
+proc fuzzy_traffic_commands_by_type {} {
     # Commands per type, blocking commands removed
     # TODO: extract these from COMMAND DOCS, and improve to include other types
     set string_commands {APPEND BITCOUNT BITFIELD BITOP BITPOS DECR DECRBY GET GETBIT GETRANGE GETSET INCR INCRBY INCRBYFLOAT MGET MSET MSETNX PSETEX SET SETBIT SETEX SETNX SETRANGE LCS STRLEN}
@@ -833,9 +861,18 @@ proc generate_fuzzy_traffic_on_key {key duration} {
     set list_commands {LINDEX LINSERT LLEN LPOP LPOS LPUSH LPUSHX LRANGE LREM LSET LTRIM RPOP RPOPLPUSH RPUSH RPUSHX}
     set set_commands {SADD SCARD SDIFF SDIFFSTORE SINTER SINTERSTORE SISMEMBER SMEMBERS SMOVE SPOP SRANDMEMBER SREM SSCAN SUNION SUNIONSTORE}
     set stream_commands {XACK XADD XCLAIM XDEL XGROUP XINFO XLEN XPENDING XRANGE XREAD XREADGROUP XREVRANGE XTRIM}
-    set commands [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands]
+    set pathhash_commands {PHCARD PHDEL PHDELPREFIX PHEXISTS PHGET PHGETALL PHLONGEST PHMGET PHMSET PHPREFIXES PHSCAN PHSET}
+    return [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands pathhash $pathhash_commands]
+}
+
+proc generate_fuzzy_traffic_on_key {key duration} {
+    set commands [fuzzy_traffic_commands_by_type]
 
     set type [r type $key]
+    # A type missing from the list above would fail with an opaque "key not known in dictionary" error.
+    if {![dict exists $commands $type]} {
+        error "generate_fuzzy_traffic_on_key: no command list for type '$type', add one to fuzzy_traffic_commands_by_type"
+    }
     set cmds [dict get $commands $type]
     set start_time [clock seconds]
     set sent {}
@@ -883,6 +920,15 @@ proc generate_fuzzy_traffic_on_key {key duration} {
             lappend cmd [randomValue]
             lappend cmd [randomValue]
             incr i 4
+        }
+        if {$cmd == "PHSET"} {
+            lappend cmd $key
+            lappend cmd [randomValue]
+            lappend cmd "FIELDS"
+            lappend cmd 1
+            lappend cmd [randomValue]
+            lappend cmd [randomValue]
+            incr i 6
         }
         for {} {$i < $arity} {incr i} {
             if {$i == $firstkey || $i == $lastkey} {

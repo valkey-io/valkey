@@ -21,9 +21,10 @@ start_server {tags {"repl network external:skip cluster:skip"} overrides {save "
             assert_equal $value [$replica get flow-control:127]
             set reads_after [getInfoProperty [$replica info stats] io_threaded_reads_processed]
 
-            # Count the replica-side INFO polls and GET, which may be offloaded.
+            # Count the replica-side INFO polls and GET, which may be offloaded and
+            # can span multiple read events under TCP packet segmentation.
             # The replication stream must not add I/O thread reads.
-            assert_lessthan_equal [expr {$reads_after - $reads_before}] [expr {$sync_polls + 3}]
+            assert_lessthan_equal [expr {$reads_after - $reads_before}] [expr {$sync_polls * 2 + 8}]
 
             # Verify that I/O thread reads are active for ordinary clients.
             for {set i 0} {$i < 20} {incr i} {

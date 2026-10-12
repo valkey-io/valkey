@@ -284,7 +284,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
         wait_for_cluster_propagation
 
         # Let R 3 trigger the automatic failover
-        pause_process_persistent [srv 0 pid]
+        pause_process [srv 0 pid]
         wait_for_condition 1000 50 {
             [s -3 role] eq {master}
         } else {

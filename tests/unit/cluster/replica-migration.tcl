@@ -444,10 +444,10 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
 # multiple replicas attached, according to the migration barrier settings.
 start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}} {
     # Killing all the replicas of primary #0 and #1
-    pause_process [srv -5 pid]
-    pause_process [srv -10 pid]
-    pause_process [srv -6 pid]
-    pause_process [srv -11 pid]
+    pause_process_persistent [srv -5 pid]
+    pause_process_persistent [srv -10 pid]
+    pause_process_persistent [srv -6 pid]
+    pause_process_persistent [srv -11 pid]
 
     # R0 and R1 will trigger replica migration.
     wait_for_condition 1000 50 {

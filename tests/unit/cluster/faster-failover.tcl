@@ -21,7 +21,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
         wait_for_ofs_sync [srv 0 client] [srv -3 client]
 
         # Pause R0, R3 will do the automatic failover.
-        pause_process_persistent [srv 0 pid]
+        pause_process [srv 0 pid]
         wait_for_condition 1000 50 {
             [s -3 role] == "master"
         } else {

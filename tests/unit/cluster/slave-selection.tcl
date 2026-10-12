@@ -188,7 +188,7 @@ test "New Master down consecutively" {
         set instances [dict remove $instances $master_id]
 
         set paused_pid [srv [expr $master_id * -1] pid]
-        pause_process_persistent $paused_pid
+        pause_process $paused_pid
         wait_for_condition $failover_iterations 50 {
             [master_detected $instances]
         } else {

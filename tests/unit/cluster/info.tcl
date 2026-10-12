@@ -126,8 +126,8 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
 start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
     # Kill two primaries to observe partial failure on the remaining one.
-    pause_process [srv 0 pid]
-    pause_process [srv -1 pid]
+    pause_process_persistent [srv 0 pid]
+    pause_process_persistent [srv -1 pid]
 
     test "count - node partial failure" {
         wait_for_condition 500 10 {

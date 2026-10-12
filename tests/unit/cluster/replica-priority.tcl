@@ -43,11 +43,12 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             fail "The first failover did not go as expected"
         }
 
+        resume_process [srv 0 pid]
+
         # Make sure our rank and priority are correct.
         verify_log_message -3 "*Start of election*rank #0*replica priority 0*" 0
         verify_log_message -6 "*Start of election*rank #1*replica priority 10*" 0
 
-        resume_process [srv 0 pid]
         wait_for_condition 1000 50 {
             [s 0 role] eq {slave} &&
             [s -3 role] eq {master} &&
@@ -80,11 +81,12 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             fail "The second failover did not go as expected"
         }
 
+        resume_process [srv -3 pid]
+
         # Make sure our rank and priority are correct.
         verify_log_message 0 "*Start of election*rank #1*replica priority 10*" 0
         verify_log_message -6 "*Start of election*rank #0*replica priority 5*" 0
 
-        resume_process [srv -3 pid]
         wait_for_condition 1000 50 {
             [s 0 role] eq {slave} &&
             [s -3 role] eq {slave} &&

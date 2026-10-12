@@ -6614,6 +6614,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "tracking_clients:%d\r\n", server.tracking_clients,
                 "pubsub_clients:%d\r\n", server.pubsub_clients,
                 "watching_clients:%d\r\n", server.watching_clients,
+                "monitoring_clients:%lu\r\n", listLength(server.monitors),
                 "clients_in_timeout_table:%llu\r\n", (unsigned long long)raxSize(server.clients_timeout_table),
                 "total_watched_keys:%lu\r\n", watched_keys,
                 "total_blocking_keys:%lu\r\n", blocking_keys,

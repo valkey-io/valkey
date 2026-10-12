@@ -1365,22 +1365,37 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         goto error;
     }
 
-    int chosen_save_type = resolveBgsaveType();
+    int chosen_save_type = resolveBgsaveType(&fail_msg);
+    if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
+        /* fail_msg was set by resolveBgsaveType to the reason forkless is
+         * unavailable under a no-fallback policy. */
+        goto error;
+    }
+
     /* Forkless socket output can only emit a plain, current-version,
      * uncompressed RDB and requires the replica to support inline replication.
-     * Fall back to fork for any cohort it cannot serve. */
+     * For any cohort it cannot serve, fall back to fork under 'prefer-forkless', or
+     * fail the sync under 'require-forkless' (which forbids forking). */
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
+        const char *reason = NULL;
         if (!(mincapa & REPLICA_CAPA_INBAND_REPL)) {
-            serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: replica does not support inline replication");
-            chosen_save_type = RDB_BGSAVE_TYPE_FORK;
+            reason = "replica does not support inline replication";
         } else if (req & REPLICA_REQ_RDB_MASK) {
-            serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: cohort needs filtered RDB content");
-            chosen_save_type = RDB_BGSAVE_TYPE_FORK;
+            reason = "cohort needs filtered RDB content";
         } else if (rdbver != RDB_VERSION) {
-            serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: cohort needs a non-current RDB version");
-            chosen_save_type = RDB_BGSAVE_TYPE_FORK;
+            reason = "cohort needs a non-current RDB version";
         } else if (sync_compression_algo != ALGO_NONE) {
-            serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: cohort needs stream compression");
+            reason = "cohort needs stream compression";
+        }
+        if (reason != NULL) {
+            if (server.forkless_policy == FORKLESS_POLICY_REQUIRE_FORKLESS) {
+                serverLog(LL_WARNING, "Can't serve SYNC forklessly (%s) and forkless-policy 'require-forkless' "
+                                      "forbids falling back to fork",
+                          reason);
+                fail_msg = "Can't serve this full sync forklessly and forkless-policy forbids fork";
+                goto error;
+            }
+            serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: %s", reason);
             chosen_save_type = RDB_BGSAVE_TYPE_FORK;
         }
     }

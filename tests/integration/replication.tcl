@@ -476,7 +476,11 @@ foreach mdl {no yes} dualchannel {no yes} {
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 5
             $master config set repl-diskless-sync-max-replicas 3
-            $master config set bgsave-default-method [expr {$forkless eq "yes" ? "forkless" : "fork"}]
+            # Forkless cannot serve a dual-channel sync (its RDB channel
+            # has no inline-replication capability), so use strict forkless
+            # only when dual-channel is off; a silent fork fallback here
+            # would hide a forkless regression.
+            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "require-forkless") : "require-fork"}]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
             set slaves {}
@@ -629,7 +633,11 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
             $master config set dual-channel-replication-enabled $dualchannel
-            $master config set bgsave-default-method [expr {$forkless eq "yes" ? "forkless" : "fork"}]
+            # Forkless cannot serve a dual-channel sync (its RDB channel
+            # has no inline-replication capability), so use strict forkless
+            # only when dual-channel is off; a silent fork fallback here
+            # would hide a forkless regression.
+            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "require-forkless") : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled $dualchannel
@@ -729,7 +737,7 @@ foreach testType {Successful Aborted} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
-            $master config set bgsave-default-method [expr {$forkless eq "yes" ? "forkless" : "fork"}]
+            $master config set forkless-policy [expr {$forkless eq "yes" ? "require-forkless" : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled no; # Doesn't work with swapdb
@@ -2082,7 +2090,7 @@ start_server {tags {"repl external:skip cluster:skip"}} {
 # save inlines into the RDB stream). A forkless-configured primary uses forkless
 # only for replicas that advertise it, and otherwise falls back to a fork-based
 # save.
-start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-enabled yes bgsave-default-method forkless repl-diskless-sync no save ""}} {
+start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -2107,7 +2115,7 @@ start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-ena
 # A replica running an older version does not advertise "inband-repl", so a
 # forkless-configured primary must fall back to a fork-based save. Requires an
 # old server binary (--other-server-path), otherwise skipped.
-start_server {tags {"repl needs:other-server external:skip"} overrides {forkless-infrastructure-enabled yes bgsave-default-method forkless repl-diskless-sync no save ""}} {
+start_server {tags {"repl needs:other-server external:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -2135,7 +2143,7 @@ start_server {tags {"repl needs:other-server external:skip"} overrides {forkless
 # iterator and cannot yet be served from the shared replication buffer. They
 # must still reach the replica (via the dedicated save buffer) or they are lost
 # -- the offsets converge but the replica is missing keys.
-start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -2185,7 +2193,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
 # mode, under both a socket (diskless) and a disk-based primary save.
 foreach primary_diskless {yes no} {
     foreach replica_load {disabled on-empty-db swapdb} {
-        start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
+        start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless}} {
             set primary [srv 0 client]
             set ph [srv 0 host]
             set pp [srv 0 port]

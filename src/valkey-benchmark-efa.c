@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include <rdma/fabric.h>
 #include <rdma/fi_cm.h>
@@ -320,6 +322,20 @@ static int peerKnown(const unsigned char *address, size_t len) {
     return 0;
 }
 
+/* fi_av_insert reads as many bytes as the address format implies. On efa,
+ * it's fixed. On tcp length is by sa_family. Returns 0 when `address` can't be valid. */
+static size_t expectedAddressLength(const unsigned char *address, size_t len) {
+    if (fabric.info->addr_format == FI_ADDR_EFA) return EFA_ADDRESS_LEN;
+    struct sockaddr header;
+    if (len < sizeof(header)) return 0;
+    memcpy(&header, address, sizeof(header));
+    switch (header.sa_family) {
+    case AF_INET: return sizeof(struct sockaddr_in);
+    case AF_INET6: return sizeof(struct sockaddr_in6);
+    default: return 0;
+    }
+}
+
 void efaHandleHelloReply(const valkeyReply *reply) {
     if (reply->type != VALKEY_REPLY_ARRAY || reply->elements == 0) {
         fprintf(stderr, "EFA: BLOB.HELLO reply is not an array of server addresses (type %d)\n", reply->type);
@@ -338,10 +354,9 @@ void efaHandleHelloReply(const valkeyReply *reply) {
             fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is not hex: %s\n", i, element->str);
             exit(1);
         }
-        /* tcp addresses are sockaddrs of varying length. Efa has a fixed size. */
-        if (fabric.info->addr_format == FI_ADDR_EFA && len != EFA_ADDRESS_LEN) {
-            fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is %zu bytes, not %d: %s\n", i, len,
-                    EFA_ADDRESS_LEN, element->str);
+        if (len != expectedAddressLength(address, len)) {
+            fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is not a %s address: %s\n", i,
+                    fabric.info->fabric_attr->prov_name, element->str);
             exit(1);
         }
         if (peerKnown(address, len)) {

@@ -672,7 +672,9 @@ static void efaDrainAllClients(void) {
         while (ln) {
             client c = ln->value;
             ln = ln->next;
-            if (c->context == NULL || c->context->err) continue;
+            /* An unstarted request (rate limited, or refused once the benchmark
+             * finished) is counted in pending but was never sent. */
+            if (c->context == NULL || c->context->err || !c->request_started) continue;
             /* Replies already buffered before the event loop stopped. */
             void *reply = NULL;
             while (0 < c->pending && valkeyGetReply(c->context, &reply) == VALKEY_OK && reply != NULL) {
@@ -681,24 +683,29 @@ static void efaDrainAllClients(void) {
                 c->pending--;
             }
             if (c->pending <= 0 || c->context->err) continue;
+            /* writeHandler arms the read handler once the request is sent. A
+             * partly written pipeline can hold complete commands the server is
+             * already executing. */
+            int sent = aeGetFileEvents(CLIENT_GET_EVENTLOOP(c), c->context->fd) & AE_READABLE;
             poll_set[waiting_count].fd = c->context->fd;
-            poll_set[waiting_count].events = POLLIN;
+            poll_set[waiting_count].events = sent ? POLLIN : POLLOUT;
             poll_set[waiting_count].revents = 0;
             waiting[waiting_count] = c;
             waiting_count++;
         }
         long long remaining = deadline - mstime();
         if (waiting_count == 0 || remaining <= 0) break;
-        if (1000 < remaining) remaining = 1000;
-        int ready = poll(poll_set, waiting_count, (int)remaining);
-        if (ready <= 0) {
-            if (remaining == 1000) break; /* probably anything else isn't coming */
-            continue;
-        }
+        if (poll(poll_set, waiting_count, (int)remaining) <= 0) continue;
         for (size_t i = 0; i < waiting_count; i++) {
             if (poll_set[i].revents == 0) continue;
+            client c = waiting[i];
+            if (poll_set[i].events == POLLOUT) {
+                /* Free the client on a write error. */
+                writeHandler(CLIENT_GET_EVENTLOOP(c), c->context->fd, c, AE_WRITABLE);
+                continue;
+            }
             /* On error the next pass sees context->err and skips the client. */
-            (void)valkeyBufferRead(waiting[i]->context);
+            (void)valkeyBufferRead(c->context);
         }
     }
     zfree(poll_set);

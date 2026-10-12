@@ -299,7 +299,9 @@ proc test {name code {okpattern undefined} {tags {}} {finally {}}} {
 
     set test_start_time [clock milliseconds]
     set code_failed [catch {set retval [uplevel 1 $code]} error]
-    set saved_error_info $::errorInfo
+    if {$code_failed} {
+        set saved_error_info $::errorInfo
+    }
 
     # Run automatic cleanup and then the user 'finally' block, regardless of
     # the test outcome. A cleanup failure only fails a test that passed.
@@ -307,6 +309,7 @@ proc test {name code {okpattern undefined} {tags {}} {finally {}}} {
     if {$finally ne {} && [catch {uplevel 1 $finally} err]} {
         lappend cleanup_errors "Error in finally block: $err"
     }
+
     if {$code_failed} {
         set ::errorInfo $saved_error_info
     } elseif {[llength $cleanup_errors]} {

@@ -465,7 +465,9 @@ proc test {descr code} {
     set ::test_paused_pids {}
     set ::test_config_restores {}
     set code_failed [catch {set retval [uplevel 1 $code]} error]
-    set saved_error_info $::errorInfo
+    if {$code_failed} {
+        set saved_error_info $::errorInfo
+    }
 
     # Run automatic cleanup regardless of the test outcome. A cleanup failure
     # only fails a test that passed.

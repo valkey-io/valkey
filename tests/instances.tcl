@@ -462,7 +462,22 @@ proc test {descr code} {
     puts -nonewline "$ts> $descr: "
     flush stdout
 
-    if {[catch {set retval [uplevel 1 $code]} error]} {
+    set ::test_paused_pids {}
+    set ::test_config_restores {}
+    set code_failed [catch {set retval [uplevel 1 $code]} error]
+    set saved_error_info $::errorInfo
+
+    # Run automatic cleanup regardless of the test outcome. A cleanup failure
+    # only fails a test that passed.
+    set cleanup_errors [test_cleanup]
+    if {$code_failed} {
+        set ::errorInfo $saved_error_info
+    } elseif {[llength $cleanup_errors]} {
+        set code_failed 1
+        set error "assertion:[join $cleanup_errors "\n"]"
+    }
+
+    if {$code_failed} {
         incr ::failed
         if {[string match "assertion:*" $error]} {
             set msg [string range $error 10 end]

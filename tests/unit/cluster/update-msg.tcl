@@ -35,7 +35,7 @@ set current_epoch [CI 1 cluster_current_epoch]
 
 set paused_pid [srv 0 pid]
 test "Killing one master node" {
-    pause_process $paused_pid
+    pause_process_persistent $paused_pid
 }
 
 test "Wait for failover" {
@@ -67,7 +67,7 @@ test "Instance #5 is now a master" {
 
 set paused_pid5 [srv -5 pid]
 test "Killing the new master #5" {
-    pause_process $paused_pid5
+    pause_process_persistent $paused_pid5
 }
 
 test "Cluster should be down now" {

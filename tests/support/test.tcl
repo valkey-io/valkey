@@ -5,6 +5,10 @@ set ::num_skipped 0
 set ::num_aborted 0
 set ::tests_failed {}
 set ::cur_test ""
+# State changed by the current test that is automatically undone when it ends.
+# Entries are added by pause_process and test_config_set.
+set ::test_paused_pids {}
+set ::test_config_restores {}
 
 proc fail {msg} {
     error "assertion:$msg"
@@ -197,7 +201,39 @@ proc search_pattern_list {value pattern_list {glob_pattern false}} {
     return 0
 }
 
-proc test {name code {okpattern undefined} {tags {}}} {
+# Set a config for the duration of the current test only. The previous value
+# is restored when the test ends, whether it passed or failed. 'client' is a
+# command prefix such as r, {r -1}, {R 2} or a client handle.
+proc test_config_set {client param value} {
+    set old [lindex [uplevel 1 [list {*}$client config get $param]] 1]
+    uplevel 1 [list {*}$client config set $param $value]
+    lappend ::test_config_restores [list $client $param $old]
+}
+
+# Undo state left behind by the current test: resume paused processes first
+# so that the servers can be reached, then restore configs in reverse order.
+# Returns a list of errors encountered.
+proc test_cleanup {} {
+    set errors {}
+    foreach pid $::test_paused_pids {
+        # The test may have killed or restarted the paused process.
+        if {![process_is_alive $pid]} continue
+        if {[catch {exec kill -SIGCONT $pid} err]} {
+            lappend errors "Failed to resume process $pid: $err"
+        }
+    }
+    set ::test_paused_pids {}
+    foreach entry [lreverse $::test_config_restores] {
+        lassign $entry client param old
+        if {[catch {uplevel #0 [list {*}$client config set $param $old]} err]} {
+            lappend errors "Failed to restore config $param to '$old': $err"
+        }
+    }
+    set ::test_config_restores {}
+    return $errors
+}
+
+proc test {name code {okpattern undefined} {tags {}} {finally {}}} {
     # abort if test name in skiptests
     if {[search_pattern_list $name $::skiptests]} {
         incr ::num_skipped
@@ -258,8 +294,27 @@ proc test {name code {okpattern undefined} {tags {}}} {
 
     send_data_packet $::test_server_fd testing $name
 
+    set ::test_paused_pids {}
+    set ::test_config_restores {}
+
     set test_start_time [clock milliseconds]
-    if {[catch {set retval [uplevel 1 $code]} error]} {
+    set code_failed [catch {set retval [uplevel 1 $code]} error]
+    set saved_error_info $::errorInfo
+
+    # Run automatic cleanup and then the user 'finally' block, regardless of
+    # the test outcome. A cleanup failure only fails a test that passed.
+    set cleanup_errors [test_cleanup]
+    if {$finally ne {} && [catch {uplevel 1 $finally} err]} {
+        lappend cleanup_errors "Error in finally block: $err"
+    }
+    if {$code_failed} {
+        set ::errorInfo $saved_error_info
+    } elseif {[llength $cleanup_errors]} {
+        set code_failed 1
+        set error "assertion:[join $cleanup_errors "\n"]"
+    }
+
+    if {$code_failed} {
         set assertion [string match "assertion:*" $error]
         set skip [string match "skipped:*" $error]
         if {$skip} {

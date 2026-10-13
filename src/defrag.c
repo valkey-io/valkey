@@ -1026,6 +1026,12 @@ static doneStatus defragModuleGlobals(monotime endtime, void *target, void *priv
     return DEFRAG_DONE;
 }
 
+/* The incremental walker owns the tracking table's private representation. */
+static doneStatus defragStageTrackingTable(monotime endtime, void *target, void *privdata) {
+    UNUSED(target);
+    UNUSED(privdata);
+    return defragTrackingTable(endtime) ? DEFRAG_DONE : DEFRAG_NOT_DONE;
+}
 
 static bool defragIsRunning(void) {
     return (defrag.timeproc_id > 0);
@@ -1270,6 +1276,7 @@ static void beginDefragCycle(void) {
 
     addDefragStage(defragLuaScripts, NULL, NULL);
     addDefragStage(defragModuleGlobals, NULL, NULL);
+    addDefragStage(defragStageTrackingTable, NULL, NULL);
 
     defrag.current_stage = NULL;
     defrag.start_cycle = getMonotonicUs();

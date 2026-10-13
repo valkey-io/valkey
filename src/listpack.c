@@ -150,7 +150,7 @@
 #define LISTPACK_MAX_SAFETY_SIZE (1 << 30)
 int lpSafeToAdd(unsigned char *lp, size_t add) {
     size_t len = lp ? lpGetTotalBytes(lp) : 0;
-    if (len + add > LISTPACK_MAX_SAFETY_SIZE) return 0;
+    if (add > LISTPACK_MAX_SAFETY_SIZE || len > LISTPACK_MAX_SAFETY_SIZE - add) return 0;
     return 1;
 }
 

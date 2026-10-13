@@ -959,7 +959,11 @@ test {diskless loading short read} {
                 # kill the replica connection on the master
                 set killed [$master client kill type replica]
 
-                set res [wait_for_log_messages -1 {"*Internal error in RDB*" "*Finished with success*" "*Successful partial resynchronization*"} $loglines 500 10]
+                # After the kill the replica only logs the outcome once it has parsed the RDB bytes
+                # already sitting in its socket receive buffer and hits EOF. That takes milliseconds
+                # on an idle machine but can take tens of seconds on a loaded sanitizer or TLS runner.
+                # wait_for_log_messages returns on the first match, so the larger budget is free when healthy.
+                set res [wait_for_log_messages -1 {"*Internal error in RDB*" "*Finished with success*" "*Successful partial resynchronization*"} $loglines 6000 10]
                 if {$::verbose} { puts $res }
                 set log_text [lindex $res 0]
                 set loglines [lindex $res 1]

@@ -384,6 +384,8 @@ void phdelCommand(client *c) {
                 path_hash->num_fields--;
             }
         }
+        /* If the payload is empty, it will be removed from the index and freed
+         * by the raxRemove below, so there's no need to restore auto-shrink. */
         if (payload->encoding == OBJ_ENCODING_HASHTABLE && hashTypeLength(payload) > 0)
             hashtableResumeAutoShrink(objectGetVal(payload));
     }

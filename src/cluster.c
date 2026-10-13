@@ -247,6 +247,9 @@ void restoreCommand(client *c) {
     } else if (ttl < 0) {
         addReplyError(c, "Invalid TTL value, must be >= 0");
         return;
+    } else if (!absttl && ttl > LLONG_MAX - commandTimeSnapshot()) {
+        addReplyErrorExpireTime(c);
+        return;
     }
 
     /* Verify RDB version and data checksum. */

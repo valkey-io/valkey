@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include "sds.h"
 
@@ -13,22 +14,42 @@ const ffc_parse_options valkey_strtod_options = {
     FFC_PRESET_GENERAL | FFC_FORMAT_FLAG_ALLOW_LEADING_PLUS,
     '.'};
 
+/* ffc does not implement C99 hex-floats. 9.0 accepted them via libc strtod,
+ * and write commands propagate the client argv, so a 9.1 replica must parse
+ * the same 0x / 0X scores a 9.0 primary already committed. */
+#define VALKEY_STRTOD_HEX_BUFLEN (5 * 1024)
+
+static int valkey_strtod_is_hex(const char *s, size_t len) {
+    size_t i = 0;
+    if (len > 0 && (s[0] == '+' || s[0] == '-')) i = 1;
+    return (len - i) >= 2 && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X');
+}
+
+static double valkey_strtod_hex(const char *str, size_t len, char **endptr) {
+    char buf[VALKEY_STRTOD_HEX_BUFLEN];
+    char *eptr;
+    double val;
+
+    if (len >= sizeof(buf)) {
+        errno = EINVAL;
+        if (endptr) *endptr = (char *)str;
+        return 0.0;
+    }
+    memcpy(buf, str, len);
+    buf[len] = '\0';
+    errno = 0;
+    val = strtod(buf, &eptr);
+    if (endptr) *endptr = (char *)str + (eptr - buf);
+    return val;
+}
+
 /**
  * Converts a null-terminated string to a double-precision floating-point number.
  * On success, returns the converted value and sets *endptr to point past the
  * last parsed character. On failure, returns 0.0 and sets errno appropriately.
  */
 double valkey_strtod(const char *str, char **endptr) {
-    errno = 0;
-    double temp = 0.0;
-    ffc_result answer = ffc_from_chars_double_options(str, str + strlen(str), &temp, valkey_strtod_options);
-    if (answer.outcome != FFC_OUTCOME_OK) {
-        errno = (answer.outcome == FFC_OUTCOME_OUT_OF_RANGE) ? ERANGE : EINVAL;
-    }
-    if (endptr) {
-        *endptr = (char *)answer.ptr;
-    }
-    return temp;
+    return valkey_strtod_n(str, strlen(str), endptr);
 }
 
 /**
@@ -41,7 +62,13 @@ double valkey_strtod(const char *str, char **endptr) {
 double valkey_strtod_n(const char *str, size_t len, char **endptr) {
     errno = 0;
     double temp = 0.0;
-    ffc_result answer = ffc_from_chars_double_options(str, str + len, &temp, valkey_strtod_options);
+    ffc_result answer;
+
+    if (valkey_strtod_is_hex(str, len)) {
+        return valkey_strtod_hex(str, len, endptr);
+    }
+
+    answer = ffc_from_chars_double_options(str, str + len, &temp, valkey_strtod_options);
     if (answer.outcome != FFC_OUTCOME_OK) {
         errno = (answer.outcome == FFC_OUTCOME_OUT_OF_RANGE) ? ERANGE : EINVAL;
     }

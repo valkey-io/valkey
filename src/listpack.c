@@ -330,35 +330,29 @@ static inline unsigned long lpEncodeBacklen(unsigned char *buf, uint64_t l) {
  * must point at the first byte of that field, the byte right after the entry
  * data.
  *
- * For l equal to 16383, 2097151 or 268435455 the field occurs with two widths:
- * the minimal number of seven-bit groups, written by 9.1.0 through 9.1.2, and
- * one group more, written by every other version. Both must be read, and the
- * leading group tells them apart, since it is zero only in the wider form.
- * The width is derived here rather than from lpEncodeBacklen(), so that it
- * stays correct whichever form the encoder emits, and the extra byte read is
- * confined to those three lengths. */
+ * The listpack spec describes the backlen bytes ambiguously as
+ *
+ *     From 0 to 127: 1 byte
+ *     From 128 to 16383: 2 bytes
+ *     From 16383 to 2097151: 3 bytes
+ *     From 2097151 to 268435455: 4 bytes
+ *     From 268435455 to 34359738367: 5 bytes
+ *
+ * This is ambiguous for 16383, 2097151 and 268435455 so if 'l' is one of these,
+ * we detect in which of the two ways it's encoded. The first byte tells them
+ * apart, since it is zero only in the wider form. (We can't simply read the
+ * backlen from start to end, because it can only be read backwards.) */
 static inline unsigned long lpBacklenBytes(uint64_t l, const unsigned char *backlen) {
-    if (unlikely(l == 16383 || l == 2097151 || l == 268435455)) {
-        /* Minimal width for these three: 2, 3 and 4 seven-bit groups. */
-        unsigned long minimal = 4;
-        if (l == 16383) {
-            minimal = 2;
-        } else if (l == 2097151) {
-            minimal = 3;
-        }
-        return backlen[0] == 0 ? minimal + 1 : minimal;
-    }
-    return lpEncodeBacklen(NULL, l);
+    unsigned long bytes = lpEncodeBacklen(NULL, l);
+    if (unlikely(l == 16383 || l == 2097151 || l == 268435455) && backlen[0] != 0) bytes--;
+    return bytes;
 }
 
-/* Decode the backlen and returns it. If the encoding looks invalid (more than
- * 5 bytes are used), UINT64_MAX is returned to report the problem. When 'bytes'
- * is not NULL the number of bytes the field occupies is stored there, on that
- * error return as well, since callers add the width to a pointer before they
- * can inspect the value. Decoding runs backwards from the last byte of the
- * field and stops at the first byte without the continuation bit, so the count
- * is exact for both widths. */
-static inline uint64_t lpDecodeBacklen(unsigned char *p, unsigned long *bytes) {
+/* Decode the backlen and returns it, storing the width of the field in bytes
+ * in 'width'. 'p' must point at the last byte of the field, decoding runs
+ * backwards from there. If the encoding looks invalid (more than 5 bytes are
+ * used), UINT64_MAX is returned to report the problem. */
+static inline uint64_t lpDecodeBacklen(unsigned char *p, unsigned long *width) {
     uint64_t val = 0;
     uint64_t shift = 0;
     unsigned long used = 1;
@@ -369,11 +363,11 @@ static inline uint64_t lpDecodeBacklen(unsigned char *p, unsigned long *bytes) {
         p--;
         used++;
         if (shift > 28) {
-            if (bytes) *bytes = used;
+            *width = used;
             return UINT64_MAX;
         }
     } while (1);
-    if (bytes) *bytes = used;
+    *width = used;
     return val;
 }
 
@@ -485,9 +479,9 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
     assert(p);
     while (p - lp != LP_HDR_SIZE) {
         p--; /* Seek the first backlen byte of the last element. */
-        unsigned long backlen_bytes = 0;
-        uint64_t prevlen = lpDecodeBacklen(p, &backlen_bytes);
-        prevlen += backlen_bytes;
+        unsigned long backlen_width;
+        uint64_t prevlen = lpDecodeBacklen(p, &backlen_width);
+        prevlen += backlen_width;
         p -= prevlen - 1; /* Seek the first byte of the previous entry. */
         /* Skip metadata entries, see lpNext(). */
         if (likely(!LP_ENCODING_IS_TAGGED(p[0]))) return p;
@@ -1434,10 +1428,10 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
 
     /* make sure the encoded length at the end patches the one at the beginning,
      * and that the field is as wide as the forward scan assumed. */
-    unsigned long backlen_bytes = 0;
-    uint64_t prevlen = lpDecodeBacklen(p - 1, &backlen_bytes);
+    unsigned long backlen_width;
+    uint64_t prevlen = lpDecodeBacklen(p - 1, &backlen_width);
     if (prevlen + encodedBacklen != entrylen) return 0;
-    if (backlen_bytes != encodedBacklen) return 0;
+    if (backlen_width != encodedBacklen) return 0;
 
     *pp = p;
     return 1;

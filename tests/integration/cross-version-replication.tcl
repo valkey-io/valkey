@@ -180,20 +180,6 @@ start_server {tags {"repl needs:other-server external:skip"}} {
 # and a 256MB value, too slow to cover on every run.
 set backlen_boundary_value [string repeat x 16378]
 
-# wait_for_sync, but reporting a replica that died instead of letting the
-# dropped connection surface as an I/O error. A replica that cannot parse the
-# payload terminates, so that is the expected shape of a regression here.
-proc wait_for_cross_version_sync {client descr} {
-    for {set i 0} {$i < 300} {incr i} {
-        if {[catch {set link [status $client master_link_status]}]} {
-            fail "$descr: replica terminated while syncing, see its log for an RDB error"
-        }
-        if {$link eq "up"} return
-        after 100
-    }
-    fail "$descr: replica did not sync in time (link status '$link')"
-}
-
 proc assert_backlen_stream_intact {client value descr} {
     # Reading the entries traverses the listpack across the boundary element.
     set entries [$client xrange backlen - +]
@@ -217,7 +203,7 @@ start_server {tags {"repl needs:other-server external:skip"}} {
 
         test "Listpack boundary backlen written by current version is read by $old_version" {
             $old_replica replicaof $new_primary_host $new_primary_port
-            wait_for_cross_version_sync $old_replica "current -> $old_version"
+            wait_for_sync $old_replica 500 100
             assert_backlen_stream_intact $old_replica $backlen_boundary_value "current -> $old_version"
         }
     }
@@ -236,7 +222,7 @@ start_server {tags {"repl needs:other-server external:skip"} start-other-server 
 
         test "Listpack boundary backlen written by $old_version is read by current version" {
             $new_replica replicaof $old_primary_host $old_primary_port
-            wait_for_cross_version_sync $new_replica "$old_version -> current"
+            wait_for_sync $new_replica 500 100
             assert_backlen_stream_intact $new_replica $backlen_boundary_value "$old_version -> current"
         }
 

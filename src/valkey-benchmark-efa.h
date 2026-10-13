@@ -2,8 +2,8 @@
  *
  * Command-line placeholders, replaced per client:
  *   __efa_rkey__  __efa_addr__  __efa_len__
- * e.g.  -- BLOB.GET k:__rand_int__ __efa_rkey__ __efa_addr__ __efa_len__
- *       -- BLOB.SET k:__rand_int__ __efa_len__ __efa_rkey__ __efa_addr__ __efa_len__
+ * e.g.  -- BLOB.RDMA_GET k:__rand_int__ __efa_rkey__ __efa_addr__ __efa_len__
+ *       -- BLOB.RDMA_SET k:__rand_int__ __efa_len__ __efa_rkey__ __efa_addr__ __efa_len__
  *
  * Build with BUILD_EFA=yes which requires libfabric via pkg-config.
  *
@@ -48,11 +48,11 @@ void efaSubstituteRegion(const efaRegion *region, char *cmd_data, int cmd_count)
 /* The benchmark's fabric address as the module's HELLO wants it. */
 sds efaLocalAddressHex(void);
 
-/* RESP for `BLOB.HELLO <local-address-hex>`. Allocates *buf with
+/* RESP for `BLOB.RDMA_HELLO <local-address-hex>`. Allocates *buf with
  * valkeyFormatCommand and returns its length. Caller free()s. */
 int efaFormatHello(char **buf);
 
-/* A BLOB.HELLO reply has one hex address per server fabric service. Each is
+/* A BLOB.RDMA_HELLO reply has one hex address per server fabric service. Each is
  * inserted into the local domain's address vector once. This must run, per
  * server, before any transfer is issued. Exits on bad reply. */
 void efaHandleHelloReply(const valkeyReply *reply);

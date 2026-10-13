@@ -228,7 +228,7 @@ efaRegion *efaRegisterRegion(void) {
         fprintf(stderr, "EFA: cannot allocate a %zu byte region\n", region->length);
         exit(1);
     }
-    /* Something non-constant for BLOB.SET to carry; the content is never checked. */
+    /* Something non-constant for BLOB.RDMA_SET to carry; the content is never checked. */
     for (size_t i = 0; i < region->length; i++) ((unsigned char *)region->buffer)[i] = (unsigned char)(i * 2654435761u >> 24);
 
     check(fi_mr_reg(fabric.domain, region->buffer, region->length,
@@ -310,7 +310,7 @@ sds efaLocalAddressHex(void) {
 
 int efaFormatHello(char **buf) {
     sds hex = efaLocalAddressHex();
-    int len = valkeyFormatCommand(buf, "BLOB.HELLO %s", hex);
+    int len = valkeyFormatCommand(buf, "BLOB.RDMA_HELLO %s", hex);
     sdsfree(hex);
     return len;
 }
@@ -338,24 +338,24 @@ static size_t expectedAddressLength(const unsigned char *address, size_t len) {
 
 void efaHandleHelloReply(const valkeyReply *reply) {
     if (reply->type != VALKEY_REPLY_ARRAY || reply->elements == 0) {
-        fprintf(stderr, "EFA: BLOB.HELLO reply is not an array of server addresses (type %d)\n", reply->type);
+        fprintf(stderr, "EFA: BLOB.RDMA_HELLO reply is not an array of server addresses (type %d)\n", reply->type);
         exit(1);
     }
     pthread_mutex_lock(&fabric.peers_mutex);
     for (size_t i = 0; i < reply->elements; i++) {
         const valkeyReply *element = reply->element[i];
         if (element->type != VALKEY_REPLY_STRING) {
-            fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is not a string\n", i);
+            fprintf(stderr, "EFA: BLOB.RDMA_HELLO reply element %zu is not a string\n", i);
             exit(1);
         }
         unsigned char *address = zmalloc(element->len / 2 + 1);
         size_t len = decodeHex(element->str, element->len, address);
         if (len == 0) {
-            fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is not hex: %s\n", i, element->str);
+            fprintf(stderr, "EFA: BLOB.RDMA_HELLO reply element %zu is not hex: %s\n", i, element->str);
             exit(1);
         }
         if (len != expectedAddressLength(address, len)) {
-            fprintf(stderr, "EFA: BLOB.HELLO reply element %zu is not a %s address: %s\n", i,
+            fprintf(stderr, "EFA: BLOB.RDMA_HELLO reply element %zu is not a %s address: %s\n", i,
                     fabric.info->fabric_attr->prov_name, element->str);
             exit(1);
         }

@@ -396,16 +396,16 @@ cleanup:
 }
 
 #ifdef USE_EFA
-/* One BLOB.HELLO per server before clients are created. The connection is kept open
+/* One BLOB.RDMA_HELLO per server before clients are created. The connection is kept open
  * for the life of the process. */
 static void efaHandshake(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     valkeyContext *ctx = getValkeyContext(ct, ip_or_path, port);
     if (ctx == NULL) exit(1);
     sds hex = efaLocalAddressHex();
-    valkeyReply *reply = valkeyCommand(ctx, "BLOB.HELLO %s", hex);
+    valkeyReply *reply = valkeyCommand(ctx, "BLOB.RDMA_HELLO %s", hex);
     sdsfree(hex);
     if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
-        fprintf(stderr, "BLOB.HELLO failed: %s\n", reply ? reply->str : ctx->errstr);
+        fprintf(stderr, "BLOB.RDMA_HELLO failed: %s\n", reply ? reply->str : ctx->errstr);
         exit(1);
     }
     efaHandleHelloReply(reply);
@@ -2220,13 +2220,13 @@ usage:
 #endif
 #ifdef USE_EFA
         " --efa-provider <efa-direct|tcp>\n"
-        "                    valkey-large-object module support. Sends BLOB.HELLO on every\n"
-        "                    connection and replaces __efa_rkey__ __efa_addr__ __efa_len__\n"
-        "                    in the command with the client's registered buffer.\n"
+        "                    valkey-large-object module support. Sends BLOB.RDMA_HELLO on\n"
+        "                    every connection and replaces __efa_rkey__ __efa_addr__\n"
+        "                    __efa_len__ in the command with the client's registered buffer.\n"
         "                    Requires a command line.\n"
         " --efa-buffer <bytes>\n"
         "                    Registered buffer per client (default: the -d size). Must\n"
-        "                    hold the object; BLOB.SET transfers this many bytes.\n"
+        "                    hold the object; BLOB.RDMA_SET transfers this many bytes.\n"
         " --efa-bind <addr>  Source address for the tcp provider (module fabric-provider\n"
         "                    Emulated). Not used with efa-direct.\n"
 #endif

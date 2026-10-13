@@ -3820,6 +3820,7 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeInitPersistentIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeResetIterator(hashTypeIterator *hi);
 int hashTypeNext(hashTypeIterator *hi);
+void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeIterator *hi, int what);
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  int what,
                                  unsigned char **vstr,
@@ -3827,9 +3828,11 @@ void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  long long *vll);
 char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
+char *hashTypeCurrentObjectRawString(hashTypeIterator *hi, int what, char *buf, size_t *len);
 long long hashTypeCurrentExpiry(robj *o, hashTypeIterator *hi);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
+void addHashFieldToReply(client *c, robj *o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);

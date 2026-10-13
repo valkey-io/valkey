@@ -478,6 +478,9 @@ void debugCommand(client *c) {
             "    Setting it to 0 disables expiring keys in background when they are not",
             "    accessed (otherwise the behavior). Setting it to 1 reenables back the",
             "    default.",
+            "SWEEP-TRACKING-TABLE",
+            "    Synchronously sweep the whole tracking table until every ID left in it",
+            "    references a connected client.",
             "QUICKLIST-PACKED-THRESHOLD <size>",
             "    Sets the threshold for elements to be inserted as plain vs packed nodes",
             "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
@@ -890,6 +893,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "sweep-tracking-table") && c->argc == 2) {
+        trackingSweepFull();
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "quicklist-packed-threshold") && c->argc == 3) {
         int memerr;

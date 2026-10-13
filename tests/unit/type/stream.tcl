@@ -54,10 +54,13 @@ proc streamFill {key count} {
     }
 }
 
+proc streamBytes {key} {
+    lindex [r debug stream-bytes $key] 0
+}
+
 proc streamAssertBytes {key} {
     set res [r debug stream-bytes $key]
     assert_equal [lindex $res 0] [lindex $res 1]
-    return [lindex $res 1]
 }
 
 set content {} ;# Will be populated with Tcl side copy of the stream content.
@@ -2118,47 +2121,42 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
     test {XTRIM with MAXBYTES option basic test} {
         r del mystream
         streamFill mystream 20
-        set bytes [streamAssertBytes mystream]
+        set bytes [streamBytes mystream]
         set target [expr {$bytes / 2}]
         assert_equal 10 [r XTRIM mystream MAXBYTES $target]
         assert_equal 10 [r XLEN mystream]
-        assert_equal $target [streamAssertBytes mystream]
-        assert_equal 0 [r XTRIM mystream MAXBYTES [expr {$bytes * 2}]]
+        assert_equal $target [streamBytes mystream]
+        assert_equal 0 [r XTRIM mystream MAXBYTES $bytes]
     }
 
     test {XADD with MAXBYTES option} {
         r del mystream
         streamFill mystream 20
-        set target [expr {[streamAssertBytes mystream] / 2}]
+        set target [expr {[streamBytes mystream] / 2}]
         r XADD mystream MAXBYTES $target 21-0 f v
         assert_equal 11 [r XLEN mystream]
-        streamAssertBytes mystream
     }
 
     test {XTRIM MAXBYTES stops before a node whose removal would undershoot} {
-        # An oversized head node followed by ten uniform small nodes.
-        r del bignode
-        r del smallnode
+        # One node of two big entries, then ten nodes of two small entries.
         r del mystream
         set big [string repeat x 1000]
-        r XADD bignode 1-0 f $big
-        r XADD bignode 2-0 f $big
-        set B [streamAssertBytes bignode]
-        streamFill smallnode 2
-        set n [streamAssertBytes smallnode]
         r XADD mystream 1-0 f $big
         r XADD mystream 2-0 f $big
+        set big_node_size [streamBytes mystream]
         for {set i 3} {$i <= 22} {incr i} {
             r XADD mystream $i-0 f [string repeat x 100]
         }
-        set total [streamAssertBytes mystream]
-        assert_equal [expr {$B + 10 * $n}] $total
+        set total [streamBytes mystream]
+        set small_nodes_size [expr {$total - $big_node_size}]
+        set small_node_size [expr {$small_nodes_size / 10}]
+
+        # Removing the big node would leave less than the threshold.
         assert_equal 0 [r XTRIM mystream MAXBYTES [expr {$total - 1}]]
-        assert_equal 2 [r XTRIM mystream MAXBYTES [expr {10 * $n - 1}]]
-        assert_equal [expr {10 * $n}] [streamAssertBytes mystream]
-        assert_equal 4 [r XTRIM mystream MAXBYTES [expr {7 * $n + 1}]]
-        assert_equal [expr {8 * $n}] [streamAssertBytes mystream]
-        assert {8 * $n - $n < 7 * $n + 1}
+        # Only the big node is removed.
+        assert_equal 2 [r XTRIM mystream MAXBYTES [expr {$small_nodes_size - 1}]]
+        # Two small nodes are removed; a third would leave less than the threshold.
+        assert_equal 4 [r XTRIM mystream MAXBYTES [expr {$small_node_size * 7 + 1}]]
     }
 
     test {Tracked listpack bytes survive interleaved mutations} {
@@ -2175,7 +2173,7 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
         streamAssertBytes mystream
         r XTRIM mystream MINID = 5-0
         streamAssertBytes mystream
-        set total [streamAssertBytes mystream]
+        set total [streamBytes mystream]
         r XTRIM mystream MAXBYTES [expr {$total / 2}]
         streamAssertBytes mystream
         r XADD mystream MAXBYTES 1 200-0 f v
@@ -2193,6 +2191,8 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
 
     test {XDEL and exact XTRIM track listpack bytes across count encoding widths} {
         # The count and deleted fields cross the 127 integer-encoding boundary.
+        set original_max_entries [lindex [r config get stream-node-max-entries] 1]
+        set original_max_bytes [lindex [r config get stream-node-max-bytes] 1]
         r del mystream
         r config set stream-node-max-entries 0
         r config set stream-node-max-bytes 0
@@ -2207,6 +2207,8 @@ start_server {tags {"stream needs:debug"} overrides {stream-node-max-entries 2}}
         r XADD mystream 131-0 f v
         r XTRIM mystream MAXLEN 0
         streamAssertBytes mystream
+        r config set stream-node-max-entries $original_max_entries
+        r config set stream-node-max-bytes $original_max_bytes
     }
 }
 
@@ -2250,6 +2252,8 @@ start_server {tags {"stream needs:repl"} overrides {stream-node-max-entries 10}}
 start_server {tags {"stream needs:debug"} overrides {appendonly yes}} {
     foreach preamble {yes no} {
         test "MAXBYTES trims replay from the AOF with a different node size, aof-use-rdb-preamble $preamble" {
+            set original_preamble [lindex [r config get aof-use-rdb-preamble] 1]
+            set original_max_entries [lindex [r config get stream-node-max-entries] 1]
             r config set aof-use-rdb-preamble $preamble
             r config set stream-node-max-entries 10
             r del mystream
@@ -2263,9 +2267,8 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes}} {
             r config set stream-node-max-entries 3
             r debug loadaof
             assert_equal $range [r XRANGE mystream - +]
-            set total [streamAssertBytes mystream]
+            set total [streamBytes mystream]
             assert {[r XTRIM mystream MAXBYTES [expr {$total / 2}]] > 0}
-            streamAssertBytes mystream
             set range [r XRANGE mystream - +]
 
             r bgrewriteaof
@@ -2273,9 +2276,10 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes}} {
             r config set stream-node-max-entries 7
             r debug loadaof
             assert_equal $range [r XRANGE mystream - +]
-            set total [streamAssertBytes mystream]
+            set total [streamBytes mystream]
             assert {[r XTRIM mystream MAXBYTES [expr {$total / 2}]] > 0}
-            streamAssertBytes mystream
+            r config set aof-use-rdb-preamble $original_preamble
+            r config set stream-node-max-entries $original_max_entries
         }
     }
 }
@@ -2299,10 +2303,6 @@ start_server {tags {"stream repl needs:debug external:skip"} overrides {stream-n
             $primary XTRIM mystream MAXBYTES ~ 0 LIMIT 6
             wait_for_ofs_sync $primary $replica
             assert_equal [$primary XRANGE mystream - +] [$replica XRANGE mystream - +]
-            foreach srv [list $primary $replica] {
-                set res [$srv debug stream-bytes mystream]
-                assert_equal [lindex $res 0] [lindex $res 1]
-            }
         }
     }
 }

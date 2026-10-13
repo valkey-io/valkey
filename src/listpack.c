@@ -263,25 +263,31 @@ static inline int lpEncodeGetType(unsigned char *ele, uint32_t size, unsigned ch
  * of the previous element of size 'l', in the target buffer 'buf'.
  * The function returns the number of bytes used to encode it, from
  * 1 to 5. If 'buf' is NULL the function just returns the number of bytes
- * needed in order to encode the backlen. */
+ * needed in order to encode the backlen.
+ *
+ * l equal to 16383, 2097151 or 268435455 is encoded in one byte more than it
+ * strictly needs, its leading group of seven bits being zero. That is wasteful
+ * but deliberate: it is the only form every version and every external reader
+ * of the format accepts, so it is what we keep writing. Readers must handle
+ * both widths, see lpBacklenBytes(). */
 static inline unsigned long lpEncodeBacklen(unsigned char *buf, uint64_t l) {
     if (l <= 127) {
         if (buf) buf[0] = l;
         return 1;
-    } else if (l <= 16383) {
+    } else if (l < 16383) {
         if (buf) {
             buf[0] = l >> 7;
             buf[1] = (l & 127) | 128;
         }
         return 2;
-    } else if (l <= 2097151) {
+    } else if (l < 2097151) {
         if (buf) {
             buf[0] = l >> 14;
             buf[1] = ((l >> 7) & 127) | 128;
             buf[2] = (l & 127) | 128;
         }
         return 3;
-    } else if (l <= 268435455) {
+    } else if (l < 268435455) {
         if (buf) {
             buf[0] = l >> 21;
             buf[1] = ((l >> 14) & 127) | 128;
@@ -301,18 +307,49 @@ static inline unsigned long lpEncodeBacklen(unsigned char *buf, uint64_t l) {
     }
 }
 
-/* Decode the backlen and returns it. If the encoding looks invalid (more than
- * 5 bytes are used), UINT64_MAX is returned to report the problem. */
-static inline uint64_t lpDecodeBacklen(unsigned char *p) {
+/* Return the number of bytes occupied by the backlen field of an entry whose
+ * encoded length, header plus data and backlen excluded, is 'l'. 'backlen'
+ * must point at the first byte of that field, the byte right after the entry
+ * data.
+ *
+ * The listpack spec describes the backlen bytes ambiguously as
+ *
+ *     From 0 to 127: 1 byte
+ *     From 128 to 16383: 2 bytes
+ *     From 16383 to 2097151: 3 bytes
+ *     From 2097151 to 268435455: 4 bytes
+ *     From 268435455 to 34359738367: 5 bytes
+ *
+ * This is ambiguous for 16383, 2097151 and 268435455 so if 'l' is one of these,
+ * we detect in which of the two ways it's encoded. The first byte tells them
+ * apart, since it is zero only in the wider form. (We can't simply read the
+ * backlen from start to end, because it can only be read backwards.) */
+static inline unsigned long lpBacklenBytes(uint64_t l, const unsigned char *backlen) {
+    unsigned long bytes = lpEncodeBacklen(NULL, l);
+    if (unlikely(l == 16383 || l == 2097151 || l == 268435455) && backlen[0] != 0) bytes--;
+    return bytes;
+}
+
+/* Decode the backlen and returns it, storing the width of the field in bytes
+ * in 'width'. 'p' must point at the last byte of the field, decoding runs
+ * backwards from there. If the encoding looks invalid (more than 5 bytes are
+ * used), UINT64_MAX is returned to report the problem. */
+static inline uint64_t lpDecodeBacklen(unsigned char *p, unsigned long *width) {
     uint64_t val = 0;
     uint64_t shift = 0;
+    unsigned long used = 1;
     do {
         val |= (uint64_t)(p[0] & 127) << shift;
         if (!(p[0] & 128)) break;
         shift += 7;
         p--;
-        if (shift > 28) return UINT64_MAX;
+        used++;
+        if (shift > 28) {
+            *width = used;
+            return UINT64_MAX;
+        }
     } while (1);
+    *width = used;
     return val;
 }
 
@@ -383,7 +420,7 @@ static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
  * it does not return NULL when the EOF element is encountered. */
 unsigned char *lpSkip(unsigned char *p) {
     unsigned long entrylen = lpCurrentEncodedSizeUnsafe(p);
-    entrylen += lpEncodeBacklen(NULL, entrylen);
+    entrylen += lpBacklenBytes(entrylen, p + entrylen);
     p += entrylen;
     return p;
 }
@@ -410,8 +447,9 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
     assert(p);
     if (p - lp == LP_HDR_SIZE) return NULL;
     p--; /* Seek the first backlen byte of the last element. */
-    uint64_t prevlen = lpDecodeBacklen(p);
-    prevlen += lpEncodeBacklen(NULL, prevlen);
+    unsigned long backlen_width;
+    uint64_t prevlen = lpDecodeBacklen(p, &backlen_width);
+    prevlen += backlen_width;
     p -= prevlen - 1; /* Seek the first byte of the previous entry. */
     return p;
 }
@@ -509,7 +547,7 @@ lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t 
         if (entry_size) *entry_size = LP_ENCODING_7BIT_UINT_ENTRY_SIZE;
     } else if (LP_ENCODING_IS_6BIT_STR(p[0])) {
         *count = LP_ENCODING_6BIT_STR_LEN(p);
-        if (entry_size) *entry_size = 1 + *count + lpEncodeBacklen(NULL, *count + 1);
+        if (entry_size) *entry_size = 1 + *count + lpBacklenBytes(*count + 1, p + *count + 1);
         return p + 1;
     } else if (LP_ENCODING_IS_13BIT_INT(p[0])) {
         uval = ((p[0] & 0x1f) << 8) | p[1];
@@ -539,11 +577,11 @@ lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t 
         if (entry_size) *entry_size = LP_ENCODING_64BIT_INT_ENTRY_SIZE;
     } else if (LP_ENCODING_IS_12BIT_STR(p[0])) {
         *count = LP_ENCODING_12BIT_STR_LEN(p);
-        if (entry_size) *entry_size = 2 + *count + lpEncodeBacklen(NULL, *count + 2);
+        if (entry_size) *entry_size = 2 + *count + lpBacklenBytes(*count + 2, p + *count + 2);
         return p + 2;
     } else if (LP_ENCODING_IS_32BIT_STR(p[0])) {
         *count = LP_ENCODING_32BIT_STR_LEN(p);
-        if (entry_size) *entry_size = 5 + *count + lpEncodeBacklen(NULL, *count + 5);
+        if (entry_size) *entry_size = 5 + *count + lpBacklenBytes(*count + 5, p + *count + 5);
         return p + 5;
     } else {
         uval = 12345678900000000ULL + p[0];
@@ -750,7 +788,7 @@ unsigned char *lpInsert(unsigned char *lp,
     uint32_t replaced_len = 0;
     if (where == LP_REPLACE) {
         replaced_len = lpCurrentEncodedSizeUnsafe(p);
-        replaced_len += lpEncodeBacklen(NULL, replaced_len);
+        replaced_len += lpBacklenBytes(replaced_len, p + replaced_len);
         ASSERT_INTEGRITY_LEN(lp, p, replaced_len);
     }
 
@@ -1221,7 +1259,11 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
 
     /* get the entry length and encoded backlen. */
     unsigned long entrylen = lpCurrentEncodedSizeUnsafe(p);
-    unsigned long encodedBacklen = lpEncodeBacklen(NULL, entrylen);
+
+    /* the first backlen byte tells the two backlen widths apart, so make sure
+     * it is in range before lpBacklenBytes() reads it. */
+    if (OUT_OF_RANGE(p + entrylen)) return 0;
+    unsigned long encodedBacklen = lpBacklenBytes(entrylen, p + entrylen);
     entrylen += encodedBacklen;
 
     /* make sure the entry doesn't reach outside the edge of the listpack */
@@ -1230,9 +1272,12 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
     /* move to the next entry */
     p += entrylen;
 
-    /* make sure the encoded length at the end patches the one at the beginning. */
-    uint64_t prevlen = lpDecodeBacklen(p - 1);
+    /* make sure the encoded length at the end patches the one at the beginning,
+     * and that the field is as wide as the forward scan assumed. */
+    unsigned long backlen_width;
+    uint64_t prevlen = lpDecodeBacklen(p - 1, &backlen_width);
     if (prevlen + encodedBacklen != entrylen) return 0;
+    if (backlen_width != encodedBacklen) return 0;
 
     *pp = p;
     return 1;
@@ -1521,7 +1566,7 @@ void lpRepr(unsigned char *lp) {
     while (p) {
         uint32_t encoded_size_bytes = lpCurrentEncodedSizeBytes(p);
         uint32_t encoded_size = lpCurrentEncodedSizeUnsafe(p);
-        unsigned long back_len = lpEncodeBacklen(NULL, encoded_size);
+        unsigned long back_len = lpBacklenBytes(encoded_size, p + encoded_size);
         printf("{\n"
                "\taddr: 0x%08lx,\n"
                "\tindex: %2d,\n"

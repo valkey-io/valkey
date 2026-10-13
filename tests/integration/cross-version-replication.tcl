@@ -88,3 +88,70 @@ start_server {tags {"repl needs:other-server external:skip"}} {
         }
     }
 }
+
+# Listpacks store, after each element, the length of that element, so that the
+# structure can be traversed backwards. Three element lengths are written with
+# two different widths depending on the version that wrote them, and a reader
+# assuming the wrong width walks into the middle of the next element. Cover both
+# directions against an old version, since a released reader cannot be fixed
+# retroactively: whatever we write has to stay readable by versions already out.
+#
+# A 32-bit string element occupies 5 + len bytes, so a 16378-byte value gives an
+# element length of exactly 16383, the first of the three. The others need a 2MB
+# and a 256MB value, too slow to cover on every run.
+set backlen_boundary_value [string repeat x 16378]
+
+proc assert_backlen_stream_intact {client value descr} {
+    # Reading the entries traverses the listpack across the boundary element.
+    set entries [$client xrange backlen - +]
+    assert_equal 2 [llength $entries] $descr
+    assert_equal $value [dict get [lindex $entries 0 1] f] $descr
+    assert_equal tail [dict get [lindex $entries 1 1] f] $descr
+}
+
+start_server {tags {"repl needs:other-server external:skip"}} {
+    set new_primary [srv 0 client]
+    set new_primary_host [srv 0 host]
+    set new_primary_port [srv 0 port]
+    $new_primary config set repl-diskless-sync yes
+    $new_primary config set repl-diskless-sync-delay 0
+    $new_primary xadd backlen 1-1 f $backlen_boundary_value
+    $new_primary xadd backlen 1-2 f tail
+
+    start_server {start-other-server 1 config "minimal.conf"} {
+        set old_replica [srv 0 client]
+        set old_version [dict get [$old_replica hello] version]
+
+        test "Listpack boundary backlen written by current version is read by $old_version" {
+            $old_replica replicaof $new_primary_host $new_primary_port
+            wait_for_sync $old_replica 500 100
+            assert_backlen_stream_intact $old_replica $backlen_boundary_value "current -> $old_version"
+        }
+    }
+}
+
+start_server {tags {"repl needs:other-server external:skip"} start-other-server 1 config "minimal.conf"} {
+    set old_primary [srv 0 client]
+    set old_primary_host [srv 0 host]
+    set old_primary_port [srv 0 port]
+    set old_version [dict get [$old_primary hello] version]
+    $old_primary xadd backlen 1-1 f $backlen_boundary_value
+    $old_primary xadd backlen 1-2 f tail
+
+    start_server {} {
+        set new_replica [srv 0 client]
+
+        test "Listpack boundary backlen written by $old_version is read by current version" {
+            $new_replica replicaof $old_primary_host $old_primary_port
+            wait_for_sync $new_replica 500 100
+            assert_backlen_stream_intact $new_replica $backlen_boundary_value "$old_version -> current"
+        }
+
+        test "Listpack boundary backlen from $old_version survives reload by current version" {
+            # Re-encodes the listpack with our own writer, so this also covers
+            # the width we produce being readable by ourselves.
+            $new_replica debug reload
+            assert_backlen_stream_intact $new_replica $backlen_boundary_value "reload"
+        }
+    }
+}

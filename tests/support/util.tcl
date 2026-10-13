@@ -111,10 +111,13 @@ proc waitForBgrewriteaof r {
 }
 
 proc wait_for_sync {r {maxtries 50} {delay 100}} {
+    # A replica that fails to load the payload terminates, so catch the error
+    # from the lost connection and report it as a test failure rather than
+    # letting it surface as an I/O error aborting the whole run.
     wait_for_condition $maxtries $delay {
-        [status $r master_link_status] eq "up"
+        [catch {status $r master_link_status} res] == 0 && $res eq "up"
     } else {
-        fail "replica didn't sync in time"
+        fail "replica didn't sync in time (master_link_status: '$res')"
     }
 }
 

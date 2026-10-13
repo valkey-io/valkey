@@ -7,6 +7,7 @@
 #include "generated_wrappers.hpp"
 
 #include <climits>
+#include <cstdarg>
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -362,4 +363,41 @@ TEST_F(UtilTest, TestWritePointerWithPadding) {
     for (size_t i = ptr_size; i < sizeof(buf); i++) {
         ASSERT_EQ(buf[i], 0u);
     }
+}
+
+/* A forwarder without the printf format attribute, so we can exercise
+ * malformed format strings (such as a trailing '%') without tripping
+ * -Wformat. */
+static int callSnprintfAsyncSignalSafe(char *out, size_t n, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vsnprintf_async_signal_safe(out, n, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+TEST_F(UtilTest, TestSnprintfAsyncSignalSafe) {
+    char out[64];
+
+    /* Ordinary formatting still works. */
+    ASSERT_EQ(callSnprintfAsyncSignalSafe(out, sizeof(out), "%d", (int)42), 2);
+    ASSERT_STREQ(out, "42");
+
+    ASSERT_EQ(callSnprintfAsyncSignalSafe(out, sizeof(out), "x%sy", "hi"), 4);
+    ASSERT_STREQ(out, "xhiy");
+
+    /* A trailing '%' is malformed. It must be handled safely and must not
+     * read past the end of the format string. */
+    ASSERT_EQ(callSnprintfAsyncSignalSafe(out, sizeof(out), "%"), 0);
+    ASSERT_STREQ(out, "");
+
+    ASSERT_EQ(callSnprintfAsyncSignalSafe(out, sizeof(out), "abc%"), 3);
+    ASSERT_STREQ(out, "abc");
+
+    /* Same for a length modifier with no conversion at the end. */
+    ASSERT_EQ(callSnprintfAsyncSignalSafe(out, sizeof(out), "%l"), 0);
+    ASSERT_STREQ(out, "");
+
+    ASSERT_EQ(callSnprintfAsyncSignalSafe(out, sizeof(out), "%ll"), 0);
+    ASSERT_STREQ(out, "");
 }

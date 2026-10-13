@@ -1676,6 +1676,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * the operation even if completely idle. */
     if (server.tracking_clients) trackingLimitUsedSlots();
 
+    /* Dead IDs can remain after all tracking clients disconnect. The sweep
+     * schedules itself and bounds each step, preserving O(1) disconnects. */
+    trackingSweepDeadClients();
+
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
      * rewrite is in progress.

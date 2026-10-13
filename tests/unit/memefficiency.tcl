@@ -24,6 +24,98 @@ proc test_memory_efficiency {range} {
     return $efficiency
 }
 
+run_solo {defrag} {
+    start_server {tags {"defrag external:skip"} overrides {appendonly no save ""}} {
+        if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
+            test {Active defrag preserves the tracking table and invalidation delivery} {
+                r config set hz 100
+                r config set activedefrag no
+                r config set active-defrag-threshold-lower 5
+                r config set active-defrag-cycle-min 65
+                r config set active-defrag-cycle-max 75
+                r config set active-defrag-ignore-bytes 2mb
+
+                set n_keys 40000
+                set n_clients 24
+                set rd [redis_deferring_client]
+                $rd client reply off
+                set value [string repeat A 512]
+                for {set j 0} {$j < $n_keys} {incr j} {
+                    $rd set k$j $value
+                }
+                $rd client reply on
+                assert_equal OK [$rd read]
+
+                set tclients {}
+                for {set c 0} {$c < $n_clients} {incr c} {
+                    set tc [redis_deferring_client]
+                    $tc hello 3
+                    $tc read
+                    $tc client tracking on
+                    assert_equal OK [$tc read]
+                    $tc client reply off
+                    lappend tclients $tc
+                }
+                for {set j 0} {$j < $n_keys} {incr j} {
+                    foreach tc $tclients {$tc get k$j}
+                    if {$j % 500 == 499} {
+                        foreach tc $tclients {
+                            $tc client reply on
+                            assert_equal OK [$tc read]
+                            $tc client reply off
+                        }
+                    }
+                }
+                # Connected clients' IDs remain in the table after tracking is
+                # disabled, keeping its contents stable through relocation.
+                foreach tc $tclients {
+                    $tc client reply on
+                    assert_equal OK [$tc read]
+                    $tc client tracking off
+                    assert_equal OK [$tc read]
+                }
+                assert_equal [expr {$n_keys * $n_clients}] [s tracking_total_items]
+                $rd client reply off
+                for {set j 0} {$j < $n_keys} {incr j 2} {$rd del k$j}
+                $rd client reply on
+                assert_equal OK [$rd read]
+                $rd close
+                set expected_items [expr {$n_keys / 2 * $n_clients}]
+                assert_equal $expected_items [s tracking_total_items]
+                set digest [debug_digest]
+                set hits_before [s active_defrag_hits]
+
+                r config set activedefrag yes
+                wait_for_condition 100 100 {
+                    [s active_defrag_hits] > $hits_before
+                } else {
+                    fail "defrag did not relocate allocations"
+                }
+                wait_for_condition 2000 100 {
+                    [s active_defrag_running] == 0
+                } else {
+                    fail "defrag did not complete"
+                }
+                assert_equal $digest [debug_digest]
+                assert_equal $expected_items [s tracking_total_items]
+                assert_equal OK [r save]
+
+                set tc [redis_deferring_client]
+                $tc hello 3
+                $tc read
+                $tc client tracking on
+                assert_equal OK [$tc read]
+                $tc get k1
+                $tc read
+                r set k1 changed
+                assert_equal {k1} [lindex [$tc read] 1]
+                $tc close
+                foreach tc $tclients {$tc close}
+            }
+        }
+    }
+}
+
 start_server {tags {"memefficiency external:skip"}} {
     foreach {size_range expected_min_efficiency} {
         32    0.15

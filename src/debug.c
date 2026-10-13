@@ -402,6 +402,8 @@ void debugCommand(client *c) {
 "    keywords not listed in original configuration file or default values.",
 "CRASH-AND-RECOVER [<milliseconds>]",
 "    Hard crash and restart after a <milliseconds> delay (default 0).",
+"SWEEP-TRACKING-TABLE",
+"    Synchronously reclaim tracking IDs of disconnected clients.",
 "DIGEST",
 "    Output a hex signature representing the current DB content.",
 "DIGEST-VALUE <key> [<key> ...]",
@@ -855,6 +857,9 @@ NULL
         tv.tv_nsec = (utime % 1000000) * 1000;
         nanosleep(&tv, NULL);
         addReply(c,shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "sweep-tracking-table") && c->argc == 2) {
+        trackingSweepFull();
+        addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"set-active-expire") &&
                c->argc == 3)
     {

@@ -978,6 +978,15 @@ void activeDefragCycle(void) {
 
             /* Move on to next database, and stop if we reached the last one. */
             if (++current_db >= server.dbnum) {
+                /* Resume tracking defrag past the last DB without resetting its
+                 * cursor. Convert this cycle's wall-clock budget to monotonic time. */
+                if (current_db == server.dbnum)
+                    defragTrackingTable(0);
+                if (!defragTrackingTable(getMonotonicUs() + (endtime - ustime()))) {
+                    current_db = server.dbnum;
+                    quit = 1;
+                    break;
+                }
                 /* defrag other items not part of the db / keys */
                 defragOtherGlobals();
 

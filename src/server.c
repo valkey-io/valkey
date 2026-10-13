@@ -1491,6 +1491,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * the operation even if completely idle. */
     if (server.tracking_clients) trackingLimitUsedSlots();
 
+    /* Dead IDs can remain after all tracking clients disconnect. The sweep
+     * schedules itself and bounds each step, preserving O(1) disconnects. */
+    trackingSweepDeadClients();
+
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
      * rewrite is in progress.
@@ -7018,6 +7022,7 @@ int __test_num = 0;
 /* The flags are the following:
 * --accurate:     Runs tests with more iterations.
 * --large-memory: Enables tests that consume more than 100mb. */
+int trackingTest(int argc, char **argv, int flags);
 typedef int redisTestProc(int argc, char **argv, int flags);
 struct redisTest {
     char *name;
@@ -7035,7 +7040,8 @@ struct redisTest {
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},
-    {"listpack", listpackTest}
+    {"listpack", listpackTest},
+    {"tracking", trackingTest}
 };
 redisTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(redisTests)/sizeof(struct redisTest);

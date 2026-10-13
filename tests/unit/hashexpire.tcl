@@ -5375,8 +5375,12 @@ start_server {tags {"hashexpire needs:debug external:skip"}} {
             HGETDEL "hgetdel myhash FIELDS 2 expired live" "hdel myhash live" \
             {HDEL multiple} "hdel myhash live expired live2" "hdel myhash live live2" \
             {HGETDEL multiple} "hgetdel myhash FIELDS 3 live expired live2" "hdel myhash live live2" \
+            {HGETDEL no skip} "hgetdel myhash FIELDS 1 live" "hgetdel myhash FIELDS 1 live" \
             HPERSIST "hpersist myhash FIELDS 2 expired live" "hpersist myhash FIELDS 1 live" \
             HEXPIREAT "hexpireat myhash $exat XX GT FIELDS 2 expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
+            HPEXPIREAT "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
+            HEXPIRE "hexpire myhash 1000 FIELDS 2 expired live" "hpexpireat myhash * FIELDS 1 live" \
+            HPEXPIRE "hpexpire myhash 1000000 FIELDS 2 expired live" "hpexpireat myhash * FIELDS 1 live" \
             {HPERSIST multiple} "hpersist myhash FIELDS 4 live expired missing live2" "hpersist myhash FIELDS 2 live live2" \
             {HEXPIREAT multiple} "hexpireat myhash $exat XX GT FIELDS 4 live expired missing live2" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 live live2" \
             {HDEL trailing} "hdel myhash live expired" "hdel myhash live" \
@@ -5384,7 +5388,8 @@ start_server {tags {"hashexpire needs:debug external:skip"}} {
             {HPERSIST trailing} "hpersist myhash FIELDS 2 live expired" "hpersist myhash FIELDS 1 live" \
             {HEXPIREAT trailing} "hexpireat myhash $exat XX GT FIELDS 2 live expired" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
             {HPERSIST no TTL} "hpersist myhash FIELDS 3 nottl expired live" "hpersist myhash FIELDS 2 nottl live" \
-            {HEXPIREAT condition not met} "hexpireat myhash $exat XX GT FIELDS 3 nottl expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 nottl live"] {
+            {HEXPIREAT condition not met} "hexpireat myhash $exat XX GT FIELDS 3 nottl expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 nottl live" \
+            {HEXPIREAT past time} "hexpireat myhash 1 FIELDS 2 expired live" "hdel myhash live"] {
             test "$name does not propagate the expired field - $encoding" {
                 setup_expired_field_stream $encoding
                 set repl [attach_to_replication_stream]

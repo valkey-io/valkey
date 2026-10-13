@@ -982,6 +982,28 @@ sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
     serverPanic("Unknown hash encoding");
 }
 
+/* Return the field or value at the current iterator position as a pointer
+ * to its raw bytes, without allocating or copying. */
+char *hashTypeCurrentObjectRawString(hashTypeIterator *hi, int what, char *buf, size_t *len) {
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *vstr;
+        unsigned int vlen;
+        long long vll;
+        hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);
+        if (vstr) {
+            *len = vlen;
+            return (char *)vstr;
+        }
+        *len = ll2string(buf, LONG_STR_SIZE, vll);
+        return buf;
+    }
+    if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
+        return hashTypeCurrentFromHashTable(hi, what, len);
+    }
+    serverPanic("Unknown hash encoding");
+    return NULL;
+}
+
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
     robj *o = lookupKeyWrite(c->db, key);
     if (checkType(c, o, OBJ_HASH)) return NULL;
@@ -1386,7 +1408,7 @@ void hincrbyfloatCommand(client *c) {
     }
 }
 
-static void addHashFieldToReply(client *c, robj *o, sds field) {
+void addHashFieldToReply(client *c, robj *o, sds field) {
     if (o == NULL) {
         addReplyNull(c);
         return;
@@ -1636,7 +1658,7 @@ void hstrlenCommand(client *c) {
     addReplyLongLong(c, hashTypeGetValueLength(o, objectGetVal(c->argv[2])));
 }
 
-static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeIterator *hi, int what) {
+void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeIterator *hi, int what) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr = NULL;
         unsigned int vlen = UINT_MAX;

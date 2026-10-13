@@ -1011,6 +1011,18 @@ void activeDefragCycle(void) {
 
             /* Move on to next database, and stop if we reached the last one. */
             if (++current_db >= server.dbnum) {
+                /* The tracking table's structure is private to tracking.c, which
+                 * provides the actual incremental defrag walker; we just drive it.
+                 * Its deadline is on the monotonic clock, unlike endtime. If it runs
+                 * out of time, current_db stays past the last db so that we come
+                 * back here on the next cycle without resetting its resume state. */
+                if (current_db == server.dbnum) defragTrackingTable(0);
+                if (!defragTrackingTable(getMonotonicUs() + (endtime - ustime()))) {
+                    current_db = server.dbnum;
+                    quit = 1;
+                    break;
+                }
+
                 /* defrag other items not part of the db / keys */
                 defragOtherGlobals();
 

@@ -2099,15 +2099,16 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
     long long count = 0, non_volatile_items;
-    sds field, value;
 
     /* First serialize volatile items if exist */
     if (hashTypeHasVolatileFields(o)) {
         hashTypeInitVolatileIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             long long expiry = hashTypeCurrentExpiry(o, &hi);
-            field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
-            value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+            char fbuf[LONG_STR_SIZE], vbuf[LONG_STR_SIZE];
+            size_t flen, vlen;
+            char *field = hashTypeCurrentObjectRawString(&hi, OBJ_HASH_FIELD, fbuf, &flen);
+            char *value = hashTypeCurrentObjectRawString(&hi, OBJ_HASH_VALUE, vbuf, &vlen);
             if (expiry > commandTimeSnapshot()) {
                 if (rioWriteBulkCount(r, '*', 8) == 0) goto werr;
                 if (rioWriteBulkString(r, "HSETEX", 6) == 0) goto werr;
@@ -2116,11 +2117,9 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
                 if (rioWriteBulkLongLong(r, expiry) == 0) goto werr;
                 if (rioWriteBulkString(r, "FIELDS", 6) == 0) goto werr;
                 if (rioWriteBulkLongLong(r, 1) == 0) goto werr;
-                if (rioWriteBulkString(r, field, sdslen(field)) == 0) goto werr;
-                if (rioWriteBulkString(r, value, sdslen(value)) == 0) goto werr;
+                if (rioWriteBulkString(r, field, flen) == 0) goto werr;
+                if (rioWriteBulkString(r, value, vlen) == 0) goto werr;
             }
-            sdsfree(field);
-            sdsfree(value);
         }
         hashTypeResetIterator(&hi);
     }
@@ -2155,8 +2154,6 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
     return 1;
 
 werr:
-    sdsfree(field);
-    sdsfree(value);
     hashTypeResetIterator(&hi);
     return 0;
 }

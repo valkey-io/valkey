@@ -46,6 +46,12 @@ start_server {tags {"dismiss external:skip"}} {
         # stream
         r xadd bigstream * entry1 $bigstr entry2 $bigstr
 
+        # path hash
+        r phset bigpathhash1 path1 FIELDS 1 field1 $bigstr    ; # hash payload encoding
+        for {set i 0} {$i < 128} {incr i} {
+            r phset bigpathhash2 path$i FIELDS 1 $i $64bytes ; # listpack payload encoding
+        }
+
         set digest [debug_digest]
         r config set aof-use-rdb-preamble no
         r bgrewriteaof

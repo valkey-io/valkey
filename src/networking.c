@@ -1558,30 +1558,14 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-/* Payload-size threshold (in bytes) below which addWritePreparedReplyBulkCBuffer()
- * fuses the bulk header, payload and trailing CRLF into one stack buffer and
- * appends them with a single _addReplyToBufferOrList() call.
- *
- * The generic path splits every bulk string into three appends (header, data,
- * trailing CRLF), each of which re-walks the buffer-or-list bookkeeping. For
- * commands that emit many small bulk strings back to back (HGETALL over a large
- * hash being the motivating case) that per-append overhead dominates the command
- * cost. Fusing copies the payload once more (into the stack buffer), so the limit
- * is kept small enough that the extra copy is cheap and the temporary stays on
- * the stack. The field and value sizes that dominate hash replies fall well under
- * it; larger payloads take the three-call path below, where a single large memcpy
- * per append already amortizes the bookkeeping and a stack copy would not pay. */
+/* Fuse small bulk replies into one append to avoid repeating reply-routing
+ * bookkeeping. The limit bounds the additional copy and stack usage. */
 #define BULK_REPLY_FUSE_LIMIT 512
 
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
     client *c = (client *)wpc;
     if (len <= BULK_REPLY_FUSE_LIMIT) {
-        /* Build "$<len>\r\n" + payload + "\r\n" in one buffer and hand it to
-         * _addReplyToBufferOrList() once. That function still makes every
-         * placement decision (close_after_reply, replica, deferred/push,
-         * reply-list spillover, encoded/copy-avoid buffers, output-byte and
-         * reqres accounting), so the fused path behaves exactly like the three
-         * separate appends below while touching that bookkeeping only once. */
+        /* Keep reply routing and accounting in _addReplyToBufferOrList(). */
         char buf[LONG_STR_SIZE + 3 + BULK_REPLY_FUSE_LIMIT + 2];
         char *dst = buf;
         if (len < OBJ_SHARED_BULKHDR_LEN) {

@@ -2191,14 +2191,9 @@ void genericHgetallCommand(client *c, int flags) {
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
 
-    /* If the hash has no volatile (TTL-bearing) fields, no field can expire
-     * mid-iteration, so the element count is known up front and we can emit a
-     * real aggregate header instead of a deferred one. That matters for more
-     * than the header itself: addReplyDeferredLen() parks a placeholder node
-     * on the reply list, and once that list is non-empty every subsequent
-     * reply bypasses the client's static buffer and goes through
-     * heap-allocated reply blocks. This holds for listpack-encoded and
-     * hashtable-encoded hashes without volatile fields. */
+    /* Without volatile fields, hashTypeLength() is exact. Emit the header now so
+     * subsequent replies can use the static buffer; a deferred header would place
+     * a placeholder on the reply list and force them into reply blocks. */
     unsigned long length = 0;
     void *replylen = NULL;
     bool exact_len = !hashTypeHasVolatileFields(o);

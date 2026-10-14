@@ -136,8 +136,9 @@ typedef union bio_job {
 
     struct {
         int type;
-        connection *conn;    /* Connection to download the RDB from */
-        int is_dual_channel; /* Single vs dual channel */
+        connection *conn;            /* Connection to download the RDB from */
+        int is_dual_channel;         /* Single vs dual channel */
+        compressionAlgo target_algo; /* Target on-disk codec, resolved when the job was created */
     } save_to_disk_args;
 
     struct {
@@ -235,10 +236,11 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
-void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
+void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel, compressionAlgo target_algo) {
     bio_job *job = allocBioJob(0);
     job->save_to_disk_args.conn = conn;
     job->save_to_disk_args.is_dual_channel = is_dual_channel;
+    job->save_to_disk_args.target_algo = target_algo;
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
@@ -317,7 +319,8 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else if (job_type == BIO_LAZY_FREE) {
             job->free_args.free_fn(job->free_args.free_args);
         } else if (job_type == BIO_RDB_SAVE) {
-            replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
+            replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel,
+                                               job->save_to_disk_args.target_algo);
         } else if (job_type == BIO_TLS_RELOAD) {
 #if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
             tlsConfigureAsync();

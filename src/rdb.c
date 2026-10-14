@@ -81,12 +81,12 @@ char *rdbFileBeingLoaded = NULL; /* used for rdb checking on read error */
 extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
-int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 void replicationEmptyDbCallback(hashtable *ht);
 
 /* Resolve the configured policy to an algorithm. The `yes` policy follows the
  * default algorithm, while explicit algorithm names remain pinned. */
-static compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
+compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
     switch (mode) {
     case RDB_COMPRESSION_NO:
         return ALGO_NONE;
@@ -96,9 +96,18 @@ static compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
         return ALGO_LZF;
     case RDB_COMPRESSION_LZ4:
         return ALGO_LZ4;
+    case RDB_COMPRESSION_ZSTD:
+        return ALGO_ZSTD;
     default:
         serverPanic("Unknown RDB compression mode: %d", mode);
     }
+}
+
+bool rdbHasFileSignature(const char *buf, size_t len) {
+    return (len >= 6 &&
+            (memcmp(buf, "REDIS0", 6) == 0 ||
+             memcmp(buf, "VALKEY", 6) == 0)) ||
+           (len >= VCS_MAGIC_SIZE && memcmp(buf, "VCS", VCS_MAGIC_SIZE) == 0);
 }
 
 /* Returns true if the RDB version is valid and accepted, false otherwise. This
@@ -783,6 +792,11 @@ int rdbGetObjectType(robj *o, int rdbver) {
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) return RDB_TYPE_HASH;
         serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;
+    case OBJ_PATH_HASH:
+        if (rdbver >= 81)
+            return RDB_TYPE_PATH_HASH;
+        else
+            return -1; /* can't be stored in old RDB */
     case OBJ_MODULE: return RDB_TYPE_MODULE_2;
     default: serverPanic("Unknown object type");
     }
@@ -1199,6 +1213,53 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             }
             raxStop(&ri);
         }
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        pathHashObject *path_hash = objectGetVal(o);
+        if ((n = rdbSaveLen(rdb, raxSize(path_hash->index))) == -1) return -1;
+        nwritten += n;
+
+        raxIterator paths;
+        raxStart(&paths, path_hash->index);
+        raxSeek(&paths, "^", NULL, 0);
+        while (raxNext(&paths)) {
+            robj *payload = paths.data;
+            if ((n = rdbSaveRawString(rdb, paths.key, paths.key_len)) == -1) {
+                raxStop(&paths);
+                return -1;
+            }
+            nwritten += n;
+            if ((n = rdbSaveLen(rdb, hashTypeLength(payload))) == -1) {
+                raxStop(&paths);
+                return -1;
+            }
+            nwritten += n;
+
+            hashTypeIterator fields;
+            hashTypeInitIterator(payload, &fields);
+            while (hashTypeNext(&fields) != C_ERR) {
+                sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
+                sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
+                ssize_t field_bytes = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field));
+                if (field_bytes == -1) {
+                    sdsfree(field);
+                    sdsfree(value);
+                    hashTypeResetIterator(&fields);
+                    raxStop(&paths);
+                    return -1;
+                }
+                ssize_t value_bytes = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value));
+                sdsfree(field);
+                sdsfree(value);
+                if (value_bytes == -1) {
+                    hashTypeResetIterator(&fields);
+                    raxStop(&paths);
+                    return -1;
+                }
+                nwritten += field_bytes + value_bytes;
+            }
+            hashTypeResetIterator(&fields);
+        }
+        raxStop(&paths);
     } else if (objectGetType(o) == OBJ_MODULE) {
         /* Save a module-specific value. */
         ValkeyModuleIO io;
@@ -1516,7 +1577,7 @@ werr:
  * When the function returns C_ERR and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the value of errno just after the I/O
  * error. */
-int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
+static int rdbSaveRioInternal(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     long key_counter = 0;
     int j;
 
@@ -1543,9 +1604,9 @@ werr:
 static int rdbCompressionInit(rio *rdb, streamWriter *writer, compressionAlgo algo, bool codec_checksum);
 static void rdbCompressionFree(rio *rdb, streamWriter *writer);
 
-/* This helper function is only used for diskless replication.
- * This is just a wrapper to rdbSaveRio() that additionally adds a prefix
- * and a suffix to the generated RDB dump. The prefix is:
+/* This helper function is only used for diskless replication. It wraps
+ * rdbSaveRio() with a prefix and suffix around the generated RDB dump. The
+ * prefix is:
  *
  * $EOF:<40 bytes unguessable hex string>\r\n
  *
@@ -1554,8 +1615,6 @@ static void rdbCompressionFree(rio *rdb, streamWriter *writer);
  * without doing any processing of the content. */
 static int rdbSaveRioWithEOFMark(int req, int rdbver, rio *rdb, int *error, rdbSaveInfo *rsi, compressionAlgo compression_algo) {
     char eofmark[RDB_EOF_MARK_SIZE];
-    streamWriter compression_writer;
-    bool compression_initialized = false;
 
     startSaving(RDBFLAGS_REPLICATION);
     getRandomHexChars(eofmark, RDB_EOF_MARK_SIZE);
@@ -1564,38 +1623,18 @@ static int rdbSaveRioWithEOFMark(int req, int rdbver, rio *rdb, int *error, rdbS
     if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
     if (rioWrite(rdb, "\r\n", 2) == 0) goto werr;
 
-    /* Compress only the RDB body; the $EOF prefix/suffix stay plaintext. The
-     * VCS frame owns checksum policy, so drop the outer RDB CRC64. */
-    if (compression_algo != ALGO_NONE) {
-        if (rdbCompressionInit(rdb, &compression_writer, compression_algo, server.rdb_checksum) == C_ERR) {
-            if (error && *error == 0) *error = EIO;
-            goto werr;
-        }
-        compression_initialized = true;
-        rdb->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
-        rdb->update_cksum = NULL;
-        rdb->cksum = 0;
-    }
-
-    if (rdbSaveRio(req, rdbver, rdb, error, RDBFLAGS_REPLICATION, rsi) == C_ERR) goto werr;
-
-    if (compression_initialized) {
-        if (streamWriterFinish(&compression_writer) == C_ERR) {
-            if (error && *error == 0) *error = EIO;
-            goto werr;
-        }
-        rdbCompressionFree(rdb, &compression_writer);
-        compression_initialized = false;
-    }
+    /* Compress only the RDB body; the $EOF prefix/suffix stay plaintext. */
+    if (rdbSaveRio(compression_algo, req, rdbver, rdb, error,
+                   RDBFLAGS_REPLICATION, rsi) == C_ERR)
+        goto werr;
 
     if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
     stopSaving(1);
     return C_OK;
 
 werr: /* Write error. */
-    /* Set 'error' only if not already set by rdbSaveRio() call. */
+    /* Set 'error' only if not already set by rdbSaveRio(). */
     if (error && *error == 0) *error = errno;
-    if (compression_initialized) rdbCompressionFree(rdb, &compression_writer);
     stopSaving(0);
     return C_ERR;
 }
@@ -1618,6 +1657,49 @@ static void rdbCompressionFree(rio *rdb, streamWriter *writer) {
     streamWriterFree(writer);
 }
 
+/* Save logical RDB bytes, applying whole-stream compression when requested.
+ * ALGO_NONE and ALGO_LZF write a plain RDB; per-string LZF remains controlled
+ * by rdbcompression in rdbSaveRawString() and is disabled while a stream writer
+ * is attached.
+ *
+ * With streaming compression, rdbSaveRioInternal() writes logical bytes
+ * through the attached streamWriter, which emits encoded bytes directly to the
+ * rio backend:
+ *
+ *   rdbSaveRioInternal -> streamWriter -> rioWriteRaw -> rio backend
+ *
+ * rioWriteRaw() bypasses the attached writer so its output is not compressed
+ * recursively. The CRC64 trailer is zero whenever the stream is compressed or
+ * rdbchecksum is disabled; the codec checksum is written only when rdbchecksum
+ * is enabled. */
+int rdbSaveRio(compressionAlgo compression_algo, int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
+    streamWriter compression_writer;
+    bool use_streaming_compression = compression_algo != ALGO_NONE && compression_algo != ALGO_LZF;
+
+    if (use_streaming_compression) {
+        if (rdbCompressionInit(rdb, &compression_writer, compression_algo, server.rdb_checksum) == C_ERR) {
+            if (error) *error = EIO;
+            return C_ERR;
+        }
+    }
+
+    if (use_streaming_compression || !server.rdb_checksum) {
+        rdb->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
+        rdb->update_cksum = NULL;
+        rdb->cksum = 0;
+    }
+
+    int retval = rdbSaveRioInternal(req, rdbver, rdb, error, rdbflags, rsi);
+    if (retval == C_OK && use_streaming_compression && streamWriterFinish(&compression_writer) == C_ERR) {
+        rdb->flags |= RIO_FLAG_WRITE_ERROR;
+        if (error) *error = EIO;
+        retval = C_ERR;
+    }
+
+    if (use_streaming_compression) rdbCompressionFree(rdb, &compression_writer);
+    return retval;
+}
+
 static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int rdbflags) {
     char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
     rio rdb;
@@ -1625,14 +1707,10 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     int saved_errno;
     char *err_op; /* For a detailed log */
     compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
-    bool use_streaming_compression = compression_algo == ALGO_LZ4;
     /* Replication full sync uses the codec selected before the child was forked. */
     if (rdbflags & RDBFLAGS_REPLICATION) {
         compression_algo = server.rdb_child_sync_algo;
-        use_streaming_compression = compression_algo != ALGO_NONE;
     }
-    streamWriter compression_writer;
-    bool compression_initialized = false;
 
     FILE *fp = fopen(filename, "w");
     if (!fp) {
@@ -1654,47 +1732,10 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
         if (!(rdbflags & RDBFLAGS_KEEP_CACHE)) rioSetReclaimCache(&rdb, 1);
     }
 
-    /* The file rio remains the interface passed to RDB. When compression is
-     * enabled, rio sends logical RDB bytes through streamWriter, which emits
-     * encoded bytes to the same rio's concrete file backend:
-     *
-     *   disabled: rdbSaveRio -> rdb(file) -> disk
-     *   enabled:  rdbSaveRio -> streamWriter -> rdb(file backend) -> disk
-     *
-     * rioWriteRaw lets streamWriter reach the backend without recursively
-     * compressing its own output. */
-    if (use_streaming_compression) {
-        if (rdbCompressionInit(&rdb, &compression_writer, compression_algo, server.rdb_checksum) == C_ERR) {
-            errno = EIO; /* Compressor init failure, set errno for werr log */
-            err_op = "rdbCompressionInit";
-            goto werr;
-        }
-        compression_initialized = true;
-    }
-    /* Streaming-compressed RDBs use codec-frame checksums instead of the
-     * logical RDB CRC64 trailer. */
-    if (use_streaming_compression || !server.rdb_checksum) {
-        rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
-        rdb.update_cksum = NULL;
-        rdb.cksum = 0;
-    }
-
-    if (rdbSaveRio(req, RDB_VERSION, &rdb, &error, rdbflags, rsi) == C_ERR) {
+    if (rdbSaveRio(compression_algo, req, RDB_VERSION, &rdb, &error, rdbflags, rsi) == C_ERR) {
         errno = error;
         err_op = "rdbSaveRio";
         goto werr;
-    }
-
-    /* Finalize the compression frame before flushing to disk. */
-    if (compression_initialized) {
-        if (streamWriterFinish(&compression_writer) == C_ERR) {
-            rdb.flags |= RIO_FLAG_WRITE_ERROR;
-            errno = EIO; /* Compression finalization failure */
-            err_op = "streamWriterFinish";
-            goto werr;
-        }
-        rdbCompressionFree(&rdb, &compression_writer);
-        compression_initialized = false;
     }
 
     /* Make sure data will not remain on the OS's output buffers */
@@ -1720,11 +1761,6 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
 werr:
     saved_errno = errno;
     serverLog(LL_WARNING, "Write error while saving DB to the disk(%s): %s", err_op, strerror(errno));
-    if (compression_initialized) {
-        /* Skip finish on error, output is being discarded (unlink below).
-         * Just release resources. */
-        rdbCompressionFree(&rdb, &compression_writer);
-    }
     if (fp) fclose(fp);
     unlink(filename);
     errno = saved_errno;
@@ -2536,6 +2572,66 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             decrRefCount(o);
             if (error) *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
             return NULL;
+        }
+    } else if (rdbtype == RDB_TYPE_PATH_HASH) {
+        uint64_t path_count = rdbLoadLen(rdb, NULL);
+        if (path_count == RDB_LENERR) return NULL;
+        o = createPathHashObject();
+        pathHashObject *path_hash = objectGetVal(o);
+
+        while (path_count--) {
+            sds path = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+            if (path == NULL) {
+                decrRefCount(o);
+                return NULL;
+            }
+            uint64_t field_count = rdbLoadLen(rdb, NULL);
+            if (field_count == RDB_LENERR || field_count == 0) {
+                sdsfree(path);
+                decrRefCount(o);
+                if (field_count == 0) rdbReportCorruptRDB("Path hash path with empty payload");
+                return NULL;
+            }
+            robj *payload = createHashObject();
+            if (!raxTryInsert(path_hash->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
+                rdbReportCorruptRDB("Duplicate pathhash path");
+                sdsfree(path);
+                decrRefCount(payload);
+                decrRefCount(o);
+                return NULL;
+            }
+            sdsfree(path);
+
+            while (field_count--) {
+                sds field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+                if (field == NULL) {
+                    decrRefCount(o);
+                    return NULL;
+                }
+                sds value = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+                if (value == NULL) {
+                    sdsfree(field);
+                    decrRefCount(o);
+                    return NULL;
+                }
+                /* hashTypeSet() reports whether it updated an existing field, which
+                 * detects duplicates without a second lookup. It takes ownership of
+                 * both strings, so there is nothing left to free here. */
+                bool expired_overwritten = false;
+                int updated = hashTypeSet(payload,
+                                          field,
+                                          value,
+                                          EXPIRY_NONE,
+                                          HASH_SET_TAKE_FIELD | HASH_SET_TAKE_VALUE,
+                                          &expired_overwritten);
+                serverAssert(!expired_overwritten);
+                if (updated) {
+                    rdbReportCorruptRDB("Duplicate pathhash payload field");
+                    decrRefCount(o);
+                    return NULL;
+                }
+                path_hash->num_fields++;
+            }
         }
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST || rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
         if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;
@@ -3459,6 +3555,90 @@ void rdbFreeStreamReader(rio *rdb, streamReader *reader) {
     streamReaderFree(reader);
 }
 
+/* Load a plain or VCS-wrapped RDB from 'rdb'. For file-backed input, the stream
+ * must be positioned at the RDB start. The initial probe is rewound for plain
+ * files so they use the native rio path; non-rewindable plain input continues
+ * through the stream-reader passthrough path, while compressed input is decoded
+ * through the attached stream reader.
+ *
+ * On success, file-backed input is left exactly after the complete RDB. The
+ * compressed reader limits source reads to the codec's input_hint so it does
+ * not consume trailing data, allowing callers to continue with content such as
+ * an old-style AOF tail. */
+int rdbLoadRioWithLoadingCtx(rio *rdb,
+                             int rdbflags,
+                             rdbSaveInfo *rsi,
+                             rdbLoadingCtx *rdb_loading_ctx,
+                             const char *filename) {
+    streamReader stream_reader;
+    compressionAlgo compression_algo = ALGO_NONE;
+    int retval;
+
+    bool skip_codec_checksum_validation =
+        (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) ||
+        !server.rdb_checksum ||
+        server.skip_checksum_validation;
+    rdbStreamReaderInitResult init_rc =
+        rdbInitStreamReader(rdb, &stream_reader, skip_codec_checksum_validation, &compression_algo);
+    if (init_rc == RDB_STREAM_READER_INIT_INCOMPATIBLE) {
+        serverLog(LL_WARNING,
+                  "Invalid or unsupported RDB stream envelope from %s. "
+                  "The input may require a Valkey version with streaming RDB "
+                  "compression support.",
+                  filename);
+        return RDB_INCOMPATIBLE;
+    }
+    if (init_rc == RDB_STREAM_READER_INIT_ERROR) {
+        serverLog(LL_WARNING, "Failed to initialize RDB stream reader for %s", filename);
+        return RDB_FAILED;
+    }
+
+    if (rdb->flags & RIO_FLAG_STREAMING_COMPRESSION) {
+        serverLog(LL_NOTICE, "Loading compressed RDB (algo=%s) from %s",
+                  compressionAlgoName(compression_algo), filename);
+    }
+
+    rio *prev_rio = server.loading_rio;
+    server.loading_rio = rdb;
+    retval = rdbLoadRioInternal(rdb, rdbflags, rsi, rdb_loading_ctx);
+    server.loading_rio = prev_rio;
+    if (retval == RDB_OK && streamReaderFinish(&stream_reader) == C_ERR) {
+        if (stream_reader.error_kind == STREAM_READER_ERROR_TRUNCATED) {
+            serverLog(LL_WARNING, "Compressed RDB stream from %s was truncated", filename);
+        } else if (stream_reader.error_kind == STREAM_READER_ERROR_CORRUPT) {
+            /* Treat a corrupt frame end like mid-parse corruption via the fatal path. */
+            rdbReportCorruptCompressedStream(filename);
+        } else {
+            serverLog(LL_WARNING, "Compressed RDB stream from %s did not end cleanly", filename);
+        }
+        retval = RDB_FAILED;
+    }
+    if (retval == RDB_OK &&
+        compression_algo != ALGO_NONE &&
+        rioCheckType(rdb) == RIO_TYPE_CONN &&
+        rdb->io.conn.read_limit != 0 &&
+        rdb->io.conn.read_so_far != rdb->io.conn.read_limit) {
+        serverLog(LL_WARNING,
+                  "Compressed RDB stream from %s ended before the announced "
+                  "transfer size; got %llu of %llu bytes",
+                  filename,
+                  (unsigned long long)rdb->io.conn.read_so_far,
+                  (unsigned long long)rdb->io.conn.read_limit);
+        retval = RDB_FAILED;
+    }
+
+    rdbFreeStreamReader(rdb, &stream_reader);
+    return retval;
+}
+
+/* Load a plain or VCS-wrapped RDB, auto-detecting whole-stream compression.
+ * The filename is used only for diagnostic messages. */
+int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
+    functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
+    rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
+    return rdbLoadRioWithLoadingCtx(rdb, rdbflags, rsi, &loading_ctx, filename);
+}
+
 /* Save the given functions_ctx to the rdb.
  * The err output parameter is optional and will be set with relevant error
  * message on failure, it is the caller responsibility to free the error
@@ -3503,27 +3683,6 @@ done:
     return res;
 }
 
-/* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
- * otherwise C_ERR is returned and 'errno' is set accordingly. */
-int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
-    functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
-    rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
-    int retval = rdbLoadRioWithLoadingCtxScopedRdb(rdb, rdbflags, rsi, &loading_ctx);
-    return retval;
-}
-
-/* Wrapper for rdbLoadRioWithLoadingCtx that manages a scoped RDB context.
- * This method wraps the rdbLoadRioWithLoadingCtx function, providing temporary
- * RDB context management. It sets a new current loading RDB, calls the wrapped
- * function, and then restores the previous loading RDB context. */
-int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx) {
-    rio *prev_rio = server.loading_rio;
-    server.loading_rio = rdb;
-    int retval = rdbLoadRioWithLoadingCtx(rdb, rdbflags, rsi, rdb_loading_ctx);
-    server.loading_rio = prev_rio;
-    return retval;
-}
-
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
  * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
@@ -3531,7 +3690,7 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
  * currently it only allow to set db object and functionLibCtx to which the data
  * will be loaded (in the future it might contains more such objects). */
-int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx) {
+static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx) {
     uint64_t dbid = 0;
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;
@@ -3888,7 +4047,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 sdsfree(key);
                 goto eoferr;
             }
-        } else if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now) {
+        } else if (expiretime < -1 ||
+                   (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now)) {
+            /* A negative expire is dropped on every node, not just a primary,
+             * since active expire asserts that expire times are non-negative. */
             if (rdbflags & RDBFLAGS_FEED_REPL) {
                 /* Caller should have created replication backlog,
                  * and now this path only works when rebooting,
@@ -4017,9 +4179,6 @@ eoferr:
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     FILE *fp;
     rio rdb;
-    streamReader stream_reader;
-    bool stream_reader_initialized = false;
-    compressionAlgo compression_algo = ALGO_NONE;
     int retval = RDB_FAILED;
     struct stat sb;
     int rdb_fd;
@@ -4037,52 +4196,8 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     startLoadingFile(sb.st_size, filename, rdbflags);
     rioInitWithFile(&rdb, fp);
 
-    /* Probe every on-disk RDB:
-     *
-     *   plain file: rewind probe, then rdbLoadRio -> rdb(file backend)
-     *   VCS file:   rdbLoadRio -> streamReader LZ4 decode  -> rdb(file backend)
-     *
-     * Non-rewindable plain sources retain the streamReader passthrough path.
-     * For VCS input the parser sees the header produced by the decoder. */
-    bool skip_codec_checksum_validation = !server.rdb_checksum || server.skip_checksum_validation;
-    rdbStreamReaderInitResult init_rc =
-        rdbInitStreamReader(&rdb, &stream_reader, skip_codec_checksum_validation, &compression_algo);
-    if (init_rc == RDB_STREAM_READER_INIT_INCOMPATIBLE) {
-        serverLog(LL_WARNING,
-                  "Invalid or unsupported RDB stream envelope in %s. "
-                  "The file may require a Valkey version with streaming RDB "
-                  "compression support.",
-                  filename);
-        retval = RDB_INCOMPATIBLE;
-        goto done;
-    }
-    if (init_rc == RDB_STREAM_READER_INIT_ERROR) {
-        serverLog(LL_WARNING, "Failed to initialize RDB stream reader for %s", filename);
-        goto done;
-    }
-    stream_reader_initialized = true;
-    if (rsi) {
-        rsi->loaded_compressed = compression_algo != ALGO_NONE;
-    }
+    retval = rdbLoadRio(&rdb, rdbflags, rsi, filename);
 
-    if (rdb.flags & RIO_FLAG_STREAMING_COMPRESSION) {
-        serverLog(LL_NOTICE, "Loading compressed RDB (algo=%s) from %s",
-                  compressionAlgoName(compression_algo), filename);
-    }
-
-    retval = rdbLoadRio(&rdb, rdbflags, rsi);
-    if (retval == RDB_OK && streamReaderFinish(&stream_reader) == C_ERR) {
-        if (stream_reader.error_kind == STREAM_READER_ERROR_CORRUPT) {
-            /* Treat a corrupt frame end like mid-parse corruption via the fatal path. */
-            rdbReportCorruptCompressedStream(filename);
-        } else {
-            serverLog(LL_WARNING, "Compressed RDB stream in %s did not end cleanly", filename);
-        }
-        retval = RDB_FAILED;
-    }
-
-done:
-    if (stream_reader_initialized) rdbFreeStreamReader(&rdb, &stream_reader);
     fclose(fp);
     stopLoading(retval == RDB_OK);
     /* Reclaim the cache backed by rdb */
@@ -4185,7 +4300,7 @@ void killRDBChild(void) {
 
 /* Spawn an RDB child that writes the RDB to the sockets of the replicas
  * that are currently in REPLICA_STATE_WAIT_BGSAVE_START state. */
-int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
+int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSaveInfo *rsi) {
     listNode *ln;
     listIter li;
     pid_t childpid;
@@ -4224,7 +4339,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
      * Otherwise, use checksum for this RDB transfer.
      */
     int skip_rdb_checksum = 1;
-    int common_capa = -1;
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are in WAIT_BGSAVE_START state. */
     int connsnum = 0;
@@ -4241,10 +4355,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
         client *replica = ln->value;
         if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
             /* Check replica has the exact requirements */
-            if (replica->repl_data->replica_req != req) continue;
-            if (replicaRdbVersion(replica) != rdbver) continue;
-
-            common_capa &= replica->repl_data->replica_capa;
+            if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {
@@ -4266,11 +4377,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
         if (!connIsIntegrityChecked(replica->conn) || !(replica->repl_data->replica_capa & REPLICA_CAPA_SKIP_RDB_CHECKSUM))
             skip_rdb_checksum = 0;
     }
-
-    compressionAlgo sync_compression_algo =
-        connsnum > 0 ? replSelectFullSyncCompression(common_capa) : ALGO_NONE;
-    if (sync_compression_algo != ALGO_NONE)
-        serverLog(LL_NOTICE, "Diskless full sync with compression: %s", compressionAlgoName(sync_compression_algo));
 
     /* Create the child process. */
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
@@ -4295,7 +4401,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
 
         if (skip_rdb_checksum) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
 
-        retval = rdbSaveRioWithEOFMark(req, rdbver, &rdb, NULL, rsi, sync_compression_algo);
+        retval = rdbSaveRioWithEOFMark(req, rdbver, &rdb, NULL, rsi, compr);
         if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
 
         if (retval == C_OK) {

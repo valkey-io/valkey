@@ -273,6 +273,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             }
         }
         streamIteratorStop(&si);
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        pathHashTypeDigest(digest, o);
     } else if (objectGetType(o) == OBJ_MODULE) {
         ValkeyModuleDigest md = {{0}, {0}, keyobj, db->id};
         moduleValue *mv = objectGetVal(o);
@@ -499,6 +501,9 @@ void debugCommand(client *c) {
             "    Setting it to 0 disables expiring keys in background when they are not",
             "    accessed (otherwise the behavior). Setting it to 1 reenables back the",
             "    default.",
+            "SWEEP-TRACKING-TABLE",
+            "    Synchronously sweep the whole tracking table until every ID left in it",
+            "    references a connected client.",
             "SET-DISABLE-DENY-SCRIPTS <0|1>",
             "    Setting it to 1 allows scripts to run commands marked with the NOSCRIPT",
             "    flag, which are normally not allowed from scripts. Setting it to 0",
@@ -940,6 +945,9 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "sweep-tracking-table") && c->argc == 2) {
+        trackingSweepFull();
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "quicklist-packed-threshold") && c->argc == 3) {
         int memerr;
         unsigned long long sz = memtoull((const char *)objectGetVal(c->argv[2]), &memerr);
@@ -1262,6 +1270,9 @@ void serverLogObjectDebugInfo(const robj *o) {
         }
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        serverLog(LL_WARNING, "Path hash path count: %llu",
+                  (unsigned long long)raxSize(((pathHashObject *)objectGetVal(o))->index));
     }
 #endif
 }

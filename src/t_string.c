@@ -233,13 +233,15 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
     if (unit == UNIT_SECONDS) *milliseconds *= 1000;
 
     if ((flags & ARGS_PX) || (flags & ARGS_EX)) {
-        *milliseconds += commandTimeSnapshot();
-    }
-
-    if (*milliseconds <= 0) {
-        /* Overflow detected. */
-        addReplyErrorExpireTime(c);
-        return C_ERR;
+        /* Relative expire: check for overflow *before* adding the base time.
+         * Signed overflow is undefined behavior in C, so we can't rely on the
+         * wrapped result coming out negative. */
+        mstime_t basetime = commandTimeSnapshot();
+        if (*milliseconds > LLONG_MAX - basetime) {
+            addReplyErrorExpireTime(c);
+            return C_ERR;
+        }
+        *milliseconds += basetime;
     }
 
     return C_OK;

@@ -1261,38 +1261,45 @@ robj *ACLDescribeUser(user *u) {
     return u->acl_string;
 }
 
-/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
- * string holding the hex representation of the digest.
- *
- * The digest is the XOR-combined SHA256("username rules") for all users. The
- * username is part of what is hashed because XOR cancels out two equal values,
- * which would otherwise drop a pair of users having the same rules. */
-static sds ACLDigest(void) {
-    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+/* XOR the digest of every entry of 'table' into 'digest'. An entry is hashed as
+ * the line ACL LIST reports for it, so the keyword keeps a role and a user of
+ * the same name from cancelling each other out. */
+static void ACLDigestAddTable(rax *table, const char *keyword, unsigned char *digest) {
     raxIterator ri;
 
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
         robj *rules = ACLDescribeUser(u);
         sds rulestr = objectGetVal(rules);
-        unsigned char userdigest[SHA256_BLOCK_SIZE];
+        unsigned char entry[SHA256_BLOCK_SIZE];
         SHA256_CTX ctx;
 
-        /* Usernames can't contain spaces, so the separator makes the pair of
-         * name and rules unambiguous. */
         sha256_init(&ctx);
+        sha256_update(&ctx, (unsigned char *)keyword, strlen(keyword));
         sha256_update(&ctx, (unsigned char *)u->name, sdslen(u->name));
         sha256_update(&ctx, (unsigned char *)" ", 1);
         sha256_update(&ctx, (unsigned char *)rulestr, sdslen(rulestr));
-        sha256_final(&ctx, userdigest);
+        sha256_final(&ctx, entry);
         decrRefCount(rules);
 
-        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= userdigest[j];
+        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= entry[j];
     }
     raxStop(&ri);
+}
 
+/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
+ * string holding the hex representation of the digest.
+ *
+ * The digest is the XOR-combined SHA256 of every line ACL LIST reports, roles
+ * included. A user only names the roles it holds, so the role rules have to be
+ * hashed on their own for an edit to one to reach the digest. */
+static sds ACLDigest(void) {
+    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+
+    ACLDigestAddTable(Roles, "role ", digest);
+    ACLDigestAddTable(Users, "user ", digest);
     return ACLHexDigest(digest, SHA256_BLOCK_SIZE);
 }
 

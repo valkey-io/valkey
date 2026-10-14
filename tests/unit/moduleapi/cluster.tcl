@@ -479,6 +479,7 @@ start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
         # 4. EXPIRY ERROR HANDLING: missing key and invalid TTL (< -1)
         assert_error "*ERR SetExpire failed*" {R 0 test.openkey_cross_slot $key_declared "{k2}nonexistent" expire 100000}
         assert_error "*ERR SetExpire failed*" {R 0 test.openkey_cross_slot $key_declared $key_target_expire expire -10}
+        assert_error "*ERR SetExpire failed*" {R 0 test.openkey_cross_slot $key_declared $key_target_expire expire 9223372036854775807}
 
         # 5. EXPIRY CANCELLATION: VALKEYMODULE_NO_EXPIRE (-1) cancels expiration (PERSIST)
         assert_equal "OK" [R 0 test.openkey_cross_slot $key_declared $key_target_expire expire -1]

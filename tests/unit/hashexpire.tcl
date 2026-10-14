@@ -4854,7 +4854,9 @@ start_server {tags {"hashexpire needs:debug external:skip"}} {
         assert_encoding $encoding myhash
     }
 
-    foreach {encoding max_entries} {listpack 128 hashtable 0} {
+    # Setting a field TTL converts the hash to hashtable encoding, so only
+    # that encoding can hold the expired field these tests rely on.
+    foreach {encoding max_entries} {hashtable 0} {
         r config set hash-max-listpack-entries $max_entries
 
         foreach {name cmd expected} [list \
@@ -4924,7 +4926,9 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {} [$replica hget myhash expired]
         }
 
-        foreach {encoding max_entries} {listpack 128 hashtable 0} {
+        # Setting a field TTL converts the hash to hashtable encoding, so only
+        # that encoding can hold the expired field these tests rely on.
+        foreach {encoding max_entries} {hashtable 0} {
             $primary config set hash-max-listpack-entries $max_entries
             $replica config set hash-max-listpack-entries $max_entries
 
@@ -4983,7 +4987,9 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
         }
     }
 
-    foreach {encoding max_entries} {listpack 128 hashtable 0} {
+    # Setting a field TTL converts the hash to hashtable encoding, so only
+    # that encoding can hold the expired field these tests rely on.
+    foreach {encoding max_entries} {hashtable 0} {
         r config set hash-max-listpack-entries $max_entries
 
         test "HPERSIST of an expired field is not applied when loading the AOF - $encoding" {

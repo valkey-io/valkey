@@ -39,6 +39,15 @@ start_server {tags {"dump"}} {
         r get foo
     } {bar}
 
+    test {RESTORE with relative TTL that overflows when basetime is added} {
+        r set foo bar
+        set encoded [r dump foo]
+        r del foo
+        assert_error "ERR invalid expire time in 'restore' command" {r restore foo 9223372036854775807 $encoded}
+        assert_error "ERR invalid expire time in 'restore' command" {r restore foo 9223372036854770000 $encoded}
+        assert_equal 0 [r exists foo]
+    }
+
     test {RESTORE with ABSTTL in the past} {
         r set foo bar
         set encoded [r dump foo]

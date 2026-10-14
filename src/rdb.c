@@ -3526,7 +3526,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 sdsfree(key);
                 goto eoferr;
             }
-        } else if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now) {
+        } else if (expiretime < -1 ||
+                   (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now)) {
+            /* A negative expire is dropped on every node, not just a primary,
+             * since active expire asserts that expire times are non-negative. */
             if (rdbflags & RDBFLAGS_FEED_REPL) {
                 /* Caller should have created replication backlog,
                  * and now this path only works when rebooting,

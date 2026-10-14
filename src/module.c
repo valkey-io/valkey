@@ -12337,6 +12337,12 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
             robj *field =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
             p = lpNext(objectGetVal(o), p);
+            /* Skip fields not visible in the current context, like HSCAN. */
+            if (!hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(objectGetVal(o), p))) {
+                decrRefCount(field);
+                p = lpNext(objectGetVal(o), p);
+                continue;
+            }
             vstr = lpGetValue(p, &vlen, &vll);
             robj *value =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
@@ -12494,6 +12500,11 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
             }
             p = lpNext(lp, p);
             if (!p) break;
+            /* Skip fields not visible in the current context, like HSCAN. */
+            if (!hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(lp, p))) {
+                p = lpNext(lp, p);
+                continue;
+            }
             unsigned int vlen;
             long long vll;
             char vbuf[LONG_STR_SIZE];

@@ -102,8 +102,8 @@ void hashTypeUpdateVolatileCount(robj *o, long delta) {
 }
 
 /* Return the number of fields carrying an expiry, INCLUDING expired fields
- * that have not been reaped yet. O(1) for listpack (aggregate header peek);
- * O(buckets) for hashtable (vset walk). Returns 0 when none. */
+ * that have not been reaped yet. O(1) for both encodings: the listpack keeps
+ * an aggregate header and the vset tracks its size. Returns 0 when none. */
 long long hashTypeVolatileCount(robj *o) {
     serverAssert(objectGetType(o) == OBJ_HASH);
 

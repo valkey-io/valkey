@@ -2,7 +2,6 @@
 #define VOLATILESET_H
 
 #include <stddef.h>
-#include <stddef.h>
 #include <stdbool.h>
 
 #include "hashtable.h"
@@ -60,6 +59,7 @@
  *
  * Utilities:
  *     bool vsetIsEmpty(vset *set) - used in order to check if a given set has any entries.
+ *     size_t vsetSize(vset *set) - returns the number of entries in the set. O(1).
  *
  * Iteration:
  *     void vsetInitIterator(vset *set, vsetIterator *it) - used to initialize a new vset iterator.
@@ -73,12 +73,12 @@
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
 /* Callback to be optionally provided to vsetRemoveExpired. when item is removed from the vset this callback will also be applied. */
 typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
-// vset is a tagged bucket with its size property
+/* A vset is a tagged pointer to its root bucket plus the number of tracked entries.
+ * A NULL bucket means the set is not initialized (see vsetIsValid) and vsetInit must
+ * be called before using it. A zeroed vset is therefore a valid "not initialized" vset. */
 typedef struct vset {
-    /* tagged root bucket, a bucket which is NULL can't be used and must be
-     * reinitialized with vsetInit */
     void *bucket;
-    size_t size; /* number of tracked entries */
+    size_t size;
 } vset;
 
 typedef uint8_t vsetIterator[600];

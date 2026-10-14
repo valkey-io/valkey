@@ -58,7 +58,6 @@
 #include "throttle_repl.h"
 #include "util.h"
 #include "forkless.h"
-#include "vset.h"
 
 #include "eval.h"
 #include "bgiteration.h"
@@ -7638,8 +7637,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-     * so we avoid these pointless loops when they're not going to do anything. */
+        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+         * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;

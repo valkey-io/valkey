@@ -245,6 +245,17 @@ void linkClient(client *c) {
     }
 }
 
+/* Upgrade a linked client's connection to high priority. unlinkClient()
+ * decrements the priority counter for any priority connection, so a client
+ * promoted after linkClient() must be counted here. */
+int clientSetConnHighPriority(client *c) {
+    bool was_priority = connIsPriority(c->conn);
+    int ret = connSetPriority(c->conn, true);
+    /* connSetPriority() sets the flag before it can fail, so check the flag. */
+    if (!was_priority && connIsPriority(c->conn)) server.stat_num_active_priority_clients++;
+    return ret;
+}
+
 /* Initialize client authentication state. */
 static void clientSetDefaultAuth(client *c) {
     /* If the default user does not require authentication, the user is

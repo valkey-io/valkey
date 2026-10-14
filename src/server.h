@@ -3218,6 +3218,7 @@ void unlinkClient(client *c);
 void removeFromServerClientList(client *c);
 int writeToClient(client *c);
 void linkClient(client *c);
+int clientSetConnHighPriority(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
 void initSharedQueryBuf(void);

@@ -1446,7 +1446,7 @@ void syncCommand(client *c) {
     serverLog(LL_NOTICE, "Replica %s asks for synchronization", replicationGetReplicaName(c));
     /* Upgrade incoming replica connection to high priority so that replication
      * command streaming and ACK heartbeats are not delayed by normal client commands. */
-    if (connSetPriority(c->conn, true) == C_ERR) {
+    if (clientSetConnHighPriority(c) == C_ERR) {
         serverLog(LL_WARNING, "Failed to upgrade priority for replica connection %d", c->conn->fd);
     }
 

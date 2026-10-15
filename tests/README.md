@@ -72,6 +72,133 @@ The minimal debugger comes with the following predefined functions.
 * Press `c` to continue past the breakpoint.
 * Press `i` to print local variables.
 
+Writing tests that don't flake
+------------------------------
+
+Most test failures in CI are not bugs in the server but tests that assume
+something has already happened. The server does its work asynchronously
+(replication, cluster gossip, background saves, expiry, lazy free), and CI
+runners are slower and noisier than a development machine, especially under
+`--valgrind`, the sanitizer builds, TLS and macOS. The checklist below covers
+the patterns that have needed a follow-up fix most often, in roughly that order.
+Both authors and reviewers should check new or changed tests against it.
+
+1. **Don't use `after` to wait for the server.** `after 1000` is a guess about how
+   fast the server is. Poll for the condition instead:
+
+   ```tcl
+   wait_for_condition 50 100 {
+       [s rdb_bgsave_in_progress] eq 0
+   } else {
+       fail "bgsave did not finish"
+   }
+   ```
+
+   `wait_for_condition maxtries delay` gives the condition `maxtries * delay`
+   milliseconds. Be generous: a budget that passes locally with margin to spare
+   can still time out under valgrind, which is often 10x slower.
+
+2. **Scale budgets for slow modes.** When a wait is long by nature (a full sync,
+   a large migration), scale it: `[expr {$::valgrind ? 7000 : 700}]`. For
+   workload sizes, scale the other way down, e.g.
+   `set key_count [expr {$::valgrind ? 10000 : 40000}]`.
+
+3. **Don't assert on state right after the command that changes it.** `DBSIZE`
+   after a delete on a replica, `INFO` fields after a config change, `CLUSTER`
+   output after a topology change: all of these settle asynchronously. Put the
+   assertion inside `wait_for_condition`.
+
+4. **Wait for replication and cluster convergence explicitly.** Before asserting
+   on a replica or a peer, use the helper that matches what you need:
+   `wait_for_ofs_sync`, `wait_replica_online`, `wait_for_sync`,
+   `wait_for_slot_state`, `wait_for_cluster_state`,
+   `wait_for_cluster_propagation`, or a poll on `debug digest`. Gossip and
+   `PSYNC` are not instant.
+
+5. **Read related stats atomically.** Two consecutive `INFO` calls can straddle
+   background traffic (replication keepalives, expiry). Compare fields from one
+   `INFO` reply, or wrap several reads in `MULTI`/`EXEC`.
+
+6. **Give log-message waits a real budget and assert the count.**
+   `wait_for_log_messages idx patterns from_line maxtries delay` has the same
+   budget arithmetic as `wait_for_condition`. When the test depends on a message
+   appearing exactly N times, assert it with `count_log_message` rather than
+   assuming the first match is the only one.
+
+7. **Avoid tight bounds on time.** Latency and duration assertions
+   (`assert_range` on elapsed time, `LATENCY` output, `usec_per_call`) are the
+   first thing to fail on a loaded runner. Widen the range, or assert on an
+   ordering or a lower bound instead of an upper bound. Use TTLs of at least one
+   second and margins of at least two seconds when comparing against the clock.
+
+8. **Don't assume a background operation has finished.** `BGSAVE`, `BGREWRITEAOF`,
+   active expiry, lazy free and fork children all complete on their own
+   schedule. Poll `rdb_bgsave_in_progress`, `aof_rewrite_in_progress`, the
+   relevant log line, or the key count.
+
+9. **Clean up, even when the test fails.** Delete the keys you created and
+   restore any `CONFIG SET` or `DEBUG` override. If a test can fail between the
+   override and the restore, put the body in a `catch` and restore in the error
+   path. A leaked `rdb-key-save-delay` or `repl-diskless-sync-delay` turns every
+   later test in the file into a mystery failure.
+
+10. **Treat output-buffer-limit tests as racy by construction.** A client can be
+    disconnected before or after your next poll depending on when the write
+    handler runs, and IO threads widen that window. Loop with a bound and accept
+    either "omem exceeded the limit" or "client disconnected" as success.
+
+11. **Synchronize deferred and blocked clients.** With a deferring client
+    (`valkey_deferring_client`), `$rd read` the reply before asserting on the
+    effect of the command. Before unblocking a blocked client, confirm it is
+    blocked with `wait_for_blocked_clients_count`.
+
+12. **Probe for platform features and skip when absent.** tmpfs behavior, MPTCP,
+    IPv6, TLS and macOS-specific paths differ between runners. Use the existing
+    tags (`tls:skip`, `valgrind:skip`, `ipv6`, `needs:*`) or probe the capability
+    at runtime and skip the test rather than asserting on a platform assumption.
+
+13. **Make failover tests deterministic.** Replica election rank depends on
+    replication offset and timing. Pin the winner with
+    `cluster-replica-validity-factor 0` in the cluster overrides, or use
+    `DEBUG CLUSTER-FAILOVER-DELAY` / packet drops to force the order you need.
+
+14. **Do enough work to trigger what you are testing.** A test that writes 20
+    keys to exercise a path that triggers at 100 passes by luck. Size the
+    workload so the behavior is forced, not probable.
+
+15. **Don't sleep for `serverCron`.** Behavior driven by the cron (query buffer
+    resize, dict rehash and resize, LRU/LFU touch, client eviction) runs at `hz`,
+    which is dynamic by default. Either freeze it during setup with
+    `DEBUG PAUSE-CRON 1` and release it, or set `dynamic-hz no` and a high `hz`,
+    then `wait_for_condition` on the state the cron produces.
+
+16. **Stop replication PINGs before measuring offsets or network stats.** The
+    primary pings replicas every `repl-ping-replica-period` seconds, which moves
+    `master_repl_offset` and the `total_net_*` counters under your assertion.
+    Raise the period on the primary for the duration of the measurement.
+
+17. **Wait for a closed client to be freed.** `CLIENT KILL`, closing a connection,
+    and dropping a `WATCH`ing client all take effect after the command returns.
+    Poll `connected_clients`, `watching_clients`
+    (`wait_for_watched_clients_count`) or `blocked_clients` rather than asserting
+    on the very next command.
+
+18. **Let the cluster converge around `valkey-cli --cluster` operations.** Before
+    and after `add-node`, `reshard`, `rebalance` or `check`, wait for every node
+    to agree on membership (`wait_for_cluster_size`, `wait_for_cluster_propagation`)
+    and for `--cluster check` to exit 0. The CLI returns before gossip has
+    finished.
+
+19. **Sentinel: wait for the Sentinel timer, not for your command.** After
+    `SENTINEL SET`, `SENTINEL RESET`, or shrinking `down-after-milliseconds`,
+    `failover-timeout` or the tilt period for test speed, the effect lands on the
+    next Sentinel timer tick and INFO exchange. Wait for the resulting state
+    (SDOWN flag, new leader, reconnected instance) with a generous budget rather
+    than acting immediately.
+
+When a test does flake in CI, fix the synchronization rather than retrying or
+widening a single timeout; the next slower runner will find the same gap.
+
 Tags
 ----
 

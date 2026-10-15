@@ -1802,7 +1802,7 @@ void freeClientReplicationData(client *c) {
  *                    a connection that has integrity checks (such as TLS).
  * lz4: accepts LZ4 streaming-compressed replication payloads.
  * zstd: accepts Zstd streaming-compressed replication payloads.
- * inband-repl: supports RDB_OPCODE_UPDATE for inline replication during forkless save.
+ * inband-repl: supports RDB_OPCODE_UPDATE for inline replication during forkless sync.
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it

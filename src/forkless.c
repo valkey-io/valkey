@@ -849,7 +849,7 @@ done:
     return ret;
 }
 
-void forklessSaveComplete(bool terminated, void *privdata) {
+static void forklessSaveComplete(bool terminated, void *privdata) {
     serverAssert(onServerMainThread());
     serverLog(LL_NOTICE, "forkless-save: completion proc - %s", (terminated) ? "terminated" : "ok");
 

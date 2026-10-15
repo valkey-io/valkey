@@ -19,6 +19,19 @@ test "SENTINEL CONFIG GET for patterns" {
     assert_match {announce-hostnames yes announce-ip*announce-port 1234} [S 1 SENTINEL CONFIG GET announce*]
 }
 
+test "SENTINEL CONFIG GET aclfile" {
+    assert_match {aclfile {}} [S 1 SENTINEL CONFIG GET aclfile]
+    assert_match {*aclfile*} [S 1 SENTINEL CONFIG GET acl*]
+    assert_match {*aclfile*} [S 1 SENTINEL CONFIG GET *file]
+}
+
+test "SENTINEL CONFIG SET aclfile is rejected" {
+    catch {[S 1 SENTINEL CONFIG SET aclfile /tmp/test.acl]} e
+    if {![string match "*Invalid argument*" $e]} {
+        fail "Expected Invalid argument error when attempting to set aclfile"
+    }
+}
+
 test "SENTINEL CONFIG SET duplicate variables" {
     catch {[S 1 SENTINEL CONFIG SET resolve-hostnames yes announce-port 1234 announce-port 100]} e
     if {![string match "*Duplicate argument*" $e]} {

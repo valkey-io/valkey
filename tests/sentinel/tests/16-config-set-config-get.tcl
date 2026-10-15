@@ -37,32 +37,35 @@ test "SENTINEL CONFIG GET aclfile" {
     close $fp
 
     file copy -force $cfgfile $cfgfile_bak
-    delete_lines_with_pattern $cfgfile $tmpfile {^user }
-    set fp [open $cfgfile a]
-    puts $fp "aclfile $aclfile"
-    close $fp
-
-    kill_instance sentinel $sentinel_id
-    restart_instance sentinel $sentinel_id
-    wait_for_condition 200 50 {
-        [catch {S $sentinel_id PING}] == 0
-    } else {
-        fail "Sentinel $sentinel_id did not come back after restart"
-    }
-
     try {
-        assert_equal [list aclfile $aclfile] [S $sentinel_id SENTINEL CONFIG GET aclfile]
-        assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET acl*]
-        assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET *file]
-    } finally {
+        delete_lines_with_pattern $cfgfile $tmpfile {^user }
+        set fp [open $cfgfile a]
+        puts $fp "aclfile $aclfile"
+        close $fp
+
         kill_instance sentinel $sentinel_id
-        file copy -force $cfgfile_bak $cfgfile
-        file delete -force $cfgfile_bak $aclfile
         restart_instance sentinel $sentinel_id
         wait_for_condition 200 50 {
             [catch {S $sentinel_id PING}] == 0
         } else {
             fail "Sentinel $sentinel_id did not come back after restart"
+        }
+
+        assert_equal [list aclfile $aclfile] [S $sentinel_id SENTINEL CONFIG GET aclfile]
+        assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET acl*]
+        assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET *file]
+    } finally {
+        catch {kill_instance sentinel $sentinel_id}
+        if {[file exists $cfgfile_bak]} {
+            file copy -force $cfgfile_bak $cfgfile
+            file delete -force $cfgfile_bak
+        }
+        file delete -force $aclfile
+        catch {restart_instance sentinel $sentinel_id}
+        catch {
+            wait_for_condition 200 50 {
+                [catch {S $sentinel_id PING}] == 0
+            }
         }
     }
 }

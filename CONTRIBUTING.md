@@ -47,8 +47,11 @@ in the pull request description, where xyz is the issue number.
 
 ## Before you open the pull request
 
-These are the things CI checks on every pull request. Getting them right
-before you open it saves a review round.
+CI checks the DCO sign-off and clang-format on every pull request (formatting
+is skipped for documentation-only changes), so getting them right before you
+open it saves a review round. The daily workflow is not run on pull requests;
+run it yourself when your change touches something the default CI doesn't
+cover.
 
 ### Developer Certificate of Origin
 
@@ -166,7 +169,6 @@ Notes:
 * The scheduled part of this workflow is gated to `valkey-io/valkey`, but manual
   `workflow_dispatch` runs work for forks.
 
-Thanks!
 ## Use of AI tools
 
 You own the quality of the code that you submit to the project. The Valkey
@@ -330,3 +332,5 @@ own commits during review; the pull request title and description become the
 commit message, so keep them up to date as the change evolves. After the merge,
 a maintainer decides whether the change is backported to release branches;
 only bug, security and test fixes are eligible.
+
+Thanks!

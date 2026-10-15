@@ -23,6 +23,48 @@ test "SENTINEL CONFIG GET aclfile" {
     assert_match {aclfile {}} [S 1 SENTINEL CONFIG GET aclfile]
     assert_match {*aclfile*} [S 1 SENTINEL CONFIG GET acl*]
     assert_match {*aclfile*} [S 1 SENTINEL CONFIG GET *file]
+
+    # Restart Sentinel with a configured nonempty aclfile
+    set sentinel_id 1
+    set dirname "sentinel_$sentinel_id"
+    set cfgfile [file join $dirname "sentinel.conf"]
+    set cfgfile_bak [file join $dirname "sentinel.conf.bak"]
+    set tmpfile [file join $dirname "sentinel.conf.tmp"]
+    set aclfile [file normalize [file join $dirname "test.acl"]]
+
+    set fp [open $aclfile w]
+    puts $fp "user default on nopass ~* &* +@all"
+    close $fp
+
+    file copy -force $cfgfile $cfgfile_bak
+    delete_lines_with_pattern $cfgfile $tmpfile {^user }
+    set fp [open $cfgfile a]
+    puts $fp "aclfile $aclfile"
+    close $fp
+
+    kill_instance sentinel $sentinel_id
+    restart_instance sentinel $sentinel_id
+    wait_for_condition 200 50 {
+        [catch {S $sentinel_id PING}] == 0
+    } else {
+        fail "Sentinel $sentinel_id did not come back after restart"
+    }
+
+    try {
+        assert_equal [list aclfile $aclfile] [S $sentinel_id SENTINEL CONFIG GET aclfile]
+        assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET acl*]
+        assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET *file]
+    } finally {
+        kill_instance sentinel $sentinel_id
+        file copy -force $cfgfile_bak $cfgfile
+        file delete -force $cfgfile_bak $aclfile
+        restart_instance sentinel $sentinel_id
+        wait_for_condition 200 50 {
+            [catch {S $sentinel_id PING}] == 0
+        } else {
+            fail "Sentinel $sentinel_id did not come back after restart"
+        }
+    }
 }
 
 test "SENTINEL CONFIG SET aclfile is rejected" {

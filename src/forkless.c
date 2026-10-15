@@ -472,10 +472,9 @@ static void waitForBuffersToDrain(forklessSaveInfo *saveInfo) {
     monotime startTimeMono;
     elapsedStart(&startTimeMono);
 
-    const unsigned long loopDelayUs = 100000; // 100ms
-
     /* Give clients a chance to flush COBs */
     while (elapsedUs(startTimeMono) < (unsigned long long)server.repl_timeout * 1000000) {
+        const unsigned long loopDelayUs = 100000; // 100ms
         usleep(loopDelayUs);
         atomic_thread_fence(__ATOMIC_ACQUIRE);
 

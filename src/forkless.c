@@ -242,7 +242,7 @@ static void *forklessSaveProcessor(void *arg) {
     if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
         err = transitionRioReplicaCobToRioConnset(saveInfo);
         rioIsConnset = (err == C_OK);
-        serverLog(LL_NOTICE, "forkless-save: transition to connset %s, %d clients remain",
+        serverLog(LL_DEBUG, "forkless-save: transition to connset %s, %d clients remain",
                   rioIsConnset ? "OK" : "FAILED", (int)listLength(saveInfo->u.repl.clients));
     }
 

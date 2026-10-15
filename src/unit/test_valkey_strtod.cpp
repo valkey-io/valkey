@@ -62,8 +62,7 @@ static int parse_consumed(const char *s, size_t slen, char *end, int err) {
 }
 
 /* Hex floats 9.0 accepted via libc strtod.
- * ZADD/ZINCRBY -> string2d; closed ranges -> valkey_strtod_n;
- * exclusive ranges strip a leading '(' then call valkey_strtod_n. */
+ * ZADD/ZINCRBY -> string2d; closed ranges -> valkey_strtod_n. */
 TEST_F(ValkeyStrtodTest, TestHexFloat) {
     const char *inputs[] = {
         "0x10",
@@ -80,16 +79,7 @@ TEST_F(ValkeyStrtodTest, TestHexFloat) {
         "0xg",
         "0xp4",
     };
-    const char *exclusive[] = {
-        "(0x10",
-        "(0x0",
-        "(0x100",
-        "(0x1p4",
-        "(0x1.0p4",
-        "(0xg",
-    };
     size_t n = sizeof(inputs) / sizeof(inputs[0]);
-    size_t nexcl = sizeof(exclusive) / sizeof(exclusive[0]);
     size_t i;
 
     for (i = 0; i < n; i++) {
@@ -132,33 +122,6 @@ TEST_F(ValkeyStrtodTest, TestHexFloat) {
         }
         if (libc_ok && string2d_ok) {
             EXPECT_DOUBLE_EQ(string2d_val, libc_val);
-        }
-    }
-
-    for (i = 0; i < nexcl; i++) {
-        const char *s = exclusive[i];
-        size_t slen = strlen(s);
-        const char *inner = s + 1;
-        size_t innerlen = slen - 1;
-        char *libc_end = NULL;
-        char *vkn_end = NULL;
-        double libc_val;
-        double vkn_val;
-        int libc_ok;
-        int vkn_ok;
-
-        errno = 0;
-        libc_val = strtod(inner, &libc_end);
-        libc_ok = parse_consumed(inner, innerlen, libc_end, errno);
-
-        errno = 0;
-        vkn_val = valkey_strtod_n(inner, innerlen, &vkn_end);
-        /* zslParseRange: eptr[0] != '\0' means the range token is invalid. */
-        vkn_ok = (errno == 0 && vkn_end != NULL && vkn_end[0] == '\0' && !isnan(vkn_val));
-
-        EXPECT_EQ(vkn_ok, libc_ok);
-        if (libc_ok && vkn_ok) {
-            EXPECT_DOUBLE_EQ(vkn_val, libc_val);
         }
     }
 }

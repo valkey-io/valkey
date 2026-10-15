@@ -1,5 +1,6 @@
 #include "valkey_strtod.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -14,19 +15,18 @@ const ffc_parse_options valkey_strtod_options = {
     FFC_PRESET_GENERAL | FFC_FORMAT_FLAG_ALLOW_LEADING_PLUS,
     '.'};
 
-/* ffc does not implement C99 hex-floats. 9.0 accepted them via libc strtod,
- * and write commands propagate the client argv, so a 9.1 replica must parse
- * the same 0x / 0X scores a 9.0 primary already committed. */
-#define VALKEY_STRTOD_HEX_BUFLEN (5 * 1024)
+/* ffc rejects hex-floats and leading whitespace; 9.0 strtod accepted both. */
+#define VALKEY_STRTOD_LIBC_BUFLEN (5 * 1024)
 
-static int valkey_strtod_is_hex(const char *s, size_t len) {
+static int valkey_strtod_use_libc(const char *s, size_t len) {
     size_t i = 0;
+    if (len > 0 && isspace((unsigned char)s[0])) return 1;
     if (len > 0 && (s[0] == '+' || s[0] == '-')) i = 1;
     return (len - i) >= 2 && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X');
 }
 
-static double valkey_strtod_hex(const char *str, size_t len, char **endptr) {
-    char buf[VALKEY_STRTOD_HEX_BUFLEN];
+static double valkey_strtod_libc(const char *str, size_t len, char **endptr) {
+    char buf[VALKEY_STRTOD_LIBC_BUFLEN];
     char *eptr;
     double val;
 
@@ -64,8 +64,8 @@ double valkey_strtod_n(const char *str, size_t len, char **endptr) {
     double temp = 0.0;
     ffc_result answer;
 
-    if (valkey_strtod_is_hex(str, len)) {
-        return valkey_strtod_hex(str, len, endptr);
+    if (valkey_strtod_use_libc(str, len)) {
+        return valkey_strtod_libc(str, len, endptr);
     }
 
     answer = ffc_from_chars_double_options(str, str + len, &temp, valkey_strtod_options);

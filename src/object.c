@@ -926,19 +926,21 @@ void dismissStreamObject(robj *o, size_t size_hint) {
     }
 }
 
+/* See dismissObject() */
 void dismissPathHashObject(robj *o, size_t size_hint) {
     pathHashObject *path_hash = objectGetVal(o);
     rax *index = path_hash->index;
     if (raxSize(index) == 0) return;
 
-    /* We iterate and dismiss the payloads only when the approximate average
-     * serialized payload size is bigger than a page size, since otherwise
-     * there's a high chance we'll just iterate without releasing anything. */
-    if (size_hint / raxSize(index) < server.page_size) return;
-
     /* Split the serialized size evenly across the payloads, so each payload
      * can dismiss its fields based on the estimated average field size. */
     size_t payload_size_hint = size_hint / raxSize(index);
+
+    /* We iterate and dismiss the payloads only when the approximate average
+     * serialized payload size is bigger than a page size, since otherwise
+     * there's a high chance we'll just iterate without releasing anything. */
+    if (payload_size_hint < server.page_size) return;
+
     raxIterator iter;
     raxStart(&iter, index);
     raxSeek(&iter, "^", NULL, 0);
@@ -965,8 +967,8 @@ void dismissObject(robj *o, size_t size_hint) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-     * so we avoid these pointless loops when they're not going to do anything. */
+        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+         * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     if (objectGetRefcount(o) != 1) return;
     switch (objectGetType(o)) {

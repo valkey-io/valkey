@@ -48,8 +48,10 @@ start_server {tags {"dismiss external:skip"}} {
 
         # path hash
         r phset bigpathhash1 path1 FIELDS 1 field1 $bigstr    ; # hash payload encoding
-        for {set i 0} {$i < 128} {incr i} {
-            r phset bigpathhash2 path$i FIELDS 1 $i $64bytes ; # listpack payload encoding
+        for {set i 0} {$i < 8} {incr i} {
+            for {set j 0} {$j < 64} {incr j} {
+                r phset bigpathhash2 path$i FIELDS 1 field$j $64bytes ; # listpack payload encoding
+            }
         }
 
         set digest [debug_digest]

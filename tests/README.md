@@ -138,9 +138,10 @@ Both authors and reviewers should check new or changed tests against it.
 
 9. **Clean up, even when the test fails.** Delete the keys you created and
    restore any `CONFIG SET` or `DEBUG` override. If a test can fail between the
-   override and the restore, put the body in a `catch` and restore in the error
-   path. A leaked `rdb-key-save-delay` or `repl-diskless-sync-delay` turns every
-   later test in the file into a mystery failure.
+   override and the restore, wrap the body in `with_config <name> <value> {...}`
+   or `with_cleanup {...} {...}` (`tests/support/util.tcl`) so the restore runs
+   on failure too. A leaked `rdb-key-save-delay` or `repl-diskless-sync-delay`
+   turns every later test in the file into a mystery failure.
 
 10. **Treat output-buffer-limit tests as racy by construction.** A client can be
     disconnected before or after your next poll depending on when the write
@@ -156,11 +157,18 @@ Both authors and reviewers should check new or changed tests against it.
     IPv6, TLS and macOS-specific paths differ between runners. Use the existing
     tags (`tls:skip`, `valgrind:skip`, `ipv6`, `needs:*`) or probe the capability
     at runtime and skip the test rather than asserting on a platform assumption.
+    Valgrind in particular has no 80-bit floating point: `strtold("+inf")` can
+    return a finite value, so a test that expects an Infinity or overflow error
+    from a float command passes natively and fails under valgrind. Tag those
+    `valgrind:skip` (see `INCRBYFLOAT`/`HINCRBYFLOAT` tests in
+    `tests/unit/type/incr.tcl` and `hash.tcl`).
 
 13. **Make failover tests deterministic.** Replica election rank depends on
     replication offset and timing. Pin the winner with
-    `cluster-replica-validity-factor 0` in the cluster overrides, or use
-    `DEBUG CLUSTER-FAILOVER-DELAY` / packet drops to force the order you need.
+    `cluster-replica-no-failover yes` on the replicas that must not take over,
+    or use `DEBUG CLUSTER-FAILOVER-DELAY` / packet drops to force the order you
+    need. `cluster-replica-validity-factor 0` only keeps a stale replica
+    eligible; it does not choose which one wins.
 
 14. **Do enough work to trigger what you are testing.** A test that writes 20
     keys to exercise a path that triggers at 100 passes by luck. Size the

@@ -28,7 +28,7 @@
 
 ## Integration tests
 - Integration tests live under `tests/` and are written in Tcl.
-- Before adding or changing a test, read "Writing tests that don't flake" in `tests/README.md`: poll with `wait_for_condition` instead of sleeping, scale budgets for `$::valgrind`, wait explicitly for replication and cluster convergence, and restore any config override in a `catch`.
+- Before adding or changing a test, read "Writing tests that don't flake" in `tests/README.md`: poll with `wait_for_condition` instead of sleeping, scale budgets for `$::valgrind`, wait explicitly for replication and cluster convergence, and restore any config override with `with_config` or `with_cleanup`.
 - Run the full integration suite: `make test` (from the repo root).
 - Run a single test file: `./runtest --single <path/to/test.tcl>`
 - Additional specialized suites:

@@ -6004,10 +6004,11 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
 }
 
-/* Called by clusterUpdateState with the number of voting primaries in the
- * NACKED and FAILED_WITHOUT_RESPONSE states. The ACKs we can still end up with
- * are the ACKED and CAN_RESPOND voters, that is size minus those two. Reset the
- * election once they cannot reach quorum. */
+/* Called by clusterUpdateState once a voter NACKed our current election, with
+ * the number of voting primaries in the NACKED and FAILED_WITHOUT_RESPONSE
+ * states. The ACKs we can still end up with are the ACKED and CAN_RESPOND
+ * voters, that is size minus those two. Reset the election once they cannot
+ * reach quorum. */
 static void clusterFailoverAbortIfQuorumUnreachable(int nacked, int failed_without_response) {
     if (!server.cluster->failover_auth_time || !server.cluster->failover_auth_sent) return;
 
@@ -7378,7 +7379,9 @@ void clusterUpdateState(void) {
         }
         dictReleaseIterator(di);
     }
-    clusterFailoverAbortIfQuorumUnreachable(nacked, failed_without_response);
+    /* FAIL voters alone never reset the election: a retry starts with the same
+     * FAIL voters, so it would be reset again as soon as its request goes out. */
+    if (nacked > 0) clusterFailoverAbortIfQuorumUnreachable(nacked, failed_without_response);
 
     /* If we are in a minority partition, change the cluster state
      * to FAIL. */

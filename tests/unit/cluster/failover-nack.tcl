@@ -508,3 +508,61 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
         wait_for_cluster_state ok
     }
 }
+
+# Voters marked FAIL alone must never reset the election, only a NACK can. A
+# retry starts with the same FAIL voters, so it would be reset again as soon
+# as its request goes out, and with CLUSTER FAILOVER that repeats on every
+# event loop iteration. Five voters, quorum 3: V1, V2 and V3 are marked FAIL
+# on the candidate only, so with no NACK at most two ACKs look achievable.
+# They are up and vote, so the election must stay open and be won in the
+# epoch it started in.
+start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
+    set primary_id [R 0 cluster myid]
+    set candidate_cport [expr {[srv -5 port] + 10000}]
+    set r4_id [R 4 cluster myid]
+    set r4_port [srv -4 port]
+    set r4_cport [expr {[srv -4 port] + 10000}]
+
+    set voter_ids {}
+    foreach v {0 1 2 3 4} {
+        lappend voter_ids [R $v cluster myid]
+    }
+    set failed_ids [lrange $voter_ids 1 3]
+
+    test "A majority of voters is marked FAIL on the candidate" {
+        assert_equal $primary_id [dict get [cluster_get_myself 5] slaveof]
+        assert_equal 5 [CI 5 cluster_size]
+        foreach id $failed_ids {
+            send_cluster_bus_packet $candidate_cport [create_cluster_fail_packet \
+                $r4_id $r4_port $r4_cport [CI 5 cluster_current_epoch] $id]
+        }
+        wait_for_condition 1000 10 {
+            [cluster_all_see_flag {5} $failed_ids fail]
+        } else {
+            fail "Candidate did not mark the voters as fail"
+        }
+        # The injected packets cost R4 its link to the candidate; wait for it
+        # to be back so that every voter can answer.
+        wait_for_condition 1000 50 {
+            [has_inbound_links_from 5 $voter_ids]
+        } else {
+            fail "Voters did not re-establish their links to the candidate"
+        }
+    }
+
+    test "Election with a majority of FAIL voters and no NACK is not reset" {
+        set from_line [count_log_lines -5]
+        R 5 CLUSTER FAILOVER FORCE
+        set res [wait_for_log_messages -5 {"*Starting a failover election for epoch *"} $from_line 1000 50]
+        set election_line [lindex $res 1]
+        assert {[cluster_all_see_flag {5} $failed_ids fail]}
+        wait_for_condition 1000 50 {
+            [s -5 role] eq "master"
+        } else {
+            fail "Replica did not win the election"
+        }
+        verify_no_log_message -5 "*cannot reach quorum*" $election_line
+        verify_no_log_message -5 "*Starting a failover election*" $election_line
+        wait_for_cluster_state ok
+    }
+}

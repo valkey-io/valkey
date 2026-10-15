@@ -46,7 +46,11 @@
  *
  * The hash table and ordered index share each item's allocation. The hash
  * table does not free items, so an item must be removed from both structures
- * before the ordered index item is freed. */
+ * before the ordered index item is freed. orderedIndexDelete() frees the item
+ * it removes, so callers using it must remove the item from the hash table
+ * first (see zsetRemoveFromIndex). orderedIndexPopFirst/PopLast() detach
+ * without freeing, so either order works there; the caller frees the item
+ * with orderedIndexItemFree() once it is out of both structures. */
 
 #include "server.h"
 #include "ordered_index.h"

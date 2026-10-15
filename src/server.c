@@ -4032,10 +4032,9 @@ static void propagatePendingCommands(void) {
     serverOpArrayFree(&server.also_propagate);
 }
 
-/* Whether any of the module-jobs / propagation / module-yield post-execution-
- * unit work is pending. Shared by postExecutionUnitOperations() and
- * afterCommand() so the "is there anything to do?" condition for these three
- * sub-systems has a single home instead of being duplicated at both call
+/* Whether any post-execution-unit work is pending. Shared by
+ * postExecutionUnitOperations() and afterCommand() so the "is there anything
+ * to do?" condition has a single home instead of being duplicated at both call
  * sites - static inline costs nothing here since both callers are in this
  * same translation unit. moduleHasPostExecUnitJobs() is a tiny cross-TU
  * accessor rather than reaching into module.c's list directly, so this file
@@ -4044,7 +4043,8 @@ static void propagatePendingCommands(void) {
  * Must stay an OR of every condition below - never drop one as an
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
-    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags ||
+           lazyfreeHasPendingDatabaseFrees();
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4065,11 +4065,9 @@ void postExecutionUnitOperations(void) {
     if (server.execution_nesting) return;
 
     /* Combined pending-work gate: in the overwhelming majority of calls
-     * (e.g. after a plain read-only command like GET) none of the three
-     * sub-systems below have anything queued. Fold all of their "is there
-     * anything to do?" checks into a single branch here so the common case
-     * pays for one memory read + one branch instead of three separate
-     * (partly cross-translation-unit, non-inlinable) function calls.
+     * (e.g. after a plain read-only command like GET) none of the
+     * sub-systems below have anything queued, so check them all in one
+     * branch and skip calling into each of them.
      *
      * Deliberately NOT hinted unlikely() here: unlike the afterCommand()
      * gate below, this function is also called right after queuing a
@@ -4084,6 +4082,8 @@ void postExecutionUnitOperations(void) {
 
         /* Module subsystem post-execution-unit logic */
         modulePostExecutionUnitOperations();
+
+        lazyfreeDrainPendingDatabaseFrees();
     }
 }
 

@@ -1696,6 +1696,13 @@ int loadSingleAppendOnlyFile(char *filename) {
              * since this is AOF, the checks in processCommand are not made
              * anyway.*/
             queueMultiCommand(fakeClient, cmd->flags);
+        } else if (cmd->proc == execCommand) {
+            /* Run EXEC as one execution unit, as call() does, so work deferred
+             * by its commands runs after EXEC has freed them. */
+            enterExecutionUnit(0, 0);
+            cmd->proc(fakeClient);
+            exitExecutionUnit();
+            postExecutionUnitOperations();
         } else {
             cmd->proc(fakeClient);
         }

@@ -231,6 +231,28 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    ## FLUSHALL inside MULTI/EXEC, replayed at startup
+    create_aof_manifest $aof_dirpath $aof_manifest_file {
+        append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+    }
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set foo bar]
+        append_to_aof [formatCommand flushall]
+        append_to_aof [formatCommand exec]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+MULTI+FLUSHALL: Keyspace is empty and usable after load" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal 0 [$client dbsize]
+            wait_lazyfree_done $client
+            assert_equal OK [$client set foo baz]
+            assert_equal baz [$client get foo]
+        }
+    }
+
     start_server {overrides {appendonly {yes}}} {
         test {Server should not try to convert DEL into EXPIREAT for EXPIRE -1} {
             r set x 10

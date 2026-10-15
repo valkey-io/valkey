@@ -1219,6 +1219,7 @@ werr:
     if (saveInfo->u.repl.clients) {
         resumeClientsAndFreeClientList(saveInfo, false);
     }
+    rioFreeReplicaCOB(&saveInfo->save_rio);
     zfree(saveInfo);
     serverLog(LL_WARNING, "Error in forklessSaveToSockets before starting thread");
     return C_ERR;

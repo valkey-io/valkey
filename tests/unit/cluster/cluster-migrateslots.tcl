@@ -162,6 +162,10 @@ proc set_debug_prevent_pause {value} {
     for {set i 0} {$i < [llength $::servers]} {incr i} {
         assert_match "OK" [R $i DEBUG SLOTMIGRATION PREVENT-PAUSE $value]
     }
+
+    if {$value} {
+        test_defer_fail { set_debug_prevent_pause 0 }
+    }
 }
 
 proc set_debug_prevent_failover {value} {
@@ -294,7 +298,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16383 NODE $node0_id}
         R 2 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
-    } undefined {} {
         set_debug_prevent_pause 0
     }
 
@@ -379,7 +382,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         assert_equal [dict get $export_migration remaining_repl_size] 0
         assert_equal [dict get $import_migration remaining_repl_size] 0
-    } undefined {} {
+
         set_debug_prevent_pause 0
     }
 
@@ -405,10 +408,9 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     }
 
         # Cleanup
+        set_debug_prevent_pause 0
         assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 1000]
         assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 1000]
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Manual and atomic slot migration are mutually exclusive" {
@@ -437,7 +439,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         wait_for_migration_field 2 $jobname state failed
         assert_match {*Slots are being manually imported*} [dict get [get_migration_by_name 2 $jobname] message]
         assert_match "OK" [R 0 CLUSTER SETSLOT 16383 STABLE]
-    } undefined {} {
+
+        # Cleanup
         set_debug_prevent_pause 0
     }
 
@@ -484,7 +487,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         # Jobs are no longer up, migration logs say cancelled
         assert {[dict get [get_migration_by_name 2 $jobname] state] eq "cancelled"}
         wait_for_migration_field 0 $jobname state failed
-    } undefined {} {
+
+        # Cleanup
         set_debug_prevent_pause 0
     }
 
@@ -535,8 +539,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 2 FLUSHDB SYNC]
             assert_match "OK" [R 2 FUNCTION FLUSH SYNC]
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Single source import - one shot" {
@@ -656,8 +658,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     proc verify_client_flag {idx flag expected_count} {
@@ -708,8 +708,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Import with hz set to 1" {
@@ -810,8 +808,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     # Test with both migrating slot < existing slot and vice versa, since a lot of the
@@ -993,8 +989,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Simultaneous exports" {
@@ -1048,8 +1042,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Multiple slot ranges from same source" {
@@ -1097,8 +1089,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Import slot range with multiple slots" {
@@ -1253,9 +1243,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # Cleanup for the next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "OOM on target aborts migration" {
@@ -1290,9 +1279,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Cleanup for the next test
             assert_match "OK" [R 0 CONFIG SET maxmemory 0]
             assert_match "OK" [R 2 FLUSHDB SYNC]
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Partial data in replica removed on failover" {
@@ -1339,7 +1327,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
         assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
-    } undefined {} {
         set_debug_prevent_pause 0
     }
 
@@ -1386,7 +1373,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Cleanup for the next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
-    } undefined {} {
         set_debug_prevent_pause 0
     }
 
@@ -1423,8 +1409,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER SETSLOT 0 NODE $node0_id]
             wait_for_migration 0 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Export unpauses itself even if slot failover doesn't occur" {
@@ -1631,9 +1615,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
             assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_migration_field 0 $jobname state failed
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "FLUSH on target during import" {
@@ -1672,9 +1655,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # Cleanup
             assert_match "OK" [R 2 FLUSHDB SYNC]
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "FLUSH on source during export" {
@@ -1708,9 +1690,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
                 wait_for_countkeysinslot 0 16383 0
                 wait_for_countkeysinslot 3 16383 0
             }
+
+            # Cleanup
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Import cancelled when source hangs" {
@@ -1746,9 +1729,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
             R 2 CONFIG SET repl-timeout 60
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Export cancelled when target hangs" {
@@ -1784,9 +1766,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
             R 0 CONFIG SET repl-timeout 60
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Import with AUTH on" {
@@ -2058,9 +2039,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field 0 $jobname state failed
             assert_match {*Connection lost to source*} [dict get [get_migration_by_name 0 $jobname] message]
             assert_match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]
+
+            # Cleanup for next test
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Export client buffer enforcement" {
@@ -2098,9 +2080,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # Cleanup for the next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Slot importing with some non-importing data" {
@@ -2167,8 +2148,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration 2 16381
             wait_for_migration 2 16383
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Export client buffer excluded from maxmemory" {
@@ -2229,9 +2208,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
                 # Cleanup for the next test
                 assert_match "OK" [R 2 FLUSHDB SYNC]
             }
+            set_debug_prevent_pause 0
         }
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Migration not cancelled when snapshot takes more time than repl-timeout" {
@@ -2447,8 +2425,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             }
             # Since we are restarting primaries, we need to ensure the cluster becomes stable
             wait_for_cluster_state ok
-        } undefined {} {
-            set_debug_prevent_pause 0
         }
     }
 }
@@ -2542,8 +2518,6 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
         assert_match "OK" [R 2 FLUSHDB SYNC]
         set_debug_prevent_pause 0
         assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 }
 
@@ -2579,8 +2553,6 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
         # Cleanup
         assert_match "OK" [R 0 FLUSHALL SYNC]
         assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Read syncslots establish response timeout" {
@@ -2686,8 +2658,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} ove
         # Cleanup
         set_debug_prevent_pause 0
         assert_match "OK" [R 2 FLUSHALL SYNC]
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 
     test "Imported keys are persisted through AOF" {
@@ -2764,8 +2734,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} ove
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
         assert_equal $slots_start [R 0 CLUSTER SLOTS]
         assert_match "OK" [R 2 FLUSHDB SYNC]
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 }
 
@@ -2809,8 +2777,6 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Check the remaining_repl_size log is OK.
         verify_log_message -2 "*Pausing writes (remaining_repl_size is 0) to allow slot migration*" 0
-    } undefined {} {
-        set_debug_prevent_pause 0
     }
 }
 

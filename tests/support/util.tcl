@@ -825,8 +825,13 @@ proc wait_process_paused {pid {retries auto}} {
 }
 
 # The process is resumed automatically when the current test ends. Use
-# pause_process_persistent to keep it paused across tests.
+# pause_process_persistent to keep it paused across tests. Outside a test it
+# behaves like pause_process_persistent.
 proc pause_process pid {
+    if {$::cur_test eq ""} {
+        pause_process_persistent $pid
+        return
+    }
     if {[lsearch -exact $::test_paused_pids $pid] < 0} {
         lappend ::test_paused_pids $pid
     }

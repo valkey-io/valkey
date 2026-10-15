@@ -6,9 +6,9 @@ set ::num_aborted 0
 set ::tests_failed {}
 set ::cur_test ""
 # State changed by the current test that is automatically undone when it ends.
-# Entries are added by pause_process and test_config_set.
+# Entries are added by pause_process and test_defer.
 set ::test_paused_pids {}
-set ::test_config_restores {}
+set ::test_deferred {}
 
 proc fail {msg} {
     error "assertion:$msg"
@@ -201,19 +201,44 @@ proc search_pattern_list {value pattern_list {glob_pattern false}} {
     return 0
 }
 
+# Register a script to run when the current test ends, whether it passed or
+# failed. Deferred scripts run in reverse registration order, in the scope of
+# the test body.
+proc test_defer {script} {
+    lappend ::test_deferred [list always $script]
+}
+
+# Like test_defer, but the script only runs if the test body failed.
+proc test_defer_fail {script} {
+    lappend ::test_deferred [list fail $script]
+}
+
 # Set a config for the duration of the current test only. The previous value
-# is restored when the test ends, whether it passed or failed. 'client' is a
-# command prefix such as r, {r -1}, {R 2} or a client handle.
+# is restored when the test ends. 'client' is a command prefix such as r,
+# {r -1}, {R 2} or a client handle. The restore is skipped if the client can
+# no longer reach a server, e.g. the test shut it down.
+#
+# Don't use it on a server that the test restarts: depending on how the client
+# is resolved, the restore may be skipped or reach another server.
 proc test_config_set {client param value} {
     set old [lindex [uplevel 1 [list {*}$client config get $param]] 1]
     uplevel 1 [list {*}$client config set $param $value]
-    lappend ::test_config_restores [list $client $param $old]
+    test_defer [list test_config_restore $client $param $old]
+}
+
+proc test_config_restore {client param value} {
+    if {[catch {uplevel 1 [list {*}$client ping]}]} {
+        return
+    }
+    uplevel 1 [list {*}$client config set $param $value]
 }
 
 # Undo state left behind by the current test: resume paused processes first
-# so that the servers can be reached, then restore configs in reverse order.
-# Returns a list of errors encountered.
-proc test_cleanup {} {
+# so that the servers can be reached, then run deferred scripts in reverse
+# order. Scripts registered with test_defer_fail only run if 'failed' is true.
+# Must be called with 'uplevel 1' from 'test' so the scripts run in the scope
+# of the test body. Returns a list of errors encountered.
+proc test_cleanup {failed} {
     set errors {}
     foreach pid $::test_paused_pids {
         # The test may have killed or restarted the paused process.
@@ -223,17 +248,19 @@ proc test_cleanup {} {
         }
     }
     set ::test_paused_pids {}
-    foreach entry [lreverse $::test_config_restores] {
-        lassign $entry client param old
-        if {[catch {uplevel #0 [list {*}$client config set $param $old]} err]} {
-            lappend errors "Failed to restore config $param to '$old': $err"
+    set deferred $::test_deferred
+    set ::test_deferred {}
+    foreach entry [lreverse $deferred] {
+        lassign $entry when script
+        if {$when eq "fail" && !$failed} continue
+        if {[catch {uplevel 1 $script} err]} {
+            lappend errors "Deferred cleanup '$script' failed: $err"
         }
     }
-    set ::test_config_restores {}
     return $errors
 }
 
-proc test {name code {okpattern undefined} {tags {}} {finally {}}} {
+proc test {name code {okpattern undefined} {tags {}}} {
     # abort if test name in skiptests
     if {[search_pattern_list $name $::skiptests]} {
         incr ::num_skipped
@@ -295,7 +322,7 @@ proc test {name code {okpattern undefined} {tags {}} {finally {}}} {
     send_data_packet $::test_server_fd testing $name
 
     set ::test_paused_pids {}
-    set ::test_config_restores {}
+    set ::test_deferred {}
 
     set test_start_time [clock milliseconds]
     set code_failed [catch {set retval [uplevel 1 $code]} error]
@@ -303,12 +330,10 @@ proc test {name code {okpattern undefined} {tags {}} {finally {}}} {
         set saved_error_info $::errorInfo
     }
 
-    # Run automatic cleanup and then the user 'finally' block, regardless of
-    # the test outcome. A cleanup failure only fails a test that passed.
-    set cleanup_errors [test_cleanup]
-    if {$finally ne {} && [catch {uplevel 1 $finally} err]} {
-        lappend cleanup_errors "Error in finally block: $err"
-    }
+    # Run automatic cleanup regardless of the test outcome. A cleanup failure
+    # only fails a test that passed. A skipped test does not count as failed.
+    set body_failed [expr {$code_failed && ![string match "skipped:*" $error]}]
+    set cleanup_errors [uplevel 1 [list test_cleanup $body_failed]]
 
     if {$code_failed} {
         set ::errorInfo $saved_error_info

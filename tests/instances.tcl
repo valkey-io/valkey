@@ -463,7 +463,8 @@ proc test {descr code} {
     flush stdout
 
     set ::test_paused_pids {}
-    set ::test_config_restores {}
+    set ::test_deferred {}
+    set ::cur_test $descr
     set code_failed [catch {set retval [uplevel 1 $code]} error]
     if {$code_failed} {
         set saved_error_info $::errorInfo
@@ -471,7 +472,8 @@ proc test {descr code} {
 
     # Run automatic cleanup regardless of the test outcome. A cleanup failure
     # only fails a test that passed.
-    set cleanup_errors [test_cleanup]
+    set cleanup_errors [uplevel 1 [list test_cleanup $code_failed]]
+    set ::cur_test ""
     if {$code_failed} {
         set ::errorInfo $saved_error_info
     } elseif {[llength $cleanup_errors]} {

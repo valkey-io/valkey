@@ -103,6 +103,38 @@ start_server {tags {"modules"}} {
         assert_equal {ele0 ele1 ele2 ele3} [lsort [r zset.members k]]
     }
 
+    foreach {enc max_entries} {listpack 128 btree 0} {
+        r config set zset-max-listpack-entries $max_entries
+
+        test "Module zset lex range with an empty or inverted range starts with no element - $enc" {
+            r del lex
+            r zadd lex 0 a 0 b 0 c 0 d 0 e
+            assert_equal $enc [r object encoding lex]
+            assert_equal {{} END} [r zset.walk lex lex \[c \[b n]
+            assert_equal {{} END} [r zset.walk lex lex ( ( n]
+            assert_equal {{} END} [r zset.walk lex lex-last (e + p]
+            assert_equal {{} END} [r zset.walk lex lex-last \[f + p]
+            assert_equal {} [r zset.rangebylex lex \[c \[b]
+            assert_equal {} [r zset.revrangebylex lex (e +]
+            # A non-empty range still starts on its first element.
+            assert_equal {b c} [r zset.walk lex lex \[b \[d n]
+            assert_equal {d c} [r zset.walk lex lex-last \[b \[d p]
+            assert_error {ERR no such key} {r zset.walk nokey lex - + n}
+        }
+
+        test "Module zset score range with a NaN bound is empty - $enc" {
+            r del k
+            r zadd k 1 a 2 b
+            assert_equal $enc [r object encoding k]
+            assert_equal {{} END} [r zset.walk k score 0 nan n]
+            assert_equal {{} END} [r zset.walk k score nan 5 n]
+            assert_equal {{} END} [r zset.walk k score-last 0 nan p]
+            assert_equal {{} END} [r zset.walk k score-last nan 5 p]
+            assert_equal {a b} [r zset.walk k score 0 5 n]
+        }
+    }
+    r config set zset-max-listpack-entries 128
+
     test "Unload the module - zset" {
         assert_equal {OK} [r module unload zset]
     }

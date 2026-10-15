@@ -37,6 +37,17 @@ test "SENTINEL CONFIG GET aclfile" {
     close $fp
 
     file copy -force $cfgfile $cfgfile_bak
+    rename abort_sentinel_test abort_sentinel_test_orig
+    proc abort_sentinel_test msg [format {
+        catch {
+            if {[file exists %s]} {
+                file copy -force %s %s
+                file delete -force %s
+            }
+            file delete -force %s
+        }
+        abort_sentinel_test_orig $msg
+    } [list $cfgfile_bak] [list $cfgfile_bak] [list $cfgfile] [list $cfgfile_bak] [list $aclfile]]
     try {
         delete_lines_with_pattern $cfgfile $tmpfile {^user }
         set fp [open $cfgfile a]
@@ -55,6 +66,10 @@ test "SENTINEL CONFIG GET aclfile" {
         assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET acl*]
         assert_match "*aclfile [string map {* \\* ? \\? \[ \\[ \] \\]} $aclfile]*" [S $sentinel_id SENTINEL CONFIG GET *file]
     } finally {
+        catch {
+            rename abort_sentinel_test ""
+            rename abort_sentinel_test_orig abort_sentinel_test
+        }
         catch {kill_instance sentinel $sentinel_id}
         if {[file exists $cfgfile_bak]} {
             file copy -force $cfgfile_bak $cfgfile

@@ -20,7 +20,37 @@ The Valkey project is led by a Technical Steering Committee, whose responsibilit
 * Want to help with documentation? [Move on to valkey-doc](https://github.com/valkey-io/valkey-doc)
 * Report a vulnerability? See [SECURITY.md](SECURITY.md)
 
-## Developer Certificate of Origin
+## How to provide a patch or a new feature
+
+1. If it is a major feature or a semantical change, please don't start coding
+straight away: if your feature is not a conceptual fit you'll lose a lot of
+time writing the code without any reason. Start by creating an issue at Github with the
+description of, exactly, what you want to accomplish and why. Use cases are important for
+features to be accepted. Here you can see if there is consensus about your idea.
+
+2. If in step 1 you get an acknowledgment from the project leaders, use the following
+procedure to submit a patch:
+    1. Fork Valkey on GitHub ([HOWTO](https://docs.github.com/en/github/getting-started-with-github/fork-a-repo))
+    1. Create a topic branch (`git checkout -b my_branch`)
+    1. Make the needed changes and commit with a DCO. (`git commit -s`)
+    1. Push to your branch (`git push origin my_branch`)
+    1. Initiate a pull request on GitHub ([HOWTO](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request)).
+       The sections below describe what reviewers look for and what happens next.
+
+3. While developing code, make sure to refer to our [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md),
+which includes documentation about various best practices for writing Valkey code.
+
+4. For minor fixes, open a pull request on GitHub.
+
+To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
+in the pull request description, where xyz is the issue number.
+
+## Before you open the pull request
+
+These are the things CI checks on every pull request. Getting them right
+before you open it saves a review round.
+
+### Developer Certificate of Origin
 
 We respect the intellectual property rights of others and we want to make sure
 all incoming contributions are correctly attributed and licensed. A Developer
@@ -62,7 +92,6 @@ We require that every contribution to Valkey to be signed with a DCO. We require
 usage of known identity (such as a real or preferred name). We do not accept anonymous
 contributors nor those utilizing pseudonyms. A DCO signed commit will contain a line like:
 
-
 ```text
 Signed-off-by: Jane Smith <jane.smith@email.com>
 ```
@@ -76,36 +105,73 @@ If you're contributing code to the Valkey project in any other form, including
 sending a code fragment or patch via private email or public discussion groups,
 you need to ensure that the contribution is in accordance with the DCO.
 
+### Code formatting with clang-format
+
+Valkey enforces code formatting using `clang-format-18`. A CI check runs on
+every pull request and will fail if your code is not formatted correctly.
+
+#### Install clang-format-18
+
+**Option A — pip (any platform):**
+
+```bash
+pip install clang-format==18.1.8
+```
+
+**Option B — apt (Debian/Ubuntu):**
+
+```bash
+sudo apt-get install software-properties-common -y
+wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+sudo apt-get update -y
+sudo apt-get install clang-format-18 -y
+```
+
+#### Format your changes
+
+Run clang-format on the files you modified:
+
+```bash
+clang-format-18 -i src/file_you_changed.c src/file_you_changed.h
+```
+
+To format all source files at once:
+
+```bash
+clang-format-18 -i src/*.c src/*.h
+```
+
+The formatting configuration lives in `src/.clang-format`. Use version 18
+specifically — different versions may produce different output and cause the
+CI check to fail.
+
+### Running the daily workflow on demand for your branch
+
+Use [`.github/workflows/daily.yml`](.github/workflows/daily.yml) with
+`workflow_dispatch` to run daily tests manually on any branch in your fork.
+
+1. Open your fork on GitHub and go to **Actions** -> **Daily**.
+2. Click **Run workflow**.
+3. In the **Branch** dropdown, select the branch that contains the workflow file you want to use.
+4. In the input fields, set:
+   * `use_repo` to your fork (for example, `your-user/valkey`)
+   * `use_git_ref` to your branch name (or a specific commit SHA)
+5. Optionally set `skipjobs`, `skiptests`, `test_args`, and `cluster_test_args`.
+6. Click **Run workflow**.
+
+Notes:
+* To run the full matrix, set `skipjobs` and `skiptests` to `none`.
+  Do not leave them empty, since the workflow input defaults may be applied.
+* The scheduled part of this workflow is gated to `valkey-io/valkey`, but manual
+  `workflow_dispatch` runs work for forks.
+
+Thanks!
 ## Use of AI tools
 
 You own the quality of the code that you submit to the project. The Valkey
 project doesn't impose any limitations on the use of AI tooling as long as the
 contribution meets the quality bar of the project.
-
-## How to provide a patch or a new feature
-
-1. If it is a major feature or a semantical change, please don't start coding
-straight away: if your feature is not a conceptual fit you'll lose a lot of
-time writing the code without any reason. Start by creating an issue at Github with the
-description of, exactly, what you want to accomplish and why. Use cases are important for
-features to be accepted. Here you can see if there is consensus about your idea.
-
-2. If in step 1 you get an acknowledgment from the project leaders, use the following
-procedure to submit a patch:
-    1. Fork Valkey on GitHub ([HOWTO](https://docs.github.com/en/github/getting-started-with-github/fork-a-repo))
-    1. Create a topic branch (`git checkout -b my_branch`)
-    1. Make the needed changes and commit with a DCO. (`git commit -s`)
-    1. Push to your branch (`git push origin my_branch`)
-    1. Initiate a pull request on GitHub ([HOWTO](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request)).
-       The sections below describe what reviewers look for and what happens next.
-
-3. While developing code, make sure to refer to our [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md),
-which includes documentation about various best practices for writing Valkey code.
-
-4. For minor fixes, open a pull request on GitHub.
-
-To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
-in the pull request description, where xyz is the issue number.
 
 ## What makes a pull request easy to review
 
@@ -170,7 +236,9 @@ merged quickly tend to share these traits:
   maintainer may also apply `run-extra-tests` or `run-valgrind-tests` to run
   the daily test matrix on your branch; tests that pass in the default CI
   configuration but fail under valgrind, sanitizers or TLS are the most common
-  reason a merged change needs a follow-up fix.
+  reason a merged change needs a follow-up fix. You can run that matrix on your
+  own fork before opening the pull request; see
+  [Running the daily workflow on demand](#running-the-daily-workflow-on-demand-for-your-branch).
 
 * **Handle the AI review before asking for a human one.** An AI reviewer
   comments on most pull requests shortly after they are opened. Go through its
@@ -262,66 +330,3 @@ own commits during review; the pull request title and description become the
 commit message, so keep them up to date as the change evolves. After the merge,
 a maintainer decides whether the change is backported to release branches;
 only bug, security and test fixes are eligible.
-
-## Code formatting with clang-format
-
-Valkey enforces code formatting using `clang-format-18`. A CI check runs on
-every pull request and will fail if your code is not formatted correctly.
-
-### Install clang-format-18
-
-**Option A — pip (any platform):**
-
-```bash
-pip install clang-format==18.1.8
-```
-
-**Option B — apt (Debian/Ubuntu):**
-
-```bash
-sudo apt-get install software-properties-common -y
-wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list
-sudo apt-get update -y
-sudo apt-get install clang-format-18 -y
-```
-
-### Format your changes
-
-Run clang-format on the files you modified:
-
-```bash
-clang-format-18 -i src/file_you_changed.c src/file_you_changed.h
-```
-
-To format all source files at once:
-
-```bash
-clang-format-18 -i src/*.c src/*.h
-```
-
-The formatting configuration lives in `src/.clang-format`. Use version 18
-specifically — different versions may produce different output and cause the
-CI check to fail.
-
-## Running the daily workflow on demand for your branch
-
-Use [`.github/workflows/daily.yml`](.github/workflows/daily.yml) with
-`workflow_dispatch` to run daily tests manually on any branch in your fork.
-
-1. Open your fork on GitHub and go to **Actions** -> **Daily**.
-2. Click **Run workflow**.
-3. In the **Branch** dropdown, select the branch that contains the workflow file you want to use.
-4. In the input fields, set:
-   * `use_repo` to your fork (for example, `your-user/valkey`)
-   * `use_git_ref` to your branch name (or a specific commit SHA)
-5. Optionally set `skipjobs`, `skiptests`, `test_args`, and `cluster_test_args`.
-6. Click **Run workflow**.
-
-Notes:
-* To run the full matrix, set `skipjobs` and `skiptests` to `none`.
-  Do not leave them empty, since the workflow input defaults may be applied.
-* The scheduled part of this workflow is gated to `valkey-io/valkey`, but manual
-  `workflow_dispatch` runs work for forks.
-
-Thanks!

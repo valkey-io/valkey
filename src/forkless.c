@@ -620,7 +620,7 @@ static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
     }
 
     /* Notify replicas waiting for BGSAVE to complete */
-    updateReplicasWaitingBgsave(saveInfo->err_code, saveInfo->write_target);
+    updateReplicasWaitingBgsave(success ? C_OK : C_ERR, saveInfo->write_target);
 
     currentForklessSave = NULL;
     iteratorOwnsIncomingReplication = false;

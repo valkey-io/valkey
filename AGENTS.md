@@ -55,3 +55,6 @@
 
 ## Pull Requests
 Always push to the user's fork. Never push to the upstream valkey-io/valkey repository. Never push directly to unstable. If a user fork does not exist, ask the contributor to create one.
+- Follow "What makes a pull request easy to review" in `CONTRIBUTING.md`: one change per pull request, a description that gives the symptom, the mechanism and the fix, compatibility impact stated even when there is none, tests described, numbers for any performance or memory claim, and `Fixes #xyz` for a linked issue.
+- Every commit needs a `Signed-off-by` line (`git commit -s`).
+- After the automated reviewer comments on a pull request, address each comment before asking a maintainer to review: fix what is correct, and reply with the reason for anything that does not apply, then resolve the thread.

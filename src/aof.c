@@ -1534,6 +1534,70 @@ static size_t aofFileReader(void *ctx, void *buf, size_t len) {
     return fread(buf, len, 1, (FILE *)ctx) == 1 ? len : 0;
 }
 
+/* Run one command that has already been parsed into argv/argc, using a fake
+ * client. This is used when we replay commands while loading data. The fake
+ * client sends no reply and is never allowed to block.
+ *
+ * The fake client takes over argv. When this function returns, argv has
+ * already been freed (running the command can change argv, so we free the
+ * client's own argv, not the pointer that was passed in).
+ *
+ * If is_multi_start is not NULL, it is set to 1 when the command is a MULTI
+ * (the start of a transaction). If is_multi_start is NULL, the caller is
+ * replaying individual commands and MULTI/EXEC commands are skipped instead
+ * of run.
+ *
+ * Returns C_OK if the command ran. Returns C_ERR if the command name is not
+ * known, or the number of arguments is wrong. In that case *err is set to a
+ * short message that the caller must free. */
+int loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int *is_multi_start, sds *err) {
+    struct serverCommand *cmd;
+
+    if (is_multi_start) *is_multi_start = 0;
+
+    fakeClient->argc = argc;
+    fakeClient->argv = argv;
+    fakeClient->argv_len = argc;
+
+    fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
+    if ((!cmd && !commandCheckExistence(fakeClient, err)) || (cmd && !commandCheckArity(cmd, argc, err))) {
+        freeClientArgv(fakeClient);
+        return C_ERR;
+    }
+
+    if (is_multi_start && cmd->proc == multiCommand) *is_multi_start = 1;
+
+    /* A caller that does not track transactions (is_multi_start == NULL) is
+     * replaying individual commands. Skip MULTI/EXEC framing so each command
+     * applies immediately instead of being queued into a transaction. */
+    if (is_multi_start == NULL && (cmd->proc == multiCommand || cmd->proc == execCommand)) {
+        serverLog(LL_DEBUG, "Skipping %s command while replaying individual commands", cmd->fullname);
+        freeClientArgv(fakeClient);
+        return C_OK;
+    }
+
+    /* Run the command in the context of a fake client */
+    if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
+        /* Note: we don't have to attempt calling evalGetCommandFlags,
+         * since this is a replay, the checks in processCommand are not made
+         * anyway.*/
+        queueMultiCommand(fakeClient, cmd->flags);
+    } else {
+        cmd->proc(fakeClient);
+    }
+
+    /* The fake client should not have a reply */
+    serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
+
+    /* The fake client should never get blocked */
+    serverAssert(fakeClient->flag.blocked == 0);
+
+    /* Clean up. Command code may have changed argv/argc so we use the
+     * argv/argc of the client instead of the local variables. */
+    freeClientArgv(fakeClient);
+    return C_OK;
+}
+
 int loadSingleAppendOnlyFile(char *filename) {
     struct client *fakeClient;
     struct valkey_stat sb;

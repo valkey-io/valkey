@@ -284,6 +284,7 @@ void rdbClearSaveState(time_t save_end);
 
 /* RESP command replay parsers shared by RDB and AOF loading. */
 respParseResult parseRespArgsFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int argc, robj ***argv_out);
+struct client *createAOFClient(void);
 int loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int *is_multi_start, sds *err);
 
 #endif

@@ -10,17 +10,20 @@ start_server {tags {"modules"}} {
     r module load $testmodule
 
     test { blocked client timeout overflow does not crash server } {
+        set before [r block.debug_unblocked_count]
         assert_error {*timeout is out of range*} {
             r block.debug 0 9223372036854775807
         }
 
-        # Let the background thread enqueue the handle before checking the server.
-        after 100
+        # Wait for the background worker to return from UnblockClient so the
+        # rejected handle is enqueued and processed by the main event loop,
+        # then confirm the server is still responsive.
         wait_for_condition 50 100 {
-            [catch {r ping} e] == 0
+            [r block.debug_unblocked_count] > $before
         } else {
-            fail "Server crashed after module timeout overflow"
+            fail "Background worker did not reach UnblockClient"
         }
+        assert_equal {PONG} [r ping]
     }
 
     test { blocked clients time tracking - check blocked command that uses RedisModule_BlockedClientMeasureTimeStart() is tracking background time} {

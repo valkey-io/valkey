@@ -7,6 +7,11 @@
 
 #define UNUSED(x) (void)(x)
 
+/* Counts background workers that have returned from
+ * ValkeyModule_UnblockClient(), so tests can wait for the unblock path to run
+ * rather than relying on a fixed delay. */
+static volatile int block_debug_unblocked = 0;
+
 typedef struct {
     /* Mutex for protecting ValkeyModule_BlockedClientMeasureTime*() API from race
      * conditions due to timeout callback triggered in the main thread. */
@@ -88,6 +93,7 @@ void *BlockDebug_ThreadMain(void *arg) {
         blockClientMeasureTimeEnd(bc, block_privdata, 0);
     block_privdata->myint = rand();
     ValkeyModule_UnblockClient(bc,block_privdata);
+    block_debug_unblocked++;
     return NULL;
 }
 
@@ -277,6 +283,16 @@ int IsBlocked_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     return VALKEYMODULE_OK;
 }
 
+/* BLOCK.DEBUG_UNBLOCKED_COUNT -- Returns how many BLOCK.DEBUG background
+ * workers have returned from ValkeyModule_UnblockClient() so far.
+ */
+int DebugUnblockedCount_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    ValkeyModule_ReplyWithLongLong(ctx, block_debug_unblocked);
+    return VALKEYMODULE_OK;
+}
+
 /* BLOCK.RELEASE [reply] -- Releases the blocked client and produce the specified reply.
  */
 int Release_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -320,6 +336,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx,"block.is_blocked",
         IsBlocked_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"block.debug_unblocked_count",
+        DebugUnblockedCount_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"block.release",

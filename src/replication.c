@@ -63,8 +63,8 @@ void replicationDiscardCachedPrimary(void);
 void replicationResurrectCachedPrimary(connection *conn);
 void replicationResurrectProvisionalPrimary(void);
 void replicationSendAck(void);
-int replicaPutOnline(client *replica);
-void replicaStartCommandStream(client *replica);
+static int replicaPutOnline(client *replica);
+static void replicaStartCommandStream(client *replica);
 int cancelReplicationHandshake(int reconnect);
 void replicationSteadyStateInit(void);
 void dualChannelSetupMainConnForPsync(connection *conn);
@@ -2022,20 +2022,6 @@ void replconfCommand(client *c) {
     addReply(c, shared.ok);
 }
 
-/* Suspend flushing a replica's COB to its socket until we receive a REPLCONF
- * ACK. Appends into the COB still accumulate; only the send is held. Used by
- * forkless-save-to-socket: after the RDB+EOF is queued in the COB, we hold the
- * flush so the replica sees a clean EOF boundary before any trailing data. */
-void suspendReplicaCobFlushUntilAck(client *replica) {
-    serverAssert(getClientType(replica) == CLIENT_TYPE_REPLICA);
-    replica->repl_data->stop_send_data_until_ack = 1;
-
-    if (replica->flag.pending_write) {
-        listUnlinkNode(server.clients_pending_write, &replica->clients_pending_write_node);
-        replica->flag.pending_write = 0;
-    }
-}
-
 /* Resume sending data to a replica after ACK received. */
 void resumeReplicaCobFlush(client *replica) {
     serverAssert(getClientType(replica) == CLIENT_TYPE_REPLICA);
@@ -2055,7 +2041,7 @@ void resumeReplicaCobFlush(client *replica) {
  *
  * the return value indicates that the replica should be disconnected.
  * */
-int replicaPutOnline(client *replica) {
+static int replicaPutOnline(client *replica) {
     resumeReplicaCobFlush(replica);
     if (replica->flag.repl_rdbonly) {
         replica->repl_data->repl_state = REPLICA_STATE_RDB_TRANSMITTED;
@@ -2092,7 +2078,7 @@ int replicaPutOnline(client *replica) {
  *    command we had no replies and it was disabled, and then we could
  *    accumulate output buffer data without sending it to the replica so it
  *    won't get mixed with the RDB stream. */
-void replicaStartCommandStream(client *replica) {
+static void replicaStartCommandStream(client *replica) {
     serverAssert(!(replica->flag.repl_rdbonly));
     replica->repl_data->repl_start_cmd_stream_on_ack = 0;
 

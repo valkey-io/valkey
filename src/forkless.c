@@ -833,6 +833,20 @@ done:
     return ret;
 }
 
+/* Suspend flushing a replica's COB to its socket until we receive a REPLCONF
+ * ACK. Appends into the COB still accumulate; only the send is held. Used by
+ * forkless-save-to-socket: after the RDB+EOF is queued in the COB, we hold the
+ * flush so the replica sees a clean EOF boundary before any trailing data. */
+void suspendReplicaCobFlushUntilAck(client *replica) {
+    serverAssert(getClientType(replica) == CLIENT_TYPE_REPLICA);
+    replica->repl_data->stop_send_data_until_ack = 1;
+
+    if (replica->flag.pending_write) {
+        listUnlinkNode(server.clients_pending_write, &replica->clients_pending_write_node);
+        replica->flag.pending_write = 0;
+    }
+}
+
 /* Retire a replica client that is owned by a forkless save from the server's
  * replication tracking. The client object is left alive (the forkless save is
  * still using its connection) and will be freed later by the save; this only

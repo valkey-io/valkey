@@ -15,5 +15,6 @@ sds forkless_catDebugInfo(sds info);
 void forklessAddReplicationCommandToReplicaCob(int argc, robj **argv);
 void forklessAddRdbSelectToReplicaCob(int dictid);
 void retireForklessManagedReplica(client *c);
+void suspendReplicaCobFlushUntilAck(client *replica);
 
 #endif

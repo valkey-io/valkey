@@ -356,7 +356,6 @@ static void *forklessSaveProcessor(void *arg) {
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
             if (connSetBlocking(c->conn, false) == C_ERR) {
-                serverLog(LL_WARNING, "forkless-save: error returning client to non-blocking.");
                 dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
             }
         }
@@ -431,10 +430,7 @@ static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveI
         rioFreeConnectionFromConnset(&saveInfo->save_rio, c->conn);
     }
 
-    /* Before passing it back to the main thread, set the connection back to non-blocking */
-    if (connSetBlocking(c->conn, false) == C_ERR) {
-        serverLog(LL_WARNING, "forkless-save: error returning client(%llu) to non-blocking.", (unsigned long long)c->id);
-    }
+    connSetBlocking(c->conn, false);
 
     /* Hand the client to the main thread for freeing. */
     mutexQueueAdd(saveInfo->foreground_queue, c);
@@ -540,7 +536,6 @@ static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (connSetBlocking(c->conn, true) == C_ERR) {
-            serverLog(LL_WARNING, "forkless-save: unable to set blocking on client(%llu)", (unsigned long long)c->id);
             dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
         }
     }
@@ -576,11 +571,8 @@ static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo) {
 static void resumeRegularReplicaActivity(client *c) {
     serverAssert(onServerMainThread());
 
-    /* Set the connection back to non-block to make sure
-     * don't hang the main thread. */
-    if (connSetBlocking(c->conn, false) == C_ERR) {
-        serverLog(LL_WARNING, "forkless-save: error returning client(%llu) to non-blocking.", (unsigned long long)c->id);
-    }
+
+    connSetBlocking(c->conn, false);
 
     c->flag.forkless_managed = 0;
 

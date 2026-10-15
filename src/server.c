@@ -8279,12 +8279,14 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
             !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
+            !(command_type == COMMAND_INCREX && (*flags & ARGS_SET_NX)) && /* except for INCREX */
             (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_SET_XX)) && /* except for INCREX */
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_XX;
@@ -8337,14 +8339,16 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
                    !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
                    !(*flags & ARGS_KEEPTTL) &&
-                   !(*flags & ARGS_ENX))
+                   !(*flags & ARGS_ENX) &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PERSIST)))
         {
             *flags |= ARGS_PERSIST;
         } else if ((opt[0] == 'e' || opt[0] == 'E') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EX)))
         {
             *flags |= ARGS_EX;
             *expire = next;
@@ -8354,7 +8358,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PX)))
         {
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
@@ -8367,7 +8372,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EXAT)))
         {
             *flags |= ARGS_EXAT;
             *expire = next;
@@ -8379,7 +8385,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PXAT)))
         {
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;

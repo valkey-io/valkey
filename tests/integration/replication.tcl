@@ -429,6 +429,38 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
+        test {INCREX ENX with existing TTL propagates as SET with KEEPTTL} {
+            r -1 set foo 1 ex 500
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ex 100 enx
+            assert_replication_stream $repl {
+                {set foo 6 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX SATURATE propagates the clamped value} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 12 saturate
+            assert_replication_stream $repl {
+                {set foo 12 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX applied-increment errors do not propagate} {
+            r -1 set foo 9223372036854775807
+            set repl [attach_to_replication_stream]
+            catch {r -1 increx foo byint -5 ubound -9223372036854775808 saturate} err
+            assert_match "*applied increment would overflow*" $err
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
         test {INCREX NX no-op does not propagate} {
             r -1 set foo 1
             set repl [attach_to_replication_stream]

@@ -862,6 +862,29 @@ start_server {tags {"incr"}} {
         assert_error "*ERR syntax error*" {r increx k enx persist}
     }
 
+    test {INCREX rejects repeated options} {
+        r set k 10
+        foreach args {
+            {nx nx} {xx xx} {persist persist}
+            {ex 10 ex 20} {px 10000 px 20000}
+            {exat 4102444800 exat 4102444801} {pxat 4102444800000 pxat 4102444800001}
+            {ex 100 enx enx} {saturate saturate}
+            {byint 1 byint 2} {byfloat 1 byfloat 2}
+            {lbound 0 lbound 1} {ubound 100 ubound 200}
+        } {
+            assert_error "*ERR syntax error*" [list r increx k {*}$args]
+        }
+        # Nothing was applied by the rejected commands.
+        assert_equal 10 [r get k]
+        assert_equal -1 [r ttl k]
+
+        # Legacy commands keep accepting their repeated options.
+        r del k2
+        assert_equal OK [r set k2 10 nx nx]
+        assert_equal OK [r set k 10 xx xx]
+        assert_equal 10 [r getex k persist persist]
+    }
+
     test {INCREX ENX option} {
         r set k 10
         assert_error "*ERR ENX flag requires an expiration*" {r increx k enx}

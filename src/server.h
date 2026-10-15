@@ -700,9 +700,9 @@ typedef enum {
 
 /* Policy for server.forkless_policy */
 typedef enum {
-    FORKLESS_POLICY_REQUIRE_FORK = 0,     /* Always fork; never use forkless. */
-    FORKLESS_POLICY_REQUIRE_FORKLESS = 1, /* Forkless only; fail rather than fork. */
-    FORKLESS_POLICY_PREFER_FORKLESS = 2   /* Forkless, falling back to fork when it cannot be served. */
+    FORKLESS_POLICY_REQUIRE_FORK,     /* Always fork; never use forkless. */
+    FORKLESS_POLICY_REQUIRE_FORKLESS, /* Forkless only; fail rather than fork. */
+    FORKLESS_POLICY_PREFER_FORKLESS   /* Forkless, falling back to fork when it cannot be served. */
 } forklessPolicy;
 
 /* Replica failover policy for server.cluster_replica_no_failover. */

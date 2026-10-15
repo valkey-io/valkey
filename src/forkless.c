@@ -387,6 +387,10 @@ static void *forklessSaveProcessor(void *arg) {
     serverAssert(!onServerMainThread());
     forklessSaveInfo *saveInfo = arg;
 
+    /* Pin this background save thread to the configured bgsave CPU list, the
+     * same way the fork-based bgsave child does */
+    serverSetCpuAffinity(server.bgsave_cpulist);
+
     serverLog(LL_NOTICE, "forkless-save: background processor started");
     int err = C_OK;
 

@@ -73,20 +73,33 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_equal "::1" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
     }
 
+    test "cluster-announce-ip accepts empty string to reset" {
+        R 0 CONFIG SET cluster-announce-ip "192.168.1.100"
+        R 0 CONFIG SET cluster-announce-ip ""
+        assert_equal "" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
+    }
+
+    test "cluster-announce-ip accepts a hostname" {
+        R 0 CONFIG SET cluster-announce-ip "my-node.example.com"
+        assert_equal "my-node.example.com" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
+    }
+
+    test "cluster-announce-ip rejects IP with port" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-ip*not a valid*" {
+            R 0 CONFIG SET cluster-announce-ip "10.1.131.239:6380"
+        }
+    }
+
+    test "cluster-announce-ip rejects value that is neither IP nor hostname" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-ip*not a valid*" {
+            R 0 CONFIG SET cluster-announce-ip "under_score"
+        }
+    }
+
     test "cluster-announce-ip rejects value exceeding length limit" {
         assert_error "ERR CONFIG SET failed*cluster-announce-ip*too long*" {
             R 0 CONFIG SET cluster-announce-ip [string repeat "a" 100]
         }
-    }
-
-    test "cluster-announce-ip accepts hyphen, dot, colon, slash, underscore" {
-        R 0 CONFIG SET cluster-announce-ip "my-host_1.example:8080/path"
-        assert_equal "my-host_1.example:8080/path" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
-    }
-
-    test "cluster-announce-ip accepts high-byte UTF-8 characters" {
-        R 0 CONFIG SET cluster-announce-ip "\xc3\xa9"
-        assert_equal "\xc3\xa9" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
     }
 
     test "cluster-announce-human-nodename rejects control characters" {

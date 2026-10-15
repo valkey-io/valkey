@@ -332,28 +332,48 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         $rd client setname iothread_test
         assert {[$rd read] eq "OK"}
         
-        # Send multiple GETs without reading
+        # Send multiple GETs without reading, until the output-buffer limit
+        # enforcement is observable: either we see omem exceed the limit, or
+        # the server has already disconnected the client (with IO threads the
+        # disconnect can happen between polls, and a write to the closed
+        # connection raises an error). The loop is bounded so a broken
+        # accounting path fails the test instead of hanging it.
         set omem 0
-        while {1} {
-            $rd get iothread_key
-            $rd flush
+        set disconnected 0
+        for {set i 0} {$i < 500} {incr i} {
+            if {[catch {
+                $rd get iothread_key
+                $rd flush
+            }]} {
+                # Write failed: the server closed the connection, meaning the
+                # output buffer limit was enforced.
+                set disconnected 1
+                break
+            }
             after 10
-            set clients [r client list]
-            foreach client_info [split $clients "\r\n"] {
+            set found 0
+            foreach client_info [split [r client list] "\r\n"] {
                 if {[string match "*name=iothread_test*" $client_info]} {
+                    set found 1
                     regexp {omem=([0-9]+)} $client_info _ omem
                     break
                 }
             }
+            if {!$found} {
+                set disconnected 1
+                break
+            }
             if {$omem >= 200000} break
-            if {[lsearch [split [r client list] "\r\n"] *name=iothread_test*] == -1} break
         }
-        
-        # Wait for disconnection
-        wait_for_condition 50 100 {
-            [lsearch [split [r client list] "\r\n"] *name=iothread_test*] == -1
-        } else {
-            fail "Client not disconnected with IO threads (omem=$omem)"
+
+        if {!$disconnected} {
+            assert {$omem >= 200000}
+            # We observed omem over the limit; the server must now disconnect.
+            wait_for_condition 50 100 {
+                [lsearch [split [r client list] "\r\n"] *name=iothread_test*] == -1
+            } else {
+                fail "Client not disconnected with IO threads (omem=$omem)"
+            }
         }
         
         # Restore settings
@@ -394,13 +414,14 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         $rd flush
 
         set spilled_to_reply_list 0
-        for {set i 0} {$i < 100} {incr i} {
+        # Generous budget: valgrind slows IO-thread reply processing 10-50x.
+        for {set i 0} {$i < 200} {incr i} {
             set oll [get_field_in_client_list $client_id [r client list] oll]
             if {$oll ne "" && $oll > 0} {
                 set spilled_to_reply_list 1
                 break
             }
-            after 50
+            after 100
         }
         if {!$spilled_to_reply_list} {
             fail "Client never spilled copy-avoided replies into c->reply"
@@ -418,7 +439,8 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         }
 
         set fully_drained 0
-        for {set i 0} {$i < 100} {incr i} {
+        # Generous budget: valgrind slows IO-thread reply processing 10-50x.
+        for {set i 0} {$i < 200} {incr i} {
             set client_list [r client list]
             set obl [get_field_in_client_list $client_id $client_list obl]
             set oll [get_field_in_client_list $client_id $client_list oll]
@@ -426,7 +448,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
                 set fully_drained 1
                 break
             }
-            after 50
+            after 100
         }
         if {!$fully_drained} {
             fail "Client reply buffers did not fully drain"

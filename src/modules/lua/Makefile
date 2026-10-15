@@ -17,10 +17,10 @@ else
 endif
 
 ifeq ($(uname_S),Darwin)
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS) $(CPPFLAGS)
 	SHOBJ_LDFLAGS= -bundle -undefined dynamic_lookup $(LDFLAGS)
 else
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS) $(CPPFLAGS)
 	SHOBJ_LDFLAGS= -shared $(LDFLAGS)
 
 # Pretty-printing setup for module build

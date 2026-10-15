@@ -2,7 +2,7 @@
  *
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef VALKEY_BENCHMARK_DATASET_H
@@ -58,7 +58,7 @@ size_t datasetGetRecordCount(dataset *ds);
 
 #ifndef __cplusplus
 /* Generate complete command for given record index (caller must sdsfree) */
-sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement);
+sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement);
 #endif
 
 #endif /* VALKEY_BENCHMARK_DATASET_H */

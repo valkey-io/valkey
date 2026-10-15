@@ -39,6 +39,7 @@
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "util.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
@@ -57,7 +58,7 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
  * This function will try to expire the key-value entry 'val'.
  *
  * If the key is found to be expired, it is removed from the database and
- * 1 is returned. Otherwise no operation is performed and 0 is returned.
+ * 1 is returned. Otherwise, no operation is performed and 0 is returned.
  *
  * When a key is expired, server.stat_expiredkeys is incremented.
  *
@@ -72,6 +73,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, mstime_t now, int didx) 
         robj *keyobj = createStringObject(key, sdslen(key));
         deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, didx);
         decrRefCount(keyobj);
+        server.dirty++;
         exitExecutionUnit();
         return 1;
     } else {
@@ -167,13 +169,18 @@ void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
     robj *o = volaKey;
     serverAssert(o);
     serverAssert(hashTypeHasVolatileFields(o));
+
+    data->has_more_expired_entries = false;
+    data->sampled++;
+
+    if (bgIteration_isEntryInuse(o)) return;
+
     mstime_t now = server.mstime;
     size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries, didx);
     if (expired_fields) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
     }
-    data->sampled++;
 }
 
 static int expireShouldSkipTableForSamplingCb(hashtable *ht) {

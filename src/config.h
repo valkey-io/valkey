@@ -76,10 +76,18 @@
 #define HAVE_SYSCTL_KERN_SOMAXCONN 1
 #endif
 
-/* Test for backtrace() */
+/* Test for backtrace() via execinfo.h */
 #if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || defined(__FreeBSD__) ||    \
     ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE)) || \
     defined(__DragonFly__) || (defined(__UCLIBC__) && defined(__UCLIBC_HAS_BACKTRACE__))
+#define HAVE_BACKTRACE 1
+#define HAVE_EXECINFO 1
+#endif
+
+/* When libbacktrace is available (e.g. on musl/Alpine), enable backtrace
+ * support even without execinfo.h. libbacktrace provides its own frame
+ * collection via backtrace_simple(). */
+#if defined(USE_LIBBACKTRACE) && !defined(HAVE_BACKTRACE)
 #define HAVE_BACKTRACE 1
 #endif
 
@@ -356,6 +364,20 @@ void setcpuaffinity(const char *cpulist);
 /* Test for posix_fadvise() */
 #if defined(__linux__) || defined(__FreeBSD__)
 #define HAVE_FADVISE
+#endif
+
+/* Drawing secret material from a configured provider needs the OpenSSL 3
+ * provider APIs and config-driven provider selection. Older OpenSSL and
+ * LibreSSL have neither, so those builds keep the bundled generator.
+ *
+ * USE_OPENSSL == 1 means BUILD_TLS=yes. BUILD_TLS=module compiles the server
+ * with USE_OPENSSL == 2 but does not link libcrypto into it (src/Makefile),
+ * so a module build keeps the bundled generator as well. */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L && !defined(LIBRESSL_VERSION_NUMBER)
+#define HAVE_OPENSSL_PROVIDERS
+#endif
 #endif
 
 #define IO_THREADS_MAX_NUM 256

@@ -31,8 +31,9 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv
+DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4
 NODEPS:=clean distclean
+CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out $(NODEPS),$(MAKECMDGOALS)),,yes))
 
 # Default settings
 STD=-pedantic
@@ -136,7 +137,7 @@ ifeq ($(DEBUG_FORCE_DEFRAG), yes)
 	SERVER_CFLAGS +=-DHAVE_DEFRAG -DDEBUG_FORCE_DEFRAG
 endif
 
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS) $(CPPFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb
@@ -256,7 +257,47 @@ ifdef OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float
+FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/lz4
+
+# Zstandard support is disabled by default.
+BUILD_ZSTD ?= no
+
+ifneq ($(CLEAN_ONLY),yes)
+ifneq ($(filter $(BUILD_ZSTD),yes no),$(BUILD_ZSTD))
+$(error BUILD_ZSTD must be yes or no)
+endif
+endif
+
+ifeq ($(BUILD_ZSTD),yes)
+ifneq ($(CLEAN_ONLY),yes)
+ifdef ZSTD_PREFIX
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(ZSTD_PREFIX)/lib/libzstd.a \
+    $(ZSTD_PREFIX)/lib64/libzstd.a))
+	ZSTD_CFLAGS := -I$(ZSTD_PREFIX)/include
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE)
+else
+ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
+ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
+# Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while installing the
+# archive to the multiarch directory, so also probe next to the .pc file.
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
+    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+ifneq ($(ZSTD_PKGCONFIG),0)
+$(error BUILD_ZSTD=yes requires static Zstandard 1.4.7 or newer)
+endif
+	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd)
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
+endif
+ifeq ($(ZSTD_STATIC_ARCHIVE),)
+$(error BUILD_ZSTD=yes requires a static Zstandard library)
+endif
+	FINAL_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
+	FINAL_LIBS += $(ZSTD_LIBS)
+endif
+endif
 
 # Lua scripting engine module
 ifeq ($(BUILD_LUA),no)
@@ -477,6 +518,7 @@ ENGINE_SERVER_OBJ = \
     allocator_defrag.o \
     anet.o \
     aof.o \
+	bgiteration.o \
     bio.o \
     bitops.o \
     blocked.o \
@@ -488,6 +530,10 @@ ENGINE_SERVER_OBJ = \
     cluster_slot_stats.o \
     commandlog.o \
     commands.o \
+    compression.o \
+    compression_lz4.o \
+    compression_zstd.o \
+    compression_stream.o \
     config.o \
     connection.o \
     crc16.o \
@@ -502,12 +548,16 @@ ENGINE_SERVER_OBJ = \
     eval.o \
     evict.o \
     expire.o \
+    fbtree.o \
     fifo.o \
+	forkless.o \
     functions.o \
     geo.o \
     geohash.o \
     geohash_helper.o \
     hashtable.o \
+    hotkeys.o \
+    space_saving.o \
     hyperloglog.o \
     intset.o \
     io_threads.o \
@@ -534,12 +584,14 @@ ENGINE_SERVER_OBJ = \
     networking.o \
     notify.o \
     object.o \
+    ordered_index.o \
     pqsort.o \
     pubsub.o \
     quicklist.o \
     rand.o \
     rax.o \
     rdb.o \
+    rdb_transcoder.o \
     rdma.o \
     release.o \
     replication.o \
@@ -563,6 +615,7 @@ ENGINE_SERVER_OBJ = \
     syscheck.o \
     t_hash.o \
     t_list.o \
+    t_path_hash.o \
     t_set.o \
     t_stream.o \
     t_string.o \
@@ -581,7 +634,11 @@ ENGINE_SERVER_OBJ = \
     ziplist.o \
     zipmap.o \
     zmalloc.o \
-    queues.o
+    queues.o \
+    throttle_token_bucket.o \
+    stat_calc.o \
+    throttle_repl.o \
+    throttle.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ = \
@@ -678,13 +735,17 @@ persist-settings: distclean
 	echo PROG_SUFFIX=$(PROG_SUFFIX) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
+	echo OPENSSL_PREFIX=$(OPENSSL_PREFIX) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
+	echo BUILD_ZSTD=$(BUILD_ZSTD) >> .make-settings
+	echo ZSTD_PREFIX=$(ZSTD_PREFIX) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
 	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
+	echo CPPFLAGS=$(CPPFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
@@ -709,10 +770,11 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
-	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(LUA_LDFLAGS)
+	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/lz4/liblz4.a $(FINAL_LIBS) $(LUA_LDFLAGS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
+	@rm -f $@
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-sentinel

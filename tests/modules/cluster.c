@@ -67,6 +67,7 @@ int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 #define MSGTYPE_DING 1
 #define MSGTYPE_DONG 2
 #define MSGTYPE_TEST_UAF 3
+#define MSGTYPE_TEST_MAX 255
 
 /* test.pingall */
 int PingallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -94,6 +95,7 @@ int test_register_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, DingReceiver);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_MAX, DingReceiver);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -101,14 +103,67 @@ int test_unregister_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, NULL);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_MAX, NULL);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-int test_send_msg_type3(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int test_send_msg_uaf(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_UAF, "TestUAF", 7);
+    ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_MAX, "TestMAX", 7);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+
+int test_openkey_cross_slot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 4) return ValkeyModule_WrongArity(ctx);
+
+    size_t op_len;
+    const char *op = ValkeyModule_StringPtrLen(argv[3], &op_len);
+
+    if (!strcmp(op, "read")) {
+        ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[2], VALKEYMODULE_READ);
+        if (!key) {
+            return ValkeyModule_ReplyWithNull(ctx);
+        }
+        size_t len;
+        char *s = ValkeyModule_StringDMA(key, &len, VALKEYMODULE_READ);
+        if (!s) {
+            ValkeyModule_CloseKey(key);
+            return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
+        }
+        ValkeyModule_ReplyWithStringBuffer(ctx, s, len);
+        ValkeyModule_CloseKey(key);
+        return VALKEYMODULE_OK;
+    } else if (!strcmp(op, "write")) {
+        if (argc < 5) return ValkeyModule_WrongArity(ctx);
+        ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[2], VALKEYMODULE_WRITE);
+        if (!key) {
+            return ValkeyModule_ReplyWithError(ctx, "ERR OpenKey failed");
+        }
+        ValkeyModule_StringSet(key, argv[4]);
+        ValkeyModule_CloseKey(key);
+        return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    } else if (!strcmp(op, "expire")) {
+        if (argc < 5) return ValkeyModule_WrongArity(ctx);
+        long long expire_ms;
+        if (ValkeyModule_StringToLongLong(argv[4], &expire_ms) != VALKEYMODULE_OK) {
+            return ValkeyModule_ReplyWithError(ctx, "ERR invalid expire");
+        }
+        ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[2], VALKEYMODULE_WRITE);
+        if (!key) {
+            return ValkeyModule_ReplyWithError(ctx, "ERR OpenKey failed");
+        }
+        if (ValkeyModule_SetExpire(key, expire_ms) != VALKEYMODULE_OK) {
+            ValkeyModule_CloseKey(key);
+            return ValkeyModule_ReplyWithError(ctx, "ERR SetExpire failed");
+        }
+        ValkeyModule_CloseKey(key);
+        return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    }
+
+    return ValkeyModule_ReplyWithError(ctx, "ERR unknown op");
 }
 
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -135,7 +190,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.unregister_receiver", test_unregister_receiver, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.send_msg_type3", test_send_msg_type3, "", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.send_msg_uaf", test_send_msg_uaf, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.openkey_cross_slot", test_openkey_cross_slot, "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Register our handlers for different message types. */

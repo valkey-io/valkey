@@ -174,12 +174,6 @@ static int writeDbSizeHints(forklessSaveInfo *saveInfo) {
     return C_OK;
 }
 
-/* Forward declarations for helper functions */
-static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveInfo, client *c);
-static void handleClosingClients(forklessSaveInfo *saveInfo);
-static void freeAbandonedForklessReplica(client *c);
-static void waitForBuffersToDrain(forklessSaveInfo *saveInfo);
-static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo);
 
 /* Write an inline replication command into the RDB stream using RDB_OPCODE_UPDATE.
  * The command is serialized as RESP (multi-bulk) so the replica can replay it during RDB load. */
@@ -223,6 +217,164 @@ static int writeReplicationData(forklessSaveInfo *saveInfo, bgIteratorItem *item
         if (!rioWrite(&saveInfo->save_rio, "\r\n", 2)) return C_ERR;
     }
 
+    return C_OK;
+}
+
+/* If a client is unresponsive or is being closed by the main thread, we might have to drop it
+ * from the current replication activity. */
+static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveInfo, client *c) {
+    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+    listNode *ln = listSearchKey(saveInfo->u.repl.clients, c);
+    serverAssert(ln != NULL);
+    listDelNode(saveInfo->u.repl.clients, ln);
+
+    int remaining = listLength(saveInfo->u.repl.clients);
+    if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
+        serverLog(LL_WARNING, "forkless-save: client(%llu) closed by primary. %d clients remain.",
+                  (unsigned long long)c->id, remaining);
+    } else {
+        serverLog(LL_WARNING, "forkless-save: client(%llu) unresponsive. %d clients remain.",
+                  (unsigned long long)c->id, remaining);
+    }
+
+    /* If the client connection is part of a connection set, remove it */
+    if (rioCheckType(&saveInfo->save_rio) == RIO_TYPE_CONNSET) {
+        rioFreeConnectionFromConnset(&saveInfo->save_rio, c->conn);
+    }
+
+    connSetBlocking(c->conn, false);
+
+    /* Hand the client to the main thread for freeing. */
+    mutexQueueAdd(saveInfo->foreground_queue, c);
+}
+
+/* Prunes replicas that are closing or disconnected. */
+static void handleClosingClients(forklessSaveInfo *saveInfo) {
+    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+    listNode *ln;
+    listIter li;
+    listRewind(saveInfo->u.repl.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
+        waitForClientIO(c);
+        int pending_close = c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed);
+        int connset_error = c->conn && rioCheckType(&saveInfo->save_rio) == RIO_TYPE_CONNSET &&
+                            rioConnsetConnErrno(&saveInfo->save_rio, c->conn);
+        if (pending_close || connset_error || !c->conn || connGetState(c->conn) != CONN_STATE_CONNECTED) {
+            if (pending_close) {
+                serverLog(LL_DEBUG, "forkless-save: detected pending close on client(%llu).",
+                          (unsigned long long)c->id);
+            } else if (connset_error) {
+                serverLog(LL_WARNING, "forkless-save: client(%llu) connection error during stream, dropping.",
+                          (unsigned long long)c->id);
+            }
+            dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
+        }
+    }
+}
+
+/* Before writing directly to the connection, we need to wait for various buffers to drain. */
+static void waitForBuffersToDrain(forklessSaveInfo *saveInfo) {
+    serverAssert(!onServerMainThread());
+    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+
+    listNode *ln;
+    listIter li;
+
+    monotime startTimeMono;
+    elapsedStart(&startTimeMono);
+
+    /* Give clients a chance to flush COBs */
+    while (elapsedUs(startTimeMono) < (unsigned long long)server.repl_timeout * 1000000) {
+        const unsigned long loopDelayUs = 100000; // 100ms
+        usleep(loopDelayUs);
+        atomic_thread_fence(__ATOMIC_ACQUIRE);
+
+        handleClosingClients(saveInfo);
+
+        listRewind(saveInfo->u.repl.clients, &li);
+        bool allFlushed = true;
+        while ((ln = listNext(&li)) != NULL) {
+            client *c = listNodeValue(ln);
+            /* Check for pending data in the COB */
+            if (clientHasPendingReplies(c)) {
+                allFlushed = false;
+                break;
+            }
+        }
+        if (allFlushed) break;
+    }
+
+    /* Kill off clients which still have COB data */
+    listRewind(saveInfo->u.repl.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
+        if (clientHasPendingReplies(c)) {
+            serverLog(LL_WARNING, "forkless-save: socket not draining (COB), client(%llu)", (unsigned long long)c->id);
+            dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
+        }
+    }
+
+    handleClosingClients(saveInfo);
+}
+
+/* Waits until all of the COBs have drained and transitions the RIO to a CONNSET.
+ *
+ * Two reasons for the transition:
+ *   1. The COB send path is driven by the main-thread event loop, so it can't be
+ *      used from the background save thread. There is also no need to: the bg
+ *      thread's only job is to stream the DB, so it is fine with blocking writes
+ *      straight to the sockets.
+ *   2. We may be streaming to more than one replica at once, so we transition to
+ *      a CONNSET (connection set) to abstract writing the same bytes to N sockets.
+ *
+ * Returns:  C_OK - successful transition, saveInfo->save_rio is now a CONNSET
+ *           C_ERR - failure, saveInfo->save_rio is still ReplicaCOB */
+static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo) {
+    serverAssert(!onServerMainThread());
+    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+
+    /* Drain the existing COB data before switching (e.g. the +FULLRESYNC handshake
+     * reply already queued on the socket) so the RDB stream stays in order. */
+    waitForBuffersToDrain(saveInfo);
+
+    listNode *ln;
+    listIter li;
+
+    /* Set remaining clients to blocking */
+    listRewind(saveInfo->u.repl.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
+        if (connSetBlocking(c->conn, true) == C_ERR) {
+            dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
+        }
+    }
+
+    /* Hopefully we still have some clients left */
+    int numConns = listLength(saveInfo->u.repl.clients);
+    if (numConns == 0) return C_ERR;
+
+    /* At this point, we are done with ReplicaCOB RIO. */
+    uint64_t current_cksum = saveInfo->save_rio.cksum;
+    size_t current_processed_bytes = saveInfo->save_rio.processed_bytes;
+    rioFreeReplicaCOB(&saveInfo->save_rio);
+
+    connection **conns = zmalloc(sizeof(connection *) * numConns);
+    listRewind(saveInfo->u.repl.clients, &li);
+    int pos = 0;
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
+        conns[pos++] = c->conn;
+    }
+
+    rioInitWithConnset(&saveInfo->save_rio, conns, numConns);
+    saveInfo->save_rio.cksum = current_cksum;
+    saveInfo->save_rio.processed_bytes = current_processed_bytes;
+    if (server.rdb_checksum) {
+        saveInfo->save_rio.update_cksum = rioGenericUpdateChecksum;
+    }
+
+    zfree(conns);
     return C_OK;
 }
 
@@ -407,165 +559,6 @@ static void freeClientsMarkedForCloseAfterBgThreadStopped(forklessSaveInfo *save
     }
 }
 
-/* If a client is unresponsive or is being closed by the main thread, we might have to drop it
- * from the current replication activity.
- */
-static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveInfo, client *c) {
-    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
-    listNode *ln = listSearchKey(saveInfo->u.repl.clients, c);
-    serverAssert(ln != NULL);
-    listDelNode(saveInfo->u.repl.clients, ln);
-
-    int remaining = listLength(saveInfo->u.repl.clients);
-    if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
-        serverLog(LL_WARNING, "forkless-save: client(%llu) closed by primary. %d clients remain.",
-                  (unsigned long long)c->id, remaining);
-    } else {
-        serverLog(LL_WARNING, "forkless-save: client(%llu) unresponsive. %d clients remain.",
-                  (unsigned long long)c->id, remaining);
-    }
-
-    /* If the client connection is part of a connection set, remove it */
-    if (rioCheckType(&saveInfo->save_rio) == RIO_TYPE_CONNSET) {
-        rioFreeConnectionFromConnset(&saveInfo->save_rio, c->conn);
-    }
-
-    connSetBlocking(c->conn, false);
-
-    /* Hand the client to the main thread for freeing. */
-    mutexQueueAdd(saveInfo->foreground_queue, c);
-}
-
-/* Prunes replicas that are closing or disconnected. */
-static void handleClosingClients(forklessSaveInfo *saveInfo) {
-    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
-    listNode *ln;
-    listIter li;
-    listRewind(saveInfo->u.repl.clients, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        waitForClientIO(c);
-        int pending_close = c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed);
-        int connset_error = c->conn && rioCheckType(&saveInfo->save_rio) == RIO_TYPE_CONNSET &&
-                            rioConnsetConnErrno(&saveInfo->save_rio, c->conn);
-        if (pending_close || connset_error || !c->conn || connGetState(c->conn) != CONN_STATE_CONNECTED) {
-            if (pending_close) {
-                serverLog(LL_DEBUG, "forkless-save: detected pending close on client(%llu).",
-                          (unsigned long long)c->id);
-            } else if (connset_error) {
-                serverLog(LL_WARNING, "forkless-save: client(%llu) connection error during stream, dropping.",
-                          (unsigned long long)c->id);
-            }
-            dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
-        }
-    }
-}
-
-/* Before writing directly to the connection, we need to wait for various buffers to drain. */
-static void waitForBuffersToDrain(forklessSaveInfo *saveInfo) {
-    serverAssert(!onServerMainThread());
-    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
-
-    listNode *ln;
-    listIter li;
-
-    monotime startTimeMono;
-    elapsedStart(&startTimeMono);
-
-    /* Give clients a chance to flush COBs */
-    while (elapsedUs(startTimeMono) < (unsigned long long)server.repl_timeout * 1000000) {
-        const unsigned long loopDelayUs = 100000; // 100ms
-        usleep(loopDelayUs);
-        atomic_thread_fence(__ATOMIC_ACQUIRE);
-
-        handleClosingClients(saveInfo);
-
-        listRewind(saveInfo->u.repl.clients, &li);
-        bool allFlushed = true;
-        while ((ln = listNext(&li)) != NULL) {
-            client *c = listNodeValue(ln);
-            /* Check for pending data in the COB */
-            if (clientHasPendingReplies(c)) {
-                allFlushed = false;
-                break;
-            }
-        }
-        if (allFlushed) break;
-    }
-
-    /* Kill off clients which still have COB data */
-    listRewind(saveInfo->u.repl.clients, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        if (clientHasPendingReplies(c)) {
-            serverLog(LL_WARNING, "forkless-save: socket not draining (COB), client(%llu)", (unsigned long long)c->id);
-            dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
-        }
-    }
-
-    handleClosingClients(saveInfo);
-}
-
-/* Waits until all of the COBs have drained and transitions the RIO to a CONNSET.
- *
- * Two reasons for the transition:
- *   1. The COB send path is driven by the main-thread event loop, so it can't be
- *      used from the background save thread. There is also no need to: the bg
- *      thread's only job is to stream the DB, so it is fine with blocking writes
- *      straight to the sockets.
- *   2. We may be streaming to more than one replica at once, so we transition to
- *      a CONNSET (connection set) to abstract writing the same bytes to N sockets.
- *
- * Returns:  C_OK - successful transition, saveInfo->save_rio is now a CONNSET
- *           C_ERR - failure, saveInfo->save_rio is still ReplicaCOB
- */
-static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo) {
-    serverAssert(!onServerMainThread());
-    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
-
-    /* Drain the existing COB data before switching (e.g. the +FULLRESYNC handshake
-     * reply already queued on the socket) so the RDB stream stays in order. */
-    waitForBuffersToDrain(saveInfo);
-
-    listNode *ln;
-    listIter li;
-
-    /* Set remaining clients to blocking */
-    listRewind(saveInfo->u.repl.clients, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        if (connSetBlocking(c->conn, true) == C_ERR) {
-            dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
-        }
-    }
-
-    /* Hopefully we still have some clients left */
-    int numConns = listLength(saveInfo->u.repl.clients);
-    if (numConns == 0) return C_ERR;
-
-    /* At this point, we are done with ReplicaCOB RIO. */
-    uint64_t current_cksum = saveInfo->save_rio.cksum;
-    size_t current_processed_bytes = saveInfo->save_rio.processed_bytes;
-    rioFreeReplicaCOB(&saveInfo->save_rio);
-
-    connection **conns = zmalloc(sizeof(connection *) * numConns);
-    listRewind(saveInfo->u.repl.clients, &li);
-    int pos = 0;
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        conns[pos++] = c->conn;
-    }
-
-    rioInitWithConnset(&saveInfo->save_rio, conns, numConns);
-    saveInfo->save_rio.cksum = current_cksum;
-    saveInfo->save_rio.processed_bytes = current_processed_bytes;
-    if (server.rdb_checksum) {
-        saveInfo->save_rio.update_cksum = rioGenericUpdateChecksum;
-    }
-
-    zfree(conns);
-    return C_OK;
-}
 
 static void resumeRegularReplicaActivity(client *c) {
     serverAssert(onServerMainThread());
@@ -840,6 +833,20 @@ done:
     return ret;
 }
 
+/* Free a replica the bg thread abandoned onto the foreground queue: clear the
+ * forkless flags, reset its repl state, and free it. Runs on the main thread. */
+static void freeAbandonedForklessReplica(client *c) {
+    serverAssert(onServerMainThread());
+    serverLog(LL_WARNING, "forkless-save: client(%llu) ended replication early", (unsigned long long)c->id);
+    c->flag.forkless_managed = 0;
+    if (c->repl_data) {
+        atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
+        c->repl_data->using_cob = 0;
+        c->repl_data->repl_state = REPL_STATE_NONE;
+    }
+    freeClient(c);
+}
+
 static void forklessSaveComplete(bool terminated, void *privdata) {
     serverAssert(onServerMainThread());
     serverLog(LL_NOTICE, "forkless-save: completion proc - %s", (terminated) ? "terminated" : "ok");
@@ -1037,19 +1044,6 @@ int isForklessSaveInProgress(void) {
     return server.cur_bgsave_type == RDB_BGSAVE_TYPE_FORKLESS;
 }
 
-/* Free a replica the bg thread abandoned onto the foreground queue: clear the
- * forkless flags, reset its repl state, and free it. Runs on the main thread. */
-static void freeAbandonedForklessReplica(client *c) {
-    serverAssert(onServerMainThread());
-    serverLog(LL_WARNING, "forkless-save: client(%llu) ended replication early", (unsigned long long)c->id);
-    c->flag.forkless_managed = 0;
-    if (c->repl_data) {
-        atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
-        c->repl_data->using_cob = 0;
-        c->repl_data->repl_state = REPL_STATE_NONE;
-    }
-    freeClient(c);
-}
 
 /* Timer proc that runs on the main thread during socket-based forkless save.
  * The bg thread may need to abandon unresponsive replicas, but can't free

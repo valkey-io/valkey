@@ -230,8 +230,7 @@ static int writeReplicationData(forklessSaveInfo *saveInfo, bgIteratorItem *item
  * Upon entering:
  *  - The RDB header has been written (magic, aux fields, functions)
  *  - The DB size hints have been written
- * This function is responsible for writing all of the dictionary entries.
- */
+ * This function is responsible for writing all of the dictionary entries. */
 static void *forklessSaveProcessor(void *arg) {
     serverAssert(!onServerMainThread());
     forklessSaveInfo *saveInfo = arg;

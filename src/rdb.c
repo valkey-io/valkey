@@ -3766,7 +3766,7 @@ static respParseResult parseRespHeaderFromReader(size_t (*read_fn)(void *ctx, vo
     long argc = strtol(buf, &endptr, 10);
     /* strtol leaves endptr at the start when it parsed no digits at all. */
     int parsed_no_digits = (endptr == buf);
-    if (parsed_no_digits || argc < 1 || argc > INT_MAX) return RESP_PARSE_FMTERR;
+    if (parsed_no_digits || argc < 1 || argc > 1024 * 1024) return RESP_PARSE_FMTERR;
     *argc_out = (int)argc;
     return RESP_PARSE_OK;
 }

@@ -368,6 +368,9 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
         send_cluster_bus_packet $candidate_cport [create_cluster_failover_nack_packet \
             $v1_id $v1_port $v1_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
         wait_for_log_messages -5 [list "*Failover auth NACK * from $v1_id * for epoch $election_epoch*"] $election_line 1000 50
+        # The bound is checked in clusterBeforeSleep, before replies are
+        # written, so once INFO answers any reset is in the log.
+        assert_equal "slave" [s -5 role]
         verify_no_log_message -5 "*cannot reach quorum*" $election_line
     }
 
@@ -385,11 +388,11 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
     test "Second NACK does not reset an election that is still winnable" {
         send_cluster_bus_packet $candidate_cport [create_cluster_failover_nack_packet \
             $v2_id $v2_port $v2_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
-        # The accounting line is written before the bound is checked, so once
-        # it is there any reset would already be in the log too.
+        # The bound is checked in clusterBeforeSleep, before replies are
+        # written, so once INFO answers any reset is in the log.
         wait_for_log_messages -5 [list "*Failover auth NACK * from $v2_id * for epoch $election_epoch*"] $election_line 1000 50
-        verify_no_log_message -5 "*cannot reach quorum*" $election_line
         assert_equal "slave" [s -5 role]
+        verify_no_log_message -5 "*cannot reach quorum*" $election_line
     }
 
     test "Third NACK leaves fewer possible votes than quorum and resets the election" {
@@ -478,6 +481,9 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
         send_cluster_bus_packet $candidate_cport [create_cluster_failover_nack_packet \
             $v2_id $v2_port $v2_cport $candidate_epoch $election_epoch $NACK_REASON_ALREADY_VOTED]
         wait_for_log_messages -5 [list "*Failover auth NACK * from $v2_id * for epoch $election_epoch*"] $election_line 1000 50
+        # The bound is checked in clusterBeforeSleep, before replies are
+        # written, so once INFO answers any reset is in the log.
+        assert_equal "slave" [s -5 role]
         verify_no_log_message -5 "*cannot reach quorum*" $election_line
     }
 

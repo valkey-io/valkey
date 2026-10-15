@@ -3440,7 +3440,6 @@ void resetReplicationBuffer(void);
 void feedReplicationBuffer(char *buf, size_t len);
 void forklessAddReplicationCommandToReplicaCob(int argc, robj **argv);
 void forklessAddRdbSelectToReplicaCob(int dictid);
-bool forklessIteratorOwnsIncomingReplication(void);
 void freeReplicaReferencedReplBuffer(client *replica);
 void retireForklessManagedReplica(client *c);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);

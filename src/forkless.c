@@ -59,10 +59,6 @@ static forklessSaveInfo *currentForklessSave = NULL;
  * handing ownership to the save-buffer mirror (channel 2). */
 static bool iteratorOwnsIncomingReplication = false;
 
-bool forklessIteratorOwnsIncomingReplication(void) {
-    return iteratorOwnsIncomingReplication;
-}
-
 /* A replica currently served by the forkless save COB (RDB being streamed to it
  * via using_cob while still in WAIT_BGSAVE_END). */
 static bool isActiveForklessSaveClient(client *replica) {

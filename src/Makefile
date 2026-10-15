@@ -853,7 +853,7 @@ distclean: clean
 .PHONY: distclean
 
 test: $(ALL_BUILD_PREREQUISITES)
-	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest $(if $(TEST),--single $(TEST),))
+	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
 test-unit:
 	@(cd unit && $(MAKE) test-unit)

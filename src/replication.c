@@ -666,30 +666,6 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
     server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
 }
 
-/* Retire a replica client that is owned by a forkless save from the server's
- * replication tracking. The client object is left alive (the forkless save is
- * still using its connection) and will be freed later by the save; this only
- * removes it from the shared replica state so the rest of the server stops
- * treating it as an attached replica: it is taken out of
- * server.replicas / server.monitors, the derived replica counters are
- * refreshed, its replica/monitor flags are cleared and its referenced
- * replication buffer is released. */
-void retireForklessManagedReplica(client *c) {
-    list *client_list = (c->flag.monitor) ? server.monitors : server.replicas;
-    listNode *ln = listSearchKey(client_list, c);
-    serverAssert(ln != NULL);
-    listDelNode(client_list, ln);
-
-    if (!(c->flag.monitor)) {
-        if (listLength(server.replicas) == 0) server.repl_no_replicas_since = server.unixtime;
-        refreshGoodReplicasCount();
-    }
-    c->flag.replica = 0;
-    c->flag.monitor = 0;
-
-    freeReplicaReferencedReplBuffer(c);
-}
-
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
     if (replica->flag.repl_rdb_channel) {

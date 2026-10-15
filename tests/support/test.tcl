@@ -326,7 +326,8 @@ proc test {name code {okpattern undefined} {tags {}}} {
 
     set test_start_time [clock milliseconds]
     set code_failed [catch {set retval [uplevel 1 $code]} error]
-    if {$code_failed} {
+    # ::errorInfo is only set for TCL_ERROR, not for return/break/continue.
+    if {$code_failed == 1} {
         set saved_error_info $::errorInfo
     }
 
@@ -336,7 +337,9 @@ proc test {name code {okpattern undefined} {tags {}}} {
     set cleanup_errors [uplevel 1 [list test_cleanup $body_failed]]
 
     if {$code_failed} {
-        set ::errorInfo $saved_error_info
+        if {[info exists saved_error_info]} {
+            set ::errorInfo $saved_error_info
+        }
     } elseif {[llength $cleanup_errors]} {
         set code_failed 1
         set error "assertion:[join $cleanup_errors "\n"]"

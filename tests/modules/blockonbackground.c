@@ -10,7 +10,7 @@
 /* Counts background workers that have returned from
  * ValkeyModule_UnblockClient(), so tests can wait for the unblock path to run
  * rather than relying on a fixed delay. */
-static volatile int block_debug_unblocked = 0;
+static int block_debug_unblocked = 0;
 
 typedef struct {
     /* Mutex for protecting ValkeyModule_BlockedClientMeasureTime*() API from race
@@ -93,7 +93,7 @@ void *BlockDebug_ThreadMain(void *arg) {
         blockClientMeasureTimeEnd(bc, block_privdata, 0);
     block_privdata->myint = rand();
     ValkeyModule_UnblockClient(bc,block_privdata);
-    block_debug_unblocked++;
+    __atomic_add_fetch(&block_debug_unblocked, 1, __ATOMIC_SEQ_CST);
     return NULL;
 }
 
@@ -289,7 +289,7 @@ int IsBlocked_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
 int DebugUnblockedCount_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
-    ValkeyModule_ReplyWithLongLong(ctx, block_debug_unblocked);
+    ValkeyModule_ReplyWithLongLong(ctx, __atomic_load_n(&block_debug_unblocked, __ATOMIC_SEQ_CST));
     return VALKEYMODULE_OK;
 }
 

@@ -3744,6 +3744,72 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
+    test {ZPOP keeps btree index and hashtable consistent across leaves} {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            set binary "bin\x00member"
+            r zadd zset -1 $binary
+            for {set i 0} {$i < 256} {incr i} {
+                r zadd zset [expr {$i / 4}] "m[format %03d $i]"
+            }
+            assert_encoding btree zset
+
+            assert_equal [list $binary -1] [r zpopmin zset]
+            assert_equal {} [r zscore zset $binary]
+
+            set expected {}
+            for {set i 0} {$i < 80} {incr i} {
+                lappend expected "m[format %03d $i]" [expr {$i / 4}]
+            }
+            assert_equal $expected [r zpopmin zset 80]
+            assert_equal {} [r zscore zset m000]
+            assert_equal 0 [r zrank zset m080]
+
+            set expected {}
+            for {set i 255} {$i >= 176} {incr i -1} {
+                lappend expected "m[format %03d $i]" [expr {$i / 4}]
+            }
+            assert_equal $expected [r zpopmax zset 80]
+            assert_equal {} [r zscore zset m255]
+            assert_equal 96 [r zcard zset]
+
+            assert_equal 1 [r zadd zset 0 m000]
+            assert_equal 0 [r zrank zset m000]
+            assert_equal 194 [llength [r zpopmin zset 100]]
+            assert_equal 0 [r exists zset]
+        }
+    }
+
+    test {ZPOP drains both ends of a three-level btree} {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            set args {}
+            for {set i 0} {$i < 4096} {incr i} {
+                lappend args $i "m[format %04d $i]"
+            }
+            assert_equal 4096 [r zadd zset {*}$args]
+            assert_encoding btree zset
+
+            for {set batch 0} {$batch < 4} {incr batch} {
+                set expected {}
+                set first [expr {$batch * 512}]
+                for {set i $first} {$i < $first + 512} {incr i} {
+                    lappend expected "m[format %04d $i]" $i
+                }
+                assert_equal $expected [r zpopmin zset 512]
+
+                set expected {}
+                set last [expr {4095 - $batch * 512}]
+                for {set i $last} {$i > $last - 512} {incr i -1} {
+                    lappend expected "m[format %04d $i]" $i
+                }
+                assert_equal $expected [r zpopmax zset 512]
+                assert_equal [expr {4096 - ($batch + 1) * 1024}] [r zcard zset]
+            }
+            assert_equal 0 [r exists zset]
+        }
+    }
+
     test {ZPOPMIN/ZPOPMAX empty btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 

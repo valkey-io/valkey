@@ -44,11 +44,9 @@
  * At the same time the elements are added to an ordered index mapping scores
  * to elements (so elements are sorted by scores in this "view").
  *
- * Note that the element string is shared between the hash table and the
- * ordered index in order to save memory. The element is freed only in
- * orderedIndexItemFree(). The hash table has no value free method set.
- * So we should always remove an element from the hash table, and later from
- * the ordered index. */
+ * The hash table and ordered index share each item's allocation. The hash
+ * table does not free items, so an item must be removed from both structures
+ * before the ordered index item is freed. */
 
 #include "server.h"
 #include "ordered_index.h"
@@ -3368,7 +3366,6 @@ void genericZpopCommand(client *c,
     int idx;
     robj *key = NULL;
     robj *zobj = NULL;
-    sds ele;
     double score;
 
     if (deleted) *deleted = 0;
@@ -3409,6 +3406,11 @@ void genericZpopCommand(client *c,
 
     /* Remove the element. */
     do {
+        sds ele = NULL;
+        OrderedIndexItem *popped = NULL;
+        const char *reply_ele;
+        size_t reply_ele_len;
+
         if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(zobj);
             unsigned char *eptr, *sptr;
@@ -3429,26 +3431,24 @@ void genericZpopCommand(client *c,
             sptr = lpNext(zl, eptr);
             serverAssertWithInfo(c, zobj, sptr != NULL);
             score = zzlGetScore(sptr);
+            serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
+            reply_ele = ele;
+            reply_ele_len = sdslen(ele);
         } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(zobj);
             OrderedIndex *oi = zs->oi;
-            OrderedIndexItem *zln;
 
-            /* Get the first or last element in the sorted set. */
-            zln = (where == ZSET_MAX ? orderedIndexGetLast(oi) : orderedIndexGetFirst(oi));
+            popped = (where == ZSET_MAX ? orderedIndexPopLast(oi) : orderedIndexPopFirst(oi));
 
-            /* There must be an element in the sorted set. */
-            serverAssertWithInfo(c, zobj, zln != NULL);
-            const char *ele_ptr;
-            size_t ele_len;
-            orderedIndexItemGetElement(zln, &ele_ptr, &ele_len);
-            ele = sdsnewlen(ele_ptr, ele_len);
-            score = orderedIndexItemGetScore(zln);
+            serverAssertWithInfo(c, zobj, popped != NULL);
+            /* The detached item is also the hashtable entry. Remove it before freeing it. */
+            serverAssertWithInfo(c, zobj, hashtableDelete(zs->ht, popped));
+            orderedIndexItemGetElement(popped, &reply_ele, &reply_ele_len);
+            score = orderedIndexItemGetScore(popped);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
 
-        serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
         server.dirty++;
 
         if (result_count == 0) { /* Do this only for the first iteration. */
@@ -3460,9 +3460,12 @@ void genericZpopCommand(client *c,
         if (use_nested_array) {
             addReplyArrayLen(c, 2);
         }
-        addReplyBulkCBuffer(c, ele, sdslen(ele));
+        addReplyBulkCBuffer(c, reply_ele, reply_ele_len);
         addReplyDouble(c, score);
-        sdsfree(ele);
+        if (popped)
+            orderedIndexItemFree(popped);
+        else
+            sdsfree(ele);
         ++result_count;
     } while (--rangelen);
 

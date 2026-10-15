@@ -3939,10 +3939,13 @@ static int tryHandleInlineSwapdbForTempLoad(rdbLoadingCtx *rdb_loading_ctx, robj
     struct serverCommand *cmd = lookupCommand(argv, argc);
     if (cmd->proc != swapdbCommand) return 0;
 
-    /* getParamsForSwapdb validates arity/range and returns false for a no-op
-     * (e.g. "swapdb 0 0"); in that case there is nothing to swap. */
-    int id1, id2;
-    if (getParamsForSwapdb(argc, argv, NULL, &id1, &id2)) {
+    /* Parse and validate the two db ids. No ACL check is needed here: this is an
+     * internal replication replay, not a client command. A no-op swap (e.g.
+     * "swapdb 0 0") or an out-of-range/malformed one leaves nothing to do. */
+    long long id1, id2;
+    if (argc == 3 && !server.cluster_enabled && getLongLongFromObject(argv[1], &id1) == C_OK &&
+        getLongLongFromObject(argv[2], &id2) == C_OK && id1 >= 0 && id1 < server.dbnum && id2 >= 0 &&
+        id2 < server.dbnum && id1 != id2) {
         if (rdb_loading_ctx->dbarray[id1] == NULL) rdb_loading_ctx->dbarray[id1] = createDatabase(id1);
         if (rdb_loading_ctx->dbarray[id2] == NULL) rdb_loading_ctx->dbarray[id2] = createDatabase(id2);
         dbSwapDataFields(rdb_loading_ctx->dbarray[id1], rdb_loading_ctx->dbarray[id2]);

@@ -4585,7 +4585,6 @@ bool dbsHaveNoKeys(void);
 serverDb *createDatabaseIfNeeded(int id);
 void swapMainDbWithTempDb(serverDb **tempDb);
 void dbSwapDataFields(serverDb *db1, serverDb *db2);
-bool getParamsForSwapdb(int argc, robj **argv, client *permission_client, int *id1_p, int *id2_p);
 sds getVersion(void);
 void debugPauseProcess(void);
 

@@ -207,6 +207,43 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
     }
 }
 
+typedef struct pendingDatabaseFree {
+    kvstore *keys;
+    kvstore *expires;
+    kvstore *keys_with_volatile_items;
+} pendingDatabaseFree;
+
+/* Keyspaces flushed inside an execution unit are freed only when the unit
+ * ends: until then the main thread can still use their objects (queued argv,
+ * pending propagation). */
+static pendingDatabaseFree *pending_db_frees = NULL;
+static int pending_db_free_count = 0;
+static int pending_db_free_cap = 0;
+
+static void enqueuePendingDatabaseFree(kvstore *keys, kvstore *expires, kvstore *keys_with_volatile_items) {
+    if (pending_db_free_count == pending_db_free_cap) {
+        pending_db_free_cap = pending_db_free_cap ? pending_db_free_cap * 2 : 8;
+        pending_db_frees = zrealloc(pending_db_frees, (size_t)pending_db_free_cap * sizeof(pendingDatabaseFree));
+    }
+    pendingDatabaseFree *pending = &pending_db_frees[pending_db_free_count++];
+    pending->keys = keys;
+    pending->expires = expires;
+    pending->keys_with_volatile_items = keys_with_volatile_items;
+}
+
+bool lazyfreeHasPendingDatabaseFrees(void) {
+    return pending_db_free_count > 0;
+}
+
+void lazyfreeDrainPendingDatabaseFrees(void) {
+    for (int i = 0; i < pending_db_free_count; i++) {
+        pendingDatabaseFree *pending = &pending_db_frees[i];
+        bioCreateLazyFreeJob(lazyfreeFreeDatabase, 3, pending->keys, pending->expires,
+                             pending->keys_with_volatile_items);
+    }
+    pending_db_free_count = 0;
+}
+
 /* Empty a DB asynchronously. What the function does actually is to
  * create a new empty set of hash tables and scheduling the old ones for
  * lazy freeing. */
@@ -222,7 +259,11 @@ void emptyDbAsync(serverDb *db) {
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     atomic_fetch_add_explicit(&lazyfree_objects, kvstoreSize(oldkeys), memory_order_relaxed);
-    bioCreateLazyFreeJob(lazyfreeFreeDatabase, 3, oldkeys, oldexpires, oldkeyswithexpires);
+    if (server.execution_nesting) {
+        enqueuePendingDatabaseFree(oldkeys, oldexpires, oldkeyswithexpires);
+    } else {
+        bioCreateLazyFreeJob(lazyfreeFreeDatabase, 3, oldkeys, oldexpires, oldkeyswithexpires);
+    }
 }
 
 /* Free the key tracking table.

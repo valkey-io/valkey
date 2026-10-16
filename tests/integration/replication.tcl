@@ -1744,6 +1744,31 @@ start_server {tags {"repl" "external:skip"}} {
         waitForBgsave r
     }
 
+    foreach hide {no yes} {
+        test "Error sent to replica is logged with hide-user-data-from-log $hide" {
+            r config set hide-user-data-from-log $hide
+            set rd [valkey_deferring_client]
+            set lines [count_log_lines 0]
+
+            $rd psync replicationid -1
+            assert_match {FULLRESYNC * *} [$rd read]
+            $rd notacommand secretvalue
+            catch {$rd read} e
+            assert_equal "PONG" [r ping]
+
+            if {$hide} {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: '(redacted)'*" $lines
+                verify_no_log_message 0 "*secretvalue*" $lines
+            } else {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *secretvalue*" $lines
+            }
+
+            $rd close
+            waitForBgsave r
+        }
+    }
+    r config set hide-user-data-from-log no
+
     test "PSYNC with wrong offset should throw error" {
         # It used to accept the FULL SYNC, but also replied with an error.
         assert_error {ERR value is not an integer or out of range} {r psync replicationid offset_str}

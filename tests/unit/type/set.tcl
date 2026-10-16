@@ -26,12 +26,12 @@ start_server {
         assert_equal [expr [llength $initelems($type)] + 1] [r scard myset]
         assert_equal 1 [r sismember myset foo]
         assert_equal 1 [r sismember myset bar]
-        assert_equal 0 [r sismember myset bla]
+        assert_equal 0 [r sismember myset blah]
         assert_equal {1} [r smismember myset foo]
         assert_equal {1 1} [r smismember myset foo bar]
-        assert_equal {1 0} [r smismember myset foo bla]
-        assert_equal {0 1} [r smismember myset bla foo]
-        assert_equal {0} [r smismember myset bla]
+        assert_equal {1 0} [r smismember myset foo blah]
+        assert_equal {0 1} [r smismember myset blah foo]
+        assert_equal {0} [r smismember myset blah]
         assert_equal "bar $initelems($type)" [lsort [r smembers myset]]
         r memory usage myset
     }

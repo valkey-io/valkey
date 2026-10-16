@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __RDB_H
-#define __RDB_H
+#ifndef RDB_H
+#define RDB_H
 
 #include <stdio.h>
 #include "rio.h"

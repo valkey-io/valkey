@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _ZIPLIST_H
-#define _ZIPLIST_H
+#ifndef ZIPLIST_H
+#define ZIPLIST_H
 
 #define ZIPLIST_HEAD 0
 #define ZIPLIST_TAIL 1
@@ -71,4 +71,4 @@ void ziplistRandomPairs(unsigned char *zl, unsigned int count, ziplistEntry *key
 unsigned int ziplistRandomPairsUnique(unsigned char *zl, unsigned int count, ziplistEntry *keys, ziplistEntry *vals);
 int ziplistSafeToAdd(unsigned char *zl, size_t add);
 
-#endif /* _ZIPLIST_H */
+#endif /* ZIPLIST_H */

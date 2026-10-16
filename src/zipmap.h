@@ -32,8 +32,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _ZIPMAP_H
-#define _ZIPMAP_H
+#ifndef ZIPMAP_H
+#define ZIPMAP_H
 
 unsigned char *zipmapRewind(unsigned char *zm);
 unsigned char *

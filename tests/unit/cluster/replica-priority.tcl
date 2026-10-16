@@ -1,3 +1,9 @@
+proc reset_failover_delay {} {
+    foreach id {0 3 6} {
+        R $id debug cluster-failover-delay -1
+    }
+}
+
 start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000 cluster-replica-validity-factor 0}} {
     test "Replica can do a better ranking in auto failover based on the priority" {
         # primary R 0, replica1 R 3, replica2 R 6
@@ -18,25 +24,37 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             fail "Replica priority did not propagate"
         }
 
+        # If the voters are slow to deliver their ACKs (e.g. a slow nodes.conf fsync)
+        # the rank #1 replica may start its own election with a higher epoch and win.
+        # Setting the delays will make the outcome more deterministic, as the best replica
+        # starts the election immediately, while lower-ranked replicas honor the delay.
+        R 3 debug cluster-failover-delay 2000
+        R 6 debug cluster-failover-delay 2000
+        R 0 debug cluster-failover-delay 2000
+
         # R 3 has a better priority and will become the primary.
         pause_process [srv 0 pid]
         wait_for_condition 1000 50 {
             [s -3 role] eq {master} &&
             [s -6 role] eq {slave}
         } else {
+            resume_process [srv 0 pid]
+            reset_failover_delay
             fail "The first failover did not go as expected"
         }
+
+        resume_process [srv 0 pid]
 
         # Make sure our rank and priority are correct.
         verify_log_message -3 "*Start of election*rank #0*replica priority 0*" 0
         verify_log_message -6 "*Start of election*rank #1*replica priority 10*" 0
 
-        resume_process [srv 0 pid]
         wait_for_condition 1000 50 {
             [s 0 role] eq {slave} &&
             [s -3 role] eq {master} &&
             [s -6 role] eq {slave}
         } else {
+            reset_failover_delay
             fail "The old primary was not converted into replica"
         }
 
@@ -48,6 +66,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             [R 6 debug cluster-replica-priority [R 0 cluster myid]] == 10 &&
             [R 0 debug cluster-replica-priority [R 6 cluster myid]] == 5
         } else {
+            reset_failover_delay
             fail "Replica priority did not propagate"
         }
 
@@ -57,21 +76,27 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             [s 0 role] eq {slave} &&
             [s -6 role] eq {master}
         } else {
+            resume_process [srv -3 pid]
+            reset_failover_delay
             fail "The second failover did not go as expected"
         }
+
+        resume_process [srv -3 pid]
 
         # Make sure our rank and priority are correct.
         verify_log_message 0 "*Start of election*rank #1*replica priority 10*" 0
         verify_log_message -6 "*Start of election*rank #0*replica priority 5*" 0
 
-        resume_process [srv -3 pid]
         wait_for_condition 1000 50 {
             [s 0 role] eq {slave} &&
             [s -3 role] eq {slave} &&
             [s -6 role] eq {master}
         } else {
+            reset_failover_delay
             fail "The old primary was not converted into replica"
         }
+
+        reset_failover_delay
 
         # Replica priority resets to 0 when the sender stops advertising it
         R 0 config set cluster-replica-priority 0

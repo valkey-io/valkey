@@ -5178,6 +5178,53 @@ start_server {tags {"hash expire listpack"}} {
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
 
+    foreach live_ttl_fields {0 3} {
+        test "Conversion tracks every expired-but-unreaped field (live volatile fields: $live_ttl_fields)" {
+            r DEBUG SET-ACTIVE-EXPIRE 0
+            r config set hash-max-listpack-value $original_max_value
+            r config set hash-max-listpack-entries $original_max_entries
+            # Earlier tests leave expired fields behind; they would be reaped
+            # below and skew the expired_fields count.
+            r flushall
+            r hset myhash p v e1 v e2 v e3 v
+            r hpexpire myhash 1 FIELDS 3 e1 e2 e3
+            for {set i 1} {$i <= $live_ttl_fields} {incr i} {
+                r hsetex myhash PX 100000 FIELDS 1 l$i v
+            }
+            wait_for_condition 100 10 {
+                [r hexists myhash e1] == 0 && [r hexists myhash e2] == 0 && [r hexists myhash e3] == 0
+            } else {
+                fail "Fields e1, e2 and e3 were never logically expired"
+            }
+            assert_encoding listpack myhash
+
+            # The conversion registers each expiring entry in the volatile set.
+            # The first one creates the set and switches the hashtable to the
+            # TTL-validating type, so every expired field must still be
+            # tracked after that, not only the first one visited.
+            r hset myhash big [string repeat x 128]
+            assert_encoding hashtable myhash
+            set expected_len [expr {2 + $live_ttl_fields}]
+
+            # All three expired fields must be reaped. An untracked one is
+            # never reaped: it stays counted by HLEN and either reappears with
+            # its value (once the volatile set empties) or stays hidden.
+            set initial_expired [info_field [r info stats] expired_fields]
+            r DEBUG SET-ACTIVE-EXPIRE 1
+            wait_for_active_expiry r myhash $expected_len $initial_expired 3
+            assert_equal {} [lsearch -all -inline -glob [r hkeys myhash] e*]
+
+            # Writing to the field must work too. With an untracked entry this
+            # crashed in the volatile set update or removal.
+            assert_equal 1 [r hset myhash e1 n]
+            assert_equal {1} [r hexpire myhash 100 FIELDS 1 e1]
+            assert_equal {1} [r hpersist myhash FIELDS 1 e1]
+            assert_equal 1 [r hdel myhash e1]
+            assert_equal $expected_len [r hlen myhash]
+            assert_equal {PONG} [r ping]
+        } {} {needs:debug}
+    }
+
     r config set hash-max-listpack-value $original_max_value
     r config set hash-max-listpack-entries $original_max_entries
 }

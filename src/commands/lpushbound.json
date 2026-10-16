@@ -1,0 +1,88 @@
+{
+    "LPUSHBOUND": {
+        "summary": "Prepends one or more elements to a list while keeping its length within a bound. In EVICT mode the oldest elements are dropped when the bound would be exceeded, in REJECT mode the push is refused.",
+        "complexity": "O(N) where N is the number of pushed elements plus the number of elements evicted to satisfy the bound.",
+        "group": "list",
+        "since": "9.0.0",
+        "arity": -5,
+        "function": "lpushboundCommand",
+        "history": [],
+        "command_flags": [
+            "WRITE",
+            "DENYOOM",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "LIST",
+            "WRITE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "INSERT"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "The new list length after the push (EVICT mode, or REJECT mode when the push fits).",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                {
+                    "description": "In REJECT mode when the push would exceed the bound: the negative capacity shortage.",
+                    "type": "integer",
+                    "maximum": -1
+                }
+            ]
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "maxlen",
+                "type": "integer"
+            },
+            {
+                "name": "policy",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "evict",
+                        "type": "pure-token",
+                        "token": "EVICT"
+                    },
+                    {
+                        "name": "reject",
+                        "type": "pure-token",
+                        "token": "REJECT"
+                    }
+                ]
+            },
+            {
+                "name": "element",
+                "type": "string",
+                "multiple": true
+            }
+        ]
+    }
+}

@@ -1100,7 +1100,7 @@ start_server {tags {"scripting"}} {
         }
         catch {r fcall_ro f1 1 x} e
         set _ $e
-    } {*Can not execute a script with write flag using \*_ro command*}
+    } {*Cannot execute a script with write flag using \*_ro command*}
 
     test {FUNCTION - write script with no-writes flag} {
         r function load replace {#!lua name=test
@@ -1157,7 +1157,7 @@ start_server {tags {"scripting"}} {
         assert_equal {hello} [r fcall f2 0]
 
         catch {[r fcall f3 1 x]} e
-        assert_match {ERR *Can not execute the command on a stale replica*} $e
+        assert_match {ERR *Cannot execute the command on a stale replica*} $e
 
         assert_match {*redis_version*} [r fcall f4 0]
 

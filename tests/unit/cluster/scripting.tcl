@@ -76,7 +76,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
             server.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-cluster'}}
         }
         catch {R 0 fcall f1 0} e
-        assert_match {*Can not run script on cluster, 'no-cluster' flag is set*} $e
+        assert_match {*Cannot run script on cluster, 'no-cluster' flag is set*} $e
     }
 
     test "Script no-cluster flag" {
@@ -86,7 +86,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
             } 0
         } e
         
-        assert_match {*Can not run script on cluster, 'no-cluster' flag is set*} $e
+        assert_match {*Cannot run script on cluster, 'no-cluster' flag is set*} $e
     }
 
     test "Calling cluster slots in scripts is OK" {

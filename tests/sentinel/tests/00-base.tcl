@@ -126,6 +126,16 @@ test "The old primary eventually gets reconfigured as a slave" {
     reset_sentinel_user_acl $::user
 }
 
+test "Sentinels expire primary-down reports after failover" {
+    foreach_sentinel_id id {
+        wait_for_condition 100 100 {
+            ![string match "*master_down*" [S $id SENTINEL SENTINELS mymaster]]
+        } else {
+            fail "Sentinel $id still has stale primary-down reports"
+        }
+    }
+}
+
 test "ODOWN is not possible without N (quorum) Sentinels reports" {
     set sentinels [llength $::sentinel_instances]
     foreach_sentinel_id id {

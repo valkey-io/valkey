@@ -729,6 +729,10 @@ all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
 persist-settings: distclean
+	echo CC=$(CC) >> .make-settings
+	echo CXX=$(CXX) >> .make-settings
+	echo AR=$(AR) >> .make-settings
+	echo RANLIB=$(RANLIB) >> .make-settings
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
@@ -855,7 +859,7 @@ distclean: clean
 test: $(ALL_BUILD_PREREQUISITES)
 	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
-test-unit:
+test-unit: $(ENGINE_LIB_NAME)
 	@(cd unit && $(MAKE) test-unit)
 
 # valkey-unit-gtests

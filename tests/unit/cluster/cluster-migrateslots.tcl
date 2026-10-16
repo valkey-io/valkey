@@ -162,6 +162,11 @@ proc set_debug_prevent_pause {value} {
     for {set i 0} {$i < [llength $::servers]} {incr i} {
         assert_match "OK" [R $i DEBUG SLOTMIGRATION PREVENT-PAUSE $value]
     }
+
+    # Inside a test, reset if the test fails. Outside a test nothing is registered
+    if {$value && $::cur_test ne ""} {
+        test_defer_fail { set_debug_prevent_pause 0 }
+    }
 }
 
 proc set_debug_prevent_failover {value} {
@@ -708,9 +713,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
     test "Import with hz set to 1" {
         assert_does_not_resync {
-            set old_hz [lindex [R 0 CONFIG GET hz] 1]
-            R 0 CONFIG SET hz 1
-            R 2 CONFIG SET hz 1
+            test_config_set {R 0} hz 1
+            test_config_set {R 2} hz 1
 
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
@@ -736,8 +740,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_equal "OK" [R 0 FLUSHDB SYNC]
             assert_equal "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
-            R 0 CONFIG SET hz $old_hz
-            R 2 CONFIG SET hz $old_hz
         }
     }
 
@@ -1294,8 +1296,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Trigger failover. Give a large repl backlog to ensure PSYNC will
         # succeed even after the new primary cleans up the importing keys.
-        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
-        R 3 CONFIG SET repl-backlog-size 100mb
+        test_config_set {R 3} repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -1322,7 +1323,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
-        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
         set_debug_prevent_pause 0
     }
 
@@ -1410,8 +1410,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     test "Export unpauses itself even if slot failover doesn't occur" {
         assert_does_not_resync {
             # Lower manual failover timeout for this test
-            set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
-            R 0 CONFIG SET cluster-manual-failover-timeout 100
+            test_config_set {R 0} cluster-manual-failover-timeout 100
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
@@ -1432,9 +1431,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Validate no longer paused
             assert_match "none" [s -0 paused_reason]
 
-            # Reset manual failover timeout
-            R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
-
             # Cleanup for the next test
             set_debug_prevent_failover 0
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1444,8 +1440,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     test "Export unpauses when cancelled" {
         assert_does_not_resync {
             # Lower manual failover timeout for this test
-            set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
-            R 0 CONFIG SET cluster-manual-failover-timeout 100
+            test_config_set {R 0} cluster-manual-failover-timeout 100
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
@@ -1462,9 +1457,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field 2 $jobname state failed
 
             assert_match "none" [s -0 paused_reason]
-
-            # Reset manual failover timeout
-            R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
 
             # Cleanup for the next test
             set_debug_prevent_failover 0
@@ -2047,8 +2039,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 2 $jobname state waiting-to-pause
-            set old_cob [lindex [R 2 config get client-output-buffer-limit] 1]
-            R 2 config set client-output-buffer-limit "replica 10k 0 0"
+            test_config_set {R 2} client-output-buffer-limit "replica 10k 0 0"
 
             # Pause the target
             set node0_pid [srv -0 pid]
@@ -2077,7 +2068,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # Cleanup for the next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
-            R 2 config set client-output-buffer-limit "$old_cob"
             set_debug_prevent_pause 0
         }
     }
@@ -2486,8 +2476,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
 
         # Trigger failover. Give a large repl backlog to ensure PSYNC will
         # succeed even after the new primary cleans up the importing keys.
-        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
-        R 3 CONFIG SET repl-backlog-size 100mb
+        test_config_set {R 3} repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -2515,7 +2504,6 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
         set_debug_prevent_pause 0
-        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
     }
 }
 

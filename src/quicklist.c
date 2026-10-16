@@ -1175,12 +1175,14 @@ int quicklistDelRange(quicklist *quicklist, const long start, const long count) 
     return 1;
 }
 
-/* Compares two entries */
+/* Compare an already decoded quicklist entry with a string. */
 int quicklistCompare(quicklistEntry *entry, unsigned char *p2, const size_t p2_len) {
-    if (unlikely(QL_NODE_IS_PLAIN(entry->node))) {
+    if (entry->value) {
         return ((entry->sz == p2_len) && (memcmp(entry->value, p2, p2_len) == 0));
     }
-    return lpCompare(entry->zi, p2, p2_len);
+    long long sval;
+    if (string2ll((const char *)p2, p2_len, &sval)) return entry->longval == sval;
+    return 0;
 }
 
 /* Returns a quicklist iterator 'iter'. After the initialization every

@@ -65,12 +65,12 @@ typedef struct clusterLink {
     int flags;                             /* CLUSTER_LINK_... */
 
     /* Threaded I/O state (main-thread owned, except where noted) */
-    int io_read_state;         /* clusterLinkIOState: read job state */
-    int io_write_state;        /* clusterLinkIOState: write job state */
-    int async_close;           /* 1 if teardown requested while jobs in flight */
-    int io_refs;               /* Count of in-flight I/O jobs */
-    clusterIOResult io_result; /* Result code from last I/O job (written by I/O thread).
-                                * Shared by read/write jobs because they are mutually exclusive per link. */
+    int io_read_state;               /* clusterLinkIOState: read job state */
+    int io_write_state;              /* clusterLinkIOState: write job state */
+    int async_close;                 /* 1 if teardown requested while jobs in flight */
+    int io_refs;                     /* Count of in-flight I/O jobs */
+    clusterIOResult io_read_result;  /* Result code from last read job (written by I/O thread) */
+    clusterIOResult io_write_result; /* Result code from last write job (written by I/O thread) */
 
     /* Async write snapshot/result */
     listNode *io_last_send_block; /* Last queue node visible to current write job */
@@ -84,9 +84,19 @@ typedef struct clusterLink {
     size_t io_complete_bytes;   /* Bytes at the start of rcvbuf framed as complete packets */
     size_t io_complete_packets; /* Number of complete packets in io_complete_bytes */
 
-    /* Read/write fairness */
+    /* Read/write fairness (half duplex links only) */
     int io_read_deferred; /* Read skipped while a write was in flight; next write dispatch yields */
 } clusterLink;
+
+/* Whether read and write jobs may be in flight on a link at the same time.
+ * They touch disjoint link state, so they can run concurrently as long as the
+ * connection offers I/O that leaves the shared connection state alone (plain
+ * TCP). TLS links keep them mutually exclusive: an SSL object must not be used
+ * from two threads at once, and SSL_read()/SSL_write() both update the shared
+ * tls_connection flags. */
+static inline int clusterLinkIOFullDuplex(clusterLink *link) {
+    return connHasStatelessIO(link->conn);
+}
 
 /* Cluster link flags and macros. */
 #define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */

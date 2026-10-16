@@ -785,24 +785,33 @@ int trySendWriteToIOThreads(client *c) {
     return C_OK;
 }
 
+/* Connection postpone mask derived from the link's in-flight I/O jobs. */
+static int clusterLinkConnPostponeMask(struct clusterLink *link) {
+    int mask = 0;
+    if (link->io_read_state != CLUSTER_LINK_IO_IDLE) mask |= CONN_POSTPONE_READ;
+    if (link->io_write_state != CLUSTER_LINK_IO_IDLE) mask |= CONN_POSTPONE_WRITE;
+    return mask;
+}
+
 /* Try to offload a cluster link read to an I/O thread.
  * Enqueues a tagged job onto io_shared_inbox (SPMC queue).
- * Returns C_OK if offloaded or if a job is already pending (to prevent
- *   the caller from falling back to synchronous I/O on a connection
+ * Returns C_OK if offloaded or if a conflicting job is already pending (to
+ *   prevent the caller from falling back to synchronous I/O on a connection
  *   with an in-flight worker job).
  * Returns C_ERR if fallback is needed (pool inactive or spmcEnqueue fails). */
 int trySendClusterReadToIOThreads(struct clusterLink *link) {
-    /* If any I/O job is already in flight for this link, return C_OK
-     * so the caller does NOT fall back to synchronous I/O. */
+    /* If a conflicting I/O job is already in flight for this link, return
+     * C_OK so the caller does NOT fall back to synchronous I/O. On a full
+     * duplex link an in-flight write does not conflict with a read. */
     if (link->io_read_state != CLUSTER_LINK_IO_IDLE) return C_OK;
-    if (link->io_write_state != CLUSTER_LINK_IO_IDLE) {
+    if (link->io_write_state != CLUSTER_LINK_IO_IDLE && !clusterLinkIOFullDuplex(link)) {
         link->io_read_deferred = 1;
         return C_OK;
     }
     link->io_read_deferred = 0;
 
-    /* Invariant: io_refs must be 0 when both states are IDLE. */
-    serverAssert(link->io_refs == 0);
+    /* Invariant: the only job that can hold a ref here is an in-flight write. */
+    serverAssert(link->io_refs == (link->io_write_state != CLUSTER_LINK_IO_IDLE));
 
     /* clusterReadHandler() drains any queued complete packets before
      * attempting a new dispatch. */
@@ -819,20 +828,20 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
         return C_ERR;
     }
 
-    /* Postpone connection state updates while the I/O thread operates. */
-    connSetPostponeUpdateState(link->conn, 1);
-
     /* Transition link to pending-read state. */
     link->io_read_state = CLUSTER_LINK_IO_PENDING;
     link->io_refs++;
     link->rcvbuf_alloc_at_dispatch = link->rcvbuf_alloc;
 
+    /* Postpone connection state updates while the I/O thread operates. */
+    connSetPostponeUpdateState(link->conn, clusterLinkConnPostponeMask(link));
+
     /* Enqueue the read job. */
     if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(link, JOB_REQ_CLUSTER_READ)) == false)) {
-        /* Rollback on enqueue failure. */
+        /* Rollback on enqueue failure. An in-flight write keeps its postpone. */
         link->io_read_state = CLUSTER_LINK_IO_IDLE;
         link->io_refs--;
-        connSetPostponeUpdateState(link->conn, 0);
+        connSetPostponeUpdateState(link->conn, clusterLinkConnPostponeMask(link));
         server.stat_cluster_io_main_thread_fallbacks++;
         return C_ERR;
     }
@@ -847,20 +856,21 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
  * head offset and the last queue node visible to the worker. New messages
  * appended by clusterSendMessage during the write stay queued on the main
  * thread and are picked up by a later dispatch.
- * Returns C_OK if offloaded or if a job is already pending (to prevent
- *   the caller from falling back to synchronous I/O on a connection
+ * Returns C_OK if offloaded or if a conflicting job is already pending (to
+ *   prevent the caller from falling back to synchronous I/O on a connection
  *   with an in-flight worker job).
  * Returns C_ERR if fallback is needed (pool inactive or spmcEnqueue fails). */
 int trySendClusterWriteToIOThreads(struct clusterLink *link) {
     listNode *last_send_block;
 
-    /* If any I/O job is already in flight for this link, return C_OK
-     * so the caller does NOT fall back to synchronous I/O. */
+    /* If a conflicting I/O job is already in flight for this link, return
+     * C_OK so the caller does NOT fall back to synchronous I/O. On a full
+     * duplex link an in-flight read does not conflict with a write. */
     if (link->io_write_state != CLUSTER_LINK_IO_IDLE) return C_OK;
-    if (link->io_read_state != CLUSTER_LINK_IO_IDLE) return C_OK;
+    if (link->io_read_state != CLUSTER_LINK_IO_IDLE && !clusterLinkIOFullDuplex(link)) return C_OK;
 
-    /* Invariant: io_refs must be 0 when both states are IDLE. */
-    serverAssert(link->io_refs == 0);
+    /* Invariant: the only job that can hold a ref here is an in-flight read. */
+    serverAssert(link->io_refs == (link->io_read_state != CLUSTER_LINK_IO_IDLE));
 
     /* Nothing to write. */
     if (listLength(link->send_msg_queue) == 0) return C_OK;
@@ -892,9 +902,6 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
     last_send_block = listLast(link->send_msg_queue);
     serverAssert(last_send_block != NULL);
 
-    /* Postpone connection state updates while the I/O thread operates. */
-    connSetPostponeUpdateState(link->conn, 1);
-
     /* Snapshot the canonical queue for one write job. */
     link->io_last_send_block = last_send_block;
     link->io_head_offset = link->head_msg_send_offset;
@@ -904,14 +911,18 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
     link->io_write_state = CLUSTER_LINK_IO_PENDING;
     link->io_refs++;
 
+    /* Postpone connection state updates while the I/O thread operates. */
+    connSetPostponeUpdateState(link->conn, clusterLinkConnPostponeMask(link));
+
     /* Enqueue the write job. */
     if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(link, JOB_REQ_CLUSTER_WRITE)) == false)) {
+        /* Rollback on enqueue failure. An in-flight read keeps its postpone. */
         link->io_write_state = CLUSTER_LINK_IO_IDLE;
         link->io_refs--;
         link->io_last_send_block = NULL;
         link->io_head_offset = 0;
         link->io_nodes_sent = 0;
-        connSetPostponeUpdateState(link->conn, 0);
+        connSetPostponeUpdateState(link->conn, clusterLinkConnPostponeMask(link));
         server.stat_cluster_io_main_thread_fallbacks++;
         return C_ERR;
     }

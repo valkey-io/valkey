@@ -143,6 +143,11 @@ typedef struct ConnectionType {
     int (*write)(struct connection *conn, const void *data, size_t data_len);
     int (*writev)(struct connection *conn, const struct iovec *iov, int iovcnt);
     int (*read)(struct connection *conn, void *buf, size_t buf_len);
+    /* Optional. Like write/read, but never touch the connection's state or
+     * last_errno: a -1 return leaves the cause in errno. A read and a write
+     * may run concurrently on different threads. */
+    int (*write_stateless)(struct connection *conn, const void *data, size_t data_len);
+    int (*read_stateless)(struct connection *conn, void *buf, size_t buf_len);
     int (*set_write_handler)(struct connection *conn, ConnectionCallbackFunc handler, int barrier);
     int (*set_read_handler)(struct connection *conn, ConnectionCallbackFunc handler);
     const char *(*get_last_error)(struct connection *conn);
@@ -288,6 +293,22 @@ static inline int connWritev(connection *conn, const struct iovec *iov, int iovc
  */
 static inline int connRead(connection *conn, void *buf, size_t buf_len) {
     return conn->type->read(conn, buf, buf_len);
+}
+
+/* Whether the connection type provides connWriteStateless()/connReadStateless(). */
+static inline int connHasStatelessIO(connection *conn) {
+    return conn->type->write_stateless && conn->type->read_stateless;
+}
+
+/* Like connWrite()/connRead(), but the connection state is left untouched, so
+ * the caller must test errno for an EAGAIN-like condition. Only valid when
+ * connHasStatelessIO() is true. */
+static inline int connWriteStateless(connection *conn, const void *data, size_t data_len) {
+    return conn->type->write_stateless(conn, data, data_len);
+}
+
+static inline int connReadStateless(connection *conn, void *buf, size_t buf_len) {
+    return conn->type->read_stateless(conn, buf, buf_len);
 }
 
 /* Register a write handler, to be called when the connection is writable.

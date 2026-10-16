@@ -57,14 +57,7 @@ inline int fakeConnGetType(void) {
     return CONN_TYPE_SOCKET;
 }
 
-inline int fakeConnWrite(connection *conn, const void *data, size_t size) {
-    fakeConnection *fc = (fakeConnection *)conn;
-    if (fc->fail_write) {
-        conn->state = CONN_STATE_ERROR;
-        return -1;
-    }
-    if (fc->error) return -1;
-
+inline int fakeConnCopyToSink(fakeConnection *fc, const void *data, size_t size) {
     size_t to_write = size;
     if (fc->written + to_write > fc->buf_size) {
         to_write = fc->buf_size - fc->written;
@@ -72,6 +65,30 @@ inline int fakeConnWrite(connection *conn, const void *data, size_t size) {
     memcpy(fc->buffer + fc->written, data, to_write);
     fc->written += to_write;
     return (int)to_write;
+}
+
+inline int fakeConnWrite(connection *conn, const void *data, size_t size) {
+    fakeConnection *fc = (fakeConnection *)conn;
+    if (fc->fail_write) {
+        conn->state = CONN_STATE_ERROR;
+        return -1;
+    }
+    if (fc->error) return -1;
+    return fakeConnCopyToSink(fc, data, size);
+}
+
+/* Reports a hard error through errno only and never touches the state. */
+inline int fakeConnWriteStateless(connection *conn, const void *data, size_t size) {
+    fakeConnection *fc = (fakeConnection *)conn;
+    if (fc->fail_write) {
+        errno = EPIPE;
+        return -1;
+    }
+    if (fc->error) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return fakeConnCopyToSink(fc, data, size);
 }
 
 inline int fakeConnWritev(connection *conn, const struct iovec *iov, int iovcnt) {
@@ -93,6 +110,14 @@ inline int fakeConnWritev(connection *conn, const struct iovec *iov, int iovcnt)
     return (int)total;
 }
 
+inline int fakeConnCopyFromSource(fakeConnection *fc, void *buf, size_t len) {
+    size_t avail = fc->read_len - fc->read_pos;
+    size_t n = (len < avail) ? len : avail;
+    memcpy(buf, fc->read_data + fc->read_pos, n);
+    fc->read_pos += n;
+    return (int)n;
+}
+
 inline int fakeConnRead(connection *conn, void *buf, size_t len) {
     fakeConnection *fc = (fakeConnection *)conn;
     if (fc->error) return -1;
@@ -105,11 +130,22 @@ inline int fakeConnRead(connection *conn, void *buf, size_t len) {
         errno = EAGAIN;
         return -1;
     }
-    size_t avail = fc->read_len - fc->read_pos;
-    size_t n = (len < avail) ? len : avail;
-    memcpy(buf, fc->read_data + fc->read_pos, n);
-    fc->read_pos += n;
-    return (int)n;
+    return fakeConnCopyFromSource(fc, buf, len);
+}
+
+/* Reports a hard error through errno only and never touches the state. */
+inline int fakeConnReadStateless(connection *conn, void *buf, size_t len) {
+    fakeConnection *fc = (fakeConnection *)conn;
+    if (fc->error) {
+        errno = EAGAIN;
+        return -1;
+    }
+    if (fc->read_pos >= fc->read_len) {
+        if (fc->eof) return 0;
+        errno = fc->fail_read ? ECONNRESET : EAGAIN;
+        return -1;
+    }
+    return fakeConnCopyFromSource(fc, buf, len);
 }
 
 inline int fakeConnSetWriteHandler(connection *conn, ConnectionCallbackFunc handler, int barrier) {
@@ -171,6 +207,8 @@ inline ConnectionType *fakeConnType(void) {
         ct.write = fakeConnWrite;
         ct.writev = fakeConnWritev;
         ct.read = fakeConnRead;
+        ct.write_stateless = fakeConnWriteStateless;
+        ct.read_stateless = fakeConnReadStateless;
         ct.set_write_handler = fakeConnSetWriteHandler;
         ct.set_read_handler = fakeConnSetReadHandler;
         ct.postpone_update_state = fakeConnPostponeUpdateState;

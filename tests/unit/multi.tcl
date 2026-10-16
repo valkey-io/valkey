@@ -1145,6 +1145,22 @@ start_server {tags {"multi"}} {
         r auth no-user foobar
         assert_error {WRONGPASS invalid username-password pair or user is disabled.} {r exec}
     }
+
+    foreach flush {FLUSHALL FLUSHDB} {
+        test "$flush ASYNC inside MULTI/EXEC frees the old keyspace after EXEC" {
+            wait_lazyfree_done r
+            r config resetstat
+            r multi
+            r set foo bar
+            r $flush async
+            r debug sleep 0.2
+            r info memory
+            set reply [r exec]
+            assert_match "*lazyfreed_objects:0\r*" [lindex $reply 3]
+            wait_lazyfree_done r
+            assert_equal 1 [s lazyfreed_objects]
+        } {} {needs:debug}
+    }
 }
 
 start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {
@@ -1194,23 +1210,5 @@ start_cluster 1 0 {tags {"external:skip cluster needs:debug"} overrides {appendo
         assert_equal [llength [R 0 KEYS *]] 2
         assert_equal [R 0 GET k0] "cd"
         assert_equal [R 0 GET k1] "b"
-    }
-}
-
-start_server {tags {"multi needs:debug"}} {
-    foreach flush {FLUSHALL FLUSHDB} {
-        test "$flush ASYNC inside MULTI/EXEC frees the old keyspace after EXEC" {
-            wait_lazyfree_done r
-            r config resetstat
-            r multi
-            r set foo bar
-            r $flush async
-            r debug sleep 0.2
-            r info memory
-            set reply [r exec]
-            assert_match "*lazyfreed_objects:0\r*" [lindex $reply 3]
-            wait_lazyfree_done r
-            assert_equal 1 [s lazyfreed_objects]
-        }
     }
 }

@@ -1699,7 +1699,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         } else if (cmd->proc == execCommand) {
             /* Run EXEC as one execution unit, as call() does, so work deferred
              * by its commands runs after EXEC has freed them. */
-            enterExecutionUnit(0, 0);
+            enterExecutionUnit(1, 0);
             cmd->proc(fakeClient);
             exitExecutionUnit();
             postExecutionUnitOperations();

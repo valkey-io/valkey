@@ -4183,7 +4183,9 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL || (expire < 0 && expire != VALKEYMODULE_NO_EXPIRE))
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
-        expire += commandTimeSnapshot();
+        mstime_t basetime = commandTimeSnapshot();
+        if (expire > LLONG_MAX - basetime) return VALKEYMODULE_ERR;
+        expire += basetime;
         setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
@@ -9590,7 +9592,9 @@ ValkeyModuleUser *VM_CreateModuleUser(const char *name) {
 }
 
 /* Frees a given user and disconnects all of the clients that have been
- * authenticated with it. See VM_CreateModuleUser for detailed usage.*/
+ * authenticated with it. See VM_CreateModuleUser for detailed usage.
+ *
+ * Returns VALKEYMODULE_OK. */
 int VM_FreeModuleUser(ValkeyModuleUser *user) {
     if (user->free_user) ACLFreeUserAndKillClients(user->user);
     zfree(user);

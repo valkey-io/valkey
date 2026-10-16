@@ -2313,6 +2313,7 @@ void xreadCommand(client *c) {
         if (o == NULL) continue;
         stream *s = o->ptr;
         streamID *gt = ids + i; /* ID must be greater than this. */
+        int modified_stream = 0;
         int serve_synchronously = 0;
         int serve_history = 0;                                      /* True for XREADGROUP with ID != ">". */
         streamConsumer *consumer = NULL;                            /* Unused if XREAD */
@@ -2343,6 +2344,7 @@ void xreadCommand(client *c) {
                 consumer = streamCreateConsumer(groups[i], consumername->ptr, c->argv[streams_arg + i], c->db->id,
                                                 SCC_DEFAULT);
                 if (noack) streamPropagateConsumerCreation(c, spi.keyname, spi.groupname, consumer->name);
+                modified_stream = 1;
             }
             consumer->seen_time = commandTimeSnapshot();
         } else if (s->length) {
@@ -2372,9 +2374,14 @@ void xreadCommand(client *c) {
             int flags = 0;
             if (noack) flags |= STREAM_RWR_NOACK;
             if (serve_history) flags |= STREAM_RWR_HISTORY;
-            streamReplyWithRange(c, s, &start, NULL, count, 0, groups ? groups[i] : NULL, consumer, flags, &spi);
-            if (groups) server.dirty++;
+            size_t delivered = streamReplyWithRange(c, s, &start, NULL, count, 0, groups ? groups[i] : NULL, consumer, flags, &spi);
+            if (groups && delivered > 0) {
+                server.dirty++;
+                modified_stream = 1;
+            }
         }
+
+        if (modified_stream) signalModifiedKey(c, c->db, c->argv[streams_arg + i]);
     }
 
     /* We replied synchronously! Set the top array len and return to caller. */
@@ -2661,12 +2668,12 @@ NULL
             o = createStreamObject();
             dbAdd(c->db, c->argv[2], o);
             s = o->ptr;
-            signalModifiedKey(c, c->db, c->argv[2]);
         }
 
         streamCG *cg = streamCreateCG(s, grpname, sdslen(grpname), &id, entries_read);
         if (cg) {
             addReply(c, shared.ok);
+            signalModifiedKey(c, c->db, c->argv[2]);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-create", c->argv[2], c->db->id);
         } else {
@@ -2682,6 +2689,7 @@ NULL
         cg->last_id = id;
         cg->entries_read = entries_read;
         addReply(c, shared.ok);
+        signalModifiedKey(c, c->db, c->argv[2]);
         server.dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-setid", c->argv[2], c->db->id);
     } else if (!strcasecmp(opt, "DESTROY") && c->argc == 4) {
@@ -2689,6 +2697,7 @@ NULL
             raxRemove(s->cgroups, (unsigned char *)grpname, sdslen(grpname), NULL);
             streamFreeCG(cg);
             addReply(c, shared.cone);
+            signalModifiedKey(c, c->db, c->argv[2]);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-destroy", c->argv[2], c->db->id);
             /* We want to unblock any XREADGROUP consumers with -NOGROUP. */
@@ -2698,6 +2707,7 @@ NULL
         }
     } else if (!strcasecmp(opt, "CREATECONSUMER") && c->argc == 5) {
         streamConsumer *created = streamCreateConsumer(cg, c->argv[4]->ptr, c->argv[2], c->db->id, SCC_DEFAULT);
+        if (created) signalModifiedKey(c, c->db, c->argv[2]);
         addReplyLongLong(c, created ? 1 : 0);
     } else if (!strcasecmp(opt, "DELCONSUMER") && c->argc == 5) {
         long long pending = 0;
@@ -2707,6 +2717,7 @@ NULL
              * that were yet associated with such a consumer. */
             pending = raxSize(consumer->pel);
             streamDelConsumer(cg, consumer);
+            signalModifiedKey(c, c->db, c->argv[2]);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-delconsumer", c->argv[2], c->db->id);
         }
@@ -2784,6 +2795,7 @@ void xsetidCommand(client *c) {
     if (entries_added != -1) s->entries_added = entries_added;
     if (!streamIDEqZero(&max_xdel_id)) s->max_deleted_entry_id = max_xdel_id;
     addReply(c, shared.ok);
+    signalModifiedKey(c, c->db, c->argv[1]);
     server.dirty++;
     notifyKeyspaceEvent(NOTIFY_STREAM, "xsetid", c->argv[1], c->db->id);
 }
@@ -2840,6 +2852,7 @@ void xackCommand(client *c) {
             server.dirty++;
         }
     }
+    if (acknowledged) signalModifiedKey(c, c->db, c->argv[1]);
     addReplyLongLong(c, acknowledged);
 cleanup:
     if (ids != static_ids) zfree(ids);
@@ -3097,6 +3110,7 @@ void xclaimCommand(client *c) {
     mstime_t deliverytime = -1; /* -1 means IDLE/TIME options not given. */
     int force = 0;
     int justid = 0;
+    int modified = 0;
 
     if (o) {
         if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
@@ -3193,6 +3207,7 @@ void xclaimCommand(client *c) {
     streamConsumer *consumer = streamLookupConsumer(group, c->argv[3]->ptr);
     if (consumer == NULL) {
         consumer = streamCreateConsumer(group, c->argv[3]->ptr, c->argv[1], c->db->id, SCC_DEFAULT);
+        modified = 1;
     }
     consumer->seen_time = commandTimeSnapshot();
 
@@ -3216,6 +3231,7 @@ void xclaimCommand(client *c) {
                 streamPropagateXCLAIM(c, c->argv[1], group, c->argv[2], c->argv[j], nack);
                 propagate_last_id = 0; /* Will be propagated by XCLAIM itself. */
                 server.dirty++;
+                modified = 1;
                 /* Release the NACK */
                 raxRemove(group->pel, buf, sizeof(buf), NULL);
                 raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
@@ -3281,12 +3297,15 @@ void xclaimCommand(client *c) {
             streamPropagateXCLAIM(c, c->argv[1], group, c->argv[2], c->argv[j], nack);
             propagate_last_id = 0; /* Will be propagated by XCLAIM itself. */
             server.dirty++;
+            modified = 1;
         }
     }
     if (propagate_last_id) {
         streamPropagateGroupID(c, c->argv[1], group, c->argv[2]);
         server.dirty++;
+        modified = 1;
     }
+    if (modified) signalModifiedKey(c, c->db, c->argv[1]);
     setDeferredArrayLen(c, arraylenptr, arraylen);
     preventCommandPropagation(c);
 cleanup:
@@ -3318,6 +3337,7 @@ void xautoclaimCommand(client *c) {
     streamID startid;
     int startex;
     int justid = 0;
+    int modified = 0;
 
     /* Parse idle/start/end/count arguments ASAP if needed, in order to report
      * syntax errors before any other error. */
@@ -3372,6 +3392,7 @@ void xautoclaimCommand(client *c) {
     streamConsumer *consumer = streamLookupConsumer(group, c->argv[3]->ptr);
     if (consumer == NULL) {
         consumer = streamCreateConsumer(group, c->argv[3]->ptr, c->argv[1], c->db->id, SCC_DEFAULT);
+        modified = 1;
     }
     consumer->seen_time = commandTimeSnapshot();
 
@@ -3402,6 +3423,7 @@ void xautoclaimCommand(client *c) {
             streamPropagateXCLAIM(c, c->argv[1], group, c->argv[2], idstr, nack);
             decrRefCount(idstr);
             server.dirty++;
+            modified = 1;
             /* Clear this entry from the PEL, it no longer exists */
             raxRemove(group->pel, ri.key, ri.key_len, NULL);
             raxRemove(nack->consumer->pel, ri.key, ri.key_len, NULL);
@@ -3452,7 +3474,10 @@ void xautoclaimCommand(client *c) {
         streamPropagateXCLAIM(c, c->argv[1], group, c->argv[2], idstr, nack);
         decrRefCount(idstr);
         server.dirty++;
+        modified = 1;
     }
+
+    if (modified) signalModifiedKey(c, c->db, c->argv[1]);
 
     /* We need to return the next entry as a cursor for the next XAUTOCLAIM call */
     raxNext(&ri);

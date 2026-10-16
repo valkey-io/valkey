@@ -367,10 +367,10 @@ static void *IOThreadMain(void *myid) {
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
     serverSetCpuAffinity(server.server_cpulist);
+    thread_id = (int)id;
     initSharedQueryBuf();
     pthread_cleanup_push(cleanupThreadResources, NULL);
 
-    thread_id = (int)id;
     void *batch_jobs[BATCH_SIZE];
     int processed = 0;
     monotime work_start_time = 0;
@@ -487,6 +487,7 @@ static void shutdownIOThread(int id) {
         serverLog(LL_WARNING, "IO thread(tid:%lu) can not be joined: %s", (unsigned long)tid, strerror(err));
     } else {
         serverLog(LL_NOTICE, "IO thread(tid:%lu) terminated", (unsigned long)tid);
+        if (!server.crashed) serverAssert(!isSharedQueryBufRegistered(id));
     }
     pthread_mutex_destroy(&io_threads_mutex[id]);
 

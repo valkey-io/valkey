@@ -3121,6 +3121,7 @@ void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
 writePreparedClient *prepareClientForFutureWrites(client *c);
 void addReplyNull(client *c);
+void addWritePreparedReplyNull(writePreparedClient *c);
 void addReplyNullArray(client *c);
 void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);

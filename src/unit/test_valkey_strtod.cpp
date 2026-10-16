@@ -186,7 +186,7 @@ TEST_F(ValkeyStrtodTest, TestHexFloat) {
         char buf[16];
         size_t slen = 1 + (size_t)(rand_r(&seed) % 15);
         size_t j;
-        static const char alphabet[] = "0123456789.+-eExXaAbCfFnNiIyY \t\n";
+        static const char alphabet[] = "0123456789.+-eExXaAbCfFnNiI.yY \t\n";
 
         if (fuzz_i < 512) {
             for (j = 0; j < slen; j++) {

@@ -24,8 +24,9 @@ mutexQueue *mutexQueueCreate(void) {
     mutexQueue *mq;
     mq = zmalloc(sizeof(*mq));
 
-    pthread_mutex_init(&mq->mutex, NULL);
-    pthread_cond_init(&mq->notify_cv, NULL);
+    int ret = pthread_mutex_init(&mq->mutex, NULL);
+    assert(ret == 0);
+    assert(pthread_cond_init(&mq->notify_cv, NULL) == 0);
     mq->priority_fifo = fifoCreate();
     mq->normal_fifo = fifoCreate();
     return mq;

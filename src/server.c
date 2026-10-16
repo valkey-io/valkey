@@ -756,7 +756,7 @@ void hashHashtableTypeDestructor(void *entry) {
 }
 
 size_t hashHashtableTypeMetadataSize(void) {
-    return sizeof(void *);
+    return sizeof(vset);
 }
 
 extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);

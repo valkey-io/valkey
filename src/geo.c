@@ -34,6 +34,10 @@
 #include "debugmacro.h"
 #include "pqsort.h"
 
+#define GEO_FIND_BATCH_SIZE 16
+static_assert(GEO_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "GEO batch size exceeds hashtable batch lookup limit");
+
 /* Things exported from t_zset.c only for geo.c, since it is the only other
  * part of the server that requires close zset introspection. */
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
@@ -890,12 +894,89 @@ void geosearchstoreCommand(client *c) {
     georadiusGeneric(c, 2, GEOSEARCH | GEOSEARCHSTORE);
 }
 
+/* Reply with the standard geohash, or null if the score cannot be decoded. */
+static void addGeohashToReply(client *c, double score) {
+    char *geoalphabet = "0123456789bcdefghjkmnpqrstuvwxyz";
+
+    /* The internal format we use for geocoding is a bit different
+     * than the standard, since we use as initial latitude range
+     * -85,85, while the normal geohashing algorithm uses -90,90.
+     * So we have to decode our position and re-encode using the
+     * standard ranges in order to output a valid geohash string. */
+
+    /* Decode... */
+    double xy[2];
+    if (!decodeGeohash(score, xy)) {
+        addReplyNull(c);
+        return;
+    }
+
+    /* Re-encode */
+    GeoHashRange r[2];
+    GeoHashBits hash;
+    r[0].min = -180;
+    r[0].max = 180;
+    r[1].min = -90;
+    r[1].max = 90;
+    geohashEncode(&r[0], &r[1], xy[0], xy[1], 26, &hash);
+
+    char buf[12];
+    int i;
+    for (i = 0; i < 11; i++) {
+        int idx;
+        if (i == 10) {
+            /* We have just 52 bits, but the API used to output
+             * an 11 bytes geohash. For compatibility we assume
+             * zero. */
+            idx = 0;
+        } else {
+            idx = (hash.bits >> (52 - ((i + 1) * 5))) & 0x1f;
+        }
+        buf[i] = geoalphabet[idx];
+    }
+    buf[11] = '\0';
+    addReplyBulkCBuffer(c, buf, 11);
+}
+
+static void geohashReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
+    const void *keys[GEO_FIND_BATCH_SIZE];
+    void *found_entries[GEO_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > GEO_FIND_BATCH_SIZE ? GEO_FIND_BATCH_SIZE : count;
+
+        /* Arguments may share an SDS; mark and unmark each string only once. */
+        for (size_t i = 0; i < batch; i++) {
+            sds member = objectGetVal(members[i]);
+            if (!zsetIsLookupKey(member)) zsetMarkLookupKey(member);
+            keys[i] = member;
+        }
+
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        for (size_t i = 0; i < batch; i++) {
+            sds member = objectGetVal(members[i]);
+            if (zsetIsLookupKey(member)) zsetUnmarkLookupKey(member);
+        }
+
+        for (size_t i = 0; i < batch; i++) {
+            if ((result >> i) & 1) {
+                OrderedIndexItem *node = found_entries[i];
+                addGeohashToReply(c, orderedIndexItemGetScore(node));
+            } else {
+                addReplyNull(c);
+            }
+        }
+
+        members += batch;
+        count -= batch;
+    }
+}
+
 /* GEOHASH key ele1 ele2 ... eleN
  *
  * Returns an array with an 11 characters geohash representation of the
  * position of the specified elements. */
 void geohashCommand(client *c) {
-    char *geoalphabet = "0123456789bcdefghjkmnpqrstuvwxyz";
     int j;
 
     /* Look up the requested zset */
@@ -904,51 +985,67 @@ void geohashCommand(client *c) {
 
     /* Geohash elements one after the other, using a null bulk reply for
      * missing elements. */
-    addReplyArrayLen(c, c->argc - 2);
+    size_t count = c->argc - 2;
+    addReplyArrayLen(c, count);
+    if (zobj && zobj->encoding == OBJ_ENCODING_BTREE && count > 1) {
+        zset *zs = objectGetVal(zobj);
+        geohashReplyWithHashtable(c, zs->ht, c->argv + 2, count);
+        return;
+    }
+
     for (j = 2; j < c->argc; j++) {
         double score;
         if (!zobj || zsetScore(zobj, objectGetVal(c->argv[j]), &score) == C_ERR) {
             addReplyNull(c);
         } else {
-            /* The internal format we use for geocoding is a bit different
-             * than the standard, since we use as initial latitude range
-             * -85,85, while the normal geohashing algorithm uses -90,90.
-             * So we have to decode our position and re-encode using the
-             * standard ranges in order to output a valid geohash string. */
-
-            /* Decode... */
-            double xy[2];
-            if (!decodeGeohash(score, xy)) {
-                addReplyNull(c);
-                continue;
-            }
-
-            /* Re-encode */
-            GeoHashRange r[2];
-            GeoHashBits hash;
-            r[0].min = -180;
-            r[0].max = 180;
-            r[1].min = -90;
-            r[1].max = 90;
-            geohashEncode(&r[0], &r[1], xy[0], xy[1], 26, &hash);
-
-            char buf[12];
-            int i;
-            for (i = 0; i < 11; i++) {
-                int idx;
-                if (i == 10) {
-                    /* We have just 52 bits, but the API used to output
-                     * an 11 bytes geohash. For compatibility we assume
-                     * zero. */
-                    idx = 0;
-                } else {
-                    idx = (hash.bits >> (52 - ((i + 1) * 5))) & 0x1f;
-                }
-                buf[i] = geoalphabet[idx];
-            }
-            buf[11] = '\0';
-            addReplyBulkCBuffer(c, buf, 11);
+            addGeohashToReply(c, score);
         }
+    }
+}
+
+/* Reply with decoded coordinates, or null if the score cannot be decoded. */
+static void addGeoPositionToReply(client *c, double score) {
+    double xy[2];
+    if (!decodeGeohash(score, xy)) {
+        addReplyNullArray(c);
+        return;
+    }
+    addReplyArrayLen(c, 2);
+    addReplyHumanLongDouble(c, xy[0]);
+    addReplyHumanLongDouble(c, xy[1]);
+}
+
+static void geoposReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
+    const void *keys[GEO_FIND_BATCH_SIZE];
+    void *found_entries[GEO_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > GEO_FIND_BATCH_SIZE ? GEO_FIND_BATCH_SIZE : count;
+
+        /* Arguments may share an SDS; mark and unmark each string only once. */
+        for (size_t i = 0; i < batch; i++) {
+            sds member = objectGetVal(members[i]);
+            if (!zsetIsLookupKey(member)) zsetMarkLookupKey(member);
+            keys[i] = member;
+        }
+
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        for (size_t i = 0; i < batch; i++) {
+            sds member = objectGetVal(members[i]);
+            if (zsetIsLookupKey(member)) zsetUnmarkLookupKey(member);
+        }
+
+        for (size_t i = 0; i < batch; i++) {
+            if ((result >> i) & 1) {
+                OrderedIndexItem *node = found_entries[i];
+                addGeoPositionToReply(c, orderedIndexItemGetScore(node));
+            } else {
+                addReplyNullArray(c);
+            }
+        }
+
+        members += batch;
+        count -= batch;
     }
 }
 
@@ -963,23 +1060,21 @@ void geoposCommand(client *c) {
     robj *zobj = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, zobj, OBJ_ZSET)) return;
 
-    /* Report elements one after the other, using a null bulk reply for
-     * missing elements. */
-    addReplyArrayLen(c, c->argc - 2);
+    /* Reply in request order, using null arrays for missing elements. */
+    size_t count = c->argc - 2;
+    addReplyArrayLen(c, count);
+    if (zobj && zobj->encoding == OBJ_ENCODING_BTREE && count > 1) {
+        zset *zs = objectGetVal(zobj);
+        geoposReplyWithHashtable(c, zs->ht, c->argv + 2, count);
+        return;
+    }
+
     for (j = 2; j < c->argc; j++) {
         double score;
         if (!zobj || zsetScore(zobj, objectGetVal(c->argv[j]), &score) == C_ERR) {
             addReplyNullArray(c);
         } else {
-            /* Decode... */
-            double xy[2];
-            if (!decodeGeohash(score, xy)) {
-                addReplyNullArray(c);
-                continue;
-            }
-            addReplyArrayLen(c, 2);
-            addReplyHumanLongDouble(c, xy[0]);
-            addReplyHumanLongDouble(c, xy[1]);
+            addGeoPositionToReply(c, score);
         }
     }
 }

@@ -2822,3 +2822,123 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
         wait_for_migration 0 16383
     }
 }
+
+# Configure node idx to start evicting once about $headroom bytes of keys are
+# stored, with evictions done inline in processCommand(). Unlike
+# setup_eviction_test, this keeps the default replica output buffer limit, so
+# replicas stay connected: a resync would hide a primary/replica divergence.
+proc setup_import_eviction {idx headroom} {
+    set saved [dict create]
+    foreach config {maxmemory maxmemory-policy lazyfree-lazy-eviction maxmemory-eviction-tenacity repl-backlog-size} {
+        dict set saved $config [lindex [R $idx CONFIG GET $config] 1]
+    }
+    R $idx CONFIG SET maxmemory-policy allkeys-random
+    R $idx CONFIG SET lazyfree-lazy-eviction no
+    R $idx CONFIG SET maxmemory-eviction-tenacity 100
+    R $idx CONFIG SET repl-backlog-size 1mb
+    # limit = current used + repl backlog max size + headroom for keys
+    R $idx CONFIG SET maxmemory [expr {[s -$idx used_memory] + 1024*1024 + $headroom}]
+    return $saved
+}
+
+proc teardown_import_eviction {idx saved} {
+    R $idx CONFIG SET maxmemory 0
+    dict for {config value} $saved {
+        R $idx CONFIG SET $config $value
+    }
+}
+
+# Write keys to node idx through a normal client until it starts evicting.
+proc fill_until_evicting {idx prefix} {
+    set start [s -$idx evicted_keys]
+    for {set batch 0} {[s -$idx evicted_keys] == $start} {incr batch} {
+        if {$batch > 200} {
+            fail "Node $idx did not start evicting"
+        }
+        populate 100 "$prefix:$batch:" 1000 -$idx
+    }
+}
+
+# Wait for the replica to catch up with its primary, then assert that both
+# hold the same data in each of the given dbs.
+proc assert_in_sync {primary replica dbs} {
+    wait_for_ofs_sync [Rn $primary] [Rn $replica]
+    foreach db $dbs {
+        R $primary SELECT $db
+        R $replica SELECT $db
+        assert_equal [R $primary DBSIZE] [R $replica DBSIZE] "DBSIZE of db $db"
+    }
+    R $primary SELECT 0
+    R $replica SELECT 0
+    assert_equal [R $primary DEBUG DIGEST] [R $replica DEBUG DIGEST]
+}
+
+# The import target evicts keys of the slots it owns to make room for the
+# imported ones. Those evictions are not part of the import stream that is
+# proxied to its replicas, so they must be replicated like any other eviction.
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 1}} {
+    set node0_id [R 0 CLUSTER MYID]
+    set node2_id [R 2 CLUSTER MYID]
+
+    set 0_slot_tag "{06S}"
+    set 16383_slot_tag "{6ZJ}"
+
+    # Node 0 is the import target, node 3 its replica and node 2 the source.
+    test "Evictions on a full import target are replicated" {
+        assert_does_not_resync {
+            set saved [setup_import_eviction 0 [expr {300*1024}]]
+            fill_until_evicting 0 "$0_slot_tag:own"
+            assert_in_sync 0 3 {0}
+
+            populate 100 "$16383_slot_tag:imported:" 1000 -2
+            set evicted_before [s -0 evicted_keys]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+            wait_for_migration_field 0 $jobname state success
+            wait_for_migration_field 2 $jobname state success
+
+            # The target made room by evicting keys of the slots it owns
+            assert_morethan [s -0 evicted_keys] $evicted_before
+            assert_equal 100 [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+
+            # And its replica must have dropped the same keys
+            assert_in_sync 0 3 {0}
+
+            teardown_import_eviction 0 $saved
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
+    test "Evictions on an import target that runs out of memory are replicated" {
+        assert_does_not_resync {
+            set saved [setup_import_eviction 0 [expr {200*1024}]]
+            fill_until_evicting 0 "$0_slot_tag:own"
+            assert_in_sync 0 3 {0}
+
+            # More than the target can make room for: it evicts all the keys it
+            # owns and then fails the import, dropping the imported keys.
+            populate 2000 "$16383_slot_tag:imported:" 1000 -2
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 0 $jobname state failed
+            assert_match {*OOM*} [dict get [get_migration_by_name 0 $jobname] message]
+            wait_for_countkeysinslot 0 16383 0
+            wait_for_countkeysinslot 3 16383 0
+
+            # The replica must not keep the keys its primary evicted
+            assert_in_sync 0 3 {0}
+
+            teardown_import_eviction 0 $saved
+            wait_for_migration_field 2 $jobname state failed
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 2 FLUSHALL SYNC]
+    }
+}

@@ -86,6 +86,7 @@
 #include "trace/trace.h"
 #include "entry.h"
 #include "lrulfu.h"
+#include "hashtable_helpers.h"
 
 /*
  * Sanity check: we require large-file support. If include order caused
@@ -3041,7 +3042,6 @@ int serverSetProcTitle(char *title);
 int validateProcTitleTemplate(const char *templ);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
-void dictVanillaFree(void *val);
 
 /* ERROR STATS constants */
 
@@ -4172,25 +4172,13 @@ void evictionPoolAlloc(void);
 int performEvictions(void);
 void startEvictionTimeProc(void);
 
-/* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
-uint8_t *getConfigurableHashSeed(void);
-uint64_t dictSdsHash(const void *key);
-uint64_t dictSdsCaseHash(const void *key);
+/* Object keys hashing/comparison functions for hash tables. The generic ones
+ * live in hashtable_helpers.h. */
 uint64_t dictObjHash(const void *key);
-uint64_t dictCStrHash(const void *key);
-uint64_t dictCStrCaseHash(const void *key);
 uint64_t dictEncObjHash(const void *key);
-int dictSdsKeyCompare(const void *key1, const void *key2);
-int dictSdsKeyCaseCompare(const void *key1, const void *key2);
 int dictObjKeyCompare(const void *key1, const void *key2);
-int dictCStrKeyCompare(const void *key1, const void *key2);
-int dictCStrKeyCaseCompare(const void *key1, const void *key2);
 int dictEncObjKeyCompare(const void *key1, const void *key2);
-void dictSdsDestructor(void *val);
-void dictListDestructor(void *val);
-void dictEntryDestructorSdsKey(void *entry);
-void dictEntryDestructorSdsKeyValue(void *entry);
-void dictEntryDestructorSdsKeyListValue(void *entry);
+void dictObjectDestructor(void *val);
 
 /* Git SHA1 */
 char *serverGitSHA1(void);

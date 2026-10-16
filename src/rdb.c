@@ -184,13 +184,6 @@ typedef struct {
     rdbAuxFieldDecoder decoder;
 } rdbAuxFieldCodec;
 
-static void dictEntryDestructorSdsKeyHeapValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictVanillaFree(dictGetVal(de));
-    zfree(de);
-}
-
 dictType rdbAuxFieldDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,

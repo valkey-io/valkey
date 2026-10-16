@@ -10,6 +10,7 @@
 #include "cli_common.h"
 #include "sds.h"
 #include "dict.h"
+#include "hashtable_helpers.h"
 #include "zmalloc.h"
 #include "util.h"
 #include <assert.h>
@@ -281,26 +282,10 @@ char *printCommand(FuzzerCommand *cmd) {
 }
 
 /* Dictionary type implementation for config entries */
-uint64_t configDictHashFunction(const void *key) {
-    return dictGenHashFunction(key, strlen(key));
-}
-
 void configDictValDestructor(void *val) {
     ConfigEntry *entry = (ConfigEntry *)val;
     sdsfree(entry->value);
     zfree(entry);
-}
-
-static int sdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
-    l1 = sdslen((sds)key1);
-    l2 = sdslen((sds)key2);
-    if (l1 != l2) return 0;
-    return memcmp(key1, key2, l1) == 0;
-}
-
-static uint64_t sdsHash(const void *key) {
-    return dictGenHashFunction(key, sdslen(key));
 }
 
 static void dictEntryDestructorSdsKeyConfigVal(void *entry) {
@@ -313,8 +298,8 @@ static void dictEntryDestructorSdsKeyConfigVal(void *entry) {
 /* Dictionary type for config entries */
 static dictType configDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = sdsHash,
-    .keyCompare = sdsKeyCompare,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictEntryDestructorSdsKeyConfigVal,
 };
 

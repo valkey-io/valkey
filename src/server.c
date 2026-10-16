@@ -367,44 +367,9 @@ void exitFromChild(int retcode) {
 
 /*====================== Hash table type implementation  ==================== */
 
-/* This is a hash table type that uses the SDS dynamic strings library as
- * keys and Objects as values (Objects can hold SDS strings,
- * lists, sets). */
-
-void dictVanillaFree(void *val) {
-    zfree(val);
-}
-
-void dictListDestructor(void *val) {
-    listRelease((list *)val);
-}
-
-void dictHashtableDestructor(void *val) {
-    hashtableRelease((hashtable *)val);
-}
-
-/* Returns 1 when keys match */
-int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
-    l1 = sdslen((sds)key1);
-    l2 = sdslen((sds)key2);
-    if (l1 != l2) return 0;
-    return memcmp(key1, key2, l1) == 0;
-}
-
-/* A case-insensitive version used for the command lookup table and other
- * places where case insensitive non binary-safe comparison is needed. */
-int dictSdsKeyCaseCompare(const void *key1, const void *key2) {
-    return strcasecmp(key1, key2) == 0;
-}
-
 void dictObjectDestructor(void *val) {
     if (val == NULL) return; /* Lazy freeing will set value to NULL. */
     decrRefCount(val);
-}
-
-void dictSdsDestructor(void *val) {
-    sdsfree(val);
 }
 
 int dictObjKeyCompare(const void *key1, const void *key2) {
@@ -417,47 +382,6 @@ uint64_t dictObjHash(const void *key) {
     return dictGenHashFunction(objectGetVal(o), sdslen((sds)objectGetVal(o)));
 }
 
-uint64_t dictSdsHash(const void *key) {
-    return dictGenHashFunction(key, sdslen(key));
-}
-
-/* Hash function using a configurable seed (set via hash-seed config).
- * Used for data hashtables (keys, sets, zsets, hashes) where deterministic
- * iteration order across cluster nodes is needed. */
-static uint8_t configurable_hash_seed[16];
-
-extern uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k);
-
-void setConfigurableHashSeed(uint8_t *seed) {
-    memcpy(configurable_hash_seed, seed, sizeof(configurable_hash_seed));
-}
-
-uint8_t *getConfigurableHashSeed(void) {
-    return configurable_hash_seed;
-}
-
-uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
-    return siphash((const uint8_t *)buf, len, configurable_hash_seed);
-}
-
-uint64_t sdsHashConfigurableSeed(const void *key) {
-    return genHashFunctionConfigurableSeed(key, sdslen(key));
-}
-
-uint64_t dictSdsCaseHash(const void *key) {
-    return dictGenCaseHashFunction(key, sdslen(key));
-}
-
-/* Dict hash function for null terminated string */
-uint64_t dictCStrHash(const void *key) {
-    return dictGenHashFunction(key, strlen(key));
-}
-
-/* Dict hash function for null terminated string */
-uint64_t dictCStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction(key, strlen((char *)key));
-}
-
 /* Hash function for client */
 uint64_t hashtableClientHash(const void *key) {
     return ((client *)key)->id;
@@ -466,16 +390,6 @@ uint64_t hashtableClientHash(const void *key) {
 /* Hashtable compare function for client */
 int hashtableClientKeyCompare(const void *key1, const void *key2) {
     return ((client *)key1)->id == ((client *)key2)->id;
-}
-
-/* Dict compare function for null terminated string */
-int dictCStrKeyCompare(const void *key1, const void *key2) {
-    return strcmp(key1, key2) == 0;
-}
-
-/* Dict case-insensitive compare function for null terminated string */
-int dictCStrKeyCaseCompare(const void *key1, const void *key2) {
-    return strcasecmp(key1, key2) == 0;
 }
 
 int dictEncObjKeyCompare(const void *key1, const void *key2) {
@@ -571,36 +485,6 @@ void dictEntryDestructorObjectKeyHashtableValue(void *entry) {
     zfree(de);
 }
 
-/* Entry destructor that frees SDS key and the dictEntry itself */
-void dictEntryDestructorSdsKey(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    zfree(de);
-}
-
-void dictEntryDestructorSdsKeyValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictSdsDestructor(dictGetVal(de));
-    zfree(de);
-}
-
-/* Entry destructor that frees SDS key, list value, and the dictEntry itself */
-void dictEntryDestructorSdsKeyListValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictListDestructor(dictGetVal(de));
-    zfree(de);
-}
-
-/* Entry destructor that frees SDS key, heap pointer value, and the dictEntry itself */
-void dictEntryDestructorSdsKeyHeapValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    zfree(dictGetVal(de));
-    zfree(de);
-}
-
 /* Generic hash table type where keys are Objects, Values
  * dummy pointers. */
 dictType objectKeyPointerValueDictType = {
@@ -678,10 +562,6 @@ hashtableType zsetHashtableType = {
     .keyCompare = zsetKeyCompare,
 };
 
-uint64_t hashtableSdsHash(const void *key) {
-    return hashtableGenHashFunction((const char *)key, sdslen((char *)key));
-}
-
 const void *hashtableObjectGetKey(const void *entry) {
     return objectGetKey(entry);
 }
@@ -695,18 +575,13 @@ void hashtableObjectPrefetchValue(const void *entry) {
     }
 }
 
-void hashtableObjectDestructor(void *val) {
-    if (val == NULL) return; /* Lazy freeing will set value to NULL. */
-    decrRefCount(val);
-}
-
 /* Kvstore->keys, keys are sds strings, vals are Objects. */
 hashtableType kvstoreKeysHashtableType = {
     .entryPrefetchValue = hashtableObjectPrefetchValue,
     .entryGetKey = hashtableObjectGetKey,
     .hashFunction = sdsHashConfigurableSeed,
     .keyCompare = dictSdsKeyCompare,
-    .entryDestructor = hashtableObjectDestructor,
+    .entryDestructor = dictObjectDestructor,
     .resizeAllowed = hashtableResizeAllowed,
     .rehashingStarted = kvstoreHashtableRehashingStarted,
     .rehashingCompleted = kvstoreHashtableRehashingCompleted,
@@ -731,19 +606,19 @@ hashtableType kvstoreExpiresHashtableType = {
 /* Command set, hashed by current command name, stores serverCommand structs. */
 hashtableType commandSetType = {.entryGetKey = hashtableCommandGetCurrentName,
                                 .hashFunction = dictSdsCaseHash,
-                                .keyCompare = dictCStrKeyCaseCompare,
+                                .keyCompare = dictSdsKeyCaseCompare,
                                 .instant_rehashing = 1};
 
 /* Command set, hashed by original command name, stores serverCommand structs. */
 hashtableType originalCommandSetType = {.entryGetKey = hashtableCommandGetOriginalName,
                                         .hashFunction = dictSdsCaseHash,
-                                        .keyCompare = dictCStrKeyCaseCompare,
+                                        .keyCompare = dictSdsKeyCaseCompare,
                                         .instant_rehashing = 1};
 
 /* Sub-command set, hashed by char* string, stores serverCommand structs. */
 hashtableType subcommandSetType = {.entryGetKey = hashtableSubcommandGetKey,
                                    .hashFunction = dictCStrCaseHash,
-                                   .keyCompare = dictCStrKeyCaseCompare,
+                                   .keyCompare = dictSdsKeyCaseCompare,
                                    .instant_rehashing = 1};
 
 /* Hash type hash table (note that small hashes are represented with listpacks) */
@@ -844,7 +719,7 @@ dictType migrateCacheDictType = {
 dictType stringSetDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
-    .keyCompare = dictCStrKeyCaseCompare,
+    .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
@@ -853,7 +728,7 @@ dictType stringSetDictType = {
 dictType externalStringType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
-    .keyCompare = dictCStrKeyCaseCompare,
+    .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = zfree,
 };
 

@@ -3398,6 +3398,10 @@ void receiveRDBinBioThread(bool is_dual_channel) {
         conn = server.repl_transfer_s;
         server.repl_transfer_s = NULL;
     }
+    if (!conn) {
+        serverLog(LL_VERBOSE, "Ignoring stale RDB transfer callback without an active replication connection");
+        return;
+    }
     connSetReadHandler(conn, NULL);
     /* Resolve the on-disk target codec now, on the main thread, so a runtime
      * CONFIG SET rdbcompression cannot retarget an already-started transfer. */
@@ -4701,6 +4705,12 @@ void syncWithPrimary(connection *conn) {
             return;
         }
         server.repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
+        return;
+    case REPL_STATE_TRANSFER:
+    case REPL_STATE_CONNECTED:
+        /* A readable event can be queued before we swap the read handler to the
+         * RDB transfer or steady-state handler. Ignore the stale callback and let
+         * the current handler process the connection. */
         return;
     /* If reached this point, we should be in REPL_STATE_RECEIVE_PSYNC_REPLY. */
     default:

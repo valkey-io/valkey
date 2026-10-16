@@ -1770,12 +1770,7 @@ start_server {tags {"repl external:skip"} overrides {repl-diskless-sync yes repl
 
         # Let the primary stream the RDB over the socket and mark the replica
         # online (arming repl_start_cmd_stream_on_ack) before we send rdb-only.
-        wait_for_condition 50 100 {
-            [s 0 connected_slaves] >= 1
-        } else {
-            fail "replica never registered on the primary"
-        }
-        after 500
+        wait_replica_online r
 
         # One REPLCONF carrying both rdb-only and ACK: the guard must reject
         # rdb-only before the ACK branch runs, so the primary stays up.
@@ -1784,7 +1779,7 @@ start_server {tags {"repl external:skip"} overrides {repl-diskless-sync yes repl
 
         # The primary must survive.
         assert_equal "PONG" [r ping]
-        verify_log_message 0 "*Replica generated a reply to command 'replconf', disconnecting it: *" $lines
+        wait_for_log_messages 0 {"*Replica generated a reply to command 'replconf', disconnecting it: *"} $lines 50 100
 
         $rd close
         waitForBgsave r

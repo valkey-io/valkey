@@ -1716,7 +1716,14 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                 (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
                  server.lastbgsave_status == C_OK)) {
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
-                rdbStartBgsave(resolveBgsaveType());
+                const char *skip_reason = NULL;
+                int save_type = resolveBgsaveType(&skip_reason);
+                if (save_type == RDB_BGSAVE_TYPE_NONE) {
+                    serverLog(LL_WARNING, "Skipping scheduled save: %s; will retry later", skip_reason);
+                    server.lastbgsave_try = server.unixtime;
+                } else {
+                    rdbStartBgsave(save_type);
+                }
                 break;
             }
         }

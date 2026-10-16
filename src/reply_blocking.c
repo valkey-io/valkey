@@ -2,7 +2,6 @@
 #include "zmalloc.h"
 #include "script.h"
 #include "bgiteration.h"
-#include <assert.h>
 #include <stdatomic.h>
 
 /* Forward declarations from module.h to avoid pulling in full module internals
@@ -161,6 +160,9 @@ void replyBlockingClientInit(client *c) {
 
 // Reset the client reply-blocking attributes during a client clean-up.
 void replyBlockingClientReset(client *c) {
+    /* reply_blocked is set iff the client is on clients_waiting_ack. */
+    debugServerAssert(!c->reply_blocking_state.reply_blocked ||
+                      listSearchKey(server.reply_blocking.clients_waiting_ack, c) != NULL);
     if (unblockClientWaitingAck(c)) {
         server.reply_blocking.clients_disconnected_before_unblocking++;
     }
@@ -323,7 +325,9 @@ static int isBlockingNeededForOffset(const client *c, const long long offset) {
 void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
     serverAssert(isPrimaryReplyBlockingEnabled());
 
-    if (isBlockingNeededForOffset(c, blockingReplOffset)) {
+    /* A client scheduled for async close is freed at the next beforeSleep and
+     * is refused all writes until then, so there is no reply to hold. */
+    if (!c->flag.close_asap && isBlockingNeededForOffset(c, blockingReplOffset)) {
         serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d",
                   blockingReplOffset, c->cmd->declared_name, (c->cmd->flags & CMD_WRITE) ? 1 : 0);
         blockLastResponseIfExist(c, blockingReplOffset);
@@ -784,14 +788,17 @@ void replyBlockingCleanup(void) {
     clearAllUncommittedKeys();
 }
 
-// Disconnect and free clients waiting for reply-blocking ack.
-static void freeClientsWaitingAck(const reply_blocking_t *rb_state) {
+/* Disconnect clients waiting for reply-blocking ack. Async: the client that
+ * issued the role change can be on this list and is still executing. */
+static void freeClientsWaitingAck(reply_blocking_t *rb_state) {
     listIter li;
     listNode *ln;
     listRewind(rb_state->clients_waiting_ack, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        freeClient(c);
+        c->reply_blocking_state.reply_blocked = 0;
+        rb_state->clients_disconnected_before_unblocking++;
+        freeClientAsync(c);
     }
     listEmpty(rb_state->clients_waiting_ack);
 }
@@ -831,12 +838,14 @@ sds genReplyBlockingInfoString(sds info) {
                         "reply_blocking_read_blocked_count:%lld\r\n"
                         "reply_blocking_write_blocked_count:%lld\r\n"
                         "reply_blocking_clients_waiting_ack:%lu\r\n"
+                        "reply_blocking_clients_disconnected_before_unblocking:%llu\r\n"
                         "reply_blocking_uncommitted_keys:%llu\r\n"
                         "reply_blocking_previous_acked_offset:%lld\r\n"
                         "reply_blocking_primary_repl_offset:%lld\r\n",
                         server.reply_blocking.read_responses_blocked,
                         server.reply_blocking.write_responses_blocked,
                         listLength(server.reply_blocking.clients_waiting_ack),
+                        server.reply_blocking.clients_disconnected_before_unblocking,
                         getNumberOfUncommittedKeys(),
                         server.reply_blocking.previous_acked_offset,
                         server.primary_repl_offset);

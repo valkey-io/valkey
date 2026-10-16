@@ -58,6 +58,5 @@ cmake-build-debug/
 cmake-build-release/
 __pycache__
 src/unit/.flags
-.DS_Store
 valkey-unit-tests
 src/.idea/*

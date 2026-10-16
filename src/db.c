@@ -791,11 +791,13 @@ long long dbTotalServerKeyCount(void) {
  * a context of a client. */
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
+    bgIteration_keyModified(db->id, objectGetVal(key));
+    /* Under reply blocking the tracking invalidation is deferred until the
+     * write is durable; everything above must run right away. */
     if (replyBlockingSignalModifiedKey(c, db, key)) {
         return;
     }
     trackingInvalidateKey(c, key, 1);
-    bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
 void signalFlushedDb(int dbid, int async) {

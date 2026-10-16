@@ -1505,12 +1505,133 @@ foreach provider_mode {aof} {
                 assert_equal "" $early_reply
                 fconfigure $fd -blocking 1
 
+                set before [getInfoProperty [$primary info debug] reply_blocking_clients_disconnected_before_unblocking]
                 $primary replicaof $replica_host $replica_port
 
                 catch {$rd read} err
                 assert_match {*I/O error*} $err
+                # Counted once when the role changed, not again on the deferred free.
+                $primary ping
+                assert_equal [expr {$before + 1}] [getInfoProperty [$primary info debug] reply_blocking_clients_disconnected_before_unblocking]
             }
 
         }
+    }
+}
+
+# ==================== Lifecycle regressions ====================
+# Each block starts its own server because the scenarios change roles or
+# toggle the feature at runtime.
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    test "REPLICAOF from a client whose own reply is held does not crash" {
+        r set warm 1
+        r DEBUG reply-blocking-pause aof
+
+        # The SET reply is held waiting for the fsync; the same connection then
+        # demotes the node, which frees every client on clients_waiting_ack
+        # while this client's command is still executing.
+        set rd [valkey_deferring_client]
+        $rd set held:key value
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        assert_equal "" [read $fd]
+        fconfigure $fd -blocking 1
+        set before [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+        $rd replicaof 127.0.0.1 1
+
+        # The held client is disconnected, the server survives and is a replica.
+        catch {$rd read} err
+        assert_match {*I/O error*} $err
+        assert_equal PONG [r ping]
+        assert_equal slave [lindex [r role] 0]
+        $rd close
+        # Counted once when the role changed, not again on the deferred free.
+        assert_equal [expr {$before + 1}] [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+
+        r replicaof no one
+        r DEBUG reply-blocking-resume aof
+    }
+
+    test "Client disconnected by a role change is not re-armed when the node is promoted again" {
+        r DEBUG reply-blocking-pause aof
+
+        # The SET reply is held. The transaction demotes the node (which
+        # schedules this client for close), promotes it again and writes: the
+        # write must not put the dying client back on clients_waiting_ack.
+        set rd [valkey_deferring_client]
+        $rd set held:key value
+        wait_for_condition 50 100 {
+            [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack] == 1
+        } else {
+            fail "SET reply was not held"
+        }
+        set before [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+
+        $rd multi
+        $rd replicaof 127.0.0.1 1
+        $rd replicaof no one
+        $rd set held:again value
+        $rd exec
+
+        catch {$rd read} err
+        assert_match {*I/O error*} $err
+        $rd close
+        assert_equal master [lindex [r role] 0]
+        r ping
+        assert_equal [expr {$before + 1}] [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+        assert_equal 0 [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack]
+
+        r DEBUG reply-blocking-resume aof
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
+    test "Enabling reply blocking at runtime initializes fake clients created earlier" {
+        # A Lua write pools a module temp client with no reply-blocking state.
+        assert_equal 1 [r eval {redis.call('set', 'k1', 'v') return 1} 0]
+
+        r config set appendfsync always
+        r config set bio-aof-offload-enabled yes
+        r config set appendonly yes
+        wait_for_condition 100 50 {
+            [s aof_rewrite_in_progress] == 0 && [s aof_rewrite_scheduled] == 0
+        } else {
+            fail "AOF rewrite did not finish"
+        }
+
+        # The next script write reuses the pooled client and defers a key
+        # invalidation task tracked on that client.
+        assert_equal 1 [r eval {redis.call('set', 'k2', 'v') return 1} 0]
+        assert_equal v [r get k2]
+        assert_equal 1 [r eval {redis.call('hset', 'h', 'f', 'v') return 1} 0]
+        assert_equal PONG [r ping]
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes forkless-infrastructure-enabled yes save ""}} {
+    test "Forkless consistent save with in-place writes under reply blocking" {
+        r hset h f 0
+        r debug populate 2000
+        r config set rdb-key-save-delay 1000
+        r config set bgsave-default-method forkless
+        r bgsave
+        assert_equal 1 [s rdb_bgsave_in_progress]
+        assert_equal forkless [s rdb_current_bgsave_type]
+
+        # In-place writes to an existing key must reach the background
+        # iterator's modification bookkeeping even though the tracking
+        # invalidation is deferred by reply blocking.
+        r hset h f 1
+        r hset h f 2
+        assert_equal 2 [r hget h f]
+
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal ok [s rdb_last_bgsave_status]
+
+        # The snapshot holds the value from before the writes.
+        r debug reload nosave
+        assert_equal 0 [r hget h f]
     }
 }

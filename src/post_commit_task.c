@@ -1,6 +1,5 @@
 #include "server.h"
 #include "zmalloc.h"
-#include <assert.h>
 #include <stdarg.h>
 
 /* Forward declarations from module.h to avoid pulling in full module internals
@@ -93,6 +92,10 @@ static taskWaitingAck *createKeyInvalidationTask(va_list ap) {
     // Track the pending notification task in the referenced client
     client *c = (client *)task->argv[0];
     if (c != NULL) {
+        /* A fake client (module temp client, Lua) created while reply blocking
+         * was off has no per-client state yet: enabling the feature at runtime
+         * only initializes the clients on server.clients. */
+        if (c->reply_blocking_state.pending_notify_tasks == NULL) replyBlockingClientInit(c);
         listAddNodeTail(c->reply_blocking_state.pending_notify_tasks, task);
     }
 

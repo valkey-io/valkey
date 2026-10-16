@@ -109,18 +109,18 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     robj *chanobj, *eventobj;
     char buf[24];
     client *c = server.executing_client;
-    debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
-                      !isPrimaryReplyBlockingEnabled() ||
-                      (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM | NOTIFY_PATH_HASH)) == 0 ||
-                      c == NULL ||
-                      c->cmd == NULL ||
-                      (c->cmd->flags & CMD_WRITE) == 0 ||
-                      c->flag.buffered_reply == 0 ||
-                      c->flag.keyspace_notified == 1 ||
-                      c->id == UINT64_MAX || // AOF client
-                      getClientType(c) != CLIENT_TYPE_NORMAL);
 
     if (!server.reply_blocking.in_post_commit_task_execution) {
+        debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
+                          (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM | NOTIFY_PATH_HASH)) == 0 ||
+                          c == NULL ||
+                          c->cmd == NULL ||
+                          (c->cmd->flags & CMD_WRITE) == 0 ||
+                          c->flag.buffered_reply == 0 ||
+                          c->flag.keyspace_notified == 1 ||
+                          c->id == UINT64_MAX || // AOF client
+                          getClientType(c) != CLIENT_TYPE_NORMAL);
+
         /* Notify modules inline, at the time the keyspace change occurs (bypassing
          * notify-keyspace-events; the module engine filters by each subscriber's event mask).
          * Doing it here rather than from the deferred task ensures subscribers are notified for

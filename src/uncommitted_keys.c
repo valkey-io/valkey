@@ -1,7 +1,6 @@
 #include "server.h"
 #include "zmalloc.h"
 #include "script.h"
-#include <assert.h>
 #include <math.h>
 
 /*================================= Internal Data Structures ================= */

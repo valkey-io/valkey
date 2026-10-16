@@ -934,8 +934,7 @@ static void simpleStringCallback(void *ctx, const char *str, size_t len) {
 }
 
 static void errorCallback(void *ctx, const char *msg, size_t len) {
-    VALKEYMODULE_NOT_USED(len);
-
+    processCollectionElementBegin(ctx);
     callCtx *call_ctx = ctx;
     lua_State *lua = call_ctx->lua;
     if (!lua_checkstack(lua, 3)) {
@@ -944,7 +943,11 @@ static void errorCallback(void *ctx, const char *msg, size_t len) {
         serverPanic("lua stack limit reach when parsing server.call reply");
     }
 
-    if (errno != 0) {
+    /* errno is set when the command was rejected before it ran, in which case
+     * the error is the whole reply. Parsing an earlier element, such as an
+     * out of range double, can also leave errno set, so only trust it for a
+     * top-level error. */
+    if (errno != 0 && call_ctx->in_collection < 0) {
         ValkeyModule_Log(call_ctx->module_ctx, "debug", "command returned an error: %s errno=%d", msg, errno);
         luaProcessReplyError(msg, lua);
     } else {
@@ -953,7 +956,7 @@ static void errorCallback(void *ctx, const char *msg, size_t len) {
          * or "ERR DB index is out of range"). Re-add the '-' so
          * luaPushErrorBuff() goes through its "-CODE msg" branch and
          * preserves the code instead of double-prefixing with "ERR ". */
-        char *msg_with_dash = lm_asprintf("-%s", msg);
+        char *msg_with_dash = lm_asprintf("-%.*s", (int)len, msg);
         luaPushErrorBuff(lua, msg_with_dash);
         ValkeyModule_Free(msg_with_dash);
         /* push a field indicate to ignore updating the stats on this error
@@ -963,7 +966,10 @@ static void errorCallback(void *ctx, const char *msg, size_t len) {
         lua_settable(lua, -3);
     }
 
-    call_ctx->error = 1;
+    /* Only a top-level error reply raises. An error nested in an aggregate is
+     * just an element of it. */
+    if (call_ctx->in_collection < 0) call_ctx->error = 1;
+    processCollectionElementEnd(ctx);
 }
 
 static void mapStartCallback(void *ctx, size_t len) {

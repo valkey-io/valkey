@@ -280,7 +280,7 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
-    ## Test that the server exits when the AOF contains a unknown command
+    ## Test that the server exits when the AOF contains an unknown command
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand set foo hello]
         append_to_aof [formatCommand bla foo hello]

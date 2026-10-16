@@ -7616,13 +7616,19 @@ void sendChildInfo(childInfoType info_type, size_t keys, char *pname) {
 
 /* Dismiss big chunks of memory inside a client structure, see zmadvise_dontneed() */
 void dismissClientMemory(client *c) {
+    /* If the client is being handled by an I/O thread or in the middle of
+     * parsing, its querybuf, argv array, and buffers may be in an inconsistent
+     * or partially-updated state in the child process. Skip dismissing its memory. */
+    if (c->io_read_state != CLIENT_IDLE || c->io_write_state != CLIENT_IDLE) return;
+    if (c->flag.pending_read || c->multibulklen > 0) return;
+
     /* Dismiss client query buffer and static reply buffer. */
     dismissMemory(c->buf, c->buf_usable_size);
     if (c->querybuf) dismissSds(c->querybuf);
     /* Dismiss argv array only if we estimate it contains a big buffer. */
     if (c->argc && c->argv_len_sum / c->argc >= server.page_size) {
         for (int i = 0; i < c->argc; i++) {
-            dismissObject(c->argv[i], 0);
+            if (c->argv[i]) dismissObject(c->argv[i], 0);
         }
     }
     if (c->argc) dismissMemory(c->argv, c->argc * sizeof(robj *));

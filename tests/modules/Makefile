@@ -6,6 +6,7 @@ warning_cflags = -W -Wall -Wno-missing-field-initializers
 ifeq ($(uname_S),Darwin)
 	SHOBJ_CFLAGS ?= $(warning_cflags) -dynamic -fno-common -g -ggdb -std=c99 -O2
 	SHOBJ_LDFLAGS ?= -bundle -undefined dynamic_lookup
+	LD = cc
 else	# Linux, others
 	SHOBJ_CFLAGS ?= $(warning_cflags) -fno-common -g -ggdb -std=c99 -O2
 	SHOBJ_LDFLAGS ?= -shared
@@ -14,13 +15,6 @@ endif
 ifeq ($(uname_S),Linux)
     LD = gcc
     CC = gcc
-endif
-
-# OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
-ifeq ($(uname_S),Darwin)
-ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
-LIBS = -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lsystem
-endif
 endif
 
 TEST_MODULES = \

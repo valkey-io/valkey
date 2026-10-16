@@ -110,13 +110,47 @@ static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *
         (e)->sz = 0;                 \
     } while (0)
 
+static inline void quicklistIterFreeBuffer(quicklistIter *iter) {
+    zfree(iter->decompressed_buf);
+    iter->decompressed_buf = NULL;
+}
+
 /* Reset the quicklistIter to prevent it from being used again after
  * insert, replace, or other against quicklist operation. */
-#define resetIterator(iter)     \
-    do {                        \
-        (iter)->current = NULL; \
-        (iter)->zi = NULL;      \
+#define resetIterator(iter)              \
+    do {                                 \
+        quicklistIterFreeBuffer((iter)); \
+        (iter)->current = NULL;          \
+        (iter)->zi = NULL;               \
     } while (0)
+
+/* Return a pointer to the uncompressed data for iter->current. */
+static unsigned char *quicklistIterGetNodeEntry(quicklistIter *iter) {
+    if (iter->decompressed_buf) return iter->decompressed_buf;
+    quicklistNode *node = iter->current;
+    if (node->encoding == QUICKLIST_NODE_ENCODING_LZF) {
+        iter->decompressed_buf = zmalloc(node->sz);
+        quicklistLZF *lzf = (quicklistLZF *)node->entry;
+        if (lzf_decompress(lzf->compressed, lzf->sz, iter->decompressed_buf, node->sz) != node->sz) assert(0);
+        return iter->decompressed_buf;
+    }
+    return node->entry;
+}
+
+/* Promote iter->decompressed_buf to node->entry when the node is about to be modified. */
+static void quicklistIterPromoteDecompressedNode(quicklistIter *iter) {
+    quicklistNode *node = iter->current;
+    if (iter->decompressed_buf) {
+        /* decompressed_buf is only allocated for LZF nodes; if node->encoding changed
+         * externally while the iterator was parked on it, the iterator was invalidated. */
+        assert(node && node->encoding == QUICKLIST_NODE_ENCODING_LZF);
+        zfree(node->entry);
+        node->entry = iter->decompressed_buf;
+        iter->decompressed_buf = NULL;
+        node->encoding = QUICKLIST_NODE_ENCODING_RAW;
+        node->recompress = 1;
+    }
+}
 
 /* Create a new quicklist.
  * Free with quicklistRelease(). */
@@ -666,8 +700,9 @@ static void __quicklistDelNode(quicklist *quicklist, quicklistNode *node) {
 /* Delete one entry from list given the node for the entry and a pointer
  * to the entry in the node.
  *
- * Note: quicklistDelIndex() *requires* uncompressed nodes because you
- *       already had to get *p from an uncompressed node somewhere.
+ * Note: quicklistDelIndex() *requires* uncompressed nodes (either already
+ *       uncompressed or promoted from iter->decompressed_buf before deletion)
+ *       because *p must point into node->entry.
  *
  * Returns 1 if the entire node was deleted, 0 if node still exists.
  * Also updates in/out param 'p' with the next offset in the listpack. */
@@ -696,6 +731,8 @@ static int quicklistDelIndex(quicklist *quicklist, quicklistNode *node, unsigned
  * 'entry' stores enough metadata to delete the proper position in
  * the correct listpack in the correct quicklist node. */
 void quicklistDelEntry(quicklistIter *iter, quicklistEntry *entry) {
+    assert(entry->node == iter->current);
+    quicklistIterPromoteDecompressedNode(iter);
     quicklistNode *prev = entry->node->prev;
     quicklistNode *next = entry->node->next;
     int deleted_node = quicklistDelIndex((quicklist *)entry->quicklist, entry->node, &entry->zi);
@@ -725,6 +762,8 @@ void quicklistDelEntry(quicklistIter *iter, quicklistEntry *entry) {
 
 /* Replace quicklist entry by 'data' with length 'sz'. */
 void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *data, size_t sz) {
+    assert(entry->node == iter->current);
+    quicklistIterPromoteDecompressedNode(iter);
     quicklist *quicklist = iter->quicklist;
     quicklistNode *node = entry->node;
     unsigned char *newentry;
@@ -733,7 +772,7 @@ void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *dat
                (newentry = lpReplace(entry->node->entry, &entry->zi, data, sz)) != NULL)) {
         entry->node->entry = newentry;
         quicklistNodeUpdateSz(entry->node);
-        /* quicklistNext() and quicklistGetIteratorEntryAtIdx() provide an uncompressed node */
+        /* entry->node is uncompressed (promoted above if it was LZF) */
         quicklistCompress(quicklist, entry->node);
     } else if (QL_NODE_IS_PLAIN(entry->node)) {
         if (isLargeElement(sz, quicklist->fill)) {
@@ -954,6 +993,8 @@ static quicklistNode *_quicklistSplitNode(quicklistNode *node, int offset, int a
  * If after==1, the new value is inserted after 'entry', otherwise
  * the new value is inserted before 'entry'. */
 static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *value, const size_t sz, int after) {
+    assert(!entry->node || entry->node == iter->current);
+    quicklistIterPromoteDecompressedNode(iter);
     quicklist *quicklist = iter->quicklist;
     int full = 0, at_tail = 0, at_head = 0, avail_next = 0, avail_prev = 0;
     int fill = quicklist->fill;
@@ -1010,6 +1051,7 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
             __quicklistInsertNode(quicklist, entry_node, new_node, after);
             quicklist->count++;
         }
+        resetIterator(iter);
         return;
     }
 
@@ -1202,6 +1244,7 @@ quicklistIter *quicklistGetIterator(quicklist *quicklist, int direction) {
     iter->quicklist = quicklist;
 
     iter->zi = NULL;
+    iter->decompressed_buf = NULL;
 
     return iter;
 }
@@ -1259,10 +1302,11 @@ quicklistIter *quicklistGetIteratorAtIdx(quicklist *quicklist, const int directi
 }
 
 /* Release iterator.
- * If we still have a valid current node, then re-encode current node. */
+ * If the current node was promoted for mutation, re-encode it. */
 void quicklistReleaseIterator(quicklistIter *iter) {
     if (!iter) return;
-    if (iter->current) quicklistCompress(iter->quicklist, iter->current);
+    quicklistIterFreeBuffer(iter);
+    if (iter->current) quicklistRecompressOnly(iter->current);
 
     zfree(iter);
 }
@@ -1310,11 +1354,11 @@ int quicklistNext(quicklistIter *iter, quicklistEntry *entry) {
     int plain = QL_NODE_IS_PLAIN(iter->current);
     if (!iter->zi) {
         /* If !zi, use current index. */
-        quicklistDecompressNodeForUse(iter->current);
+        unsigned char *node_entry = quicklistIterGetNodeEntry(iter);
         if (unlikely(plain))
-            iter->zi = iter->current->entry;
+            iter->zi = node_entry;
         else
-            iter->zi = lpSeek(iter->current->entry, iter->offset);
+            iter->zi = lpSeek(node_entry, iter->offset);
     } else if (unlikely(plain)) {
         iter->zi = NULL;
     } else {
@@ -1326,7 +1370,7 @@ int quicklistNext(quicklistIter *iter, quicklistEntry *entry) {
             nextFn = lpPrev;
             offset_update = -1;
         }
-        iter->zi = nextFn(iter->current->entry, iter->zi);
+        iter->zi = nextFn(quicklistIterGetNodeEntry(iter), iter->zi);
         iter->offset += offset_update;
     }
 
@@ -1335,7 +1379,7 @@ int quicklistNext(quicklistIter *iter, quicklistEntry *entry) {
 
     if (iter->zi) {
         if (unlikely(plain)) {
-            entry->value = entry->node->entry;
+            entry->value = quicklistIterGetNodeEntry(iter);
             entry->sz = entry->node->sz;
             return 1;
         }
@@ -1347,7 +1391,8 @@ int quicklistNext(quicklistIter *iter, quicklistEntry *entry) {
     } else {
         /* We ran out of listpack entries.
          * Pick next node, update offset, then re-run retrieval. */
-        quicklistCompress(iter->quicklist, iter->current);
+        quicklistIterFreeBuffer(iter);
+        quicklistRecompressOnly(iter->current);
         if (iter->direction == AL_START_HEAD) {
             /* Forward traversal */
             D("Jumping to start of next node");

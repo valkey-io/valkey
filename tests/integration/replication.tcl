@@ -1181,7 +1181,10 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                             wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1 1
                         }]} {
                             wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 2 replicas still up*"} $loglines 1 1
-                            wait_for_log_messages -2 {"*Connection with replica * lost.*"} $loglines 1 1
+                            # A replica that gets SIGTERM while loading defers the shutdown,
+                            # so it can outlive the RDB child. Some wait might be needed before
+                            # expecting the primary to notice the dropped connection.
+                            wait_for_log_messages -2 {"*Connection with replica * lost.*"} $loglines 200 100
                         }
                     }
                     if {$all_drop == "timeout"} {

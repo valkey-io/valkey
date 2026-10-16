@@ -89,6 +89,12 @@ valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALK
 add_dependencies(valkey-benchmark generate_commands_def)
 add_dependencies(valkey-benchmark generate_fmtargs_h)
 add_dependencies(valkey-benchmark release_header)
+if (USE_EFA)
+    target_sources(valkey-benchmark PRIVATE "${VALKEY_BENCHMARK_EFA_SRCS}")
+    target_compile_definitions(valkey-benchmark PRIVATE USE_EFA)
+    target_link_libraries(valkey-benchmark PRIVATE PkgConfig::LIBFABRIC)
+endif ()
+unset(USE_EFA CACHE)
 
 # Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
 valkey_create_symlink("valkey-server" "valkey-sentinel")

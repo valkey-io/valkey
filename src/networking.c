@@ -168,7 +168,6 @@ _Thread_local sds thread_shared_qb = NULL;
  * threads remain reachable in the child. The registry is otherwise used only
  * to verify worker cleanup. */
 static _Atomic(sds) shared_querybuf_registry[IO_THREADS_MAX_NUM];
-static pthread_rwlock_t shared_querybuf_fork_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 typedef enum {
     PARSE_OK = 0,
@@ -3867,26 +3866,16 @@ void resetClientIOState(client *c) {
 /* Initializes the shared query buffer to a new sds with the default capacity.
  * Need to ensure the initlen is not less than readlen in readToQueryBuf. */
 void initSharedQueryBuf(void) {
-    pthread_rwlock_rdlock(&shared_querybuf_fork_lock);
     sds querybuf = sdsnewlen(NULL, PROTO_IOBUF_LEN);
     sdsclear(querybuf);
     atomic_store_explicit(&shared_querybuf_registry[getCurTid()], querybuf, memory_order_relaxed);
     thread_shared_qb = querybuf;
-    pthread_rwlock_unlock(&shared_querybuf_fork_lock);
 }
 
 void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
     atomic_store_explicit(&shared_querybuf_registry[getCurTid()], NULL, memory_order_relaxed);
-}
-
-void sharedQueryBufBeforeFork(void) {
-    pthread_rwlock_wrlock(&shared_querybuf_fork_lock);
-}
-
-void sharedQueryBufAfterFork(void) {
-    pthread_rwlock_unlock(&shared_querybuf_fork_lock);
 }
 
 int isSharedQueryBufRegistered(int tid) {

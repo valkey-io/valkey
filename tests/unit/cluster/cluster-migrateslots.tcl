@@ -2942,3 +2942,103 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_match "OK" [R 2 FLUSHALL SYNC]
     }
 }
+
+# The import stream proxied to the target's replicas can select a db (e.g. the
+# snapshot of keys in db 2), and the target also propagates its own writes and
+# evictions to the same replicas. Both must leave the replicas in the db that
+# the next command is meant for.
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+    set node0_id [R 0 CLUSTER MYID]
+    set node2_id [R 2 CLUSTER MYID]
+
+    set 0_slot_tag "{06S}"
+    set 16383_slot_tag "{6ZJ}"
+
+    # Node 0 is the import target, node 3 its replica and node 2 the source.
+    test "Writes in other DBs during a slot import are replicated to the right DB" {
+        assert_does_not_resync {
+            # The target last replicated a write in db 1
+            R 0 SELECT 1
+            assert_match "OK" [R 0 SET $0_slot_tag:pre value]
+            R 0 SELECT 0
+
+            # Snapshot of keys in db 2
+            R 2 SELECT 2
+            populate 10 "$16383_slot_tag:snapshot:" 100 -2
+            R 2 SELECT 0
+            set_debug_prevent_pause 1
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
+
+            # Incremental write in db 2, proxied after the snapshot
+            R 2 SELECT 2
+            assert_match "OK" [R 2 SET $16383_slot_tag:incremental1 value]
+            R 0 SELECT 2
+            wait_for_countkeysinslot 0 16383 11
+
+            # The target's own writes, while the proxied stream is in db 2
+            R 0 SELECT 1
+            assert_match "OK" [R 0 SET $0_slot_tag:a value]
+            R 0 SELECT 0
+            assert_match "OK" [R 0 SET $0_slot_tag:b value]
+
+            # Proxied again, after the target selected db 0 for its replicas
+            assert_match "OK" [R 2 SET $16383_slot_tag:incremental2 value]
+            R 2 SELECT 0
+            R 0 SELECT 2
+            wait_for_countkeysinslot 0 16383 12
+            R 0 SELECT 0
+
+            set_debug_prevent_pause 0
+            wait_for_migration 0 16383
+            wait_for_migration_field 0 $jobname state success
+
+            assert_in_sync 0 3 {0 1 2}
+            foreach {db slot count} {0 0 1 0 16383 0 1 0 2 2 16383 12} {
+                R 3 SELECT $db
+                assert_equal $count [R 3 CLUSTER COUNTKEYSINSLOT $slot] "replica db $db slot $slot"
+            }
+            R 3 SELECT 0
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
+    test "Evictions in another DB than the imported keys are replicated to the right DB" {
+        assert_does_not_resync {
+            # Dbs are created on first use, create them before sizing maxmemory
+            R 0 SELECT 2
+            R 0 SELECT 1
+            set saved [setup_import_eviction 0 [expr {300*1024}]]
+            fill_until_evicting 0 "$0_slot_tag:own"
+            R 0 SELECT 0
+            assert_in_sync 0 3 {0 1 2}
+
+            R 2 SELECT 2
+            populate 100 "$16383_slot_tag:imported:" 1000 -2
+            R 2 SELECT 0
+            set evicted_before [s -0 evicted_keys]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+            wait_for_migration_field 0 $jobname state success
+            assert_morethan [s -0 evicted_keys] $evicted_before
+
+            assert_in_sync 0 3 {0 1 2}
+            R 3 SELECT 2
+            assert_equal 100 [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+            R 3 SELECT 0
+
+            teardown_import_eviction 0 $saved
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+}

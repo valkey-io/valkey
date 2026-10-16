@@ -809,6 +809,24 @@ static sds catReplicationBulkLen(sds frame, size_t len) {
     return sdscatlen(frame, aux, n + 3);
 }
 
+/* Send a SELECT command to every replica, unless they already have this db
+ * selected. */
+static void replicationFeedSelectDb(int dictid) {
+    if (server.replicas_eldb == dictid) return;
+
+    robj *selectcmd = generateSelectCommand(dictid);
+    feedReplicationBufferWithObject(selectcmd);
+
+    /* Although the SELECT command is not associated with any slot,
+     * its per-slot network-bytes-out accumulation is made by the above function call.
+     * To cancel-out this accumulation, below adjustment is made. */
+    clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(objectGetVal(selectcmd)));
+
+    decrRefCount(selectcmd);
+
+    server.replicas_eldb = dictid;
+}
+
 /* Propagate write commands to replication stream.
  *
  * This function is used if the instance is a primary: we use the commands
@@ -845,19 +863,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
     prepareReplicasToWrite();
 
     /* Send SELECT command to every replica if needed. */
-    if (dictid != -1 && server.replicas_eldb != dictid) {
-        robj *selectcmd = generateSelectCommand(dictid);
-        feedReplicationBufferWithObject(selectcmd);
-
-        /* Although the SELECT command is not associated with any slot,
-         * its per-slot network-bytes-out accumulation is made by the above function call.
-         * To cancel-out this accumulation, below adjustment is made. */
-        clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(objectGetVal(selectcmd)));
-
-        decrRefCount(selectcmd);
-
-        server.replicas_eldb = dictid;
-    }
+    if (dictid != -1) replicationFeedSelectDb(dictid);
 
     /* Build the RESP frame for this command in a staging buffer, then push it
      * to feedReplicationBuffer in as few calls as possible. Collapses the
@@ -958,6 +964,30 @@ void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen) {
          * replication stream. */
         prepareReplicasToWrite();
         feedReplicationBuffer(buf, buflen);
+    }
+}
+
+/* Proxy what a slot import client applied to our replicas. The proxied
+ * stream assumes the replicas are in 'start_dbid' (the db the import client
+ * was in before applying it), and leaves them in 'end_dbid'. As a primary we
+ * also feed our replicas with our own commands (e.g. our clients' writes and
+ * our evictions), so make sure the replicas are in the db the proxied stream
+ * expects, and keep track of the db it leaves them in. */
+void replicationFeedStreamFromSlotImport(int start_dbid, int end_dbid, char *buf, size_t buflen) {
+    if (server.primary_host != NULL) {
+        replicationFeedStreamFromPrimaryStream(buf, buflen);
+        return;
+    }
+
+    /* There must be replication backlog if having attached replicas. */
+    if (listLength(server.replicas)) serverAssert(server.repl_backlog != NULL);
+    if (server.repl_backlog) {
+        /* Must install write handler for all replicas first before feeding
+         * replication stream. */
+        prepareReplicasToWrite();
+        replicationFeedSelectDb(start_dbid);
+        feedReplicationBuffer(buf, buflen);
+        server.replicas_eldb = end_dbid;
     }
 }
 

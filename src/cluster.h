@@ -92,6 +92,7 @@ mstime_t clusterManualFailoverTimeLimit(void);
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
 void clusterCommandMyShardId(client *c);
+void clusterCommandMyShard(client *c);
 void clusterCommandShards(client *c);
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary);
 

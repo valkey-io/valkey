@@ -40,6 +40,7 @@
 #include "cluster_migrateslots.h"
 #include "util.h"
 #include "bgiteration.h"
+#include "listpack.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
@@ -162,13 +163,13 @@ void expireScanCallback(void *privdata, void *entry, int didx) {
     data->sampled++;
 }
 
-/* Expires up to `max_entries` fields from a hash with volatile fields.
- * Sets `has_more_expired_entries` if more remain. Updates stats. */
-void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
+/* Expires up to `max_entries` items from a key with volatile items. Sets
+ * `has_more_expired_entries` if more remain. Updates stats. */
+void volatileItemExpireScanCallback(void *privdata, void *volaKey, int didx) {
     expireScanData *data = privdata;
     robj *o = volaKey;
     serverAssert(o);
-    serverAssert(hashTypeHasVolatileFields(o));
+    serverAssert(objectHasVolatileItems(o));
 
     data->has_more_expired_entries = false;
     data->sampled++;
@@ -176,9 +177,9 @@ void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
     if (bgIteration_isEntryInuse(o)) return;
 
     mstime_t now = server.mstime;
-    size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries, didx);
-    if (expired_fields) {
-        data->has_more_expired_entries = (expired_fields == data->max_entries);
+    size_t expired_items = dbReclaimExpiredItems(o, data->db, now, data->max_entries, didx);
+    if (expired_items) {
+        data->has_more_expired_entries = (expired_items == data->max_entries);
         data->expired++;
     }
 }
@@ -216,7 +217,7 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
         unsigned int current_db; /* Next DB to test. */
         bool timelimit_exit;     /* Time limit hit in previous call? */
     } expireState;
-    static expireState _expire_state[ACTIVE_EXPIRY_TYPE_COUNT] = {0}; // [KEYS, FIELDS]
+    static expireState _expire_state[ACTIVE_EXPIRY_TYPE_COUNT] = {0}; // [KEYS, ITEMS]
     expireState *state = &_expire_state[jobType];
     double *expired_stale_perc[ACTIVE_EXPIRY_TYPE_COUNT] = {
         &server.stat_expired_keys_stale_perc,
@@ -286,9 +287,9 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
                 scan_cb = expireScanCallback;
                 time_check_mask = 0xf; /* For regular keys we can check the time condition every 16 loop iterations */
                 break;
-            case FIELDS:
+            case ITEMS:
                 kvs = db->keys_with_volatile_items;
-                scan_cb = fieldExpireScanCallback;
+                scan_cb = volatileItemExpireScanCallback;
                 /* For field-level keys we check the time condition every loop iteration.
                  * This is required since we might perform much more operation per single key with many fields.
                  * Limiting the number of fields we scan in each field makes the overall process less efficient.
@@ -405,7 +406,7 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
                     data.ttl_samples = 0;
                 }
             }
-            /* check time limit for every FIELDS job iteration or every 16 iterations for KEYS. */
+            /* check time limit for every ITEMS job iteration or every 16 iterations for KEYS. */
             if ((iteration & time_check_mask) == 0) {
                 if (elapsedUs(start) > (uint64_t)timelimit_us) {
                     state->timelimit_exit = 1;
@@ -419,7 +420,7 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
     ustime_t elapsed = (ustime_t)elapsedUs(start);
     if (jobType == KEYS) {
         latencyTraceIfNeeded(db, expire_cycle_keys, elapsed);
-    } else if (jobType == FIELDS) {
+    } else if (jobType == ITEMS) {
         latencyTraceIfNeeded(db, expire_cycle_fields, elapsed);
     }
 
@@ -493,23 +494,23 @@ ustime_t activeExpireCycle(int type) {
         timelimit_us = config_cycle_slow_time_perc * 1000000 / server.hz / 100;
     }
 
-    static bool expireCycleStartWithFields = 0;
+    static bool expireCycleStartWithItems = 0;
     ustime_t elapsed = 0;
 
     /* Try to smoke-out bugs (server.also_propagate should be empty here) */
     serverAssert(server.also_propagate.numops == 0);
 
-    if (expireCycleStartWithFields) {
-        elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);
+    if (expireCycleStartWithItems) {
+        elapsed += activeExpireCycleJob(ITEMS, type, timelimit_us - elapsed);
         elapsed += activeExpireCycleJob(KEYS, type, timelimit_us - elapsed);
     } else {
         elapsed += activeExpireCycleJob(KEYS, type, timelimit_us - elapsed);
-        elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);
+        elapsed += activeExpireCycleJob(ITEMS, type, timelimit_us - elapsed);
     }
     server.stat_expire_cycle_time_used += elapsed;
     latencyAddSampleIfNeeded("expire-cycle", elapsed);
     latencyTraceIfNeeded(db, expire_cycle, elapsed);
-    expireCycleStartWithFields = !expireCycleStartWithFields;
+    expireCycleStartWithItems = !expireCycleStartWithItems;
     return elapsed;
 }
 
@@ -1035,4 +1036,79 @@ expirationPolicy getExpirationPolicyWithFlags(int flags) {
     if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return POLICY_KEEP_EXPIRED;
 
     return POLICY_DELETE_EXPIRED;
+}
+
+/* Transient "ignore TTL" state for the listpack encoding. The hashtable
+ * encoding hangs this state on the object itself (by swapping the hashtable
+ * type); a listpack has nowhere to put it, so a file-scope flag consulted by
+ * listpackObjectItemIsValid() serves both types. Safe: an ignore-TTL bracket
+ * never outlives the command that opened it. Returns the state it replaced, so
+ * a bracket that can run with another already open restores what it found
+ * instead of clearing unconditionally. */
+static bool listpack_ttl_ignored = false;
+
+bool listpackObjectIgnoreTTL(bool ignore) {
+    bool previous = listpack_ttl_ignored;
+    listpack_ttl_ignored = ignore;
+    return previous;
+}
+
+/* Maintain the aggregate volatile-count header of a listpack-encoded object.
+ *
+ * The header is a single tagged entry leading the listpack whose integer payload
+ * is the number of items carrying an expiry. It exists only while that
+ * count is > 0: created on the 0->1 transition, updated in place, and deleted
+ * on the 1->0 transition, so objects without item TTLs pay nothing. All semantics
+ * live here; the listpack layer only provides the positional primitive.
+ *
+ * Must be called after the mutation it accounts for; it may reallocate the
+ * listpack, so callers must not reuse element pointers taken before it. */
+void listpackObjectUpdateVolatileCount(robj *o, long delta) {
+    if (delta == 0) return;
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
+    unsigned char *zl = objectGetVal(o);
+    unsigned char *head = lpStart(zl);
+    int has_head = lpIsMetadata(head);
+    long long count = (has_head ? lpGetMetadataValue(head) : 0) + delta;
+    serverAssert(count >= 0);
+    if (count == 0) {
+        zl = lpRemoveMetadata(zl, head);
+    } else {
+        unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+        uint64_t enclen;
+        lpEncodeIntegerGetType(count, intenc, &enclen);
+        /* head == lpStart(zl): replace the existing header in place, or insert
+         * a new one before the first physical entry / EOF. */
+        zl = lpInsertMetadata(zl, intenc, enclen, head, has_head ? LP_REPLACE : LP_BEFORE, NULL);
+    }
+    objectSetVal(o, zl);
+}
+
+/* Listpack mirror of hashHashtableTypeValidate: whether a field whose stored
+ * expiry is 'expiry' is visible in the current execution context. The
+ * hashtable encoding applies this filter inside hashtableFind/Scan/Next via
+ * the validateEntry callback; listpack read paths must apply it explicitly
+ * so both encodings answer identically (notably under POLICY_IGNORE_EXPIRE:
+ * loading, replication stream, slot migration, import mode). */
+bool listpackObjectItemIsValid(long long expiry) {
+    if (expiry == EXPIRY_NONE) return true;
+    /* Inside an ignore-TTL bracket (e.g. HSETEX force-deleting an already
+     * expired field) every field is visible, mirroring the hashtable
+     * encoding's type swap to the non-validating hashHashtableType. */
+    if (listpack_ttl_ignored) return true;
+    if (getExpirationPolicyWithFlags(0) == POLICY_IGNORE_EXPIRE) return true;
+    return !timestampIsExpired(expiry);
+}
+
+/* Loading and the replication stream ignore item expiry, so the propagated command must omit the expired items.
+ * The command cannot tell expired items from missing items, so it skips both. Allocate the new argv and copy the
+ * items before the first skipped one into it, at 'dst'. */
+robj **createChangedItemsArgv(client *c, size_t size, int dst, int items_index, int first_skipped, int *argc) {
+    robj **new_argv = zcalloc(sizeof(robj *) * size);
+    for (int i = items_index; i < first_skipped; i++) {
+        new_argv[dst++] = c->argv[i];
+        incrRefCount(c->argv[i]);
+    }
+    *argc = dst;
+    return new_argv;
 }

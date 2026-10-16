@@ -1,0 +1,120 @@
+{
+    "SEXPIREAT": {
+        "summary": "Sets the expiration time for set members to a Unix timestamp in seconds.",
+        "complexity": "O(N) where N is the number of specified members.",
+        "group": "set",
+        "since": "10.0.0",
+        "arity": -6,
+        "function": "sexpireatCommand",
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "SET",
+            "WRITE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "List of integer codes indicating the result of setting expiry on each specified member, in the same order as the members are requested.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "description": "The member does not exist in the set, or the key does not exist.",
+                        "const": -2
+                    },
+                    {
+                        "description": "The specified NX | XX | GT | LT condition has not been met.",
+                        "const": 0
+                    },
+                    {
+                        "description": "The expiration time was applied.",
+                        "const": 1
+                    },
+                    {
+                        "description": "The member was deleted because the given Unix timestamp in seconds is not later than the current time.",
+                        "const": 2
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "unix-time-seconds",
+                "type": "unix-time"
+            },
+            {
+                "name": "condition",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "nx",
+                        "type": "pure-token",
+                        "token": "NX"
+                    },
+                    {
+                        "name": "xx",
+                        "type": "pure-token",
+                        "token": "XX"
+                    },
+                    {
+                        "name": "gt",
+                        "type": "pure-token",
+                        "token": "GT"
+                    },
+                    {
+                        "name": "lt",
+                        "type": "pure-token",
+                        "token": "LT"
+                    }
+                ]
+            },
+            {
+                "name": "members",
+                "token": "MEMBERS",
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "nummembers",
+                        "type": "integer",
+                        "multiple": false,
+                        "minimum": 1
+                    },
+                    {
+                        "name": "member",
+                        "type": "member",
+                        "multiple": true
+                    }
+                ]
+            }
+        ]
+    }
+}

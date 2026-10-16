@@ -7,17 +7,6 @@ proc info_field {info field} {
     return [s field_name]
 }
 
-proc get_keys_with_volatile_items {r} {
-    set line [$r info keyspace]
-    set match [regexp -inline {keys_with_volatile_items=([\d]+)} $line]
-
-    if {[llength $match] == 2} {
-        return [lindex $match 1]
-    } else {
-        return 0
-    }
-}
-
 proc get_keys {r} {
     set line [$r info keyspace]
     set match [regexp -inline {keys=([\d]+)} $line]
@@ -89,13 +78,6 @@ proc get_check_ttl_command {command} {
     }
 }
 
-proc assert_keyevent_patterns {rd key args} {
-    foreach event_type $args {
-        set event [$rd read]
-        assert_match "pmessage __keyevent@* __keyevent@*:$event_type $key" $event
-    }
-}
-
 proc setup_replication_test {primary replica primary_host primary_port} {
     $primary FLUSHALL
     $replica replicaof $primary_host $primary_port
@@ -108,13 +90,6 @@ proc setup_replication_test {primary replica primary_host primary_port} {
     set primary_initial_expired [info_field [$primary info stats] expired_fields]
     set replica_initial_expired [info_field [$replica info stats] expired_fields]
     return [list $primary_initial_expired $replica_initial_expired]
-}
-
-proc setup_single_keyspace_notification {r} {
-    $r config set notify-keyspace-events KEA
-    set rd [valkey_deferring_client]
-    assert_equal {1} [psubscribe $rd __keyevent@*]
-    return $rd
 }
 
 proc wait_for_active_expiry {r key expected_len initial_expired expected_increment {timeout 100} {interval 100}} {
@@ -2880,23 +2855,6 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
 }
 
 #### AOF Test #####
-proc validate_aof_content {aof_file pxat_count hdel_count} {
-    wait_for_condition 100 100 {
-        [file exists $aof_file] eq 1
-    } else {
-        fail "hash value was not expired after timeout"
-    }
-
-    set aof_content [exec cat $aof_file]
-
-    # Verify amount of PXAT and HDEL
-    # Count PXAT commands
-    set got_pxat_count [regexp -all {PXAT} $aof_content]
-    assert_equal $got_pxat_count $pxat_count
-    # Count HDEL commands
-    set got_hdel_count [regexp -all {HDEL} $aof_content]
-    assert_equal $got_hdel_count $hdel_count
-}
 tags {"aof external:skip"} {
     foreach rdb_preamble {"yes" "no"} {
         set defaults {appendonly {yes} appendfilename {appendonly.aof} appenddirname {appendonlydir} auto-aof-rewrite-percentage {0}}

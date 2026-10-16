@@ -2394,7 +2394,7 @@ void xreadCommand(client *c) {
             }
             if (o && ((stream *)objectGetVal(o))->length) {
                 stream *s = objectGetVal(o);
-                ids[id_idx] = s->last_id;
+                streamLastValidID(s, &ids[id_idx]);
                 if (streamDecrID(&ids[id_idx]) != C_OK) {
                     /* shouldn't happen */
                     addReplyError(c, "the stream last element ID is 0-0");

@@ -30,8 +30,8 @@
  * The caller is responsible for memory management for items in the mutexQueue.
  */
 
-#ifndef __MUTEXQUEUE_H
-#define __MUTEXQUEUE_H
+#ifndef VALKEY_MUTEXQUEUE_H
+#define VALKEY_MUTEXQUEUE_H
 
 #include <stdbool.h>
 #include "fifo.h"

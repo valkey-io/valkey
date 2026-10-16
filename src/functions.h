@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __FUNCTIONS_H_
-#define __FUNCTIONS_H_
+#ifndef VALKEY_FUNCTIONS_H
+#define VALKEY_FUNCTIONS_H
 
 /*
  * functions.c unit provides the Functions API:

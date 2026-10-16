@@ -896,6 +896,76 @@ start_server {
         assert_equal [lindex $reply 1 0 1] {e 5}
     }
 
+    test {XAUTOCLAIM handles sparse PEL and mixed listpack fields} {
+        set old_max_entries [config_get_set stream-node-max-entries 3]
+        r DEL x
+        r XADD x 1-0 f one
+        r XADD x 2-0 f two
+        r XADD x 3-0 other three
+        r XADD x 4-0 f four
+        r XADD x 5-0 f five
+        r XADD x 6-0 f six
+        r XADD x 7-0 f seven
+        r XADD x 8-0 other eight extra value
+        r XGROUP CREATE x grp 0
+        r XREADGROUP GROUP grp Alice COUNT 8 STREAMS x >
+        r XACK x grp 2-0 4-0 7-0
+        r XDEL x 6-0
+
+        assert_equal {0-0 {{1-0 {f one}} {3-0 {other three}} {5-0 {f five}} {8-0 {other eight extra value}}} 6-0} \
+            [r XAUTOCLAIM x grp Bob 0 0-0 COUNT 5]
+        assert_equal {0-0 {1-0 3-0 5-0 8-0} {}} \
+            [r XAUTOCLAIM x grp Charlie 0 0-0 COUNT 4 JUSTID]
+
+        r CONFIG SET stream-node-max-entries $old_max_entries
+    }
+
+    test {XAUTOCLAIM skips unread fields when an entry is not idle enough} {
+        r DEL x
+        r XADD x 1-0 f one
+        r XADD x 2-0 other two extra value
+        r XADD x 3-0 f three
+        r XGROUP CREATE x grp 0
+        r XREADGROUP GROUP grp Alice COUNT 3 STREAMS x >
+        r XCLAIM x grp Alice 0 1-0 3-0 IDLE 2000000 JUSTID
+
+        assert_equal {0-0 {{1-0 {f one}} {3-0 {f three}}} {}} \
+            [r XAUTOCLAIM x grp Bob 1000000 0-0 COUNT 3]
+        set pending [r XPENDING x grp - + 3 Alice]
+        assert_equal 1 [llength $pending]
+        assert_equal 2-0 [lindex $pending 0 0]
+    }
+
+    test {XAUTOCLAIM skips nodes with wide last entries} {
+        set old_max_entries [config_get_set stream-node-max-entries 2]
+        set old_max_bytes [config_get_set stream-node-max-bytes 0]
+        r DEL x
+        set fields {}
+        for {set i 0} {$i < 40} {incr i} {
+            lappend fields f$i v
+        }
+        r XADD x 1-0 f one
+        r XADD x 2-0 {*}$fields
+        r XADD x 3-0 f three
+        r XADD x 4-0 {*}$fields
+        r XADD x 5-0 f five
+        r XADD x 6-0 {*}$fields
+        r XADD x 7-0 f seven
+        r XADD x 8-0 {*}$fields
+        r XGROUP CREATE x grp 0
+        r XREADGROUP GROUP grp Alice COUNT 8 STREAMS x >
+        r XACK x grp 2-0 4-0 6-0 8-0
+        r XDEL x 5-0 6-0
+
+        assert_equal {0-0 {1-0 3-0 7-0} 5-0} \
+            [r XAUTOCLAIM x grp Bob 0 0-0 COUNT 4 JUSTID]
+        assert_equal {0-0 {{1-0 {f one}} {3-0 {f three}} {7-0 {f seven}}} {}} \
+            [r XAUTOCLAIM x grp Charlie 0 0-0 COUNT 3]
+
+        r CONFIG SET stream-node-max-entries $old_max_entries
+        r CONFIG SET stream-node-max-bytes $old_max_bytes
+    }
+
     test {XAUTOCLAIM COUNT must be > 0} {
        assert_error "ERR COUNT must be > 0" {r XAUTOCLAIM key group consumer 1 1 COUNT 0}
     }

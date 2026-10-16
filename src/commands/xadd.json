@@ -16,7 +16,7 @@
                 "Added support for the `<ms>-*` explicit ID form."
             ],
             [
-                "9.2.0",
+                "10.0.0",
                 "Added the `MAXBYTES` trimming strategy."
             ]
         ],
@@ -91,7 +91,7 @@
                                 "name": "maxbytes",
                                 "type": "pure-token",
                                 "token": "MAXBYTES",
-                                "since": "9.2.0"
+                                "since": "10.0.0"
                             }
                         ]
                     },

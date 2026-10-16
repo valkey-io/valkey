@@ -10996,7 +10996,7 @@ struct COMMAND_ARG XACKDEL_Args[] = {
 commandHistory XADD_History[] = {
 {"6.2.0","Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option."},
 {"7.0.0","Added support for the `<ms>-*` explicit ID form."},
-{"9.2.0","Added the `MAXBYTES` trimming strategy."},
+{"10.0.0","Added the `MAXBYTES` trimming strategy."},
 };
 #endif
 
@@ -11018,7 +11018,7 @@ keySpec XADD_Keyspecs[1] = {
 struct COMMAND_ARG XADD_trim_strategy_Subargs[] = {
 {MAKE_ARG("maxlen",ARG_TYPE_PURE_TOKEN,-1,"MAXLEN",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("minid",ARG_TYPE_PURE_TOKEN,-1,"MINID",NULL,"6.2.0",CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("maxbytes",ARG_TYPE_PURE_TOKEN,-1,"MAXBYTES",NULL,"9.2.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("maxbytes",ARG_TYPE_PURE_TOKEN,-1,"MAXBYTES",NULL,"10.0.0",CMD_ARG_NONE,0,NULL)},
 };
 
 /* XADD trim operator argument table */
@@ -11740,7 +11740,7 @@ struct COMMAND_ARG XSETID_Args[] = {
 /* XTRIM history */
 commandHistory XTRIM_History[] = {
 {"6.2.0","Added the `MINID` trimming strategy and the `LIMIT` option."},
-{"9.2.0","Added the `MAXBYTES` trimming strategy."},
+{"10.0.0","Added the `MAXBYTES` trimming strategy."},
 };
 #endif
 
@@ -11762,7 +11762,7 @@ keySpec XTRIM_Keyspecs[1] = {
 struct COMMAND_ARG XTRIM_trim_strategy_Subargs[] = {
 {MAKE_ARG("maxlen",ARG_TYPE_PURE_TOKEN,-1,"MAXLEN",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("minid",ARG_TYPE_PURE_TOKEN,-1,"MINID",NULL,"6.2.0",CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("maxbytes",ARG_TYPE_PURE_TOKEN,-1,"MAXBYTES",NULL,"9.2.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("maxbytes",ARG_TYPE_PURE_TOKEN,-1,"MAXBYTES",NULL,"10.0.0",CMD_ARG_NONE,0,NULL)},
 };
 
 /* XTRIM trim operator argument table */

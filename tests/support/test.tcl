@@ -203,13 +203,19 @@ proc search_pattern_list {value pattern_list {glob_pattern false}} {
 
 # Register a script to run when the current test ends, whether it passed or
 # failed. Deferred scripts run in reverse registration order, in the scope of
-# the test body.
+# the test body. Must be called from inside a test.
 proc test_defer {script} {
+    if {$::cur_test eq ""} {
+        error "test_defer called outside a test"
+    }
     lappend ::test_deferred [list always $script]
 }
 
 # Like test_defer, but the script only runs if the test body failed.
 proc test_defer_fail {script} {
+    if {$::cur_test eq ""} {
+        error "test_defer_fail called outside a test"
+    }
     lappend ::test_deferred [list fail $script]
 }
 
@@ -223,10 +229,10 @@ proc test_defer_fail {script} {
 proc test_config_set {client param value} {
     set old [lindex [uplevel 1 [list {*}$client config get $param]] 1]
     uplevel 1 [list {*}$client config set $param $value]
-    test_defer [list test_config_restore $client $param $old]
+    test_defer [list _test_config_restore $client $param $old]
 }
 
-proc test_config_restore {client param value} {
+proc _test_config_restore {client param value} {
     if {[catch {uplevel 1 [list {*}$client ping]}]} {
         return
     }
@@ -321,6 +327,9 @@ proc test {name code {okpattern undefined} {tags {}}} {
 
     send_data_packet $::test_server_fd testing $name
 
+    # Tests can be nested; keep the outer test's cleanup state for it.
+    set prev_paused_pids $::test_paused_pids
+    set prev_deferred $::test_deferred
     set ::test_paused_pids {}
     set ::test_deferred {}
 
@@ -335,6 +344,8 @@ proc test {name code {okpattern undefined} {tags {}}} {
     # only fails a test that passed. A skipped test does not count as failed.
     set body_failed [expr {$code_failed && ![string match "skipped:*" $error]}]
     set cleanup_errors [uplevel 1 [list test_cleanup $body_failed]]
+    set ::test_paused_pids $prev_paused_pids
+    set ::test_deferred $prev_deferred
 
     if {$code_failed} {
         if {[info exists saved_error_info]} {

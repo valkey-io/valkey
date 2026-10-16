@@ -462,6 +462,10 @@ proc test {descr code} {
     puts -nonewline "$ts> $descr: "
     flush stdout
 
+    # Tests can be nested; keep the outer test's cleanup state for it.
+    set prev_paused_pids $::test_paused_pids
+    set prev_deferred $::test_deferred
+    set prev_test $::cur_test
     set ::test_paused_pids {}
     set ::test_deferred {}
     set ::cur_test $descr
@@ -474,7 +478,9 @@ proc test {descr code} {
     # Run automatic cleanup regardless of the test outcome. A cleanup failure
     # only fails a test that passed.
     set cleanup_errors [uplevel 1 [list test_cleanup $code_failed]]
-    set ::cur_test ""
+    set ::test_paused_pids $prev_paused_pids
+    set ::test_deferred $prev_deferred
+    set ::cur_test $prev_test
     if {$code_failed} {
         if {[info exists saved_error_info]} {
             set ::errorInfo $saved_error_info

@@ -306,6 +306,64 @@ proc test_scan {type} {
         }
     }
 
+    test "{$type} ZSCAN with binary members and different COUNT values" {
+        r del zset
+        set elements {}
+        set expected {}
+        set expected_match {}
+        for {set j 0} {$j < 200} {incr j} {
+            set member "member:$j\x00tail"
+            lappend elements $j $member
+            lappend expected [list $member $j]
+            if {[string match "member:1*" $member]} {
+                lappend expected_match [list $member $j]
+            }
+        }
+        r zadd zset {*}$elements
+        assert_encoding btree zset
+
+        foreach count {10 100 1000} {
+            set cursor 0
+            set actual {}
+            while 1 {
+                set res [r zscan zset $cursor count $count]
+                set cursor [lindex $res 0]
+                foreach {member score} [lindex $res 1] {
+                    lappend actual [list $member $score]
+                }
+                if {$cursor == 0} break
+            }
+            assert_equal [lsort $expected] [lsort $actual]
+
+            set cursor 0
+            set actual_match {}
+            while 1 {
+                set res [r zscan zset $cursor match "member:1*" count $count]
+                set cursor [lindex $res 0]
+                foreach {member score} [lindex $res 1] {
+                    lappend actual_match [list $member $score]
+                }
+                if {$cursor == 0} break
+            }
+            assert_equal [lsort $expected_match] [lsort $actual_match]
+
+            set cursor 0
+            set actual_match_noscores {}
+            while 1 {
+                set res [r zscan zset $cursor match "member:1*" count $count noscores]
+                set cursor [lindex $res 0]
+                foreach member [lindex $res 1] {
+                    lappend actual_match_noscores $member
+                }
+                if {$cursor == 0} break
+            }
+            assert_equal [lsort [lmap pair $expected_match {lindex $pair 0}]] [lsort $actual_match_noscores]
+        }
+
+        set res [r zscan zset 0 count 1000 noscores]
+        assert_equal [lsort [lmap pair $expected {lindex $pair 0}]] [lsort [lindex $res 1]]
+    }
+
     test "{$type} SCAN guarantees check under write load" {
         r flushdb
         populate 100

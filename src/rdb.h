@@ -50,13 +50,14 @@
  * In an RDB file/stream, we also check the magic string REDIS or VALKEY but in
  * the DUMP/RESTORE format, there is only the RDB version number and no magic
  * string. */
-#define RDB_VERSION 80
+#define RDB_VERSION 81
 
 /* Mapping between RDB version and the Valkey version where it was added. */
 static const int RDB_VERSION_MAP[][2] = {
     /* {RDB version, added in Valkey version} from oldest to newest. */
     {11, 0x070200},
     {80, 0x090000},
+    {81, 0x090200},
 };
 
 /* Reserved range for foreign (unsupported, non-OSS) RDB format. */
@@ -128,7 +129,8 @@ enum RdbType {
     RDB_TYPE_STREAM_LISTPACKS_2 = 19,
     RDB_TYPE_SET_LISTPACK = 20, /* Added in RDB 11 (7.2) */
     RDB_TYPE_STREAM_LISTPACKS_3 = 21,
-    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration, RDB 80 (9.0) */
+    RDB_TYPE_HASH_2 = 22,    /* Hash with field-level expiration, RDB 80 (9.0) */
+    RDB_TYPE_PATH_HASH = 23, /* Path hash paths with field/value payloads, RDB 81 (9.2) */
     RDB_TYPE_LAST
 };
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
@@ -189,6 +191,9 @@ enum RdbType {
 #define RDB_LOAD_ERR_ALL_ITEMS_EXPIRED 4 /* All fields expired */
 
 bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
+/* Recognize plain Redis/Valkey RDB headers and the streaming-compression
+ * envelope prefix. The loader validates the complete header or envelope. */
+bool rdbHasFileSignature(const char *buf, size_t len);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);
@@ -204,9 +209,10 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbStartBgsave(int bgsave_type);
 int resolveBgsaveType(void);
-int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi);
+int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
 int rdbSaveToFile(const char *filename);
+compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode);
 int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char type);
 size_t rdbSavedObjectLen(robj *o, robj *key, int dbid);
@@ -223,8 +229,12 @@ int rdbSaveBinaryDoubleValue(rio *rdb, double val);
 int rdbLoadBinaryDoubleValue(rio *rdb, double *val);
 int rdbSaveBinaryFloatValue(rio *rdb, float val);
 int rdbLoadBinaryFloatValue(rio *rdb, float *val);
-int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
-int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename);
+int rdbLoadRioWithLoadingCtx(rio *rdb,
+                             int rdbflags,
+                             rdbSaveInfo *rsi,
+                             rdbLoadingCtx *rdb_loading_ctx,
+                             const char *filename);
 bool rdbRioHasCorruptCompressedInput(rio *rdb);
 bool rdbRioHasInternalStreamReaderError(rio *rdb);
 void rdbReportCorruptCompressedStream(const char *source);
@@ -245,7 +255,7 @@ rdbStreamReaderInitResult rdbInitStreamReader(rio *rdb,
                                               compressionAlgo *algo);
 void rdbFreeStreamReader(rio *rdb, streamReader *reader);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);
-int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
+int rdbSaveRio(compressionAlgo compression_algo, int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 void replicationEmptyDbCallback(hashtable *ht);

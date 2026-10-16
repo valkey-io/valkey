@@ -358,13 +358,11 @@ int fileIsRDB(char *filepath) {
         return 0;
     }
 
-    if (size >= 8) { /* There must be at least room for the RDB header. */
-        char sig[5];
-        int rdb_file = fread(sig, sizeof(sig), 1, fp) == 1 && memcmp(sig, "REDIS", sizeof(sig)) == 0;
-        if (rdb_file) {
-            fclose(fp);
-            return 1;
-        }
+    char sig[6];
+    size_t siglen = fread(sig, 1, sizeof(sig), fp);
+    if (rdbHasFileSignature(sig, siglen)) {
+        fclose(fp);
+        return 1;
     }
 
     fclose(fp);

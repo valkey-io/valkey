@@ -366,6 +366,20 @@ void setcpuaffinity(const char *cpulist);
 #define HAVE_FADVISE
 #endif
 
+/* Drawing secret material from a configured provider needs the OpenSSL 3
+ * provider APIs and config-driven provider selection. Older OpenSSL and
+ * LibreSSL have neither, so those builds keep the bundled generator.
+ *
+ * USE_OPENSSL == 1 means BUILD_TLS=yes. BUILD_TLS=module compiles the server
+ * with USE_OPENSSL == 2 but does not link libcrypto into it (src/Makefile),
+ * so a module build keeps the bundled generator as well. */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L && !defined(LIBRESSL_VERSION_NUMBER)
+#define HAVE_OPENSSL_PROVIDERS
+#endif
+#endif
+
 #define IO_THREADS_MAX_NUM 256
 
 #ifndef CACHE_LINE_SIZE

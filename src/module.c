@@ -2679,6 +2679,22 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * atomic slot migration and CLUSTER MIGRATESLOTS will return an error. Modules
  * should set this flag if they understand keys may be loaded during the
  * migration but before ownership is transferred.
+ *
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS:
+ * When set, this option indicates that the module is capable of handling
+ * forkless operations (such as a forkless background save). Opting in has the
+ * following implications the module must acknowledge:
+ * - While a forkless operation is running, opening a key for write with
+ *   VM_OpenKey() may return NULL when the key is in use by the operation; the
+ *   module must handle that NULL return.
+ * - A module that registers a data type also declares that its RDB save
+ *   callbacks are thread-safe.
+ * - A module that registers an aux_save/aux_save2 function must run it only in
+ *   the VALKEYMODULE_AUX_BEFORE_RDB section, and it must export only limited
+ *   data (this function runs on the main thread and blocks it during a forkless
+ *   operation).
+ * When forkless background saving is configured, if any loaded module does not
+ * set this flag, the server falls back to fork-based saving.
  */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
@@ -3778,14 +3794,19 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  *
  * #### Return value
  *
- * The command returns VALKEYMODULE_ERR if the format specifiers are invalid
- * or the command name does not belong to a known command. */
+ * The command returns VALKEYMODULE_ERR if the format specifiers are invalid,
+ * the command name does not belong to a known command, or the server is
+ * paused for replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER
+ * FAILOVER). */
 int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
     struct serverCommand *cmd = NULL;
     robj **argv = NULL;
     int argc = 0, flags = 0, j;
     va_list ap;
     int slot = -1;
+
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
 
     bool skip_validation = ctx->module &&
                            (ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
@@ -3840,8 +3861,13 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
  * the command can just be re-executed to deterministically re-create the
  * new state starting from the old one.
  *
- * The function always returns VALKEYMODULE_OK. */
+ * The function returns VALKEYMODULE_ERR if the server is paused for
+ * replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER FAILOVER),
+ * otherwise VALKEYMODULE_OK is returned. */
 int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
+
     alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL, ctx->client->slot);
     server.dirty++;
     return VALKEYMODULE_OK;
@@ -4337,7 +4363,7 @@ static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
  * Valkey 9.2+: When opening a key with VALKEYMODULE_WRITE, NULL will be returned
  * if the key is currently write-locked (i.e. if forkless operations are operating
  * on the key).  This change is non-breaking as:
- * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE
+ * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS
  * * Module write commands are blocked (before execution), if a declared key is write-locked
  * The risk is only for a module that performs VM_OpenKey() on a key which was NOT
  * declared in the current command OR arbitrarily opens keys during a timer event.
@@ -4432,6 +4458,7 @@ int VM_KeyType(ValkeyModuleKey *key) {
     case OBJ_HASH: return VALKEYMODULE_KEYTYPE_HASH;
     case OBJ_MODULE: return VALKEYMODULE_KEYTYPE_MODULE;
     case OBJ_STREAM: return VALKEYMODULE_KEYTYPE_STREAM;
+    case OBJ_PATH_HASH: return VALKEYMODULE_KEYTYPE_PATH_HASH;
     default: return VALKEYMODULE_KEYTYPE_EMPTY;
     }
 }
@@ -4450,6 +4477,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
     case OBJ_ZSET: return zsetLength(key->value);
     case OBJ_HASH: return hashTypeLength(key->value);
     case OBJ_STREAM: return streamLength(key->value);
+    case OBJ_PATH_HASH: return raxSize(((pathHashObject *)objectGetVal(key->value))->index);
     default: return 0;
     }
 }
@@ -4504,7 +4532,9 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL || (expire < 0 && expire != VALKEYMODULE_NO_EXPIRE))
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
-        expire += commandTimeSnapshot();
+        mstime_t basetime = commandTimeSnapshot();
+        if (expire > LLONG_MAX - basetime) return VALKEYMODULE_ERR;
+        expire += basetime;
         key->value = setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
@@ -5463,18 +5493,29 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * For example, valkey-search uses this interface to avoid maintaining two copies of the
  * indexed vectors.
  *
- * The function receives the hash key, field name, buffer to share along with its size. */
+ * The function receives the hash key, field name, buffer to share along with its size.
+ *
+ * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if the key or field
+ * is missing, the key is not a hash, or the update fails. */
 int VM_HashSetStringRef(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
-    return hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len);
+    if (hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len) != C_OK) return VALKEYMODULE_ERR;
+    return VALKEYMODULE_OK;
 }
 
 /* Checks if the value of a hash entry is a shared string reference (stringRef).
- * The function receives the hash key and field name to perform the check against. */
+ * The function receives the hash key and field name to perform the check against.
+ *
+ * Returns 1 if the field exists and holds a string reference. Returns 0 in every
+ * other case, including a missing or non-hash key, a missing field name and a
+ * field which doesn't exist or is already expired. Note that the return value is
+ * a plain boolean and not an OK/ERR status, since VALKEYMODULE_ERR can't be told
+ * apart from a positive answer. */
 int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
-    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH) return VALKEYMODULE_ERR;
+    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field) return 0;
     return hashTypeHasStringRef(key->value, objectGetVal(field));
 }
+
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty
  * hash value, in order to set the specified field.
@@ -6831,6 +6872,20 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
             }
             goto cleanup;
         }
+    }
+
+    /* Reject write commands from modules when replica traffic is paused.
+     * This prevents module timer callbacks and thread-safe contexts from
+     * bypassing the pause and hitting the assertion in propagateNow(). */
+    if (replicate && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)) && isPausedActions(PAUSE_ACTION_REPLICA)) {
+        errno = ENOSPC;
+        if (error_as_call_replies) {
+            reply_error_msg = sdscatfmt(sdsempty(),
+                                        "Write command '%S' was "
+                                        "called while the server is paused for writes.",
+                                        c->cmd->fullname);
+        }
+        goto cleanup;
     }
 
     /* Check if the user can run this command according to the current
@@ -10484,7 +10539,9 @@ ValkeyModuleUser *VM_CreateModuleUser(const char *name) {
 }
 
 /* Frees a given user and disconnects all of the clients that have been
- * authenticated with it. See VM_CreateModuleUser for detailed usage.*/
+ * authenticated with it. See VM_CreateModuleUser for detailed usage.
+ *
+ * Returns VALKEYMODULE_OK. */
 int VM_FreeModuleUser(ValkeyModuleUser *user) {
     if (user->free_user) ACLFreeUserAndKillClients(user->user);
     zfree(user);
@@ -12281,6 +12338,8 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
         cursor->done = 1;
         ret = 0;
     } else if (objectGetType(o) == OBJ_ZSET || objectGetType(o) == OBJ_HASH) {
+        /* Only hash listpacks carry field TTL metadata. */
+        int is_hash = objectGetType(o) == OBJ_HASH;
         unsigned char *p = lpSeek(objectGetVal(o), 0);
         unsigned char *vstr;
         unsigned int vlen;
@@ -12290,6 +12349,12 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
             robj *field =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
             p = lpNext(objectGetVal(o), p);
+            /* Skip hash fields not visible in the current context, like HSCAN. */
+            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(objectGetVal(o), p))) {
+                decrRefCount(field);
+                p = lpNext(objectGetVal(o), p);
+                continue;
+            }
             vstr = lpGetValue(p, &vlen, &vll);
             robj *value =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
@@ -12430,6 +12495,8 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
          * String entries are borrowed; integer-encoded entries are materialized
          * (callback-scoped). Integers may be either field or value. */
         unsigned char *lp = objectGetVal(o);
+        /* Only hash listpacks carry field TTL metadata. */
+        int is_hash = objectGetType(o) == OBJ_HASH;
         unsigned char *p = lpSeek(lp, 0);
         while (p) {
             unsigned int flen;
@@ -12447,6 +12514,11 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
             }
             p = lpNext(lp, p);
             if (!p) break;
+            /* Skip hash fields not visible in the current context, like HSCAN. */
+            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(lp, p))) {
+                p = lpNext(lp, p);
+                continue;
+            }
             unsigned int vlen;
             long long vll;
             char vbuf[LONG_STR_SIZE];

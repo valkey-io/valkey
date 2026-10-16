@@ -756,7 +756,7 @@ void hashHashtableTypeDestructor(void *entry) {
 }
 
 size_t hashHashtableTypeMetadataSize(void) {
-    return sizeof(void *);
+    return sizeof(vset);
 }
 
 extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
@@ -1302,7 +1302,6 @@ static void clientsCron(int clients_this_cycle) {
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
         if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
-        if (clientsCronTcpIsClosing(c)) continue;
 
         /* Iterating all the clients in getMemoryOverheadData() is too slow and
          * in turn would make the INFO command too slow. So we perform this
@@ -1498,7 +1497,7 @@ void checkChildrenDone(void) {
 
         if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
-        /* sigKillChildHandler catches the signal and calls exit(), but we
+        /* sigKillChildHandler catches the signal and calls _exit(), but we
          * must make sure not to flag lastbgsave_status, etc incorrectly.
          * We could directly terminate the child process via SIGUSR1
          * without handling it */
@@ -1789,6 +1788,13 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
     if (server.tracking_clients) trackingLimitUsedSlots();
+
+    /* Reclaim dead client IDs from the tracking table. NOT gated on
+     * server.tracking_clients: dead IDs can linger in inner RAXes after every
+     * tracking client has disconnected, so tracking_clients may be zero while
+     * stale items remain. The sweep schedules itself on an adaptive period
+     * and time-budgets each step, so calling it every tick is cheap. */
+    trackingSweepDeadClients();
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
@@ -5371,6 +5377,9 @@ int finishShutdown(void) {
 
     moduleUnloadAllModules();
 
+    /* Module unloading may drain IO queues, so stop workers afterward. */
+    killIOThreads();
+
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
 
@@ -6499,6 +6508,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
  * on memory corruption problems. */
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
+    info = sdsMakeRoomFor(info, 4096);
     time_t uptime = server.unixtime - server.stat_starttime;
     int j;
     int sections = 0;
@@ -7532,7 +7542,12 @@ static void sigKillChildHandler(int sig) {
     UNUSED(sig);
     int level = server.in_fork_child == CHILD_TYPE_MODULE ? LL_VERBOSE : LL_WARNING;
     serverLogRawFromHandler(level, "Received SIGUSR1 in child, exiting now.");
-    exitFromChild(SERVER_CHILD_NOERROR_RETVAL);
+    /* Only async-signal-safe functions may be called from a signal handler,
+     * so use _exit() directly rather than exitFromChild(), whose exit() path
+     * in coverage builds runs the gcov atexit dump. A child killed by its
+     * parent intentionally skips the coverage dump: the dump serializes on
+     * profile data files shared with every concurrently exiting process. */
+    _exit(SERVER_CHILD_NOERROR_RETVAL);
 }
 
 void setupChildSignalHandlers(void) {
@@ -8295,6 +8310,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
+ * DELEX specific command extended options - IFEQ/IFNE
  * INCREX specific command extended options - BYINT/BYFLOAT
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
@@ -8347,7 +8363,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
             *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
@@ -8357,7 +8373,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'n' || opt[2] == 'N') &&
                    (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
             *flags |= ARGS_SET_IFNE;
             *compare_val = next;
@@ -8384,7 +8400,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_EX;
             *expire = next;
@@ -8394,7 +8410,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
@@ -8407,7 +8423,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_EXAT;
             *expire = next;
@@ -8419,7 +8435,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && next)
+                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;

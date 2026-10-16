@@ -17,6 +17,7 @@ typedef enum {
     ALGO_NONE = 0,
     ALGO_LZF = 1, /* Per-string LZF inside the RDB payload (legacy). */
     ALGO_LZ4 = 2,
+    ALGO_ZSTD = 3,
 } compressionAlgo;
 
 typedef enum {
@@ -26,6 +27,10 @@ typedef enum {
 } compressFlushMode;
 
 const char *compressionAlgoName(compressionAlgo algo);
+bool streamCodecIsSupported(compressionAlgo algo);
+/* Codec facts used by callers that request periodic stream integrity. */
+uint8_t streamCodecIntegrityChecksumFlags(compressionAlgo algo);
+bool streamCodecNeedsBoundedFramesForIntegrity(compressionAlgo algo);
 
 /* ===== Compressor ===== */
 
@@ -36,6 +41,7 @@ typedef struct {
     compressionAlgo algo;
     int level; /* 0 selects the codec default. */
     void *ctx;
+    size_t ctx_memory; /* Bytes held by ctx via the codec's custom allocator, for memory accounting. */
     bool stream_started;
     uint8_t checksum_flags;
 } streamCompressor;
@@ -57,6 +63,7 @@ typedef struct {
     bool frame_done;
     bool skip_codec_checksum_validation;
     void *ctx;
+    size_t ctx_memory; /* Bytes held by ctx via the codec's custom allocator, for memory accounting. */
     size_t input_hint; /* Preferred compressed bytes for next feed, 0 if unknown. */
 } streamDecompressor;
 
@@ -69,6 +76,8 @@ ssize_t streamDecompressorFeed(streamDecompressor *decompressor,
                                const uint8_t *input,
                                size_t input_len,
                                size_t *input_consumed);
+/* Start the next concatenated frame while retaining codec allocations. */
+int streamDecompressorReset(streamDecompressor *decompressor);
 void streamDecompressorFree(streamDecompressor *decompressor);
 
 #endif /* COMPRESSION_H */

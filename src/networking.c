@@ -408,6 +408,7 @@ client *createClient(connection *conn) {
     c->client_list_node = NULL;
     c->io_read_state = CLIENT_IDLE;
     c->io_write_state = CLIENT_IDLE;
+    c->cur_tid = 0;
     c->nwritten = 0;
     c->last_memory_usage = 0;
     c->last_memory_type = CLIENT_TYPE_NORMAL;
@@ -2724,9 +2725,6 @@ client *lookupClientByID(uint64_t id) {
     return c;
 }
 
-/* Bound compression work and staging memory for one write dispatch. */
-#define REPL_COMPRESSION_BATCH_SIZE (1024 * 1024)
-
 /* Advance the replica's replication-buffer cursor (ref_repl_buf_node /
  * ref_block_pos) past consumed raw bytes, releasing the reference on each
  * fully-sent block. Shared by the compressed and plaintext post-write paths. */
@@ -2825,16 +2823,17 @@ static bool getReplicaWriteRange(client *c, listNode **last_node, size_t *last_p
 }
 
 /* Append compressed input to the link's staging buffer. The first call emits
- * the replication envelope; a sync flush makes the batch writable without
- * ending the frame. */
+ * the replication envelope. Frames may span multiple socket-write batches;
+ * later frames start without repeating the envelope. */
 static int compressReplicaDataToOutputBuffer(replicaCompressionState *compression,
                                              const uint8_t *input,
                                              size_t input_len,
                                              compressFlushMode flush_mode) {
-    if (!compression->compressor.stream_started) {
+    if (!compression->envelope_written) {
         uint8_t envelope[VCS_ENVELOPE_SIZE];
         if (vcsBuildEnvelope(envelope, compression->compressor.algo, VCS_STREAM_REPL) == C_ERR) return C_ERR;
         compression->out_buf = sdscatlen(compression->out_buf, envelope, sizeof(envelope));
+        compression->envelope_written = true;
     }
     size_t bound = streamCompressorOutputBound(&compression->compressor, input_len);
     serverAssert(bound > 0);
@@ -2909,12 +2908,26 @@ static void writeToReplicaCompressed(client *c) {
 
     if (batch_uncompressed_bytes == 0) return;
 
-    /* Drain codec-buffered bytes so the whole batch lands in out_buf. */
-    if (compressReplicaDataToOutputBuffer(compression, NULL, 0, COMPRESS_FLUSH_SYNC) != C_OK) {
+    /* Drain codec-buffered bytes so the whole batch lands in out_buf. Codecs
+     * that need bounded frames for integrity retain history across small write
+     * batches and close after reaching the configured raw-byte threshold. */
+    compressFlushMode flush_mode = COMPRESS_FLUSH_SYNC;
+    if (compression->frame_max_bytes &&
+        compression->frame_uncompressed_bytes + batch_uncompressed_bytes >= compression->frame_max_bytes) {
+        flush_mode = COMPRESS_FLUSH_END;
+    }
+    if (compressReplicaDataToOutputBuffer(compression, NULL, 0, flush_mode) != C_OK) {
         c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
         return;
     }
 
+    if (compression->frame_max_bytes) {
+        if (flush_mode == COMPRESS_FLUSH_END) {
+            compression->frame_uncompressed_bytes = 0;
+        } else {
+            compression->frame_uncompressed_bytes += batch_uncompressed_bytes;
+        }
+    }
     compression->batch_uncompressed_bytes = batch_uncompressed_bytes;
 
     /* Send out_buf. The backlog cursor advances only after a full send
@@ -3724,6 +3737,9 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNBALANCED_QUOTES) {
         addReplyError(c, "Protocol error: unbalanced quotes in request");
         setProtocolError("unbalanced quotes in inline request", c);
+    } else if (flags & READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL) {
+        addReplyError(c, "Protocol error: embedded NUL byte in inline request");
+        setProtocolError("embedded NUL byte in inline request", c);
     } else if (flags & READ_FLAGS_ERROR_INVALID_CRLF) {
         addReplyError(c, "Protocol error: invalid CRLF in request");
         setProtocolError("invalid CRLF in request", c);
@@ -3748,7 +3764,7 @@ int isParsingError(client *c) {
                             READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
                             READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
                             READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT | READ_FLAGS_ERROR_UNBALANCED_QUOTES |
-                            READ_FLAGS_ERROR_INVALID_CRLF);
+                            READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL | READ_FLAGS_ERROR_INVALID_CRLF);
 }
 
 /* This function is called after the query-buffer was parsed.
@@ -3998,7 +4014,7 @@ void parseInlineBuffer(client *c) {
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
     /* Search for end of line */
-    newline = strchr(c->querybuf + c->qb_pos, '\n');
+    newline = memchr(c->querybuf + c->qb_pos, '\n', sdslen(c->querybuf) - c->qb_pos);
 
     /* Nothing to do without a \r\n */
     if (newline == NULL) {
@@ -4013,6 +4029,14 @@ void parseInlineBuffer(client *c) {
 
     /* Split the input buffer up to the \r\n */
     querylen = newline - (c->querybuf + c->qb_pos);
+
+    /* Reject a raw NUL byte in the line, because sdssplitargs() doesn't
+     * handle it. Binary payloads must use the quoted \x00 escape form. */
+    if (memchr(c->querybuf + c->qb_pos, '\0', querylen)) {
+        c->read_flags |= READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL;
+        return;
+    }
+
     argv = sdsnsplitargs(c->querybuf + c->qb_pos, querylen, &argc);
     if (argv == NULL) {
         c->read_flags |= READ_FLAGS_ERROR_UNBALANCED_QUOTES;
@@ -6725,7 +6749,16 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_compression &&
         c->io_write_state != CLIENT_PENDING_IO) {
         replicaCompressionState *compression = c->repl_data->repl_compression;
-        mem += zmalloc_size(compression) + sdsAllocSize(compression->out_buf);
+        mem += zmalloc_size(compression) + sdsAllocSize(compression->out_buf) + compression->compressor.ctx_memory;
+    }
+    /* The stream decoder for a compressed upstream link hangs off the server
+     * struct, but it exists for exactly this link, so attribute it to the
+     * primary client. Reads are not offloaded to IO threads while the decoder
+     * is active, so its buffers are stable here. */
+    if (c->flag.primary && server.repl_stream_reader) {
+        streamPushReader *reader = server.repl_stream_reader;
+        mem += zmalloc_size(reader) + reader->decompressor.ctx_memory;
+        mem += reader->pending_input ? sdsAllocSize(reader->pending_input) : 0;
     }
     /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to

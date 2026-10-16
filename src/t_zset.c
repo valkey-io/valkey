@@ -44,11 +44,9 @@
  * At the same time the elements are added to an ordered index mapping scores
  * to elements (so elements are sorted by scores in this "view").
  *
- * Note that the element string is shared between the hash table and the
- * ordered index in order to save memory. The element is freed only in
- * orderedIndexItemFree(). The hash table has no value free method set.
- * So we should always remove an element from the hash table, and later from
- * the ordered index. */
+ * The hash table and ordered index share each item's allocation. The hash
+ * table does not free items, so an item must be removed from both structures
+ * before the ordered index item is freed. */
 
 #include "server.h"
 #include "ordered_index.h"
@@ -571,6 +569,58 @@ static unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
     return zl;
 }
 
+/* Update the score of an element inside the sorted set listpack.
+ * Note that the element must exist in the listpack. */
+static unsigned char *zzlUpdateScore(unsigned char *zl, unsigned char *eptr, sds ele, double score, double curscore) {
+    unsigned char *sptr = lpNext(zl, eptr);
+    serverAssert(sptr != NULL);
+
+    /* Fast path: if the new score keeps the element in its current slot under
+     * (score, ele) ordering, replace the score entry in place instead of
+     * delete + full re-scan.
+     *
+     * Only the neighbor in the direction of the score change needs to be
+     * checked: if the score increases, the previous neighbor satisfies
+     * (prev_score < score) strictly (since prev_score <= curscore < score), so
+     * only the next neighbor can violate the order. The score-decrease case is
+     * symmetric. */
+    bool keep_position = true;
+    if (score > curscore) {
+        unsigned char *next_eptr = eptr, *next_sptr = sptr;
+        zzlNext(zl, &next_eptr, &next_sptr);
+        if (next_sptr != NULL) {
+            double next_score = zzlGetScore(next_sptr);
+            if (next_score < score ||
+                (next_score == score && zzlCompareElements(next_eptr, (unsigned char *)ele, sdslen(ele)) < 0))
+                keep_position = false;
+        }
+    } else { /* score < curscore */
+        unsigned char *prev_eptr = eptr, *prev_sptr = sptr;
+        zzlPrev(zl, &prev_eptr, &prev_sptr);
+        if (prev_sptr != NULL) {
+            double prev_score = zzlGetScore(prev_sptr);
+            if (prev_score > score ||
+                (prev_score == score && zzlCompareElements(prev_eptr, (unsigned char *)ele, sdslen(ele)) > 0))
+                keep_position = false;
+        }
+    }
+
+    if (keep_position) {
+        long long lscore;
+        if (double2ll(score, &lscore)) {
+            zl = lpReplaceInteger(zl, &sptr, lscore);
+        } else {
+            char scorebuf[MAX_D2STRING_CHARS];
+            int scorelen = d2string(scorebuf, sizeof(scorebuf), score);
+            zl = lpReplace(zl, &sptr, (unsigned char *)scorebuf, scorelen);
+        }
+        return zl;
+    }
+
+    zl = zzlDelete(zl, eptr);
+    return zzlInsert(zl, ele, score);
+}
+
 static unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range, unsigned long *deleted) {
     unsigned char *eptr, *sptr;
     double score;
@@ -887,10 +937,8 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
 
             if (newscore) *newscore = score;
 
-            /* Remove and re-insert when score changed. */
             if (score != curscore) {
-                objectSetVal(zobj, zzlDelete(objectGetVal(zobj), eptr));
-                objectSetVal(zobj, zzlInsert(objectGetVal(zobj), ele, score));
+                objectSetVal(zobj, zzlUpdateScore(objectGetVal(zobj), eptr, ele, score, curscore));
                 *out_flags |= ZADD_OUT_UPDATED;
             }
             return 1;
@@ -3318,7 +3366,6 @@ void genericZpopCommand(client *c,
     int idx;
     robj *key = NULL;
     robj *zobj = NULL;
-    sds ele;
     double score;
 
     if (deleted) *deleted = 0;
@@ -3359,6 +3406,11 @@ void genericZpopCommand(client *c,
 
     /* Remove the element. */
     do {
+        sds ele = NULL;
+        OrderedIndexItem *popped = NULL;
+        const char *reply_ele;
+        size_t reply_ele_len;
+
         if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(zobj);
             unsigned char *eptr, *sptr;
@@ -3379,26 +3431,24 @@ void genericZpopCommand(client *c,
             sptr = lpNext(zl, eptr);
             serverAssertWithInfo(c, zobj, sptr != NULL);
             score = zzlGetScore(sptr);
+            serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
+            reply_ele = ele;
+            reply_ele_len = sdslen(ele);
         } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(zobj);
             OrderedIndex *oi = zs->oi;
-            OrderedIndexItem *zln;
 
-            /* Get the first or last element in the sorted set. */
-            zln = (where == ZSET_MAX ? orderedIndexGetLast(oi) : orderedIndexGetFirst(oi));
+            popped = (where == ZSET_MAX ? orderedIndexPopLast(oi) : orderedIndexPopFirst(oi));
 
-            /* There must be an element in the sorted set. */
-            serverAssertWithInfo(c, zobj, zln != NULL);
-            const char *ele_ptr;
-            size_t ele_len;
-            orderedIndexItemGetElement(zln, &ele_ptr, &ele_len);
-            ele = sdsnewlen(ele_ptr, ele_len);
-            score = orderedIndexItemGetScore(zln);
+            serverAssertWithInfo(c, zobj, popped != NULL);
+            /* The detached item is also the hashtable entry. Remove it before freeing it. */
+            serverAssertWithInfo(c, zobj, hashtableDelete(zs->ht, popped));
+            orderedIndexItemGetElement(popped, &reply_ele, &reply_ele_len);
+            score = orderedIndexItemGetScore(popped);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
 
-        serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
         server.dirty++;
 
         if (result_count == 0) { /* Do this only for the first iteration. */
@@ -3410,9 +3460,12 @@ void genericZpopCommand(client *c,
         if (use_nested_array) {
             addReplyArrayLen(c, 2);
         }
-        addReplyBulkCBuffer(c, ele, sdslen(ele));
+        addReplyBulkCBuffer(c, reply_ele, reply_ele_len);
         addReplyDouble(c, score);
-        sdsfree(ele);
+        if (popped)
+            orderedIndexItemFree(popped);
+        else
+            sdsfree(ele);
         ++result_count;
     } while (--rangelen);
 

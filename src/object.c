@@ -932,13 +932,10 @@ void dismissPathHashObject(robj *o, size_t size_hint) {
     rax *index = path_hash->index;
     if (raxSize(index) == 0) return;
 
-    /* Split the serialized size evenly across the payloads, so each payload
-     * can dismiss its fields based on the estimated average field size. */
-    size_t payload_size_hint = size_hint / raxSize(index);
-
     /* We iterate and dismiss the payloads only when the approximate average
      * serialized payload size is bigger than a page size, since otherwise
      * there's a high chance we'll just iterate without releasing anything. */
+    size_t payload_size_hint = size_hint / raxSize(index);
     if (payload_size_hint < server.page_size) return;
 
     raxIterator iter;

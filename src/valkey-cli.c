@@ -3065,6 +3065,7 @@ static void usage(int err) {
             "                     Default time interval is 15 sec. Change it using -i.\n"
             "  --latency-dist     Shows latency as a spectrum, requires xterm 256 colors.\n"
             "                     Default time interval is 1 sec. Change it using -i.\n"
+            "  --mono             Use a monochrome palette with --latency-dist.\n"
             "  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
             "  --replica          Simulate a replica showing commands received from the primaries.\n"
             "  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
@@ -3767,13 +3768,14 @@ clusterManagerCommandDef clusterManagerCommands[] = {
      "search-multiple-owners,fix-with-unreachable-primaries"},
     {"reshard", clusterManagerCommandReshard, -1, "<host:port> or <host> <port> - separated by either colon or space",
      "from <arg>,to <arg>,slots <arg>,yes,timeout <arg>,pipeline <arg>,"
-     "replace"},
+     "replace,use-atomic-slot-migration"},
     {"rebalance", clusterManagerCommandRebalance, -1,
      "<host:port> or <host> <port> - separated by either colon or space",
      "weight <node1=w1...nodeN=wN>,use-empty-primaries,"
-     "timeout <arg>,simulate,pipeline <arg>,threshold <arg>,replace"},
+     "timeout <arg>,simulate,pipeline <arg>,threshold <arg>,replace,"
+     "use-atomic-slot-migration"},
     {"add-node", clusterManagerCommandAddNode, 2, "new_host:new_port existing_host:existing_port",
-     "replica,primaries-id <arg>"},
+     "replica,primary-id <arg>"},
     {"del-node", clusterManagerCommandDeleteNode, 2, "host:port node_id", NULL},
     {"call", clusterManagerCommandCall, -2, "host:port command arg arg ... arg", "only-primaries,only-replicas"},
     {"set-timeout", clusterManagerCommandSetTimeout, 2, "host:port milliseconds", NULL},

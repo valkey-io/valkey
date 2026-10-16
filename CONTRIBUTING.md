@@ -49,9 +49,9 @@ in the pull request description, where xyz is the issue number.
 
 CI checks the DCO sign-off and clang-format on every pull request (formatting
 is skipped for documentation-only changes), so getting them right before you
-open it saves a review round. The daily workflow is not run on pull requests;
-run it yourself when your change touches something the default CI doesn't
-cover.
+open it saves a review round. The daily workflow does not run on pull requests
+to `unstable` unless a maintainer adds the `run-extra-tests` label, so run it
+yourself when your change touches something the default CI doesn't cover.
 
 ### Developer Certificate of Origin
 
@@ -304,8 +304,9 @@ queue, and most pull requests get a first look within a day or two, but some
 wait considerably longer when the queue is busy. To help your pull request
 find the right reviewer:
 
-* Request review from people who recently changed the files you touched
-  (`git log --format=%an -- path/to/file | sort | uniq -c | sort -rn | head`).
+* Request review from people who recently changed the files you touched, for
+  example `git log --since=1.year --format=%an -- path/to/file | sort |
+  uniq -c | sort -rn | head`.
   Reviewers listed in [MAINTAINERS.md](MAINTAINERS.md) can approve and merge;
   anyone may review.
 * If nothing has happened after two weeks, leave a comment on the pull request

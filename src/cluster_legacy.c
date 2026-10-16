@@ -3855,9 +3855,11 @@ static void clusterProcessPublishPacket(clusterMsgDataPublish *publish_data, uin
     uint32_t channel_len, message_len;
 
     /* Don't bother creating useless objects if there are no
-     * Pub/Sub subscribers. */
+     * Pub/Sub subscribers. A sharded publish can now match local PSUBSCRIBE
+     * patterns, so process it when this node has pattern subscribers too. */
     if ((type == CLUSTERMSG_TYPE_PUBLISH && serverPubsubSubscriptionCount() > 0) ||
-        (type == CLUSTERMSG_TYPE_PUBLISHSHARD && serverPubsubShardSubscriptionCount() > 0)) {
+        (type == CLUSTERMSG_TYPE_PUBLISHSHARD &&
+         (serverPubsubShardSubscriptionCount() > 0 || serverPubsubSubscriptionCount() > 0))) {
         channel_len = ntohl(publish_data->channel_len);
         message_len = ntohl(publish_data->message_len);
         channel = createStringObject((char *)publish_data->bulk_data, channel_len);

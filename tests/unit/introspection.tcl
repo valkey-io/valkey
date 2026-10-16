@@ -1382,6 +1382,8 @@ start_server {tags {"introspection"}} {
                 tls-ciphers
                 tls-ciphersuites
                 tls-port
+                tls-alt-cert-file
+                tls-alt-key-file
             }
         }
 
@@ -1946,6 +1948,21 @@ start_server {config "minimal.conf" tags {"introspection external:skip"} overrid
             assert_equal [$r2 close] 0
         }
     } {} {needs:debug}
+}
+
+if {!$::tls} {
+    start_server {tags {introspection external:skip}} {
+        assert_error {*ERR CONFIG SET failed (possibly related to argument 'tls-port')*} {
+            r config set tls-port 6798
+        }
+        assert_error {*ERR CONFIG SET failed (possibly related to argument 'tls-cluster')*} {
+            r config set tls-cluster yes
+        }
+        assert_error {*ERR CONFIG SET failed (possibly related to argument 'tls-replication')*} {
+            r config set tls-replication yes
+        }
+        assert_equal "PONG" [r ping]
+    }
 }
 
 test {config during loading} {

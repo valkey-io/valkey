@@ -756,7 +756,7 @@ void hashHashtableTypeDestructor(void *entry) {
 }
 
 size_t hashHashtableTypeMetadataSize(void) {
-    return sizeof(void *);
+    return sizeof(vset);
 }
 
 extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
@@ -1497,7 +1497,7 @@ void checkChildrenDone(void) {
 
         if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
-        /* sigKillChildHandler catches the signal and calls exit(), but we
+        /* sigKillChildHandler catches the signal and calls _exit(), but we
          * must make sure not to flag lastbgsave_status, etc incorrectly.
          * We could directly terminate the child process via SIGUSR1
          * without handling it */
@@ -1788,6 +1788,13 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
     if (server.tracking_clients) trackingLimitUsedSlots();
+
+    /* Reclaim dead client IDs from the tracking table. NOT gated on
+     * server.tracking_clients: dead IDs can linger in inner RAXes after every
+     * tracking client has disconnected, so tracking_clients may be zero while
+     * stale items remain. The sweep schedules itself on an adaptive period
+     * and time-budgets each step, so calling it every tick is cheap. */
+    trackingSweepDeadClients();
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
@@ -5327,6 +5334,9 @@ int finishShutdown(void) {
 
     moduleUnloadAllModules();
 
+    /* Module unloading may drain IO queues, so stop workers afterward. */
+    killIOThreads();
+
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
 
@@ -6455,6 +6465,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
  * on memory corruption problems. */
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
+    info = sdsMakeRoomFor(info, 4096);
     time_t uptime = server.unixtime - server.stat_starttime;
     int j;
     int sections = 0;
@@ -7484,7 +7495,12 @@ static void sigKillChildHandler(int sig) {
     UNUSED(sig);
     int level = server.in_fork_child == CHILD_TYPE_MODULE ? LL_VERBOSE : LL_WARNING;
     serverLogRawFromHandler(level, "Received SIGUSR1 in child, exiting now.");
-    exitFromChild(SERVER_CHILD_NOERROR_RETVAL);
+    /* Only async-signal-safe functions may be called from a signal handler,
+     * so use _exit() directly rather than exitFromChild(), whose exit() path
+     * in coverage builds runs the gcov atexit dump. A child killed by its
+     * parent intentionally skips the coverage dump: the dump serializes on
+     * profile data files shared with every concurrently exiting process. */
+    _exit(SERVER_CHILD_NOERROR_RETVAL);
 }
 
 void setupChildSignalHandlers(void) {

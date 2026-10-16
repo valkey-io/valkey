@@ -43,7 +43,6 @@
 #include "module.h"
 #include "cluster_migrateslots.h"
 #include "io_threads.h"
-#include "compression_stream.h"
 #include "rdb_transcoder.h"
 
 #include <memory.h>
@@ -279,8 +278,8 @@ bool replStreamHasPendingDecode(void) {
  * decoded byte count (0 means a partial envelope or compressed block was
  * buffered), or -1 when the stream is corrupt and the caller should disconnect
  * the link. Once the probe classifies the stream as plaintext, the reader
- * retires itself: later reads take the regular read path (callers gate on
- * server.repl_stream_reader) and may use IO threads. */
+ * retires itself: later reads take the regular read path on the main thread
+ * (callers gate on server.repl_stream_reader). */
 ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_len, size_t output_budget) {
     streamPushReader *reader = server.repl_stream_reader;
     serverAssert(reader != NULL);
@@ -2781,16 +2780,7 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
      * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
     if (server.aof_enabled) {
         bool aof_rdb_base_candidate = disk_based_sync && server.aof_use_rdb_preamble;
-        if (aof_rdb_base_candidate && !rsi->loaded_compressed) {
-            if (restartAOFWithSyncRdb() == C_ERR) {
-                restartAOFAfterSYNC();
-            }
-        } else {
-            if (aof_rdb_base_candidate) {
-                serverLog(LL_NOTICE,
-                          "Sync RDB file %s is streaming-compressed, falling back to BGREWRITEAOF instead of reusing it as an AOF base",
-                          server.rdb_filename);
-            }
+        if (!aof_rdb_base_candidate || restartAOFWithSyncRdb() == C_ERR) {
             restartAOFAfterSYNC();
         }
     }
@@ -2805,9 +2795,6 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
 
 int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, int *usemark, rdbSaveInfo *rsi) {
     rio rdb;
-    streamReader stream_reader;
-    bool stream_reader_initialized = false;
-    compressionAlgo compression_algo = ALGO_NONE;
     serverDb **dbarray;
     functionsLibCtx *functions_lib_ctx;
     serverDb **diskless_load_tempDb = NULL;
@@ -2850,84 +2837,26 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
-    int retval = RDB_FAILED;
-    /* Always attach a stream reader that probes the envelope: decode a compressed RDB, or pass through plaintext. */
-    bool skip_codec_checksum = (rdb.flags & RIO_FLAG_SKIP_RDB_CHECKSUM) != 0;
-    rdbStreamReaderInitResult init_rc =
-        rdbInitStreamReader(&rdb, &stream_reader, skip_codec_checksum, &compression_algo);
-    if (init_rc == RDB_STREAM_READER_INIT_INCOMPATIBLE) {
-        serverLog(LL_WARNING,
-                  "Unsupported RDB stream envelope from primary. This replica "
-                  "cannot decode it; a Valkey version with streaming RDB "
-                  "compression support may be required on the replica.");
-        /* Nothing loaded yet: take the data-preserving incompatibility path below. */
-        retval = RDB_INCOMPATIBLE;
-        loadingFailed = 1;
-    } else if (init_rc == RDB_STREAM_READER_INIT_ERROR) {
-        serverLog(LL_WARNING, "Failed to initialize RDB stream reader from primary");
-        loadingFailed = 1;
-    } else {
-        stream_reader_initialized = true;
-        /* rdbInitStreamReader sets RIO_FLAG_SKIP_RDB_CHECKSUM on a codec match. */
-        if (compression_algo != ALGO_NONE)
-            serverLog(LL_NOTICE, "Loading compressed RDB (algo=%s) from primary", compressionAlgoName(compression_algo));
-    }
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
     /* If we aren't using the swapdb method, then we want to empty the data before loading the rdb */
     int flags = RDBFLAGS_REPLICATION;
     if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) flags |= RDBFLAGS_EMPTY_DATA;
-    if (!loadingFailed) retval = rdbLoadRioWithLoadingCtxScopedRdb(&rdb, flags, rsi, &loadingCtx);
+    int retval = rdbLoadRioWithLoadingCtx(&rdb, flags, rsi, &loadingCtx, "primary replication stream");
     if (retval != RDB_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                               "from socket, check server logs.");
         loadingFailed = 1;
-    } else {
-        if (compression_algo != ALGO_NONE) {
-            /* Close the compressed frame; streamReaderFinish stops at the frame boundary. */
-            int finish_rc = streamReaderFinish(&stream_reader);
-            if (finish_rc == C_ERR) {
-                if (stream_reader.error_kind == STREAM_READER_ERROR_TRUNCATED) {
-                    serverLog(LL_WARNING, "Compressed RDB stream from primary was truncated; will resync");
-                } else if (stream_reader.error_kind == STREAM_READER_ERROR_CORRUPT) {
-                    /* Same fatal path as parse-time corruption, so a corrupt stream cannot retry-loop. */
-                    rdbReportCorruptCompressedStream("primary socket");
-                } else {
-                    serverLog(LL_WARNING, "Compressed RDB stream from primary did not end cleanly");
-                }
-                loadingFailed = 1;
-            }
-        }
-        if (!loadingFailed) {
-            /* Detach so trailing-framing reads hit the raw socket. */
-            if (stream_reader_initialized) {
-                rdbFreeStreamReader(&rdb, &stream_reader);
-                stream_reader_initialized = false;
-            }
-            if (*usemark) {
-                /* Verify the end mark is correct (plaintext, follows any frame). */
-                if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
-                    serverLog(LL_WARNING, "Replication stream EOF marker is broken");
-                    loadingFailed = 1;
-                }
-            } else if (compression_algo != ALGO_NONE) {
-                /* Size-framed compressed: consumed wire bytes must equal the announced
-                 * transfer size; an early close otherwise looks like success. */
-                if (rdb.io.conn.read_so_far != rdb.io.conn.read_limit) {
-                    serverLog(LL_WARNING,
-                              "Compressed RDB stream from primary ended before the announced "
-                              "transfer size; got %llu of %llu bytes",
-                              (unsigned long long)rdb.io.conn.read_so_far,
-                              (unsigned long long)rdb.io.conn.read_limit);
-                    loadingFailed = 1;
-                }
-            }
+    } else if (*usemark) {
+        /* Verify the end mark is correct (plaintext, follows any frame). */
+        if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
+            serverLog(LL_WARNING, "Replication stream EOF marker is broken");
+            loadingFailed = 1;
         }
     }
 
     if (loadingFailed) {
         stopLoading(0);
-        if (stream_reader_initialized) rdbFreeStreamReader(&rdb, &stream_reader);
         rioFreeConn(&rdb, NULL);
 
         if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
@@ -2983,7 +2912,6 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
 
     /* Cleanup and restore the socket to the original state to continue
      * with the normal replication. */
-    if (stream_reader_initialized) rdbFreeStreamReader(&rdb, &stream_reader);
     rioFreeConn(&rdb, NULL);
     connNonBlock(conn);
     connRecvTimeout(conn, 0);

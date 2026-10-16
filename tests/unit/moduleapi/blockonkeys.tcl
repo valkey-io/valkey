@@ -349,6 +349,31 @@ start_server {tags {"modules"}} {
         $rd close
     }
 
+    test {Module block aborted: timeout out of range} {
+        r del k
+        assert_error "*timeout is out of range*" {r blockonkeys.block_and_unblock k 9223372036854775807}
+        assert_equal [r ping] {PONG}
+        assert_equal [s blocked_clients] 0
+    }
+
+    test {Module block aborted: called from MULTI} {
+        r del k
+        r multi
+        r blockonkeys.block_and_unblock k 0
+        assert_error "*Blocking module command called from transaction*" {r exec}
+        assert_equal [r ping] {PONG}
+        assert_equal [s blocked_clients] 0
+    }
+
+    test {Module block aborted: called from Lua script} {
+        r del k
+        assert_error "*Blocking module command called from Lua script*" {
+            r eval {return redis.call('blockonkeys.block_and_unblock', KEYS[1], '0')} 1 k
+        }
+        assert_equal [r ping] {PONG}
+        assert_equal [s blocked_clients] 0
+    }
+
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]

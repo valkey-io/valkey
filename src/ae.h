@@ -140,6 +140,7 @@ typedef struct aeEventLoop {
     monotime priority_events_last_poll;                 /* Timestamp when high-priority events were last drained */
     uint64_t priority_events_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
     aeQoSStatsProc *priority_events_stats_callback;     /* Callback invoked with elapsed microseconds after draining high-priority events */
+    monotime wakeup_time;                               /* When the loop last woke up from polling; at the end to keep the fields above in place. */
 } aeEventLoop;
 
 /* Prototypes */

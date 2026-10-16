@@ -539,7 +539,13 @@ int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop) {
     /* Skip if high-priority processing is disabled or preemptive polling is disabled */
     if (eventLoop->priority_apidata == NULL || eventLoop->priority_events_preempt_check_interval_us == 0) return 0;
     if (elapsedUs(eventLoop->priority_events_last_poll) < eventLoop->priority_events_preempt_check_interval_us) return 0;
-    return aeProcessQoSEvents(eventLoop);
+    /* The events of this poll were observed now, not at the loop's wake-up, stamp them with
+     * this time, and restore it for the normal events still to be processed. */
+    monotime wakeup_time = eventLoop->wakeup_time;
+    eventLoop->wakeup_time = getMonotonicUs();
+    int processed = aeProcessQoSEvents(eventLoop);
+    eventLoop->wakeup_time = wakeup_time;
+    return processed;
 }
 
 /* Process every pending file event, then every pending time event
@@ -602,6 +608,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         if (!(flags & AE_FILE_EVENTS)) {
             numevents = 0;
         }
+
+        if (!(flags & AE_DONT_WAIT)) eventLoop->wakeup_time = getMonotonicUs();
 
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);

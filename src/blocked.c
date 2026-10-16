@@ -407,6 +407,31 @@ void handleClientsBlockedOnKeys(void) {
 
     /* This function is called only when also_propagate is in its basic state
      * (i.e. not from call(), module context, etc.) */
+    if (server.also_propagate.numops != 0) {
+        serverLog(LL_WARNING, "=== ASSERTION FAILURE: also_propagate.numops = %d (expected 0) ===", 
+                  server.also_propagate.numops);
+        for (int i = 0; i < server.also_propagate.numops; i++) {
+            serverLog(LL_WARNING, "Op[%d]: target=%d dbid=%d argc=%d",
+                     i, server.also_propagate.ops[i].target,
+                     server.also_propagate.ops[i].dbid, 
+                     server.also_propagate.ops[i].argc);
+            if (server.also_propagate.ops[i].argc > 0) {
+                sds cmdlog = sdsnew("  Cmd: ");
+                for (int j = 0; j < server.also_propagate.ops[i].argc; j++) {
+                    if (j > 0) cmdlog = sdscat(cmdlog, " ");
+                    cmdlog = sdscat(cmdlog, (char*)objectGetVal(server.also_propagate.ops[i].argv[j]));
+                }
+                serverLog(LL_WARNING, "%s", cmdlog);
+                sdsfree(cmdlog);
+            }
+        }
+        if (server.current_client) {
+            serverLog(LL_WARNING, "Client: id=%llu cmd=%s",
+                     (unsigned long long)server.current_client->id,
+                     server.current_client->cmd ? server.current_client->cmd->fullname : "NULL");
+        }
+        serverLog(LL_WARNING, "Ready keys: %lu", listLength(server.ready_keys));
+    }
     serverAssert(server.also_propagate.numops == 0);
 
     /* If a command being unblocked causes another command to get unblocked,
@@ -1023,8 +1048,12 @@ void blockedBeforeSleep(void) {
      * Example: A module calls RM_SignalKeyAsReady from within a timer callback
      * (So we don't visit processCommand() at all).
      *
-     * This may unblock clients, so must be done before processUnblockedClients */
-    handleClientsBlockedOnKeys();
+     * This may unblock clients, so must be done before processUnblockedClients.
+     *
+     * Skip if there are pending propagations (e.g., from lazy expiration during
+     * module command execution). The propagations will be flushed by the command
+     * processing path, and ready keys will be handled in the next iteration. */
+    if (server.also_propagate.numops == 0) handleClientsBlockedOnKeys();
 
     /* Check if there are clients unblocked by modules that implement
      * blocking commands. */

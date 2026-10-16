@@ -94,9 +94,11 @@ Both authors and reviewers should check new or changed tests against it.
    }
    ```
 
-   `wait_for_condition maxtries delay` gives the condition `maxtries * delay`
-   milliseconds. Be generous: a budget that passes locally with margin to spare
-   can still time out under valgrind, which is often 10x slower.
+   `wait_for_condition maxtries delay` checks the condition up to `maxtries`
+   times and sleeps `delay` milliseconds after each false result, so the budget
+   is at least `maxtries * delay` milliseconds plus the time the checks
+   themselves take. Be generous: a budget that passes locally with margin to
+   spare can still time out under valgrind, which is often 10x slower.
 
 2. **Scale budgets for slow modes.** When a wait is long by nature (a full sync,
    a large migration), scale it: `[expr {$::valgrind ? 7000 : 700}]`. For

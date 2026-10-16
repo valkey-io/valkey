@@ -2126,7 +2126,8 @@ static sds cliFormatReplyJson(sds out, valkeyReply *r, int mode) {
 static sds cliFormatReply(valkeyReply *reply, int mode, int verbatim) {
     sds out;
 
-    if (verbatim) {
+    /* Human-readable command replies must still honor explicit serialization modes. */
+    if (verbatim && (mode == OUTPUT_STANDARD || mode == OUTPUT_RAW)) {
         out = cliFormatReplyRaw(reply);
     } else if (mode == OUTPUT_STANDARD) {
         out = cliFormatReplyTTY(reply, "");

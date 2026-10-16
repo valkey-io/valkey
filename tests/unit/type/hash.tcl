@@ -809,6 +809,41 @@ start_server {tags {"hash"}} {
         r config set hash-max-listpack-value $original_max_value
     }
 
+    test {Hash with an over-long value converts to hashtable on RDB load} {
+        set original_max_value [lindex [r config get hash-max-listpack-value] 1]
+        set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+        r config set hash-max-listpack-entries 128
+        r config set hash-max-listpack-value 64
+
+        # A hash with few, short fields/values is listpack encoded.
+        r del h_rdb_val
+        r hset h_rdb_val f [string repeat a 32]
+        assert_encoding listpack h_rdb_val
+
+        # Lower the value limit below the stored value and reload from the RDB.
+        # On load the listpack must convert to a hashtable, the same encoding a
+        # runtime write of this data would produce; previously only the entry
+        # count was checked on load, so it stayed a listpack.
+        r config set hash-max-listpack-value 8
+        r debug reload
+        assert_encoding hashtable h_rdb_val
+        assert_equal [r hget h_rdb_val f] [string repeat a 32]
+
+        # A numeric value is stored in the listpack as an integer; its decimal
+        # length is what counts against the limit, same as at write time.
+        r config set hash-max-listpack-value 64
+        r del h_rdb_int
+        r hset h_rdb_int f 123456789
+        assert_encoding listpack h_rdb_int
+        r config set hash-max-listpack-value 4
+        r debug reload
+        assert_encoding hashtable h_rdb_int
+        assert_equal [r hget h_rdb_int f] 123456789
+
+        r config set hash-max-listpack-value $original_max_value
+        r config set hash-max-listpack-entries $original_max_entries
+    } {OK} {needs:debug}
+
     test {Hash ziplist regression test for large keys} {
         r hset hash kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk a
         r hset hash kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk b

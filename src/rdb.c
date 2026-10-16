@@ -2142,6 +2142,35 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int al
     return ret;
 }
 
+/* Return 1 if any field or value of a listpack-encoded hash is longer than
+ * hash-max-listpack-value. On RDB load the element sizes are not otherwise
+ * known, so the load paths below only check the entry count against
+ * hash-max-listpack-entries; without this check a hash holding an over-long
+ * field or value would stay listpack-encoded after load even though writing the
+ * same data at runtime would store it as a hashtable.
+ *
+ * The limit is compared against the element's string length, as hashTypeSet()
+ * does with the sds field/value. A numeric element is stored in the listpack as
+ * an integer, so its decimal length is measured explicitly here. */
+static int hashListpackValueExceedsLimit(robj *o) {
+    unsigned char *lp = objectGetVal(o);
+    unsigned char *p = lpFirst(lp);
+    while (p != NULL) {
+        int64_t ele;
+        unsigned char *str = lpGet(p, &ele, NULL);
+        size_t len;
+        if (str != NULL) {
+            len = (size_t)ele; /* 'ele' holds the string length. */
+        } else {
+            char buf[LONG_STR_SIZE]; /* 'ele' holds an integer value. */
+            len = ll2string(buf, sizeof(buf), ele);
+        }
+        if (len > server.hash_max_listpack_value) return 1;
+        p = lpNext(lp, p);
+    }
+    return 0;
+}
+
 /* Load an Object of the specified type from the specified file.
  * On success a newly allocated object is returned, otherwise NULL.
  * When the function returns NULL and if 'error' is not NULL, the
@@ -2921,7 +2950,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries)
+            if (hashTypeLength(o) > server.hash_max_listpack_entries || hashListpackValueExceedsLimit(o))
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             else
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
@@ -2948,7 +2977,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            if (hashTypeLength(o) > server.hash_max_listpack_entries || hashListpackValueExceedsLimit(o))
+                hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             break;
         }
         default:

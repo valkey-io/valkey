@@ -6,6 +6,7 @@
 
 #include "generated_wrappers.hpp"
 
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -1805,7 +1806,8 @@ TEST(CompressionTest, rdbTranscoderRejectsBytesAfterSourceFrame) {
     const char *trailer = "TRAILER";
     const size_t ntargets = 1 + sizeof(testCompressionAlgos) / sizeof(testCompressionAlgos[0]);
 
-    for (compressionAlgo src : testCompressionAlgos) {
+    for (size_t si = 0; si < sizeof(testCompressionAlgos) / sizeof(testCompressionAlgos[0]); si++) {
+        compressionAlgo src = testCompressionAlgos[si];
         DynamicBuf frame;
         dynamicBufInit(&frame);
         streamWriter w;
@@ -1819,9 +1821,11 @@ TEST(CompressionTest, rdbTranscoderRejectsBytesAfterSourceFrame) {
         for (size_t ti = 0; ti < ntargets; ti++) {
             compressionAlgo target = ti == 0 ? ALGO_NONE : testCompressionAlgos[ti - 1];
             if (target == src) continue; /* Verbatim route never decodes the frame. */
-            for (bool same_write : {true, false}) {
-                SCOPED_TRACE(testing::Message() << "src=" << src << " target=" << target
-                                                << " same_write=" << same_write);
+            for (int wi = 0; wi < 2; wi++) {
+                bool same_write = wi == 0;
+                char trace[64];
+                snprintf(trace, sizeof(trace), "src=%d target=%d same_write=%d", (int)src, (int)target, same_write);
+                SCOPED_TRACE(trace);
                 DynamicBuf out;
                 dynamicBufInit(&out);
                 rdbTranscoder t;

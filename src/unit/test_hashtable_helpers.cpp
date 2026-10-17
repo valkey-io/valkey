@@ -46,7 +46,7 @@ TEST_F(HashtableHelpersTest, CaseCompareAndHash) {
 }
 
 TEST_F(HashtableHelpersTest, PointerHash) {
-    long slots[2];
+    long slots[2] = {0, 0};
     ASSERT_EQ(hashtablePointerHash(&slots[0]), hashtablePointerHash(&slots[0]));
     ASSERT_NE(hashtablePointerHash(&slots[0]), hashtablePointerHash(&slots[1]));
 }

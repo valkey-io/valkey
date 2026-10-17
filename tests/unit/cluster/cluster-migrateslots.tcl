@@ -2827,12 +2827,14 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
 # stored, with evictions done inline in processCommand(). Unlike
 # setup_eviction_test, this keeps the default replica output buffer limit, so
 # replicas stay connected: a resync would hide a primary/replica divergence.
+# Only keys with a TTL are evicted, so that the keys written by
+# fill_until_evicting can be evicted, but not the imported ones.
 proc setup_import_eviction {idx headroom} {
     set saved [dict create]
     foreach config {maxmemory maxmemory-policy lazyfree-lazy-eviction maxmemory-eviction-tenacity repl-backlog-size} {
         dict set saved $config [lindex [R $idx CONFIG GET $config] 1]
     }
-    R $idx CONFIG SET maxmemory-policy allkeys-random
+    R $idx CONFIG SET maxmemory-policy volatile-random
     R $idx CONFIG SET lazyfree-lazy-eviction no
     R $idx CONFIG SET maxmemory-eviction-tenacity 100
     R $idx CONFIG SET repl-backlog-size 1mb
@@ -2848,20 +2850,25 @@ proc teardown_import_eviction {idx saved} {
     }
 }
 
-# Write keys to node idx through a normal client until it starts evicting.
+# Write keys with a TTL to node idx through a normal client until it starts
+# evicting.
 proc fill_until_evicting {idx prefix} {
     set start [s -$idx evicted_keys]
     for {set batch 0} {[s -$idx evicted_keys] == $start} {incr batch} {
         if {$batch > 200} {
             fail "Node $idx did not start evicting"
         }
-        populate 100 "$prefix:$batch:" 1000 -$idx
+        populate 100 "$prefix:$batch:" 1000 -$idx false 100000
     }
 }
 
 # Wait for the replica to catch up with its primary, then assert that both
-# hold the same data in each of the given dbs.
+# hold the same data in each of the given dbs. A primary at maxmemory can
+# evict on any command, including the ones checking it, so it must not evict
+# until the check is done.
 proc assert_in_sync {primary replica dbs} {
+    set policy [lindex [R $primary CONFIG GET maxmemory-policy] 1]
+    R $primary CONFIG SET maxmemory-policy noeviction
     wait_for_ofs_sync [Rn $primary] [Rn $replica]
     foreach db $dbs {
         R $primary SELECT $db
@@ -2871,6 +2878,7 @@ proc assert_in_sync {primary replica dbs} {
     R $primary SELECT 0
     R $replica SELECT 0
     assert_equal [R $primary DEBUG DIGEST] [R $replica DEBUG DIGEST]
+    R $primary CONFIG SET maxmemory-policy $policy
 }
 
 # The import target evicts keys of the slots it owns to make room for the

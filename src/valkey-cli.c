@@ -61,6 +61,7 @@
 #endif
 #include "sds.h"
 #include "dict.h"
+#include "hashtable_helpers.h"
 #include "adlist.h"
 #include "zmalloc.h"
 #include "linenoise.h"
@@ -189,10 +190,6 @@ int spectrum_palette_size;
 
 static int orig_termios_saved = 0;
 static struct termios orig_termios; /* To restore terminal at exit.*/
-
-/* Dict Helpers */
-static uint64_t dictSdsHash(const void *key);
-static int dictSdsKeyCompare(const void *key1, const void *key2);
 
 /* Cluster Manager Command Info */
 typedef struct clusterManagerCommand {
@@ -379,34 +376,9 @@ static sds getDotfilePath(char *envoverride, char *envoverride_old, char *dotfil
     return dotPath;
 }
 
-static uint64_t dictSdsHash(const void *key) {
-    return dictGenHashFunction(key, sdslen(key));
-}
-
-static int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
-    l1 = sdslen((sds)key1);
-    l2 = sdslen((sds)key2);
-    if (l1 != l2) return 0;
-    return memcmp(key1, key2, l1) == 0;
-}
-
-static void dictEntryDestructorSdsKeyNoVal(void *entry) {
-    dictEntry *de = entry;
-    sdsfree(dictGetKey(de));
-    zfree(de);
-}
-
 static void dictEntryDestructorSdsVal(void *entry) {
     dictEntry *de = entry;
     sdsfree(dictGetVal(de));
-    zfree(de);
-}
-
-static void dictEntryDestructorSdsKeyListVal(void *entry) {
-    dictEntry *de = entry;
-    sdsfree(dictGetKey(de));
-    listRelease(dictGetVal(de));
     zfree(de);
 }
 
@@ -905,7 +877,7 @@ static void cliInitHelp(void) {
         .entryGetKey = dictEntryGetKey,
         .hashFunction = dictSdsHash,
         .keyCompare = dictSdsKeyCompare,
-        .entryDestructor = dictEntryDestructorSdsKeyNoVal,
+        .entryDestructor = dictEntryDestructorSdsKey,
     };
     valkeyReply *commandTable;
     dict *groups;
@@ -3697,7 +3669,7 @@ static dictType clusterManagerLinkDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
-    .entryDestructor = dictEntryDestructorSdsKeyListVal,
+    .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
 typedef int clusterManagerCommandProc(int argc, char **argv);

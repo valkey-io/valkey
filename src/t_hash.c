@@ -1058,7 +1058,10 @@ void hashTypeConvertListpack(robj *o, int enc) {
          * object pointer for the active-expire cron. */
         if (has_volatile) {
             hashtableIterator iter;
-            hashtableInitIterator(&iter, ht, 0);
+            /* Skip validation: tracking the first entry switches the hashtable
+             * to the type that hides expired entries, which would leave the
+             * remaining expired fields untracked. */
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;
             while (hashtableNext(&iter, &next)) {
                 if (entryGetExpiry(next) != EXPIRY_NONE) hashTypeTrackEntry(o, next);

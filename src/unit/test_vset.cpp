@@ -232,6 +232,88 @@ TEST_F(VsetTest, TestVsetGetSize) {
     zfree(entries);
 }
 
+static size_t count_by_iteration(vset *set) {
+    vsetIterator it;
+    vsetInitIterator(set, &it);
+    void *entry;
+    size_t count = 0;
+    while (vsetNext(&it, &entry)) count++;
+    vsetResetIterator(&it);
+    return count;
+}
+
+/* The size is tracked on every mutation instead of being computed by walking
+ * the buckets. Drive the set through random adds, updates, removals and
+ * partial expirations (crossing SINGLE/VECTOR/RAX and HT time buckets) and
+ * verify the tracked size against the expected count and a full iteration. */
+TEST_F(VsetTest, TestVsetSizeTracking) {
+    srand(42);
+    vset set;
+    vsetInit(&set);
+    ASSERT_EQ(vsetSize(&set), (size_t)0);
+
+    for (int round = 0; round < 3; round++) {
+        /* grow through SINGLE -> VECTOR -> RAX, with a clustered expiry to create HT buckets */
+        for (int i = 0; i < 3000; i++) {
+            if (i % 3 == 0)
+                insert_mock_entry_with_expiry(&set, 5000);
+            else
+                insert_mock_entry(&set);
+            if (i < 200) {
+                ASSERT_EQ(vsetSize(&set), (size_t)mock_entry_count);
+            }
+        }
+        ASSERT_EQ(vsetSize(&set), (size_t)mock_entry_count);
+
+        /* mixed mutations, updates may move entries across buckets */
+        for (int i = 0; i < 5000; i++) {
+            switch (rand() % 3) {
+            case 0: insert_mock_entry(&set); break;
+            case 1: update_mock_entry(&set); break;
+            case 2: remove_mock_entry(&set); break;
+            }
+        }
+        ASSERT_EQ(vsetSize(&set), (size_t)mock_entry_count);
+        ASSERT_EQ(vsetSize(&set), count_by_iteration(&set));
+
+        /* partial expiration bounded by max_count */
+        mstime_t now = 6000;
+        size_t before = vsetSize(&set);
+        size_t removed = vsetRemoveExpired(&set, mockGetExpiry, mock_entry_expire, now, 100, &now);
+        ASSERT_LE(removed, (size_t)100);
+        ASSERT_EQ(vsetSize(&set), before - removed);
+        ASSERT_EQ(vsetSize(&set), (size_t)mock_entry_count);
+
+        /* tracked -> untracked removes, untracked -> tracked adds */
+        if (mock_entry_count > 0) {
+            mock_entry *e = mock_entries[mock_entry_count - 1];
+            ASSERT_TRUE(vsetUpdateEntry(&set, mockGetExpiry, e, NULL, mockGetExpiry(e), -1));
+            ASSERT_EQ(vsetSize(&set), (size_t)mock_entry_count - 1);
+            ASSERT_TRUE(vsetUpdateEntry(&set, mockGetExpiry, NULL, e, -1, mockGetExpiry(e)));
+            ASSERT_EQ(vsetSize(&set), (size_t)mock_entry_count);
+        }
+
+        /* remove everything one by one down to NONE */
+        while (mock_entry_count > 0) remove_mock_entry(&set);
+        ASSERT_EQ(vsetSize(&set), (size_t)0);
+        ASSERT_TRUE(vsetIsEmpty(&set));
+
+        /* clear resets the size and the set is reusable */
+        for (int i = 0; i < 500; i++) insert_mock_entry(&set);
+        vsetClear(&set);
+        ASSERT_EQ(vsetSize(&set), (size_t)0);
+        free_mock_entries();
+    }
+
+    /* release then re-init */
+    for (int i = 0; i < 10; i++) insert_mock_entry(&set);
+    vsetRelease(&set);
+    ASSERT_FALSE(vsetIsValid(&set));
+    vsetInit(&set);
+    ASSERT_EQ(vsetSize(&set), (size_t)0);
+    vsetRelease(&set);
+}
+
 /* Exercises vsetEstimatedEarliestExpiry() across every reachable bucket
  * encoding: NONE, SINGLE, VECTOR, and RAX (both a single time-bucket and
  * multiple time-buckets).

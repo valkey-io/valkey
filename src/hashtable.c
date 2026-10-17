@@ -122,6 +122,12 @@ uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len) {
     return siphash_nocase((const uint8_t *)buf, len, hash_function_seed);
 }
 
+/* Hash function for tables keyed by a pointer value. Cheaper than the default,
+ * which runs siphash over the pointer's bytes. */
+uint64_t hashtablePointerHash(const void *key) {
+    return wangHash64((uint64_t)(uintptr_t)key);
+}
+
 /* --- Global resize policy API --- */
 
 /* The global resize policy is one of

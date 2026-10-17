@@ -279,21 +279,11 @@ dictType clusterSdsToListType = {
     .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
-static uint64_t dictPtrHash(const void *key) {
-    /* We hash the pointer value itself. */
-    return dictGenHashFunction((const char *)&key, sizeof(key));
-}
-
-static int dictPtrCompare(const void *key1, const void *key2) {
-    return key1 == key2;
-}
-
 /* Dictionary type for mapping hash slots to cluster nodes.
- * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
-dictType clusterSlotDictType = {
+ * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers.
+ * The default hash function and key comparison already handle pointer keys. */
+static dictType clusterSlotDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictPtrHash,
-    .keyCompare = dictPtrCompare,
     .entryDestructor = zfree,
 };
 
@@ -5930,12 +5920,42 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
               (unsigned long long)server.cluster->currentEpoch);
 }
 
+/* Returns non-zero if a voter rejecting us for this reason is telling us
+ * something a new election can act on:
+ * - ALREADY_VOTED: It already spent its vote on another replica in this epoch.
+ * - REQ_EPOCH_OLD: It answered a request from an older epoch.
+ * - STALE_CONFIG: It qualifies as well because the voter sends an UPDATE right
+ *   before the NACK, so the retry runs with a corrected slot config.
+ *
+ * Every other reason describes state that a new epoch leaves unchanged,
+ * counting those would reset elections that no retry can win. */
+static int clusterNackIsPerRoundReason(uint8_t reason) {
+    return reason == CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED ||
+           reason == CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD ||
+           reason == CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG;
+}
+
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
     /* Ignore NACKs from FAIL nodes to avoid double-counting: FAIL nodes are
      * already accounted for in size_fail, and they will never ACK, so including
      * their NACK would undercount achievable votes. */
     if (nodeFailed(sender)) {
+        return;
+    }
+
+    /* Ignore NACKs that a new epoch cannot fix: those voters answer the next
+     * request the same way, so counting them only resets the election over and
+     * over at a high frequency, each round bumping the epoch and re-broadcasting
+     * a request that cannot win. Skipping them leaves the election to expire and
+     * be rescheduled on the auth_retry_time cadence, keeping fast-fail for the
+     * rejections that carry split-vote information. */
+    if (!clusterNackIsPerRoundReason(request->data.failover_nack.nack.reason)) {
+        serverLog(LL_NOTICE,
+                  "Ignoring failover auth NACK [%s] from %.40s (%s) for epoch %llu: "
+                  "a new election would draw the same answer.",
+                  clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
+                  humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch);
         return;
     }
 

@@ -788,7 +788,9 @@ void scriptCommand(client *c) {
     } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "kill")) {
         scriptKill(c, 1);
     } else if ((c->argc == 3 || c->argc == 4) && !strcasecmp(objectGetVal(c->argv[1]), "debug")) {
-        if (clientHasPendingReplies(c)) {
+        /* Includes replies held by reply blocking: the debugger writes to the
+         * socket directly, bypassing the reply buffers. */
+        if (clientHasUnsentOutput(c)) {
             addReplyError(c, "SCRIPT DEBUG must be called outside a pipeline");
             return;
         }

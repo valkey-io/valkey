@@ -5145,6 +5145,59 @@ start_server {tags {"hash expire listpack"}} {
         assert_equal 0 [get_keys_with_volatile_items r]
     } {} {needs:debug}
 
+    test "Conversion tracks every expired-but-unreaped field in the volatile set" {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        r config set hash-max-listpack-value $original_max_value
+        r config set hash-max-listpack-entries $original_max_entries
+        r del myhash
+        r hset myhash f1 v1 f2 v2 f3 v3 f4 v4
+        r hpexpire myhash 1 FIELDS 3 f1 f2 f3
+        wait_for_condition 100 10 {
+            [r hexists myhash f1] == 0 && [r hexists myhash f2] == 0 && [r hexists myhash f3] == 0
+        } else {
+            fail "Fields were never logically expired"
+        }
+        assert_encoding listpack myhash
+
+        # Tracking the first volatile field switches the new hashtable to the
+        # type that hides expired entries. If the conversion keeps iterating
+        # with validation on, the remaining expired fields are skipped and
+        # never added to the volatile set.
+        r hset myhash big [string repeat x 128]
+        assert_encoding hashtable myhash
+
+        # Overwriting a field updates its volatile set entry, which asserts if
+        # the field was never tracked.
+        assert_equal 3 [r hset myhash f1 n1 f2 n2 f3 n3]
+        assert_equal {n1 n2 n3} [r hmget myhash f1 f2 f3]
+        assert_equal {-1 -1 -1} [r httl myhash FIELDS 3 f1 f2 f3]
+        assert_equal 0 [get_keys_with_volatile_items r]
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test "Active expiry reaps every expired field carried across a conversion" {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        r config set hash-max-listpack-value $original_max_value
+        r config set hash-max-listpack-entries $original_max_entries
+        r del myhash
+        r hset myhash f1 v1 f2 v2 f3 v3 f4 v4
+        r hpexpire myhash 1 FIELDS 3 f1 f2 f3
+        wait_for_condition 100 10 {
+            [r hexists myhash f1] == 0 && [r hexists myhash f2] == 0 && [r hexists myhash f3] == 0
+        } else {
+            fail "Fields were never logically expired"
+        }
+        r hset myhash big [string repeat x 128]
+        assert_encoding hashtable myhash
+        assert_equal 5 [r hlen myhash]
+
+        # An expired field missing from the volatile set is never reaped.
+        set initial_expired [info_field [r info stats] expired_fields]
+        r DEBUG SET-ACTIVE-EXPIRE 1
+        wait_for_active_expiry r myhash 2 $initial_expired 3
+        assert_equal 0 [get_keys_with_volatile_items r]
+    } {} {needs:debug}
+
     test "Conversion does not leave field TTLs globally ignored" {
         r DEBUG SET-ACTIVE-EXPIRE 0
         r config set hash-max-listpack-value $original_max_value

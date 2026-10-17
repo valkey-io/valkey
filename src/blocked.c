@@ -659,13 +659,20 @@ static void handleClientsBlockedOnKey(readyList *rl) {
             if (de == NULL) break;
             clients = dictGetVal(de);
 
+            robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
+            /* With no runnable receiver, a full rotation leaves the live queue
+             * unchanged. Partial rotations must finish to preserve fairness. */
+            if (o == NULL && count + 1 == (long)listLength(clients) &&
+                dictFind(rl->db->blocking_keys_unblock_on_nokey, rl->key) == NULL) {
+                break;
+            }
+
             /* Process the head, then rotate it to the tail, so we can fairly
              * iterate all receivers step by step without a dangling iterator. */
             ln = listFirst(clients);
             receiver = listNodeValue(ln);
             listRotateHeadToTail(clients);
 
-            robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
              *    blocked type, since we might process the wrong key type.
              * 2. We want to serve clients blocked on module keys

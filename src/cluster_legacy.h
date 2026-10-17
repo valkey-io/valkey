@@ -22,6 +22,7 @@
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
 #define CLUSTER_CANT_FAILOVER_EXPIRED 3
 #define CLUSTER_CANT_FAILOVER_WAITING_VOTES 4
+#define CLUSTER_CANT_FAILOVER_NO_DATA 5
 #define CLUSTER_CANT_FAILOVER_RELOG_PERIOD 1 /* seconds. */
 
 /* clusterState todo_before_sleep flags. */
@@ -194,8 +195,15 @@ typedef struct {
 } clusterMsgDataFail;
 
 typedef struct {
-    uint8_t reason;
+    uint64_t epoch;      /* currentEpoch of the rejected FAILOVER_AUTH_REQUEST, so the
+                          * candidate can match the NACK to the election it actually
+                          * answers rather than to whatever election it is running when
+                          * the NACK arrives. Network byte order. */
+    uint8_t reason;      /* One of CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_*. */
+    uint8_t reserved[7]; /* Explicit padding, always zero. */
 } clusterMsgDataFailoverNack;
+
+static_assert(sizeof(clusterMsgDataFailoverNack) == 16, "unexpected FAILOVER_AUTH_NACK payload size");
 
 typedef struct {
     uint32_t channel_len;

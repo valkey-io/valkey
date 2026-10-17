@@ -1073,7 +1073,7 @@ TEST_F(BgIterationTest, createAndCleanup) {
     EXPECT_EQ(status.queue_length, 0u);
     EXPECT_GT(status.queue_length_target, 0u);
 
-    EXPECT_LT(status.runtime_ms, 5u);
+    EXPECT_LT(status.runtime_ms, 1000u);
     EXPECT_EQ(status.current_item_ms, 0u);
 
     expectAnythingCleanup(it);

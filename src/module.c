@@ -58,6 +58,7 @@
 #include "server.h"
 #include "ordered_index.h"
 #include "cluster.h"
+#include "entry.h"
 #include "commandlog.h"
 #include "rdb.h"
 #include "monotonic.h"
@@ -607,6 +608,38 @@ void VM_Free(void *ptr) {
 /* Like strdup() but returns memory allocated with ValkeyModule_Alloc(). */
 char *VM_Strdup(const char *str) {
     return zstrdup(str);
+}
+
+/* Report memory obtained outside the server allocator, such as an mmap()ed
+ * region, so it counts toward used_memory and maxmemory. Does not allocate.
+ *
+ * Report only resident memory, and only memory not already obtained from
+ * ValkeyModule_Alloc(). Each call must be matched by
+ * ValkeyModule_DecrExternalMemory() of the same size.
+ *
+ * May be called from a command callback or a thread-safe context.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if the
+ * total would overflow, leaving the accounting unchanged. */
+int VM_IncrExternalMemory(size_t bytes) {
+    if (zmalloc_increase_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* Stop accounting for memory reported with ValkeyModule_IncrExternalMemory().
+ * Frees nothing.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if
+ * `bytes` exceeds the reported total, leaving the accounting unchanged. */
+int VM_DecrExternalMemory(size_t bytes) {
+    if (zmalloc_decrease_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
 }
 
 /* --------------------------------------------------------------------------
@@ -2646,6 +2679,22 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * atomic slot migration and CLUSTER MIGRATESLOTS will return an error. Modules
  * should set this flag if they understand keys may be loaded during the
  * migration but before ownership is transferred.
+ *
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS:
+ * When set, this option indicates that the module is capable of handling
+ * forkless operations (such as a forkless background save). Opting in has the
+ * following implications the module must acknowledge:
+ * - While a forkless operation is running, opening a key for write with
+ *   VM_OpenKey() may return NULL when the key is in use by the operation; the
+ *   module must handle that NULL return.
+ * - A module that registers a data type also declares that its RDB save
+ *   callbacks are thread-safe.
+ * - A module that registers an aux_save/aux_save2 function must run it only in
+ *   the VALKEYMODULE_AUX_BEFORE_RDB section, and it must export only limited
+ *   data (this function runs on the main thread and blocks it during a forkless
+ *   operation).
+ * When forkless background saving is configured, if any loaded module does not
+ * set this flag, the server falls back to fork-based saving.
  */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
@@ -3745,14 +3794,19 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  *
  * #### Return value
  *
- * The command returns VALKEYMODULE_ERR if the format specifiers are invalid
- * or the command name does not belong to a known command. */
+ * The command returns VALKEYMODULE_ERR if the format specifiers are invalid,
+ * the command name does not belong to a known command, or the server is
+ * paused for replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER
+ * FAILOVER). */
 int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
     struct serverCommand *cmd = NULL;
     robj **argv = NULL;
     int argc = 0, flags = 0, j;
     va_list ap;
     int slot = -1;
+
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
 
     bool skip_validation = ctx->module &&
                            (ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
@@ -3807,8 +3861,13 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
  * the command can just be re-executed to deterministically re-create the
  * new state starting from the old one.
  *
- * The function always returns VALKEYMODULE_OK. */
+ * The function returns VALKEYMODULE_ERR if the server is paused for
+ * replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER FAILOVER),
+ * otherwise VALKEYMODULE_OK is returned. */
 int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
+
     alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL, ctx->client->slot);
     server.dirty++;
     return VALKEYMODULE_OK;
@@ -4304,7 +4363,7 @@ static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
  * Valkey 9.2+: When opening a key with VALKEYMODULE_WRITE, NULL will be returned
  * if the key is currently write-locked (i.e. if forkless operations are operating
  * on the key).  This change is non-breaking as:
- * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE
+ * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS
  * * Module write commands are blocked (before execution), if a declared key is write-locked
  * The risk is only for a module that performs VM_OpenKey() on a key which was NOT
  * declared in the current command OR arbitrarily opens keys during a timer event.
@@ -4399,6 +4458,7 @@ int VM_KeyType(ValkeyModuleKey *key) {
     case OBJ_HASH: return VALKEYMODULE_KEYTYPE_HASH;
     case OBJ_MODULE: return VALKEYMODULE_KEYTYPE_MODULE;
     case OBJ_STREAM: return VALKEYMODULE_KEYTYPE_STREAM;
+    case OBJ_PATH_HASH: return VALKEYMODULE_KEYTYPE_PATH_HASH;
     default: return VALKEYMODULE_KEYTYPE_EMPTY;
     }
 }
@@ -4417,6 +4477,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
     case OBJ_ZSET: return zsetLength(key->value);
     case OBJ_HASH: return hashTypeLength(key->value);
     case OBJ_STREAM: return streamLength(key->value);
+    case OBJ_PATH_HASH: return raxSize(((pathHashObject *)objectGetVal(key->value))->index);
     default: return 0;
     }
 }
@@ -4471,7 +4532,9 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL || (expire < 0 && expire != VALKEYMODULE_NO_EXPIRE))
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
-        expire += commandTimeSnapshot();
+        mstime_t basetime = commandTimeSnapshot();
+        if (expire > LLONG_MAX - basetime) return VALKEYMODULE_ERR;
+        expire += basetime;
         key->value = setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
@@ -5430,18 +5493,29 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * For example, valkey-search uses this interface to avoid maintaining two copies of the
  * indexed vectors.
  *
- * The function receives the hash key, field name, buffer to share along with its size. */
+ * The function receives the hash key, field name, buffer to share along with its size.
+ *
+ * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if the key or field
+ * is missing, the key is not a hash, or the update fails. */
 int VM_HashSetStringRef(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
-    return hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len);
+    if (hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len) != C_OK) return VALKEYMODULE_ERR;
+    return VALKEYMODULE_OK;
 }
 
 /* Checks if the value of a hash entry is a shared string reference (stringRef).
- * The function receives the hash key and field name to perform the check against. */
+ * The function receives the hash key and field name to perform the check against.
+ *
+ * Returns 1 if the field exists and holds a string reference. Returns 0 in every
+ * other case, including a missing or non-hash key, a missing field name and a
+ * field which doesn't exist or is already expired. Note that the return value is
+ * a plain boolean and not an OK/ERR status, since VALKEYMODULE_ERR can't be told
+ * apart from a positive answer. */
 int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
-    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH) return VALKEYMODULE_ERR;
+    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field) return 0;
     return hashTypeHasStringRef(key->value, objectGetVal(field));
 }
+
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty
  * hash value, in order to set the specified field.
@@ -6798,6 +6872,20 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
             }
             goto cleanup;
         }
+    }
+
+    /* Reject write commands from modules when replica traffic is paused.
+     * This prevents module timer callbacks and thread-safe contexts from
+     * bypassing the pause and hitting the assertion in propagateNow(). */
+    if (replicate && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)) && isPausedActions(PAUSE_ACTION_REPLICA)) {
+        errno = ENOSPC;
+        if (error_as_call_replies) {
+            reply_error_msg = sdscatfmt(sdsempty(),
+                                        "Write command '%S' was "
+                                        "called while the server is paused for writes.",
+                                        c->cmd->fullname);
+        }
+        goto cleanup;
     }
 
     /* Check if the user can run this command according to the current
@@ -9465,6 +9553,16 @@ int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNo
     return VALKEYMODULE_OK;
 }
 
+/* Whether any module post-execution-unit job is pending. Kept as a tiny
+ * accessor rather than exposing modulePostExecUnitJobs itself, so callers
+ * outside this file (postExecutionUnitOperations()) don't need to know it's
+ * backed by a list - if that representation ever changes, only this
+ * function needs to change with it. It's trivial enough that LTO can inline
+ * it at its (currently single) call site same as any other cross-TU call. */
+bool moduleHasPostExecUnitJobs(void) {
+    return listLength(modulePostExecUnitJobs) > 0;
+}
+
 void firePostExecutionUnitJobs(void) {
     /* Avoid propagation of commands.
      * In that way, postExecutionUnitOperations will prevent
@@ -10431,7 +10529,9 @@ ValkeyModuleUser *VM_CreateModuleUser(const char *name) {
 }
 
 /* Frees a given user and disconnects all of the clients that have been
- * authenticated with it. See VM_CreateModuleUser for detailed usage.*/
+ * authenticated with it. See VM_CreateModuleUser for detailed usage.
+ *
+ * Returns VALKEYMODULE_OK. */
 int VM_FreeModuleUser(ValkeyModuleUser *user) {
     if (user->free_user) ACLFreeUserAndKillClients(user->user);
     zfree(user);
@@ -12172,8 +12272,11 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
  *      ValkeyModule_CloseKey(key);
  *      ValkeyModule_ScanCursorDestroy(c);
  *
- * The function will return 1 if there are more elements to scan and 0 otherwise,
- * possibly setting errno if the call failed.
+ * The function will return 1 if there are more elements to scan and 0 otherwise.
+ * On a return value of 0, errno is set to distinguish the cases:
+ *   - 0       - the scan completed successfully.
+ *   - EINVAL  - the key is NULL or not a hash, set or sorted set.
+ *   - ENOENT  - the cursor is already exhausted (a previous call returned 0).
  * It is also possible to restart an existing cursor using VM_ScanCursorRestart.
  *
  * NOTE: Certain operations are unsafe while iterating the object. For instance
@@ -12225,6 +12328,8 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
         cursor->done = 1;
         ret = 0;
     } else if (objectGetType(o) == OBJ_ZSET || objectGetType(o) == OBJ_HASH) {
+        /* Only hash listpacks carry field TTL metadata. */
+        int is_hash = objectGetType(o) == OBJ_HASH;
         unsigned char *p = lpSeek(objectGetVal(o), 0);
         unsigned char *vstr;
         unsigned int vlen;
@@ -12234,6 +12339,12 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
             robj *field =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
             p = lpNext(objectGetVal(o), p);
+            /* Skip hash fields not visible in the current context, like HSCAN. */
+            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(objectGetVal(o), p))) {
+                decrRefCount(field);
+                p = lpNext(objectGetVal(o), p);
+                continue;
+            }
             vstr = lpGetValue(p, &vlen, &vll);
             robj *value =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
@@ -12241,6 +12352,178 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
             p = lpNext(objectGetVal(o), p);
             decrRefCount(field);
             decrRefCount(value);
+        }
+        cursor->cursor = 1;
+        cursor->done = 1;
+        ret = 0;
+    }
+    errno = 0;
+    return ret;
+}
+
+/* Callback for VM_ScanKeyRawBorrowed. See VM_ScanKeyRawBorrowed below for the
+ * (field, value) meaning per type and the pointer lifetime contract. */
+typedef void (*ValkeyModuleScanKeyRawBorrowedCB)(ValkeyModuleKey *key,
+                                                 const char *field,
+                                                 size_t field_len,
+                                                 const char *value,
+                                                 size_t value_len,
+                                                 void *privdata);
+typedef struct {
+    ValkeyModuleKey *key;
+    void *user_data;
+    ValkeyModuleScanKeyRawBorrowedCB fn;
+} ScanKeyRawBorrowedCBData;
+
+/* Hashtable-encoded SET / HASH / ZSET(btree) callback: borrowed field/member
+ * (+ borrowed hash value, or materialized zset score). */
+static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entry) {
+    ScanKeyRawBorrowedCBData *data = privdata;
+    robj *o = data->key->value;
+    if (objectGetType(o) == OBJ_SET) {
+        sds member = entry;
+        data->fn(data->key, member, sdslen(member), NULL, 0, data->user_data);
+    } else if (objectGetType(o) == OBJ_ZSET) {
+        const char *member;
+        size_t mlen;
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &member, &mlen);
+        char scorebuf[MAX_D2STRING_CHARS]; /* materialized: callback-scoped */
+        int slen = d2string(scorebuf, sizeof(scorebuf), orderedIndexItemGetScore((const OrderedIndexItem *)entry));
+        data->fn(data->key, member, mlen, scorebuf, (size_t)slen, data->user_data);
+    } else if (objectGetType(o) == OBJ_HASH) {
+        sds field = entryGetField(entry);
+        size_t val_len;
+        char *val = entryGetValue(entry, &val_len);
+        data->fn(data->key, field, sdslen(field), val, val_len, data->user_data);
+    } else {
+        serverPanic("unexpected object type in ScanKeyRawBorrowed");
+    }
+}
+
+/* Like ValkeyModule_ScanKey, but each element is delivered to the callback as
+ * borrowed `(const char *, size_t)` byte ranges instead of allocating a
+ * ValkeyModuleString per element. This avoids a per-element allocation on the
+ * hot reply path. Works on the same key types as ValkeyModule_ScanKey: hash,
+ * set and sorted set.
+ *
+ *     void scan_callback(ValkeyModuleKey *key, const char *field, size_t field_len,
+ *                        const char *value, size_t value_len, void *privdata);
+ *
+ * Per element the callback receives (field, field_len, value, value_len):
+ *   - HASH: field = field name,   value = field value.
+ *   - SET:  field = member,       value = NULL, value_len = 0 (sets have no value).
+ *   - ZSET: field = member,       value = score as a decimal string.
+ *
+ * The score string uses the same form as `ZRANGE ... WITHSCORES`: e.g. the score
+ * 1.5 is delivered as "1.5" and 2.0 as "2". (ValkeyModule_ScanKey instead
+ * delivers a `%.17Lg`-style rendering for sorted-set scores.)
+ *
+ * POINTER LIFETIME: the field and value pointers are only guaranteed to be valid
+ * for the duration of the callback invocation. A typical use is to reply to the
+ * calling client from within the callback with ValkeyModule_ReplyWithStringBuffer.
+ * To keep a field or value beyond the callback, copy it (for example into a
+ * ValkeyModuleString with ValkeyModule_CreateString).
+ *
+ * The usage pattern, return value, errno semantics and iteration-safety notes
+ * are identical to ValkeyModule_ScanKey. */
+int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModuleScanKeyRawBorrowedCB fn, void *privdata) {
+    if (key == NULL || key->value == NULL) {
+        errno = EINVAL;
+        return 0;
+    }
+    hashtable *ht = NULL;
+    robj *o = key->value;
+    if (objectGetType(o) == OBJ_SET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) ht = objectGetVal(o);
+    } else if (objectGetType(o) == OBJ_HASH) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) ht = objectGetVal(o);
+    } else if (objectGetType(o) == OBJ_ZSET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) ht = ((zset *)objectGetVal(o))->ht;
+    } else {
+        errno = EINVAL;
+        return 0;
+    }
+    if (cursor->done) {
+        errno = ENOENT;
+        return 0;
+    }
+    int ret = 1;
+    if (ht) {
+        /* hashtable-encoded set/hash, or btree-encoded zset: incremental. */
+        ScanKeyRawBorrowedCBData data = {key, privdata, fn};
+        cursor->cursor = hashtableScan(ht, cursor->cursor, moduleScanKeyRawBorrowedHashtableCallback, &data);
+        if (cursor->cursor == 0) {
+            cursor->done = 1;
+            ret = 0;
+        }
+    } else if (objectGetType(o) == OBJ_SET) {
+        /* intset / listpack set: full scan. Listpack members are borrowed;
+         * intset integer members are materialized (callback-scoped). */
+        setTypeIterator *si = setTypeInitIterator(o);
+        char *str;
+        size_t len;
+        int64_t llele;
+        char intbuf[LONG_STR_SIZE];
+        while (setTypeNext(si, &str, &len, &llele) != -1) {
+            const char *m;
+            size_t mlen;
+            if (str != NULL) {
+                m = str;
+                mlen = len;
+            } else {
+                mlen = (size_t)ll2string(intbuf, sizeof(intbuf), llele);
+                m = intbuf;
+            }
+            fn(key, m, mlen, NULL, 0, privdata);
+        }
+        setTypeReleaseIterator(si);
+        cursor->cursor = 1;
+        cursor->done = 1;
+        ret = 0;
+    } else {
+        /* listpack-encoded zset or hash: (field/member, value/score) pairs.
+         * String entries are borrowed; integer-encoded entries are materialized
+         * (callback-scoped). Integers may be either field or value. */
+        unsigned char *lp = objectGetVal(o);
+        /* Only hash listpacks carry field TTL metadata. */
+        int is_hash = objectGetType(o) == OBJ_HASH;
+        unsigned char *p = lpSeek(lp, 0);
+        while (p) {
+            unsigned int flen;
+            long long fll;
+            char fbuf[LONG_STR_SIZE];
+            unsigned char *fstr = lpGetValue(p, &flen, &fll);
+            const char *fp;
+            size_t fl;
+            if (fstr != NULL) {
+                fp = (char *)fstr;
+                fl = flen;
+            } else {
+                fl = (size_t)ll2string(fbuf, sizeof(fbuf), fll);
+                fp = fbuf;
+            }
+            p = lpNext(lp, p);
+            if (!p) break;
+            /* Skip hash fields not visible in the current context, like HSCAN. */
+            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(lp, p))) {
+                p = lpNext(lp, p);
+                continue;
+            }
+            unsigned int vlen;
+            long long vll;
+            char vbuf[LONG_STR_SIZE];
+            unsigned char *vstr = lpGetValue(p, &vlen, &vll);
+            const char *vp;
+            size_t vl;
+            if (vstr != NULL) {
+                vp = (char *)vstr;
+                vl = vlen;
+            } else {
+                vl = (size_t)ll2string(vbuf, sizeof(vbuf), vll);
+                vp = vbuf;
+            }
+            fn(key, fp, fl, vp, vl, privdata);
+            p = lpNext(lp, p);
         }
         cursor->cursor = 1;
         cursor->done = 1;
@@ -15327,6 +15610,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(TryRealloc);
     REGISTER_API(Free);
     REGISTER_API(Strdup);
+    REGISTER_API(IncrExternalMemory);
+    REGISTER_API(DecrExternalMemory);
     REGISTER_API(CreateCommand);
     REGISTER_API(GetCommand);
     REGISTER_API(CreateSubcommand);
@@ -15636,6 +15921,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ScanCursorRestart);
     REGISTER_API(Scan);
     REGISTER_API(ScanKey);
+    REGISTER_API(ScanKeyRawBorrowed);
     REGISTER_API(CreateModuleUser);
     REGISTER_API(SetContextUser);
     REGISTER_API(SetModuleUserACL);

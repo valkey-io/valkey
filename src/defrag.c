@@ -713,6 +713,8 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         defragHash(ob);
     } else if (ob->type == OBJ_STREAM) {
         defragStream(ob);
+    } else if (ob->type == OBJ_PATH_HASH) {
+        /* Path hash payload defragmentation is intentionally deferred. */
     } else if (ob->type == OBJ_MODULE) {
         defragModule(db, ob);
     } else {
@@ -968,7 +970,7 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
     /* In case we are in the process of eval some script we do not want to replace the script being run
      * so we just bail out without really defragging here. */
     if (scriptIsRunning()) return DEFRAG_DONE;
-    activeDefragSdsDict(evalScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+    activeDefragSdsDict(evalCtxScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
     return DEFRAG_DONE;
 }
 
@@ -977,6 +979,15 @@ static doneStatus defragModuleGlobals(monotime endtime, void *target, void *priv
     UNUSED(target);
     UNUSED(privdata);
     return moduleDefragGlobals(endtime) ? DEFRAG_NOT_DONE : DEFRAG_DONE;
+}
+
+
+/* The tracking table's structure is private to tracking.c, which provides
+ * the actual incremental defrag walker; this stage just drives it. */
+static doneStatus defragStageTrackingTable(monotime endtime, void *target, void *privdata) {
+    UNUSED(target);
+    UNUSED(privdata);
+    return defragTrackingTable(endtime) ? DEFRAG_DONE : DEFRAG_NOT_DONE;
 }
 
 
@@ -1229,6 +1240,7 @@ static void beginDefragCycle(void) {
 
     addDefragStage(defragLuaScripts, NULL, NULL);
     addDefragStage(defragModuleGlobals, NULL, NULL);
+    addDefragStage(defragStageTrackingTable, NULL, NULL);
 
     defrag.current_stage = NULL;
     defrag.start_cycle = getMonotonicUs();

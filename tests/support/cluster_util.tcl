@@ -208,6 +208,12 @@ proc cluster_allocate_replicas {masters replicas} {
     }
 }
 
+# Replica allocator that does not attach any replica to a primary. Pass it as
+# the replica_allocator argument of start_cluster when a test needs the extra
+# nodes to stay unassigned at setup time, e.g. to add them later as replicas
+# with a particular replication configuration.
+proc no_replica_allocation {primaries replicas} {}
+
 # Setup method to be executed to configure the cluster before the
 # tests run.
 proc cluster_setup {masters replicas node_count slot_allocator replica_allocator options} {
@@ -367,6 +373,13 @@ proc get_myself id {
         if {[cluster_has_flag $n myself]} {return $n}
     }
     return {}
+}
+
+# Returns 1 if the instance 'instance_id' agrees that the node 'replica_id' is a
+# replica and is a replica of the node 'primary_id'.
+proc cluster_node_is_replica_of {instance_id replica_id primary_id} {
+    set node [cluster_get_node_by_id $instance_id $replica_id]
+    expr {[cluster_has_flag $node slave] && [dict get $node slaveof] eq $primary_id}
 }
 
 # Returns 1 if no node knows node_id, 0 if any node knows it.

@@ -266,7 +266,9 @@ int getCachedKeySlot(sds key) {
      * so we must always recompute the slot for commands coming from the primary or AOF.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !mustObeyClient(server.current_client)) {
+        !mustObeyClient(server.current_client) &&
+        server.current_client->cmd &&
+        !(server.current_client->cmd->flags & (CMD_MODULE | CMD_TOUCHES_ARBITRARY_KEYS))) {
         debugServerAssertWithInfo(server.current_client, NULL,
                                   (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
@@ -1160,7 +1162,7 @@ int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
 }
 
 char *obj_type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", NULL, /* module type is special */
-                                     "stream"};
+                                     "stream", "pathhash"};
 
 /* Helper function to get type from a string in scan commands */
 long long getObjectTypeByName(char *name) {
@@ -1730,6 +1732,7 @@ void copyCommand(client *c) {
     case OBJ_ZSET: newobj = zsetDup(o); break;
     case OBJ_HASH: newobj = hashTypeDup(o); break;
     case OBJ_STREAM: newobj = streamDup(o); break;
+    case OBJ_PATH_HASH: newobj = pathHashTypeDup(o); break;
     case OBJ_MODULE:
         newobj = moduleTypeDupOrReply(c, key, newkey, dst->id, o);
         if (!newobj) return;
@@ -2888,6 +2891,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
                 found_store = 1;
                 keys[num].pos = i + 1; /* <store-key> */
                 keys[num].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
+                /* Skip the destination. It is a key name, so it must never be
+                 * examined as an option: a key that spells one would hide the
+                 * later STORE clause that SORT actually writes to. */
+                i++;
                 break;
             }
         }

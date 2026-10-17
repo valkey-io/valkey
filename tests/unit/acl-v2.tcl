@@ -106,6 +106,51 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*key*" $err
     }
 
+    test {EXEC conditions require read permission} {
+        r ACL SETUSER exec-condition-write-only on nopass %W~write* +@all
+        r set writecondition value
+        r del writelist
+        $r2 auth exec-condition-write-only password
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifeq writecondition value} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifne writecondition other} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec nx writecondition} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec xx writecondition} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        assert_error "EXECABORT*invalid check condition syntax*" {$r2 exec ifeq writecondition other invalid}
+        assert_equal 0 [r llen writelist]
+    }
+
+    test {EXEC condition keys check permissions on the active database} {
+        r ACL SETUSER exec-db-selector-user on nopass (db=1 +@all ~*) (db=0 +@all ~public*)
+        r select 0
+        r set secret secret-value
+        $r2 auth exec-db-selector-user password
+        $r2 select 0
+        $r2 multi
+        $r2 select 1
+        catch {$r2 exec ifeq secret guessed-value} err
+        assert_match "*NOPERM*key*" $err
+        r del secret
+    }
+
     test {Test separate read and write permissions} {
         r ACL SETUSER key-permission-RW on nopass %R~read* %W~write* +@all
         $r2 auth key-permission-RW password
@@ -628,6 +673,37 @@ start_server {tags {"acl external:skip"}} {
         r del v1 mylist
     }
     
+    test {Test SORT STORE destination that is named like an option} {
+        # Every decoy destination below is permitted, so the only reason to
+        # reject a command is the real destination the server writes to.
+        r ACL setuser test-sort-store on nopass ~allowed:* ~by ~get ~limit ~alpha +@all
+        r rpush allowed:src c b a
+
+        # A dedicated client, because deleting the user below kills it.
+        set r3 [valkey_client]
+        $r3 auth test-sort-store nopass
+
+        # A destination spelling an option that takes arguments hides the later
+        # STORE clause that SORT actually uses.
+        foreach keyword {by get limit} {
+            assert_equal "User test-sort-store has no permissions to access the 'forbidden:dst' key" \
+                [r ACL DRYRUN test-sort-store SORT allowed:src ALPHA STORE $keyword STORE forbidden:dst]
+            assert_error "*NOPERM*key*" {$r3 sort allowed:src ALPHA STORE $keyword STORE forbidden:dst}
+            assert_equal 0 [r exists forbidden:dst]
+        }
+
+        # A destination spelling STORE reports whatever follows it instead.
+        assert_equal "User test-sort-store has no permissions to access the 'store' key" \
+            [r ACL DRYRUN test-sort-store SORT allowed:src STORE store alpha]
+        assert_error "*NOPERM*key*" {$r3 sort allowed:src STORE store alpha}
+        assert_equal 0 [r exists store]
+
+        # cleanup
+        $r3 close
+        r ACL deluser test-sort-store
+        r del allowed:src
+    }
+
     test {Test DRYRUN with wrong number of arguments} {
         r ACL setuser test-dry-run +@all ~v*
         

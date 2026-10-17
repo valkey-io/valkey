@@ -974,10 +974,9 @@ void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen) {
  * our evictions), so make sure the replicas are in the db the proxied stream
  * expects, and keep track of the db it leaves them in. */
 void replicationFeedStreamFromSlotImport(int start_dbid, int end_dbid, char *buf, size_t buflen) {
-    if (server.primary_host != NULL) {
-        replicationFeedStreamFromPrimaryStream(buf, buflen);
-        return;
-    }
+    /* Only primaries import slots: when we are demoted, the import client is
+     * unlinked from its job (see clusterUpdateSlotImportsOnOwnershipChange()). */
+    serverAssert(server.primary_host == NULL);
 
     /* There must be replication backlog if having attached replicas. */
     if (listLength(server.replicas)) serverAssert(server.repl_backlog != NULL);

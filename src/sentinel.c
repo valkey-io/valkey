@@ -2658,7 +2658,8 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
     /* Handle replicas replicating to a different primary address. */
     if ((ri->flags & SRI_REPLICA) && role == SRI_REPLICA &&
         (ri->replica_primary_port != ri->primary->addr->port ||
-         !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host))) {
+         (ri->replica_primary_host &&
+          !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host)))) {
         mstime_t wait_time = ri->primary->failover_timeout;
 
         /* Make sure the primary is sane before reconfiguring this instance

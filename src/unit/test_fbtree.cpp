@@ -110,6 +110,31 @@ class FbtreeTest : public ::testing::Test {
         }
         return result;
     }
+
+    /* Insert 'count' members sharing a prefix long enough to spill, so the
+     * tree gains an inner level whose root prefix is heap allocated. */
+    std::vector<sds> buildLongPrefixTree(int count, size_t prefix_len) {
+        char suffix[16]; /* "e" plus any int, so the format cannot truncate */
+
+        std::vector<sds> inserted;
+        for (int i = 0; i < count; i++) {
+            snprintf(suffix, sizeof(suffix), "e%03d", i);
+            sds ele = fbtreeInsert(fbt, createPrefixString("E", prefix_len, suffix));
+            inserted.emplace_back(ele);
+        }
+        expectValid();
+        EXPECT_FALSE(fbt->root->is_leaf);
+        innerNode *root = (innerNode *)(void *)fbt->root;
+        EXPECT_GT(root->prefix_len, (size_t)EMBED_PREFIX_LEN);
+        return inserted;
+    }
+
+    /* The tree holds no elements and its root is released. */
+    void expectEmpty() {
+        EXPECT_EQ(fbtreeLength(fbt), 0UL);
+        EXPECT_EQ(fbt->root, nullptr);
+        expectValid();
+    }
 };
 
 /* ========== Basic Lifecycle Tests ========== */
@@ -554,6 +579,87 @@ TEST_F(FbtreeTest, PrevSingle) {
     ASSERT_NE(pos = fbtreePrev(&it), nullptr);
     EXPECT_EQ(memcmp(pos, "only", 5), 0);
     EXPECT_EQ(pos = fbtreePrev(&it), nullptr);
+}
+
+TEST_F(FbtreeTest, PeekEmpty) {
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
+}
+
+TEST_F(FbtreeTest, PeekDoesNotMoveIterator) {
+    const int total = NODE_SIZE * 7 / 2;
+    char first[8], last[8], buf[8];
+    for (int i = 0; i < total; i++) {
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        insert(buf);
+    }
+    snprintf(first, sizeof(first), "k%03d", 0);
+    snprintf(last, sizeof(last), "k%03d", total - 1);
+    expectValid();
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    /* A fresh iterator sees both ends. */
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, first, 5), 0);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, last, 5), 0);
+
+    /* Forward across every leaf: a repeated peek is stable and the step that
+     * follows returns the peeked element. */
+    int count = 0;
+    while ((pos = fbtreePeekNext(&it)) != nullptr) {
+        EXPECT_EQ(fbtreePeekNext(&it), pos);
+        EXPECT_EQ(fbtreeNext(&it), pos);
+        count++;
+    }
+    EXPECT_EQ(count, total);
+    EXPECT_EQ(fbtreeNext(&it), nullptr);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, last, 5), 0);
+
+    /* And backward. */
+    count = 0;
+    while ((pos = fbtreePeekPrev(&it)) != nullptr) {
+        EXPECT_EQ(fbtreePrev(&it), pos);
+        count++;
+    }
+    EXPECT_EQ(count, total);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, first, 5), 0);
+
+    /* After a seek the peeks are the cursor's two neighbours. */
+    const int rank = NODE_SIZE + 3;
+    char before[8], at[8];
+    snprintf(before, sizeof(before), "k%03d", rank - 1);
+    snprintf(at, sizeof(at), "k%03d", rank);
+    fbtreeSeekToRank(&it, rank);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, before, 5), 0);
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, at, 5), 0);
+    ASSERT_NE(pos = fbtreeNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, at, 5), 0);
+
+    fbtreeSeekToRank(&it, 0);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, first, 5), 0);
+
+    fbtreeSeekToRank(&it, total);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    ASSERT_NE(pos = fbtreePeekPrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, last, 5), 0);
+
+    fbtreeResetIterator(&it);
+    EXPECT_EQ(fbtreePeekNext(&it), nullptr);
+    EXPECT_EQ(fbtreePeekPrev(&it), nullptr);
 }
 
 TEST_F(FbtreeTest, IteratorExhaustedStaysInvalid) {
@@ -2014,6 +2120,29 @@ TEST_F(FbtreeTest, LongPrefixDelete) {
     }
 
     zfree(inserted);
+}
+
+/* Empty a multilevel tree with a spilled root prefix, each way a tree can be
+ * emptied, under the fixture's memory check. None of them reaches the
+ * emptied-inner-root branch of fbtreePostDeleteCleanup. */
+TEST_F(FbtreeTest, LongPrefixDeleteAll) {
+    const size_t prefix_len = EMBED_PREFIX_LEN + 8;
+    const int count = NODE_SIZE * 3;
+
+    /* Single deletes in both directions: the root collapses onto its
+     * surviving child before it can empty. */
+    std::vector<sds> inserted = buildLongPrefixTree(count, prefix_len);
+    for (int i = 0; i < count; i++) EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    expectEmpty();
+
+    inserted = buildLongPrefixTree(count, prefix_len);
+    for (int i = count - 1; i >= 0; i--) EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    expectEmpty();
+
+    /* A range covering everything takes the delete-all path. */
+    inserted = buildLongPrefixTree(count, prefix_len);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, count - 1, NULL, NULL), (unsigned long)count);
+    expectEmpty();
 }
 
 TEST_F(FbtreeTest, LongPrefixBoundary) {

@@ -155,25 +155,45 @@ endif
 $(WRAP_DIR):
 	@mkdir -p $(WRAP_DIR)
 
+# Turns one object into a wrapped object. When the server is built with -flto,
+# which the default -O3 turns on (see OPTIMIZATION in ../Makefile), the objects
+# are LLVM bitcode and must be turned into real Mach-O objects first.
+#
+# We use a compiler for that, not llc. The bitcode carries the version of
+# whichever clang produced it, and a Homebrew llc of a different version cannot
+# read it: it fails with "error: Invalid record" or "Unsupported stack probing
+# method" for every object. $(WRAP_CC) is the compiler that produced the bitcode,
+# so it always matches: $(CC) for the server objects and $(CXX) for the test
+# objects. No -O flag is passed, because the IR is already optimized and this
+# step only needs code generation, which is what llc did.
+#
+# llvm-nm is passed explicitly: Homebrew LLVM installs no plain 'nm', so 'nm'
+# would be Apple's. The CMake build (wrap-objects.py) uses llvm-nm as well.
+#
+# The steps are joined with && so that a failing step stops the build. With ';'
+# a failure in generate-redefine-syms.py left an empty syms file, and
+# llvm-objcopy then wrote an object without the renames.
 define wrap-object
 	@mkdir -p $(dir $@)
 	@if file $< | grep -q "LLVM bitcode"; then \
-		llc $< -filetype=obj -o $(WRAP_DIR)/$*_temp.o; \
-		python3 generate-redefine-syms.py $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms; \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@; \
+		$(WRAP_CC) -c -x ir $< -o $(WRAP_DIR)/$*_temp.o && \
+		python3 generate-redefine-syms.py --nm llvm-nm $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms && \
+		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@ && \
 		rm -f $(WRAP_DIR)/$*_temp.o; \
 	else \
-		python3 generate-redefine-syms.py $< > $(WRAP_DIR)/$*-wrap-syms; \
+		python3 generate-redefine-syms.py --nm llvm-nm $< > $(WRAP_DIR)/$*-wrap-syms && \
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
 	fi
 	@rm -f $(WRAP_DIR)/$*-wrap-syms
 endef
 
 # Wrap server library objects
+$(ENGINE_SERVER_WRAP_OBJ): WRAP_CC := $(CC)
 $(ENGINE_SERVER_WRAP_OBJ): $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
 	$(wrap-object)
 
 # Wrap test objects, so that calls to wrapped functions are redirected to __wrap_*
+$(TEST_WRAP_OBJ): WRAP_CC := $(CXX)
 $(TEST_WRAP_OBJ): $(WRAP_DIR)/%.o: %.o $(WRAP_DIR) generated_wrappers.o
 	$(wrap-object)
 

@@ -1,6 +1,8 @@
 /* Test module for ValkeyModule_UnsubscribeFromKeyspaceEvents.
  *
  * Subscriptions made on load, in this order:
+ *   - resubscribe on MODULE, which unsubscribes and subscribes itself again
+ *     on every call.
  *   - countEvents on STRING|HASH, counting events per type.
  *   - countStringOther on STRING, a second callback on the same type.
  *   - unsubscribeSelf on LIST, which unsubscribes itself on its first call.
@@ -14,6 +16,7 @@
  * Commands:
  *   KSU.SUB                 - subscribe countEvents to STRING|HASH again.
  *   KSU.UNSUB string|hash   - unsubscribe countEvents from the given type.
+ *   KSU.NOTIFY key          - fire a MODULE event on the key.
  *   KSU.COUNT name          - reply with the named counter.
  */
 
@@ -26,6 +29,7 @@ static long long other_events = 0;
 static long long self_events = 0;
 static long long victim_events = 0;
 static long long nested_victim_events = 0;
+static long long resubscribe_events = 0;
 
 static int countEvents(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
     VALKEYMODULE_NOT_USED(ctx);
@@ -97,6 +101,16 @@ static int nestedInner(ValkeyModuleCtx *ctx, int type, const char *event, Valkey
     return VALKEYMODULE_OK;
 }
 
+static int resubscribe(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
+    VALKEYMODULE_NOT_USED(type);
+    VALKEYMODULE_NOT_USED(event);
+    VALKEYMODULE_NOT_USED(key);
+    resubscribe_events++;
+    ValkeyModule_UnsubscribeFromKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_MODULE, resubscribe);
+    ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_MODULE, resubscribe);
+    return VALKEYMODULE_OK;
+}
+
 static int cmdSub(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     if (argc != 1) return ValkeyModule_WrongArity(ctx);
@@ -121,6 +135,12 @@ static int cmdUnsub(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+static int cmdNotify(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_NotifyKeyspaceEvent(ctx, VALKEYMODULE_NOTIFY_MODULE, "notify", argv[1]);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 static int cmdCount(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
     const char *name = ValkeyModule_StringPtrLen(argv[1], NULL);
@@ -137,6 +157,8 @@ static int cmdCount(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         count = victim_events;
     } else if (!strcasecmp(name, "nested_victim")) {
         count = nested_victim_events;
+    } else if (!strcasecmp(name, "resubscribe")) {
+        count = resubscribe_events;
     } else {
         return ValkeyModule_ReplyWithError(ctx, "ERR unknown counter");
     }
@@ -151,7 +173,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING | VALKEYMODULE_NOTIFY_HASH,
+    if (ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_MODULE, resubscribe) != VALKEYMODULE_OK ||
+        ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING | VALKEYMODULE_NOTIFY_HASH,
                                                countEvents) != VALKEYMODULE_OK ||
         ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING, countStringOther) != VALKEYMODULE_OK ||
         ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_LIST, unsubscribeSelf) != VALKEYMODULE_OK ||
@@ -165,6 +188,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "ksu.sub", cmdSub, "", 0, 0, 0) == VALKEYMODULE_ERR ||
         ValkeyModule_CreateCommand(ctx, "ksu.unsub", cmdUnsub, "", 0, 0, 0) == VALKEYMODULE_ERR ||
+        ValkeyModule_CreateCommand(ctx, "ksu.notify", cmdNotify, "", 0, 0, 0) == VALKEYMODULE_ERR ||
         ValkeyModule_CreateCommand(ctx, "ksu.count", cmdCount, "", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }

@@ -60,6 +60,13 @@ tags "modules" {
             assert_equal 2 [r xlen nested_stream]
         }
 
+        test {Callback can unsubscribe and subscribe itself again} {
+            assert_equal OK [r ksu.notify k]
+            assert_equal 1 [r ksu.count resubscribe]
+            assert_equal OK [r ksu.notify k]
+            assert_equal 2 [r ksu.count resubscribe]
+        }
+
         test {Unsubscribe within MULTI} {
             r multi
             r set s 5

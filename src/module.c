@@ -9745,6 +9745,11 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
     listNode *ln;
     listRewind(moduleKeyspaceSubscribers, &li);
 
+    /* Subscribers added by a callback during this dispatch are appended after
+     * 'last' and don't receive the event being dispatched. 'last' can't be
+     * freed before we reach it, since removal is deferred while dispatching. */
+    listNode *last = listLast(moduleKeyspaceSubscribers);
+
     /* Remove irrelevant flags from the type mask */
     type &= ~(NOTIFY_KEYEVENT | NOTIFY_KEYSPACE);
 
@@ -9783,6 +9788,7 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
             sub->active = prev_active;
             moduleFreeContext(&ctx);
         }
+        if (ln == last) break;
     }
 
     /* Restore the executing client's originally selected DB. */

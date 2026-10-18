@@ -347,7 +347,9 @@ typedef struct ValkeyModuleKeyspaceSubscriber {
      * calling themselves */
     int active;
     /* Set when the subscriber was unsubscribed while a dispatch was in
-     * progress. The entry is freed once the outermost dispatch returns. */
+     * progress. The entry is freed once the outermost dispatch returns.
+     * A removed entry always has an empty event_mask, so checking the mask
+     * alone would skip it too; the flag is checked explicitly for clarity. */
     int removed;
 } ValkeyModuleKeyspaceSubscriber;
 
@@ -9550,6 +9552,8 @@ void moduleReleaseGIL(void) {
  * runs is dangerous and discouraged. In order to react to key space events with
  * write actions, please refer to `VM_AddPostNotificationJob`.
  *
+ * To remove a subscription, use `VM_UnsubscribeFromKeyspaceEvents`.
+ *
  * See https://valkey.io/topics/notifications for more information.
  */
 int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc callback) {
@@ -9570,14 +9574,19 @@ int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNo
  * The event types in `types` are removed from every subscription of the
  * calling module that uses `callback`. A subscription left with no event
  * types is removed entirely. Types that were not subscribed are ignored.
+ * If `callback` was subscribed more than once, `types` are removed from all
+ * of those subscriptions.
  *
  * It is safe to call this function from within a notification callback,
  * including the callback being unsubscribed. The removed event types are not
  * delivered to `callback` from that point on.
  *
  * Returns VALKEYMODULE_OK if at least one subscription was affected,
- * otherwise VALKEYMODULE_ERR. */
+ * otherwise VALKEYMODULE_ERR. VALKEYMODULE_ERR is also returned if the
+ * context is not associated with a module. */
 int VM_UnsubscribeFromKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc callback) {
+    if (ctx->module == NULL) return VALKEYMODULE_ERR;
+
     int found = 0;
     listIter li;
     listNode *ln;

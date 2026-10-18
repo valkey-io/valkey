@@ -3521,6 +3521,8 @@ streamForwardEntry *streamForwardIteratorFind(streamForwardIterator *xi, streamI
         }
 
         streamForwardEntry *entry = &xi->entry;
+        /* Skip intervening entries inside GetID instead of returning each one. */
+        xi->si.start_id = *target;
         xi->has_entry = streamIteratorGetID(&xi->si, &entry->id, &entry->numfields);
         if (!xi->has_entry) return NULL;
         entry->fields_left = entry->numfields;

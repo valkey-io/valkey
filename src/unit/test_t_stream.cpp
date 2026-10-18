@@ -6,6 +6,7 @@
 
 #include "generated_wrappers.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 extern "C" {
@@ -16,6 +17,156 @@ extern "C" {
 /* Mirrors of the record flags private to t_stream.c. */
 #define TEST_STREAM_ITEM_FLAG_DELETED (1 << 0)
 #define TEST_STREAM_ITEM_FLAG_SAMEFIELDS (1 << 1)
+
+/* Two nodes with three integer-encoded fields per entry. ID 30-0 is deleted.
+ * Exercise both primary field reuse and entries carrying their own fields. */
+static stream *buildForwardSearchStream(int samefields) {
+    stream *s = streamNew();
+    for (int node = 0; node < 2; node++) {
+        unsigned char *lp = lpNew(0);
+        lp = lpAppendInteger(lp, node == 0 ? 3 : 4);
+        lp = lpAppendInteger(lp, node == 0 ? 1 : 0);
+        lp = lpAppendInteger(lp, 3);
+        for (int field = 1; field <= 3; field++) lp = lpAppendInteger(lp, field);
+        lp = lpAppendInteger(lp, 0);
+        for (int item = 0; item < 4; item++) {
+            int flags = samefields ? TEST_STREAM_ITEM_FLAG_SAMEFIELDS : 0;
+            if (node == 0 && item == 2) flags |= TEST_STREAM_ITEM_FLAG_DELETED;
+            lp = lpAppendInteger(lp, flags);
+            lp = lpAppendInteger(lp, item * 10);
+            lp = lpAppendInteger(lp, 0);
+            if (!samefields) lp = lpAppendInteger(lp, 3);
+            for (int field = 1; field <= 3; field++) {
+                if (!samefields) lp = lpAppendInteger(lp, field + 3);
+                lp = lpAppendInteger(lp, (node * 4 + item + 1) * 10 + field);
+            }
+            lp = lpAppendInteger(lp, samefields ? 6 : 10);
+        }
+        streamID primary = {node == 0 ? 10u : 100u, 0};
+        unsigned char key[sizeof(streamID)];
+        streamEncodeID(key, &primary);
+        raxInsert(s->rax, key, sizeof(key), lp, NULL);
+    }
+    s->length = 7;
+    return s;
+}
+
+static void expectEntryField(streamForwardEntry *entry, int field, int value) {
+    unsigned char *fieldptr, *valueptr;
+    int64_t fieldlen, valuelen;
+    ASSERT_EQ(streamForwardEntryNextField(entry, &fieldptr, &valueptr, &fieldlen, &valuelen), 1);
+    char expected_field[32], expected_value[32];
+    int expected_fieldlen = snprintf(expected_field, sizeof(expected_field), "%d", field);
+    int expected_valuelen = snprintf(expected_value, sizeof(expected_value), "%d", value);
+    ASSERT_EQ(fieldlen, expected_fieldlen);
+    ASSERT_EQ(valuelen, expected_valuelen);
+    EXPECT_EQ(memcmp(fieldptr, expected_field, fieldlen), 0);
+    EXPECT_EQ(memcmp(valueptr, expected_value, valuelen), 0);
+}
+
+/* Reading none, some, or all fields must not change the next search result.
+ * Test both encoding layouts within a node and across node boundaries. */
+TEST(StreamForwardIteratorTest, FindsEntriesAfterAnyFieldReadCount) {
+    for (int samefields = 0; samefields <= 1; samefields++) {
+        for (int read_count = 0; read_count <= 3; read_count++) {
+            stream *s = buildForwardSearchStream(samefields);
+            streamForwardIterator it;
+            streamID target = {10, 0};
+            streamForwardIteratorStart(&it, s, &target);
+            streamForwardEntry *entry = streamForwardIteratorFind(&it, &target);
+            ASSERT_NE(entry, nullptr);
+            EXPECT_EQ(entry->id.ms, 10u);
+            ASSERT_EQ(entry->numfields, 3);
+            for (int field = 1; field <= read_count; field++) {
+                expectEntryField(entry, samefields ? field : field + 3, 10 + field);
+            }
+
+            target.ms = 20;
+            entry = streamForwardIteratorFind(&it, &target);
+            ASSERT_NE(entry, nullptr);
+            EXPECT_EQ(entry->id.ms, 20u);
+            for (int field = 1; field <= read_count; field++) {
+                expectEntryField(entry, samefields ? field : field + 3, 20 + field);
+            }
+
+            /* Crossing a node must also handle a partially read entry. */
+            target.ms = 100;
+            entry = streamForwardIteratorFind(&it, &target);
+            ASSERT_NE(entry, nullptr);
+            EXPECT_EQ(entry->id.ms, 100u);
+            for (int field = 1; field <= 3; field++) {
+                expectEntryField(entry, samefields ? field : field + 3, 50 + field);
+            }
+            unsigned char *fieldptr, *valueptr;
+            int64_t fieldlen, valuelen;
+            EXPECT_EQ(streamForwardEntryNextField(entry, &fieldptr, &valueptr, &fieldlen, &valuelen), 0);
+            EXPECT_EQ(streamForwardEntryNextField(entry, &fieldptr, &valueptr, &fieldlen, &valuelen), 0);
+
+            target.ms = 110;
+            entry = streamForwardIteratorFind(&it, &target);
+            ASSERT_NE(entry, nullptr);
+            expectEntryField(entry, samefields ? 1 : 4, 61);
+            target.ms = 140;
+            EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+            target.ms = 150;
+            EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+            streamForwardIteratorStop(&it);
+            freeStream(s);
+        }
+    }
+}
+
+TEST(StreamForwardIteratorTest, PreservesFutureEntriesAfterMissingTargets) {
+    for (int samefields = 0; samefields <= 1; samefields++) {
+        stream *s = buildForwardSearchStream(samefields);
+        streamForwardIterator it;
+        streamID target = {10, 0};
+        streamForwardIteratorStart(&it, s, &target);
+        streamForwardEntry *entry = streamForwardIteratorFind(&it, &target);
+        ASSERT_NE(entry, nullptr);
+        expectEntryField(entry, samefields ? 1 : 4, 11);
+        target.ms = 30; /* Deleted entry; 40-0 must remain cached. */
+        EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+        target.ms = 35;
+        EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+        target.ms = 40;
+        entry = streamForwardIteratorFind(&it, &target);
+        ASSERT_NE(entry, nullptr);
+        expectEntryField(entry, samefields ? 1 : 4, 41);
+        target.ms = 90; /* Absent target in the gap between nodes. */
+        EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+        target.ms = 100;
+        entry = streamForwardIteratorFind(&it, &target);
+        ASSERT_NE(entry, nullptr);
+        expectEntryField(entry, samefields ? 1 : 4, 51);
+        streamForwardIteratorStop(&it);
+        freeStream(s);
+    }
+}
+
+static void findInvalidForwardTarget(int kind) {
+    server.enable_debug_assert = 1;
+    stream *s = buildForwardSearchStream(1);
+    streamForwardIterator it;
+    streamID target = {20, 0};
+    streamForwardIteratorStart(&it, s, &target);
+    if (kind == 0) {
+        target.ms = 10; /* Before the initial lower bound. */
+    } else {
+        target.ms = 30; /* Missing targets must also advance the lower bound. */
+        streamForwardIteratorFind(&it, &target);
+        target.ms = kind == 1 ? 30 : 20;
+    }
+    streamForwardIteratorFind(&it, &target);
+    streamForwardIteratorStop(&it);
+    freeStream(s);
+}
+
+TEST(StreamForwardIteratorDeathTest, RejectsInvalidTargetOrder) {
+    EXPECT_DEATH(findInvalidForwardTarget(0), "");
+    EXPECT_DEATH(findInvalidForwardTarget(1), "");
+    EXPECT_DEATH(findInvalidForwardTarget(2), "");
+}
 
 /* Build a structurally valid stream listpack holding two same-fields records.
  * The declared header counts and the per-record deleted flags are supplied

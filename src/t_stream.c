@@ -1235,6 +1235,23 @@ int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
     }
 }
 
+/* Share the field reader without adding a call for each field/value pair. */
+static inline __attribute__((always_inline)) void streamIteratorReadField(streamIterator *si,
+                                                                          unsigned char **fieldptr,
+                                                                          unsigned char **valueptr,
+                                                                          int64_t *fieldlen,
+                                                                          int64_t *valuelen) {
+    if (si->entry_flags & STREAM_ITEM_FLAG_SAMEFIELDS) {
+        *fieldptr = lpGet(si->primary_fields_ptr, fieldlen, si->field_buf);
+        si->primary_fields_ptr = lpNext(si->lp, si->primary_fields_ptr);
+    } else {
+        *fieldptr = lpGet(si->lp_ele, fieldlen, si->field_buf);
+        si->lp_ele = lpNext(si->lp, si->lp_ele);
+    }
+    *valueptr = lpGet(si->lp_ele, valuelen, si->value_buf);
+    si->lp_ele = lpNext(si->lp, si->lp_ele);
+}
+
 /* Get the field and value of the current item we are iterating. This should
  * be called immediately after streamIteratorGetID(), and for each field
  * according to the number of fields returned by streamIteratorGetID().
@@ -1246,15 +1263,7 @@ void streamIteratorGetField(streamIterator *si,
                             unsigned char **valueptr,
                             int64_t *fieldlen,
                             int64_t *valuelen) {
-    if (si->entry_flags & STREAM_ITEM_FLAG_SAMEFIELDS) {
-        *fieldptr = lpGet(si->primary_fields_ptr, fieldlen, si->field_buf);
-        si->primary_fields_ptr = lpNext(si->lp, si->primary_fields_ptr);
-    } else {
-        *fieldptr = lpGet(si->lp_ele, fieldlen, si->field_buf);
-        si->lp_ele = lpNext(si->lp, si->lp_ele);
-    }
-    *valueptr = lpGet(si->lp_ele, valuelen, si->value_buf);
-    si->lp_ele = lpNext(si->lp, si->lp_ele);
+    streamIteratorReadField(si, fieldptr, valueptr, fieldlen, valuelen);
 }
 
 /* Remove the current entry from the stream: can be called after the
@@ -3437,46 +3446,63 @@ cleanup:
     if (ids != static_ids) zfree(ids);
 }
 
-typedef struct {
-    streamIterator si;
-    raxIterator next_ri;
-    streamID id;
-    streamID node_primary_id;
-    streamID next_primary_id;
-    int64_t numfields;
-    int has_entry;
-    int has_node_bound;
-    int has_next_node;
-} xautoclaimIterator;
+/* Targets passed to Find must be at or after start. */
+void streamForwardIteratorStart(streamForwardIterator *xi, stream *s, streamID *start) {
+    memset(xi, 0, sizeof(*xi));
+    streamIteratorStart(&xi->si, s, start, NULL, 0);
+    xi->entry.cursor = &xi->si;
+    raxStart(&xi->next_ri, s->rax);
+}
 
 /* Find target while reusing the current stream entry and listpack position.
- * PEL IDs are ordered, so both iterators only move forward. */
-static int xautoclaimIteratorFind(xautoclaimIterator *xi, stream *s, streamID *target) {
+ * The first target must be at or after start, and all subsequent targets must
+ * strictly increase, including after a search that returns NULL.
+ * An absent target returns NULL without consuming the next live entry.
+ * The returned entry may be read fully, partially, or left unread. */
+streamForwardEntry *streamForwardIteratorFind(streamForwardIterator *xi, streamID *target) {
+    /* Target history is needed only for the debug-only ordering checks. */
+    if (server.enable_debug_assert) {
+        debugServerAssert(streamCompareID(target, &xi->si.start_id) >= 0);
+        debugServerAssert(!xi->has_last_target || streamCompareID(target, &xi->last_target) > 0);
+        xi->last_target = *target;
+        xi->has_last_target = 1;
+    }
     while (1) {
+        /* Matching or passing target needs no successor-node bound. Prepare
+         * that bound only when the search must advance beyond this entry. */
+        if (xi->has_entry) {
+            int cmp = streamCompareID(&xi->entry.id, target);
+            if (cmp == 0) return &xi->entry;
+            if (cmp > 0) return NULL;
+        }
+
+        /* Refresh the bound on first use or after si enters another listpack.
+         * The next node's first ID bounds the current listpack without scanning
+         * the fields of its last entry. */
         if (xi->si.lp &&
             (!xi->has_node_bound || streamCompareID(&xi->si.primary_id, &xi->node_primary_id) != 0)) {
-            /* The next node's first ID bounds this node without scanning
-             * the fields of its last entry. */
+            /* Re-seek only when next_ri no longer points to this node's successor. */
             if (!xi->has_node_bound || !xi->has_next_node ||
                 streamCompareID(&xi->si.primary_id, &xi->next_primary_id) != 0) {
                 raxSeek(&xi->next_ri, ">", xi->si.ri.key, xi->si.ri.key_len);
             }
             xi->has_next_node = raxNext(&xi->next_ri);
-            if (xi->has_next_node) streamDecodeID(xi->next_ri.key, &xi->next_primary_id);
+            if (xi->has_next_node) {
+                serverAssert(xi->next_ri.key_len == sizeof(streamID));
+                streamDecodeID(xi->next_ri.key, &xi->next_primary_id);
+            }
             xi->node_primary_id = xi->si.primary_id;
             xi->has_node_bound = 1;
         }
         int past_node = xi->has_next_node && streamCompareID(target, &xi->next_primary_id) >= 0;
 
         if (xi->has_entry) {
-            int cmp = streamCompareID(&xi->id, target);
-            if (cmp == 0) return 1;
-            if (cmp > 0) return 0;
-
-            /* GetID leaves the cursor at the first field. Skip unread fields
-             * before advancing to the next entry in the same listpack. */
+            /* Field reads already advanced the shared cursor. Skip only the
+             * unread fields before looking for the next entry. */
             if (!past_node) {
-                int64_t to_skip = (xi->si.entry_flags & STREAM_ITEM_FLAG_SAMEFIELDS) ? xi->numfields : xi->numfields * 2;
+                int64_t to_skip = (xi->si.entry_flags & STREAM_ITEM_FLAG_SAMEFIELDS)
+                                      ? xi->entry.fields_left
+                                      : xi->entry.fields_left * 2;
                 while (to_skip--) xi->si.lp_ele = lpNext(xi->si.lp, xi->si.lp_ele);
             }
             xi->has_entry = 0;
@@ -3485,13 +3511,35 @@ static int xautoclaimIteratorFind(xautoclaimIterator *xi, stream *s, streamID *t
         /* A sparse PEL can skip many stream entries. Seek past the current
          * node instead of scanning all intervening listpacks. */
         if (past_node) {
+            stream *s = xi->si.stream;
             streamIteratorStop(&xi->si);
             streamIteratorStart(&xi->si, s, target, NULL, 0);
         }
 
-        xi->has_entry = streamIteratorGetID(&xi->si, &xi->id, &xi->numfields);
-        if (!xi->has_entry) return 0;
+        streamForwardEntry *entry = &xi->entry;
+        xi->has_entry = streamIteratorGetID(&xi->si, &entry->id, &entry->numfields);
+        if (!xi->has_entry) return NULL;
+        entry->fields_left = entry->numfields;
     }
+}
+
+/* Read the next field/value pair, returning zero at the end of the entry.
+ * Returned strings are valid until the next NextField, Find, or Stop call.
+ * Integer-encoded strings use the shared iterator's conversion buffers. */
+int streamForwardEntryNextField(streamForwardEntry *entry,
+                                unsigned char **fieldptr,
+                                unsigned char **valueptr,
+                                int64_t *fieldlen,
+                                int64_t *valuelen) {
+    if (!entry->fields_left) return 0;
+    streamIteratorReadField(entry->cursor, fieldptr, valueptr, fieldlen, valuelen);
+    entry->fields_left--;
+    return 1;
+}
+
+void streamForwardIteratorStop(streamForwardIterator *xi) {
+    streamIteratorStop(&xi->si);
+    raxStop(&xi->next_ri);
 }
 
 /* XAUTOCLAIM <key> <group> <consumer> <min-idle-time> <start> [COUNT <count>] [JUSTID]
@@ -3586,9 +3634,8 @@ void xautoclaimCommand(client *c) {
 
     /* The loop changes PELs but not the stream, whose listpacks xi retains. */
     stream *s = objectGetVal(o);
-    xautoclaimIterator xi = {0};
-    streamIteratorStart(&xi.si, s, &startid, NULL, 0);
-    raxStart(&xi.next_ri, s->rax);
+    streamForwardIterator xi;
+    streamForwardIteratorStart(&xi, s, &startid);
 
     unsigned char startkey[sizeof(streamID)];
     streamEncodeID(startkey, &startid);
@@ -3605,7 +3652,8 @@ void xautoclaimCommand(client *c) {
         streamDecodeID(ri.key, &id);
 
         /* Item must exist for us to transfer it to another consumer. */
-        if (!xautoclaimIteratorFind(&xi, s, &id)) {
+        streamForwardEntry *entry = streamForwardIteratorFind(&xi, &id);
+        if (!entry) {
             /* Propagate this change (we are going to delete the NACK). */
             robj *idstr = createObjectFromStreamID(&id);
             streamPropagateXCLAIM(c, c->argv[1], group, c->argv[2], idstr, nack);
@@ -3646,21 +3694,22 @@ void xautoclaimCommand(client *c) {
             nack->consumer = consumer;
         }
 
+        /* Format the ID once for both the reply and propagation. */
+        robj *idstr = createObjectFromStreamID(&id);
+
         /* Send the reply for this entry. */
         if (justid) {
-            addReplyStreamID(c, &id);
+            addReplyBulk(c, idstr);
         } else {
             addReplyArrayLen(c, 2);
-            addReplyStreamID(c, &id);
-            addReplyArrayLen(c, xi.numfields * 2);
-            for (int64_t field = 0; field < xi.numfields; field++) {
-                unsigned char *key, *value;
-                int64_t key_len, value_len;
-                streamIteratorGetField(&xi.si, &key, &value, &key_len, &value_len);
+            addReplyBulk(c, idstr);
+            addReplyArrayLen(c, entry->numfields * 2);
+            unsigned char *key, *value;
+            int64_t key_len, value_len;
+            while (streamForwardEntryNextField(entry, &key, &value, &key_len, &value_len)) {
                 addReplyBulkCBuffer(c, key, key_len);
                 addReplyBulkCBuffer(c, value, value_len);
             }
-            xi.has_entry = 0;
         }
         arraylen++;
         count--;
@@ -3668,15 +3717,13 @@ void xautoclaimCommand(client *c) {
         consumer->active_time = commandTimeSnapshot();
 
         /* Propagate this change. */
-        robj *idstr = createObjectFromStreamID(&id);
         streamPropagateXCLAIM(c, c->argv[1], group, c->argv[2], idstr, nack);
         decrRefCount(idstr);
         server.dirty++;
         modified = 1;
     }
 
-    streamIteratorStop(&xi.si);
-    raxStop(&xi.next_ri);
+    streamForwardIteratorStop(&xi);
     if (modified) signalModifiedKey(c, c->db, c->argv[1]);
 
     /* We need to return the next entry as a cursor for the next XAUTOCLAIM call */

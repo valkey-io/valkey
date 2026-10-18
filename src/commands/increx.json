@@ -84,8 +84,20 @@
                         "name": "unix-time-milliseconds",
                         "type": "unix-time",
                         "token": "PXAT"
+                    },
+                    {
+                        "name": "persist",
+                        "type": "pure-token",
+                        "token": "PERSIST"
                     }
                 ]
+            },
+            {
+                "name": "enx",
+                "type": "pure-token",
+                "token": "ENX",
+                "optional": true,
+                "summary": "Only set the expiration if the key currently has no TTL. Requires one of EX/PX/EXAT/PXAT; cannot be combined with PERSIST."
             },
             {
                 "name": "increment",
@@ -103,6 +115,27 @@
                         "token": "BYFLOAT"
                     }
                 ]
+            },
+            {
+                "name": "lowerbound",
+                "type": "string",
+                "token": "LBOUND",
+                "optional": true,
+                "summary": "Integer when used with BYINT, floating-point when used with BYFLOAT."
+            },
+            {
+                "name": "upperbound",
+                "type": "string",
+                "token": "UBOUND",
+                "optional": true,
+                "summary": "Integer when used with BYINT, floating-point when used with BYFLOAT."
+            },
+            {
+                "name": "saturate",
+                "type": "pure-token",
+                "token": "SATURATE",
+                "optional": true,
+                "summary": "Saturate the result to LBOUND/UBOUND (or the type limits when no explicit bound is given) when out of bounds. Without this option, out-of-bounds operations are rejected and reply [current_value, 0]."
             }
         ],
         "reply_schema": {

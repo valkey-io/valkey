@@ -144,6 +144,44 @@ TEST(StreamForwardIteratorTest, PreservesFutureEntriesAfterMissingTargets) {
     }
 }
 
+TEST(StreamForwardIteratorTest, StartsAndRestartsOnNonzeroStorage) {
+    stream *empty = streamNew();
+    stream *s = buildForwardSearchStream(1);
+    streamForwardIterator it;
+    memset(&it, 0xa5, sizeof(it));
+    streamID target = {10, 0};
+
+    /* Stopping before the first search must also release initialized state. */
+    streamForwardIteratorStart(&it, s, &target);
+    streamForwardIteratorStop(&it);
+    streamForwardIteratorStart(&it, empty, &target);
+    EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+    target.ms = 20;
+    EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+    streamForwardIteratorStop(&it);
+
+    target.ms = 10;
+    streamForwardIteratorStart(&it, s, &target);
+    streamForwardEntry *entry = streamForwardIteratorFind(&it, &target);
+    ASSERT_NE(entry, nullptr);
+    expectEntryField(entry, 1, 11);
+    target.ms = 100;
+    entry = streamForwardIteratorFind(&it, &target);
+    ASSERT_NE(entry, nullptr);
+    expectEntryField(entry, 1, 51);
+    streamForwardIteratorStop(&it);
+
+    /* Restart after a populated cache, including the successor-node state. */
+    target.ms = 10;
+    streamForwardIteratorStart(&it, s, &target);
+    entry = streamForwardIteratorFind(&it, &target);
+    ASSERT_NE(entry, nullptr);
+    expectEntryField(entry, 1, 11);
+    streamForwardIteratorStop(&it);
+    freeStream(s);
+    freeStream(empty);
+}
+
 static void findInvalidForwardTarget(int kind) {
     server.enable_debug_assert = 1;
     stream *s = buildForwardSearchStream(1);

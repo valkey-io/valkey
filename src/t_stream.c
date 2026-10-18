@@ -3448,7 +3448,11 @@ cleanup:
 
 /* Targets passed to Find must be at or after start. */
 void streamForwardIteratorStart(streamForwardIterator *xi, stream *s, streamID *start) {
-    memset(xi, 0, sizeof(*xi));
+    /* Cached entries and node IDs are populated before their flags are set. */
+    xi->has_entry = 0;
+    xi->has_node_bound = 0;
+    xi->has_next_node = 0;
+    xi->has_last_target = 0;
     streamIteratorStart(&xi->si, s, start, NULL, 0);
     xi->entry.cursor = &xi->si;
     raxStart(&xi->next_ri, s->rax);

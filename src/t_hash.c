@@ -1324,7 +1324,7 @@ void hincrbyfloatCommand(client *c) {
 
     value += incr;
     if (isinf(value)) {
-        addReplyError(c, "increment would produce Infinity");
+        addReplyError(c, "increment would produce NaN or Infinity");
         return;
     }
 

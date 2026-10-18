@@ -969,7 +969,7 @@ start_server {tags {"hash"}} {
     test {HINCRBYFLOAT with an infinite field value} {
         r del hfoo
         r hset hfoo field inf
-        assert_error "*would produce Infinity*" {r hincrbyfloat hfoo field 1}
+        assert_error "*increment would produce NaN or Infinity*" {r hincrbyfloat hfoo field 1}
         assert_equal inf [r hget hfoo field]
         # An infinite increment is dropped before the result is ever computed.
         assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field -inf}

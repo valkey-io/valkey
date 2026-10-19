@@ -24,9 +24,11 @@ foreach {apiname cmdsuffix expected} {
                 fail "Replica did not connect"
             }
 
-            test "VM_$apiname write command returns error during CLIENT PAUSE WRITE with replica" {
-                $primary PAUSETEST.TIMER_$cmdsuffix 100
+            test "VM_$apiname write returns error during CLIENT PAUSE WRITE with replica" {
+                # TIMER_* is not a write command, so it can be scheduled after the
+                # pause; the write runs inside the timer callback while paused.
                 $primary CLIENT PAUSE 60000 WRITE
+                $primary PAUSETEST.TIMER_$cmdsuffix 1
                 # Without fix: server crashes (assertion in propagateNow)
                 # With fix: the write is rejected (result != OK)
                 wait_for_condition 50 20 {
@@ -58,7 +60,7 @@ start_server {tags {"modules needs:repl"}} {
         }
 
         test {Module timer VM_Call succeeds when not paused} {
-            $primary PAUSETEST.TIMER_CALL 100
+            $primary PAUSETEST.TIMER_CALL 1
             wait_for_condition 50 20 {
                 [$primary PAUSETEST.GET_RESULT] ne "NONE"
             } else {

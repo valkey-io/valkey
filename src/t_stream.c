@@ -3453,7 +3453,11 @@ void streamForwardIteratorStart(streamForwardIterator *xi, stream *s, streamID *
     xi->has_node_bound = 0;
     xi->has_next_node = 0;
     xi->has_last_target = 0;
-    streamIteratorStart(&xi->si, s, start, NULL, 0);
+    /* Initialize the stream cursor only when the first target is known. */
+    xi->si.stream = s;
+    xi->si.start_id = start ? *start : (streamID){0, 0};
+    xi->si.lp = NULL;
+    xi->si.ri.rt = NULL;
     xi->entry.cursor = &xi->si;
     raxStart(&xi->next_ri, s->rax);
 }
@@ -3471,6 +3475,7 @@ streamForwardEntry *streamForwardIteratorFind(streamForwardIterator *xi, streamI
         xi->last_target = *target;
         xi->has_last_target = 1;
     }
+    if (!xi->si.ri.rt) streamIteratorStart(&xi->si, xi->si.stream, target, NULL, 0);
     while (1) {
         /* Matching or passing target needs no successor-node bound. Prepare
          * that bound only when the search must advance beyond this entry. */
@@ -3544,7 +3549,7 @@ int streamForwardEntryNextField(streamForwardEntry *entry,
 }
 
 void streamForwardIteratorStop(streamForwardIterator *xi) {
-    streamIteratorStop(&xi->si);
+    if (xi->si.ri.rt) streamIteratorStop(&xi->si);
     raxStop(&xi->next_ri);
 }
 

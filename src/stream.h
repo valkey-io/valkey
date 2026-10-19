@@ -61,6 +61,7 @@ typedef struct streamForwardEntry {
 /* Forward searches for sparse, strictly increasing IDs in an immutable stream.
  * Keep the iterator at the same address between Start and Stop: its entry
  * points back to the iterator's stream cursor.
+ * si.ri.rt is NULL until the first Find initializes the stream cursor.
  * entry caches a live entry, possibly beyond the last requested target.
  * next_ri tracks the successor of node_primary_id; when has_next_node is set,
  * next_primary_id bounds that node's listpack without scanning its last entry. */

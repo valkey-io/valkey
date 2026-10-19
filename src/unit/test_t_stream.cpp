@@ -144,6 +144,50 @@ TEST(StreamForwardIteratorTest, PreservesFutureEntriesAfterMissingTargets) {
     }
 }
 
+TEST(StreamForwardIteratorTest, FindsFirstTargetSeveralNodesAfterStart) {
+    for (int samefields = 0; samefields <= 1; samefields++) {
+        stream *s = buildForwardSearchStream(samefields);
+        streamID primary = {100, 0};
+        unsigned char key[sizeof(streamID)];
+        streamEncodeID(key, &primary);
+        void *value;
+        ASSERT_EQ(raxFind(s->rax, key, sizeof(key), &value), 1);
+        unsigned char *lp = (unsigned char *)value;
+        for (int node = 2; node < 10; node++) {
+            primary.ms = node * 100;
+            streamEncodeID(key, &primary);
+            raxInsert(s->rax, key, sizeof(key), lpDup(lp), NULL);
+            s->length += 4;
+        }
+
+        for (int missing = 0; missing <= 1; missing++) {
+            streamForwardIterator it;
+            streamID start = {0, 0};
+            streamForwardIteratorStart(&it, s, &start);
+            streamID target = {missing ? 899u : 900u, 0};
+            if (missing) {
+                EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+                target.ms = 900;
+            }
+            streamForwardEntry *entry = streamForwardIteratorFind(&it, &target);
+            ASSERT_NE(entry, nullptr);
+            EXPECT_EQ(entry->id.ms, 900u);
+            expectEntryField(entry, samefields ? 1 : 4, 51);
+            target.ms = 920;
+            entry = streamForwardIteratorFind(&it, &target);
+            ASSERT_NE(entry, nullptr);
+            EXPECT_EQ(entry->id.ms, 920u);
+            expectEntryField(entry, samefields ? 1 : 4, 71);
+            target.ms = 940;
+            EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+            target.ms = 950;
+            EXPECT_EQ(streamForwardIteratorFind(&it, &target), nullptr);
+            streamForwardIteratorStop(&it);
+        }
+        freeStream(s);
+    }
+}
+
 TEST(StreamForwardIteratorTest, StartsAndRestartsOnNonzeroStorage) {
     stream *empty = streamNew();
     stream *s = buildForwardSearchStream(1);
@@ -177,6 +221,13 @@ TEST(StreamForwardIteratorTest, StartsAndRestartsOnNonzeroStorage) {
     entry = streamForwardIteratorFind(&it, &target);
     ASSERT_NE(entry, nullptr);
     expectEntryField(entry, 1, 11);
+    streamForwardIteratorStop(&it);
+
+    streamForwardIteratorStart(&it, s, NULL);
+    target.ms = 100;
+    entry = streamForwardIteratorFind(&it, &target);
+    ASSERT_NE(entry, nullptr);
+    expectEntryField(entry, 1, 51);
     streamForwardIteratorStop(&it);
     freeStream(s);
     freeStream(empty);

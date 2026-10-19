@@ -1771,7 +1771,7 @@ void hsetexCommand(client *c) {
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
-    int fields_index = 0;
+    int fields_index = 2; /* Skip the command name and the key. */
     long long num_fields = 0;
     mstime_t when = EXPIRY_NONE;
     int i = 0;
@@ -2030,7 +2030,7 @@ void hgetexCommand(client *c) {
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
-    int fields_index = 0;
+    int fields_index = 2; /* Skip the command name and the key. */
     long long num_fields = -1;
     mstime_t when = EXPIRY_NONE;
     int i = 0;

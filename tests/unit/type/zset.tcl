@@ -800,6 +800,13 @@ start_server {tags {"zset"}} {
             assert_error "*not*float*" {r zrangebyscore fooz str 1}
             assert_error "*not*float*" {r zrangebyscore fooz 1 str}
             assert_error "*not*float*" {r zrangebyscore fooz 1 NaN}
+            assert_error "*not*float*" {r zrangebyscore fooz ( +inf}
+            assert_error "*not*float*" {r zrangebyscore fooz -inf (}
+            assert_error "*not*float*" {r zrangebyscore fooz {} +inf}
+            assert_error "*not*float*" {r zrangebyscore fooz -inf {}}
+            assert_error "*not*float*" {r zcount fooz ( +inf}
+            # Keep both keys in one slot so cluster mode reaches score validation.
+            assert_error "*not*float*" {r zrangestore "{fooz}dest" fooz ( +inf BYSCORE}
         }
 
         proc create_default_lex_zset {} {

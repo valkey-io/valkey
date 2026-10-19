@@ -1682,7 +1682,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
         if ((!cmd && !commandCheckExistence(fakeClient, &err)) || (cmd && !commandCheckArity(cmd, argc, &err))) {
             serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename,
-                      server.hide_user_data_from_log ? "*redacted*" : err);
+                      (server.hide_user_data_from_log && !cmd) ? "*redacted*" : err);
             sdsfree(err);
             freeClientArgv(fakeClient);
             ret = AOF_FAILED;

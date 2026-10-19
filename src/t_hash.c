@@ -1055,10 +1055,14 @@ void hashTypeConvertListpack(robj *o, int enc) {
          * in the hashtable metadata). Without it the fields would neither be
          * actively reaped nor lazily hidden after conversion, and the
          * db-level volatile-keys tracking would go stale, leaving a dangling
-         * object pointer for the active-expire cron. */
+         * object pointer for the active-expire cron. Skip validation: the
+         * first tracked entry creates the volatile set and switches the
+         * hashtable to the TTL-validating type, which would otherwise make
+         * the iterator skip every later already-expired entry, leaving it
+         * untracked. */
         if (has_volatile) {
             hashtableIterator iter;
-            hashtableInitIterator(&iter, ht, 0);
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;
             while (hashtableNext(&iter, &next)) {
                 if (entryGetExpiry(next) != EXPIRY_NONE) hashTypeTrackEntry(o, next);
@@ -1109,6 +1113,12 @@ robj *hashTypeDup(robj *o) {
         hobj = createObject(OBJ_HASH, ht);
         hobj->encoding = OBJ_ENCODING_HASHTABLE;
 
+        /* Copy logically-expired fields too, like the listpack branch does. A
+         * replica applying the same COPY ignores field expiry and keeps them,
+         * so dropping them here means their deletion is never propagated. The
+         * reaper deletes them from the copy and propagates it. */
+        bool prev_state = false;
+        hashTypeIgnoreTTL(o, true, &prev_state);
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             /* Extract a field-value pair from an original hash object.*/
@@ -1124,6 +1134,7 @@ robj *hashTypeDup(robj *o) {
                 hashTypeTrackEntry(hobj, entry);
         }
         hashTypeResetIterator(&hi);
+        hashTypeIgnoreTTL(o, prev_state, NULL);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -1782,7 +1793,7 @@ void hsetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -2040,7 +2051,7 @@ void hgetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HGET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HGET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }

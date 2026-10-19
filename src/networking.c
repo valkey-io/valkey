@@ -3958,7 +3958,15 @@ void commandProcessed(client *c) {
     if (isReplicatedClient(c)) {
         long long applied = c->repl_data->reploff - prev_offset;
         if (applied) {
-            replicationFeedStreamFromPrimaryStream(c->querybuf + c->repl_data->repl_applied, applied);
+            char *stream = c->querybuf + c->repl_data->repl_applied;
+            if (c->slot_migration_job) {
+                /* What was applied ends with a command (or EXEC), so the db
+                 * of the client is the one the proxied stream ends in. */
+                replicationFeedStreamFromSlotImport(c->repl_data->repl_applied_dbid, c->db->id, stream, applied);
+                c->repl_data->repl_applied_dbid = c->db->id;
+            } else {
+                replicationFeedStreamFromPrimaryStream(stream, applied);
+            }
             c->repl_data->repl_applied += applied;
         }
     }

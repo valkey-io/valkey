@@ -5197,6 +5197,8 @@ start_server {tags {"hash expire listpack"}} {
                 fail "Fields e1, e2 and e3 were never logically expired"
             }
             assert_encoding listpack myhash
+            set original_notify [lindex [r config get notify-keyspace-events] 1]
+            set rd [setup_single_keyspace_notification r]
 
             # The conversion registers each expiring entry in the volatile set.
             # The first one creates the set and switches the hashtable to the
@@ -5222,7 +5224,15 @@ start_server {tags {"hash expire listpack"}} {
             assert_equal 1 [r hdel myhash e1]
             assert_equal $expected_len [r hlen myhash]
             assert_equal {PONG} [r ping]
-        } {} {needs:debug}
+
+            # Active expiry reaps the three fields in one batch, which emits a
+            # single hexpired. The writes to e1 must not emit another one: that
+            # only happens when a write overwrites a field that expired but was
+            # never reaped.
+            assert_keyevent_patterns $rd myhash hset hexpired hset hexpire hpersist hdel
+            $rd close
+            r config set notify-keyspace-events $original_notify
+        } {OK} {needs:debug}
     }
 
     r config set hash-max-listpack-value $original_max_value

@@ -821,11 +821,24 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # 7 keys * 200ms/key keeps the snapshot running during the write below.
             R 2 CONFIG SET rdb-key-save-delay 200000
-            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
-            set jobname [get_job_name 2 16383]
-            wait_for_migration_field 2 $jobname state snapshotting
-            assert_equal 101 [R 2 INCRBY $16383_slot_tag:balance 1]
+            set errcode [catch {
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+                set jobname [get_job_name 2 16383]
+                wait_for_migration_field 2 $jobname state snapshotting
+                assert_equal 101 [R 2 INCRBY $16383_slot_tag:balance 1]
+            } errmsg options]
+
+            # Restore even on failure, a leaked delay slows every later test.
             R 2 CONFIG SET rdb-key-save-delay 0
+            if {$errcode} {
+                catch {R 2 CLUSTER CANCELSLOTMIGRATIONS}
+                set_debug_prevent_pause 0
+                R 2 SELECT 15
+                R 2 DEL $16383_slot_tag:balance
+                R 2 SELECT 0
+                R 2 DEL $16383_slot_tag:balance $16383_slot_tag:pad0 $16383_slot_tag:pad1 $16383_slot_tag:pad2 $16383_slot_tag:pad3 $16383_slot_tag:pad4
+                return -options $options $errmsg
+            }
 
             set_debug_prevent_pause 0
             wait_for_migration 0 16383

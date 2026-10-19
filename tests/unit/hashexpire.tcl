@@ -5341,6 +5341,39 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {} [$replica HGET myhash f1]
             assert_equal {f2 f3 f4} [lsort [$replica HKEYS myhash]]
         } {} {needs:debug}
+
+        test {COPY of a hash holding an expired-but-unreaped field keeps the replica in sync} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            $replica DEBUG SET-ACTIVE-EXPIRE 0
+
+            # A value over hash-max-listpack-value keeps the hash hashtable encoded.
+            $primary HSET myhash f1 v1 f2 [string repeat x 128]
+            $primary HPEXPIRE myhash 1 FIELDS 1 f1
+            wait_for_condition 100 10 {
+                [$primary HEXISTS myhash f1] == 0
+            } else {
+                fail "Field f1 was never logically expired on the primary"
+            }
+            assert_equal {hashtable} [$primary object encoding myhash]
+
+            # The replica ignores field expiry while applying COPY, so its copy
+            # has f1. The primary has to copy f1 too, otherwise it never
+            # propagates the deletion of f1 from the copy.
+            $primary COPY myhash mycopy
+            wait_for_ofs_sync $primary $replica
+            assert_equal 2 [$primary HLEN mycopy]
+            assert_equal [$primary HLEN mycopy] [$replica HLEN mycopy]
+
+            # The reaper deletes f1 from both hashes and propagates it.
+            $primary DEBUG SET-ACTIVE-EXPIRE 1
+            $replica DEBUG SET-ACTIVE-EXPIRE 1
+            wait_for_active_expiry $primary mycopy 1 $primary_initial_expired 2
+            wait_for_ofs_sync $primary $replica
+            assert_equal 1 [$replica HLEN mycopy]
+            assert_equal 1 [$replica HLEN myhash]
+        } {} {needs:debug}
     }
 }
 

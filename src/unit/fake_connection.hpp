@@ -37,6 +37,12 @@ typedef struct fakeConnection {
     size_t buf_size;
     size_t written;
 
+    /* If non-zero, writev accepts at most this many bytes in total and then
+     * hits a hard error on the remaining data: the state moves out of
+     * CONN_STATE_CONNECTED but the bytes already written are still reported,
+     * like TLS does when writev is split into multiple SSL_write() calls. */
+    size_t writev_fail_after;
+
     /* Read source. Once read_data is drained, the next read reports EAGAIN,
      * or EOF / a hard error if the corresponding flag is set. A hard error
      * moves the connection out of CONN_STATE_CONNECTED, which is how callers
@@ -81,6 +87,17 @@ inline int fakeConnWritev(connection *conn, const struct iovec *iov, int iovcnt)
     size_t total = 0;
     for (int i = 0; i < iovcnt; i++) {
         size_t to_write = iov[i].iov_len;
+        if (fc->writev_fail_after && total + to_write > fc->writev_fail_after) {
+            /* Write what we may, then fail on the rest. */
+            to_write = fc->writev_fail_after - total;
+            if (fc->written + to_write > fc->buf_size) to_write = fc->buf_size - fc->written;
+            memcpy(fc->buffer + fc->written, iov[i].iov_base, to_write);
+            fc->written += to_write;
+            total += to_write;
+            conn->state = CONN_STATE_ERROR;
+            conn->last_errno = EPIPE;
+            return total > 0 ? (int)total : -1;
+        }
         if (fc->written + to_write > fc->buf_size) {
             to_write = fc->buf_size - fc->written;
         }
@@ -91,6 +108,10 @@ inline int fakeConnWritev(connection *conn, const struct iovec *iov, int iovcnt)
         total += to_write;
     }
     return (int)total;
+}
+
+inline const char *fakeConnGetLastError(connection *conn) {
+    return strerror(conn->last_errno);
 }
 
 inline int fakeConnRead(connection *conn, void *buf, size_t len) {
@@ -171,6 +192,7 @@ inline ConnectionType *fakeConnType(void) {
         ct.write = fakeConnWrite;
         ct.writev = fakeConnWritev;
         ct.read = fakeConnRead;
+        ct.get_last_error = fakeConnGetLastError;
         ct.set_write_handler = fakeConnSetWriteHandler;
         ct.set_read_handler = fakeConnSetReadHandler;
         ct.postpone_update_state = fakeConnPostponeUpdateState;

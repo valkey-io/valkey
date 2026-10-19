@@ -1184,5 +1184,75 @@ start_server {tags {"tls"}} {
             close $fd
             $control_client close
         }
+
+        test {TLS: client is freed when the connection fails in the middle of a writev} {
+            # A TLS writev that fails on its last iovec, after more than
+            # NET_MAX_WRITES_PER_EVENT bytes were written, still returns a
+            # positive count. The server must detect the failed connection and
+            # free the client.
+            set control_client [valkey [srv 0 host] [srv 0 pport]]
+            set saved_copy_avoid [lindex [$control_client config get min-string-size-avoid-copy-reply] 1]
+            set saved_copy_avoid_threaded [lindex [$control_client config get min-string-size-avoid-copy-reply-threaded] 1]
+
+            # With copy avoidance, MGET of 10 x 10KB strings becomes a single
+            # encoded reply buffer, written with one writev of 31 iovecs
+            # (prefix, payload and "\r\n" for each string) totaling ~100KB.
+            $control_client config set min-string-size-avoid-copy-reply 1024
+            $control_client config set min-string-size-avoid-copy-reply-threaded 1024
+            set mget "*11\r\n\$4\r\nMGET\r\n"
+            for {set i 0} {$i < 10} {incr i} {
+                $control_client set k$i [string repeat x 10000]
+                append mget "\$2\r\nk$i\r\n"
+            }
+            set reply_len [expr {5 + 10 * (8 + 10000 + 2)}]
+
+            # Whether the large writev happens in one go depends on the socket
+            # buffers, so retry until the injected failure fired, i.e. until we
+            # got less than the full reply.
+            set injected 0
+            for {set attempt 0} {$attempt < 20 && !$injected} {incr attempt} {
+                set fd [::tls::socket [srv 0 host] [srv 0 port]]
+                fconfigure $fd -translation binary -blocking 1
+                ::tls::handshake $fd
+                fconfigure $fd -blocking 0
+                set client_port [lindex [fconfigure $fd -sockname] 2]
+
+                assert_equal OK [$control_client DEBUG TLS-WRITEV-FAIL-LAST-IOV 1]
+                puts -nonewline $fd $mget
+                flush $fd
+
+                # Read until we have the full reply, the server closes the
+                # connection, or we time out.
+                set got 0
+                set deadline [expr {[clock milliseconds] + 5000}]
+                while {$got < $reply_len && ![eof $fd] && [clock milliseconds] < $deadline} {
+                    set chunk [read $fd]
+                    if {$chunk eq ""} { after 10 }
+                    incr got [string length $chunk]
+                }
+                assert_equal OK [$control_client DEBUG TLS-WRITEV-FAIL-LAST-IOV 0]
+
+                if {$got < $reply_len} {
+                    set injected 1
+                    # Everything but the final "\r\n" was written, and then the
+                    # server must close the connection and free the client.
+                    assert_equal [expr {$reply_len - 2}] $got
+                    assert {[eof $fd]}
+                    wait_for_condition 50 100 {
+                        ![string match "*addr=127.0.0.1:$client_port *" [$control_client client list]]
+                    } else {
+                        fail "Client with a failed TLS connection was not freed"
+                    }
+                }
+                close $fd
+            }
+            assert_equal 1 $injected
+            assert_equal PONG [$control_client ping]
+
+            $control_client config set min-string-size-avoid-copy-reply $saved_copy_avoid
+            $control_client config set min-string-size-avoid-copy-reply-threaded $saved_copy_avoid_threaded
+            for {set i 0} {$i < 10} {incr i} { $control_client del k$i }
+            $control_client close
+        }
     }
 }

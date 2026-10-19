@@ -2483,6 +2483,7 @@ void initServerConfig(void) {
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
     server.debug_force_tls_write_error = 0;
+    server.debug_tls_writev_fail_last_iov = 0;
     server.dict_resizing = 1;
     server.import_mode = 0;
 

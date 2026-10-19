@@ -551,7 +551,8 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED 22
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED 23
 #define VALKEYMODULE_EVENT_KEY_MEMORY_DELTA 24
-#define _VALKEYMODULE_EVENT_NEXT 25 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA 25
+#define _VALKEYMODULE_EVENT_NEXT 26 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -615,7 +616,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1},
                                ValkeyModuleEvent_CommandResultRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 1},
                                ValkeyModuleEvent_CommandResultACLRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, 1},
-                               ValkeyModuleEvent_KeyMemoryDelta = {VALKEYMODULE_EVENT_KEY_MEMORY_DELTA, 1};
+                               ValkeyModuleEvent_KeyMemoryDelta = {VALKEYMODULE_EVENT_KEY_MEMORY_DELTA, 1},
+                               ValkeyModuleEvent_PubSubSubscriptionDelta = {VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -917,6 +919,17 @@ typedef struct ValkeyModuleKeyMemoryDelta {
 } ValkeyModuleKeyMemoryDeltaV1;
 
 #define ValkeyModuleKeyMemoryDelta ValkeyModuleKeyMemoryDeltaV1
+
+#define VALKEYMODULE_PUBSUBSUBSCRIPTIONDELTA_VERSION 1
+typedef struct ValkeyModulePubSubSubscriptionDelta {
+    uint64_t version;            /* Version of this structure for ABI compat. */
+    ValkeyModuleString *channel; /* Channel name, only valid during the callback. */
+    uint64_t old_subscribers;    /* Number of subscribers before the change. */
+    uint64_t new_subscribers;    /* Number of subscribers after the change. */
+    int32_t sharded;             /* 1 for a shard channel, 0 otherwise. */
+} ValkeyModulePubSubSubscriptionDeltaV1;
+
+#define ValkeyModulePubSubSubscriptionDelta ValkeyModulePubSubSubscriptionDeltaV1
 
 #define VALKEYMODULE_ATOMICSLOTMIGRATIONINFO_INITIALIZER_V1 {.version = 1}
 

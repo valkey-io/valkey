@@ -69,7 +69,8 @@ endif
 # OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
 ifeq ($(uname_S),Darwin)
 ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
-	SHOBJ_LDFLAGS+= -L "$(shell xcrun --sdk macosx --show-sdk-path)/usr/lib" -lsystem
+	MACOS_SDK_PATH := $(shell xcrun --sdk macosx --show-sdk-path)
+	SHOBJ_LDFLAGS+= -L "$(MACOS_SDK_PATH)/usr/lib" -lsystem
 endif
 endif
 

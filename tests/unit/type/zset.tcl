@@ -800,6 +800,22 @@ start_server {tags {"zset"}} {
             assert_error "*not*float*" {r zrangebyscore fooz str 1}
             assert_error "*not*float*" {r zrangebyscore fooz 1 str}
             assert_error "*not*float*" {r zrangebyscore fooz 1 NaN}
+            assert_error "*not*float*" {r zrangebyscore fooz ( +inf}
+            assert_error "*not*float*" {r zrangebyscore fooz -inf (}
+            assert_error "*not*float*" {r zrangebyscore fooz {} +inf}
+            assert_error "*not*float*" {r zrangebyscore fooz -inf {}}
+            assert_error "*not*float*" {r zcount fooz ( +inf}
+            # Keep both keys in one slot so cluster mode reaches score validation.
+            assert_error "*not*float*" {r zrangestore "{fooz}dest" fooz ( +inf BYSCORE}
+        }
+
+        test "ZCOUNT/ZRANGEBYSCORE hex and leading-whitespace bounds - $encoding" {
+            create_default_zset
+            assert_equal 3 [r zcount zset 0x0 0x3]
+            assert_equal {b c d} [r zrangebyscore zset 0x0 0x3]
+            assert_equal {c d} [r zrangebyscore zset (0x1 0x3]
+            assert_equal 3 [r zcount zset " 0" " 3"]
+            assert_equal {c d} [r zrangebyscore zset "( 1" 3]
         }
 
         proc create_default_lex_zset {} {
@@ -843,6 +859,28 @@ start_server {tags {"zset"}} {
             assert_equal {} [r zrangebylex zset - \[aaaa]
             assert_equal {} [r zrevrangebylex zset \[elez \[elex]
             assert_equal {} [r zrevrangebylex zset (hill (omega]
+        }
+
+        test "ZRANGEBYSCORE/ZRANGEBYLEX with a negative or past-the-end LIMIT offset - $encoding" {
+            create_default_zset
+            assert_equal {} [r zrangebyscore zset -inf +inf LIMIT -1 10]
+            assert_equal {} [r zrevrangebyscore zset +inf -inf LIMIT -1 10]
+            assert_equal {} [r zrange zset -inf +inf BYSCORE LIMIT -2 10]
+            assert_equal {} [r zrange zset +inf -inf BYSCORE REV LIMIT -2 10]
+            assert_equal {g} [r zrangebyscore zset -inf +inf LIMIT 6 10]
+            assert_equal {} [r zrangebyscore zset -inf +inf LIMIT 7 10]
+            assert_equal {} [r zrevrangebyscore zset +inf -inf LIMIT 100 10]
+            create_default_lex_zset
+            assert_equal {} [r zrangebylex zset - + LIMIT -1 10]
+            assert_equal {} [r zrevrangebylex zset + - LIMIT -1 10]
+            assert_equal {} [r zrange zset - + BYLEX LIMIT -2 10]
+            assert_equal {} [r zrange zset + - BYLEX REV LIMIT -2 10]
+            assert_equal {omega} [r zrangebylex zset - + LIMIT 8 10]
+            assert_equal {} [r zrangebylex zset - + LIMIT 9 10]
+            assert_equal {} [r zrevrangebylex zset + - LIMIT 100 10]
+            assert_equal 0 [r zrangestore dst{zset} zset - + BYLEX LIMIT -1 10]
+            assert_equal 0 [r zrangestore dst{zset} zset - + BYLEX LIMIT 100 10]
+            assert_equal 0 [r exists dst{zset}]
         }
 
         test "ZLEXCOUNT advanced - $encoding" {
@@ -919,18 +957,21 @@ start_server {tags {"zset"}} {
                 r zadd zset 0 [format m%03d $i]
             }
             assert_encoding $encoding zset
+            # The LIMIT offset is parsed into a long, so the largest accepted
+            # offset is LONG_MAX, which is narrower on 32-bit builds.
+            set long_max [expr {(1 << ([s arch_bits] - 1)) - 1}]
             assert_equal {m100 m101 m102} [r zrangebylex zset - + LIMIT 100 3]
             assert_equal {m115 m116 m117 m118 m119} [r zrangebylex zset \[m010 (m120 LIMIT 105 10]
             assert_equal {} [r zrangebylex zset \[m010 (m120 LIMIT 110 10]
             assert_equal {m127} [r zrangebylex zset - + LIMIT 127 5]
             assert_equal {} [r zrangebylex zset - + LIMIT 128 5]
-            assert_equal {} [r zrangebylex zset \[m001 + LIMIT 9223372036854775807 1]
+            assert_equal {} [r zrangebylex zset \[m001 + LIMIT $long_max 1]
             assert_equal {m027 m026 m025} [r zrevrangebylex zset + - LIMIT 100 3]
             assert_equal {m014 m013 m012 m011 m010} [r zrevrangebylex zset (m120 \[m010 LIMIT 105 10]
             assert_equal {} [r zrevrangebylex zset (m120 \[m010 LIMIT 110 10]
             assert_equal {m000} [r zrevrangebylex zset + - LIMIT 127 5]
             assert_equal {} [r zrevrangebylex zset + - LIMIT 128 5]
-            assert_equal {} [r zrevrangebylex zset (m120 - LIMIT 9223372036854775807 1]
+            assert_equal {} [r zrevrangebylex zset (m120 - LIMIT $long_max 1]
             assert_equal 5 [r zrangestore dst{zset} zset \[m010 (m120 BYLEX LIMIT 105 10]
             assert_equal {m115 m116 m117 m118 m119} [r zrange dst{zset} 0 -1]
             r del dst{zset}

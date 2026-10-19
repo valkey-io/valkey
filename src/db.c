@@ -2783,6 +2783,11 @@ int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysR
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
 }
 
+int msetexGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    return genericGetKeys(0, 1, 2, 2, argv, argc, result);
+}
+
 int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(1, 2, 3, 1, argv, argc, result);

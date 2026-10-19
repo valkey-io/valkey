@@ -2425,6 +2425,66 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_cluster_state ok
         }
     }
+
+    # Writes during snapshot and during incremental forwarding must reach the
+    # target. MSETEX is invisible to that path unless its keys are discovered.
+    test "MSETEX writes survive atomic slot migration" {
+        assert_does_not_resync {
+            set slot 16383
+            set tag $16383_slot_tag
+            ensure_slot_on_node 2 $slot
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+
+            assert_equal "OK" [R 2 SET $tag:oldkey old]
+            # 30 keys * 100ms keeps the child in snapshotting while we write.
+            populate 30 "$tag:fill:" 100 -2
+
+            set old_delay [lindex [R 2 CONFIG GET rdb-key-save-delay] 1]
+            R 2 CONFIG SET rdb-key-save-delay 100000
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE $slot $slot NODE $node0_id]
+            set jobname [get_job_name 2 $slot]
+            wait_for_migration_field 2 $jobname state snapshotting
+
+            assert_equal 1 [R 2 MSETEX 1 $tag:oldkey new]
+            assert_equal 1 [R 2 MSETEX 1 $tag:newkey created EX 1000]
+            assert_equal "OK" [R 2 SET $tag:control control]
+            R 2 CONFIG SET rdb-key-save-delay $old_delay
+
+            wait_for_migration 0 $slot 300
+            assert_equal new [R 0 GET $tag:oldkey]
+            assert_equal created [R 0 GET $tag:newkey]
+            assert_morethan [R 0 PTTL $tag:newkey] 0
+            assert_equal control [R 0 GET $tag:control]
+            assert_equal 0 [R 2 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal 33 [R 0 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal "success" [dict get [get_migration_by_name 0 $jobname] state]
+            assert_equal "success" [dict get [get_migration_by_name 2 $jobname] state]
+
+            set_debug_prevent_pause 1
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE $slot $slot NODE $node2_id]
+            set jobname [get_job_name 0 $slot]
+            wait_for_migration_field 0 $jobname state waiting-to-pause
+
+            assert_equal 1 [R 0 MSETEX 1 $tag:oldkey newer]
+            assert_equal 1 [R 0 MSETEX 1 $tag:incrkey forwarded EX 1000]
+            assert_equal "OK" [R 0 SET $tag:control2 control2]
+            set_debug_prevent_pause 0
+
+            wait_for_migration 2 $slot 300
+            assert_equal newer [R 2 GET $tag:oldkey]
+            assert_equal forwarded [R 2 GET $tag:incrkey]
+            assert_morethan [R 2 PTTL $tag:incrkey] 0
+            assert_equal control2 [R 2 GET $tag:control2]
+            assert_equal 0 [R 0 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal 35 [R 2 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal "success" [dict get [get_migration_by_name 2 $jobname] state]
+            assert_equal "success" [dict get [get_migration_by_name 0 $jobname] state]
+
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+        }
+    }
 }
 
 start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {

@@ -809,6 +809,15 @@ start_server {tags {"zset"}} {
             assert_error "*not*float*" {r zrangestore "{fooz}dest" fooz ( +inf BYSCORE}
         }
 
+        test "ZCOUNT/ZRANGEBYSCORE hex and leading-whitespace bounds - $encoding" {
+            create_default_zset
+            assert_equal 3 [r zcount zset 0x0 0x3]
+            assert_equal {b c d} [r zrangebyscore zset 0x0 0x3]
+            assert_equal {c d} [r zrangebyscore zset (0x1 0x3]
+            assert_equal 3 [r zcount zset " 0" " 3"]
+            assert_equal {c d} [r zrangebyscore zset "( 1" 3]
+        }
+
         proc create_default_lex_zset {} {
             create_zset zset {0 alpha 0 bar 0 cool 0 down
                               0 elephant 0 foo 0 great 0 hill

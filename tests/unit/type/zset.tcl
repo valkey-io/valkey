@@ -957,18 +957,21 @@ start_server {tags {"zset"}} {
                 r zadd zset 0 [format m%03d $i]
             }
             assert_encoding $encoding zset
+            # The LIMIT offset is parsed into a long, so the largest accepted
+            # offset is LONG_MAX, which is narrower on 32-bit builds.
+            set long_max [expr {(1 << ([s arch_bits] - 1)) - 1}]
             assert_equal {m100 m101 m102} [r zrangebylex zset - + LIMIT 100 3]
             assert_equal {m115 m116 m117 m118 m119} [r zrangebylex zset \[m010 (m120 LIMIT 105 10]
             assert_equal {} [r zrangebylex zset \[m010 (m120 LIMIT 110 10]
             assert_equal {m127} [r zrangebylex zset - + LIMIT 127 5]
             assert_equal {} [r zrangebylex zset - + LIMIT 128 5]
-            assert_equal {} [r zrangebylex zset \[m001 + LIMIT 9223372036854775807 1]
+            assert_equal {} [r zrangebylex zset \[m001 + LIMIT $long_max 1]
             assert_equal {m027 m026 m025} [r zrevrangebylex zset + - LIMIT 100 3]
             assert_equal {m014 m013 m012 m011 m010} [r zrevrangebylex zset (m120 \[m010 LIMIT 105 10]
             assert_equal {} [r zrevrangebylex zset (m120 \[m010 LIMIT 110 10]
             assert_equal {m000} [r zrevrangebylex zset + - LIMIT 127 5]
             assert_equal {} [r zrevrangebylex zset + - LIMIT 128 5]
-            assert_equal {} [r zrevrangebylex zset (m120 - LIMIT 9223372036854775807 1]
+            assert_equal {} [r zrevrangebylex zset (m120 - LIMIT $long_max 1]
             assert_equal 5 [r zrangestore dst{zset} zset \[m010 (m120 BYLEX LIMIT 105 10]
             assert_equal {m115 m116 m117 m118 m119} [r zrange dst{zset} 0 -1]
             r del dst{zset}

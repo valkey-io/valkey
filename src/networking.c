@@ -969,8 +969,8 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         const char *err = s;
         int err_len = (int)len;
         if (server.hide_user_data_from_log) {
-            err = objectGetVal(shared.redacted);
-            err_len = (int)sdslen(err);
+            err = "*redacted*";
+            err_len = (int)strlen(err);
         }
         serverLog(LL_WARNING,
                   "== CRITICAL == This %s is sending an error "

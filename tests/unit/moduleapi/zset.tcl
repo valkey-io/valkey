@@ -141,6 +141,9 @@ start_server {tags {"modules"}} {
             assert_equal {d c b END} [r zset.walk k score-last 2 4 ppp]
             assert_equal {d c b END} [r zset.walk lex lex-last \[b \[d ppp]
             assert_equal {d END c} [r zset.walk k score-last 2 4 np]
+            # Same, with the range reaching both ends of the key.
+            assert_equal {a b c d e END d c b a END b} [r zset.walk k score -inf +inf nnnnnpppppn]
+            assert_equal {a b c d e END d c b a END b} [r zset.walk lex lex - + nnnnnpppppn]
         }
 
         test "Module zset range end-reached flag follows the last step - $enc" {

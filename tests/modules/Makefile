@@ -33,6 +33,7 @@ TEST_MODULES = \
     propagate.so \
     misc.so \
     hooks.so \
+    keymemorydelta.so \
     blockonkeys.so \
     blockonbackground.so \
     scan.so \

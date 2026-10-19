@@ -12,6 +12,7 @@
 #include "monotonic.h"
 #include "mutexqueue.h"
 #include "server.h"
+#include "key_memory_delta.h"
 
 
 static bool receiveItemsBackFromOneIterator(bgIterator *it);
@@ -1481,7 +1482,11 @@ static void processReturnOfItemToMainThread(bgIterator *it, bgIteratorItem *item
                 decrRefCount(key);
             }
             // resumeRehashing must be called before decrementEntryInuse, since decrementEntryInuse can free
-            if (item->u.dbe.is_rehashing_paused) resumeRehashing(item->u.dbe.de);
+            if (item->u.dbe.is_rehashing_paused) {
+                /* Resuming may shrink the value's hashtable. */
+                keyMemoryDeltaTrackResize(item->dbid, item->u.dbe.de);
+                resumeRehashing(item->u.dbe.de);
+            }
             decrementEntryInuse(item->u.dbe.de);
         }
         break;

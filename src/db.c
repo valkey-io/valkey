@@ -30,6 +30,7 @@
 #include "server.h"
 #include "listpack.h"
 #include "hotkeys.h"
+#include "key_memory_delta.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -122,6 +123,8 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
 
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_hits++;
         /* TODO: Use separate hits stats for WRITE */
+
+        keyMemoryDeltaTrackLookup(db, key, val, flags);
     } else {
         if (!(flags & (LOOKUP_NONOTIFY | LOOKUP_WRITE))) notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
@@ -221,6 +224,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     } else {
         debugServerAssertWithInfo(NULL, key, kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key)) == NULL);
     }
+    keyMemoryDeltaTrackKey(db, key, NULL);
 
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
@@ -343,6 +347,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     serverAssertWithInfo(NULL, key, oldref != NULL);
     robj *old = *oldref;
     robj *new;
+    keyMemoryDeltaTrackKey(db, key, old);
 
     if (overwrite) {
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -500,6 +505,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         hotkeysRecordDelete(key, db->id, flags);
 
         robj *val = *ref;
+        keyMemoryDeltaTrackKey(db, key, val);
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
         incrRefCount(val);
@@ -707,6 +713,9 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         clusterHandleFlushDuringSlotMigration();
     }
 
+    /* Modules learn about the flush from the events above, not key by key. */
+    keyMemoryDeltaDiscard(server.db, dbnum);
+
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
@@ -733,6 +742,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
 /* Discard tempDb array. It's always async. */
 void discardTempDb(serverDb **tempDb) {
+    keyMemoryDeltaDiscard(tempDb, -1);
     /* Release temp DBs. */
     emptyDbStructure(tempDb, -1, 1, NULL);
     for (int i = 0; i < server.dbnum; i++) {
@@ -1848,6 +1858,7 @@ int dbSwapDatabases(int id1, int id2) {
     db2->expires = aux.expires;
     db2->keys_with_volatile_items = aux.keys_with_volatile_items;
     copyDbExpiry(db2, &aux);
+    keyMemoryDeltaSwapDb(db1, db2);
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1867,6 +1878,10 @@ int dbSwapDatabases(int id1, int id2) {
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
 void swapMainDbWithTempDb(serverDb **tempDb) {
+    /* The databases keep their addresses but swap their contents, and the
+     * replacement is reported to modules as a whole (ReplAsyncLoad). */
+    keyMemoryDeltaDiscard(server.db, -1);
+    keyMemoryDeltaDiscard(tempDb, -1);
     for (int i = 0; i < server.dbnum; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
@@ -2136,6 +2151,9 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         /* Process in batches to avoid large stack allocations. */
         unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
         robj *entries[EXPIRE_BULK_LIMIT];
+        /* The fields are deleted before the execution unit below starts. Even
+         * when none expired, the volatile set may have been restructured. */
+        keyMemoryDeltaTrackValue(db, o);
         size_t expired = hashTypeDeleteExpiredFields(o, now, batch_size, entries);
         if (expired == 0) break;
 

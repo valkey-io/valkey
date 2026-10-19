@@ -550,7 +550,8 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE 21
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED 22
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED 23
-#define _VALKEYMODULE_EVENT_NEXT 24 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_KEY_MEMORY_DELTA 24
+#define _VALKEYMODULE_EVENT_NEXT 25 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -613,7 +614,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_CommandResultSuccess = {VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS, 1},
                                ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1},
                                ValkeyModuleEvent_CommandResultRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 1},
-                               ValkeyModuleEvent_CommandResultACLRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, 1};
+                               ValkeyModuleEvent_CommandResultACLRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, 1},
+                               ValkeyModuleEvent_KeyMemoryDelta = {VALKEYMODULE_EVENT_KEY_MEMORY_DELTA, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -902,6 +904,19 @@ typedef struct ValkeyModuleCommandResultInfo {
 } ValkeyModuleCommandResultInfoV1;
 
 #define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1
+
+#define VALKEYMODULE_KEYMEMORYDELTA_VERSION 1
+typedef struct ValkeyModuleKeyMemoryDelta {
+    uint64_t version;        /* Version of this structure for ABI compat. */
+    ValkeyModuleString *key; /* Key name, only valid during the callback. */
+    uint64_t old_bytes;      /* Memory usage before the execution unit. */
+    uint64_t new_bytes;      /* Memory usage after the execution unit. */
+    int32_t dbnum;           /* Database of the key. */
+    int32_t old_exists;      /* Non-zero if the key existed before. */
+    int32_t new_exists;      /* Non-zero if the key exists after. */
+} ValkeyModuleKeyMemoryDeltaV1;
+
+#define ValkeyModuleKeyMemoryDelta ValkeyModuleKeyMemoryDeltaV1
 
 #define VALKEYMODULE_ATOMICSLOTMIGRATIONINFO_INITIALIZER_V1 {.version = 1}
 

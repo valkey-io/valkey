@@ -39,6 +39,7 @@
  */
 
 #include "server.h"
+#include "key_memory_delta.h"
 #include "ordered_index.h"
 #include "hashtable.h"
 #include "eval.h"
@@ -682,6 +683,9 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         ob = newob;
     }
 
+    /* Defragmenting a hashtable resumes its rehashing, which may shrink it. */
+    keyMemoryDeltaTrackResize(ctx->dbid, ob);
+
     if (ob->type == OBJ_STRING) {
         /* Already handled in activeDefragStringOb. */
     } else if (ob->type == OBJ_LIST) {
@@ -776,6 +780,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
             return 0;
         }
 
+        keyMemoryDeltaTrackResize(dbid, ob); /* See defragKey(). */
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
         } else if (ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE) {

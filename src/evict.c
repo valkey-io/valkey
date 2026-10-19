@@ -31,6 +31,7 @@
  */
 
 #include "server.h"
+#include "key_memory_delta.h"
 #include "bio.h"
 #include "script.h"
 #include "cluster_migrateslots.h"
@@ -398,6 +399,10 @@ static long long evictSingleKey(serverDb *db, robj *keyobj, int slot) {
      * We don't incr the dirty counter since we don't want to propagate
      * the read command on key eviction. */
     enterExecutionUnit(1, 0);
+    /* Memory used to track the key for key memory delta events must not be
+     * counted against the memory freed, so track it before measuring. Checked
+     * first so that the lookup is skipped when nobody is subscribed. */
+    if (keyMemoryDeltaEnabled()) keyMemoryDeltaTrackSlow(db, objectGetVal(keyobj), dbFind(db, objectGetVal(keyobj)));
     delta = (long long)zmalloc_used_memory();
     latencyStartMonitor(eviction_latency);
     int deleted = dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);

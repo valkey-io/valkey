@@ -32,6 +32,7 @@
 #include "listpack.h"
 #include "sds.h"
 #include "server.h"
+#include "key_memory_delta.h"
 #include "ordered_index.h"
 #include "bio.h"
 #include "rio.h"
@@ -1692,7 +1693,12 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (cmd->proc == multiCommand) valid_before_multi = valid_up_to;
 
-        /* Run the command in the context of a fake client */
+        /* Run the command in the context of a fake client, in an execution
+         * unit of its own as call() would, which the commands of a transaction
+         * share. Modules can't add post notification jobs while loading, and
+         * nothing is propagated, so of the operations done when a unit ends,
+         * only the delivery of key memory deltas is needed, right after. */
+        enterExecutionUnit(1, 0);
         if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
             /* Note: we don't have to attempt calling evalGetCommandFlags,
              * since this is AOF, the checks in processCommand are not made
@@ -1701,6 +1707,8 @@ int loadSingleAppendOnlyFile(char *filename) {
         } else {
             cmd->proc(fakeClient);
         }
+        exitExecutionUnit();
+        if (unlikely(keyMemoryDeltaHasPending())) keyMemoryDeltaFlush();
 
         /* The fake client should not have a reply */
         serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);

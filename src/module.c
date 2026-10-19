@@ -432,6 +432,7 @@ static int commandResultSuccessListeners = 0;     /* Count of modules listening 
 static int commandResultFailureListeners = 0;     /* Count of modules listening for command result failure. */
 static int commandResultRejectedListeners = 0;    /* Count of modules listening for command result rejected. */
 static int commandResultACLRejectedListeners = 0; /* Count of modules listening for command result ACL rejected. */
+static int pubsubSubscriptionDeltaListeners = 0;  /* Count of modules listening for subscription changes. */
 
 /* Data structures related to the module users */
 
@@ -12693,6 +12694,7 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED */
     VALKEYMODULE_KEYMEMORYDELTA_VERSION,           /* VALKEYMODULE_EVENT_KEY_MEMORY_DELTA */
+    VALKEYMODULE_PUBSUBSUBSCRIPTIONDELTA_VERSION,  /* VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -13153,6 +13155,26 @@ static uint64_t moduleEventVersions[] = {
  *         int32_t old_exists;      // Non-zero if the key existed before.
  *         int32_t new_exists;      // Non-zero if the key exists after.
  *
+ * * ValkeyModuleEvent_PubSubSubscriptionDelta
+ *
+ *     Called when the number of clients subscribed to a channel or to a shard
+ *     channel changes. The callback runs synchronously from within SUBSCRIBE,
+ *     SSUBSCRIBE, UNSUBSCRIBE, SUNSUBSCRIBE and RESET, when a client is freed
+ *     (including clients freed asynchronously, outside of any command), and
+ *     when the shard channels of a slot are removed because the node no longer
+ *     serves it. Pattern subscriptions are not reported. The callback must not
+ *     try to change subscriptions.
+ *
+ *     The data pointer can be casted to a ValkeyModulePubSubSubscriptionDelta
+ *     structure with the following fields:
+ *
+ *         ValkeyModuleString *channel; // Channel name, only valid during the
+ *                                      // callback: use ValkeyModule_HoldString()
+ *                                      // to keep it.
+ *         uint64_t old_subscribers;    // Number of subscribers before.
+ *         uint64_t new_subscribers;    // Number of subscribers after.
+ *         int32_t sharded;             // 1 for a shard channel, 0 otherwise.
+ *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
  * is given then VALKEYMODULE_ERR is returned. */
@@ -13189,6 +13211,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
                 commandResultACLRejectedListeners--;
             else if (event.id == VALKEYMODULE_EVENT_KEY_MEMORY_DELTA)
                 key_memory_delta_listeners--;
+            else if (event.id == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA)
+                pubsubSubscriptionDeltaListeners--;
         } else {
             el->callback = callback; /* Update the callback with the new one. */
         }
@@ -13213,6 +13237,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         commandResultACLRejectedListeners++;
     else if (event.id == VALKEYMODULE_EVENT_KEY_MEMORY_DELTA)
         key_memory_delta_listeners++;
+    else if (event.id == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA)
+        pubsubSubscriptionDeltaListeners++;
     return VALKEYMODULE_OK;
 }
 
@@ -13244,6 +13270,7 @@ int VM_IsSubEventSupported(ValkeyModuleEvent event, int64_t subevent) {
     case VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED:
         return subevent < 5; /* ValkeyModuleACLLogEntryReason has 5 values (0-4) */
     case VALKEYMODULE_EVENT_KEY_MEMORY_DELTA: return subevent == 0;
+    case VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA: return subevent == 0;
     default: break;
     }
     return 0;
@@ -13342,6 +13369,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                 ValkeyModuleKeyMemoryDeltaV1 *info = data;
                 selectDb(ctx.client, info->dbnum);
                 moduledata = data;
+            } else if (eid == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA) {
+                moduledata = data;
             }
 
             el->module->in_hook++;
@@ -13378,6 +13407,8 @@ void moduleUnsubscribeAllServerEvents(ValkeyModule *module) {
                 commandResultACLRejectedListeners--;
             else if (el->event.id == VALKEYMODULE_EVENT_KEY_MEMORY_DELTA)
                 key_memory_delta_listeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA)
+                pubsubSubscriptionDeltaListeners--;
             listDelNode(ValkeyModule_EventListeners, ln);
             zfree(el);
         }
@@ -13436,6 +13467,16 @@ void moduleNotifyKeyMemoryDelta(int dbid, sds key, size_t old_bytes, size_t new_
     ValkeyModuleKeyMemoryDeltaV1 info = {VALKEYMODULE_KEYMEMORYDELTA_VERSION, &keyobj, old_bytes, new_bytes, dbid,
                                          old_exists, new_exists};
     moduleFireServerEvent(VALKEYMODULE_EVENT_KEY_MEMORY_DELTA, 0, &info);
+}
+
+/* Fire the Pub/Sub subscription delta event for a channel whose number of
+ * subscribers changed. */
+void moduleNotifyPubSubSubscriptionDelta(robj *channel, size_t old_subscribers, size_t new_subscribers, int sharded) {
+    if (pubsubSubscriptionDeltaListeners == 0) return;
+    debugServerAssert(sdsEncodedObject(channel));
+    ValkeyModulePubSubSubscriptionDeltaV1 info = {VALKEYMODULE_PUBSUBSUBSCRIPTIONDELTA_VERSION, channel,
+                                                  old_subscribers, new_subscribers, sharded};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA, 0, &info);
 }
 
 /* Return the free_effort of the module, it will automatically choose to call

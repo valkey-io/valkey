@@ -1583,7 +1583,7 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         assert_equal 0 [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack]
 
         r DEBUG reply-blocking-resume aof
-    }
+    } undefined {logreqres:skip} ;# The client is closed mid-EXEC, so its EXEC reply is truncated in the req-res log.
 }
 
 start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {

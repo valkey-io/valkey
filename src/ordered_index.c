@@ -179,10 +179,57 @@ unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long sta
     return fbtreeDeleteRangeByRank((fbtreeIndex *)oi, start, end, rangeDeleteCallback, &args);
 }
 
+/* True if the index holds more than one score, so lex matches may not be contiguous. */
+static bool hasMixedScores(fbtreeIndex *fbt) {
+    return memcmp(fbtreePeekMin(fbt), fbtreePeekMax(fbt), SCORE_SIZE) != 0;
+}
+
+/* Rank range of a lex range on a mixed-score index, matching the listpack: the
+ * run from the first element >= min up to the first element after it > max.
+ * Returns false if the range is empty. O(N). */
+static bool lexRangeRanksMixedScores(fbtreeIndex *fbt, const_sds min, const_sds max, bool min_ex, bool max_ex, unsigned long *start, unsigned long *end) {
+    zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
+    int cmp = zsetLexCompare(min, sdslen(min), (sds)max);
+    if (cmp > 0 || (cmp == 0 && (min_ex || max_ex))) return false;
+
+    const char *ele;
+    size_t len;
+    orderedIndexItemGetElement((const OrderedIndexItem *)fbtreePeekMax(fbt), &ele, &len);
+    if (!zsetLexGteMin(ele, len, &range)) return false;
+    orderedIndexItemGetElement((const OrderedIndexItem *)fbtreePeekMin(fbt), &ele, &len);
+    if (!zsetLexLteMax(ele, len, &range)) return false;
+
+    fbtreeIterator iter;
+    fbtreeInitIterator(&iter, fbt);
+    bool found = false;
+    unsigned long rank = 0;
+    const_sds item;
+    while ((item = fbtreeNext(&iter)) != NULL) {
+        orderedIndexItemGetElement((const OrderedIndexItem *)item, &ele, &len);
+        if (found) {
+            if (!zsetLexLteMax(ele, len, &range)) break;
+            *end = rank;
+        } else if (zsetLexGteMin(ele, len, &range)) {
+            if (!zsetLexLteMax(ele, len, &range)) break;
+            found = true;
+            *start = *end = rank;
+        }
+        rank++;
+    }
+    fbtreeResetIterator(&iter);
+    return found;
+}
+
 unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata) {
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
     if (fbtreeLength(fbt) == 0) return 0;
     if (max == shared.minstring || min == shared.maxstring) return 0;
+
+    if (hasMixedScores(fbt)) {
+        unsigned long start, end;
+        if (!lexRangeRanksMixedScores(fbt, min, max, min_ex, max_ex, &start, &end)) return 0;
+        return orderedIndexDeleteRangeByIndex(oi, start, end, on_delete, privdata);
+    }
 
     const_sds first = fbtreePeekMin(fbt);
     if (!first) return 0;
@@ -286,6 +333,11 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
 
     if (min == shared.minstring && max == shared.maxstring) return len;
     if (max == shared.minstring || min == shared.maxstring) return 0;
+
+    if (hasMixedScores(fbt)) {
+        unsigned long start, end;
+        return lexRangeRanksMixedScores(fbt, min, max, min_ex, max_ex, &start, &end) ? end - start + 1 : 0;
+    }
 
     const_sds first = fbtreePeekMin(fbt);
     if (!first) return 0;

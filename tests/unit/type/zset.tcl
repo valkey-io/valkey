@@ -910,6 +910,37 @@ start_server {tags {"zset"}} {
             assert_equal {b} [r zrange zset 0 -1]
         }
 
+        test "ZLEXCOUNT/ZREMRANGEBYLEX with mixed scores - $encoding" {
+            # The range is the run in score order that starts at the first
+            # element >= min and stops at the first element after it > max.
+            foreach {members min max count left} {
+                {1 a 2 b 0 c} {[a} + 3 {}
+                {1 a 2 b 0 c} - + 3 {}
+                {1 a 2 b 0 c} {[a} {[a} 0 {c a b}
+                {1 a 2 b 0 c} {(a} + 3 {}
+                {1 a 2 b 0 c} - {[b} 0 {c a b}
+                {1 a 2 b 0 c} {[b} {[c} 3 {}
+                {1 a 2 b 0 c} {(c} + 0 {c a b}
+                {1 a 1 b 2 c 2 d 3 e} - + 5 {}
+                {1 a 1 b 2 c 2 d 3 e} {[b} {[d} 3 {a e}
+                {1 a 1 b 2 c 2 d 3 e} {(b} {(e} 2 {a b e}
+                {0 b 0 d 1 a 1 c 2 e} {[a} {[c} 1 {d a c e}
+                {0 b 0 d 1 a 1 c 2 e} {[c} + 4 {b}
+                {0 b 0 d 1 a 1 c 2 e} {(b} {(e} 3 {b e}
+                {0 b 0 d 1 a 1 c 2 e} - {(d} 1 {d a c e}
+                {0 b 0 d 1 a 1 c 2 e} {[e} + 1 {b d a c}
+                {0 b 0 d 1 a 1 c 2 e} {[f} + 0 {b d a c e}
+                {0 b 0 d 1 a 1 c 2 e} - {[a} 0 {b d a c e}
+            } {
+                r del zset
+                r zadd zset {*}$members
+                assert_encoding $encoding zset
+                assert_equal $count [r zlexcount zset $min $max]
+                assert_equal $count [r zremrangebylex zset $min $max]
+                assert_equal $left [r zrange zset 0 -1]
+            }
+        }
+
         test "ZRANGEBYLEX/ZREVRANGEBYLEX crossed sentinel bounds are empty - $encoding" {
             create_default_lex_zset
             assert_equal {} [r zrangebylex zset + \[c]
@@ -3979,6 +4010,30 @@ start_server {tags {"zset" "cluster:skip"}} {
             assert_equal 3 [r zlexcount zset "\[b" "\[d"]
             assert_equal 1 [r zlexcount zset "(b" "(d"]
             assert_equal 0 [r zlexcount zset "\[x" "\[z"]
+        }
+    }
+
+    test {ZLEXCOUNT/ZREMRANGEBYLEX agree across encodings on mixed-score sets} {
+        # ZREMRANGEBYLEX is replicated as is, so the encodings must agree.
+        set letters {a b c d e f}
+        set bounds {}
+        foreach l $letters { lappend bounds "\[$l" "($l" }
+        lappend bounds - +
+        for {set i 0} {$i < 500} {incr i} {
+            set members {}
+            for {set j 0} {$j < 1 + [randomInt 10]} {incr j} {
+                lappend members [randomInt 4] [lindex $letters [randomInt 6]][lindex $letters [randomInt 6]]
+            }
+            set min [lindex $bounds [randomInt [llength $bounds]]]
+            set max [lindex $bounds [randomInt [llength $bounds]]]
+            r del zlp zbt
+            with_config zset-max-ziplist-entries 128 { r zadd zlp {*}$members }
+            with_config zset-max-ziplist-entries 0 { r zadd zbt {*}$members }
+            assert_encoding listpack zlp
+            assert_encoding btree zbt
+            assert_equal [r zlexcount zlp $min $max] [r zlexcount zbt $min $max] "ZLEXCOUNT $min $max on $members"
+            assert_equal [r zremrangebylex zlp $min $max] [r zremrangebylex zbt $min $max] "ZREMRANGEBYLEX $min $max on $members"
+            assert_equal [r zrange zlp 0 -1 withscores] [r zrange zbt 0 -1 withscores] "after ZREMRANGEBYLEX $min $max on $members"
         }
     }
 }

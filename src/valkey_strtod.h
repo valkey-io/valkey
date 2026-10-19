@@ -5,7 +5,8 @@
 
 /**
  * Converts a string to a double using ffc.h (https://github.com/kolemannix/ffc.h),
- * a C99 port of the fast_float library.
+ * a C99 port of the fast_float library. Hex-floats (0x / 0X) and tokens with
+ * leading whitespace fall back to libc strtod so 9.0-compatible scores still parse.
  *
  * valkey_strtod: takes a null-terminated string.
  * valkey_strtod_n: takes a pointer and length, avoiding strlen.

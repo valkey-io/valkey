@@ -12,6 +12,7 @@ typedef enum {
     CPU_USEC,
     NETWORK_BYTES_IN,
     NETWORK_BYTES_OUT,
+    REPL_STREAM_BYTES,
     SLOT_STAT_COUNT,
     INVALID
 } slotStatType;
@@ -51,6 +52,7 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
     case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
     case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
+    case REPL_STREAM_BYTES: slot_stat = server.cluster->slot_stats[slot].repl_stream_bytes; break;
     case SLOT_STAT_COUNT:
     case INVALID: serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
@@ -110,6 +112,8 @@ static void addReplySlotStat(client *c, int slot) {
         addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_in);
         addReplyBulkCString(c, "network-bytes-out");
         addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_out);
+        addReplyBulkCString(c, "repl-stream-bytes");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].repl_stream_bytes);
     }
 }
 
@@ -172,6 +176,31 @@ void clusterSlotStatsIncrNetworkBytesOutForReplication(long long len) {
  * This will decrement `len` value times the active replica count. */
 void clusterSlotStatsDecrNetworkBytesOutForReplication(long long len) {
     clusterSlotStatsUpdateNetworkBytesOutForReplication(-len);
+}
+
+/* Accumulates replication bytes per slot. Records the byte count fed into the
+ * replication buffer once per write, regardless of replica count. This complements network-bytes-out
+ * which multiplies by replica count, allowing recovery of the single-stream replication volume. */
+static void clusterSlotStatsUpdateReplStreamBytes(long long len) {
+    client *c = server.current_client;
+    if (c == NULL || !clusterSlotStatsEnabled(c->slot)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    serverAssert(nodeIsPrimary(server.cluster->myself));
+    /* Ensure we don't underflow the counter when adjusting downwards. */
+    serverAssert(len >= 0 || server.cluster->slot_stats[c->slot].repl_stream_bytes >= (uint64_t)-len);
+    server.cluster->slot_stats[c->slot].repl_stream_bytes += len;
+}
+
+/* Increment replication bytes counter. */
+void clusterSlotStatsIncrReplStreamBytes(long long len) {
+    clusterSlotStatsUpdateReplStreamBytes(len);
+}
+
+/* Decrement replication bytes counter.
+ * This is used to remove accounting of data which doesn't belong to any particular slot, e.g. SELECT command. */
+void clusterSlotStatsDecrReplStreamBytes(long long len) {
+    clusterSlotStatsUpdateReplStreamBytes(-len);
 }
 
 /* Upon SPUBLISH, two egress events are triggered.
@@ -289,6 +318,8 @@ void clusterSlotStatsCommand(client *c) {
             order_by = NETWORK_BYTES_IN;
         } else if (!strcasecmp(objectGetVal(c->argv[3]), "network-bytes-out") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_OUT;
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "repl-stream-bytes") && server.cluster_slot_stats_enabled) {
+            order_by = REPL_STREAM_BYTES;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;

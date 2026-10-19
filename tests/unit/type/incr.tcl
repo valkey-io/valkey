@@ -764,6 +764,9 @@ start_server {tags {"incr"}} {
         assert_range [r ttl k] 1 100
     }
 
+    # This test can't be executed on x86 when valgrind is enabled, valgrind
+    # simulates long double with double precision, so inf bounds and
+    # ldbl_overflow_operand() don't behave as expected.
     test {INCREX bound validation errors} {
         r set k 10
         assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byint 5 lbound 20 ubound 0}
@@ -803,8 +806,11 @@ start_server {tags {"incr"}} {
         # Integer mode rejects inf for bounds
         assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k ubound inf}
         assert_error "*ERR LBOUND is not an integer or out of range*" {r increx k lbound inf}
-    }
+    } {} {valgrind:skip}
 
+    # This test can't be executed on x86 when valgrind is enabled, valgrind
+    # simulates long double with double precision, so inf bounds and
+    # ldbl_overflow_operand() don't behave as expected.
     test {INCREX applied delta overflow errors} {
         r set k 9223372036854775807
         assert_error "*ERR applied increment would overflow*" {r increx k byint -5 ubound -9223372036854775808 saturate}
@@ -820,8 +826,11 @@ start_server {tags {"incr"}} {
         assert_equal 10 [r get k]
         assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound inf ubound inf saturate}
         assert_equal 10 [r get k]
-    }
+    } {} {valgrind:skip}
 
+    # This test can't be executed on x86 when valgrind is enabled, valgrind
+    # simulates long double with double precision, so inf bounds and
+    # ldbl_overflow_operand() don't behave as expected.
     test {INCREX PERSIST option} {
         # Removes TTL on existing key with TTL
         r set k 10 ex 500
@@ -871,7 +880,7 @@ start_server {tags {"incr"}} {
         assert_error "*ERR syntax error*" {r increx k persist ex 10}
         assert_error "*ERR syntax error*" {r increx k persist enx}
         assert_error "*ERR syntax error*" {r increx k enx persist}
-    }
+    } {} {valgrind:skip}
 
     test {INCREX rejects repeated options} {
         r set k 10

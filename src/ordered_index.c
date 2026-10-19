@@ -226,7 +226,7 @@ static bool lexRangeLastRankMixedScores(fbtreeIndex *fbt, const_sds min, const_s
 
 /* Rank range of a lex range on a mixed-score index, matching the listpack: the
  * run from the first element >= min up to the first element after it > max.
- * Returns false if the range is empty. O(N). */
+ * Returns false if the range is empty. With end NULL it stops at the start. O(N). */
 static bool lexRangeRanksMixedScores(fbtreeIndex *fbt, const_sds min, const_sds max, bool min_ex, bool max_ex, unsigned long *start, unsigned long *end) {
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
     if (!lexRangeMayMatch(fbt, &range)) return false;
@@ -246,7 +246,9 @@ static bool lexRangeRanksMixedScores(fbtreeIndex *fbt, const_sds min, const_sds 
         } else if (zsetLexGteMin(ele, len, &range)) {
             if (!zsetLexLteMax(ele, len, &range)) break;
             found = true;
-            *start = *end = rank;
+            *start = rank;
+            if (!end) break;
+            *end = rank;
         }
         rank++;
     }
@@ -592,9 +594,9 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
 
     /* Mixed scores: start where the listpack starts; the caller stops at the far bound. */
     if (hasMixedScores(fbt)) {
-        unsigned long start, end, last;
+        unsigned long start, last;
         if (!reverse) {
-            if (!lexRangeRanksMixedScores(fbt, min, max, min_ex, max_ex, &start, &end) || start + offset >= len) {
+            if (!lexRangeRanksMixedScores(fbt, min, max, min_ex, max_ex, &start, NULL) || start + offset >= len) {
                 fbtreeResetIterator(fbt_iter);
                 return;
             }

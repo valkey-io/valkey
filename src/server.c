@@ -2163,6 +2163,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
             latencyStartMonitor(latency);
             atomic_store_explicit(&server.module_gil_acquiring, 1, memory_order_relaxed);
             moduleAcquireGIL();
+            atomic_fetch_add_explicit(&server.module_gil_main_acquisitions, 1, memory_order_relaxed);
             atomic_store_explicit(&server.module_gil_acquiring, 0, memory_order_relaxed);
             atomic_store_explicit(&server.module_gil_acquired, 1, memory_order_relaxed);
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);

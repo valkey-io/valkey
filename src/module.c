@@ -2616,10 +2616,13 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
                         /* Ignore the error, this is best-effort. */
                     }
                 } else {
-                    /* Release the GIL, yielding CPU to give the main thread an opportunity to start
-                     * event processing, and then acquire the GIL again until the main thread releases it. */
+                    /* Wait for a main-thread acquisition before competing for the GIL again.
+                     * Use a counter so a complete acquire/release cycle cannot be missed. */
+                    uint64_t seen = atomic_load_explicit(&server.module_gil_main_acquisitions, memory_order_relaxed);
                     moduleReleaseGIL();
-                    sched_yield();
+                    while (atomic_load_explicit(&server.module_gil_main_acquisitions, memory_order_relaxed) == seen) {
+                        usleep(1);
+                    }
                     moduleAcquireGIL();
                 }
             } else {
@@ -13422,6 +13425,7 @@ void moduleInitModulesSystem(void) {
     listSetMatchMethod(modules, moduleNameMatch);
     server.module_configs_queue = dictCreate(&sdsKeyValueHashDictType);
     server.module_gil_acquiring = 0;
+    server.module_gil_main_acquisitions = 0;
     moduleAuthCallbacks = listCreate();
 
     /* Set up the keyspace notification subscriber list and static client */

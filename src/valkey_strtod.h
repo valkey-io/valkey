@@ -3,7 +3,9 @@
 
 #ifdef USE_FAST_FLOAT
 
+#include <ctype.h>
 #include "errno.h"
+#include <stdlib.h>
 
 /**
  * Converts a null-terminated byte string to a double using the fast_float library.
@@ -26,6 +28,11 @@ double fast_float_strtod(const char *str, char **endptr);
 
 static inline double valkey_strtod(const char *str, char **endptr) {
     errno = 0;
+    /* fast_float rejects hex floats and leading whitespace accepted by strtod. */
+    const char *digits = str;
+    if (isspace((unsigned char)str[0])) return strtod(str, endptr);
+    if (digits[0] == '+' || digits[0] == '-') digits++;
+    if (digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')) return strtod(str, endptr);
     return fast_float_strtod(str, endptr);
 }
 

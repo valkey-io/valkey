@@ -5649,3 +5649,30 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
         }
     }
 }
+
+start_server {tags {"hashexpire needs:debug external:skip"} overrides {hash-max-listpack-entries 0}} {
+    test {MEMORY USAGE of a hash does not change while expired fields await reclamation} {
+        r debug set-active-expire 0
+        r hset myhash a 1 b 2 c 3
+        r hset myhash x [string repeat x 200] y [string repeat y 200] z [string repeat z 200]
+        assert_equal 3 [llength [r hpexpire myhash 50 FIELDS 3 x y z]]
+        assert_encoding hashtable myhash
+        set full [r memory usage myhash samples 0]
+        set sampled [r memory usage myhash]
+
+        # The fields are logically expired, but their memory is still in use.
+        after 100
+        assert_equal 6 [llength [r hgetall myhash]]
+        assert_equal $full [r memory usage myhash samples 0]
+        assert_equal $sampled [r memory usage myhash]
+
+        # Once they are reclaimed, the usage drops.
+        r debug set-active-expire 1
+        wait_for_condition 50 100 {
+            [r memory usage myhash samples 0] < $full
+        } else {
+            fail "expired fields were not reclaimed"
+        }
+        assert_lessthan [r memory usage myhash] $sampled
+    }
+}

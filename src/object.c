@@ -1408,7 +1408,12 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             hashtable *ht = objectGetVal(o);
             hashtableIterator iter;
             vset *volatile_fields = hashtableMetadata(ht);
-            hashtableInitIterator(&iter, ht, 0);
+            /* Sample from the same population that hashtableSize() counts:
+             * expired fields still occupy memory until they are reclaimed,
+             * and validating them here would make the estimate depend on the
+             * expiration policy (e.g. while loading, or when applying the
+             * replication stream, expired fields are not filtered). */
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;
 
             asize += hashtableMemUsage(ht);

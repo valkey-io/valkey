@@ -398,14 +398,65 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
-        test {INCREX BYINT without expire propagates verbatim} {
-            # BYINT-only increments are deterministic, so unlike BYFLOAT they
-            # don't need rewriting to SET for replication safety.
+        test {INCREX BYINT without expire propagates as SET with KEEPTTL} {
             r -1 del foo
             set repl [attach_to_replication_stream]
             r -1 increx foo byint 5
             assert_replication_stream $repl {
-                {increx foo byint 5}
+                {set foo 5 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX with PERSIST propagates as SET} {
+            r -1 set foo 1 ex 100
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 persist
+            assert_replication_stream $repl {
+                {set foo 6}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX declined bounds operation does not propagate} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 10
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX ENX with existing TTL propagates as SET with KEEPTTL} {
+            r -1 set foo 1 ex 500
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ex 100 enx
+            assert_replication_stream $repl {
+                {set foo 6 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX SATURATE propagates the clamped value} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 12 saturate
+            assert_replication_stream $repl {
+                {set foo 12 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX applied-increment errors do not propagate} {
+            r -1 set foo 9223372036854775807
+            set repl [attach_to_replication_stream]
+            catch {r -1 increx foo byint -5 ubound -9223372036854775808 saturate} err
+            assert_match "*applied increment would overflow*" $err
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
             }
             close_replication_stream $repl
         }
@@ -1743,6 +1794,31 @@ start_server {tags {"repl" "external:skip"}} {
         $rd close
         waitForBgsave r
     }
+
+    foreach hide {no yes} {
+        test "Error sent to replica is logged with hide-user-data-from-log $hide" {
+            r config set hide-user-data-from-log $hide
+            set rd [valkey_deferring_client]
+            set lines [count_log_lines 0]
+
+            $rd psync replicationid -1
+            assert_match {FULLRESYNC * *} [$rd read]
+            $rd notacommand secretvalue
+            catch {$rd read} e
+            assert_equal "PONG" [r ping]
+
+            if {$hide} {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: '\\*redacted\\*'*" $lines
+                verify_no_log_message 0 "*secretvalue*" $lines
+            } else {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *secretvalue*" $lines
+            }
+
+            $rd close
+            waitForBgsave r
+        }
+    }
+    r config set hide-user-data-from-log no
 
     test "PSYNC with wrong offset should throw error" {
         # It used to accept the FULL SYNC, but also replied with an error.

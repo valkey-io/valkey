@@ -115,6 +115,123 @@ int test_send_msg_uaf(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+/* Commands for the per-slot memory-bytes tests. Each one changes a string in
+ * place with StringTruncate and then makes a second change on the same open
+ * key, so the in-place change is still pending when the second change runs. */
+
+/* test.slotmem_truncate_expire <key> <len> <ms> */
+int test_slotmem_truncate_expire(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4) return ValkeyModule_WrongArity(ctx);
+    long long len, ms;
+    if (ValkeyModule_StringToLongLong(argv[2], &len) != VALKEYMODULE_OK ||
+        ValkeyModule_StringToLongLong(argv[3], &ms) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    ValkeyModuleKey *k = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModule_StringTruncate(k, len);
+    ValkeyModule_SetExpire(k, ms);
+    ValkeyModule_CloseKey(k);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* test.slotmem_truncate_set <key> <len> <value> */
+int test_slotmem_truncate_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4) return ValkeyModule_WrongArity(ctx);
+    long long len;
+    if (ValkeyModule_StringToLongLong(argv[2], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    ValkeyModuleKey *k = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModule_StringTruncate(k, len);
+    ValkeyModule_StringSet(k, argv[3]);
+    ValkeyModule_CloseKey(k);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* test.slotmem_truncate_two <key1> <key2> <len>
+ * Declares no keys, so the two keys may be in different slots. */
+int test_slotmem_truncate_two(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4) return ValkeyModule_WrongArity(ctx);
+    long long len;
+    if (ValkeyModule_StringToLongLong(argv[3], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    ValkeyModuleKey *k1 = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModuleKey *k2 = ValkeyModule_OpenKey(ctx, argv[2], VALKEYMODULE_WRITE);
+    ValkeyModule_StringTruncate(k1, len);
+    ValkeyModule_StringTruncate(k2, len);
+    ValkeyModule_CloseKey(k1);
+    ValkeyModule_CloseKey(k2);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* test.slotmem_call_append <key> <suffix> [<len>]
+ * Opens the key for write, runs APPEND on it with VM_Call, and then, if <len>
+ * is given, truncates the open key to <len> before closing it. */
+int test_slotmem_call_append(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3 && argc != 4) return ValkeyModule_WrongArity(ctx);
+    long long len = -1;
+    if (argc == 4 && ValkeyModule_StringToLongLong(argv[3], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    ValkeyModuleKey *k = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "APPEND", "ss", argv[1], argv[2]);
+    if (rep) ValkeyModule_FreeCallReply(rep);
+    if (len >= 0) ValkeyModule_StringTruncate(k, len);
+    ValkeyModule_CloseKey(k);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* test.slotmem_open_many <len> <suffix|""> <key> [<key> ...]
+ * Opens all keys for write at the same time. If <suffix> is not empty, runs
+ * APPEND <suffix> on each open key with VM_Call. Then truncates each open key
+ * to <len> and closes all keys. */
+int test_slotmem_open_many(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 4) return ValkeyModule_WrongArity(ctx);
+    long long len;
+    if (ValkeyModule_StringToLongLong(argv[1], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    size_t suffix_len;
+    ValkeyModule_StringPtrLen(argv[2], &suffix_len);
+    int nkeys = argc - 3;
+    ValkeyModuleKey **keys = ValkeyModule_Alloc(sizeof(*keys) * nkeys);
+    for (int i = 0; i < nkeys; i++) keys[i] = ValkeyModule_OpenKey(ctx, argv[3 + i], VALKEYMODULE_WRITE);
+    if (suffix_len > 0) {
+        for (int i = 0; i < nkeys; i++) {
+            ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "APPEND", "ss", argv[3 + i], argv[2]);
+            if (rep) ValkeyModule_FreeCallReply(rep);
+        }
+    }
+    for (int i = 0; i < nkeys; i++) ValkeyModule_StringTruncate(keys[i], len);
+    for (int i = 0; i < nkeys; i++) ValkeyModule_CloseKey(keys[i]);
+    ValkeyModule_Free(keys);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+typedef struct {
+    ValkeyModuleString *key;
+    long long len;
+} slotmemTimerData;
+
+static void slotmemTimerTruncate(ValkeyModuleCtx *ctx, void *data) {
+    slotmemTimerData *d = data;
+    ValkeyModuleKey *k = ValkeyModule_OpenKey(ctx, d->key, VALKEYMODULE_WRITE);
+    ValkeyModule_StringTruncate(k, d->len);
+    ValkeyModule_CloseKey(k);
+    ValkeyModule_FreeString(NULL, d->key);
+    ValkeyModule_Free(d);
+}
+
+/* test.slotmem_timer_truncate <key> <len>
+ * Truncates the key from a timer callback, where no client is executing. */
+int test_slotmem_timer_truncate(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    long long len;
+    if (ValkeyModule_StringToLongLong(argv[2], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    slotmemTimerData *d = ValkeyModule_Alloc(sizeof(*d));
+    d->key = ValkeyModule_CreateStringFromString(NULL, argv[1]);
+    d->len = len;
+    ValkeyModule_CreateTimer(ctx, 1, slotmemTimerTruncate, d);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -140,6 +257,19 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.unregister_receiver", test_unregister_receiver, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.send_msg_uaf", test_send_msg_uaf, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_truncate_expire", test_slotmem_truncate_expire, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_truncate_set", test_slotmem_truncate_set, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_truncate_two", test_slotmem_truncate_two, "write", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_call_append", test_slotmem_call_append, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_timer_truncate", test_slotmem_timer_truncate, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_open_many", test_slotmem_open_many, "write", 3, -1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Register our handlers for different message types. */

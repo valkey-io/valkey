@@ -228,3 +228,46 @@ TEST_F(KvstoreTest, kvstoreHashtableExpand) {
 
     kvstoreRelease(kvs);
 }
+
+TEST_F(KvstoreTest, kvstoreHashtableTrackedBytes) {
+    int didx = 1;
+    kvstore *kvs = kvstoreCreate(&KvstoreHashtableTestType, 1, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
+
+    /* No hashtable yet: calls are no-ops and the count reads 0. */
+    kvstoreHashtableAddTrackedBytes(kvs, didx, 100);
+    kvstoreHashtableSubTrackedBytes(kvs, didx, 10);
+    ASSERT_EQ(kvstoreGetHashtable(kvs, didx), nullptr);
+    ASSERT_EQ(kvstoreHashtableTrackedBytes(kvs, didx), 0u);
+
+    /* Add and sub on an existing hashtable. Other hashtables are not touched. */
+    char *key = stringFromInt(1);
+    ASSERT_TRUE(kvstoreHashtableAdd(kvs, didx, key));
+    kvstoreHashtableAddTrackedBytes(kvs, didx, 100);
+    kvstoreHashtableAddTrackedBytes(kvs, didx, 50);
+    kvstoreHashtableSubTrackedBytes(kvs, didx, 30);
+    ASSERT_EQ(kvstoreHashtableTrackedBytes(kvs, didx), 120u);
+    ASSERT_EQ(kvstoreHashtableTrackedBytes(kvs, 0), 0u);
+
+    /* Sub clamps at 0. */
+    kvstoreHashtableSubTrackedBytes(kvs, didx, 1000);
+    ASSERT_EQ(kvstoreHashtableTrackedBytes(kvs, didx), 0u);
+
+    /* kvstoreEmpty resets the count. */
+    kvstoreHashtableAddTrackedBytes(kvs, didx, 70);
+    kvstoreEmpty(kvs, NULL);
+    ASSERT_EQ(kvstoreHashtableTrackedBytes(kvs, didx), 0u);
+
+    /* The count is dropped when the last entry is deleted and the empty
+     * hashtable is freed, and starts from 0 when it is created again. */
+    key = stringFromInt(2);
+    ASSERT_TRUE(kvstoreHashtableAdd(kvs, didx, key));
+    kvstoreHashtableAddTrackedBytes(kvs, didx, 40);
+    ASSERT_TRUE(kvstoreHashtableDelete(kvs, didx, key));
+    ASSERT_EQ(kvstoreGetHashtable(kvs, didx), nullptr);
+    ASSERT_EQ(kvstoreHashtableTrackedBytes(kvs, didx), 0u);
+    key = stringFromInt(3);
+    ASSERT_TRUE(kvstoreHashtableAdd(kvs, didx, key));
+    ASSERT_EQ(kvstoreHashtableTrackedBytes(kvs, didx), 0u);
+
+    kvstoreRelease(kvs);
+}

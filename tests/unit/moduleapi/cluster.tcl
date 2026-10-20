@@ -416,4 +416,113 @@ start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
     }
 }
 
+# Per-slot memory-bytes with module key APIs. A module can change a key in
+# place and then make a second change on the same open key, or open keys in
+# several slots in one command.
+source tests/unit/cluster/slot-stats-memory-bytes-helpers.tcl
+
+set testmodule [file normalize tests/modules/cluster.so]
+set modules [list loadmodule $testmodule]
+start_cluster 1 0 [list config_lines $modules] {
+    set key "{FOO}k"
+    set key_slot [R 0 cluster keyslot $key]
+
+    # A second key in the slot makes an error visible: with one key, the clamp
+    # at 0 can hide it.
+    test "memory-bytes: StringTruncate then SetExpire on the same open key" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 100]
+        R 0 test.slotmem_truncate_expire $key 5000 100000
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 DEL $key
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes: StringTruncate then StringSet on the same open key" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 100]
+        R 0 test.slotmem_truncate_set $key 5000 [string repeat c 50]
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 DEL $key
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes: one module command changes keys in two slots" {
+        R 0 FLUSHALL
+        set key2 "{BAR}k"
+        set key2_slot [R 0 cluster keyslot $key2]
+        assert {$key_slot != $key2_slot}
+        R 0 SET $key [string repeat a 100]
+        R 0 SET $key2 [string repeat b 100]
+        R 0 test.slotmem_truncate_two $key $key2 5000
+        assert_slot_bytes_match_memory_usage $key_slot
+        assert_slot_bytes_match_memory_usage $key2_slot
+    }
+
+    # VM_Call runs APPEND on a temporary client while the module still has the
+    # key open for write. The change must be counted once. The value is large
+    # enough to be stored outside the object, so APPEND changes it in place and
+    # the module's open key handle stays valid (an embedded value would be
+    # replaced, and the handle would point to freed memory).
+    test "memory-bytes: VM_Call APPEND on a key the module has open" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 1000]
+        R 0 test.slotmem_call_append $key [string repeat x 500]
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    # After the VM_Call, the module changes the open key again before closing it.
+    test "memory-bytes: change the open key again after VM_Call" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 1000]
+        R 0 test.slotmem_call_append $key [string repeat x 500] 5000
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    # More open keys than the inline array holds, so most snapshot entries go
+    # to the overflow hashtable. The values are large enough to be stored
+    # outside the object, so the open key handles stay valid across VM_Call.
+    test "memory-bytes: module opens many keys (overflow hashtable)" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        set keys {}
+        for {set i 0} {$i < 100} {incr i} {
+            lappend keys "{FOO}m$i"
+            R 0 SET "{FOO}m$i" [string repeat a 1000]
+        }
+        R 0 test.slotmem_open_many 3000 "" {*}$keys
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes: module opens many keys and runs VM_Call on each" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        set keys {}
+        for {set i 0} {$i < 100} {incr i} {
+            lappend keys "{FOO}m$i"
+            R 0 SET "{FOO}m$i" [string repeat a 1000]
+        }
+        R 0 test.slotmem_open_many 4000 [string repeat x 500] {*}$keys
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    # A timer callback runs with no executing client.
+    test "memory-bytes: StringTruncate from a module timer" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 100]
+        R 0 test.slotmem_timer_truncate $key 5000
+        wait_for_condition 50 20 {
+            [R 0 STRLEN $key] == 5000
+        } else {
+            fail "timer did not run"
+        }
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+}
+
 } ;# end tag

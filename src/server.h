@@ -1400,6 +1400,35 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
+/* Per-key "before" size snapshot used to account in-place value mutations
+ * (APPEND, INCR, XADD on an existing stream, ...) for the CLUSTER SLOT-STATS
+ * memory-bytes metric. lookupKeyWrite records each modified key's size here;
+ * signalModifiedKey later computes the new size and applies the delta.
+ *
+ * A single command may mutate several keys in place (e.g. SMOVE, LMOVE), so
+ * this is a per-key set rather than one scalar. Each entry keeps its own slot
+ * and database: cluster rejects cross-slot commands, but a module can open keys
+ * in several slots in one command, and MOVE / COPY ... DB use the same key name
+ * in two databases. There is one set for the whole server (see
+ * server.slot_memory_bytes), not one per client. */
+typedef struct slotMemoryBytesSnap {
+    robj *key;       /* The modified key (incref'd while snapshotted). */
+    uint64_t hash;   /* Hash of the key name, compared before the name. */
+    uint64_t before; /* Allocated size captured at lookup / last db-hook refresh. */
+    int dbid;        /* Database of `key`. */
+    int slot;        /* Slot of `key`. */
+    int nesting;     /* server.execution_nesting when the entry was created. */
+} slotMemoryBytesSnap;
+
+#define SLOT_MEMORY_BYTES_INLINE 8
+
+typedef struct slotMemoryBytesSnapshot {
+    slotMemoryBytesSnap inlined[SLOT_MEMORY_BYTES_INLINE]; /* Fast path, no allocation. */
+    int inlined_count;                                     /* Used inline entries. */
+    int max_nesting;                                       /* Deepest nesting with entries; -1 = empty set. */
+    hashtable *overflow;                                   /* NULL until the inline array is full; entries looked up by (dbid, key name). */
+} slotMemoryBytesSnapshot;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1943,6 +1972,10 @@ struct valkeyServer {
 
     /* Stuff for client mem eviction */
     clientMemUsageBucket *client_mem_usage_buckets;
+
+    /* Per-key memory-bytes "before" snapshots for in-place mutations
+     * (see cluster_slot_stats.c). */
+    slotMemoryBytesSnapshot slot_memory_bytes;
 
     rax *clients_timeout_table; /* Radix tree for blocked clients timeouts. */
     int execution_nesting;      /* Execution nesting level.

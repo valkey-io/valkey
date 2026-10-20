@@ -2169,6 +2169,9 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.el_iteration_active = (numevents > 0);
         /* Set the eventloop command count at start. */
         server.el_cmd_cnt_start = server.stat_numcommands;
+        /* Drop memory-bytes snapshots left by module threads, which ran while
+         * the main thread was sleeping, or by module timers. */
+        if (server.cluster_enabled) clusterSlotStatsClearSnapshot(-1);
     }
 
     /* Update the time cache. Skip the (relatively expensive) daylight-saving
@@ -3080,6 +3083,7 @@ void initServer(void) {
     server.current_client = NULL;
     server.errors = raxNew();
     server.execution_nesting = 0;
+    clusterSlotStatsInitSnapshot();
     server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
@@ -4504,6 +4508,10 @@ void afterCommand(client *c) {
     }
 
     clusterSlotStatsAddNetworkBytesOutForUserClient(c);
+
+    /* Drop the memory-bytes snapshots taken by this command. Snapshots of an
+     * outer command (a module with a key open around VM_Call) are kept. */
+    if (server.cluster_enabled) clusterSlotStatsClearSnapshot(server.execution_nesting);
 }
 
 /* Check if c->cmd exists, fills `err` with details in case it doesn't.

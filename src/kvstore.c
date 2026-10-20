@@ -98,6 +98,7 @@ struct _kvstoreHashtableIterator {
 typedef struct {
     listNode *rehashing_node; /* list node in rehashing list */
     kvstore *kvs;
+    uint64_t tracked_bytes; /* Caller-maintained byte count for the entries in this hashtable. */
 } kvstoreHashtableMetadata;
 
 hashtableType intHashtableType = {.instant_rehashing = 1};
@@ -318,6 +319,7 @@ void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *)) {
         if (!ht) continue;
         kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
         if (metadata->rehashing_node) metadata->rehashing_node = NULL;
+        metadata->tracked_bytes = 0;
         hashtableEmpty(ht, callback);
         freeHashtableIfNeeded(kvs, didx);
     }
@@ -767,6 +769,32 @@ unsigned long kvstoreHashtableSize(kvstore *kvs, int didx) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return 0;
     return hashtableSize(ht);
+}
+
+/* Adds `bytes` to the tracked byte count of the hashtable at `didx`. The
+ * count lives in the hashtable metadata, so it is dropped together with the
+ * hashtable when the hashtable is emptied or freed. */
+void kvstoreHashtableAddTrackedBytes(kvstore *kvs, int didx, uint64_t bytes) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (!ht) return;
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    metadata->tracked_bytes += bytes;
+}
+
+/* Subtracts `bytes` from the tracked byte count of the hashtable at `didx`,
+ * clamping to zero. */
+void kvstoreHashtableSubTrackedBytes(kvstore *kvs, int didx, uint64_t bytes) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (!ht) return;
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    metadata->tracked_bytes = metadata->tracked_bytes >= bytes ? metadata->tracked_bytes - bytes : 0;
+}
+
+uint64_t kvstoreHashtableTrackedBytes(kvstore *kvs, int didx) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (!ht) return 0;
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    return metadata->tracked_bytes;
 }
 
 unsigned long kvstoreHashtableBuckets(kvstore *kvs, int didx) {

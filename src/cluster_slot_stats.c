@@ -12,9 +12,362 @@ typedef enum {
     CPU_USEC,
     NETWORK_BYTES_IN,
     NETWORK_BYTES_OUT,
+    MEMORY_BYTES,
     SLOT_STAT_COUNT,
     INVALID
 } slotStatType;
+
+/* -----------------------------------------------------------------------------
+ * Per-slot byte accounting (memory-bytes metric).
+ *
+ * The counter is kept per (db, slot) in the metadata of the slot's hashtable in
+ * db->keys (see kvstoreHashtableAddTrackedBytes). The reported value is the sum
+ * over server.db, the same way countKeysInSlot() computes key-count. Because
+ * the counter lives next to the data, it follows the data on FLUSHDB, async
+ * flush, temp DBs used by diskless load, and slot ownership changes.
+ *
+ * Adding a new type later means adding a case to slotStatsObjectSize() that
+ * returns its allocated byte size. All the wiring in db.c stays type-agnostic.
+ * -------------------------------------------------------------------------- */
+
+/* Returns 1 when per-slot memory-bytes accounting is active. We gate this on
+ * cluster_enabled only (not cluster_slot_stats_enabled), because memory_bytes
+ * is a state metric that must remain consistent with the database contents
+ * regardless of the more expensive cumulative metrics being toggled. */
+static inline int isMemoryBytesAccountingEnabled(int slot) {
+    return server.cluster_enabled && slot >= 0 && slot < CLUSTER_SLOTS;
+}
+
+/* Returns the allocated memory footprint in bytes that the (`key`, `val`) entry
+ * contributes to its slot's memory-bytes counter, or 0 for untracked types.
+ * `key` may be NULL when it is already embedded in `val` and thus counted as
+ * part of the value allocation. */
+static uint64_t slotStatsObjectSize(sds key, robj *val) {
+    uint64_t asize = zmalloc_size(val);
+    /* Key sds: already inside zmalloc_size(val) when embedded; add it
+     * otherwise. (key may be NULL for callers that pass only the value.) */
+    if (!val->hasembkey && key != NULL) asize += sdsAllocSize(key);
+    switch (val->type) {
+    case OBJ_STRING:
+        /* EMBSTR/INT keep the value inside the robj (already counted). RAW
+         * has a separate sds allocation. */
+        if (val->encoding == OBJ_ENCODING_RAW) asize += sdsAllocSize(objectGetVal(val));
+        return asize;
+    case OBJ_STREAM: {
+        /* streamMemUsage() covers the stream struct, its data radix tree, and
+         * the listpacks in that tree. Consumer group memory is not yet counted. */
+        stream *s = objectGetVal(val);
+        return asize + streamMemUsage(s);
+    }
+    default:
+        return 0;
+    }
+}
+
+/* The `SdsKey` variants take the key as a raw `sds`. They are the right choice
+ * when the caller only has the key as an sds (e.g. dbAddRDBLoad), or when the
+ * key has already been embedded into `val` (in which case pass NULL: the
+ * embedded key is counted by zmalloc_size(val) inside slotStatsObjectSize). */
+void clusterSlotStatsAddMemorySdsKey(serverDb *db, int slot, sds key, robj *val) {
+    if (!isMemoryBytesAccountingEnabled(slot)) return;
+    uint64_t sz = slotStatsObjectSize(key, val);
+    if (sz == 0) return;
+    kvstoreHashtableAddTrackedBytes(db->keys, slot, sz);
+}
+
+void clusterSlotStatsSubMemorySdsKey(serverDb *db, int slot, sds key, robj *val) {
+    if (!isMemoryBytesAccountingEnabled(slot)) return;
+    uint64_t sz = slotStatsObjectSize(key, val);
+    if (sz == 0) return;
+    kvstoreHashtableSubTrackedBytes(db->keys, slot, sz);
+}
+
+/* The `robj *` key variants forward to the SdsKey variants. These are the
+ * right choice in db.c primitives, which hold the key as a `robj *` and have
+ * dict_index in hand from their kvstore lookup. */
+void clusterSlotStatsAddMemory(serverDb *db, int slot, robj *key, robj *val) {
+    clusterSlotStatsAddMemorySdsKey(db, slot, key ? objectGetVal(key) : NULL, val);
+}
+
+void clusterSlotStatsSubMemory(serverDb *db, int slot, robj *key, robj *val) {
+    clusterSlotStatsSubMemorySdsKey(db, slot, key ? objectGetVal(key) : NULL, val);
+}
+
+uint64_t clusterSlotStatsGetObjectSize(robj *key, robj *val) {
+    if (!server.cluster_enabled) return 0;
+    return slotStatsObjectSize(key ? objectGetVal(key) : NULL, val);
+}
+
+/* Returns the memory-bytes of `slot`, summed over all databases. */
+static uint64_t slotMemoryBytes(int slot) {
+    uint64_t result = 0;
+    for (int i = 0; i < server.dbnum; i++) {
+        if (server.db[i]) result += kvstoreHashtableTrackedBytes(server.db[i]->keys, slot);
+    }
+    return result;
+}
+
+/* -----------------------------------------------------------------------------
+ * Per-key in-place mutation snapshot.
+ *
+ * There is one set for the whole server (server.slot_memory_bytes), so the
+ * snapshot and the commit find the same entry no matter which client runs the
+ * command: a script or VM_Call runs commands on a temporary client, and module
+ * timers and thread-safe contexts run with no client at all. Entries are
+ * matched on (database, key name).
+ *
+ * The first SLOT_MEMORY_BYTES_INLINE entries live in an inline array, so
+ * commands with a few keys need no allocation. Each entry stores the hash of
+ * its key name, and the scan compares the hash and the database before it
+ * compares the names. Further entries go to a hashtable keyed on (database,
+ * key name), so a command or module with many keys stays O(1) per operation.
+ * A key is in exactly one of the two places.
+ * -------------------------------------------------------------------------- */
+
+static uint64_t slotSnapHashKey(robj *key) {
+    sds skey = objectGetVal(key);
+    return hashtableGenHashFunction(skey, sdslen(skey));
+}
+
+/* Returns 1 if entry `e` tracks the key `skey` (hash `hash`) in `dbid`. */
+static inline int slotSnapMatch(const slotMemoryBytesSnap *e, uint64_t hash, int dbid, sds skey) {
+    return e->hash == hash && e->dbid == dbid && sdscmp(objectGetVal(e->key), skey) == 0;
+}
+
+/* Hashtable type for the overflow entries. The entry is its own key: a lookup
+ * passes a stack slotMemoryBytesSnap with `hash`, `dbid` and `key` set. */
+static uint64_t slotSnapHtHash(const void *key) {
+    return ((const slotMemoryBytesSnap *)key)->hash;
+}
+
+/* Returns non-zero if the keys are equal (this is how hashtable.c uses it). */
+static int slotSnapHtKeyCompare(const void *key1, const void *key2) {
+    const slotMemoryBytesSnap *a = key1, *b = key2;
+    return slotSnapMatch(a, b->hash, b->dbid, objectGetVal(b->key));
+}
+
+static void slotSnapHtDestructor(void *entry) {
+    slotMemoryBytesSnap *e = entry;
+    decrRefCount(e->key);
+    zfree(e);
+}
+
+static hashtableType slotSnapHashtableType = {
+    .hashFunction = slotSnapHtHash,
+    .keyCompare = slotSnapHtKeyCompare,
+    .entryDestructor = slotSnapHtDestructor,
+};
+
+/* Find the entry tracking `key` in `db`, or NULL. */
+static slotMemoryBytesSnap *slotSnapFind(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) {
+    if (s->max_nesting < 0) return NULL;
+    sds skey = objectGetVal(key);
+    uint64_t hash = slotSnapHashKey(key);
+    for (int i = 0; i < s->inlined_count; i++) {
+        if (slotSnapMatch(&s->inlined[i], hash, db->id, skey)) return &s->inlined[i];
+    }
+    if (s->overflow == NULL) return NULL;
+    slotMemoryBytesSnap probe = {.key = key, .hash = hash, .dbid = db->id};
+    void *found;
+    return hashtableFind(s->overflow, &probe, &found) ? found : NULL;
+}
+
+/* Mark the set as empty once both places are empty, so the cheap
+ * `max_nesting < 0` guards short-circuit. */
+static void slotSnapUpdateEmpty(slotMemoryBytesSnapshot *s) {
+    if (s->overflow != NULL && hashtableSize(s->overflow) == 0) {
+        hashtableRelease(s->overflow);
+        s->overflow = NULL;
+    }
+    if (s->inlined_count == 0 && s->overflow == NULL) s->max_nesting = -1;
+}
+
+/* Remove entry `e` (returned by slotSnapFind). */
+static void slotSnapRemoveEntry(slotMemoryBytesSnapshot *s, slotMemoryBytesSnap *e) {
+    if (e >= s->inlined && e < s->inlined + SLOT_MEMORY_BYTES_INLINE) {
+        decrRefCount(e->key);
+        *e = s->inlined[--s->inlined_count]; /* swap with last */
+    } else {
+        hashtableDelete(s->overflow, e); /* destructor decrefs the key and frees e */
+    }
+    slotSnapUpdateEmpty(s);
+}
+
+/* Remove the entry tracking `key` in `db`, if any. */
+static void slotSnapRemove(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) {
+    slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
+    if (e != NULL) slotSnapRemoveEntry(s, e);
+}
+
+/* Record the "before" size for `key` in `db` at `slot`. Called from
+ * lookupKeyWrite. If the key already has an entry, it is kept as it is: the
+ * counter still holds that entry's `before`, and a pending in-place change
+ * (for example from an outer module command) must not be lost. */
+void clusterSlotStatsSnapshotKey(serverDb *db, int slot, robj *key, robj *val) {
+    if (!isMemoryBytesAccountingEnabled(slot)) return;
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
+    if (slotSnapFind(s, db, key) != NULL) return;
+
+    int inlined = s->inlined_count < SLOT_MEMORY_BYTES_INLINE;
+    slotMemoryBytesSnap *e = inlined ? &s->inlined[s->inlined_count++] : zmalloc(sizeof(*e));
+    e->key = key;
+    incrRefCount(key);
+    e->hash = slotSnapHashKey(key);
+    e->before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
+    e->dbid = db->id;
+    e->slot = slot;
+    e->nesting = server.execution_nesting;
+    if (!inlined) {
+        if (s->overflow == NULL) s->overflow = hashtableCreate(&slotSnapHashtableType);
+        hashtableAdd(s->overflow, e);
+    }
+    if (e->nesting > s->max_nesting) s->max_nesting = e->nesting;
+}
+
+/* Refresh the "before" size for `key` to the new value's size, but only if the
+ * key is already snapshotted. Called from db-hooks (dbAdd / dbSetValue) after
+ * they account the change themselves, so a later signalModifiedKey computes a
+ * zero delta instead of double counting. Never creates an entry, so bulk write
+ * paths (e.g. MSET) that never snapshotted don't allocate. */
+void clusterSlotStatsRefreshKey(serverDb *db, robj *key, robj *val) {
+    if (!server.cluster_enabled) return;
+    slotMemoryBytesSnap *e = slotSnapFind(&server.slot_memory_bytes, db, key);
+    if (e != NULL) e->before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
+}
+
+/* Drop any pending snapshot for `key`. Called from the delete path, where the
+ * db-hook has already subtracted the key's size explicitly. */
+void clusterSlotStatsForgetKey(serverDb *db, robj *key) {
+    if (!server.cluster_enabled) return;
+    slotSnapRemove(&server.slot_memory_bytes, db, key);
+}
+
+/* Apply the in-place delta for `key`. Called from signalModifiedKey.
+ *
+ * The entry is dropped, unless it was created at an outer execution level. That
+ * happens when a module opens a key for write and then runs a command on it
+ * with VM_Call: the inner command's signalModifiedKey applies the change so
+ * far, and the entry stays (with the new size) for the outer module code, which
+ * can change the key again before it closes it. */
+void clusterSlotStatsCommitKey(serverDb *db, robj *key) {
+    if (!server.cluster_enabled) return;
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
+    slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
+    if (e == NULL) return;
+
+    int slot = e->slot;
+    uint64_t before = e->before;
+    uint64_t after = before;
+    /* Re-read the value to get the post-mutation size. Use read-only flags so
+     * this lookup does not itself take a new write snapshot. The lookup does
+     * not change the set, so `e` stays valid. */
+    robj *val = lookupKeyReadWithFlags(db, key, LOOKUP_NOEFFECTS);
+    if (val != NULL) {
+        after = slotStatsObjectSize(objectGetVal(key), val);
+        if (after != before) {
+            kvstoreHashtableSubTrackedBytes(db->keys, slot, before);
+            kvstoreHashtableAddTrackedBytes(db->keys, slot, after);
+        }
+    }
+    if (val != NULL && e->nesting < server.execution_nesting) {
+        e->before = after;
+    } else {
+        slotSnapRemoveEntry(s, e);
+    }
+}
+
+/* If `key` has a pending snapshot, apply the change from the snapshot size to
+ * `size` (the key's current size) and move the snapshot to `size`. Callers that
+ * then Sub the current size (dbSetValue, setExpire, delete) start from a
+ * counter that matches the current value. Without this, an in-place
+ * change made before the call (e.g. VM_StringTruncate before VM_SetExpire)
+ * would be lost when the snapshot is refreshed or dropped. */
+static void slotSnapSettle(serverDb *db, robj *key, uint64_t size) {
+    slotMemoryBytesSnap *e = slotSnapFind(&server.slot_memory_bytes, db, key);
+    if (e == NULL || e->before == size) return;
+    kvstoreHashtableSubTrackedBytes(db->keys, e->slot, e->before);
+    kvstoreHashtableAddTrackedBytes(db->keys, e->slot, size);
+    e->before = size;
+}
+
+void clusterSlotStatsSettleKey(serverDb *db, robj *key, robj *val) {
+    if (!server.cluster_enabled) return;
+    slotSnapSettle(db, key, slotStatsObjectSize(objectGetVal(key), val));
+}
+
+/* Account a value that was resized or reallocated without going through
+ * dbSetValue (e.g. setExpire adding the embedded expire field). `before` is the
+ * size from clusterSlotStatsGetObjectSize() taken before the change, and `val`
+ * is the value after it. Also refreshes the key's pending snapshot, so a later
+ * signalModifiedKey does not count the same change again. */
+void clusterSlotStatsUpdateMemory(serverDb *db, int slot, robj *key, uint64_t before, robj *val) {
+    if (!isMemoryBytesAccountingEnabled(slot)) return;
+    slotSnapSettle(db, key, before);
+    uint64_t after = slotStatsObjectSize(objectGetVal(key), val);
+    if (after != before) {
+        kvstoreHashtableSubTrackedBytes(db->keys, slot, before);
+        kvstoreHashtableAddTrackedBytes(db->keys, slot, after);
+    }
+    clusterSlotStatsRefreshKey(db, key, val);
+}
+
+/* Initialize the server-wide snapshot set. Called once from initServer(). */
+void clusterSlotStatsInitSnapshot(void) {
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
+    s->inlined_count = 0;
+    s->max_nesting = -1;
+    s->overflow = NULL;
+}
+
+/* Drop the pending snapshots created deeper than execution level `level`
+ * (e->nesting > level); pass -1 to drop all of them.
+ *
+ * afterCommand passes server.execution_nesting. It runs after call() left its
+ * execution unit, so this drops exactly the entries of the command that just
+ * ended (for example one EXEC sub-command or one command of a script), and
+ * keeps the entries of an outer command (a module that has a key open around a
+ * VM_Call). afterSleep and the AOF load loop pass -1. Entries are kept
+ * consistent by the db-hooks, so dropping them only frees memory.
+ *
+ * Returns at once when no entry is deeper than `level`, which is the common
+ * case, so an outer command with many entries costs nothing per inner call. */
+void clusterSlotStatsClearSnapshot(int level) {
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
+    if (s->max_nesting <= level) return;
+
+    int kept = 0, max_nesting = -1;
+    for (int i = 0; i < s->inlined_count; i++) {
+        if (s->inlined[i].nesting > level) {
+            decrRefCount(s->inlined[i].key);
+        } else {
+            if (s->inlined[i].nesting > max_nesting) max_nesting = s->inlined[i].nesting;
+            s->inlined[kept++] = s->inlined[i];
+        }
+    }
+    s->inlined_count = kept;
+
+    if (s->overflow != NULL) {
+        if (level < 0) {
+            hashtableRelease(s->overflow); /* destructor frees every entry */
+            s->overflow = NULL;
+        } else {
+            hashtableIterator iter;
+            void *next;
+            hashtableInitIterator(&iter, s->overflow, HASHTABLE_ITER_SAFE);
+            while (hashtableNext(&iter, &next)) {
+                slotMemoryBytesSnap *e = next;
+                if (e->nesting > level) {
+                    hashtableDelete(s->overflow, e);
+                } else if (e->nesting > max_nesting) {
+                    max_nesting = e->nesting;
+                }
+            }
+            hashtableCleanupIterator(&iter);
+        }
+    }
+    s->max_nesting = max_nesting;
+    slotSnapUpdateEmpty(s);
+}
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command
@@ -51,6 +404,7 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
     case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
     case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
+    case MEMORY_BYTES: slot_stat = slotMemoryBytes(slot); break;
     case SLOT_STAT_COUNT:
     case INVALID: serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
@@ -96,13 +450,22 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
-                                                          : 1); /* Nested map representing slot usage statistics. */
+    /* The map always carries key-count and memory-bytes (state metrics), and
+     * additionally carries cpu-usec / network-bytes-in / network-bytes-out
+     * when the cumulative stats are enabled. */
+    int map_len = server.cluster_slot_stats_enabled ? SLOT_STAT_COUNT : 2;
+    addReplyMapLen(c, map_len);
+
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
 
-    /* Any additional metrics aside from key-count come with a performance trade-off,
-     * and are aggregated and returned based on its server config. */
+    /* memory-bytes is the total allocated footprint of all keys in the slot. */
+    addReplyBulkCString(c, "memory-bytes");
+    addReplyLongLong(c, slotMemoryBytes(slot));
+
+    /* Any additional metrics aside from key-count/memory-bytes come with a
+     * performance trade-off, and are aggregated and returned based on its
+     * server config. */
     if (server.cluster_slot_stats_enabled) {
         addReplyBulkCString(c, "cpu-usec");
         addReplyLongLong(c, server.cluster->slot_stats[slot].cpu_usec);
@@ -200,7 +563,8 @@ static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int de
 
 /* Resets applicable slot statistics. */
 void clusterSlotStatReset(int slot) {
-    /* key-count is exempt, as it is queried separately through `countKeysInSlot()`. */
+    /* key-count and memory-bytes are exempt, as they are kept with the data
+     * and queried separately through `countKeysInSlot()` and slotMemoryBytes(). */
     memset(&server.cluster->slot_stats[slot], 0, sizeof(slotStat));
 }
 
@@ -289,6 +653,9 @@ void clusterSlotStatsCommand(client *c) {
             order_by = NETWORK_BYTES_IN;
         } else if (!strcasecmp(objectGetVal(c->argv[3]), "network-bytes-out") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_OUT;
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "memory-bytes")) {
+            /* memory-bytes is a state metric, always available when cluster is enabled. */
+            order_by = MEMORY_BYTES;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;

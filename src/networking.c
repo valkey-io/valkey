@@ -118,16 +118,16 @@ typedef enum {
  * The packed attribute is specified because buffer is accessed at arbitrary offsets,
  * so no benefit in data structure padding and applying packed saves the space in the buffer  */
 typedef struct __attribute__((__packed__)) payloadHeader {
-    size_t payload_len;       /* payload length in a reply buffer */
-    uint64_t reply_len;       /* actual reply length for non-plain payloads */
-    int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
+    size_t payload_len; /* payload length in a reply buffer */
+    /* Logical size finalized by the main thread, or zero while unobserved. */
+    uint64_t reply_len;
+    /* Low 15 bits encode slot + 1; high bit means the main thread accounts
+     * this header and all future appends. The I/O thread never reads this
+     * scalar, which is a separate memory location from payload_type. */
+    uint16_t slot_and_flags;
     uint8_t payload_type : 1; /* one of payloadType */
     uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
     uint8_t reserved : 6;     /* reserved */
-    /* tracked_for_cob is placed after the bitfield byte so it is byte aligned.
-     * _Atomic(uint8_t) has alignment 1, this is safe inside __packed__
-     * because the compiler will not insert padding before it */
-    _Atomic(uint8_t) tracked_for_cob; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
 } payloadHeader;
 
 /* To avoid copy of whole string in reply buffer
@@ -137,9 +137,85 @@ typedef struct __attribute__((__packed__)) bulkStrRef {
     sds str;   /* pointer to string to optimize memory access by I/O thread */
 } bulkStrRef;
 
+#define PAYLOAD_ACCOUNTED 0x8000u
+#define PAYLOAD_SLOT_MASK 0x7fffu
+static_assert(CLUSTER_SLOTS < PAYLOAD_ACCOUNTED, "slot encoding overlaps reply accounting flag");
+
+static inline int payloadHeaderSlot(const payloadHeader *header) {
+    return (int)(header->slot_and_flags & PAYLOAD_SLOT_MASK) - 1;
+}
+
+/* Queued references retain immutable strings. Once observed, a header and all
+ * future appends are accounted immediately. I/O never reads this state. */
+static void accountBulkReplyChunk(client *c, payloadHeader *header) {
+    serverAssert(header->payload_type == BULK_STR_REF);
+    if (header->slot_and_flags & PAYLOAD_ACCOUNTED) return;
+    serverAssert(header->reply_len == 0 && header->payload_len % sizeof(bulkStrRef) == 0);
+    bulkStrRef *first = (bulkStrRef *)(header + 1);
+    bulkStrRef *end = (bulkStrRef *)((char *)first + header->payload_len);
+    for (bulkStrRef *ref = first; ref < end; ref++) valkey_prefetch(ref->str - 1);
+    uint64_t total = 0;
+    for (bulkStrRef *ref = first; ref < end; ref++) {
+        size_t len = sdslen(ref->str);
+        total += (uint64_t)digits10(len) + 3 + len + 2;
+    }
+    header->reply_len = total;
+    header->slot_and_flags |= PAYLOAD_ACCOUNTED;
+    c->io_tracked_reply_len += total;
+    /* Logged MGET can batch size reads until its atomic command finishes.
+     * Every earlier logged command finalized its headers before returning. */
+    if (header->track_bytes) c->net_output_bytes_curr_cmd += total;
+}
+
+static void accountBulkReplyBuffer(client *c, char *ptr, char *end) {
+    while (ptr < end) {
+        payloadHeader *header = (payloadHeader *)ptr;
+        if (header->payload_type == BULK_STR_REF) accountBulkReplyChunk(c, header);
+        ptr += sizeof(payloadHeader) + header->payload_len;
+    }
+}
+
+/* Start at the first dirty header rather than rescanning an observed backlog. */
+static void accountPendingBulkReplies(client *c) {
+    payloadHeader *first = c->pending_bulk_header;
+    if (!first) return;
+    listNode *node = c->pending_bulk_node;
+    if (!node) {
+        serverAssert(c->flag.buf_encoded);
+        accountBulkReplyBuffer(c, (char *)first, c->buf + c->bufpos);
+        node = listFirst(c->reply);
+        first = NULL;
+    }
+    for (; node; node = listNextNode(node)) {
+        clientReplyBlock *block = listNodeValue(node);
+        if (block && block->flag.buf_encoded)
+            accountBulkReplyBuffer(c, first ? (char *)first : block->buf, block->buf + block->used);
+        first = NULL;
+    }
+    c->pending_bulk_header = NULL;
+    c->pending_bulk_node = NULL;
+}
+
+/* Release can discard unobserved sizes, but must move the marker before the
+ * buffer or its list node disappears. Plain and placeholder nodes need no scan. */
+static void advancePendingBulkReplies(client *c, char *buf) {
+    if (!c->pending_bulk_header) return;
+    listNode *node = c->pending_bulk_node;
+    char *pending_buf = node ? ((clientReplyBlock *)listNodeValue(node))->buf : c->buf;
+    if (pending_buf != buf) return;
+    node = node ? listNextNode(node) : listFirst(c->reply);
+    while (node) {
+        clientReplyBlock *block = listNodeValue(node);
+        if (block && block->flag.buf_encoded) break;
+        node = listNextNode(node);
+    }
+    c->pending_bulk_node = node;
+    c->pending_bulk_header = node ? (payloadHeader *)((clientReplyBlock *)listNodeValue(node))->buf : NULL;
+}
+
+static uint64_t getClientOutputBufferMemoryUsage64(client *c);
 static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
-static void trackBufReferences(char *buf, size_t bufpos, client *c);
 static void releaseBufReferences(char *buf, size_t bufpos, client *c);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
@@ -421,6 +497,8 @@ client *createClient(connection *conn) {
     c->net_output_bytes = 0;
     c->net_output_bytes_curr_cmd = 0;
     c->io_tracked_reply_len = 0;
+    c->pending_bulk_header = NULL;
+    c->pending_bulk_node = NULL;
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -606,11 +684,12 @@ static size_t upsertPayloadHeader(char *buf,
 
     // If cluster slots stats disabled set slot to -1 to prevent excessive per slot headers
     if (!clusterSlotStatsEnabled(slot)) slot = -1;
+    serverAssert(slot >= -1 && slot < CLUSTER_SLOTS);
 
-    /* Try to add payload to last chunk if possible */
-    if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot &&
-        (*last_header)->track_bytes == track_bytes &&
-        !atomic_load_explicit(&(*last_header)->tracked_for_cob, memory_order_acquire)) {
+    /* Try to add payload to last chunk if possible. Logical accounting is
+     * main-thread only, so extending a header needs no tracking handshake. */
+    if (*last_header != NULL && (*last_header)->payload_type == type && payloadHeaderSlot(*last_header) == slot &&
+        (*last_header)->track_bytes == track_bytes) {
         (*last_header)->payload_len += allowed_len;
         return allowed_len;
     }
@@ -625,10 +704,9 @@ static size_t upsertPayloadHeader(char *buf,
 
     (*last_header)->payload_type = type;
     (*last_header)->payload_len = allowed_len;
-    (*last_header)->slot = slot;
+    (*last_header)->slot_and_flags = (uint16_t)(slot + 1);
     (*last_header)->reply_len = 0;
     (*last_header)->track_bytes = track_bytes;
-    (*last_header)->tracked_for_cob = 0;
     (*last_header)->reserved = 0;
 
     *bufpos += sizeof(payloadHeader);
@@ -658,7 +736,14 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
     }
     if (!reply_len) return 0;
 
-    memcpy(c->buf + c->bufpos, payload, reply_len);
+    /* A reference is indivisible and always has the same size. Keep the
+     * copy constant-sized so it does not call the generic memcpy path. */
+    if (payload_type == BULK_STR_REF) {
+        serverAssert(reply_len == sizeof(bulkStrRef));
+        memcpy(c->buf + c->bufpos, payload, sizeof(bulkStrRef));
+    } else {
+        memcpy(c->buf + c->bufpos, payload, reply_len);
+    }
     c->bufpos += reply_len;
     /* We update the buffer peak after appending the reply to the buffer */
     if (c->buf_peak < (size_t)c->bufpos) c->buf_peak = (size_t)c->bufpos;
@@ -742,7 +827,9 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
         *reply_bytes += tail->size;
 
-        closeClientOnOutputBufferLimitReached(c, 1);
+        /* Bulk references are checked by tryAvoidBulkStrCopyToReply after
+         * their accounting state has been registered. */
+        if (payload_type != BULK_STR_REF) closeClientOnOutputBufferLimitReached(c, 1);
     }
 }
 
@@ -800,21 +887,76 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     }
 }
 
-/* Increment reference to object and add pointer to object and
- * pointer to string itself to current reply buffer */
-static void _addBulkStrRefToBufferOrList(client *c, robj *obj) {
-    if (c->flag.close_after_reply) return;
+/* Returns 0 when checkClientOutputBufferLimits() would return 0 without side
+ * effects for a client that just queued a copy-avoided reply: the client was
+ * authenticated, so the unauthenticated client limit does not apply, no soft
+ * limit episode is in progress, and its usage is below its class limits.
+ * isCopyAvoidPreferred() only admits normal and pub/sub clients, so the class
+ * follows from the pub/sub flag. This keeps the full limit check off the
+ * per-reference hot path. */
+static inline int copyAvoidedReplyMayHitLimit(client *c) {
+    if (unlikely(!c->flag.ever_authenticated || c->obuf_soft_limit_reached_time)) return 1;
+    clientBufferLimitsConfig *limits = &server.client_obuf_limits[c->flag.pubsub ? CLIENT_TYPE_PUBSUB : CLIENT_TYPE_NORMAL];
+    if (!limits->hard_limit_bytes && !limits->soft_limit_bytes) return 0;
+    /* Same comparison as checkClientOutputBufferLimits(). */
+    uint64_t used = getClientOutputBufferMemoryUsage64(c);
+    return (limits->hard_limit_bytes && used >= limits->hard_limit_bytes) ||
+           (limits->soft_limit_bytes && used >= limits->soft_limit_bytes);
+}
+
+/* These conditions exclude every output limit and its soft episode state. */
+static inline int copyAvoidedReplyHasNoLimits(client *c) {
+    clientBufferLimitsConfig *limits = &server.client_obuf_limits[c->flag.pubsub ? CLIENT_TYPE_PUBSUB : CLIENT_TYPE_NORMAL];
+    return c->flag.ever_authenticated && !c->obuf_soft_limit_reached_time &&
+           !limits->hard_limit_bytes && !limits->soft_limit_bytes;
+}
+
+static inline int copyAvoidedReplyExempt(client *c) {
+    return server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold == -1 && copyAvoidedReplyHasNoLimits(c);
+}
+
+/* Increment the object reference and queue the object and string pointers. */
+static inline int _addBulkStrRefToBufferOrList(client *c, robj *obj, int exempt) {
+    if (c->flag.close_after_reply) return 0;
+    /* Limit changes need not change the header's track_bytes. Finalize its
+     * pending prefix before appending an immediately accounted reference. */
+    if (!exempt && c->pending_bulk_header) accountPendingBulkReplies(c);
 
     /* Refcount will be decremented in write completion handler by the main thread */
     incrRefCount(obj);
 
     bulkStrRef str_ref = {.obj = obj, .str = objectGetVal(obj)};
-    if (!_addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref))) {
+    /* A reference is never split, so it always lands in the last header. */
+    payloadHeader *header;
+    listNode *header_node = NULL;
+    if (_addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref))) {
+        header = c->last_header;
+    } else {
         /* Content spilled to reply list. Clear c->last_header since
          * it points into c->buf and should not be reused. */
         c->last_header = NULL;
         _addBulkStrRefToToList(c, (void *)&str_ref, sizeof(str_ref));
+        header_node = listLast(c->reply);
+        clientReplyBlock *tail = listNodeValue(header_node);
+        header = tail->last_header;
     }
+    if (exempt && !(header->slot_and_flags & PAYLOAD_ACCOUNTED)) {
+        if (!c->pending_bulk_header) {
+            c->pending_bulk_header = header;
+            c->pending_bulk_node = header_node;
+        }
+        return 1;
+    }
+    size_t str_len = sdslen(str_ref.str);
+    uint64_t logical_reply_len = (uint64_t)digits10(str_len) + 3 + str_len + 2;
+    header->reply_len += logical_reply_len;
+    header->slot_and_flags |= PAYLOAD_ACCOUNTED;
+    c->io_tracked_reply_len += logical_reply_len;
+    /* Reuse the RESP size for command logging instead of reading the string
+     * length and calculating its prefix a second time in addReplyBulk(). */
+    if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1)
+        c->net_output_bytes_curr_cmd += logical_reply_len;
+    return exempt;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1531,30 +1673,65 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
     if (!isCopyAvoidPreferred(c, obj)) return C_ERR;
     if (prepareClientToWrite(c) != C_OK) return C_ERR;
 
-    _addBulkStrRefToBufferOrList(c, obj);
+    int exempt = _addBulkStrRefToBufferOrList(c, obj, copyAvoidedReplyExempt(c));
+    /* Only exempt, unlogged replies defer accounting. Any applicable limit
+     * is enforced immediately, before anything is written. */
+    if (!exempt && unlikely(copyAvoidedReplyMayHitLimit(c))) closeClientOnOutputBufferLimitReached(c, 1);
 
     return C_OK;
 }
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
-        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
-         * We determine per-reply if tracking is enabled by checking the config in the main thread. */
-        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
-            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
-            size_t str_len = sdslen(objectGetVal(obj));
-            uint32_t num_len = digits10(str_len);
-            /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-            c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
-            c->net_output_bytes_curr_cmd += str_len;       /* <data> */
-            c->net_output_bytes_curr_cmd += 2;             /* \r\n */
-        }
-        return;
-    }
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) return;
     addReplyBulkLen(c, obj);
     addReply(c, obj);
     addReplyProto(c, "\r\n", 2);
+}
+
+/* This preparation is scoped to an atomic MGET without module lookup hooks. Lookup cannot
+ * change reply mode, authentication, logging or limits within that command. */
+writePreparedClient *prepareClientForBulk(client *c, int *exempt) {
+    if (!server.min_io_threads_copy_avoid ||
+        server.io_threads_num < server.min_io_threads_copy_avoid ||
+        c->flag.fake || c->flag.script || c->flag.module || c->flag.pushing || isDeferredReplyEnabled(c) ||
+        getClientType(c) != CLIENT_TYPE_NORMAL || moduleMayRunDuringKeyLookup())
+        return NULL;
+    *exempt = copyAvoidedReplyHasNoLimits(c);
+    return prepareClientForFutureWrites(c);
+}
+
+/* Only call with preparation from prepareClientForBulk(), during the
+ * same command. Use the exempt helper only with its returned exemption.
+ * Non-RAW/static objects retain the regular copying behavior. */
+void addWritePreparedBulk(writePreparedClient *wpc, robj *obj) {
+    client *c = (client *)wpc;
+    if (unlikely(c->flag.close_asap)) return;
+    if (obj->encoding == OBJ_ENCODING_RAW && obj->refcount != OBJ_STATIC_REFCOUNT) {
+        _addBulkStrRefToBufferOrList(c, obj, 0);
+        if (unlikely(copyAvoidedReplyMayHitLimit(c))) closeClientOnOutputBufferLimitReached(c, 1);
+    } else {
+        addReplyBulk(c, obj);
+    }
+}
+
+/* Keep exemption constant so the compiler can specialize this hot path. */
+void addWritePreparedBulkExempt(writePreparedClient *wpc, robj *obj) {
+    client *c = (client *)wpc;
+    if (unlikely(c->flag.close_asap)) return;
+    if (obj->encoding == OBJ_ENCODING_RAW && obj->refcount != OBJ_STATIC_REFCOUNT) {
+        _addBulkStrRefToBufferOrList(c, obj, 1);
+    } else {
+        addReplyBulk(c, obj);
+    }
+}
+
+/* Complete a prepared atomic MGET before command logging observes its size.
+ * Unlogged replies retain their usual on-demand accounting. */
+void finishWritePreparedBulk(writePreparedClient *wpc) {
+    client *c = (client *)wpc;
+    if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1 && c->pending_bulk_header)
+        accountPendingBulkReplies(c);
 }
 
 /* Add a C buffer as bulk reply */
@@ -1768,7 +1945,7 @@ void AddReplyFromClient(client *dst, client *src) {
     }
 
     /* First add the static buffer (either into the static buffer or reply list) */
-    serverAssert(src->flag.buf_encoded == 0);
+    serverAssert(src->flag.buf_encoded == 0 && src->pending_bulk_header == NULL);
     addReplyProto(dst, src->buf, src->bufpos);
 
     /* We need to check with prepareClientToWrite again (after addReplyProto)
@@ -3077,10 +3254,9 @@ static void addEncodedBufferToReplyIOV(char *buf, size_t bufpos, replyIOV *reply
         if (header->payload_type == PLAIN_REPLY) {
             addPlainBufferToReplyIOV(ptr, header->payload_len, reply, metadata);
         } else {
-            uint64_t data_len = metadata->data_len;
             addBulkStringToReplyIOV(ptr, header->payload_len, reply, metadata);
-            /* Store actual reply len for cluster slot stats */
-            header->reply_len = metadata->data_len - data_len;
+            /* Only the main thread maintains logical accounting. The I/O
+             * thread does not read or update either accounting field. */
         }
         ptr += header->payload_len;
     }
@@ -3188,9 +3364,6 @@ static int writevToClient(client *c) {
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
     if (bufpos > 0) {
-        if (c->flag.buf_encoded) {
-            trackBufReferences(c->buf, bufpos, c);
-        }
         addBufferToReplyIOV(c->flag.buf_encoded, c->buf, bufpos, &reply, &buf_metadata[bufcnt++]);
     }
 
@@ -3211,10 +3384,6 @@ static int writevToClient(client *c) {
             if (used == 0) { /* empty node, skip over it. */
                 if (next == lastblock) break;
                 continue;
-            }
-
-            if (o->flag.buf_encoded) {
-                trackBufReferences(o->buf, used, c);
             }
 
             addBufferToReplyIOV(o->flag.buf_encoded, o->buf, used, &reply, &buf_metadata[bufcnt]);
@@ -3317,67 +3486,23 @@ void resetLastWrittenBuf(client *c) {
     c->io_last_written.data_len = 0;
 }
 
-/* Track BULK_STR_REF sizes.
- * Calculates reply_len for BULK_STR_REFs if not already set, and adds to client's tracking counter.
- * This is called from I/O thread before writing to account for actual reply sizes. */
-static void trackBufReferences(char *buf, size_t bufpos, client *c) {
-    serverAssert(c);
-
-    char *ptr = buf;
-    while (ptr < buf + bufpos) {
-        payloadHeader *header = (payloadHeader *)ptr;
-        ptr += sizeof(payloadHeader);
-
-        if (header->payload_type == BULK_STR_REF) {
-            uint8_t expected = 0;
-            if (atomic_compare_exchange_strong_explicit(&header->tracked_for_cob, &expected, 1,
-                                                        memory_order_acq_rel, memory_order_acquire)) {
-                /* We claimed tracking rights */
-                bulkStrRef *str_ref = (bulkStrRef *)ptr;
-                size_t len = header->payload_len;
-                uint64_t total_reply_len = 0;
-                while (len > 0) {
-                    size_t str_len = sdslen(str_ref->str);
-                    uint32_t num_len = digits10(str_len);
-                    /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-                    total_reply_len += (uint64_t)num_len + 3 + str_len + 2;
-                    str_ref++;
-                    len -= sizeof(bulkStrRef);
-                }
-                /* reply_len must be set here because addEncodedBufferToReplyIOV
-                 * stops early on partial writes (limit_reached) and may not check
-                 * headers after write boundary */
-                header->reply_len = total_reply_len;
-                atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
-            }
-        }
-
-        ptr += header->payload_len;
-    }
-    serverAssert(ptr == buf + bufpos);
-}
-
 /* Release references to string objects inside an encoded buffer */
 static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
+    serverAssert(c != NULL);
+    advancePendingBulkReplies(c, buf);
     char *ptr = buf;
     while (ptr < buf + bufpos) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            /* Decrement tracked reply size only if it was previously tracked.
-             * Use atomic exchange to ensure we only decrement once. */
-            if (c && atomic_exchange_explicit(&header->tracked_for_cob, 0, memory_order_acq_rel)) {
-                atomic_fetch_sub_explicit(&c->io_tracked_reply_len, header->reply_len, memory_order_relaxed);
-            }
-
-            /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
-             * at the time this reply was added, we account for cluster slot stats here in the IO thread
-             * after writing the reply. When tracking was enabled, it's already accounted in the main thread
-             * via afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
-            if (!header->track_bytes) {
-                clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
-            }
+            /* Slotless, unobserved chunks need never be read by the main
+             * thread. Resolve only sizes required for slot statistics. */
+            int slot = payloadHeaderSlot(header);
+            if (!header->track_bytes && slot >= 0) accountBulkReplyChunk(c, header);
+            c->io_tracked_reply_len -= header->reply_len;
+            if (!header->track_bytes)
+                clusterSlotStatsAddNetworkBytesOutForSlot(slot, header->reply_len);
 
             bulkStrRef *str_ref = (bulkStrRef *)ptr;
             size_t len = header->payload_len;
@@ -6621,6 +6746,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * the caller wishes. The main usage of this function currently is
  * enforcing the client output length limits. */
 static uint64_t getClientOutputBufferMemoryUsage64(client *c) {
+    if (c->pending_bulk_header) accountPendingBulkReplies(c);
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
         size_t repl_buf_size = 0;
         size_t repl_node_num = 0;
@@ -6643,7 +6769,7 @@ static uint64_t getClientOutputBufferMemoryUsage64(client *c) {
                  (list_item_size * listLength(c->deferred_reply));
     }
 
-    usage += atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+    usage += c->io_tracked_reply_len;
 
     return usage;
 }
@@ -6805,13 +6931,13 @@ int checkClientOutputBufferLimits(client *c) {
  *
  * Returns 1 if client was (flagged) closed. */
 int closeClientOnOutputBufferLimitReached(client *c, int async) {
+    if (c->pending_bulk_header) accountPendingBulkReplies(c);
     if (c->flag.fake) return 0; /* It is unsafe to free fake clients. */
     serverAssert(c->conn);
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    uint64_t tracked_len = atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
-    if ((c->reply_bytes == 0 && tracked_len == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
+    if ((c->reply_bytes == 0 && c->io_tracked_reply_len == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
         (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
         return 0;
     if (checkClientOutputBufferLimits(c)) {
@@ -7275,6 +7401,10 @@ void ioThreadWriteToClient(client *c) {
 /* These wrapper functions expose static functions for use in GoogleTest unit tests.
  * They are non-static wrappers that simply call the corresponding static functions. */
 
+void testOnlyPostWriteToClient(client *c) {
+    _postWriteToClient(c);
+}
+
 void testOnlyPostWriteToReplica(client *c) {
     postWriteToReplica(c);
 }
@@ -7312,7 +7442,7 @@ void testOnlyAddBulkStrRefToToList(client *c, const void *payload, size_t len) {
 }
 
 void testOnlyAddBulkStrRefToBufferOrList(client *c, robj *obj) {
-    _addBulkStrRefToBufferOrList(c, obj);
+    _addBulkStrRefToBufferOrList(c, obj, copyAvoidedReplyExempt(c));
 }
 
 void testOnlyInitReplyIOV(client *c, int iovsize, struct iovec *iov_arr, char (*prefixes)[BULK_STR_LEN_PREFIX_MAX_SIZE], char *crlf, replyIOV *reply) {

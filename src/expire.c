@@ -569,11 +569,11 @@ void expireReplicaKeys(void) {
         while (dbids && dbid < server.dbnum) {
             if ((dbids & 1) != 0) {
                 serverDb *db = server.db[dbid];
-                int dict_index = getKVStoreIndexForKey(keyname);
-                robj *expire = db == NULL ? NULL : dbFindExpiresWithDictIndex(db, keyname, dict_index);
+                int didx = getKVStoreIndexForKey(keyname);
+                robj *expire = db == NULL ? NULL : dbFindExpiresWithDictIndex(db, keyname, didx);
                 int expired = 0;
 
-                if (expire && activeExpireCycleTryExpire(db, expire, start, dict_index)) {
+                if (expire && activeExpireCycleTryExpire(db, expire, start, didx)) {
                     expired = 1;
                     /* Propagate the DEL (writable replicas do not propagate anything to other replicas,
                      * but they might propagate to AOF) and trigger module hooks. */

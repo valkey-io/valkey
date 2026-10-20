@@ -295,4 +295,47 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         R 0 MSET "{FOO}k1" hello "{FOO}k2" [string repeat z 50] "{FOO}k3" 999
         assert_slot_bytes_match_memory_usage $key_slot
     }
+
+    # Adding an expire can reallocate the value to hold the embedded expire
+    # field. setExpire must account that change.
+    test "memory-bytes matches MEMORY USAGE: SET EX / SETEX / SET PX" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}k1" [string repeat a 20] EX 100
+        R 0 SETEX "{FOO}k2" 100 [string repeat b 30]
+        R 0 SET "{FOO}k3" 12345 PX 100000
+        R 0 SET "{FOO}k4" [string repeat c 100] EX 100
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes matches MEMORY USAGE: EXPIRE / GETEX on an existing key" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}k1" [string repeat a 20]
+        R 0 SET "{FOO}k2" [string repeat b 30]
+        R 0 EXPIRE "{FOO}k1" 100
+        R 0 GETEX "{FOO}k2" EX 100
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 PERSIST "{FOO}k1"
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes matches MEMORY USAGE: volatile keys after DEBUG RELOAD" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}k1" [string repeat a 20] EX 100
+        R 0 SET "{FOO}k2" [string repeat b 100]
+        R 0 DEBUG RELOAD
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 DEL "{FOO}k1" "{FOO}k2"
+        assert_equal 0 [get_slot_bytes $key_slot]
+    } {} {needs:debug}
+
+    # Commands run from a script execute on a temporary client, not on the
+    # client that runs EVAL. The snapshot and the commit must use the same client.
+    test "memory-bytes matches MEMORY USAGE: in-place APPEND / SETRANGE inside EVAL" {
+        R 0 FLUSHALL
+        R 0 SET $key value
+        R 0 EVAL {return server.call('APPEND', KEYS[1], ARGV[1])} 1 $key [string repeat x 100]
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 EVAL {return server.call('SETRANGE', KEYS[1], 300, 'y')} 1 $key
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
 }

@@ -1,307 +1,384 @@
 # Per-Slot Memory Tracking — High-Level Design
 
-## Goal
+## Overview
 
-Track the allocated memory consumed by each hash slot in a Valkey cluster.
-The metric is a single per-slot total, summed across all keys in the slot
-regardless of object type (string, list, set, zset, hash, stream, module).
-The metric is exposed via `CLUSTER SLOT-STATS` as `memory-bytes` and is
-always-on when cluster mode is enabled.
+Valkey Cluster needs a fast way to report how much allocated memory belongs to
+each hash slot. This design adds a `memory-bytes` state metric to
+`CLUSTER SLOT-STATS`.
 
-As part of this work we plan to provide an O(1) size function for every data
-type, so the per-key size lookup — and therefore the accounting on every write
-path — stays O(1) regardless of value size. Streams are the first type wired
-this way (see [Stream accounting](#stream-accounting)); the remaining types
-follow the same pattern.
+The metric:
 
-## Definition of "memory size"
+- Reports one allocated-memory total per slot.
+- Includes keys from every configured database.
+- Uses the same memory-size definition as `MEMORY USAGE` for supported types.
+- Is maintained incrementally. Reading a slot's value costs O(number of
+  databases), the same as `key-count`.
+- Is available when cluster mode is enabled, even when cumulative slot metrics
+  are disabled.
 
-The metric reflects the *allocated* footprint of an entry (matching
-`objectComputeSize()`, which backs `MEMORY USAGE`), not a logical byte count.
-For each key in a slot, the contribution to the slot's `memory_bytes` counter
-is computed by `slotStatsObjectSize()` as:
+The current design maintains `memory-bytes` continuously when cluster mode is
+enabled. The final always-on versus configurable policy is discussed in
+[Design decisions](#design-decisions).
 
-```
+### Implementation status
+
+| Type | Status | Size source | Known limitation |
+|---|---|---|---|
+| String | Implemented | Value robj allocation, plus the external sds for RAW strings | None |
+| Stream | Implemented | `streamMemUsage()` and `stream->tracked_memory_bytes` | Consumer-group memory is not counted yet |
+| List | Planned | O(1) allocated-size function or incremental counter | Not wired |
+| Hash | Planned | O(1) allocated-size function or incremental counter | Not wired |
+| Set | Planned | O(1) allocated-size function or incremental counter | Not wired |
+| ZSet | Planned | O(1) allocated-size function or incremental counter | Not wired |
+| Module | API planned | Module-reported allocation deltas | Legacy and non-participating modules are not counted |
+
+Streams are the first container type with O(1) size tracking. The remaining
+built-in types will follow the same pattern.
+
+## Contents
+
+- [Metric semantics](#metric-semantics)
+- [Architecture](#architecture)
+- [Lifecycle and correctness](#lifecycle-and-correctness)
+- [Storage and command interface](#storage-and-command-interface)
+- [Type-specific accounting](#type-specific-accounting)
+- [Adding support for another type](#adding-support-for-another-type)
+- [Design decisions](#design-decisions)
+- [Known limitations](#known-limitations)
+- [Benchmark results](#benchmark-results)
+
+---
+
+## Metric semantics
+
+### What `memory-bytes` measures
+
+`memory-bytes` represents the allocated footprint of every key/value entry in a
+slot. It follows `objectComputeSize()`, which backs `MEMORY USAGE`, rather than
+reporting logical content length.
+
+For each key, `slotStatsObjectSize()` calculates:
+
+```text
 zmalloc_size(val) + <key, if not embedded> + <type-specific external allocations>
 ```
 
+The terms are:
+
 - `zmalloc_size(val)` is the actual allocation of the value object, including
-  allocator rounding. Because keyspace objects embed the key inside the value
-  object (`hasembkey`), this already accounts for the key sds and the expire
-  field. The key is added explicitly only for the (rare) non-embedded case.
-- The type-specific term adds allocations that live *outside* the value robj:
+  allocator rounding.
+- Keyspace objects normally embed the key in the value object (`hasembkey`), so
+  the value allocation already includes the key sds and expire field.
+- The key is added separately only in the rare non-embedded case.
+- Type-specific size functions add allocations outside the value robj, such as
+  an external string sds, container nodes, listpacks, or radix trees.
 
-| Type | External allocation | Notes |
-|------|-------------------|-------|
-| String (EMBSTR/INT) | none | value bytes are inside the robj, already in `zmalloc_size(val)` |
-| String (RAW) | `sdsAllocSize(val->ptr)` | separate sds allocation |
-| Stream | `streamMemUsage(s)` | stream struct + data rax (`raxAllocSize`) + listpacks (`tracked_memory_bytes`) |
-| List / Hash / Set / ZSet / Module | (not yet wired) | future: add a `case` to `slotStatsObjectSize()` |
+This definition makes the intended relationship straightforward:
 
-Adding support for a new type requires:
-1. A single `case` in `slotStatsObjectSize()` returning its allocated size
-   (base `zmalloc_size(val)` plus the type's external allocations).
-2. If the type mutates in-place (bypassing `dbSetValue`), ensuring
-   `signalModifiedKey` is called after the mutation so the delta is captured.
+```text
+slot memory-bytes = sum of MEMORY USAGE for the slot's keys
+```
 
-## Scope: a slot is cluster-wide, not per-DB
+The equality applies to types and allocations supported by the per-slot
+accounting. Current exceptions are listed in [Known limitations](#known-limitations).
+Tests should compare against `MEMORY USAGE <key> SAMPLES 0` rather than use
+allocator-dependent constants.
 
-The counter is stored in a single global array, `server.cluster->slot_stats[CLUSTER_SLOTS]`,
-indexed only by slot number (`crc16(key) % 16384`) — there is no DB dimension.
-When `cluster-databases > 1`, keys for the same slot in different DBs all
-contribute to the *same* `memory_bytes` counter, so the reported value is the
-sum across all DBs for that slot.
+### Slot scope across databases
 
-This is intentional and matches the other `CLUSTER SLOT-STATS` fields.
+The reported value is cluster-wide for the slot: when `cluster-databases > 1`,
+same-slot keys in all databases add to the same reported `memory-bytes`. This
+matches `key-count`.
+
+The counter itself is kept per (database, slot), next to the data. Each
+database has one hashtable per slot in `db->keys`, and the counter lives in the
+metadata of that hashtable. `CLUSTER SLOT-STATS` sums the counters over
+`server.db`, the same way `countKeysInSlot()` sums key counts. See
+[Per-slot storage](#per-slot-storage).
+
+Because the counter lives with the data, it follows the data:
+
+- `FLUSHDB` on one database removes only that database's bytes.
+- An async flush swaps the database's kvstore out, so its counters leave with it.
+- A temp database used by diskless load (`repl-diskless-load swapdb`) has its
+  own kvstore. Its counters become visible only if it is swapped in, and are
+  dropped with it otherwise.
+- A slot ownership change (failover, `CLUSTER SETSLOT ... NODE`, slot takeover)
+  does not touch the counter, because the keys stay in place.
+
+### State metric versus cumulative metrics
+
+`memory-bytes` describes current state. It differs from cumulative fields such
+as `cpu-usec` and `network-bytes-in/out`:
+
+- `CONFIG RESETSTAT` preserves `memory-bytes`. The counter is not stored in
+  `slot_stats`, so resetting the cumulative fields cannot touch it.
+- `FLUSHDB` and `FLUSHALL` reduce or clear it as data is removed.
+- It must be maintained continuously. If enabled only after data already
+  exists, rebuilding it would require an O(N) scan of keys.
 
 ---
 
 ## Architecture
 
-The accounting system has two complementary mechanisms:
+The accounting uses two complementary paths:
 
-### 1. DB-primitive hooks (create / overwrite / delete)
+1. **Database primitive hooks** handle key creation, replacement, deletion,
+   loading, and expire changes. Database flushes need no hook, because the
+   counter is dropped together with the slot hashtable.
+2. **Per-key snapshots plus `signalModifiedKey`** handle values that mutate in
+   place without passing through `dbSetValue`.
 
-All key lifecycle events funnel through a small set of functions in `db.c`:
-
-| Primitive | Event | Action |
-|-----------|-------|--------|
-| `dbAddInternal` | New key created | `+= size(key, val)`, refresh key's snapshot |
-| `dbSetValue` | Key overwritten | `-= size(key, old)`, `+= size(key, new)`, refresh key's snapshot |
-| `dbGenericDeleteWithDictIndex` | Key deleted | `-= size(key, val)`, drop key's snapshot entry |
-| `dbAddRDBLoad` | Key loaded from RDB | `+= size(key, val)` |
-| `emptyDbStructure` | FLUSHDB / FLUSHALL | Reset `memory_bytes` to 0 |
-
-These hooks cover: SET, DEL, UNLINK, RENAME, COPY, RESTORE, MIGRATE,
-eviction, expiration, replication apply, RDB load, AOF replay, and any
-module API that creates/overwrites/deletes keys (`RM_StringSet`,
-`RM_DeleteKey`, etc.).
-
-### 2. Snapshot + signalModifiedKey (in-place mutations)
-
-For commands that mutate a value without going through `dbSetValue`
-(e.g. APPEND, INCR, XADD on existing stream, LPUSH, SADD, HSET):
-
+```text
+Create / replace / delete                    In-place mutation
+-------------------------                    -----------------
+dbAdd / dbSetValue / dbDelete               lookupKeyWrite(key)
+        |                                             |
+        v                                             v
+add/subtract full entry size                 capture size_before
+                                                      |
+                                             mutate existing value
+                                                      |
+                                                      v
+                                             signalModifiedKey(key)
+                                                      |
+                                             apply size_after - size_before
 ```
-lookupKeyWrite(db, key)
-  → records this key's size_before in the client's per-key snapshot set
 
-... in-place mutation (value changes without dbSetValue) ...
+### Database primitive hooks
+
+Key lifecycle events pass through a small set of functions in `db.c`:
+
+| Primitive | Event | Accounting action |
+|---|---|---|
+| `dbAddInternal` | New key | Add the entry size; refresh that key's snapshot if present |
+| `dbSetValue` | Replace value | Subtract the old size, add the new size, then refresh the snapshot |
+| `dbGenericDeleteWithDictIndex` | Delete key | Subtract the entry size and remove that key's snapshot |
+| `dbAddRDBLoad` | Load key from RDB | Add the entry size |
+| `setExpire` | Add or change an expire | Apply the size change, because adding the embedded expire field can reallocate the value; refresh the snapshot |
+| `kvstoreEmpty` | `FLUSHDB` / `FLUSHALL` | No accounting hook; the counter in each slot hashtable is cleared with the hashtable |
+
+All hooks take the `serverDb *` they work on, and add or subtract against that
+database's slot hashtable.
+
+These hooks cover normal commands and internal paths including `SET`, `DEL`,
+`UNLINK`, `RENAME`, `COPY`, `RESTORE`, `MIGRATE`, eviction, expiration,
+replication apply, RDB load, AOF replay, and module APIs that create, replace,
+or delete keys (`RM_StringSet`, `RM_DeleteKey`, and similar APIs).
+
+### In-place mutation snapshots
+
+Commands such as `APPEND`, `INCR`, `XADD`, `LPUSH`, `SADD`, and `HSET` may
+change an existing value without calling `dbSetValue`. Their accounting flow is:
+
+```text
+lookupKeyWrite(db, key)
+  -> record this key's size_before in the snapshot of server.executing_client
+
+mutate the existing value
 
 signalModifiedKey(c, db, key)
-  → finds this key's snapshot entry, looks up current val, computes size_after
-  → applies delta: slot_stats[slot].memory_bytes += (after - before)
-  → removes that key's entry
+  -> find this key's snapshot on server.executing_client
+  -> read the current value (LOOKUP_NOEFFECTS) and compute size_after
+  -> apply the counter of (db, slot) += size_after - size_before
+  -> remove this key's snapshot
 ```
 
-#### Per-key snapshot set (why it isn't a single scalar)
+The snapshot always lives on `server.executing_client`, the client that
+`call()` is running. This matters for scripts and `VM_Call`: `EVAL`, `FCALL`
+and module calls run each command on a temporary client, while
+`server.current_client` stays the client that sent `EVAL`. Using
+`server.executing_client` for the snapshot, the refresh, the forget, and the
+commit makes all four use the same client.
 
-A single command may mutate **several** keys in place — e.g. `SMOVE`,
-`LMOVE`/`RPOPLPUSH` shrink one key and grow another. A single `(slot, before)`
-scalar on the client cannot represent this: the second `lookupKeyWrite` would
-clobber the first key's `before`, and the first `signalModifiedKey` would clear
-the snapshot so the second key's delta is lost. The accounting would be
-corrupted by an arbitrary amount.
+The re-read at commit time uses `LOOKUP_NOEFFECTS`, so it has no side effects.
+In particular it is not counted again by hot-key detection.
 
-So the snapshot is a **small per-key set** on the client
-(`client.slot_data_bytes`, type `slotMemoryBytesSnapshot`):
+#### Why snapshots are per key
+
+Some commands mutate several keys in place. For example, `SMOVE` and
+`LMOVE`/`RPOPLPUSH` shrink one value and grow another.
+
+A single `(slot, before)` value on the client is not enough:
+
+1. The second `lookupKeyWrite` would replace the first key's `before` value.
+2. The first `signalModifiedKey` would consume the shared snapshot.
+3. The second key's delta would be lost.
+
+The client therefore owns a small per-key snapshot set in
+`client.slot_memory_bytes`:
 
 ```c
 typedef struct slotMemoryBytesSnap {
-    robj *key;        /* the modified key (incref'd while snapshotted) */
-    uint64_t before;  /* size at lookup / last db-hook refresh */
+    robj *key;        /* incref'd while snapshotted */
+    uint64_t before;  /* size at lookup or last DB-hook refresh */
+    int slot;         /* slot of key */
+    int dbid;         /* database of key */
 } slotMemoryBytesSnap;
 
 typedef struct slotMemoryBytesSnapshot {
-    slotMemoryBytesSnap inlined[2]; /* inline fast path, no allocation */
-    int count;                    /* valid inline entries; 0 once spilled */
-    int slot;                     /* shared slot for the command, -1 = none */
-    list *overflow;               /* NULL until >2 keys; then holds ALL entries */
+    slotMemoryBytesSnap inlined[2]; /* allocation-free common path */
+    int inlined_count;              /* valid inline entries; 0 after spill */
+    int slot;                       /* -1 means empty (fast-path guard) */
+    list *overflow;                 /* all entries after more than two keys */
 } slotMemoryBytesSnapshot;
 ```
 
-This is a small-vector optimization. Two entries are stored **inline**, which
-covers single-key commands and the common two-key movers (`SMOVE`, `LMOVE`)
-with zero allocation. A third distinct key migrates the inline entries into the
-`overflow` list and everything is kept there afterwards. The list stays `NULL`
-in the common case, so there is no allocation on the hot path. The set is keyed
-by the key, so `signalModifiedKey` searches for the entry matching the key it
-was handed (a 1–2 element scan in practice).
+The first two entries stay inline. This covers single-key commands and common
+two-key movers without allocation. On the third distinct key, the two inline
+entries move to `overflow`, and the list stores all entries from that point.
 
-#### Single shared slot, no db-id
+`signalModifiedKey` searches for the entry matching its key. In normal command
+paths this is a scan of one or two entries.
 
-- **One slot field.** Cluster rejects cross-slot commands, so every key a
-  command touches hashes to the same slot. The slot is stored once on the
-  snapshot, not per entry. (`slot == -1` doubles as the "nothing captured"
-  fast-path guard.)
-- **No db-id.** Cluster now allows multiple databases (`cluster-databases`
-  config), so the same key name can exist in several DBs. The snapshot stays
-  db-id-agnostic because a built-in command never switches `c->db` mid-command
-  **and** the snapshot set is cleared at every command boundary (see below), so
-  no entry can ever outlive the command that created it. The only path that
-  could break this is a module command that calls `RM_SelectDb` mid-execution
-  and mutates same-named keys in two DBs — out of scope for the currently
-  wired types.
+#### Why each entry stores its slot and database
 
-#### Per-command clear
+Cluster rejects cross-slot commands, so all keys used by a built-in command
+share one slot. Modules do not have this check: `RM_OpenKey` can open local
+keys in different slots in one command, and a keyspace-notification callback
+can open keys while another command runs. So each entry stores the slot of its
+key, and the commit uses that slot. The `slot` field of the set is only the
+empty-snapshot fast-path check (`slot == -1`).
 
-`afterCommand()` clears the snapshot set at the end of every `call()`. Because
-`call()` wraps every command — including each `MULTI`/`EXEC` sub-command and
-every scripted call — this guarantees:
+Each entry also stores the database ID of its key, and entries are matched on
+(database, key name). One command can use the same key name in two databases:
+`MOVE` and `COPY ... DB` look up the key in the source and in the destination
+database, and a module can call `RM_SelectDb` while its command runs. Without
+the database ID, `MOVE` would share one entry between the two databases: the
+destination lookup would overwrite the source `before`, and the settle step in
+the source delete would count the key again in the source slot.
 
-- A snapshot can never leak into the next command (e.g. a command that does
-  `lookupKeyWrite` but returns early without `signalModifiedKey`).
-- A snapshot can never span a `SELECT`, which is what makes dropping the db-id
-  safe.
+#### Snapshot lifecycle
 
-`resetClient()` also clears it (belt-and-suspenders for the top-level command),
-and `freeClient()` releases the overflow list.
+- `afterCommand()` clears snapshots at the end of every `call()`, including
+  each `MULTI`/`EXEC` sub-command and each scripted call.
+- `resetClient()` also clears snapshots for top-level client cleanup.
+- `freeClient()` releases the overflow list.
 
-**Interaction between the two mechanisms:**
+The per-command clear handles early returns after `lookupKeyWrite` and prevents
+stale snapshots from leaking into later commands or across `SELECT`.
 
-- If the mutation goes through `dbSetValue` (e.g. `dbReplaceValue` called by
-  `dbUnshareStringValue`), the db-hook does its own Sub/Add and **refreshes**
-  that key's snapshot entry to the new value's size. When `signalModifiedKey`
-  later fires, it sees `before == after` and applies zero delta. The refresh
-  only updates an *existing* entry — it never creates one — so bulk write paths
-  like `MSET` that never snapshotted do not allocate.
-- If the key is deleted between lookup and signal (rare — module callbacks),
-  `dbGenericDelete` **removes** that key's entry. `signalModifiedKey` finds no
-  entry and skips; the delete path already did the explicit Sub.
-- If the command exits early without calling `signalModifiedKey`, the leftover
-  entry is dropped by the per-command clear. Nothing is updated.
+#### Interaction with DB hooks
 
-### Cost when cluster mode is disabled
+The snapshot and DB-hook paths may both run for one command. The following
+rules prevent double counting:
 
-Zero. The `lookupKey` snapshot is gated on `server.cluster_enabled`.
-The db-primitive hooks call `dataBytesAccountingEnabled(slot)` which
-returns false immediately. No function calls, no branches taken.
+- Before `dbSetValue`, `setExpire`, or the delete path subtract the key's
+  current size, they **settle** the key's snapshot
+  (`clusterSlotStatsSettleKey`). Settle applies any in-place change that is
+  still pending (current size minus `before`) and moves `before` to the
+  current size. Without this step, an in-place change made earlier in the same
+  command would be lost. Example: a module calls `RM_StringTruncate` and then
+  `RM_SetExpire` or `RM_StringSet` on the same open key.
+- After `dbSetValue` or `setExpire` performs its subtract/add, it refreshes the
+  existing snapshot to the new value's size. A later `signalModifiedKey` sees
+  equal before/after values and applies no delta.
+- Refresh updates only an existing snapshot. It does not create one, so bulk
+  write paths such as `MSET` do not allocate snapshot entries unnecessarily.
+- If the key is deleted between lookup and signal, `dbGenericDelete` settles,
+  performs the subtraction, and removes that key's snapshot. A later signal
+  finds no entry and does nothing.
+- If a command exits without signaling, `afterCommand()` drops the leftover
+  entry without changing the metric.
 
----
+### Cost outside cluster mode
 
-## Data paths and correctness
-
-### Normal write commands (SET, HSET, LPUSH, SADD, ZADD, XADD, etc.)
-
-1. Command calls `lookupKeyWrite` → key's snapshot entry captured.
-2. Command either:
-   - Calls `setKey` / `dbAdd` / `dbSetValue` → db-hook accounts it, refreshes the key's entry.
-   - Mutates value in-place → `signalModifiedKey` accounts the delta for that key.
-3. `afterCommand` clears any leftover snapshot entries at the command boundary.
-
-### Key deletion (DEL, UNLINK, expire, evict)
-
-- `dbGenericDelete` subtracts the key's size and drops the key's snapshot entry.
-- `signalModifiedKey` is not called for deletions (only `signalDeletedKeyAsReady`).
-- Lazy-free / async delete: the size is subtracted **before** the object is
-  queued for background freeing — the accounting uses the live object.
-
-### RDB load
-
-- `dbAddRDBLoad` calls `clusterSlotStatsAddMemorySdsKey` after inserting each
-  key (the `SdsKey` variant, since at that point the value is already embedded
-  with its key and the caller holds only an `sds` key).
-- For streams, `tracked_memory_bytes` is maintained during RDB load by adding
-  `zmalloc_size(lp)` at each `raxTryInsert` of a listpack.
-
-### Replication apply (replica receiving writes from primary)
-
-- Replicated commands execute through the normal command path.
-- `lookupKeyWrite` + `signalModifiedKey` and db-hooks fire as usual.
-- `server.current_client` is set to the replication client.
-
-### FLUSHDB / FLUSHALL
-
-- `emptyDbStructure` calls `clusterSlotStatsResetMemoryBytesAll()` which
-  zeroes all `memory_bytes` counters across all slots.
-- This runs regardless of sync/async flush — the counters are cleared
-  immediately even if the actual memory is freed in the background.
-
-### CONFIG RESETSTAT
-
-- `memory_bytes` is a **state metric** (reflects current data), not a
-  cumulative counter. `CONFIG RESETSTAT` preserves it.
-- Only the cumulative metrics (cpu_usec, network_bytes_in/out) are reset.
-
-### Slot ownership changes (CLUSTER ADDSLOTS / DELSLOTS)
-
-- `clusterSlotStatReset(slot)` zeroes the entire `slotStat` struct including
-  `memory_bytes`. This is correct because keys migrate with the slot — the new
-  owner will rebuild the counters as keys arrive via RESTORE/MIGRATE.
-
-### Module API (RM_StreamAppendItem, RM_StringSet, RM_HashSet, etc.)
-
-- Module calls that create/delete keys go through `dbAdd` / `dbGenericDelete`
-  → covered by db-hooks.
-- Module calls that mutate existing values (RM_StreamAppendItem,
-  RM_ListPush, RM_HashSet on existing key) call `signalModifiedKey` at the
-  end → covered by snapshot+signal mechanism.
-- No per-module-function instrumentation is needed.
-
-### RENAME / COPY
-
-- Source key is deleted from old slot → db-hook subtracts.
-- Destination key is created in new slot → db-hook adds.
-- Cross-slot RENAME is rejected in cluster mode.
-- COPY within same slot: both source and destination are accounted.
-
-### Multi-key in-place commands (SMOVE, LMOVE / RPOPLPUSH, ...)
-
-- These shrink one key and grow another **in place** (no `dbSetValue`), within
-  a single command and a single slot (cross-slot is rejected).
-- Each key gets its own snapshot entry at `lookupKeyWrite`, and each
-  `signalModifiedKey` consumes only that key's entry. The per-key snapshot set
-  is what makes this correct — a single-scalar snapshot would miss-attribute one
-  key's `before` to the other and drop the second key's delta entirely.
-- Not exercised by the currently wired types (string, stream have no two-key
-  in-place command); this is a prerequisite for wiring set/list/zset/hash. The
-  `SMOVE`/`LMOVE` regression tests should land with those types.
-
-### SWAPDB
-
-- Not allowed in cluster mode (`server.cluster_enabled` check rejects it).
-- No accounting concerns.
+Snapshot capture is gated on `server.cluster_enabled`. The DB primitive hooks
+are still called, but each one returns after a single `server.cluster_enabled`
+check. Non-cluster deployments do not maintain the per-slot metric.
 
 ---
 
-## Storage
+## Lifecycle and correctness
+
+### Operation matrix
+
+| Path | How the metric stays correct |
+|---|---|
+| Normal write | `lookupKeyWrite` captures the old size; a DB hook accounts replacement or `signalModifiedKey` applies an in-place delta |
+| Multi-key in-place write | Every key has its own snapshot; each signal consumes only the matching entry |
+| Delete / unlink | Size is subtracted before the object is freed; the matching snapshot is removed |
+| Lazy or asynchronous delete | Accounting uses the live object before it is queued for background freeing |
+| Expiration / eviction | Both use the normal delete primitive and subtract the entry size |
+| RDB load | `dbAddRDBLoad` adds every loaded key; type-specific counters are maintained while decoding |
+| AOF replay | Commands execute through the normal command paths |
+| Replication apply | Replicated commands use normal command paths with the replication client as `server.executing_client` |
+| Replica full sync | The replica loads the RDB through `dbAddRDBLoad` and `setExpire`, so it reports the same value as the primary |
+| Diskless load with `swapdb` | Keys load into a temp database with its own kvstore. The old dataset's counters are dropped with the old kvstore; a failed load drops the temp counters |
+| Scripts and `VM_Call` | Snapshot and commit both use `server.executing_client`, the temporary client that runs the command |
+| Setting an expire | `setExpire` applies the size change when the expire field reallocates the value (`SET EX`, `SETEX`, `GETEX`, `EXPIRE`, RDB load) |
+| `FLUSHDB` / `FLUSHALL` | Only the flushed databases lose their counters, including for asynchronous flush |
+| `CONFIG RESETSTAT` | `memory-bytes` is preserved because it represents current state |
+| Slot ownership change | `clusterSlotStatReset(slot)` clears only the cumulative fields. Failover, `CLUSTER SETSLOT ... NODE`, and slot takeover keep the keys, so the counter stays. Keys dropped later (`delKeysInSlot`) are subtracted by the delete path |
+| `RENAME` | Source deletion subtracts and destination creation adds; cross-slot rename is rejected |
+| `COPY` | Destination creation/replacement is accounted; same-slot source and destination remain independent entries |
+| `SWAPDB` | Rejected in cluster mode, so it needs no accounting path |
+
+### RDB load details
+
+`dbAddRDBLoad` calls `clusterSlotStatsAddMemorySdsKey` after inserting each key.
+It uses the `SdsKey` variant because the value already embeds its key and the
+caller holds an `sds` key.
+
+For streams, RDB loading updates `tracked_memory_bytes` by adding
+`zmalloc_size(lp)` whenever a listpack is inserted into the stream radix tree.
+
+### Module command paths
+
+Module APIs that create or delete keys pass through `dbAdd` and
+`dbGenericDelete`, so DB hooks account them. APIs that mutate existing values,
+such as `RM_StreamAppendItem`, `RM_ListPush`, and `RM_HashSet`, call
+`signalModifiedKey` and use the snapshot path.
+
+Module-owned allocations require the separate participation policy described
+in [Module types](#module-types).
+
+---
+
+## Storage and command interface
+
+### Per-slot storage
+
+The counter is a field in the kvstore hashtable metadata (`src/kvstore.c`):
 
 ```c
-/* In cluster_legacy.h */
-typedef struct slotStat {
-    uint64_t cpu_usec;
-    uint64_t network_bytes_in;
-    uint64_t network_bytes_out;
-    uint64_t memory_bytes;  /* per-slot allocated-byte accounting */
-} slotStat;
+typedef struct {
+    listNode *rehashing_node;
+    kvstore *kvs;
+    uint64_t tracked_bytes; /* Caller-maintained byte count for the entries in this hashtable. */
+} kvstoreHashtableMetadata;
 ```
 
-Total memory-bytes overhead: `8 bytes × 16384 slots` ≈ 128 KB.
+kvstore exposes it through `kvstoreHashtableAddTrackedBytes()`,
+`kvstoreHashtableSubTrackedBytes()`, and `kvstoreHashtableTrackedBytes()`. The
+kvstore does not know what the bytes mean; `cluster_slot_stats.c` is the only
+user, and only for `db->keys`. `kvstoreEmpty()` sets the field to 0, and the
+field goes away when an empty hashtable is freed.
 
-For streams, the per-slot counter draws on `stream->tracked_memory_bytes`, a
-counter maintained incrementally in `t_stream.c` that holds the summed
-`zmalloc_size` of all listpacks in the stream's data rax. See
-[Stream accounting](#stream-accounting) below.
+`cluster_slot_stats.c` reads the slot value with `slotMemoryBytes(slot)`, which
+sums `kvstoreHashtableTrackedBytes(server.db[i]->keys, slot)` over all
+databases.
 
-The in-place mutation snapshot lives on the client
-(`client.slot_data_bytes`, type `slotMemoryBytesSnapshot`; see
-[Snapshot + signalModifiedKey](#2-snapshot--signalmodifiedkey-in-place-mutations)).
-It is two inline entries plus a lazily-allocated overflow list, so the common
-case adds a fixed handful of bytes per client and **zero** per-command
-allocations. The overflow list is allocated only when a single command
-in-place-mutates more than two distinct keys (essentially modules only) and is
-released in `freeClient`.
+The cost is:
 
----
+- 8 bytes per allocated hashtable. The metadata type is shared by all
+  kvstores, so this applies to `keys`, `expires`, `keys_with_volatile_items`,
+  and the pubsub kvstores, not only to `keys`.
+- O(number of databases) per slot when the stat is read. `ORDERBY` reads every
+  slot owned by the shard before sorting.
 
-## Exposure
+The client snapshot adds two inline entries and a list pointer to each client.
+It performs no per-command allocation for up to two keys. The overflow list is
+allocated only if one command snapshots more than two distinct keys, which is
+expected mainly from module commands, and its header is retained for reuse
+until `freeClient()`.
 
-### CLUSTER SLOT-STATS reply
+### `CLUSTER SLOT-STATS` reply
 
-The `memory-bytes` field is a single integer: the total allocated footprint of
-all keys in the slot.
+`memory-bytes` is one integer containing the allocated footprint of all
+supported keys in the slot:
 
-```
+```text
 CLUSTER SLOT-STATS SLOTSRANGE 0 0
 1) 1) (integer) 0
    2) 1) "key-count"
@@ -312,130 +389,205 @@ CLUSTER SLOT-STATS SLOTSRANGE 0 0
       ...
 ```
 
-### ORDERBY memory-bytes
+The reply schema in `src/commands/cluster-slot-stats.json` lists
+`memory-bytes`, so `--log-req-res` reply validation accepts it.
 
-`CLUSTER SLOT-STATS ORDERBY memory-bytes [LIMIT n] [ASC|DESC]`
+### Ordering slots by memory
 
-Sorts by each slot's `memory_bytes` total. It is available even when
-`cluster-slot-stats-enabled` is off (and gated only on `cluster_enabled`)
-because, unlike the cumulative metrics that can start counting from zero on
-enable, this state metric cannot be reconstructed after the fact without an
-O(N) rescan of the slot's keys, so it must be maintained continuously.
+```text
+CLUSTER SLOT-STATS ORDERBY memory-bytes [LIMIT n] [ASC|DESC]
+```
 
----
-
-## Adding a new type — checklist
-
-1. Implement a size function that returns the type's allocated footprint (or
-   maintain a `tracked_memory_bytes`-style counter on the type's struct if it
-   uses in-place mutations that change container sizes; see the stream example).
-2. Add a `case OBJ_<TYPE>:` to `slotStatsObjectSize()` in
-   `cluster_slot_stats.c`, adding the type's external allocations on top of the
-   base `zmalloc_size(val)`.
-3. Ensure the type's mutation commands call `signalModifiedKey` after
-   modifying the value (most already do).
-4. If the type is loaded from RDB via a non-standard path (not
-   `dbAddRDBLoad`), ensure any incremental counter is maintained during load.
-5. Add integration tests in `tests/unit/cluster/slot-stats-memory-bytes-<type>.tcl`.
-   Prefer exact assertions against `MEMORY USAGE <key> SAMPLES 0` (see the
-   `assert_slot_bytes_match_memory_usage` helper) over hardcoded byte counts,
-   which are allocator-dependent.
+The command sorts by each slot's `memory-bytes` total (summed over databases).
+It remains available
+when `cluster-slot-stats-enabled` is off because the metric is state that cannot
+be reconstructed later without scanning all keys.
 
 ---
 
-## Stream accounting
+## Type-specific accounting
 
-Streams need incremental tracking because their bytes live in listpacks that
-are mutated in place (XADD appends, XDEL/XTRIM mark-delete or free nodes).
+### Strings
 
-- `stream->tracked_memory_bytes` holds the summed **allocated** size
-  (`zmalloc_size`, not `lpBytes`) of all listpacks in the stream's data rax.
-  Allocated size matters because stream nodes are over-allocated on creation
-  and only shrunk to fit when sealed; using logical `lpBytes` would undercount
-  the active tail node by up to its preallocation slack.
-- It is maintained by three helpers in `t_stream.c`: `streamTrackLpAdd`,
-  `streamTrackLpRemove` (call before `lpFree`), and `streamShrinkLpToFit`
-  (shrink + account + return the reallocated listpack). All XADD/XTRIM/XDEL/dup/
-  RDB-load sites go through these or bracket an in-place mutation with a
-  `zmalloc_size` read before and after.
-- `streamMemUsage(s)` returns the stream's footprint as
-  `sizeof(*s) + raxAllocSize(s->rax) + s->tracked_memory_bytes`, all O(1).
-  `slotStatsObjectSize()` adds this to `zmalloc_size(val)` for OBJ_STREAM.
+`slotStatsObjectSize()` starts with `zmalloc_size(val)`. String encodings add:
 
-**Not yet counted:** consumer group memory (`s->cgroups`: groups, consumers,
-PELs, NACKs). For a stream with consumer groups, `memory-bytes` is therefore
-lower than `MEMORY USAGE`, which does count it. Consumer-group tracking is
-deferred to a follow-up (it needs a dedicated incremental counter, because the
-per-slot metric is consulted on every in-place mutation and an O(groups +
-consumers) walk on that hot path would be too costly).
+| Encoding | Additional allocation |
+|---|---|
+| EMBSTR | None; content is embedded in the value allocation |
+| INT | None; the integer is stored in the value object |
+| RAW | `sdsAllocSize(val->ptr)` for the external sds |
 
-No changes to `db.c`, `networking.c`, or command dispatch are needed.
+### Streams
+
+Streams require incremental accounting because their listpacks are changed in
+place by `XADD`, `XDEL`, and `XTRIM`.
+
+#### Tracked state
+
+`stream->tracked_memory_bytes` stores the total **allocated** size of every
+listpack in the stream's data radix tree. It uses `zmalloc_size`, not
+`lpBytes`, because active stream nodes are over-allocated and shrink only when
+sealed. Logical listpack length would miss that unused capacity.
+
+The counter is maintained by three helpers in `t_stream.c`:
+
+- `streamTrackLpAdd`
+- `streamTrackLpRemove` (called before `lpFree`)
+- `streamShrinkLpToFit` (shrinks, updates accounting, and returns the possibly
+  reallocated listpack)
+
+XADD, XTRIM, XDEL, duplication, and RDB-load paths use these helpers or bracket
+an in-place listpack mutation with `zmalloc_size` reads before and after.
+
+#### O(1) stream size
+
+```text
+streamMemUsage(s) = sizeof(*s)
+                  + raxAllocSize(s->rax)
+                  + s->tracked_memory_bytes
+```
+
+`slotStatsObjectSize()` adds this result to `zmalloc_size(val)` for
+`OBJ_STREAM`. The operation remains O(1), regardless of stream length.
+
+#### Stream limitation
+
+Consumer-group memory is not yet counted. This includes groups, consumers,
+PELs, and NACKs under `s->cgroups`. `MEMORY USAGE` includes these allocations,
+so streams with consumer groups currently report a lower per-slot value.
+
+Adding this memory requires another incremental counter. Walking all groups and
+consumers on every in-place mutation would make the hot path too expensive.
+
+### Module types
+
+The current module memory callback, used by `MEMORY USAGE`, is approximate and
+cannot provide exact incremental per-slot accounting. The design therefore
+uses a **delta API** instead: a module reports `+n` and `-n` as it allocates and
+frees memory attributable to a key.
+
+Support policy:
+
+| Module category | Policy |
+|---|---|
+| Legacy modules | Unsupported; their keys do not contribute to `memory-bytes` |
+| Official modules (Valkey Search, Bloom, JSON, and others) | Valkey provides the delta API and wires these modules to it |
+| New modules | Opt in to the delta API; correct reporting is the module's responsibility |
+
+Shared module memory that cannot be assigned to one key, such as common JSON
+structures, is excluded. Slots containing non-participating module keys are
+therefore under-counted. This limitation must remain visible rather than
+presenting the value as complete for data the server cannot inspect.
 
 ---
 
-## Module types
+## Adding support for another type
 
-Modules expose only an approximate memory-usage callback today (used by
-`MEMORY USAGE`), which cannot be trivially reused for exact,
-incrementally-maintained per-slot accounting. Our approach does **not** rely on
-that callback. Instead, modules participate through a **delta API**: the module
-reports `+n`/`-n` against the per-slot counter on its own allocations and
-frees — the same incremental mechanism the built-in types use, so a
-participating module is accounted with the same fidelity as a native type.
+Use this checklist for lists, hashes, sets, sorted sets, and future types:
 
-Support policy, by module category:
+1. Implement an O(1) function that returns the type's allocated footprint.
+   If container allocations change in place, maintain an incremental counter
+   on the type structure, following the stream design.
+2. Add `case OBJ_<TYPE>:` to `slotStatsObjectSize()` in
+   `cluster_slot_stats.c`. Add external allocations to the base
+   `zmalloc_size(val)`.
+3. Confirm that every in-place mutation calls `signalModifiedKey` after the
+   value changes. Most existing commands already do this.
+4. Confirm that RDB loading and duplication maintain any new incremental
+   counter. Add explicit handling for non-standard load paths that bypass
+   `dbAddRDBLoad`.
+5. Test single-key creation, replacement, in-place growth/shrink, deletion,
+   expiration, RDB load, AOF replay, replication, and flush behavior.
+6. For types with multi-key movers, add regression coverage for both keys. Use
+   `SMOVE` for sets and `LMOVE`/`RPOPLPUSH` for lists.
+7. Add the integration tests under:
 
-- **Old (legacy) modules** — not supported; their keys do not contribute to
-  `memory-bytes`.
-- **Official modules** (Valkey Search, Valkey Bloom, Valkey JSON, ...) — we
-  provide the delta API and do the wiring ourselves. These will be exact.
-- **New modules** — opt-in via the delta API; using it correctly is the
-  module's responsibility.
+   ```text
+   tests/unit/cluster/slot-stats-memory-bytes-<type>.tcl
+   ```
 
-Shared/common (non-per-key) module memory (e.g. JSON's shared structures) is
-excluded, since it cannot be attributed to any single slot.
+   Type-independent cases (replica sync, swapdb load, failover, several
+   databases) live in `slot-stats-memory-bytes-lifecycle.tcl`. Add a key of the
+   new type to `write_memory_bytes_dataset` there. Module key API cases (an
+   in-place change followed by a second change on the same open key, and keys
+   in two slots in one command) live in `tests/unit/moduleapi/cluster.tcl`,
+   with commands in `tests/modules/cluster.c`.
 
-A slot containing keys from a non-participating module will be under-counted.
-This is made *visible* (tracked scope is observable) rather than silently
-presented as authoritative for data the metric cannot see.
+8. Prefer exact comparisons with `MEMORY USAGE <key> SAMPLES 0` through
+   `assert_slot_bytes_match_memory_usage`. Do not hardcode allocator-dependent
+   byte values.
+
+The common accounting design should not require further changes to `db.c`,
+`networking.c`, or command dispatch when adding a built-in type.
 
 ---
 
 ## Design decisions
 
-Resolved during design review (2026-06-23).
+### Resolved: include expiry metadata
 
-- **Expiry metadata.** Included. Since the metric reflects actual allocated
-  memory, expiry information should be counted as part of the key's footprint
-  for as long as the key exists. The embedded expire field is already covered
-  by `zmalloc_size(val)` (it lives inside the value robj); if additional
-  per-key expiry structures are added in the future they should be included
-  too. The memory is only released (and subtracted from the counter) when the
-  key is actually evicted or expired.
-- **Always-on vs. configurable.** Whether accounting is unconditional or gated
-  behind a config will be decided based on measured performance. We are
-  comfortable always paying the small extra memory cost for the large
-  data-representation counters.
+Resolved during design review on 2026-06-23.
+
+The metric includes expiry information while the key exists because it reports
+allocated memory. The embedded expire field is already part of
+`zmalloc_size(val)`. Any future per-key expiry allocations should also be
+included. The bytes are removed only when the key is deleted, evicted, or
+expired.
+
+### Open: always-on versus configurable
+
+The current implementation and command semantics assume continuous accounting
+whenever cluster mode is enabled. This avoids an O(N) rebuild when a state
+metric is enabled after keys already exist.
+
+The final policy depends on measured write-path cost. The current stream
+benchmark found no measurable impact beyond normal run-to-run variation and
+therefore supports keeping the metric always on. A configuration gate would
+need defined initialization semantics, such as scanning existing data before
+reporting a complete value.
+
+---
+
+## Known limitations
+
+- Only strings and streams are currently wired. Other built-in types do not yet
+  contribute to `memory-bytes`.
+- Stream consumer-group allocations are not counted, so streams with groups do
+  not yet match `MEMORY USAGE`.
+- Legacy and non-participating module types are not counted.
+- Shared module memory that cannot be assigned to a key is excluded.
+- Nested clients do not share a snapshot. If a module opens a key for write,
+  changes it in place, and then calls `VM_Call` on the same key, the inner
+  command runs on a temporary client and does not see the outer client's
+  snapshot. The counter for that key can drift.
 
 ---
 
 ## Benchmark results
 
-Measured on the same EC2 instance, 1M operations, 50 clients, each result
-averaged over 3 runs. Baseline is the same `per-slot-memory` branch **without**
-the stream `tracked_memory_bytes` changes; "With tracking" includes the full
-stream accounting (`zmalloc_size`-based listpack tracking + `streamMemUsage`).
+### Test setup
 
-### Stream operations
+- Same EC2 instance for baseline and tracking runs.
+- 1 million operations per test.
+- 50 clients.
+- Each result averaged over three runs.
+- Baseline: the same `per-slot-memory` branch without stream
+  `tracked_memory_bytes` changes.
+- With tracking: `zmalloc_size`-based listpack tracking plus
+  `streamMemUsage()`.
 
-| Command | Baseline (ops/s) | With tracking (ops/s) | Δ% | p50 base (ms) | p50 track (ms) | p99 base (ms) | p99 track (ms) |
-|---|---|---|---|---|---|---|---|
-| XADD (3B) | 95,782 | 94,838 | −1.0% | 0.487 | 0.492 | 0.753 | 0.769 |
-| XADD (512B) | 94,146 | 92,000 | −2.3% | 0.497 | 0.508 | 0.769 | 0.791 |
-| XTRIM MAXLEN | 98,408 | 97,245 | −1.2% | 0.471 | 0.476 | 0.724 | 0.748 |
+### Result summary
+
+Stream operations remained within approximately 1–2% of baseline, which is
+within observed run-to-run variation. The accounting adds one
+`zmalloc_size` read before and after each listpack mutation and showed no
+measurable throughput or latency cost.
+
+### Stream operation results
+
+| Command | Baseline (ops/s) | With tracking (ops/s) | Delta | p50 base (ms) | p50 track (ms) | p99 base (ms) | p99 track (ms) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| XADD (3B) | 95,782 | 94,838 | -1.0% | 0.487 | 0.492 | 0.753 | 0.769 |
+| XADD (512B) | 94,146 | 92,000 | -2.3% | 0.497 | 0.508 | 0.769 | 0.791 |
+| XTRIM MAXLEN | 98,408 | 97,245 | -1.2% | 0.471 | 0.476 | 0.724 | 0.748 |
 | XDEL | 95,314 | 95,419 | +0.1% | 0.492 | 0.492 | 0.772 | 0.767 |
-
-**Summary:** all stream operations are within 1–2% of the baseline, well
-within run-to-run variance. The per-slot accounting overhead — a single
-`zmalloc_size` read before/after each listpack mutation — has no measurable
-throughput or latency impact.

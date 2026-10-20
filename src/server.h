@@ -1408,17 +1408,21 @@ typedef struct slotMigrationJob slotMigrationJob;
  * A single command may mutate several keys in place (e.g. SMOVE, LMOVE), so
  * this is a small per-key set rather than one scalar. Up to two entries are
  * stored inline -- covering single-key commands and the common two-key movers
- * -- and anything beyond that spills to a list. Cluster rejects cross-slot
- * commands, so every key touched by a command shares one slot, stored once. */
+ * -- and anything beyond that spills to a list. Each entry keeps its own slot
+ * and database: cluster rejects cross-slot commands, but a module can open keys
+ * in several slots in one command, and MOVE / COPY ... DB use the same key name
+ * in two databases. */
 typedef struct slotMemoryBytesSnap {
     robj *key;       /* The modified key (incref'd while snapshotted). */
     uint64_t before; /* Allocated size captured at lookup / last db-hook refresh. */
+    int slot;        /* Slot of `key`. */
+    int dbid;        /* Database of `key`. */
 } slotMemoryBytesSnap;
 
 typedef struct slotMemoryBytesSnapshot {
     slotMemoryBytesSnap inlined[2]; /* Inline fast path (no allocation). */
     int inlined_count;              /* Valid inline entries; 0 once spilled. */
-    int slot;                       /* Shared slot for the command, -1 = none captured. */
+    int slot;                       /* -1 = no entries (fast-path guard), otherwise >= 0. */
     list *overflow;                 /* NULL until >2 keys; then holds ALL entries. */
 } slotMemoryBytesSnapshot;
 

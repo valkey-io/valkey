@@ -133,8 +133,8 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
      * lookupKeyWrite followed by an in-place mutation and then signalModifiedKey,
      * the delta is computed from this snapshot. The snapshot is per-key, so a
      * command may safely look up several keys for write (e.g. SMOVE). */
-    if ((flags & LOOKUP_WRITE) && server.cluster_enabled && server.current_client) {
-        clusterSlotStatsSnapshotKey(server.current_client, dict_index, key, val);
+    if ((flags & LOOKUP_WRITE) && server.cluster_enabled && server.executing_client) {
+        clusterSlotStatsSnapshotKey(server.executing_client, db, dict_index, key, val);
     }
 
     /* Charge this lookup to hot-key detection. All the policy (whether detection
@@ -239,8 +239,8 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
-    clusterSlotStatsAddMemory(dict_index, key, val);
-    clusterSlotStatsRefreshKey(server.current_client, key, val);
+    clusterSlotStatsAddMemory(db, dict_index, key, val);
+    clusterSlotStatsRefreshKey(server.executing_client, db, key, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
     *valref = val;
@@ -313,7 +313,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
     initObjectLRUOrLFU(val);
 
-    clusterSlotStatsAddMemorySdsKey(dict_index, key, val);
+    clusterSlotStatsAddMemorySdsKey(db, dict_index, key, val);
 
     /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
     dbTrackKeyWithVolatileItems(db, val);
@@ -355,7 +355,8 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     robj *old = *oldref;
     robj *new;
 
-    clusterSlotStatsSubMemory(dict_index, key, old);
+    clusterSlotStatsSettleKey(server.executing_client, db, key, old);
+    clusterSlotStatsSubMemory(db, dict_index, key, old);
 
     if (overwrite) {
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -421,11 +422,11 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     } else {
         decrRefCount(old);
     }
-    clusterSlotStatsAddMemory(dict_index, key, new);
+    clusterSlotStatsAddMemory(db, dict_index, key, new);
     /* Refresh snapshot so signalModifiedKey computes a zero delta instead of
      * double counting an overwrite the caller may follow with an in-place
      * mutation (e.g. dbUnshareStringValue before APPEND). */
-    clusterSlotStatsRefreshKey(server.current_client, key, new);
+    clusterSlotStatsRefreshKey(server.executing_client, db, key, new);
     *valref = new;
 }
 
@@ -528,8 +529,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         decrRefCount(val);
         /* Because of dbUnshareStringValue, the val in de may change. */
         val = *ref;
-        clusterSlotStatsSubMemory(dict_index, key, val);
-        clusterSlotStatsForgetKey(server.current_client, key);
+        clusterSlotStatsSettleKey(server.executing_client, db, key, val);
+        clusterSlotStatsSubMemory(db, dict_index, key, val);
+        clusterSlotStatsForgetKey(server.executing_client, db, key);
 
         /* Delete from keys and expires tables. This will not free the object.
          * (The expires table has no destructor callback.) */
@@ -678,11 +680,6 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         resetDbExpiryState(dbarray[j]);
     }
 
-    /* Only reset memory_bytes for the real server DBs, not temp DBs. */
-    if (dbarray == server.db) {
-        clusterSlotStatsResetMemoryBytesAll();
-    }
-
     return removed;
 }
 
@@ -818,7 +815,7 @@ void signalModifiedKey(client *c, serverDb *db, robj *key) {
      * an existing stream, ...) that don't go through dbSetValue. The snapshot is
      * keyed per-key, so multi-key in-place commands (e.g. SMOVE) are accounted
      * correctly. */
-    clusterSlotStatsCommitKey(c, db, key);
+    clusterSlotStatsCommitKey(server.executing_client, db, key);
     bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
@@ -2005,7 +2002,10 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     val = *valref;
     long long old_when = objectGetExpire(val);
 
+    /* Adding the expire field can reallocate the value, so account the change. */
+    uint64_t old_size = clusterSlotStatsGetObjectSize(key, val);
     robj *newval = objectSetExpire(val, when);
+    clusterSlotStatsUpdateMemory(db, dict_index, key, old_size, newval);
     if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexUsingCachedSlot(objectGetKey(newval));

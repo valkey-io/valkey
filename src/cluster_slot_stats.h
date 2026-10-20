@@ -23,35 +23,29 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
 /* memory-bytes metric (per-slot allocated byte accounting).
  *
  * Tracks the allocated footprint (`zmalloc_size(val)` plus the type's external
- * allocations) summed per slot. The accounting is type-agnostic: the dispatcher
- * in cluster_slot_stats.c decides how to size each object kind. Currently
+ * allocations) per (db, slot), in the metadata of the slot's hashtable in
+ * db->keys. The accounting is type-agnostic: the dispatcher in
+ * cluster_slot_stats.c decides how to size each object kind. Currently
  * OBJ_STRING and OBJ_STREAM are wired up.
  *
  * Lifecycle pattern at db.c primitives:
- *   - On new key      -> Add(slot, key, val)
- *   - On overwrite    -> Sub(slot, key, old); Add(slot, key, new)
- *   - On delete       -> Sub(slot, key, val) (before freeing)
- *   - On in-place     -> Sub(slot, key, val); ... mutate ... ; Add(slot, key, val)
+ *   - On new key      -> Add(db, slot, key, val)
+ *   - On overwrite    -> Sub(db, slot, key, old); Add(db, slot, key, new)
+ *   - On delete       -> Sub(db, slot, key, val) (before freeing)
+ *   - On in-place     -> snapshot at lookupKeyWrite, delta at signalModifiedKey
  */
-void clusterSlotStatsAddMemory(int slot, robj *key, robj *val);
-void clusterSlotStatsSubMemory(int slot, robj *key, robj *val);
+void clusterSlotStatsAddMemory(serverDb *db, int slot, robj *key, robj *val);
+void clusterSlotStatsSubMemory(serverDb *db, int slot, robj *key, robj *val);
 /* `sds` key variants, for callers that hold the key as an sds, or that pass
  * NULL because the key is already embedded in `val` (counted by zmalloc_size). */
-void clusterSlotStatsAddMemorySdsKey(int slot, sds key, robj *val);
-void clusterSlotStatsSubMemorySdsKey(int slot, sds key, robj *val);
-/* Convenience wrappers for command-level callers that have the key as a
- * `robj *` and would otherwise have to compute the slot themselves. The
- * lower-level slot variants above stay available for db.c primitives,
- * which already have dict_index in hand from their kvstore lookup. */
-void clusterSlotStatsAddMemoryForKey(robj *key, robj *val);
-void clusterSlotStatsSubMemoryForKey(robj *key, robj *val);
+void clusterSlotStatsAddMemorySdsKey(serverDb *db, int slot, sds key, robj *val);
+void clusterSlotStatsSubMemorySdsKey(serverDb *db, int slot, sds key, robj *val);
 /* Returns the allocated size for a given (key, val) pair, or 0 for untracked
- * types. Used by lookupKeyWrite to snapshot the "before" size for in-place
- * mutation tracking. */
+ * types or when cluster mode is off. */
 uint64_t clusterSlotStatsGetObjectSize(robj *key, robj *val);
-/* Bulk reset, used by FLUSHDB / FLUSHALL / emptyData. Does not touch the
- * cumulative cpu_usec / network_bytes_* counters. */
-void clusterSlotStatsResetMemoryBytesAll(void);
+/* Applies the change from `before` to the current size of `val`, for values
+ * reallocated outside dbSetValue (e.g. setExpire). */
+void clusterSlotStatsUpdateMemory(serverDb *db, int slot, robj *key, uint64_t before, robj *val);
 
 /* Per-key in-place mutation snapshot.
  *
@@ -63,17 +57,13 @@ void clusterSlotStatsResetMemoryBytesAll(void);
  * clusterSlotStatsCommitKey(). The whole set is cleared at each command
  * boundary (clusterSlotStatsClearSnapshot) and released on client free
  * (clusterSlotStatsFreeSnapshot). All are no-ops when cluster mode is off. */
-void clusterSlotStatsSnapshotKey(client *c, int slot, robj *key, robj *val);
-void clusterSlotStatsRefreshKey(client *c, robj *key, robj *val);
-void clusterSlotStatsForgetKey(client *c, robj *key);
+void clusterSlotStatsSnapshotKey(client *c, serverDb *db, int slot, robj *key, robj *val);
+void clusterSlotStatsRefreshKey(client *c, serverDb *db, robj *key, robj *val);
+void clusterSlotStatsForgetKey(client *c, serverDb *db, robj *key);
 void clusterSlotStatsCommitKey(client *c, serverDb *db, robj *key);
+/* Applies any pending in-place change of `key` (current value `val`) before a
+ * db-hook subtracts the current size. Used by dbSetValue and the delete path. */
+void clusterSlotStatsSettleKey(client *c, serverDb *db, robj *key, robj *val);
 void clusterSlotStatsInitSnapshot(client *c);
 void clusterSlotStatsClearSnapshot(client *c);
 void clusterSlotStatsFreeSnapshot(client *c);
-
-/* Subtract `b` from `*a`, clamping to zero. Used for memory_bytes counters
- * which can be zeroed by clusterSlotStatReset during slot migration before
- * all keys are physically removed. */
-static inline void saturated_sub(uint64_t *a, uint64_t b) {
-    *a = (*a >= b) ? *a - b : 0;
-}

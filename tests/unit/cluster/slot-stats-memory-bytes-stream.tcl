@@ -193,4 +193,15 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         R 0 XTRIM $key MAXLEN 50
         assert_slot_bytes_match_memory_usage $key_slot
     }
+
+    test "memory-bytes matches MEMORY USAGE: XADD / XTRIM on an existing stream inside EVAL" {
+        R 0 FLUSHALL
+        R 0 XADD $key "*" f v
+        for {set i 0} {$i < 200} {incr i} {
+            R 0 EVAL {return server.call('XADD', KEYS[1], '*', 'f', ARGV[1])} 1 $key [string repeat x 50]
+        }
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 EVAL {return server.call('XTRIM', KEYS[1], 'MAXLEN', 10)} 1 $key
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
 }

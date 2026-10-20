@@ -416,4 +416,50 @@ start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
     }
 }
 
+# Per-slot memory-bytes with module key APIs. A module can change a key in
+# place and then make a second change on the same open key, or open keys in
+# several slots in one command.
+source tests/unit/cluster/slot-stats-memory-bytes-helpers.tcl
+
+set testmodule [file normalize tests/modules/cluster.so]
+set modules [list loadmodule $testmodule]
+start_cluster 1 0 [list config_lines $modules] {
+    set key "{FOO}k"
+    set key_slot [R 0 cluster keyslot $key]
+
+    # A second key in the slot makes an error visible: with one key, the clamp
+    # at 0 can hide it.
+    test "memory-bytes: StringTruncate then SetExpire on the same open key" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 100]
+        R 0 test.slotmem_truncate_expire $key 5000 100000
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 DEL $key
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes: StringTruncate then StringSet on the same open key" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 100]
+        R 0 test.slotmem_truncate_set $key 5000 [string repeat c 50]
+        assert_slot_bytes_match_memory_usage $key_slot
+        R 0 DEL $key
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes: one module command changes keys in two slots" {
+        R 0 FLUSHALL
+        set key2 "{BAR}k"
+        set key2_slot [R 0 cluster keyslot $key2]
+        assert {$key_slot != $key2_slot}
+        R 0 SET $key [string repeat a 100]
+        R 0 SET $key2 [string repeat b 100]
+        R 0 test.slotmem_truncate_two $key $key2 5000
+        assert_slot_bytes_match_memory_usage $key_slot
+        assert_slot_bytes_match_memory_usage $key2_slot
+    }
+}
+
 } ;# end tag

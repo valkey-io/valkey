@@ -1688,7 +1688,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         # dangling pointer.
 
         # Drive the real dual-channel rdb-channel handshake:
-        set rdb_chan [valkey $primary_host $primary_port 0 0 {} 1]
+        set rdb_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
         assert_equal "+OK" [$rdb_chan REPLCONF capa eof rdb-only 1 rdb-channel 1 listening-port 0]
 
         # SYNC returns the $ENDOFF line once the fork has admitted this client.
@@ -1737,7 +1737,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         for {set i 0} {$i < 100} {incr i} { $primary set key-$i $i }
         set offset [status $primary repl_backlog_first_byte_offset]
 
-        set main_chan [valkey $primary_host $primary_port 0 0 {} 1]
+        set main_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
         assert_equal "+OK" [$main_chan REPLCONF capa eof capa psync2]
 
         # With the fix, the freed id was removed from the rax on free, so

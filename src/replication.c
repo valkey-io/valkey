@@ -536,11 +536,8 @@ void removeReplicaFromPsyncWait(client *replica_main_client) {
     replBufBlock *o;
     /* Get replBufBlock pointed by this replica */
     client *replica_rdb_client = lookupRdbClientByID(replica_main_client->repl_data->associated_rdb_client_id);
-    /* The rdb client may have already been dropped from the psync-wait set
-     * (e.g. its connection was freed). Callers are expected to confirm
-     * membership via lookupRdbClientByID() first, but guard here as well so a
-     * stale associated_rdb_client_id can never dereference a missing client. */
-    if (replica_rdb_client == NULL) return;
+    /* Callers must confirm the rdb client exists via lookupRdbClientByID() first. */
+    serverAssert(replica_rdb_client != NULL);
     ln = replica_rdb_client->repl_data->ref_repl_buf_node;
     o = ln ? listNodeValue(ln) : NULL;
     if (o != NULL) {

@@ -536,6 +536,11 @@ void removeReplicaFromPsyncWait(client *replica_main_client) {
     replBufBlock *o;
     /* Get replBufBlock pointed by this replica */
     client *replica_rdb_client = lookupRdbClientByID(replica_main_client->repl_data->associated_rdb_client_id);
+    /* The rdb client may have already been dropped from the psync-wait set
+     * (e.g. its connection was freed). Callers are expected to confirm
+     * membership via lookupRdbClientByID() first, but guard here as well so a
+     * stale associated_rdb_client_id can never dereference a missing client. */
+    if (replica_rdb_client == NULL) return;
     ln = replica_rdb_client->repl_data->ref_repl_buf_node;
     o = ln ? listNodeValue(ln) : NULL;
     if (o != NULL) {
@@ -661,12 +666,15 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
-    if (replica->flag.repl_rdb_channel) {
-        uint64_t rdb_cid = htonu64(replica->id);
-        if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
-            dualChannelServerLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
-                                 replicationGetReplicaName(replica), (long long unsigned int)replica->id);
-        }
+    /* Remove the client from the psync-wait set keyed on its own id. We do this
+     * unconditionally rather than gating on replica->flag.repl_rdb_channel, as the
+     * flag can be cleared while an entry is still tracked, and raxRemove() is a
+     * no-op when the key is absent. Gating on the flag could leave a freed client
+     * pointer in the rax that a later PSYNC would dereference. */
+    uint64_t rdb_cid = htonu64(replica->id);
+    if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
+        dualChannelServerLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
+                             replicationGetReplicaName(replica), (long long unsigned int)replica->id);
     }
     if (replica->repl_data->ref_repl_buf_node != NULL) {
         /* Decrease the start buffer node reference count. */

@@ -1843,6 +1843,32 @@ start_server {
             assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]
         }
 
+        test {XAUTOCLAIM cleanup of entry both deleted & XNACK'd propagates XACK instead of XCLAIM} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+            # First, disassociate entry from consumer via XNACK
+            # Then, delete it to prep for XAUTOCLAIM cleanup.
+            assert_equal 1 [$master XNACK stream grp FAIL IDS 1 1-0]
+            $master XDEL stream 1-0
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xclaim_before [get_replica_calls $replica xclaim]
+
+            # XAUTOCLAIM cleans up the deleted entry, but b/c it has no group
+            # we can't replicate as XCLAIM. So propagate as XACK instead to cause
+            # replicas to achieve same effect of removing from PEL.
+            assert_equal {0-0 {} 1-0} [$master XAUTOCLAIM stream grp bob 0 0-0]
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 1 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 0 [expr {[get_replica_calls $replica xclaim] - $xclaim_before}]
+            assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]
+            assert_equal 0 [llength [$master XPENDING stream grp - + 10]]
+        }
+
         test {XACKDEL KEEPREF on already deleted entry propagates XACK only} {
             $master DEL stream
             $master XADD stream 1-0 f v
@@ -1960,10 +1986,11 @@ start_server {
             fail "Replication not started."
         }
 
-        test {XNACK propagates individual XNACK commands with RETRYCOUNT + FORCE} {
+        test {XNACK replicates as-is} {
             $master DEL stream
             $master XADD stream 1-0 f v
             $master XADD stream 2-0 f v
+            $master XADD stream 3-0 f v
             $master XGROUP CREATE stream grp 0
             $master XREADGROUP GROUP grp alice COUNT 2 STREAMS stream >
             wait_for_ofs_sync $master $replica
@@ -1975,7 +2002,7 @@ start_server {
             $rd MONITOR
             assert_match {*OK*} [$rd read]
 
-            # Run the XNACK on master without RETRYCOUNT/FORCE
+            # Run the XNACK on master
             assert_equal 2 [$master XNACK stream grp FAIL IDS 3 1-0 2-0 3-0]
             wait_for_ofs_sync $master $replica
 
@@ -1985,31 +2012,55 @@ start_server {
                 set line [$rd read]
                 if {[string match {*XNACK*} $line]} break
             }
-            assert_match {*"XNACK"*"RETRYCOUNT" "1" "FORCE"*} $line
+            assert_match {*"XNACK"*"FAIL"*"IDS" "3" "1-0" "2-0" "3-0"*} $line
+
+            # Run a second XNACK with the trailing options: FORCE creates
+            # 3-0's PEL entry and RETRYCOUNT sets its delivery count. Both
+            # must reach the replica verbatim, in order.
+            set xnack_mid [get_replica_calls $replica xnack]
+            assert_equal 1 [$master XNACK stream grp FAIL IDS 1 3-0 RETRYCOUNT 42 FORCE]
+            wait_for_ofs_sync $master $replica
+
+            set line ""
+            for {set i 0} {$i < 20} {incr i} {
+                set line [$rd read]
+                if {[string match {*XNACK*FORCE*} $line]} break
+            }
+            assert_match {*"XNACK"*"FAIL"*"IDS" "1" "3-0"*"RETRYCOUNT" "42"*"FORCE"*} $line
             $rd close
 
+            # Only 1 XNACK replicated, not multiple
             assert_equal 2 [expr {[get_replica_calls $replica xnack] - $xnack_before}]
+            assert_equal 1 [expr {[get_replica_calls $replica xnack] - $xnack_mid}]
 
-            # Check replicated state
+            # Check replicated state: released entries are unowned with the
+            # idle sentinel and delivery count preserved
             set pend [$replica XPENDING stream grp - + 10]
-            assert_equal 2 [llength $pend]
-            assert_equal {1-0 1} [list [lindex $pend 0 0] [lindex $pend 0 3]]
-            assert_equal {2-0 1} [list [lindex $pend 1 0] [lindex $pend 1 3]]
+            assert_equal 3 [llength $pend]
+            assert_equal [list [list 1-0 {} -1 1]] [lrange $pend 0 0]
+            assert_equal [list [list 2-0 {} -1 1]] [lrange $pend 1 1]
+            assert_equal [list [list 3-0 {} -1 42]] [lrange $pend 2 2]
+
+            # Master and replica agree
+            set pend [$master XPENDING stream grp - + 10]
+            assert_equal 3 [llength $pend]
+            assert_equal [list [list 1-0 {} -1 1]] [lrange $pend 0 0]
+            assert_equal [list [list 2-0 {} -1 1]] [lrange $pend 1 1]
+            assert_equal [list [list 3-0 {} -1 42]] [lrange $pend 2 2]
         }
     }
 
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no appendfsync always}} {
-        test {XNACK propagated PEL state survives AOF reload} {
+        test {XNACK PEL state survives AOF reload} {
             r DEL mystream
             r XADD mystream 1-0 f v
             r XADD mystream 2-0 f v
             r XGROUP CREATE mystream mygroup 0
-            # Only 1-0 is delivered into the PEL; 2-0 exists but was never read
+            # Only 1-0 is delivered into the PEL; 2-0 exists but was never read, thus not in PEL
             r XREADGROUP GROUP mygroup cnsmr COUNT 1 STREAMS mystream ">"
 
             # Distinct delivery counts via RETRYCOUNT; FORCE creates 2-0's
-            # PEL entry. Each NACK is propagated to the AOF as an absolute
-            # XNACK ... RETRYCOUNT <n> FORCE command.
+            # PEL entry. The XNACK commands are AOF-logged as-is.
             assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 1-0 RETRYCOUNT 7]
             assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 2-0 RETRYCOUNT 42 FORCE]
 
@@ -2018,17 +2069,17 @@ start_server {
             assert_equal 7 [lindex $pend 0 3]
             assert_equal 42 [lindex $pend 1 3]
 
-            # Replaying the AOF re-executes the propagated XNACK commands,
-            # restoring the PEL entries, consumers and delivery counts
+            # Replaying the AOF re-executes the XNACK commands, restoring the
+            # unowned PEL entries and delivery counts
             r debug loadaof
 
             set pend [r XPENDING mystream mygroup - + 10]
             assert_equal 2 [llength $pend]
             assert_equal 1-0 [lindex $pend 0 0]
-            assert_equal cnsmr [lindex $pend 0 1]
+            assert_equal {} [lindex $pend 0 1] ;# released: unowned
             assert_equal 7 [lindex $pend 0 3]
             assert_equal 2-0 [lindex $pend 1 0]
-            assert_equal {} [lindex $pend 1 1] ;# recreated via FORCE: dummy consumer
+            assert_equal {} [lindex $pend 1 1] ;# created via FORCE: unowned
             assert_equal 42 [lindex $pend 1 3]
         }
     }

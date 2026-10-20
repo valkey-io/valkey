@@ -4,15 +4,17 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-/* The LZ4 backend for inline in-memory value compression. See compressor_alg.h
- * for the interface and design-docs/inline-compression.md section 7 for why the
- * interface has this shape.
+/* The LZ4 backend for inline in-memory value compression. See
+ * compression_block_interface.h for the interface and
+ * design-docs/inline-compression.md section 8 for why the interface has this
+ * shape.
  *
  * Three choices in this file are worth explaining.
  *
  * 1. We use the LZ4 block API, not lz4frame.
  *    compression_lz4.c uses lz4frame, because the RDB and replication byte stream
- *    needs framing. We do not. Our own compressionFrame header already holds the
+ *    needs framing. We do not. The header that the caller stores with each value
+ *    (design-docs/inline-compression.md, section 6.4) already holds the
  *    uncompressed length and the dictionary id, and LZ4F_HEADER_SIZE_MAX is 19
  *    bytes. That is a lot next to a 256-byte value, and it would buy nothing.
  *
@@ -32,7 +34,7 @@
  * writes to the working stream in the instance and only reads the dictionary. */
 
 #include "fmacros.h" /* must come before any system header */
-#include "compressor/compressor_alg.h"
+#include "compression_block_interface.h"
 #include "server.h" /* C_OK, C_ERR */
 #include "serverassert.h"
 #include "zmalloc.h"
@@ -44,7 +46,7 @@
 /* Acceleration factor for LZ4_compress_fast_continue(). 1 gives the same speed
  * and ratio as LZ4_compress_default(). Higher values trade ratio for speed, which
  * is the wrong trade here: this feature exists to save memory. */
-#define COMPRESSOR_LZ4_ACCELERATION 1
+#define BLOCK_COMPRESSOR_LZ4_ACCELERATION 1
 
 /* The scratch an instance keeps in instance->state. Private to one thread.
  *
@@ -59,7 +61,7 @@ typedef struct lz4State {
 /* One digested dictionary version. Read only once dict_load returns, so it is
  * shared by every instance on every thread. */
 typedef struct lz4Dict {
-    char *dict;            /* our own copy, at most COMPRESSOR_LZ4_DICT_MAX bytes */
+    char *dict;            /* our own copy, at most BLOCK_COMPRESSOR_LZ4_DICT_MAX bytes */
     int dict_len;          /* length of dict */
     void *dstream_buf;     /* zmalloc'd storage that dstream lives in */
     LZ4_stream_t *dstream; /* dict digested by LZ4_loadDictSlow */
@@ -79,7 +81,7 @@ static LZ4_stream_t *lz4StreamNew(void **buf_out) {
     return stream;
 }
 
-static int lz4StateNew(compressorAlg *instance) {
+static int lz4StateNew(blockCompressor *instance) {
     lz4State *st = zcalloc(sizeof(*st));
     st->cstream = lz4StreamNew(&st->cstream_buf);
     if (st->cstream == NULL) {
@@ -90,7 +92,7 @@ static int lz4StateNew(compressorAlg *instance) {
     return C_OK;
 }
 
-static void lz4StateFree(compressorAlg *instance) {
+static void lz4StateFree(blockCompressor *instance) {
     lz4State *st = instance->state;
     if (st == NULL) return;
     zfree(st->cstream_buf);
@@ -99,13 +101,13 @@ static void lz4StateFree(compressorAlg *instance) {
 }
 
 static void *lz4DictLoad(const void *dict_buf, size_t len) {
-    if (dict_buf == NULL || len < COMPRESSOR_LZ4_DICT_MIN) return NULL;
+    if (dict_buf == NULL || len < BLOCK_COMPRESSOR_LZ4_DICT_MIN) return NULL;
 
     /* Keep only the tail LZ4 can actually use. Compression and decompression must
      * see the same bytes, and both read this one copy, so they cannot disagree. */
-    if (len > COMPRESSOR_LZ4_DICT_MAX) {
-        dict_buf = (const char *)dict_buf + (len - COMPRESSOR_LZ4_DICT_MAX);
-        len = COMPRESSOR_LZ4_DICT_MAX;
+    if (len > BLOCK_COMPRESSOR_LZ4_DICT_MAX) {
+        dict_buf = (const char *)dict_buf + (len - BLOCK_COMPRESSOR_LZ4_DICT_MAX);
+        len = BLOCK_COMPRESSOR_LZ4_DICT_MAX;
     }
 
     lz4Dict *d = zcalloc(sizeof(*d));
@@ -146,7 +148,7 @@ static size_t lz4LibMaxOutputSize(size_t input_len) {
     return (size_t)max_size;
 }
 
-static size_t lz4Compress(compressorAlg *instance,
+static size_t lz4Compress(blockCompressor *instance,
                           void *cdict,
                           const void *src,
                           size_t srclen,
@@ -156,10 +158,10 @@ static size_t lz4Compress(compressorAlg *instance,
     lz4State *st = instance->state;
     lz4Dict *d = cdict;
 
-    instance->last_error = COMPRESSOR_ERR_NONE;
+    instance->last_error = BLOCK_COMPRESSOR_ERR_NONE;
 
     if (srclen == 0 || srclen > (size_t)LZ4_MAX_INPUT_SIZE) {
-        instance->last_error = COMPRESSOR_ERR_BAD_SIZE;
+        instance->last_error = BLOCK_COMPRESSOR_ERR_BAD_SIZE;
         return 0;
     }
     if (dstcap > (size_t)INT_MAX) dstcap = (size_t)INT_MAX;
@@ -175,20 +177,20 @@ static size_t lz4Compress(compressorAlg *instance,
                                              dst,
                                              (int)srclen,
                                              (int)dstcap,
-                                             COMPRESSOR_LZ4_ACCELERATION);
+                                             BLOCK_COMPRESSOR_LZ4_ACCELERATION);
     if (written <= 0) {
         /* Note 5 on LZ4_compress_fast_continue(): after an error the stream is
          * invalid and may only be reset or freed. Re-initialize it, because
          * LZ4_resetStream_fast() is documented as unsafe on garbage state. */
         st->cstream = LZ4_initStream(st->cstream_buf, sizeof(LZ4_stream_t));
         assert(st->cstream != NULL);
-        instance->last_error = COMPRESSOR_ERR_COMPRESS;
+        instance->last_error = BLOCK_COMPRESSOR_ERR_COMPRESS;
         return 0;
     }
     return (size_t)written;
 }
 
-static size_t lz4Decompress(compressorAlg *instance,
+static size_t lz4Decompress(blockCompressor *instance,
                             void *cdict,
                             const void *body,
                             size_t body_len,
@@ -197,10 +199,10 @@ static size_t lz4Decompress(compressorAlg *instance,
     assert(instance != NULL && body != NULL && dst != NULL);
     lz4Dict *d = cdict;
 
-    instance->last_error = COMPRESSOR_ERR_NONE;
+    instance->last_error = BLOCK_COMPRESSOR_ERR_NONE;
 
     if (body_len == 0 || body_len > (size_t)INT_MAX || dstcap == 0 || dstcap > (size_t)INT_MAX) {
-        instance->last_error = COMPRESSOR_ERR_BAD_SIZE;
+        instance->last_error = BLOCK_COMPRESSOR_ERR_BAD_SIZE;
         return 0;
     }
 
@@ -213,13 +215,13 @@ static size_t lz4Decompress(compressorAlg *instance,
         written = LZ4_decompress_safe(body, dst, (int)body_len, (int)dstcap);
     }
     if (written <= 0) {
-        instance->last_error = COMPRESSOR_ERR_DECOMPRESS;
+        instance->last_error = BLOCK_COMPRESSOR_ERR_DECOMPRESS;
         return 0;
     }
     return (size_t)written;
 }
 
-const compressorApi compressorApiLz4 = {
+const blockCompressorApi blockCompressorApiLz4 = {
     .state_new = lz4StateNew,
     .state_free = lz4StateFree,
     /* No trainer. LZ4 has none of its own and its headers point at Zstandard's

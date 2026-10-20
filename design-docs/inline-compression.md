@@ -324,7 +324,7 @@ Fields deliberately left out:
 
 Finally, a **net-savings guard** compares **allocation sizes**, not string lengths. It compares the memory used by the frame with the memory used by the plain value (`zmalloc_size`). The allocator rounds each request up to a size class, so a shorter string may still use the same amount of memory (Appendix A). If the frame does not save at least `COMPRESSOR_MIN_SAVINGS_PCT` percent (10; a fixed value in v1, §9), it is dropped. The worker also drops a frame that is not shorter than its input. Incompressible data therefore costs one failed attempt but adds no permanent memory overhead.
 
-Errors are codes, not logs. A frame function sets `compressorAlg.last_error` (for example `COMPRESSOR_ERR_FRAME_VERSION` or `COMPRESSOR_ERR_DICTIONARY_MISMATCH`), and the caller, which knows the key, decides what to log and count.
+Errors are codes, not logs. A frame function sets `blockCompressor.last_error` (for example `BLOCK_COMPRESSOR_ERR_FRAME_VERSION` or `BLOCK_COMPRESSOR_ERR_DICTIONARY_MISMATCH`), and the caller, which knows the key, decides what to log and count.
 
 Frames created locally are trusted internal objects. Frames loaded from RDB are persisted input and must be validated before installation: supported algorithm, known format version, valid lengths, and a resolvable dictionary reference when `dict_id` is nonzero (§3.3). `RESTORE` payloads come from clients, and a read stops the server on a frame that does not decompress, so the load also decompresses the body once into a temporary buffer and checks its length (`compressorCreateStringObjectFromFrame()`).
 
@@ -393,29 +393,29 @@ The compressed frame stays immutable and self-describing until a read or a write
 
 ## 8. The algorithm is replaceable
 
-The compression library is never called directly. `src/compressor/compressor_alg.h` holds three objects:
+The compression library is never called directly. It uses the block API of the library (one whole value in, one buffer out, no stream state and no container header), next to the stream compression of `compression.h`, which uses the LZ4 frame format for the RDB and replication byte stream. The algorithm ids are `compressionAlgo` from `compression.h` (`ALGO_LZ4`, `ALGO_ZSTD`), shared with stream compression. `src/compression_block_interface.h` holds three objects:
 
 | Object | What it is |
 |---|---|
-| `compressorApi` | The compression function table. Every entry calls straight into a backend library. Shared, constant, never allocated. |
-| `compressorConfig` | The value size range the operator asked for. |
-| `compressorAlg` | What callers hold. Built by `newCompressor()`, released by `freeCompressor()`. Carries the function table, the plain data, and the backend's private scratch. |
+| `blockCompressorApi` | The compression function table. Every entry calls straight into a backend library. Shared, constant, never allocated. |
+| `blockCompressorConfig` | The value size range the operator asked for. |
+| `blockCompressor` | What callers hold. Built by `blockCompressorCreate()`, released by `blockCompressorFree()`. Carries the function table, the plain data, and the backend's private scratch. |
 
 ```c
-typedef struct compressorApi {
-    int    (*state_new)(compressorAlg *instance);
-    void   (*state_free)(compressorAlg *instance);
-    int    (*train)(compressorAlg *instance, const void *samples, const size_t *sizes,
+typedef struct blockCompressorApi {
+    int    (*state_new)(blockCompressor *instance);
+    void   (*state_free)(blockCompressor *instance);
+    int    (*train)(blockCompressor *instance, const void *samples, const size_t *sizes,
                     unsigned n, void *dict_out, size_t dict_cap);
     void  *(*dict_load)(const void *dict_buf, size_t len);
     void   (*dict_free)(void *cdict);
     size_t (*lib_max_output_size)(size_t input_len);
-    size_t (*compress)(compressorAlg *instance, void *cdict, const void *src,
+    size_t (*compress)(blockCompressor *instance, void *cdict, const void *src,
                        size_t srclen, void *dst, size_t dstcap);
-    size_t (*decompress)(compressorAlg *instance, void *cdict, const void *body,
+    size_t (*decompress)(blockCompressor *instance, void *cdict, const void *body,
                          size_t body_len, void *dst, size_t dstcap);
-    void   (*release)(compressorAlg *instance, void *cdict);
-} compressorApi;
+    void   (*release)(blockCompressor *instance, void *cdict);
+} blockCompressorApi;
 ```
 
 Three shapes here are deliberate.
@@ -426,9 +426,9 @@ Three shapes here are deliberate.
 
 **An instance belongs to one thread and is never shared**, and it never changes after it is built. That is what removes every lock and atomic from this layer. Each worker thread holds one, and the main thread holds one for decompressing on reads. To change a setting, build a new instance and drop the old one.
 
-A loaded dictionary is passed as one `compressorDict` (`id`, `algorithm_id`, `cdict`), not as separate arguments, so a caller cannot write one dictionary's ID with another dictionary's data. `compressorDictIsValid()` checks one.
+A loaded dictionary is passed as one `blockCompressorDict` (`id`, `algorithm_id`, `cdict`), not as separate arguments, so a caller cannot write one dictionary's ID with another dictionary's data. `compressorDictIsValid()` checks one.
 
-A failure returns 0, and the code goes into `instance->last_error`. `compressorStrerror()` maps it to text. The codes are shared by all backends, because none of them is specific to one library.
+A failure returns 0, and the code goes into `instance->last_error`. `blockCompressorStrerror()` maps it to text. The codes are shared by all backends, because none of them is specific to one library.
 
 The backend used for **new compression** is selected at startup from `compression-mode` (§9). Persisted frames may outlive the process that created them, so each frame records its algorithm and format version, and each loaded dictionary is associated with that algorithm (§6.4). The process must retain decoder contexts for every algorithm present in the loaded RDB even when new compression is disabled or configured to use another backend.
 
@@ -541,7 +541,7 @@ How the counters fit together:
 - `compression_total_keys_eligible = compression_total_jobs_queued + compression_total_keys_skipped_already_queued`
 - `compression_total_jobs_queued + compression_total_incoming_jobs_queued = compression_total_values_compressed + compression_total_values_dropped + compression_jobs_in_flight`
 
-Implementation notes (`src/compressor/compressor_stats.{h,c}`):
+Implementation notes:
 - `compression` is not a default INFO section. `INFO compression`, `INFO all`, and `INFO everything` show it. A plain `INFO` does not, so its output does not change.
 - The three `compressed_values*` gauges change on install, on decompress in place, and on free (`freeStringObject()` calls `compressorStringObjectFreed()`). A value can be freed on a background thread (`FLUSHALL ASYNC`), so these three use relaxed atomics. All other counters change only on the main thread. Gauges and counters are two separate structs, so `CONFIG RESETSTAT` clears only the counters and never writes the gauges: a background free cannot be lost during a reset.
 - The time counters use `getMonotonicUs()`, read twice per compression or decompression.

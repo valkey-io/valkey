@@ -221,19 +221,21 @@ proc test_defer_fail {script} {
 
 # Set a config for the duration of the current test only. The previous value
 # is restored when the test ends. 'client' is a command prefix such as r,
-# {r -1}, {R 2} or a client handle. The restore is skipped if the client can
-# no longer reach a server, e.g. the test shut it down.
+# {r -1}, {R 2} or a client handle. The server is identified by its run_id, so
+# the restore is skipped if the client no longer reaches that same server, e.g.
+# the test shut it down, or 'r' now points to an outer server.
 #
-# Don't use it on a server that the test restarts: depending on how the client
-# is resolved, the restore may be skipped or reach another server.
+# Don't use it on a server that the test restarts: a restart changes the
+# run_id, so the restore is skipped.
 proc test_config_set {client param value} {
     set old [lindex [uplevel 1 [list {*}$client config get $param]] 1]
+    set run_id [uplevel 1 [list status $client run_id]]
     uplevel 1 [list {*}$client config set $param $value]
-    test_defer [list _test_config_restore $client $param $old]
+    test_defer [list _test_config_restore $client $param $old $run_id]
 }
 
-proc _test_config_restore {client param value} {
-    if {[catch {uplevel 1 [list {*}$client ping]}]} {
+proc _test_config_restore {client param value run_id} {
+    if {[catch {uplevel 1 [list status $client run_id]} id] || $id ne $run_id} {
         return
     }
     uplevel 1 [list {*}$client config set $param $value]

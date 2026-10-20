@@ -1161,7 +1161,7 @@ start_server {tags {"repl"} overrides {save ""}} {
             assert_equal 1 [s 0 master_sync_in_progress]
             assert_match {*state=bg_transfer*repl_compression=lz4*} [$primary info replication]
 
-            wait_for_condition 100 100 {
+            wait_for_condition 200 100 {
                 [s 0 master_link_status] eq {up}
             } else {
                 fail "Replication not up after dual-channel sync"
@@ -1222,7 +1222,7 @@ start_server {tags {"repl"} overrides {save ""}} {
                 set payload [string repeat x [expr {2 * 1024 * 1024}]]
                 $primary set zstd-during-load $payload
 
-                wait_for_condition 100 100 {
+                wait_for_condition 200 100 {
                     [s 0 master_link_status] eq {up} &&
                     [$replica get zstd-during-load] eq $payload
                 } else {

@@ -119,7 +119,7 @@ typedef enum {
  * so no benefit in data structure padding and applying packed saves the space in the buffer  */
 typedef struct __attribute__((__packed__)) payloadHeader {
     size_t payload_len;       /* payload length in a reply buffer */
-    size_t reply_len;         /* actual reply length for non-plain payloads */
+    uint64_t reply_len;       /* actual reply length for non-plain payloads */
     int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
     uint8_t payload_type : 1; /* one of payloadType */
     uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
@@ -3335,12 +3335,12 @@ static void trackBufReferences(char *buf, size_t bufpos, client *c) {
                 /* We claimed tracking rights */
                 bulkStrRef *str_ref = (bulkStrRef *)ptr;
                 size_t len = header->payload_len;
-                size_t total_reply_len = 0;
+                uint64_t total_reply_len = 0;
                 while (len > 0) {
                     size_t str_len = sdslen(str_ref->str);
                     uint32_t num_len = digits10(str_len);
                     /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-                    total_reply_len += (num_len + 3) + str_len + 2;
+                    total_reply_len += (uint64_t)num_len + 3 + str_len + 2;
                     str_ref++;
                     len -= sizeof(bulkStrRef);
                 }
@@ -6620,7 +6620,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * Note: this function is very fast so can be called as many time as
  * the caller wishes. The main usage of this function currently is
  * enforcing the client output length limits. */
-size_t getClientOutputBufferMemoryUsage(client *c) {
+static uint64_t getClientOutputBufferMemoryUsage64(client *c) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
         size_t repl_buf_size = 0;
         size_t repl_node_num = 0;
@@ -6637,7 +6637,7 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
     }
 
     size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
-    size_t usage = c->reply_bytes + (list_item_size * listLength(c->reply));
+    uint64_t usage = c->reply_bytes + (list_item_size * listLength(c->reply));
     if (isDeferredReplyEnabled(c)) {
         usage += c->deferred_reply_bytes +
                  (list_item_size * listLength(c->deferred_reply));
@@ -6648,13 +6648,19 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
     return usage;
 }
 
+/* Logical output may exceed a 32-bit address space. Saturate its size_t view. */
+size_t getClientOutputBufferMemoryUsage(client *c) {
+    uint64_t usage = getClientOutputBufferMemoryUsage64(c);
+    return usage > SIZE_MAX ? SIZE_MAX : (size_t)usage;
+}
+
 /* Returns the total client's memory usage.
  * Optionally, if output_buffer_mem_usage is not NULL, it fills it with
  * the client output buffer memory usage portion of the total. */
 size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
-    size_t mem = getClientOutputBufferMemoryUsage(c);
+    uint64_t mem = getClientOutputBufferMemoryUsage64(c);
 
-    if (output_buffer_mem_usage != NULL) *output_buffer_mem_usage = mem;
+    if (output_buffer_mem_usage != NULL) *output_buffer_mem_usage = mem > SIZE_MAX ? SIZE_MAX : (size_t)mem;
     mem += c->querybuf ? sdsAllocSize(c->querybuf) : 0;
     mem += zmalloc_size(c);
     mem += c->buf_usable_size;
@@ -6691,7 +6697,7 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     if (c->pubsub_data && c->pubsub_data->client_tracking_prefixes)
         mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) + sizeof(raxNode *));
 
-    return mem;
+    return mem > SIZE_MAX ? SIZE_MAX : (size_t)mem;
 }
 
 int getClientTypeByName(char *name) {
@@ -6729,7 +6735,7 @@ char *getClientTypeName(int client_class) {
  *               Otherwise, zero is returned. */
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
-    unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+    uint64_t used_mem = getClientOutputBufferMemoryUsage64(c);
 
     /* For unauthenticated clients which were also never authenticated before the output buffer is limited to prevent
      * them from abusing it by not reading the replies */
@@ -6753,8 +6759,8 @@ int checkClientOutputBufferLimits(client *c) {
      * Such a configuration is ignored (the size of repl-backlog-size will be used).
      * This doesn't have memory consumption implications since the replica client
      * will share the backlog buffers memory. */
-    size_t hard_limit_bytes = server.client_obuf_limits[class].hard_limit_bytes;
-    size_t soft_limit_bytes = server.client_obuf_limits[class].soft_limit_bytes;
+    unsigned long long hard_limit_bytes = server.client_obuf_limits[class].hard_limit_bytes;
+    unsigned long long soft_limit_bytes = server.client_obuf_limits[class].soft_limit_bytes;
     if (class == CLIENT_TYPE_REPLICA && hard_limit_bytes && (long long)hard_limit_bytes < server.repl_backlog_size)
         hard_limit_bytes = server.repl_backlog_size;
     if (class == CLIENT_TYPE_REPLICA && soft_limit_bytes && (long long)soft_limit_bytes < server.repl_backlog_size)
@@ -6804,7 +6810,7 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    size_t tracked_len = atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+    uint64_t tracked_len = atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
     if ((c->reply_bytes == 0 && tracked_len == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
         (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
         return 0;

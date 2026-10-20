@@ -1069,7 +1069,7 @@ jobs:
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
         run: |
-          sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
+          sudo apt-get update && sudo apt-get install lttng-tools liblttng-ust-dev
           make -j4 USE_LTTNG=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx

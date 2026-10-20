@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-/* Tests for the value compression backends. See src/compressor/compression_block_interface.h. */
+/* Tests for the value compression backends. See src/compression_block_interface.h. */
 
 #include "generated_wrappers.hpp"
 

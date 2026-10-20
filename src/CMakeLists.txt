@@ -17,6 +17,9 @@ if (USE_ZSTD)
 endif ()
 valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
                              "redis-server")
+# src/ is the include root, the same as -I. in src/Makefile, so files in a
+# subfolder can use #include "server.h" and #include "compressor/compressor_alg.h".
+target_include_directories(valkey-server PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_dependencies(valkey-server generate_commands_def)
 add_dependencies(valkey-server generate_fmtargs_h)
 add_dependencies(valkey-server release_header)

@@ -2433,7 +2433,7 @@ void xreadCommand(client *c) {
         streamID *gt = ids + i; /* ID must be greater than this. */
         int modified_stream = 0;
         int serve_synchronously = 0;
-        int serve_history = 0;                                      /* True for XREADGROUP with ID != ">". */
+        int serve_history = 0; /* True for XREADGROUP with ID != ">". */
         int consumer_created = 0;
         streamConsumer *consumer = NULL;                            /* Unused if XREAD */
         streamPropInfo spi = {c->argv[streams_arg + i], groupname}; /* Unused if XREAD */

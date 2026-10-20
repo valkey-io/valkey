@@ -1160,11 +1160,18 @@ start_server {
             r XCLAIM mystream mygroup c2 0 1-0
             r XAUTOCLAIM mystream mygroup c3 0 0-0
 
+            r XADD mystream 2-0 f v
+            r XADD mystream 3-0 f v
+            r XREADGROUP GROUP mygroup c1 STREAMS mystream >
+            r XDEL mystream 2-0 3-0
+            assert_equal {} [r XCLAIM mystream mygroup c4 0 2-0]
+            assert_equal {0-0 {} 3-0} [r XAUTOCLAIM mystream mygroup c5 0 0-0]
+
             set names {}
             foreach c [r xinfo consumers mystream mygroup] {
                 lappend names [lindex $c 1]
             }
-            assert_equal [lsort $names] {c1 c2 c3}
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
 
             r debug loadaof
 
@@ -1172,7 +1179,7 @@ start_server {
             foreach c [r xinfo consumers mystream mygroup] {
                 lappend names [lindex $c 1]
             }
-            assert_equal [lsort $names] {c1 c2 c3}
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
         }
     }
 
@@ -1613,19 +1620,26 @@ start_server {
             $master XREADGROUP GROUP mygroup c1 COUNT 10 STREAMS mystream >
             $master XCLAIM mystream mygroup c2 0 1-0
             $master XAUTOCLAIM mystream mygroup c3 0 0-0
+
+            $master XADD mystream 2-0 f v
+            $master XADD mystream 3-0 f v
+            $master XREADGROUP GROUP mygroup c1 STREAMS mystream >
+            $master XDEL mystream 2-0 3-0
+            assert_equal {} [$master XCLAIM mystream mygroup c4 0 2-0]
+            assert_equal {0-0 {} 3-0} [$master XAUTOCLAIM mystream mygroup c5 0 0-0]
             wait_for_ofs_sync $master $replica
 
             set names {}
             foreach c [$master xinfo consumers mystream mygroup] {
                 lappend names [lindex $c 1]
             }
-            assert_equal [lsort $names] {c1 c2 c3}
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
 
             set names {}
             foreach c [$replica xinfo consumers mystream mygroup] {
                 lappend names [lindex $c 1]
             }
-            assert_equal [lsort $names] {c1 c2 c3}
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
         }
     }
 

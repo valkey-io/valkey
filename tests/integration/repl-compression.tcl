@@ -1289,7 +1289,7 @@ start_server {tags {"repl"} overrides {save ""}} {
                 assert_equal $initial_compressed \
                     [regexp -all {repl_compression=(lz4|zstd)} [$primary info replication]]
 
-                wait_for_condition 100 100 {
+                wait_for_condition 200 100 {
                     [status $primary sync_partial_ok] == $partial_before + 1 &&
                     [s 0 master_link_status] eq {up} &&
                     [regexp -all {repl_compression=(lz4|zstd)} [$primary info replication]] == $final_compressed

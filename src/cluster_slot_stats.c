@@ -110,9 +110,13 @@ static uint64_t slotMemoryBytes(int slot) {
 /* -----------------------------------------------------------------------------
  * Per-key in-place mutation snapshot.
  *
- * The set lives on the client (client.slot_memory_bytes). Two entries are stored
- * inline; a third distinct key migrates the inline entries into an overflow
- * list and everything is then kept there. Each entry records its own slot.
+ * There is one set for the whole server (server.slot_memory_bytes), so the
+ * snapshot and the commit find the same entry no matter which client runs the
+ * command: a script or VM_Call runs commands on a temporary client, and module
+ * timers and thread-safe contexts run with no client at all. Entries are
+ * matched on (database, key name). Two entries are stored inline; a third
+ * distinct key migrates the inline entries into an overflow list and
+ * everything is then kept there.
  * -------------------------------------------------------------------------- */
 
 #define SLOT_MEMORY_BYTES_INLINE 2
@@ -149,6 +153,14 @@ static slotMemoryBytesSnap *slotSnapFind(slotMemoryBytesSnapshot *s, serverDb *d
     return NULL;
 }
 
+/* Free the empty overflow list, so the next entries use the inline array again
+ * instead of a heap allocation per entry. Marks the set as empty. */
+static void slotSnapReleaseOverflow(slotMemoryBytesSnapshot *s) {
+    listRelease(s->overflow);
+    s->overflow = NULL;
+    s->slot = -1;
+}
+
 /* Remove the entry tracking `key` in `db`, if any. Resets the shared slot to -1
  * once the set becomes empty so the cheap `slot < 0` guards short-circuit. */
 static void slotSnapRemove(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) {
@@ -164,7 +176,7 @@ static void slotSnapRemove(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) 
                 break;
             }
         }
-        if (listLength(s->overflow) == 0) s->slot = -1;
+        if (listLength(s->overflow) == 0) slotSnapReleaseOverflow(s);
         return;
     }
     for (int i = 0; i < s->inlined_count; i++) {
@@ -178,52 +190,42 @@ static void slotSnapRemove(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) 
     if (s->inlined_count == 0) s->slot = -1;
 }
 
-/* Record (or refresh) the "before" size for `key` at `slot`. Called from
- * lookupKeyWrite. Creates a new entry if the key isn't tracked yet. */
-void clusterSlotStatsSnapshotKey(client *c, serverDb *db, int slot, robj *key, robj *val) {
-    if (c == NULL || !isMemoryBytesAccountingEnabled(slot)) return;
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
-    uint64_t before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
+/* Record the "before" size for `key` in `db` at `slot`. Called from
+ * lookupKeyWrite. If the key already has an entry, it is kept as it is: the
+ * counter still holds that entry's `before`, and a pending in-place change
+ * (for example from an outer module command) must not be lost. */
+void clusterSlotStatsSnapshotKey(serverDb *db, int slot, robj *key, robj *val) {
+    if (!isMemoryBytesAccountingEnabled(slot)) return;
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
+    if (s->slot >= 0 && slotSnapFind(s, db, key) != NULL) return;
 
-    slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
-    if (e != NULL) { /* refresh existing */
-        e->before = before;
-        e->slot = slot;
-        s->slot = slot;
-        return;
-    }
-
+    slotMemoryBytesSnap *e;
     s->slot = slot;
     if (s->overflow == NULL && s->inlined_count < SLOT_MEMORY_BYTES_INLINE) {
         e = &s->inlined[s->inlined_count++];
-        e->key = key;
-        incrRefCount(key);
-        e->before = before;
-        e->slot = slot;
-        e->dbid = db->id;
-        return;
-    }
-
-    /* Spill: on first overflow migrate the inline entries into the list
-     * (ownership of their key refs transfers to the heap entries), then append
-     * the new key. */
-    if (s->overflow == NULL) {
-        s->overflow = listCreate();
-        listSetFreeMethod(s->overflow, slotSnapFreeEntry);
+    } else {
+        /* Spill: on first overflow migrate the inline entries into the list
+         * (ownership of their key refs transfers to the heap entries), then
+         * append the new key. */
+        if (s->overflow == NULL) {
+            s->overflow = listCreate();
+            listSetFreeMethod(s->overflow, slotSnapFreeEntry);
+        }
         for (int i = 0; i < s->inlined_count; i++) {
             slotMemoryBytesSnap *moved = zmalloc(sizeof(*moved));
             *moved = s->inlined[i];
             listAddNodeTail(s->overflow, moved);
         }
         s->inlined_count = 0;
+        e = zmalloc(sizeof(*e));
+        listAddNodeTail(s->overflow, e);
     }
-    slotMemoryBytesSnap *ne = zmalloc(sizeof(*ne));
-    ne->key = key;
+    e->key = key;
     incrRefCount(key);
-    ne->before = before;
-    ne->slot = slot;
-    ne->dbid = db->id;
-    listAddNodeTail(s->overflow, ne);
+    e->before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
+    e->slot = slot;
+    e->dbid = db->id;
+    e->nesting = server.execution_nesting;
 }
 
 /* Refresh the "before" size for `key` to the new value's size, but only if the
@@ -231,9 +233,9 @@ void clusterSlotStatsSnapshotKey(client *c, serverDb *db, int slot, robj *key, r
  * they account the change themselves, so a later signalModifiedKey computes a
  * zero delta instead of double counting. Never creates an entry, so bulk write
  * paths (e.g. MSET) that never snapshotted don't allocate. */
-void clusterSlotStatsRefreshKey(client *c, serverDb *db, robj *key, robj *val) {
-    if (c == NULL || !server.cluster_enabled) return;
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
+void clusterSlotStatsRefreshKey(serverDb *db, robj *key, robj *val) {
+    if (!server.cluster_enabled) return;
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
     if (s->slot < 0) return;
     slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
     if (e != NULL) e->before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
@@ -241,35 +243,45 @@ void clusterSlotStatsRefreshKey(client *c, serverDb *db, robj *key, robj *val) {
 
 /* Drop any pending snapshot for `key`. Called from the delete path, where the
  * db-hook has already subtracted the key's size explicitly. */
-void clusterSlotStatsForgetKey(client *c, serverDb *db, robj *key) {
-    if (c == NULL || !server.cluster_enabled) return;
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
+void clusterSlotStatsForgetKey(serverDb *db, robj *key) {
+    if (!server.cluster_enabled) return;
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
     if (s->slot < 0) return;
     slotSnapRemove(s, db, key);
 }
 
-/* Apply the in-place delta for `key` and drop its snapshot. Called from
- * signalModifiedKey. */
-void clusterSlotStatsCommitKey(client *c, serverDb *db, robj *key) {
-    if (c == NULL || !server.cluster_enabled) return;
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
+/* Apply the in-place delta for `key`. Called from signalModifiedKey.
+ *
+ * The entry is dropped, unless it was created at an outer execution level. That
+ * happens when a module opens a key for write and then runs a command on it
+ * with VM_Call: the inner command's signalModifiedKey applies the change so
+ * far, and the entry stays (with the new size) for the outer module code, which
+ * can change the key again before it closes it. */
+void clusterSlotStatsCommitKey(serverDb *db, robj *key) {
+    if (!server.cluster_enabled) return;
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
     if (s->slot < 0) return;
     slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
     if (e == NULL) return;
 
     int slot = e->slot;
     uint64_t before = e->before;
+    uint64_t after = before;
     /* Re-read the value to get the post-mutation size. Use read-only flags so
      * this lookup does not itself take a new write snapshot. */
     robj *val = lookupKeyReadWithFlags(db, key, LOOKUP_NOEFFECTS);
     if (val != NULL) {
-        uint64_t after = slotStatsObjectSize(objectGetVal(key), val);
+        after = slotStatsObjectSize(objectGetVal(key), val);
         if (after != before) {
             kvstoreHashtableSubTrackedBytes(db->keys, slot, before);
             kvstoreHashtableAddTrackedBytes(db->keys, slot, after);
         }
     }
-    slotSnapRemove(s, db, key);
+    if (val != NULL && e->nesting < server.execution_nesting) {
+        e->before = after;
+    } else {
+        slotSnapRemove(s, db, key);
+    }
 }
 
 /* If `key` has a pending snapshot, apply the change from the snapshot size to
@@ -278,9 +290,8 @@ void clusterSlotStatsCommitKey(client *c, serverDb *db, robj *key) {
  * counter that matches the current value. Without this, an in-place
  * change made before the call (e.g. VM_StringTruncate before VM_SetExpire)
  * would be lost when the snapshot is refreshed or dropped. */
-static void slotSnapSettle(client *c, serverDb *db, robj *key, uint64_t size) {
-    if (c == NULL) return;
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
+static void slotSnapSettle(serverDb *db, robj *key, uint64_t size) {
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
     if (s->slot < 0) return;
     slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
     if (e == NULL || e->before == size) return;
@@ -289,9 +300,9 @@ static void slotSnapSettle(client *c, serverDb *db, robj *key, uint64_t size) {
     e->before = size;
 }
 
-void clusterSlotStatsSettleKey(client *c, serverDb *db, robj *key, robj *val) {
+void clusterSlotStatsSettleKey(serverDb *db, robj *key, robj *val) {
     if (!server.cluster_enabled) return;
-    slotSnapSettle(c, db, key, slotStatsObjectSize(objectGetVal(key), val));
+    slotSnapSettle(db, key, slotStatsObjectSize(objectGetVal(key), val));
 }
 
 /* Account a value that was resized or reallocated without going through
@@ -301,45 +312,56 @@ void clusterSlotStatsSettleKey(client *c, serverDb *db, robj *key, robj *val) {
  * signalModifiedKey does not count the same change again. */
 void clusterSlotStatsUpdateMemory(serverDb *db, int slot, robj *key, uint64_t before, robj *val) {
     if (!isMemoryBytesAccountingEnabled(slot)) return;
-    slotSnapSettle(server.executing_client, db, key, before);
+    slotSnapSettle(db, key, before);
     uint64_t after = slotStatsObjectSize(objectGetVal(key), val);
     if (after != before) {
         kvstoreHashtableSubTrackedBytes(db->keys, slot, before);
         kvstoreHashtableAddTrackedBytes(db->keys, slot, after);
     }
-    clusterSlotStatsRefreshKey(server.executing_client, db, key, val);
+    clusterSlotStatsRefreshKey(db, key, val);
 }
 
-/* Initialize the snapshot on a freshly allocated client. createClient() uses
- * zmalloc (not zeroed), so every field must be set explicitly. This must not
- * read `overflow` -- unlike clusterSlotStatsClearSnapshot() -- because it is
- * uninitialized at this point. */
-void clusterSlotStatsInitSnapshot(client *c) {
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
+/* Initialize the server-wide snapshot set. Called once from initServer(). */
+void clusterSlotStatsInitSnapshot(void) {
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
     s->inlined_count = 0;
     s->slot = -1;
     s->overflow = NULL;
 }
 
-/* Clear all pending snapshots. Called at each command boundary (afterCommand)
- * and from resetClient, so a snapshot can never leak across commands. */
-void clusterSlotStatsClearSnapshot(client *c) {
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
-    if (s->overflow != NULL) listEmpty(s->overflow); /* keep header for reuse */
-    for (int i = 0; i < s->inlined_count; i++) decrRefCount(s->inlined[i].key);
-    s->inlined_count = 0;
-    s->slot = -1;
-}
-
-/* Release the snapshot, including the overflow list header. Called on client
- * free. */
-void clusterSlotStatsFreeSnapshot(client *c) {
-    clusterSlotStatsClearSnapshot(c);
-    slotMemoryBytesSnapshot *s = &c->slot_memory_bytes;
+/* Drop the pending snapshots created deeper than execution level `level`
+ * (e->nesting > level); pass -1 to drop all of them.
+ *
+ * afterCommand passes server.execution_nesting. It runs after call() left its
+ * execution unit, so this drops exactly the entries of the command that just
+ * ended (for example one EXEC sub-command or one command of a script), and
+ * keeps the entries of an outer command (a module that has a key open around a
+ * VM_Call). afterSleep and the AOF load loop pass -1. Entries are kept
+ * consistent by the db-hooks, so dropping them only frees memory. */
+void clusterSlotStatsClearSnapshot(int level) {
+    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
+    if (s->slot < 0) return;
     if (s->overflow != NULL) {
-        listRelease(s->overflow);
-        s->overflow = NULL;
+        listIter li;
+        listNode *ln;
+        listRewind(s->overflow, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            slotMemoryBytesSnap *e = listNodeValue(ln);
+            if (e->nesting > level) listDelNode(s->overflow, ln); /* free method decrefs the key */
+        }
+        if (listLength(s->overflow) == 0) slotSnapReleaseOverflow(s);
+        return;
     }
+    int kept = 0;
+    for (int i = 0; i < s->inlined_count; i++) {
+        if (s->inlined[i].nesting > level) {
+            decrRefCount(s->inlined[i].key);
+        } else {
+            s->inlined[kept++] = s->inlined[i];
+        }
+    }
+    s->inlined_count = kept;
+    if (kept == 0) s->slot = -1;
 }
 
 /* -----------------------------------------------------------------------------

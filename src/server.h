@@ -1411,12 +1411,14 @@ typedef struct slotMigrationJob slotMigrationJob;
  * -- and anything beyond that spills to a list. Each entry keeps its own slot
  * and database: cluster rejects cross-slot commands, but a module can open keys
  * in several slots in one command, and MOVE / COPY ... DB use the same key name
- * in two databases. */
+ * in two databases. There is one set for the whole server (see
+ * server.slot_memory_bytes), not one per client. */
 typedef struct slotMemoryBytesSnap {
     robj *key;       /* The modified key (incref'd while snapshotted). */
     uint64_t before; /* Allocated size captured at lookup / last db-hook refresh. */
     int slot;        /* Slot of `key`. */
     int dbid;        /* Database of `key`. */
+    int nesting;     /* server.execution_nesting when the entry was created. */
 } slotMemoryBytesSnap;
 
 typedef struct slotMemoryBytesSnapshot {
@@ -1508,7 +1510,6 @@ typedef struct client {
     int nread;                                    /* Number of bytes of the last read. */
     int read_flags;                               /* Client Read flags - used to communicate the client read state. */
     int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
-    slotMemoryBytesSnapshot slot_memory_bytes;    /* Per-key memory-bytes "before" snapshots for in-place mutations. */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
     /* In updateClientMemoryUsage() we track the memory usage of
@@ -1970,6 +1971,10 @@ struct valkeyServer {
 
     /* Stuff for client mem eviction */
     clientMemUsageBucket *client_mem_usage_buckets;
+
+    /* Per-key memory-bytes "before" snapshots for in-place mutations
+     * (see cluster_slot_stats.c). */
+    slotMemoryBytesSnapshot slot_memory_bytes;
 
     rax *clients_timeout_table; /* Radix tree for blocked clients timeouts. */
     int execution_nesting;      /* Execution nesting level.

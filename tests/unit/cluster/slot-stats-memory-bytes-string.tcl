@@ -338,4 +338,25 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         R 0 EVAL {return server.call('SETRANGE', KEYS[1], 300, 'y')} 1 $key
         assert_slot_bytes_match_memory_usage $key_slot
     }
+
+    # A write lookup that changes nothing (SET NX on an existing key) leaves a
+    # snapshot that is dropped when that sub-command ends. A later sub-command
+    # that changes the same key in place must still be counted.
+    test "memory-bytes: no-op write then in-place change in one EVAL / MULTI" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 1000]
+        R 0 EVAL {
+            server.call('SET', KEYS[1], 'x', 'NX')
+            server.call('HDEL', KEYS[2], 'f')
+            return server.call('APPEND', KEYS[1], ARGV[1])
+        } 2 $key "{FOO}missing" [string repeat x 500]
+        assert_slot_bytes_match_memory_usage $key_slot
+
+        R 0 MULTI
+        R 0 SET $key x NX
+        R 0 APPEND $key [string repeat y 700]
+        R 0 EXEC
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
 }

@@ -162,6 +162,50 @@ int test_slotmem_truncate_two(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, i
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+/* test.slotmem_call_append <key> <suffix> [<len>]
+ * Opens the key for write, runs APPEND on it with VM_Call, and then, if <len>
+ * is given, truncates the open key to <len> before closing it. */
+int test_slotmem_call_append(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3 && argc != 4) return ValkeyModule_WrongArity(ctx);
+    long long len = -1;
+    if (argc == 4 && ValkeyModule_StringToLongLong(argv[3], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    ValkeyModuleKey *k = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "APPEND", "ss", argv[1], argv[2]);
+    if (rep) ValkeyModule_FreeCallReply(rep);
+    if (len >= 0) ValkeyModule_StringTruncate(k, len);
+    ValkeyModule_CloseKey(k);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+typedef struct {
+    ValkeyModuleString *key;
+    long long len;
+} slotmemTimerData;
+
+static void slotmemTimerTruncate(ValkeyModuleCtx *ctx, void *data) {
+    slotmemTimerData *d = data;
+    ValkeyModuleKey *k = ValkeyModule_OpenKey(ctx, d->key, VALKEYMODULE_WRITE);
+    ValkeyModule_StringTruncate(k, d->len);
+    ValkeyModule_CloseKey(k);
+    ValkeyModule_FreeString(NULL, d->key);
+    ValkeyModule_Free(d);
+}
+
+/* test.slotmem_timer_truncate <key> <len>
+ * Truncates the key from a timer callback, where no client is executing. */
+int test_slotmem_timer_truncate(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    long long len;
+    if (ValkeyModule_StringToLongLong(argv[2], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    slotmemTimerData *d = ValkeyModule_Alloc(sizeof(*d));
+    d->key = ValkeyModule_CreateStringFromString(NULL, argv[1]);
+    d->len = len;
+    ValkeyModule_CreateTimer(ctx, 1, slotmemTimerTruncate, d);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -194,6 +238,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.slotmem_truncate_set", test_slotmem_truncate_set, "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.slotmem_truncate_two", test_slotmem_truncate_two, "write", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_call_append", test_slotmem_call_append, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_timer_truncate", test_slotmem_timer_truncate, "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Register our handlers for different message types. */

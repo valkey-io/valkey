@@ -35,12 +35,14 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 
     # With swapdb, the replica loads into a temp DB and then drops the old
-    # dataset. The old dataset must not stay in the counter.
+    # dataset. The old dataset must not stay in the counter. The replica is not
+    # compared with the primary here: after an RDB load the same data can take a
+    # different number of allocated bytes (for example with ASan, where the
+    # allocator reports the exact requested size).
     test "memory-bytes: replica does not keep old bytes after a swapdb diskless load" {
         R 1 CONFIG SET repl-diskless-load swapdb
         R 0 CONFIG SET repl-diskless-sync yes
         R 0 CONFIG SET repl-diskless-sync-delay 0
-        set expected [get_slot_bytes $key_slot 0]
         set syncs [s 0 sync_full]
 
         # A new replication ID forces a full sync on reconnect.
@@ -52,7 +54,6 @@ start_cluster 1 1 {tags {external:skip cluster}} {
             fail "replica did not full sync"
         }
         wait_for_ofs_sync $primary $replica
-        assert_equal $expected [get_slot_bytes $key_slot 1]
         assert_slot_bytes_match_memory_usage $key_slot 1
     } {} {needs:debug}
 
@@ -147,4 +148,23 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-databases 16}
         assert_equal 1 [R 0 MOVE "{FOO}k" 1 REPLACE]
         assert_equal [usage_db01 {"{FOO}stay" "{FOO}stay1" "{FOO}k"}] [get_slot_bytes $key_slot]
     }
+}
+
+# -----------------------------------------------------------------------------
+# AOF load. Commands are replayed without call(), so the AOF loop drops the
+# snapshots itself.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {appendonly yes appendfsync always}} {
+    set key_slot [R 0 cluster keyslot "{FOO}"]
+
+    test "memory-bytes: matches MEMORY USAGE after DEBUG LOADAOF" {
+        write_memory_bytes_dataset 0
+        R 0 APPEND "{FOO}s1" [string repeat c 300]
+        R 0 SET "{FOO}s1" x NX
+        R 0 HDEL "{FOO}missing" f
+        R 0 DEBUG LOADAOF
+        assert_slot_bytes_match_memory_usage $key_slot
+        assert {[get_slot_bytes $key_slot] > 0}
+    } {} {needs:debug}
 }

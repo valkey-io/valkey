@@ -37,6 +37,7 @@
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
+#include "cluster_slot_stats.h"
 #include "util.h"
 
 #include <signal.h>
@@ -1706,6 +1707,9 @@ int loadSingleAppendOnlyFile(char *filename) {
         /* Clean up. Command code may have changed argv/argc so we use the
          * argv/argc of the client instead of the local variables. */
         freeClientArgv(fakeClient);
+        /* Commands here run without call(), so afterCommand does not drop
+         * their memory-bytes snapshots. */
+        if (server.cluster_enabled) clusterSlotStatsClearSnapshot(-1);
         if (server.aof_load_truncated) valid_up_to = ftello(fp);
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }

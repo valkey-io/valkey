@@ -47,23 +47,22 @@ uint64_t clusterSlotStatsGetObjectSize(robj *key, robj *val);
  * reallocated outside dbSetValue (e.g. setExpire). */
 void clusterSlotStatsUpdateMemory(serverDb *db, int slot, robj *key, uint64_t before, robj *val);
 
-/* Per-key in-place mutation snapshot.
+/* Per-key in-place mutation snapshot (one set for the whole server).
  *
- * A command's write-lookups snapshot each modified key's "before" size via
+ * Write-lookups snapshot each modified key's "before" size via
  * clusterSlotStatsSnapshotKey(); db-hooks that overwrite a value in place
  * refresh it via clusterSlotStatsRefreshKey() so the eventual signalModifiedKey
  * sees a zero delta; deletes drop the snapshot via clusterSlotStatsForgetKey();
- * and signalModifiedKey applies the delta and drops the snapshot via
- * clusterSlotStatsCommitKey(). The whole set is cleared at each command
- * boundary (clusterSlotStatsClearSnapshot) and released on client free
- * (clusterSlotStatsFreeSnapshot). All are no-ops when cluster mode is off. */
-void clusterSlotStatsSnapshotKey(client *c, serverDb *db, int slot, robj *key, robj *val);
-void clusterSlotStatsRefreshKey(client *c, serverDb *db, robj *key, robj *val);
-void clusterSlotStatsForgetKey(client *c, serverDb *db, robj *key);
-void clusterSlotStatsCommitKey(client *c, serverDb *db, robj *key);
+ * and signalModifiedKey applies the delta via clusterSlotStatsCommitKey().
+ * Entries of a command are dropped when that command ends, and all entries in
+ * afterSleep and in the AOF load loop (clusterSlotStatsClearSnapshot). All are
+ * no-ops when cluster mode is off. */
+void clusterSlotStatsSnapshotKey(serverDb *db, int slot, robj *key, robj *val);
+void clusterSlotStatsRefreshKey(serverDb *db, robj *key, robj *val);
+void clusterSlotStatsForgetKey(serverDb *db, robj *key);
+void clusterSlotStatsCommitKey(serverDb *db, robj *key);
 /* Applies any pending in-place change of `key` (current value `val`) before a
  * db-hook subtracts the current size. Used by dbSetValue and the delete path. */
-void clusterSlotStatsSettleKey(client *c, serverDb *db, robj *key, robj *val);
-void clusterSlotStatsInitSnapshot(client *c);
-void clusterSlotStatsClearSnapshot(client *c);
-void clusterSlotStatsFreeSnapshot(client *c);
+void clusterSlotStatsSettleKey(serverDb *db, robj *key, robj *val);
+void clusterSlotStatsInitSnapshot(void);
+void clusterSlotStatsClearSnapshot(int level);

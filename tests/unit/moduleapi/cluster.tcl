@@ -460,6 +460,42 @@ start_cluster 1 0 [list config_lines $modules] {
         assert_slot_bytes_match_memory_usage $key_slot
         assert_slot_bytes_match_memory_usage $key2_slot
     }
+
+    # VM_Call runs APPEND on a temporary client while the module still has the
+    # key open for write. The change must be counted once. The value is large
+    # enough to be stored outside the object, so APPEND changes it in place and
+    # the module's open key handle stays valid (an embedded value would be
+    # replaced, and the handle would point to freed memory).
+    test "memory-bytes: VM_Call APPEND on a key the module has open" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 1000]
+        R 0 test.slotmem_call_append $key [string repeat x 500]
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    # After the VM_Call, the module changes the open key again before closing it.
+    test "memory-bytes: change the open key again after VM_Call" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 1000]
+        R 0 test.slotmem_call_append $key [string repeat x 500] 5000
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    # A timer callback runs with no executing client.
+    test "memory-bytes: StringTruncate from a module timer" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        R 0 SET $key [string repeat a 100]
+        R 0 test.slotmem_timer_truncate $key 5000
+        wait_for_condition 50 20 {
+            [R 0 STRLEN $key] == 5000
+        } else {
+            fail "timer did not run"
+        }
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
 }
 
 } ;# end tag

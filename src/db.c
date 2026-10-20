@@ -133,8 +133,8 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
      * lookupKeyWrite followed by an in-place mutation and then signalModifiedKey,
      * the delta is computed from this snapshot. The snapshot is per-key, so a
      * command may safely look up several keys for write (e.g. SMOVE). */
-    if ((flags & LOOKUP_WRITE) && server.cluster_enabled && server.executing_client) {
-        clusterSlotStatsSnapshotKey(server.executing_client, db, dict_index, key, val);
+    if ((flags & LOOKUP_WRITE) && server.cluster_enabled) {
+        clusterSlotStatsSnapshotKey(db, dict_index, key, val);
     }
 
     /* Charge this lookup to hot-key detection. All the policy (whether detection
@@ -240,7 +240,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
     clusterSlotStatsAddMemory(db, dict_index, key, val);
-    clusterSlotStatsRefreshKey(server.executing_client, db, key, val);
+    clusterSlotStatsRefreshKey(db, key, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
     *valref = val;
@@ -355,7 +355,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     robj *old = *oldref;
     robj *new;
 
-    clusterSlotStatsSettleKey(server.executing_client, db, key, old);
+    clusterSlotStatsSettleKey(db, key, old);
     clusterSlotStatsSubMemory(db, dict_index, key, old);
 
     if (overwrite) {
@@ -426,7 +426,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     /* Refresh snapshot so signalModifiedKey computes a zero delta instead of
      * double counting an overwrite the caller may follow with an in-place
      * mutation (e.g. dbUnshareStringValue before APPEND). */
-    clusterSlotStatsRefreshKey(server.executing_client, db, key, new);
+    clusterSlotStatsRefreshKey(db, key, new);
     *valref = new;
 }
 
@@ -529,9 +529,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         decrRefCount(val);
         /* Because of dbUnshareStringValue, the val in de may change. */
         val = *ref;
-        clusterSlotStatsSettleKey(server.executing_client, db, key, val);
+        clusterSlotStatsSettleKey(db, key, val);
         clusterSlotStatsSubMemory(db, dict_index, key, val);
-        clusterSlotStatsForgetKey(server.executing_client, db, key);
+        clusterSlotStatsForgetKey(db, key);
 
         /* Delete from keys and expires tables. This will not free the object.
          * (The expires table has no destructor callback.) */
@@ -815,7 +815,7 @@ void signalModifiedKey(client *c, serverDb *db, robj *key) {
      * an existing stream, ...) that don't go through dbSetValue. The snapshot is
      * keyed per-key, so multi-key in-place commands (e.g. SMOVE) are accounted
      * correctly. */
-    clusterSlotStatsCommitKey(server.executing_client, db, key);
+    clusterSlotStatsCommitKey(db, key);
     bgIteration_keyModified(db->id, objectGetVal(key));
 }
 

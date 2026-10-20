@@ -173,23 +173,42 @@ change an existing value without calling `dbSetValue`. Their accounting flow is:
 
 ```text
 lookupKeyWrite(db, key)
-  -> record this key's size_before in the snapshot of server.executing_client
+  -> record this key's size_before in server.slot_memory_bytes
+     (if the key already has an entry, keep it as it is)
 
 mutate the existing value
 
 signalModifiedKey(c, db, key)
-  -> find this key's snapshot on server.executing_client
+  -> find this key's entry by (db, key)
   -> read the current value (LOOKUP_NOEFFECTS) and compute size_after
   -> apply the counter of (db, slot) += size_after - size_before
-  -> remove this key's snapshot
+  -> remove the entry (or keep it with size_after, see below)
 ```
 
-The snapshot always lives on `server.executing_client`, the client that
-`call()` is running. This matters for scripts and `VM_Call`: `EVAL`, `FCALL`
-and module calls run each command on a temporary client, while
-`server.current_client` stays the client that sent `EVAL`. Using
-`server.executing_client` for the snapshot, the refresh, the forget, and the
-commit makes all four use the same client.
+There is one snapshot set for the whole server, `server.slot_memory_bytes`. It
+does not belong to a client. This matters because the code that takes a
+snapshot and the code that commits it do not always run on the same client:
+
+- `EVAL`, `FCALL` and `VM_Call` run each command on a temporary client.
+- Module timers and thread-safe contexts run with no executing client.
+- A module can open a key for write and then run a command on the same key
+  with `VM_Call`. The outer open key and the inner command must see the same
+  entry, or the change is counted twice.
+
+The server is single-threaded (module threads hold the GIL), so one set is
+enough.
+
+Two rules make nested execution correct:
+
+- A lookup on a key that already has an entry keeps the entry. The counter
+  still holds that entry's `before`, so replacing it with the current size
+  would lose a pending in-place change.
+- Each entry records `server.execution_nesting` when it was created. If a
+  commit runs at a deeper level than the entry (the inner command of a
+  `VM_Call` on a key the module has open), it applies the change and keeps the
+  entry with the new size. The outer module code can change the open key again,
+  and its own commit at close time applies only that last change. Otherwise
+  the commit removes the entry.
 
 The re-read at commit time uses `LOOKUP_NOEFFECTS`, so it has no side effects.
 In particular it is not counted again by hot-key detection.
@@ -199,14 +218,14 @@ In particular it is not counted again by hot-key detection.
 Some commands mutate several keys in place. For example, `SMOVE` and
 `LMOVE`/`RPOPLPUSH` shrink one value and grow another.
 
-A single `(slot, before)` value on the client is not enough:
+A single `(slot, before)` value is not enough:
 
 1. The second `lookupKeyWrite` would replace the first key's `before` value.
 2. The first `signalModifiedKey` would consume the shared snapshot.
 3. The second key's delta would be lost.
 
-The client therefore owns a small per-key snapshot set in
-`client.slot_memory_bytes`:
+The server therefore owns a small per-key snapshot set in
+`server.slot_memory_bytes`:
 
 ```c
 typedef struct slotMemoryBytesSnap {
@@ -214,6 +233,7 @@ typedef struct slotMemoryBytesSnap {
     uint64_t before;  /* size at lookup or last DB-hook refresh */
     int slot;         /* slot of key */
     int dbid;         /* database of key */
+    int nesting;      /* server.execution_nesting when created */
 } slotMemoryBytesSnap;
 
 typedef struct slotMemoryBytesSnapshot {
@@ -250,13 +270,25 @@ the source delete would count the key again in the source slot.
 
 #### Snapshot lifecycle
 
-- `afterCommand()` clears snapshots at the end of every `call()`, including
-  each `MULTI`/`EXEC` sub-command and each scripted call.
-- `resetClient()` also clears snapshots for top-level client cleanup.
-- `freeClient()` releases the overflow list.
+- `afterCommand()` drops the entries of the command that just ended:
+  `clusterSlotStatsClearSnapshot(server.execution_nesting)` removes entries
+  with `nesting > server.execution_nesting`. `afterCommand()` runs after
+  `call()` has left its execution unit, so this matches exactly the finished
+  command. Each `MULTI`/`EXEC` sub-command and each scripted call drops its own
+  entries. An outer module command that has a key open around a `VM_Call`
+  keeps its entry, because it was created at a lower level.
+- `afterSleep()` drops all entries (level -1) after the main thread takes the
+  GIL back. This removes entries left by module threads, which run while the
+  main thread sleeps, and by module timers.
+- The AOF load loop drops all entries after each command, because it runs
+  commands without `call()`, so `afterCommand()` does not run.
+- `initServer()` initializes the set. It lives as long as the server.
 
-The per-command clear handles early returns after `lookupKeyWrite` and prevents
-stale snapshots from leaking into later commands or across `SELECT`.
+The db-hooks keep every entry consistent with the counter, so dropping an entry
+only frees memory. Dropping is needed for write lookups that end without a
+commit: an early return, a no-op write (`HDEL` of a missing field, `SET NX` on
+an existing key), or a `WRONGTYPE` error. Because each command drops its own
+entries, a script with many such writes keeps the set small.
 
 #### Interaction with DB hooks
 
@@ -302,10 +334,11 @@ check. Non-cluster deployments do not maintain the per-slot metric.
 | Expiration / eviction | Both use the normal delete primitive and subtract the entry size |
 | RDB load | `dbAddRDBLoad` adds every loaded key; type-specific counters are maintained while decoding |
 | AOF replay | Commands execute through the normal command paths |
-| Replication apply | Replicated commands use normal command paths with the replication client as `server.executing_client` |
-| Replica full sync | The replica loads the RDB through `dbAddRDBLoad` and `setExpire`, so it reports the same value as the primary |
+| Replication apply | Replicated commands use normal command paths |
+| Replica full sync | The replica loads the RDB through `dbAddRDBLoad` and `setExpire` and counts the bytes of its own loaded values, so it matches `MEMORY USAGE` on the replica. The value can differ from the primary, because the same data can take a different number of allocated bytes after an RDB load |
 | Diskless load with `swapdb` | Keys load into a temp database with its own kvstore. The old dataset's counters are dropped with the old kvstore; a failed load drops the temp counters |
-| Scripts and `VM_Call` | Snapshot and commit both use `server.executing_client`, the temporary client that runs the command |
+| Scripts and `VM_Call` | Snapshot and commit use the server-wide set, so the temporary client that runs the command finds the same entry |
+| Module timers and thread-safe contexts | No client is executing; the server-wide set still records and commits the change |
 | Setting an expire | `setExpire` applies the size change when the expire field reallocates the value (`SET EX`, `SETEX`, `GETEX`, `EXPIRE`, RDB load) |
 | `FLUSHDB` / `FLUSHALL` | Only the flushed databases lose their counters, including for asynchronous flush |
 | `CONFIG RESETSTAT` | `memory-bytes` is preserved because it represents current state |
@@ -367,11 +400,13 @@ The cost is:
 - O(number of databases) per slot when the stat is read. `ORDERBY` reads every
   slot owned by the shard before sorting.
 
-The client snapshot adds two inline entries and a list pointer to each client.
-It performs no per-command allocation for up to two keys. The overflow list is
-allocated only if one command snapshots more than two distinct keys, which is
-expected mainly from module commands, and its header is retained for reuse
-until `freeClient()`.
+The snapshot set is one fixed struct in `server` (two inline entries and a
+list pointer). It adds nothing per client. It performs no per-command
+allocation for up to two keys. The overflow list is allocated only if more
+than two distinct keys have entries at the same time, which is expected mainly
+from module commands. The list is freed as soon as it becomes empty, so the
+next entries use the inline array again. A spill therefore costs one list
+allocation for that command only, not for every later write.
 
 ### `CLUSTER SLOT-STATS` reply
 
@@ -556,10 +591,9 @@ reporting a complete value.
   not yet match `MEMORY USAGE`.
 - Legacy and non-participating module types are not counted.
 - Shared module memory that cannot be assigned to a key is excluded.
-- Nested clients do not share a snapshot. If a module opens a key for write,
-  changes it in place, and then calls `VM_Call` on the same key, the inner
-  command runs on a temporary client and does not see the outer client's
-  snapshot. The counter for that key can drift.
+- In-place changes are counted only when `signalModifiedKey` runs for the key.
+  Module code that changes a value in place and never closes the key (or
+  disables the signal) is not counted.
 
 ---
 

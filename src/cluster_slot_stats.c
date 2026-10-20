@@ -114,80 +114,89 @@ static uint64_t slotMemoryBytes(int slot) {
  * snapshot and the commit find the same entry no matter which client runs the
  * command: a script or VM_Call runs commands on a temporary client, and module
  * timers and thread-safe contexts run with no client at all. Entries are
- * matched on (database, key name). Two entries are stored inline; a third
- * distinct key migrates the inline entries into an overflow list and
- * everything is then kept there.
+ * matched on (database, key name).
+ *
+ * The first SLOT_MEMORY_BYTES_INLINE entries live in an inline array, so
+ * commands with a few keys need no allocation. Each entry stores the hash of
+ * its key name, and the scan compares the hash and the database before it
+ * compares the names. Further entries go to a hashtable keyed on (database,
+ * key name), so a command or module with many keys stays O(1) per operation.
+ * A key is in exactly one of the two places.
  * -------------------------------------------------------------------------- */
 
-#define SLOT_MEMORY_BYTES_INLINE 2
+static uint64_t slotSnapHashKey(robj *key) {
+    sds skey = objectGetVal(key);
+    return hashtableGenHashFunction(skey, sdslen(skey));
+}
 
-/* listRelease/listEmpty free callback for overflow entries. */
-static void slotSnapFreeEntry(void *p) {
-    slotMemoryBytesSnap *e = p;
+/* Returns 1 if entry `e` tracks the key `skey` (hash `hash`) in `dbid`. */
+static inline int slotSnapMatch(const slotMemoryBytesSnap *e, uint64_t hash, int dbid, sds skey) {
+    return e->hash == hash && e->dbid == dbid && sdscmp(objectGetVal(e->key), skey) == 0;
+}
+
+/* Hashtable type for the overflow entries. The entry is its own key: a lookup
+ * passes a stack slotMemoryBytesSnap with `hash`, `dbid` and `key` set. */
+static uint64_t slotSnapHtHash(const void *key) {
+    return ((const slotMemoryBytesSnap *)key)->hash;
+}
+
+/* Returns non-zero if the keys are equal (this is how hashtable.c uses it). */
+static int slotSnapHtKeyCompare(const void *key1, const void *key2) {
+    const slotMemoryBytesSnap *a = key1, *b = key2;
+    return slotSnapMatch(a, b->hash, b->dbid, objectGetVal(b->key));
+}
+
+static void slotSnapHtDestructor(void *entry) {
+    slotMemoryBytesSnap *e = entry;
     decrRefCount(e->key);
     zfree(e);
 }
 
-/* Returns 1 if entry `e` tracks `key` in database `dbid`. */
-static inline int slotSnapMatch(slotMemoryBytesSnap *e, int dbid, sds skey) {
-    return e->dbid == dbid && sdscmp(objectGetVal(e->key), skey) == 0;
-}
+static hashtableType slotSnapHashtableType = {
+    .hashFunction = slotSnapHtHash,
+    .keyCompare = slotSnapHtKeyCompare,
+    .entryDestructor = slotSnapHtDestructor,
+};
 
-/* Find the entry tracking `key` in `db`, or NULL. Searches the overflow list
- * when spilled, otherwise the inline array. */
+/* Find the entry tracking `key` in `db`, or NULL. */
 static slotMemoryBytesSnap *slotSnapFind(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) {
+    if (s->max_nesting < 0) return NULL;
     sds skey = objectGetVal(key);
-    if (s->overflow != NULL) {
-        listIter li;
-        listNode *ln;
-        listRewind(s->overflow, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            slotMemoryBytesSnap *e = listNodeValue(ln);
-            if (slotSnapMatch(e, db->id, skey)) return e;
-        }
-        return NULL;
-    }
+    uint64_t hash = slotSnapHashKey(key);
     for (int i = 0; i < s->inlined_count; i++) {
-        if (slotSnapMatch(&s->inlined[i], db->id, skey)) return &s->inlined[i];
+        if (slotSnapMatch(&s->inlined[i], hash, db->id, skey)) return &s->inlined[i];
     }
-    return NULL;
+    if (s->overflow == NULL) return NULL;
+    slotMemoryBytesSnap probe = {.key = key, .hash = hash, .dbid = db->id};
+    void *found;
+    return hashtableFind(s->overflow, &probe, &found) ? found : NULL;
 }
 
-/* Free the empty overflow list, so the next entries use the inline array again
- * instead of a heap allocation per entry. Marks the set as empty. */
-static void slotSnapReleaseOverflow(slotMemoryBytesSnapshot *s) {
-    listRelease(s->overflow);
-    s->overflow = NULL;
-    s->slot = -1;
+/* Mark the set as empty once both places are empty, so the cheap
+ * `max_nesting < 0` guards short-circuit. */
+static void slotSnapUpdateEmpty(slotMemoryBytesSnapshot *s) {
+    if (s->overflow != NULL && hashtableSize(s->overflow) == 0) {
+        hashtableRelease(s->overflow);
+        s->overflow = NULL;
+    }
+    if (s->inlined_count == 0 && s->overflow == NULL) s->max_nesting = -1;
 }
 
-/* Remove the entry tracking `key` in `db`, if any. Resets the shared slot to -1
- * once the set becomes empty so the cheap `slot < 0` guards short-circuit. */
+/* Remove entry `e` (returned by slotSnapFind). */
+static void slotSnapRemoveEntry(slotMemoryBytesSnapshot *s, slotMemoryBytesSnap *e) {
+    if (e >= s->inlined && e < s->inlined + SLOT_MEMORY_BYTES_INLINE) {
+        decrRefCount(e->key);
+        *e = s->inlined[--s->inlined_count]; /* swap with last */
+    } else {
+        hashtableDelete(s->overflow, e); /* destructor decrefs the key and frees e */
+    }
+    slotSnapUpdateEmpty(s);
+}
+
+/* Remove the entry tracking `key` in `db`, if any. */
 static void slotSnapRemove(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) {
-    sds skey = objectGetVal(key);
-    if (s->overflow != NULL) {
-        listIter li;
-        listNode *ln;
-        listRewind(s->overflow, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            slotMemoryBytesSnap *e = listNodeValue(ln);
-            if (slotSnapMatch(e, db->id, skey)) {
-                listDelNode(s->overflow, ln); /* free method decrefs the key */
-                break;
-            }
-        }
-        if (listLength(s->overflow) == 0) slotSnapReleaseOverflow(s);
-        return;
-    }
-    for (int i = 0; i < s->inlined_count; i++) {
-        if (slotSnapMatch(&s->inlined[i], db->id, skey)) {
-            decrRefCount(s->inlined[i].key);
-            s->inlined[i] = s->inlined[s->inlined_count - 1]; /* swap with last */
-            s->inlined_count--;
-            break;
-        }
-    }
-    if (s->inlined_count == 0) s->slot = -1;
+    slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
+    if (e != NULL) slotSnapRemoveEntry(s, e);
 }
 
 /* Record the "before" size for `key` in `db` at `slot`. Called from
@@ -197,35 +206,22 @@ static void slotSnapRemove(slotMemoryBytesSnapshot *s, serverDb *db, robj *key) 
 void clusterSlotStatsSnapshotKey(serverDb *db, int slot, robj *key, robj *val) {
     if (!isMemoryBytesAccountingEnabled(slot)) return;
     slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
-    if (s->slot >= 0 && slotSnapFind(s, db, key) != NULL) return;
+    if (slotSnapFind(s, db, key) != NULL) return;
 
-    slotMemoryBytesSnap *e;
-    s->slot = slot;
-    if (s->overflow == NULL && s->inlined_count < SLOT_MEMORY_BYTES_INLINE) {
-        e = &s->inlined[s->inlined_count++];
-    } else {
-        /* Spill: on first overflow migrate the inline entries into the list
-         * (ownership of their key refs transfers to the heap entries), then
-         * append the new key. */
-        if (s->overflow == NULL) {
-            s->overflow = listCreate();
-            listSetFreeMethod(s->overflow, slotSnapFreeEntry);
-        }
-        for (int i = 0; i < s->inlined_count; i++) {
-            slotMemoryBytesSnap *moved = zmalloc(sizeof(*moved));
-            *moved = s->inlined[i];
-            listAddNodeTail(s->overflow, moved);
-        }
-        s->inlined_count = 0;
-        e = zmalloc(sizeof(*e));
-        listAddNodeTail(s->overflow, e);
-    }
+    int inlined = s->inlined_count < SLOT_MEMORY_BYTES_INLINE;
+    slotMemoryBytesSnap *e = inlined ? &s->inlined[s->inlined_count++] : zmalloc(sizeof(*e));
     e->key = key;
     incrRefCount(key);
+    e->hash = slotSnapHashKey(key);
     e->before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
-    e->slot = slot;
     e->dbid = db->id;
+    e->slot = slot;
     e->nesting = server.execution_nesting;
+    if (!inlined) {
+        if (s->overflow == NULL) s->overflow = hashtableCreate(&slotSnapHashtableType);
+        hashtableAdd(s->overflow, e);
+    }
+    if (e->nesting > s->max_nesting) s->max_nesting = e->nesting;
 }
 
 /* Refresh the "before" size for `key` to the new value's size, but only if the
@@ -235,9 +231,7 @@ void clusterSlotStatsSnapshotKey(serverDb *db, int slot, robj *key, robj *val) {
  * paths (e.g. MSET) that never snapshotted don't allocate. */
 void clusterSlotStatsRefreshKey(serverDb *db, robj *key, robj *val) {
     if (!server.cluster_enabled) return;
-    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
-    if (s->slot < 0) return;
-    slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
+    slotMemoryBytesSnap *e = slotSnapFind(&server.slot_memory_bytes, db, key);
     if (e != NULL) e->before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
 }
 
@@ -245,9 +239,7 @@ void clusterSlotStatsRefreshKey(serverDb *db, robj *key, robj *val) {
  * db-hook has already subtracted the key's size explicitly. */
 void clusterSlotStatsForgetKey(serverDb *db, robj *key) {
     if (!server.cluster_enabled) return;
-    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
-    if (s->slot < 0) return;
-    slotSnapRemove(s, db, key);
+    slotSnapRemove(&server.slot_memory_bytes, db, key);
 }
 
 /* Apply the in-place delta for `key`. Called from signalModifiedKey.
@@ -260,7 +252,6 @@ void clusterSlotStatsForgetKey(serverDb *db, robj *key) {
 void clusterSlotStatsCommitKey(serverDb *db, robj *key) {
     if (!server.cluster_enabled) return;
     slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
-    if (s->slot < 0) return;
     slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
     if (e == NULL) return;
 
@@ -268,7 +259,8 @@ void clusterSlotStatsCommitKey(serverDb *db, robj *key) {
     uint64_t before = e->before;
     uint64_t after = before;
     /* Re-read the value to get the post-mutation size. Use read-only flags so
-     * this lookup does not itself take a new write snapshot. */
+     * this lookup does not itself take a new write snapshot. The lookup does
+     * not change the set, so `e` stays valid. */
     robj *val = lookupKeyReadWithFlags(db, key, LOOKUP_NOEFFECTS);
     if (val != NULL) {
         after = slotStatsObjectSize(objectGetVal(key), val);
@@ -280,7 +272,7 @@ void clusterSlotStatsCommitKey(serverDb *db, robj *key) {
     if (val != NULL && e->nesting < server.execution_nesting) {
         e->before = after;
     } else {
-        slotSnapRemove(s, db, key);
+        slotSnapRemoveEntry(s, e);
     }
 }
 
@@ -291,9 +283,7 @@ void clusterSlotStatsCommitKey(serverDb *db, robj *key) {
  * change made before the call (e.g. VM_StringTruncate before VM_SetExpire)
  * would be lost when the snapshot is refreshed or dropped. */
 static void slotSnapSettle(serverDb *db, robj *key, uint64_t size) {
-    slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
-    if (s->slot < 0) return;
-    slotMemoryBytesSnap *e = slotSnapFind(s, db, key);
+    slotMemoryBytesSnap *e = slotSnapFind(&server.slot_memory_bytes, db, key);
     if (e == NULL || e->before == size) return;
     kvstoreHashtableSubTrackedBytes(db->keys, e->slot, e->before);
     kvstoreHashtableAddTrackedBytes(db->keys, e->slot, size);
@@ -325,7 +315,7 @@ void clusterSlotStatsUpdateMemory(serverDb *db, int slot, robj *key, uint64_t be
 void clusterSlotStatsInitSnapshot(void) {
     slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
     s->inlined_count = 0;
-    s->slot = -1;
+    s->max_nesting = -1;
     s->overflow = NULL;
 }
 
@@ -337,31 +327,46 @@ void clusterSlotStatsInitSnapshot(void) {
  * ended (for example one EXEC sub-command or one command of a script), and
  * keeps the entries of an outer command (a module that has a key open around a
  * VM_Call). afterSleep and the AOF load loop pass -1. Entries are kept
- * consistent by the db-hooks, so dropping them only frees memory. */
+ * consistent by the db-hooks, so dropping them only frees memory.
+ *
+ * Returns at once when no entry is deeper than `level`, which is the common
+ * case, so an outer command with many entries costs nothing per inner call. */
 void clusterSlotStatsClearSnapshot(int level) {
     slotMemoryBytesSnapshot *s = &server.slot_memory_bytes;
-    if (s->slot < 0) return;
-    if (s->overflow != NULL) {
-        listIter li;
-        listNode *ln;
-        listRewind(s->overflow, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            slotMemoryBytesSnap *e = listNodeValue(ln);
-            if (e->nesting > level) listDelNode(s->overflow, ln); /* free method decrefs the key */
-        }
-        if (listLength(s->overflow) == 0) slotSnapReleaseOverflow(s);
-        return;
-    }
-    int kept = 0;
+    if (s->max_nesting <= level) return;
+
+    int kept = 0, max_nesting = -1;
     for (int i = 0; i < s->inlined_count; i++) {
         if (s->inlined[i].nesting > level) {
             decrRefCount(s->inlined[i].key);
         } else {
+            if (s->inlined[i].nesting > max_nesting) max_nesting = s->inlined[i].nesting;
             s->inlined[kept++] = s->inlined[i];
         }
     }
     s->inlined_count = kept;
-    if (kept == 0) s->slot = -1;
+
+    if (s->overflow != NULL) {
+        if (level < 0) {
+            hashtableRelease(s->overflow); /* destructor frees every entry */
+            s->overflow = NULL;
+        } else {
+            hashtableIterator iter;
+            void *next;
+            hashtableInitIterator(&iter, s->overflow, HASHTABLE_ITER_SAFE);
+            while (hashtableNext(&iter, &next)) {
+                slotMemoryBytesSnap *e = next;
+                if (e->nesting > level) {
+                    hashtableDelete(s->overflow, e);
+                } else if (e->nesting > max_nesting) {
+                    max_nesting = e->nesting;
+                }
+            }
+            hashtableCleanupIterator(&iter);
+        }
+    }
+    s->max_nesting = max_nesting;
+    slotSnapUpdateEmpty(s);
 }
 
 /* -----------------------------------------------------------------------------

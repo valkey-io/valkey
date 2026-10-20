@@ -178,6 +178,32 @@ int test_slotmem_call_append(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+/* test.slotmem_open_many <len> <suffix|""> <key> [<key> ...]
+ * Opens all keys for write at the same time. If <suffix> is not empty, runs
+ * APPEND <suffix> on each open key with VM_Call. Then truncates each open key
+ * to <len> and closes all keys. */
+int test_slotmem_open_many(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 4) return ValkeyModule_WrongArity(ctx);
+    long long len;
+    if (ValkeyModule_StringToLongLong(argv[1], &len) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+    size_t suffix_len;
+    ValkeyModule_StringPtrLen(argv[2], &suffix_len);
+    int nkeys = argc - 3;
+    ValkeyModuleKey **keys = ValkeyModule_Alloc(sizeof(*keys) * nkeys);
+    for (int i = 0; i < nkeys; i++) keys[i] = ValkeyModule_OpenKey(ctx, argv[3 + i], VALKEYMODULE_WRITE);
+    if (suffix_len > 0) {
+        for (int i = 0; i < nkeys; i++) {
+            ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "APPEND", "ss", argv[3 + i], argv[2]);
+            if (rep) ValkeyModule_FreeCallReply(rep);
+        }
+    }
+    for (int i = 0; i < nkeys; i++) ValkeyModule_StringTruncate(keys[i], len);
+    for (int i = 0; i < nkeys; i++) ValkeyModule_CloseKey(keys[i]);
+    ValkeyModule_Free(keys);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 typedef struct {
     ValkeyModuleString *key;
     long long len;
@@ -242,6 +268,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.slotmem_call_append", test_slotmem_call_append, "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.slotmem_timer_truncate", test_slotmem_timer_truncate, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.slotmem_open_many", test_slotmem_open_many, "write", 3, -1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Register our handlers for different message types. */

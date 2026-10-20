@@ -483,6 +483,33 @@ start_cluster 1 0 [list config_lines $modules] {
         assert_slot_bytes_match_memory_usage $key_slot
     }
 
+    # More open keys than the inline array holds, so most snapshot entries go
+    # to the overflow hashtable. The values are large enough to be stored
+    # outside the object, so the open key handles stay valid across VM_Call.
+    test "memory-bytes: module opens many keys (overflow hashtable)" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        set keys {}
+        for {set i 0} {$i < 100} {incr i} {
+            lappend keys "{FOO}m$i"
+            R 0 SET "{FOO}m$i" [string repeat a 1000]
+        }
+        R 0 test.slotmem_open_many 3000 "" {*}$keys
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
+    test "memory-bytes: module opens many keys and runs VM_Call on each" {
+        R 0 FLUSHALL
+        R 0 SET "{FOO}other" [string repeat b 100]
+        set keys {}
+        for {set i 0} {$i < 100} {incr i} {
+            lappend keys "{FOO}m$i"
+            R 0 SET "{FOO}m$i" [string repeat a 1000]
+        }
+        R 0 test.slotmem_open_many 4000 [string repeat x 500] {*}$keys
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
     # A timer callback runs with no executing client.
     test "memory-bytes: StringTruncate from a module timer" {
         R 0 FLUSHALL

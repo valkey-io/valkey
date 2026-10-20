@@ -230,26 +230,40 @@ The server therefore owns a small per-key snapshot set in
 ```c
 typedef struct slotMemoryBytesSnap {
     robj *key;        /* incref'd while snapshotted */
+    uint64_t hash;    /* hash of the key name, compared first */
     uint64_t before;  /* size at lookup or last DB-hook refresh */
-    int slot;         /* slot of key */
     int dbid;         /* database of key */
+    int slot;         /* slot of key */
     int nesting;      /* server.execution_nesting when created */
-} slotMemoryBytesSnap;
+} slotMemoryBytesSnap;                 /* 40 bytes */
+
+#define SLOT_MEMORY_BYTES_INLINE 8
 
 typedef struct slotMemoryBytesSnapshot {
-    slotMemoryBytesSnap inlined[2]; /* allocation-free common path */
-    int inlined_count;              /* valid inline entries; 0 after spill */
-    int slot;                       /* -1 means empty (fast-path guard) */
-    list *overflow;                 /* all entries after more than two keys */
-} slotMemoryBytesSnapshot;
+    slotMemoryBytesSnap inlined[SLOT_MEMORY_BYTES_INLINE]; /* no allocation */
+    int inlined_count;     /* used inline entries */
+    int max_nesting;       /* deepest nesting with entries; -1 = empty */
+    hashtable *overflow;   /* NULL until the inline array is full */
+} slotMemoryBytesSnapshot;             /* about 336 bytes, once */
 ```
 
-The first two entries stay inline. This covers single-key commands and common
-two-key movers without allocation. On the third distinct key, the two inline
-entries move to `overflow`, and the list stores all entries from that point.
+The set has two parts, and a key is in exactly one of them:
 
-`signalModifiedKey` searches for the entry matching its key. In normal command
-paths this is a scan of one or two entries.
+- **Inline array (8 entries).** Commands with a few keys need no allocation.
+  A search hashes the key name once and compares each entry's `hash` and
+  `dbid` before it compares the names with `sdscmp`. So a mismatch costs one
+  integer compare. The array has a fixed size, so the scan is O(1).
+- **Overflow hashtable.** When the inline array is full, new entries are
+  allocated and added to a Valkey `hashtable`. The entry is its own key: the
+  hash function returns the stored `hash`, and the compare function checks
+  `dbid` and the key name. Find, add, and remove are O(1). The hashtable is
+  created on the 9th entry and freed when it becomes empty.
+
+This keeps every operation O(1) for any number of keys. That matters for
+commands that look up many keys before they signal any of them (for example
+`MSETNX`, which looks up all keys first), and for modules that open many keys
+for write at the same time. A linked list here made such a command O(N^2):
+`MSETNX` with 40,000 keys took 3.5 s, and takes 39 ms with the hashtable.
 
 #### Why each entry stores its slot and database
 
@@ -400,13 +414,18 @@ The cost is:
 - O(number of databases) per slot when the stat is read. `ORDERBY` reads every
   slot owned by the shard before sorting.
 
-The snapshot set is one fixed struct in `server` (two inline entries and a
-list pointer). It adds nothing per client. It performs no per-command
-allocation for up to two keys. The overflow list is allocated only if more
-than two distinct keys have entries at the same time, which is expected mainly
-from module commands. The list is freed as soon as it becomes empty, so the
-next entries use the inline array again. A spill therefore costs one list
-allocation for that command only, not for every later write.
+The snapshot set is one fixed struct in `server` (8 inline entries, about 336
+bytes). It adds nothing per client. It performs no allocation while at most 8
+keys have entries at the same time. After that, each further entry costs one
+allocation and one hashtable insert. The hashtable is freed as soon as it
+becomes empty, so the next entries use the inline array again.
+
+Each write lookup in cluster mode hashes the key name once, to search the set.
+
+`clusterSlotStatsClearSnapshot(level)` returns at once when `max_nesting <=
+level`, so the per-command clear costs nothing when the command left no
+entries. An outer module command with many open keys therefore adds no cost to
+each inner `VM_Call`.
 
 ### `CLUSTER SLOT-STATS` reply
 

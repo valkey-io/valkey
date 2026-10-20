@@ -1406,26 +1406,27 @@ typedef struct slotMigrationJob slotMigrationJob;
  * signalModifiedKey later computes the new size and applies the delta.
  *
  * A single command may mutate several keys in place (e.g. SMOVE, LMOVE), so
- * this is a small per-key set rather than one scalar. Up to two entries are
- * stored inline -- covering single-key commands and the common two-key movers
- * -- and anything beyond that spills to a list. Each entry keeps its own slot
+ * this is a per-key set rather than one scalar. Each entry keeps its own slot
  * and database: cluster rejects cross-slot commands, but a module can open keys
  * in several slots in one command, and MOVE / COPY ... DB use the same key name
  * in two databases. There is one set for the whole server (see
  * server.slot_memory_bytes), not one per client. */
 typedef struct slotMemoryBytesSnap {
     robj *key;       /* The modified key (incref'd while snapshotted). */
+    uint64_t hash;   /* Hash of the key name, compared before the name. */
     uint64_t before; /* Allocated size captured at lookup / last db-hook refresh. */
-    int slot;        /* Slot of `key`. */
     int dbid;        /* Database of `key`. */
+    int slot;        /* Slot of `key`. */
     int nesting;     /* server.execution_nesting when the entry was created. */
 } slotMemoryBytesSnap;
 
+#define SLOT_MEMORY_BYTES_INLINE 8
+
 typedef struct slotMemoryBytesSnapshot {
-    slotMemoryBytesSnap inlined[2]; /* Inline fast path (no allocation). */
-    int inlined_count;              /* Valid inline entries; 0 once spilled. */
-    int slot;                       /* -1 = no entries (fast-path guard), otherwise >= 0. */
-    list *overflow;                 /* NULL until >2 keys; then holds ALL entries. */
+    slotMemoryBytesSnap inlined[SLOT_MEMORY_BYTES_INLINE]; /* Fast path, no allocation. */
+    int inlined_count;                                     /* Used inline entries. */
+    int max_nesting;                                       /* Deepest nesting with entries; -1 = empty set. */
+    hashtable *overflow;                                   /* NULL until the inline array is full; entries looked up by (dbid, key name). */
 } slotMemoryBytesSnapshot;
 
 typedef struct client {

@@ -339,6 +339,18 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_slot_bytes_match_memory_usage $key_slot
     }
 
+    # MSETNX looks up every key before it sets any of them, so the snapshot set
+    # holds one entry per key and uses the overflow hashtable.
+    test "memory-bytes matches MEMORY USAGE: MSETNX with many keys" {
+        R 0 FLUSHALL
+        set args {}
+        for {set i 0} {$i < 1000} {incr i} {
+            lappend args "{FOO}n$i" [string repeat v [expr {$i % 200}]]
+        }
+        assert_equal 1 [R 0 MSETNX {*}$args]
+        assert_slot_bytes_match_memory_usage $key_slot
+    }
+
     # A write lookup that changes nothing (SET NX on an existing key) leaves a
     # snapshot that is dropped when that sub-command ends. A later sub-command
     # that changes the same key in place must still be counted.

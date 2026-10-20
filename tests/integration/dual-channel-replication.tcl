@@ -1680,7 +1680,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set repl-backlog-size [expr {10 ** 6}]
     $primary config set loglevel notice
 
-    test "Dual channel: REPLCONF rdb-channel 0 on a waiting rdb client then PSYNC triggers use-after-free" {
+    test "Dual channel: freed rdb client is removed from replicas_waiting_psync after REPLCONF rdb-channel 0" {
         # freeReplicaReferencedReplBuffer() must remove the rdb client from
         # replicas_waiting_psync unconditionally. Gating it on repl_rdb_channel
         # leaves a dangling pointer when a client clears that flag (REPLCONF
@@ -1745,13 +1745,17 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         # the fix, it is accepted and the PSYNC below dereferences freed memory.
         set idreply [$main_chan REPLCONF set-rdb-client-id $rdb_client_id]
         if {[string match "+OK*" $idreply]} {
-            puts "HELLO WORLD"
             # Deferred: the PSYNC reply is not needed. The dereference happens
             # while the primary processes this command, and a read could hang or
             # fail if the primary has already aborted.
             $main_chan deferred 1
             catch {$main_chan PSYNC $replid $offset}
         }
+
+        # Validate server is still responsive with correct info stats
+        assert_match "-ERR Unrecognized RDB client id*" $idreply
+        assert_match {*replicas_waiting_psync:0*} [$primary info replication]
+
         $main_chan close
     }
 }

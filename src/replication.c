@@ -1430,7 +1430,12 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
 
     /* The RDB snapshot bypasses the durable send limit that caps the
      * replication stream. Drain any offloaded AOF flush first so everything
-     * in the snapshot is fsynced before it can reach a replica. */
+     * in the snapshot is fsynced before it can reach a replica.
+     *
+     * This only covers a fork-based snapshot, which is frozen at fork time.
+     * A forkless full sync (#4797) inlines write commands made during the
+     * sync into the RDB stream, so it must also hold back the EOF marker
+     * until the replication offset is fsynced. */
     if (isPrimaryReplyBlockingEnabled()) {
         flushAppendOnlyFile(1);
         debugServerAssert(atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed) ==

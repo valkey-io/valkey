@@ -817,6 +817,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Populate database with all data types
         createComplexDatasetForVerification r 20
+        set keys [r keys *]
+
+        # Add filler keys that are never deleted, so the save still has
+        # work left after every key above has been deleted (and therefore
+        # already serialized).
+        createComplexDatasetForVerification r 200 "filler_"
+        set filler_count [expr {[r dbsize] - [llength $keys]}]
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
@@ -828,14 +835,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not start"
         }
         
-        # Delete all keys in the database
-        set keys [r keys *]
+        # Delete all non-filler keys
         foreach key $keys {
             r del $key
         }
         
         # Verify all keys deleted and save still in progress
-        assert_equal [r dbsize] 0
+        assert_equal [r dbsize] $filler_count
         assert_equal [s rdb_bgsave_in_progress] 1
         
         # Speed up and complete save

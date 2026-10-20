@@ -1705,7 +1705,7 @@ start_server {
         assert_equal {{1-0 {hello world}}} [lindex $claim 1]
     }
 
-    test {XNACK with FORCE creates PEL entry even if didn't exist} {
+    test {XNACK with FORCE creates unowned PEL entry even if didn't exist} {
         # Create stream w/ 2 messages and a group, do not read anything
         r DEL mystream
         r XADD mystream 1-0 hello world
@@ -1716,18 +1716,22 @@ start_server {
         assert_equal 1 [r XNACK mystream mygroup SILENT IDS 2 1-0 99-0 FORCE]
         set pend [r XPENDING mystream mygroup - + 1]
         assert_equal 1-0 [lindex $pend 0 0]
-        assert_equal 0 [lindex $pend 0 3]
+        assert_equal {} [lindex $pend 0 1] ;# unowned
+        assert_equal -1 [lindex $pend 0 2] ;# idle sentinel for unowned entries
+        assert_equal 0 [lindex $pend 0 3]  ;# never delivered
 
-        # FORCE on an already-NACK'd message doesn't duplicate the entry
-        # The dummy consumer shows up in XPENDING extended output
+        # FORCE on an already-released message doesn't duplicate the entry
         assert_equal 1 [r XNACK mystream mygroup SILENT IDS 1 1-0 FORCE]
         set pend [r XPENDING mystream mygroup - + 1]
-        assert_equal {1-0 0} [list [lindex $pend 0 0] [lindex $pend 0 3]]
+        assert_equal [list [list 1-0 {} -1 0]] $pend
 
-        # But, the internal dummy consumer doesn't show in consumers list,
-        # full stream info, and can't be deleted directly.
+        # No consumer is fabricated to own the released entry: the
+        # consumers arrays stay empty and DELCONSUMER is a NOOP. The entry
+        # itself is still visible at group level, unowned and never
+        # delivered.
         assert_equal [r XINFO CONSUMERS mystream mygroup] {}
         assert_equal {} [dict get [lindex [dict get [r XINFO STREAM mystream FULL] groups] 0] consumers]
+        assert_equal {{1-0 {} 0 0}} [dict get [lindex [dict get [r XINFO STREAM mystream FULL] groups] 0] pending]
         assert_equal [r XGROUP DELCONSUMER mystream mygroup ""] 0
 
         # Available for reclaim, despite not being 10s
@@ -1737,12 +1741,134 @@ start_server {
         # XINFO GROUPS counts only the real consumer created here by XAUTOCLAIM
         assert_equal 1 [dict get [lindex [r XINFO GROUPS mystream] 0] consumers]
 
-        # Forced NACK on a different message reuses the existing dummy consumer
+        # Forced NACK on a different message is unowned as well
         assert_equal 1 [r XNACK mystream mygroup SILENT IDS 1 2-0 FORCE]
         set pend [r XPENDING mystream mygroup - + 10]
         assert_equal consumer [lindex $pend 0 1] ;# 1-0 was claimed by XAUTOCLAIM
         assert_equal 2 [llength $pend]
-        assert_equal {} [lindex $pend 1 1] ;# 2-0 is owned by the reused dummy
+        assert_equal {} [lindex $pend 1 1] ;# 2-0 is unowned
+    }
+
+    test {XNACK with FORCE resets delivery count for a previously delivered message} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup alice COUNT 1 STREAMS mystream >
+
+        # The entry was delivered once: delivery count is 1
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal 1 [lindex $pend 0 3]
+
+        # ACK removes it from the PEL entirely
+        assert_equal 1 [r XACK mystream mygroup 1-0]
+        assert_equal 0 [llength [r XPENDING mystream mygroup - + 10]]
+
+        # FORCE re-creates the PEL entry, but this incarnation was never
+        # delivered. Thus, delivery count is 0, and entry is unowned
+        assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 1-0 FORCE]
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal [list [list 1-0 {} -1 0]] $pend
+    }
+
+    test {XNACK releases the message from its consumer for immediate reclaim} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup alice COUNT 1 STREAMS mystream >
+
+        # Delivered to alice: owned, delivery count 1
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal {1-0 alice} [list [lindex $pend 0 0] [lindex $pend 0 1]]
+        set pend [r XPENDING mystream mygroup]
+        assert_equal {{alice 1}} [lindex $pend 3]
+
+        # NACK releases the entry: it stays in the group PEL but is
+        # removed from consumer alice's PEL and immediately reclaimable
+        assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 1-0]
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal 1-0 [lindex $pend 0 0]
+        assert_equal {} [lindex $pend 0 1] ;# consumer cleared
+        assert_equal -1 [lindex $pend 0 2] ;# idle sentinel for unowned entries
+        assert_equal 1 [lindex $pend 0 3]  ;# FAIL keeps the delivery count
+
+        set pend [r XPENDING mystream mygroup]
+        assert_equal 1 [lindex $pend 0]
+        assert_equal {} [lindex $pend 3]
+
+        # We bypass min-idle time filter for unowned entries, so monitoring
+        # queries with an idle threshold still observe them
+        set pend [r XPENDING mystream mygroup IDLE 9999999 - + 10]
+        assert_equal [list [list 1-0 {} -1 1]] $pend
+
+        # XINFO STREAM FULL shows the released entry with an empty
+        # consumer name and a zeroed last delivery time
+        assert_equal {{1-0 {} 0 1}} [dict get [lindex [dict get [r XINFO STREAM mystream FULL] groups] 0] pending]
+
+        # alice no longer owns anything; the entry survives DELCONSUMER
+        assert_equal 0 [dict get [lindex [r XINFO CONSUMERS mystream mygroup] 0] pending]
+        assert_equal 0 [r XGROUP DELCONSUMER mystream mygroup alice]
+        assert_equal 1 [llength [r XPENDING mystream mygroup - + 10]]
+
+        # Removing the unhealthy consumer is the whole point: another
+        # consumer can immediately reclaim the released work
+        set claim [r XAUTOCLAIM mystream mygroup bob 0 0-0 COUNT 10]
+        assert_equal {{1-0 {f v}}} [lindex $claim 1]
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal bob [lindex $pend 0 1]
+        assert_equal 2 [lindex $pend 0 3] ;# reclaim counts as a delivery
+    }
+
+    test {XREADGROUP reassignment takes over an unowned entry after XNACK} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup alice COUNT 1 STREAMS mystream >
+        assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 1-0]
+
+        # Rewind the group so a '>' delivery encounters the released entry
+        # again while it is still in the group PEL.
+        r XGROUP SETID mystream mygroup 0
+        assert_equal {{mystream {{1-0 {f v}}}}} [r XREADGROUP GROUP mygroup bob COUNT 1 STREAMS mystream >]
+
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal 1-0 [lindex $pend 0 0]
+        assert_equal bob [lindex $pend 0 1]
+        assert {[lindex $pend 0 2] <= 2000} ;# idle time is wall-clock, so check with tolerance
+        assert_equal 1 [lindex $pend 0 3] ;# '>' delivery counts as the first delivery
+    }
+
+    test {XCLAIM removes a deleted entry released by XNACK and propagates XACK} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup alice COUNT 2 STREAMS mystream >
+        assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 1-0]
+        r XDEL mystream 1-0
+
+        # The deleted entry can't be claimed, and since it is unowned it
+        # is removed from the group PEL entirely: no empty reply slot, no
+        # dangling released entry
+        assert_equal {{2-0 {f v}}} [r XCLAIM mystream mygroup bob 0 1-0 2-0]
+        assert_equal 2-0 [lindex [r XPENDING mystream mygroup - + 10] 0 0]
+    }
+
+    test {XNACK entries are always claimable regardless of min-idle-time} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup alice COUNT 1 STREAMS mystream >
+        r XNACK mystream mygroup FAIL IDS 1 1-0
+
+        # Unowned entries bypass the min idle time: they are immediately
+        # claimable by any consumer
+        set claim [r XAUTOCLAIM mystream mygroup bob 9999999 0-0]
+        assert_equal {{1-0 {f v}}} [lindex $claim 1]
+
+        # Same for XCLAIM
+        r XNACK mystream mygroup FAIL IDS 1 1-0
+        set claim [r XCLAIM mystream mygroup carol 9999999 1-0]
+        assert_equal {{1-0 {f v}}} $claim
     }
 
     test {XRANGE fuzzing} {
@@ -1923,6 +2049,31 @@ start_server {
         assert_equal $result {{mystream {{4-0 {f v}}}}}
 
         r config set stream-node-max-entries 100
+    }
+}
+
+start_server {tags {"stream needs:debug"}} {
+    test {XNACK released entries survive RDB reload} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        r XGROUP CREATE mystream mygroup 0
+        r XREADGROUP GROUP mygroup alice COUNT 1 STREAMS mystream >
+        # 1-0: released by XNACK; 2-0: FORCE-created unowned entry
+        assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 1-0]
+        assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 2-0 RETRYCOUNT 42 FORCE]
+
+        set pend [r XPENDING mystream mygroup - + 10]
+        assert_equal [list [list 1-0 {} -1 1] [list 2-0 {} -1 42]] $pend
+
+        # DEBUG RELOAD saves and loads the RDB: unowned PEL entries are
+        # legitimate state and must round-trip with their ownership,
+        # idle sentinel and delivery counts intact
+        r debug reload
+
+        assert_equal [list [list 1-0 {} -1 1] [list 2-0 {} -1 42]] \
+            [r XPENDING mystream mygroup - + 10]
+        assert_equal 0 [dict get [lindex [r XINFO CONSUMERS mystream mygroup] 0] pending]
     }
 }
 

@@ -3158,7 +3158,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     decrRefCount(o);
                     return NULL;
                 }
-                streamNACK *nack = streamCreateNACK(NULL);
+                streamNACK *nack = streamCreateNACK(NULL, 0);
                 nack->delivery_time = rdbLoadMillisecondTime(rdb, RDB_VERSION);
                 nack->delivery_count = rdbLoadLen(rdb, NULL);
                 if (rioGetReadError(rdb)) {
@@ -3177,7 +3177,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
 
             /* Now that we loaded our global PEL, we need to load the
-             * consumers and their local PELs. */
+             * consumers and their local PELs. It is possible some NACKs have
+             * no consumer, because they were released by XNACK. */
             uint64_t consumers_num = rdbLoadLen(rdb, NULL);
             if (consumers_num == RDB_LENERR) {
                 rdbReportReadError("Stream consumers num loading failed.");
@@ -3261,21 +3262,6 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     }
                 }
             }
-
-            /* Verify that each PEL eventually got a consumer assigned to it. */
-            raxIterator ri_cg_pel;
-            raxStart(&ri_cg_pel, cgroup->pel);
-            raxSeek(&ri_cg_pel, "^", NULL, 0);
-            while (raxNext(&ri_cg_pel)) {
-                streamNACK *nack = ri_cg_pel.data;
-                if (!nack->consumer) {
-                    raxStop(&ri_cg_pel);
-                    rdbReportCorruptRDB("Stream CG PEL entry without consumer");
-                    decrRefCount(o);
-                    return NULL;
-                }
-            }
-            raxStop(&ri_cg_pel);
         }
     } else if (rdbtype == RDB_TYPE_MODULE_PRE_GA) {
         rdbReportCorruptRDB("Pre-release module format not supported");

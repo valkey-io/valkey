@@ -163,6 +163,12 @@ static int parseMultibulk(client *c,
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 _Thread_local sds thread_shared_qb = NULL;
 
+/* fork() only preserves the calling thread's TLS. Keep a process-wide reference
+ * to each thread's shared query buffer so allocations owned by vanished worker
+ * threads remain reachable in the child. The registry is otherwise used only
+ * to verify worker cleanup. */
+static _Atomic(sds) shared_querybuf_registry[IO_THREADS_MAX_NUM];
+
 typedef enum {
     PARSE_OK = 0,
     PARSE_ERR = -1,
@@ -3860,13 +3866,20 @@ void resetClientIOState(client *c) {
 /* Initializes the shared query buffer to a new sds with the default capacity.
  * Need to ensure the initlen is not less than readlen in readToQueryBuf. */
 void initSharedQueryBuf(void) {
-    thread_shared_qb = sdsnewlen(NULL, PROTO_IOBUF_LEN);
-    sdsclear(thread_shared_qb);
+    sds querybuf = sdsnewlen(NULL, PROTO_IOBUF_LEN);
+    sdsclear(querybuf);
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], querybuf, memory_order_relaxed);
+    thread_shared_qb = querybuf;
 }
 
 void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], NULL, memory_order_relaxed);
+}
+
+int isSharedQueryBufRegistered(int tid) {
+    return atomic_load_explicit(&shared_querybuf_registry[tid], memory_order_relaxed) != NULL;
 }
 
 /* This function is used when we want to re-enter the event loop but there

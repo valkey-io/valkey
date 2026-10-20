@@ -2862,6 +2862,9 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
                 sentinelResetPrimaryAndChangeAddress(primary, token[5], primary_port);
                 sentinelCallClientReconfScript(primary, SENTINEL_OBSERVER, "start", old_addr, primary->addr);
                 releaseSentinelAddr(old_addr);
+            } else if (primary->flags & SRI_FAILOVER_IN_PROGRESS) {
+                sentinelEvent(LL_WARNING, "+config-update-from", si, "%@");
+                sentinelResetPrimaryAndChangeAddress(primary, token[5], primary_port);
             }
         }
 

@@ -201,6 +201,12 @@ int zipmapValidateIntegrity(unsigned char *zm, size_t size, int deep) {
             return 0;
 
         p += s; /* skip the encoded field size */
+        /* Bounds-check the field length before advancing 'p'. Advancing the
+         * pointer first can wrap, since 'l' is an attacker-controlled 32-bit
+         * value, so the OUT_OF_RANGE check below could be bypassed. Compare
+         * against the bytes remaining in the zipmap in 64-bit space so the
+         * arithmetic cannot overflow on 32-bit platforms either (CWE-190). */
+        if ((uint64_t)l > (uint64_t)(zm + size - 1 - p)) return 0;
         p += l; /* skip the field */
 
         /* make sure the entry doesn't reach outside the edge of the zipmap */
@@ -216,8 +222,13 @@ int zipmapValidateIntegrity(unsigned char *zm, size_t size, int deep) {
         /* Sanity check: length < 254 must be encoded in 1 byte, not 5 bytes */
         if (l < ZIPMAP_BIGLEN && s != 1)
             return 0;
-        p += s;     /* skip the encoded value size*/
-        e = *p++;   /* skip the encoded free space (always encoded in one byte) */
+        p += s;   /* skip the encoded value size*/
+        e = *p++; /* skip the encoded free space (always encoded in one byte) */
+        /* Bounds-check 'l + e' before advancing 'p'. Both are unsigned int,
+         * so 'l + e' can wrap to a small value (e.g. l=0xFFFFFFFF, e=1) and
+         * slip past the OUT_OF_RANGE check below, defeating validation. Do
+         * the comparison in 64-bit space so it cannot overflow (CWE-190). */
+        if ((uint64_t)l + e > (uint64_t)(zm + size - 1 - p)) return 0;
         p += l + e; /* skip the value and free space */
         count++;
 

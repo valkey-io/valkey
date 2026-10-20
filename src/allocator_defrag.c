@@ -24,7 +24,7 @@
  * - **zmalloc**: An abstraction layer over the memory allocator, providing
  *   a uniform allocation interface to the application code. It can delegate
  *   to various underlying allocators (e.g., libc, tcmalloc, jemalloc, or others).
- *   It is not dependant on defrag implementation logic and it's possible to use jemalloc
+ *   It is not dependent on defrag implementation logic and it's possible to use jemalloc
  *   version that does not support defrag.
  * - **allocator_defrag**: This file contains allocator-specific logic for
  *   defragmentation, invoked from `defrag.c` when memory defragmentation is needed.

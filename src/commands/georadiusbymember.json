@@ -48,7 +48,8 @@
             {
                 "flags": [
                     "OW",
-                    "UPDATE"
+                    "UPDATE",
+                    "VARIABLE_FLAGS"
                 ],
                 "begin_search": {
                     "keyword": {
@@ -67,7 +68,8 @@
             {
                 "flags": [
                     "OW",
-                    "UPDATE"
+                    "UPDATE",
+                    "VARIABLE_FLAGS"
                 ],
                 "begin_search": {
                     "keyword": {
@@ -92,7 +94,7 @@
             },
             {
                 "name": "member",
-                "type": "string"
+                "type": "member"
             },
             {
                 "name": "radius",

@@ -334,7 +334,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
     return AOF_CHECK_OK;
 }
 
-/* Used to determine whether the file is a RDB file. These two possibilities:
+/* Used to determine whether the file is an RDB file. These two possibilities:
  * 1. The file is an old style RDB-preamble AOF
  * 2. The file is a BASE AOF in Multi Part AOF
  * */
@@ -359,8 +359,9 @@ int fileIsRDB(char *filepath) {
     }
 
     if (size >= 8) { /* There must be at least room for the RDB header. */
-        char sig[5];
-        int rdb_file = fread(sig, sizeof(sig), 1, fp) == 1 && memcmp(sig, "REDIS", sizeof(sig)) == 0;
+        char sig[6];
+        int rdb_file = fread(sig, sizeof(sig), 1, fp) == 1 &&
+                       (memcmp(sig, "REDIS0", sizeof(sig)) == 0 || memcmp(sig, "VALKEY", sizeof(sig)) == 0);
         if (rdb_file) {
             fclose(fp);
             return 1;

@@ -9,7 +9,97 @@
 #include <cstring>
 
 extern "C" {
+#include "listpack.h"
 #include "stream.h"
+}
+
+/* Mirrors of the record flags private to t_stream.c. */
+#define TEST_STREAM_ITEM_FLAG_DELETED (1 << 0)
+#define TEST_STREAM_ITEM_FLAG_SAMEFIELDS (1 << 1)
+
+/* Build a structurally valid stream listpack holding two same-fields records.
+ * The declared header counts and the per-record deleted flags are supplied
+ * separately so a caller can describe a header whose live/deleted split
+ * disagrees with the records that actually follow. */
+static unsigned char *buildTwoRecordStreamListpack(long long declared_live,
+                                                   long long declared_deleted,
+                                                   int first_deleted,
+                                                   int second_deleted) {
+    unsigned char *lp = lpNew(0);
+
+    /* Primary entry: count, deleted, num-primary-fields, field, terminator. */
+    lp = lpAppendInteger(lp, declared_live);
+    lp = lpAppendInteger(lp, declared_deleted);
+    lp = lpAppendInteger(lp, 1);
+    lp = lpAppend(lp, (unsigned char *)"f", 1);
+    lp = lpAppendInteger(lp, 0);
+
+    /* Two records, each reusing the primary field, so lp-count is 1 field
+     * plus the three fixed elements. */
+    for (int i = 0; i < 2; i++) {
+        int deleted = i == 0 ? first_deleted : second_deleted;
+        long long flags = TEST_STREAM_ITEM_FLAG_SAMEFIELDS;
+        if (deleted) flags |= TEST_STREAM_ITEM_FLAG_DELETED;
+
+        lp = lpAppendInteger(lp, flags);
+        lp = lpAppendInteger(lp, 0); /* ms diff */
+        lp = lpAppendInteger(lp, i); /* seq diff */
+        lp = lpAppend(lp, (unsigned char *)(i == 0 ? "v1" : "v2"), 2);
+        lp = lpAppendInteger(lp, 4);
+    }
+
+    return lp;
+}
+
+class StreamListpackIntegrityTest : public ::testing::Test {};
+
+/* Control: the header split matches the records, so the payload is accepted.
+ * This keeps the mismatch tests below honest by proving the hand-built
+ * fixture is otherwise structurally valid. */
+TEST_F(StreamListpackIntegrityTest, TestAcceptsMatchingLiveAndDeletedCounts) {
+    unsigned char *lp = buildTwoRecordStreamListpack(2, 0, 0, 0);
+    uint64_t valid_count = 0;
+    ASSERT_EQ(lpLength(lp), 15u);
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 1);
+    ASSERT_EQ(valid_count, 2u);
+    lpFree(lp);
+}
+
+TEST_F(StreamListpackIntegrityTest, TestAcceptsMatchingDeletedRecord) {
+    unsigned char *lp = buildTwoRecordStreamListpack(1, 1, 0, 1);
+    uint64_t valid_count = 0;
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 1);
+    ASSERT_EQ(valid_count, 1u);
+    lpFree(lp);
+}
+
+/* Both records are live, but the header claims one live and one deleted. The
+ * total still equals two, so a total-only check accepts this payload while the
+ * live count is understated. XDEL then sees a declared live count of 1, frees
+ * the whole node and destroys the record the header did not account for. */
+TEST_F(StreamListpackIntegrityTest, TestRejectsUnderstatedLiveCount) {
+    unsigned char *lp = buildTwoRecordStreamListpack(1, 1, 0, 0);
+    uint64_t valid_count = 0;
+    ASSERT_EQ(lpLength(lp), 15u);
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 0);
+    lpFree(lp);
+}
+
+/* The mirrored case: one record is flagged deleted while the header claims
+ * two live records and no deleted ones. The total again matches. */
+TEST_F(StreamListpackIntegrityTest, TestRejectsOverstatedLiveCount) {
+    unsigned char *lp = buildTwoRecordStreamListpack(2, 0, 0, 1);
+    uint64_t valid_count = 0;
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 0);
+    lpFree(lp);
+}
+
+/* Every record is flagged deleted while the header claims both are live. */
+TEST_F(StreamListpackIntegrityTest, TestRejectsAllRecordsDeletedWithLiveHeader) {
+    unsigned char *lp = buildTwoRecordStreamListpack(2, 0, 1, 1);
+    uint64_t valid_count = 0;
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 0);
+    lpFree(lp);
 }
 
 class StreamIdTest : public ::testing::Test {};

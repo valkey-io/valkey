@@ -321,8 +321,8 @@ ValkeyModuleString *ldbCatStackValue(ValkeyModuleString *s, lua_State *lua, int 
 static void ldbLogStackValue(lua_State *lua, const char *prefix) {
     ValkeyModuleString *p = ValkeyModule_CreateString(NULL, prefix, strlen(prefix));
     ValkeyModuleString *s = ldbCatStackValue(p, lua, -1);
+    /* Ownership of 's' is transferred to the debugger log list */
     ValkeyModule_ScriptingEngineDebuggerLog(s, 1);
-    ValkeyModule_FreeString(NULL, s);
 }
 
 /* Log a RESP reply as debugger output, in a human readable format.
@@ -583,7 +583,7 @@ static int wholeCommandHandler(ValkeyModuleString **argv, size_t argc, void *con
 
 static int printCommandHandler(ValkeyModuleString **argv, size_t argc, void *context) {
     ValkeyModule_Assert(context != NULL);
-    lua_State *lua = context;
+    lua_State *lua = ((luaEngineCtx *)context)->eval_lua;
     if (argc == 2) {
         ldbPrint(lua, ValkeyModule_StringPtrLen(argv[1], NULL));
     } else {
@@ -603,8 +603,8 @@ static int breakCommandHandler(ValkeyModuleString **argv, size_t argc, void *con
 static int traceCommandHandler(ValkeyModuleString **argv, size_t argc, void *context) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
-    VALKEYMODULE_NOT_USED(context);
-    lua_State *lua = context;
+    ValkeyModule_Assert(context != NULL);
+    lua_State *lua = ((luaEngineCtx *)context)->eval_lua;
     ldbTrace(lua);
     ValkeyModule_ScriptingEngineDebuggerFlushLogs();
     return CONTINUE_READ_NEXT_COMMAND;
@@ -612,7 +612,7 @@ static int traceCommandHandler(ValkeyModuleString **argv, size_t argc, void *con
 
 static int evalCommandHandler(ValkeyModuleString **argv, size_t argc, void *context) {
     ValkeyModule_Assert(context != NULL);
-    lua_State *lua = context;
+    lua_State *lua = ((luaEngineCtx *)context)->eval_lua;
     ldbEval(lua, argv, argc);
     ValkeyModule_ScriptingEngineDebuggerFlushLogs();
     return CONTINUE_READ_NEXT_COMMAND;
@@ -620,7 +620,7 @@ static int evalCommandHandler(ValkeyModuleString **argv, size_t argc, void *cont
 
 static int valkeyCommandHandler(ValkeyModuleString **argv, size_t argc, void *context) {
     ValkeyModule_Assert(context != NULL);
-    lua_State *lua = context;
+    lua_State *lua = ((luaEngineCtx *)context)->eval_lua;
     ldbServer(lua, argv, argc);
     ValkeyModule_ScriptingEngineDebuggerFlushLogs();
     return CONTINUE_READ_NEXT_COMMAND;
@@ -629,9 +629,8 @@ static int valkeyCommandHandler(ValkeyModuleString **argv, size_t argc, void *co
 static int abortCommandHandler(ValkeyModuleString **argv, size_t argc, void *context) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
-    VALKEYMODULE_NOT_USED(context);
     ValkeyModule_Assert(context != NULL);
-    lua_State *lua = context;
+    lua_State *lua = ((luaEngineCtx *)context)->eval_lua;
     luaPushError(lua, "script aborted for user request");
     luaError(lua);
     return CONTINUE_READ_NEXT_COMMAND;
@@ -640,9 +639,7 @@ static int abortCommandHandler(ValkeyModuleString **argv, size_t argc, void *con
 static ValkeyModuleScriptingEngineDebuggerCommand *commands_array_cache = NULL;
 static size_t commands_array_len = 0;
 
-void ldbGenerateDebuggerCommandsArray(lua_State *lua,
-                                      const ValkeyModuleScriptingEngineDebuggerCommand **commands,
-                                      size_t *commands_len) {
+void ldbGenerateDebuggerCommandsArray(const ValkeyModuleScriptingEngineDebuggerCommand **commands, size_t *commands_len) {
     static ValkeyModuleScriptingEngineDebuggerCommandParam list_params[] = {
         {.name = "line", .optional = 1},
         {.name = "ctx", .optional = 1},
@@ -671,14 +668,14 @@ void ldbGenerateDebuggerCommandsArray(lua_State *lua,
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("continue", 1, NULL, 0, "Run till next breakpoint.", 0, continueCommandHandler),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("list", 1, list_params, 2, "List source code around a specific line. If no line is specified the list is printed around the current line. [ctx] specifies how many lines to show before/after [line].", 0, listCommandHandler),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("whole", 1, NULL, 0, "List all source code. Alias for 'list 1 1000000'.", 0, wholeCommandHandler),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("print", 1, print_params, 1, "Show the value of the specified variable [var]. Can also show global vars KEYS and ARGV. If no [var] is specidied, shows the value of all local variables.", 0, printCommandHandler, lua),
+            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("print", 1, print_params, 1, "Show the value of the specified variable [var]. Can also show global vars KEYS and ARGV. If no [var] is specidied, shows the value of all local variables.", 0, printCommandHandler),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("break", 1, break_params, 1, "Add/Remove a breakpoint to the specified line. If no [line] is specified, it shows all breakpoints. When line = 0, it removes all breakpoints.", 0, breakCommandHandler),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("trace", 1, NULL, 0, "Show a backtrace.", 0, traceCommandHandler, lua),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("eval", 1, eval_params, 1, "Execute some Lua code (in a different callframe).", 0, evalCommandHandler, lua),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("valkey", 1, valkey_params, 1, "Execute a command.", 0, valkeyCommandHandler, lua),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("redis", 1, valkey_params, 1, NULL, 1, valkeyCommandHandler, lua),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX(SERVER_API_NAME, 0, valkey_params, 1, NULL, 1, valkeyCommandHandler, lua),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("abort", 1, NULL, 0, "Stop the execution of the script. In sync mode dataset changes will be retained.", 0, abortCommandHandler, lua),
+            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("trace", 1, NULL, 0, "Show a backtrace.", 0, traceCommandHandler),
+            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("eval", 1, eval_params, 1, "Execute some Lua code (in a different callframe).", 0, evalCommandHandler),
+            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("valkey", 1, valkey_params, 1, "Execute a command.", 0, valkeyCommandHandler),
+            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("redis", 1, valkey_params, 1, NULL, 1, valkeyCommandHandler),
+            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND(SERVER_API_NAME, 0, valkey_params, 1, NULL, 1, valkeyCommandHandler),
+            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("abort", 1, NULL, 0, "Stop the execution of the script. In sync mode dataset changes will be retained.", 0, abortCommandHandler),
         };
 
         commands_array_len = sizeof(commands_array) / sizeof(ValkeyModuleScriptingEngineDebuggerCommand);

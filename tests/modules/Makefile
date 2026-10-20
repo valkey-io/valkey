@@ -69,6 +69,7 @@ TEST_MODULES = \
     rdbloadsave.so \
     crash.so \
     cluster.so \
+    hellovalkey.so \
     helloscripting.so \
     unsupported_features.so \
     deferred_reply.so
@@ -85,6 +86,18 @@ all: $(TEST_MODULES)
 
 %.so: %.xo
 	$(LD) -o $@ $^ $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+
+# hellovalkey is the only test module that exercises the legacy redismodule.h
+# include path (regression test for #547). The generic %.xo rule above only
+# tracks valkeymodule.h, so declare the redismodule.h dependency explicitly.
+hellovalkey.xo: ../../src/redismodule.h
+
+hellovalkey.so: hellovalkey.xo hellovalkey.version
+ifeq ($(uname_S),Linux)
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS) -Wl,--version-script=hellovalkey.version
+else
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+endif
 
 .PHONY: clean
 

@@ -56,7 +56,7 @@ start_server {tags {"bitops"}} {
         assert_error "*WRONGTYPE*" {r bitcount mylist -6 -15 bit}
     }
 
-    test {BITCOUNT returns 0 against non existing key} {
+    test {BITCOUNT returns 0 against nonexistent key} {
         r del no-key
         assert {[r bitcount no-key] == 0}
         assert {[r bitcount no-key 0 1000 bit] == 0}
@@ -73,7 +73,7 @@ start_server {tags {"bitops"}} {
         assert {[r bitcount str -6 -7] == 0}
         assert {[r bitcount str -6 -15 bit] == 0}
 
-        # against non existing key
+        # against nonexistent key
         r del str
         assert {[r bitcount str -6 -7] == 0}
         assert {[r bitcount str -6 -15 bit] == 0}
@@ -178,7 +178,7 @@ start_server {tags {"bitops"}} {
         r set s 1
         assert_error {ERR *not an integer*} {r bitcount s a b}
 
-        # against non existing key
+        # against nonexistent key
         r del s
         assert_error {ERR *not an integer*} {r bitcount s a b}
 
@@ -328,7 +328,7 @@ start_server {tags {"bitops"}} {
         assert_error {ERR *not an integer*} {r bitpos s a}
         assert_error {ERR *not an integer*} {r bitpos s 0 a b}
 
-        # against non existing key
+        # against nonexistent key
         r del s
         assert_error {ERR *not an integer*} {r bitpos s b}
         assert_error {ERR *not an integer*} {r bitpos s 0 a b}

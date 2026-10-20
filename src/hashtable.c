@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 /* Hashtable
@@ -120,6 +120,12 @@ uint64_t hashtableGenHashFunction(const char *buf, size_t len) {
 
 uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len) {
     return siphash_nocase((const uint8_t *)buf, len, hash_function_seed);
+}
+
+/* Hash function for tables keyed by a pointer value. Cheaper than the default,
+ * which runs siphash over the pointer's bytes. */
+uint64_t hashtablePointerHash(const void *key) {
+    return wangHash64((uint64_t)(uintptr_t)key);
 }
 
 /* --- Global resize policy API --- */
@@ -344,7 +350,7 @@ typedef struct {
 } position;
 
 static_assert(sizeof(hashtablePosition) >= sizeof(position),
-              "Opaque iterator size");
+              "Opaque position size");
 
 /* State for incremental find. */
 typedef struct {
@@ -1406,13 +1412,13 @@ void hashtableResumeAutoShrink(hashtable *ht) {
  * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
  * pause auto shrink when rehashing is paused, meaning the hashtable will not
  * shrink the bucket count. */
-static void hashtablePauseRehashing(hashtable *ht) {
+void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
     hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
-static void hashtableResumeRehashing(hashtable *ht) {
+void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
     assert(ht->pause_rehash >= 0);
     hashtableResumeAutoShrink(ht);
@@ -1910,7 +1916,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             const void *elem_key = entryGetKey(ht, entry);
             if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
-                data->state = HASHTABLE_FOUND;
+                data->state = validateElementIfNeeded(ht, entry) ? HASHTABLE_FOUND : HASHTABLE_NOT_FOUND;
                 return false;
             }
             /* No match. Look for next candidate entry in the bucket. */
@@ -1990,6 +1996,37 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
     }
 }
 
+/* Provides batch lookup. Compared with serial single-key lookups, it can improve
+ * performance by parallelizing memory accesses. Each bit in the returned bitmap
+ * indicates whether the key at the same index was found. */
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries) {
+    assert(numkeys >= 0 && numkeys <= HASHTABLE_FIND_BATCH_MAX_SIZE);
+    if (numkeys == 0) return 0;
+
+    rehashStepOnReadIfNeeded(ht);
+
+    hashtableIncrementalFindState states[numkeys];
+    for (int i = 0; i < numkeys; i++) {
+        hashtableIncrementalFindInit(&states[i], ht, keys[i]);
+    }
+
+    size_t incomplete;
+    do {
+        incomplete = 0;
+        for (int i = 0; i < numkeys; i++) {
+            incomplete += hashtableIncrementalFindStep(&states[i]);
+        }
+    } while (incomplete != 0);
+
+    uint32_t result = 0;
+    for (int i = 0; i < numkeys; i++) {
+        if (hashtableIncrementalFindGetResult(&states[i], &found_entries[i])) {
+            result |= (uint32_t)1 << i;
+        }
+    }
+    return result;
+}
+
 /* --- Scan --- */
 
 /* Scan is a stateless iterator. It works with a cursor that is returned to the
@@ -2013,6 +2050,22 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  * - An entry that is inserted or deleted during a full scan may or may not be
  *   returned during the scan.
  *
+ * Additional guarantees when shrinking is blocked for the duration of the scan
+ * (e.g. by calling hashtablePauseAutoShrink before starting and
+ * hashtableResumeAutoShrink after finishing):
+ *
+ * - An entry will never be returned more than once.
+ *
+ * - An entry that exists throughout the entire scan is guaranteed to be
+ *   returned.
+ *
+ * - An entry that is created, destroyed, or re-created during the scan may or
+ *   may not be returned, but will never be returned more than once.
+ *
+ * Expansion and rehashing may occur freely without breaking these guarantees.
+ * Only a shrink is problematic: it introduces a smaller table whose bucket
+ * boundaries don't align with the existing cursor position.
+ *
  * Scan callback rules:
  *
  * - The scan callback may delete the entry that was passed to it.
@@ -2024,6 +2077,31 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata) {
     return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, 0);
+}
+
+/* Given a scan cursor, determines whether a key's hashtable position has
+ * already been visited by the scan. Returns true if the position has been
+ * passed (i.e. the key would have been emitted already), false if not yet
+ * visited.
+ *
+ * The result is exact when shrinking is blocked (see scan guarantees above).
+ * If a shrink has been initiated since the cursor was obtained, the result is
+ * best-effort and not guaranteed to be correct.
+ *
+ * A cursor of 0 means the scan has not started, so no keys have been passed. */
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
+    if (cursor == 0) return false;
+    if (hashtableSize(ht) == 0) return true;
+
+    /* The scan visits buckets in reverse-binary order based on the smallest
+     * table. During rehashing, a small-table bucket and its corresponding
+     * large-table buckets are processed together, so the small-table mask
+     * determines ordering in both cases. */
+    int exp = ht->bucket_exp[0];
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < exp) exp = ht->bucket_exp[1];
+    size_t mask = expToMask(exp);
+    size_t bucket_idx = hashKey(ht, key) & mask;
+    return rev(bucket_idx) < rev(cursor & mask);
 }
 
 /* Like hashtableScan, but additionally reallocates the memory used by the dict

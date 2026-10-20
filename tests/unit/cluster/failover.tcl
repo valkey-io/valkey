@@ -257,3 +257,26 @@ start_cluster 5 5 {tags {external:skip cluster}} {
         }
     }
 } ;# start_cluster
+
+proc test_small_timeout {timeout} {
+    test "Failover with cluster-node-time set to $timeout" {
+        R 3 config set cluster-node-timeout $timeout
+
+        pause_process [srv 0 pid]
+        wait_for_condition 1000 50 {
+            [s -3 role] == "master"
+        } else {
+            fail "Failover did not happen"
+        }
+
+        resume_process [srv 0 pid]
+    }
+}
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test_small_timeout 30
+} ;# start_cluster
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test_small_timeout 0
+} ;# start_cluster

@@ -91,11 +91,11 @@ void clusterSlotStatsSubMemory(int slot, robj *key, robj *val) {
  * lower-level slot variants. Use these from command-level code that doesn't
  * already have dict_index in hand. */
 void clusterSlotStatsAddMemoryForKey(robj *key, robj *val) {
-    clusterSlotStatsAddMemory(getSlotForKey(objectGetVal(key)), key, val);
+    clusterSlotStatsAddMemory(getKVStoreIndexForKey(objectGetVal(key)), key, val);
 }
 
 void clusterSlotStatsSubMemoryForKey(robj *key, robj *val) {
-    clusterSlotStatsSubMemory(getSlotForKey(objectGetVal(key)), key, val);
+    clusterSlotStatsSubMemory(getKVStoreIndexForKey(objectGetVal(key)), key, val);
 }
 
 uint64_t clusterSlotStatsGetObjectSize(robj *key, robj *val) {
@@ -340,14 +340,16 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     return slot_stat;
 }
 
-/* Compare by stat in ascending order. If stat is the same, compare by slot in ascending order. */
+/* Compare by stat in ascending order. If stat is the same, compare by slot in ascending order.
+ * Note: subtraction of uint64_t values cast to int truncates when the difference exceeds
+ * INT_MAX, potentially inverting the sort order. Use three-way comparison instead. */
 static int slotStatForSortAscCmp(const void *a, const void *b) {
     slotStatForSort entry_a = *((slotStatForSort *)a);
     slotStatForSort entry_b = *((slotStatForSort *)b);
     if (entry_a.stat == entry_b.stat) {
         return entry_a.slot - entry_b.slot;
     }
-    return entry_a.stat - entry_b.stat;
+    return (entry_a.stat > entry_b.stat) - (entry_a.stat < entry_b.stat);
 }
 
 /* Compare by stat in descending order. If stat is the same, compare by slot in ascending order. */
@@ -357,7 +359,7 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     if (entry_b.stat == entry_a.stat) {
         return entry_a.slot - entry_b.slot;
     }
-    return entry_b.stat - entry_a.stat;
+    return (entry_b.stat > entry_a.stat) - (entry_b.stat < entry_a.stat);
 }
 
 static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
@@ -637,4 +639,12 @@ void clusterSlotStatsCommand(client *c) {
 
 int clusterSlotStatsEnabled(int slot) {
     return server.cluster_slot_stats_enabled && server.cluster_enabled && slot != -1;
+}
+
+int testOnlySlotStatForSortAscCmp(const void *a, const void *b) {
+    return slotStatForSortAscCmp(a, b);
+}
+
+int testOnlySlotStatForSortDescCmp(const void *a, const void *b) {
+    return slotStatForSortDescCmp(a, b);
 }

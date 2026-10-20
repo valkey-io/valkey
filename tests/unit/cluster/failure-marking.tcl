@@ -1,5 +1,5 @@
 # Test a single primary can mark replica as `fail`
-start_cluster 1 1 {tags {external:skip cluster}} {
+start_cluster 1 1 {tags {external:skip cluster network}} {
 
     test "Verify that single primary marks replica as failed" {
         set primary [srv -0 client]
@@ -22,7 +22,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 }
 
 # Test multiple primaries wait for a quorum and then mark a replica as `fail`
-start_cluster 2 1 {tags {external:skip cluster}} {
+start_cluster 2 1 {tags {external:skip cluster network}} {
 
     test "Verify that multiple primaries mark replica as failed" {
         set primary1 [srv -0 client]
@@ -47,7 +47,7 @@ start_cluster 2 1 {tags {external:skip cluster}} {
 
         wait_node_marked_pfail 0 $replica1_instance_id
 
-        # Resume other primary and wait for to show replica as failed
+        # Resume other primary and wait for the replica to show as failed
         resume_process $primary2_pid
 
         wait_node_marked_fail 0 $replica1_instance_id
@@ -56,7 +56,7 @@ start_cluster 2 1 {tags {external:skip cluster}} {
     }
 }
 
-tags {external:skip tls:skip cluster singledb} {
+tags {external:skip tls:skip cluster singledb network} {
     set base_conf [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 save ""]
     start_multiple_servers 5 [list overrides $base_conf] {
         test "Only primary with slots has the right to mark a node as failed" {
@@ -116,7 +116,7 @@ tags {external:skip tls:skip cluster singledb} {
 }
 
 # Test that no new failure-report is added once the node is already marked as FAIL
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster network}} {
     test "Primaries do not add failure-report after replica is already marked FAIL" {
         # Primary nodes
         set primary0 [srv 0 client];

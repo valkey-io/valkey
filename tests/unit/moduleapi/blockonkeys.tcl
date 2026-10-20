@@ -217,6 +217,26 @@ start_server {tags {"modules"}} {
         r client kill id $cid ;# try to smoke-out client-related memory leak
     }
 
+    test {Module blocked-on-keys reply killing successor must not UAF} {
+        # Regression for #4198: serving a BLOCKED_MODULE client may run a reply
+        # callback that CLIENT KILLs another client still on the same ready-key
+        # list. Iteration must not retain a stale listNode* across that teardown.
+        r del race
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+
+        $rd1 blockonkeys.block_kill_successor race first
+        wait_for_blocked_clients_count 1
+        $rd2 blockonkeys.block_kill_successor race second
+        wait_for_blocked_clients_count 2
+
+        assert_equal {OK} [r blockonkeys.signal_ready race]
+        assert_equal {FIRST} [$rd1 read]
+        assert_equal {PONG} [r ping]
+        $rd1 close
+        catch {$rd2 close}
+    }
+
     test {Module client blocked on keys (with metadata): Blocked, CLIENT UNBLOCK TIMEOUT} {
         r del k
         r fsl.push k 32

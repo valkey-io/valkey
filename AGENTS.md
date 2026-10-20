@@ -24,6 +24,7 @@
 - Build and run all unit tests: `make -C src test-unit`
 - Unit tests cover data-structure and low-level logic changes.
 - A single test filter can be run with: `make -C src test-unit && ./src/unit/valkey-unit-gtests --gtest_filter='<TestSuite>.<TestName>'`
+- **Write tests in minimal C++.** GTest provides the test runner, but test code should look like C. No STL containers (`std::vector`, `std::string`, `std::set`), no STL algorithms, no `auto`, no lambdas, no templates, no RAII. Use fixed-size C arrays, `sds`, `qsort`, and explicit types. See `src/unit/README.md` for full guidelines and examples.
 
 ## Integration tests
 - Integration tests live under `tests/` and are written in Tcl.

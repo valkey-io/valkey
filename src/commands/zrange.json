@@ -10,6 +10,10 @@
             [
                 "6.2.0",
                 "Added the `REV`, `BYSCORE`, `BYLEX` and `LIMIT` options."
+            ],
+            [
+                "9.2.0",
+                "Added the `XX` option."
             ]
         ],
         "command_flags": [
@@ -42,6 +46,10 @@
         ],
         "reply_schema": {
             "anyOf": [
+                {
+                    "description": "Key does not exist and XX option is specified.",
+                    "type": "null"
+                },
                 {
                     "description": "A list of member elements",
                     "type": "array",
@@ -133,6 +141,13 @@
                 "token": "WITHSCORES",
                 "type": "pure-token",
                 "optional": true
+            },
+            {
+                "name": "xx",
+                "token": "XX",
+                "type": "pure-token",
+                "optional": true,
+                "since": "9.2.0"
             }
         ]
     }

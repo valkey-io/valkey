@@ -10,6 +10,10 @@
             [
                 "2.0.0",
                 "Added the `WITHSCORES` modifier."
+            ],
+            [
+                "9.2.0",
+                "Added the `XX` option."
             ]
         ],
         "command_flags": [
@@ -42,6 +46,10 @@
         ],
         "reply_schema": {
             "anyOf": [
+                {
+                    "description": "Key does not exist and XX option is specified.",
+                    "type": "null"
+                },
                 {
                     "type": "array",
                     "description": "List of the elements in the specified score range, as not WITHSCORES.",
@@ -94,6 +102,13 @@
                 "type": "pure-token",
                 "optional": true,
                 "since": "2.0.0"
+            },
+            {
+                "name": "xx",
+                "token": "XX",
+                "type": "pure-token",
+                "optional": true,
+                "since": "9.2.0"
             },
             {
                 "token": "LIMIT",

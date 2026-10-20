@@ -29,7 +29,7 @@ start_server {tags {"modules usercall network"}} {
             assert_equal [r usercall.reset_user] OK
             assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
             # off because module user / default value
-            assert_equal [r usercall.get_acl] "off ~* &* alldbs +@all -set"
+            assert_equal [r usercall.get_acl] "off ~* &* +@all -set"
 
             # doesn't fail for regular commands as just testing acl here
             assert_equal [r usercall.$cmd {} set x 10] OK
@@ -48,7 +48,7 @@ start_server {tags {"modules usercall network"}} {
             assert_equal [r usercall.reset_user] OK
             assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
             # off because module user / default value
-            assert_equal [r usercall.get_acl] "off ~* &* alldbs +@all -set"
+            assert_equal [r usercall.get_acl] "off ~* &* +@all -set"
 
             # fails here as testing acl in rm call
             assert_error {*NOPERM User module_user has no permissions*} {r usercall.$cmd C set x 10}
@@ -111,7 +111,7 @@ start_server {tags {"modules usercall network"}} {
             assert_equal [r usercall.reset_user] OK
             assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
             # off because module user / default value
-            assert_equal [r usercall.get_acl] "off ~* &* alldbs +@all -set"
+            assert_equal [r usercall.get_acl] "off ~* &* +@all -set"
 
             # passes as not checking ACL
             assert_equal [r usercall.$cmd {} evalsha $sha_set 0] 1
@@ -178,5 +178,48 @@ start_server {tags {"modules usercall network"}} {
                 assert_equal [$master waitaof 1 1 10000] {1 1}
             }
         }
+    }
+}
+
+# Module users live outside the Users radix tree, so ACL LOAD does not replace
+# them. A role they hold must be re-pointed at the reloaded role rather than left
+# dangling at the freed one.
+set server_path [tmpdir "server.usercall.role.acl"]
+exec cp -f tests/assets/user.acl $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "modules usercall external:skip"]] {
+    r module load $testmodule
+
+    test {module user keeps a working role across ACL LOAD} {
+        r ACL SETROLE myrole +ping ~*
+        r usercall.reset_user
+        r usercall.add_to_acl "on role=myrole ~* &*"
+        assert_match {*role=myrole*} [r usercall.get_acl]
+
+        set info [r ACL GETROLE myrole]
+        set idx [lsearch $info "users"]
+        assert_equal {module_user} [lindex $info [expr {$idx + 1}]]
+
+        r ACL SAVE
+        r ACL LOAD
+
+        # The membership survives, and both directions still agree.
+        assert_match {*role=myrole*} [r usercall.get_acl]
+        set info [r ACL GETROLE myrole]
+        set idx [lsearch $info "users"]
+        assert_equal {module_user} [lindex $info [expr {$idx + 1}]]
+
+        # The role is still referenced, so it cannot be deleted.
+        assert_error {*is assigned to one or more users*} {r ACL DELROLE myrole}
+        assert_equal {PONG} [r PING]
+    }
+
+    test {module user loses the membership when ACL LOAD drops the role} {
+        set fd [open "$server_path/user.acl" w]
+        close $fd
+        r ACL LOAD
+
+        assert_equal {} [r ACL ROLES]
+        assert_match {*-@all*} [r usercall.get_acl]
+        assert_equal {PONG} [r PING]
     }
 }

@@ -21,17 +21,15 @@ proc get_my_primary_peer {srv_idx} {
 
 proc test_migrated_replica {type} {
     test "Migrated replica reports zero repl offset and rank, and fails to win election - $type" {
-        # Write some data to primary 0, slot 1, make a small repl_offset.
-        for {set i 0} {$i < 1024} {incr i} {
-            R 0 incr key_991803
-        }
-        assert_equal {1024} [R 0 get key_991803]
+        # Write a key to primary 0, slot 1, make a small repl_offset.
+        set small_value [string repeat "x" 1024]
+        R 0 set key_991803 $small_value
+        assert_equal $small_value [R 0 get key_991803]
 
-        # Write some data to primary 3, slot 0, make a big repl_offset.
-        for {set i 0} {$i < 10240} {incr i} {
-            R 3 incr key_977613
-        }
-        assert_equal {10240} [R 3 get key_977613]
+        # Write a key to primary 3, slot 0, make a big repl_offset.
+        set large_value [string repeat "y" 10240]
+        R 3 set key_977613 $large_value
+        assert_equal $large_value [R 3 get key_977613]
 
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
@@ -52,6 +50,12 @@ proc test_migrated_replica {type} {
         R 7 config set cluster-replica-validity-factor 0
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration yes
+
+        # Make server 4 (the freshest replica) win deterministically: servers 3/7
+        # honor the delay, while rank #0 server 4 fires immediately via the fast path.
+        R 3 debug cluster-failover-delay 3000
+        R 4 debug cluster-failover-delay 3000
+        R 7 debug cluster-failover-delay 3000
 
         if {$type == "shutdown"} {
             # Shutdown primary 0.
@@ -106,11 +110,9 @@ proc test_migrated_replica {type} {
         R 3 readonly
         R 7 readonly
         wait_for_condition 1000 50 {
-            [catch {expr {
-                [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
-                [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
-                [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
-            }} result] == 0 && $result
+            [R 3 get key_991803] eq $small_value && [R 3 get key_977613] eq $large_value &&
+            [R 4 get key_991803] eq $small_value && [R 4 get key_977613] eq $large_value &&
+            [R 7 get key_991803] eq $small_value && [R 7 get key_977613] eq $large_value
         } else {
             catch {puts "R 3: [R 3 keys *]"}
             catch {puts "R 4: [R 4 keys *]"}
@@ -133,27 +135,25 @@ proc test_migrated_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 proc test_nonempty_replica {type} {
     test "New non-empty replica reports zero repl offset and rank, and fails to win election - $type" {
-        # Write some data to primary 0, slot 1, make a small repl_offset.
-        for {set i 0} {$i < 1024} {incr i} {
-            R 0 incr key_991803
-        }
-        assert_equal {1024} [R 0 get key_991803]
+        # Write a key to primary 0, slot 1, make a small repl_offset.
+        set small_value [string repeat "x" 1024]
+        R 0 set key_991803 $small_value
+        assert_equal $small_value [R 0 get key_991803]
 
-        # Write some data to primary 3, slot 0, make a big repl_offset.
-        for {set i 0} {$i < 10240} {incr i} {
-            R 3 incr key_977613
-        }
-        assert_equal {10240} [R 3 get key_977613]
+        # Write a key to primary 3, slot 0, make a big repl_offset.
+        set large_value [string repeat "y" 10240]
+        R 3 set key_977613 $large_value
+        assert_equal $large_value [R 3 get key_977613]
 
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
@@ -162,6 +162,11 @@ proc test_nonempty_replica {type} {
         R 7 config set cluster-replica-validity-factor 0
         R 7 config set cluster-allow-replica-migration yes
         R 7 cluster replicate [R 0 cluster myid]
+
+        # Make server 4 (the freshest replica) win deterministically: server 7
+        # honors the delay, while rank #0 server 4 fires immediately via the fast path.
+        R 4 debug cluster-failover-delay 3000
+        R 7 debug cluster-failover-delay 3000
 
         if {$type == "shutdown"} {
             # Shutdown primary 0.
@@ -205,10 +210,8 @@ proc test_nonempty_replica {type} {
         # Make sure the key exists and is consistent.
         R 7 readonly
         wait_for_condition 1000 50 {
-            [catch {expr {
-                [R 4 get key_991803] == 1024 &&
-                [R 7 get key_991803] == 1024
-            }} result] == 0 && $result
+            [R 4 get key_991803] eq $small_value &&
+            [R 7 get key_991803] eq $small_value
         } else {
             catch {puts "R 4: [R 4 get key_991803]"}
             catch {puts "R 7: [R 7 get key_991803]"}
@@ -228,32 +231,36 @@ proc test_nonempty_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 proc test_sub_replica {type} {
     test "Sub-replica reports zero repl offset and rank, and fails to win election - $type" {
-        # Write some data to primary 0, slot 1, make a small repl_offset.
-        for {set i 0} {$i < 1024} {incr i} {
-            R 0 incr key_991803
-        }
-        assert_equal {1024} [R 0 get key_991803]
+        # Write a key to primary 0, slot 1, make a small repl_offset.
+        set small_value [string repeat "x" 1024]
+        R 0 set key_991803 $small_value
+        assert_equal $small_value [R 0 get key_991803]
 
-        # Write some data to primary 3, slot 0, make a big repl_offset.
-        for {set i 0} {$i < 10240} {incr i} {
-            R 3 incr key_977613
-        }
-        assert_equal {10240} [R 3 get key_977613]
+        # Write a key to primary 3, slot 0, make a big repl_offset.
+        set large_value [string repeat "y" 10240]
+        R 3 set key_977613 $large_value
+        assert_equal $large_value [R 3 get key_977613]
 
         R 3 config set cluster-replica-validity-factor 0
         R 7 config set cluster-replica-validity-factor 0
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration no
+
+        # Make server 4 (the freshest replica) win deterministically: servers 3/7
+        # honor the delay, while rank #0 server 4 fires immediately via the fast path.
+        R 3 debug cluster-failover-delay 3000
+        R 4 debug cluster-failover-delay 3000
+        R 7 debug cluster-failover-delay 3000
 
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
@@ -331,11 +338,9 @@ proc test_sub_replica {type} {
         R 3 readonly
         R 7 readonly
         wait_for_condition 1000 50 {
-            [catch {expr {
-                [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
-                [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
-                [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
-            }} result] == 0 && $result
+            [R 3 get key_991803] eq $small_value && [R 3 get key_977613] eq $large_value &&
+            [R 4 get key_991803] eq $small_value && [R 4 get key_977613] eq $large_value &&
+            [R 7 get key_991803] eq $small_value && [R 7 get key_977613] eq $large_value
         } else {
             catch {puts "R 3: [R 3 keys *]"}
             catch {puts "R 4: [R 4 keys *]"}
@@ -356,11 +361,11 @@ proc test_sub_replica {type} {
     }
 }
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 

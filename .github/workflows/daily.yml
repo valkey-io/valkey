@@ -1428,7 +1428,7 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
+          sudo apt-get update && sudo apt-get install lttng-tools liblttng-ust-dev
           cd libbacktrace && ./configure && make && sudo make install
       - name: make
         run: make -j4 USE_LTTNG=yes USE_LIBBACKTRACE=yes

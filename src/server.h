@@ -3227,6 +3227,7 @@ void protectClient(client *c);
 void unprotectClient(client *c);
 void initSharedQueryBuf(void);
 void freeSharedQueryBuf(void);
+int isSharedQueryBufRegistered(int tid);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void clientSetUser(client *c, user *u, int authenticated);

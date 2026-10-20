@@ -8,6 +8,7 @@
  * compressor_alg_lz4.c and compressor_alg_zstd.c, and this file is the only place
  * that knows which ids map to which function table. */
 
+#include "fmacros.h" /* must come before any system header */
 #include "compressor/compressor_alg.h"
 #include "server.h" /* C_OK, C_ERR */
 #include "serverassert.h"

@@ -31,6 +31,7 @@
  * instances on any number of threads may share one. LZ4_attach_dictionary only
  * writes to the working stream in the instance and only reads the dictionary. */
 
+#include "fmacros.h" /* must come before any system header */
 #include "compressor/compressor_alg.h"
 #include "server.h" /* C_OK, C_ERR */
 #include "serverassert.h"

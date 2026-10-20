@@ -199,6 +199,12 @@ merged quickly tend to share these traits:
   Before/after output or a short code excerpt is worth more than a long prose
   explanation.
 
+* **A description a reviewer can read in a minute.** Leave out what the diff
+  already shows, how the change evolved during development, pasted test output,
+  and full benchmark tables (link them or put them in a comment). A long
+  description costs every reviewer time; a short one that misses something
+  costs one question.
+
 * **Compatibility impact stated up front, even when there is none.** Call out
   anything that touches the RDB or AOF format, the replication stream, command
   replies (RESP2 and RESP3), `INFO` fields, configuration names or defaults,

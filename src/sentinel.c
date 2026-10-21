@@ -2863,8 +2863,14 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
                 sentinelCallClientReconfScript(primary, SENTINEL_OBSERVER, "start", old_addr, primary->addr);
                 releaseSentinelAddr(old_addr);
             } else if ((primary->flags & SRI_FAILOVER_IN_PROGRESS) && primary_config_epoch > primary->failover_epoch) {
+                sentinelAddr *reported = dupSentinelAddr(sentinelGetCurrentPrimaryAddress(primary));
+
                 sentinelEvent(LL_WARNING, "+config-update-from", si, "%@");
-                sentinelResetPrimaryAndChangeAddress(primary, token[5], primary_port);
+                if (sentinelResetPrimaryAndChangeAddress(primary, token[5], primary_port) == C_OK &&
+                    !sentinelAddrOrHostnameEqual(reported, primary->addr)) {
+                    sentinelCallClientReconfScript(primary, SENTINEL_OBSERVER, "start", reported, primary->addr);
+                }
+                releaseSentinelAddr(reported);
             }
         }
 

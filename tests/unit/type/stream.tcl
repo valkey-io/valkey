@@ -1907,10 +1907,13 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
             r XADD mystream * xitem v
         }
 
+        # The last LIMIT wins. A LIMIT below the node size (10) trims nothing.
         r XADD mystream MAXLEN ~ 55 LIMIT 5 LIMIT 30 * xitem v
+        assert_equal 71 [r xlen mystream]
         r XADD mystream LIMIT 5 MAXLEN ~ 55 LIMIT 6 LIMIT 30 NOMKSTREAM * xitem v
-        assert {[r XTRIM mystream MAXLEN ~ 50 LIMIT 5 LIMIT 30] > 0}
-        set len [r xlen mystream]
+        assert_equal 62 [r xlen mystream]
+        assert_equal 10 [r XTRIM mystream MAXLEN ~ 50 LIMIT 5 LIMIT 30]
+        assert_equal 52 [r xlen mystream]
 
         set fp [open $aof r]
         fconfigure $fp -translation binary
@@ -1920,7 +1923,7 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
         assert_equal -1 [string first "LIMIT" $blob]
 
         r debug loadaof
-        assert_equal $len [r xlen mystream]
+        assert_equal 52 [r xlen mystream]
     }
 }
 

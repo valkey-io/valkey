@@ -101,12 +101,12 @@ static thread_local int thread_index = -1;
  * used_memory_thread array was written, it could be read by another thread simultaneously,
  * the reader will see the inconsistency memory on non x86 architecture potentially.
  * For the ARM and PowerPC platform, we can solve this issue by make the memory aligned.
- * For the other architecture, lets fall back to the atomic operation to keep safe. */
-/* Each thread's counter lives on its own cache line. Without this, adjacent
- * threads' counters share a cache line and every allocation's counter update
- * causes false sharing across all allocating threads (and with the main
- * thread, which sums these counters in zmalloc_used_memory() after every
- * command). */
+ * For the other architecture, lets fall back to the atomic operation to keep safe.
+ *
+ * Each element is aligned to CACHE_LINE_SIZE, so every thread's counter occupies a cache
+ * line of its own and a counter update by one thread does not invalidate the line holding
+ * another thread's counter (false sharing). The cost is that zmalloc_used_memory(), which
+ * the main thread calls after every command, reads one cache line per active thread. */
 #if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) || \
     defined(__arm64__)
 typedef struct {
@@ -117,6 +117,7 @@ typedef struct {
     __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t value;
 } used_memory_entry;
 #endif
+static_assert(sizeof(used_memory_entry) == CACHE_LINE_SIZE, "each used_memory_thread counter must occupy exactly one cache line");
 static used_memory_entry used_memory_thread[MAX_THREADS_NUM];
 static atomic_int total_active_threads = 0;
 /* This is a simple protection. It's used only if some modules create a lot of threads. */

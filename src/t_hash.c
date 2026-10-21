@@ -1314,7 +1314,7 @@ void hincrbyfloatCommand(client *c) {
     mstime_t expiry = EXPIRY_NONE;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
-    if (isnan(incr) || isinf(incr)) {
+    if (isinf(incr)) {
         addReplyError(c, "value is NaN or Infinity");
         return;
     }
@@ -1334,7 +1334,7 @@ void hincrbyfloatCommand(client *c) {
     }
 
     value += incr;
-    if (isnan(value) || isinf(value)) {
+    if (isinf(value)) {
         addReplyError(c, "increment would produce NaN or Infinity");
         return;
     }

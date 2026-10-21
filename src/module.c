@@ -229,7 +229,7 @@ struct ValkeyModuleKey {
             uint32_t start;          /* Start pos for positional ranges. */
             uint32_t end;            /* End pos for positional ranges. */
             void *current;           /* Zset iterator current node. */
-            OrderedIndexIterator oi; /* OrderedIndex iterator for skiplist encoding. */
+            OrderedIndexIterator oi; /* OrderedIndex iterator for OBJ_ENCODING_BTREE encoding. */
             int er;                  /* Zset iterator end reached flag
                                          (true if end was reached). */
             int fwd;                 /* The ordered index cursor sits between

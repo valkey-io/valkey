@@ -105,10 +105,10 @@ Both authors and reviewers should check new or changed tests against it.
    workload sizes, scale the other way down, e.g.
    `set key_count [expr {$::valgrind ? 10000 : 40000}]`.
 
-3. **Don't assert on state right after the command that changes it.** `DBSIZE`
-   after a delete on a replica, `INFO` fields after a config change, `CLUSTER`
-   output after a topology change: all of these settle asynchronously. Put the
-   assertion inside `wait_for_condition`.
+3. **Don't assert on state that isn't reflected yet.** A value that settles
+   asynchronously -- `DBSIZE` after a delete on a replica, `INFO` fields after a
+   config change, `CLUSTER` output after a topology change -- is not readable the
+   instant the command returns. Put the assertion inside `wait_for_condition`.
 
 4. **Wait for replication and cluster convergence explicitly.** Before asserting
    on a replica or a peer, use the helper that matches what you need:
@@ -128,8 +128,8 @@ Both authors and reviewers should check new or changed tests against it.
    assuming the first match is the only one.
 
 7. **Avoid tight bounds on time.** Latency and duration assertions
-   (`assert_range` on elapsed time, `LATENCY` output, `usec_per_call`) are the
-   first thing to fail on a loaded runner. Widen the range, or assert on an
+   (`assert_range` on elapsed time, `LATENCY` output, `usec_per_call`) can fail on
+   a loaded runner. Widen the range, or assert on an
    ordering or a lower bound instead of an upper bound. Use TTLs of at least one
    second and margins of at least two seconds when comparing against the clock.
 
@@ -163,7 +163,7 @@ Both authors and reviewers should check new or changed tests against it.
 
 12. **Probe for platform features and skip when absent.** tmpfs behavior, MPTCP,
     IPv6, TLS and macOS-specific paths differ between runners. Use the existing
-    tags (`tls:skip`, `valgrind:skip`, `ipv6`, `needs:*`) or probe the capability
+    tags (`tls:skip`, `valgrind:skip`, `ipv6`, `mptcp`) or probe the capability
     at runtime and skip the test rather than asserting on a platform assumption.
     Valgrind in particular has no 80-bit floating point: `strtold("+inf")` can
     return a finite value, so a test that expects an Infinity or overflow error
@@ -171,22 +171,24 @@ Both authors and reviewers should check new or changed tests against it.
     `valgrind:skip` (see `INCRBYFLOAT`/`HINCRBYFLOAT` tests in
     `tests/unit/type/incr.tcl` and `hash.tcl`).
 
-13. **Make failover tests deterministic.** Replica election rank depends on
-    replication offset and timing. Pin the winner with
-    `cluster-replica-no-failover yes` on the replicas that must not take over,
-    or use `DEBUG CLUSTER-FAILOVER-DELAY` / packet drops to force the order you
-    need. `cluster-replica-validity-factor 0` only keeps a stale replica
-    eligible; it does not choose which one wins.
+13. **Make failover tests deterministic.** Automatic election rank depends on
+    replication offset and timing, so don't assert which replica wins unless
+    you have made it the only candidate. To choose a winner, run
+    `CLUSTER FAILOVER` on that replica (`FORCE` when the primary is down,
+    `TAKEOVER` when there is no quorum); manual failover bypasses rank, delay
+    and `cluster-replica-no-failover`. To keep replicas out of an automatic
+    election, set `cluster-replica-no-failover yes` on them.
+    `cluster-replica-validity-factor 0` only keeps a stale replica eligible;
+    it does not choose which one wins.
 
 14. **Do enough work to trigger what you are testing.** A test that writes 20
     keys to exercise a path that triggers at 100 passes by luck. Size the
     workload so the behavior is forced, not probable.
 
 15. **Don't sleep for `serverCron`.** Behavior driven by the cron (query buffer
-    resize, dict rehash and resize, LRU/LFU touch, client eviction) runs at `hz`,
-    which is dynamic by default. Either freeze it during setup with
-    `DEBUG PAUSE-CRON 1` and release it, or set `dynamic-hz no` and a high `hz`,
-    then `wait_for_condition` on the state the cron produces.
+    resize, dict rehash and resize, LRU/LFU touch, client eviction) runs at `hz`.
+    Either freeze it during setup with `DEBUG PAUSE-CRON 1` and release it, or
+    raise `hz`, then `wait_for_condition` on the state the cron produces.
 
 16. **Stop replication PINGs before measuring offsets or network stats.** The
     primary pings replicas every `repl-ping-replica-period` seconds, which moves
@@ -212,8 +214,8 @@ Both authors and reviewers should check new or changed tests against it.
     (SDOWN flag, new leader, reconnected instance) with a generous budget rather
     than acting immediately.
 
-When a test does flake in CI, fix the synchronization rather than retrying or
-widening a single timeout; the next slower runner will find the same gap.
+When a test does flake in CI, fix the synchronization rather than retrying; the
+next slower runner will find the same gap.
 
 Tags
 ----

@@ -218,10 +218,11 @@ double zzlGetScore(unsigned char *sptr) {
  * The structural layout (member, score, member, score, ...) must already have
  * been validated by lpValidateIntegrityAndDups. Returns 1 if all scores are
  * valid, 0 if a NAN score is found. This guards against crafted RESTORE
- * payloads: zslInsertNode() asserts the score is not NAN, so a NAN score in a
- * listpack zset would crash the server when it is later converted to a
- * skiplist. The skiplist RDB format rejects NAN scores at load time; this is
- * the equivalent check for the listpack format. */
+ * payloads: the ordered index packs each score into a sortable 8-byte key
+ * and asserts the score is not NAN, so a NAN score in a listpack zset
+ * would crash the server when it is later converted to the ordered index
+ * encoding. The ordered index RDB format rejects NAN scores at
+ * load time; this is the equivalent check for the listpack format. */
 int zzlValidateScores(unsigned char *zl) {
     unsigned char *eptr = lpSeek(zl, 0), *sptr;
     while (eptr != NULL) {

@@ -125,6 +125,15 @@ endif ()
 # Build options (allocator, tls, rdma et al)
 # ----------------------------------------------------
 
+# Allow `MALLOC` as an alias for `BUILD_MALLOC` so the Makefile spelling
+# (`MALLOC=<libname>`) also works with CMake. Both resolve to BUILD_MALLOC.
+if (MALLOC)
+    if (BUILD_MALLOC AND NOT "${BUILD_MALLOC}" STREQUAL "${MALLOC}")
+        message(FATAL_ERROR "Conflicting allocator values: BUILD_MALLOC='${BUILD_MALLOC}' and MALLOC='${MALLOC}'. Set only one, or set both to the same value.")
+    endif ()
+    set(BUILD_MALLOC "${MALLOC}")
+endif ()
+
 if (NOT BUILD_MALLOC)
     if (APPLE)
         set(BUILD_MALLOC "libc")
@@ -259,6 +268,15 @@ else ()
 endif ()
 
 # Sanitizer
+# Allow `SANITIZER` as an alias for `BUILD_SANITIZER` so the Makefile spelling
+# (`SANITIZER=<type>`) also works with CMake. Both resolve to BUILD_SANITIZER.
+if (SANITIZER)
+    if (BUILD_SANITIZER AND NOT "${BUILD_SANITIZER}" STREQUAL "${SANITIZER}")
+        message(FATAL_ERROR "Conflicting sanitizer values: BUILD_SANITIZER='${BUILD_SANITIZER}' and SANITIZER='${SANITIZER}'. Set only one, or set both to the same value.")
+    endif ()
+    set(BUILD_SANITIZER "${SANITIZER}")
+endif ()
+
 if (BUILD_SANITIZER)
     # Common CFLAGS
     list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-sanitize-recover=all")
@@ -316,6 +334,26 @@ if (BUILD_ZSTD)
                    INTERFACE_LINK_OPTIONS "${ZSTD_STATIC_LDFLAGS_OTHER}")
 else ()
     message(STATUS "Zstandard support is disabled")
+endif ()
+
+# libbacktrace support
+string(TOLOWER "${USE_LIBBACKTRACE}" USE_LIBBACKTRACE_LOWER)
+if (NOT "${USE_LIBBACKTRACE_LOWER}" MATCHES "^(yes|no)$")
+    message(FATAL_ERROR "USE_LIBBACKTRACE can be one of: [yes | no], but '${USE_LIBBACKTRACE}' was provided")
+endif ()
+
+if ("${USE_LIBBACKTRACE_LOWER}" STREQUAL "yes")
+    add_valkey_server_compiler_options("-DUSE_LIBBACKTRACE")
+    if (LIBBACKTRACE_PREFIX)
+        include_directories("${LIBBACKTRACE_PREFIX}/include")
+        add_valkey_server_linker_option("-L${LIBBACKTRACE_PREFIX}/lib")
+    endif ()
+    # Append last on the link line (like the Makefile's FINAL_LIBS) so the
+    # static libbacktrace archive resolves references from the server objects.
+    add_valkey_server_linker_option("-lbacktrace")
+    message(STATUS "libbacktrace support is enabled")
+else ()
+    message(STATUS "libbacktrace support is disabled")
 endif ()
 
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
@@ -397,7 +435,10 @@ unset(USE_RDMA CACHE)
 unset(BUILD_TLS CACHE)
 unset(BUILD_RDMA CACHE)
 unset(BUILD_ZSTD CACHE)
+unset(USE_LIBBACKTRACE CACHE)
+unset(LIBBACKTRACE_PREFIX CACHE)
 unset(BUILD_MALLOC CACHE)
+unset(MALLOC CACHE)
 unset(USE_JEMALLOC CACHE)
 unset(BUILD_TLS_MODULE CACHE)
 unset(BUILD_TLS_BUILTIN CACHE)

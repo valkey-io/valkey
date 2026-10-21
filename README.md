@@ -340,8 +340,9 @@ Other options supported by Valkey's `CMake` build system:
 - `-DBUILD_TLS=<yes|no>` enable TLS build for Valkey. Default: `no`
 - `-DBUILD_RDMA=<no|module>` enable RDMA module build (only module mode supported). Default: `no`
 - `-DBUILD_ZSTD=<yes|no>` configure Zstandard streaming compression support. Default: `no`
-- `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
-- `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled. Default: disabled (no sanitizer)
+- `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use (the Makefile spelling `-DMALLOC=<...>` is accepted as an alias). Default on Linux: `jemalloc`, for other OS: `libc`
+- `-DUSE_LIBBACKTRACE=<yes|no>` build with libbacktrace for enhanced stack traces (file names and line numbers, including static functions). Optionally set `-DLIBBACKTRACE_PREFIX=/path` for a custom installation. Default: `no`
+- `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled (the Makefile spelling `-DSANITIZER=<...>` is accepted as an alias). Default: disabled (no sanitizer)
 - `-DBUILD_UNIT_GTESTS=[yes|no]`  when set, the build will produce unit tests executable `valkey-unit-gtests`. Default: `no`
 - `-DBUILD_TEST_MODULES=[yes|no]`  when set, the build will include the modules located under the `tests/modules` folder. Default: `no`
 - `-DBUILD_EXAMPLE_MODULES=[yes|no]`  when set, the build will include the example modules located under the `src/modules` folder. Default: `no`

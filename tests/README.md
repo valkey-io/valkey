@@ -139,11 +139,17 @@ Both authors and reviewers should check new or changed tests against it.
    relevant log line, or the key count.
 
 9. **Clean up, even when the test fails.** Delete the keys you created and
-   restore any `CONFIG SET` or `DEBUG` override. If a test can fail between the
-   override and the restore, wrap the body in `with_config <name> <value> {...}`
-   or `with_cleanup {...} {...}` (`tests/support/util.tcl`) so the restore runs
-   on failure too. A leaked `rdb-key-save-delay` or `repl-diskless-sync-delay`
-   turns every later test in the file into a mystery failure.
+   restore any `CONFIG SET` or override, so a test that fails partway does not
+   leak state into the next one. A leaked `rdb-key-save-delay` or
+   `repl-diskless-sync-delay` turns every later test in the file into a mystery
+   failure. Register the undo inline so it cannot be forgotten and runs on
+   failure too: `test_config_set <client> <param> <value>` sets a config for the
+   current test and restores the old value when it ends, and `test_defer {...}`
+   (or `test_defer_fail {...}`, which runs only on failure) registers any cleanup
+   script to run when the test ends. `pause_process` is resumed automatically at
+   test end; use `pause_process_persistent` only when a later test depends on the
+   process staying paused. `with_config <name> <value> {...}` and
+   `with_cleanup {...} {...}` remain for a scoped block inside a test.
 
 10. **Treat output-buffer-limit tests as racy by construction.** A client can be
     disconnected before or after your next poll depending on when the write

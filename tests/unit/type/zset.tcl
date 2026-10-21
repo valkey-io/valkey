@@ -4237,4 +4237,89 @@ start_server {tags {"zset" "needs:debug"} overrides {save ""}} {
         assert_equal {m450 m750 m1050} [r zrange z 0 2]
         assert_equal 19950 [r zscore z m19950]
     }
+
+    test {ZSET btree compaction drops an in-progress sweep when its key is replaced} {
+        # A sweep spans cron ticks, resumed by (db, key name) and a saved rank
+        # cursor. If a command puts a different value under that name between
+        # ticks (RENAME here; DEL + recreate, RESTORE/COPY REPLACE and SWAPDB
+        # likewise), the cursor describes a tree that is gone. Resumed against
+        # the replacement it would skip the first `cursor` ranks, or, past the
+        # replacement's end, do nothing and park it as unimprovable without
+        # ever sweeping it. The sweep must be dropped instead, leaving the
+        # replacement eligible for its own. Both keys share a hash tag so
+        # RENAME is legal in cluster mode. Recipe by charsyam.
+        r config set zset-max-ziplist-entries 0
+        r config set zset-compaction no
+        r del "{c}z" "{c}r" "{c}b"
+        # The set under sweep: large and sparse, so one tick's budget below
+        # leaves many ticks of sweep still to do.
+        proc build_sparse {key prefix n} {
+            for {set i 0} {$i < $n} {incr i 200} {
+                set args {}
+                for {set j $i} {$j < $i + 200} {incr j} { lappend args $j $prefix$j }
+                r zadd $key {*}$args
+            }
+            for {set i 0} {$i < $n} {incr i 400} {
+                set args {}
+                for {set j $i} {$j < $i + 400} {incr j 2} { lappend args $prefix$j }
+                r zrem $key {*}$args
+            }
+            assert_equal [expr {$n / 2}] [r zcard $key]
+            assert_encoding btree $key
+            assert {[zset_load_factor $key] < 0.6}
+        }
+        build_sparse "{c}z" m 20000
+        # The replacement: sparse, and shorter than one tick's budget so the
+        # stale cursor lands past its end.
+        build_sparse "{c}r" r 1000
+        # A barrier key: enqueued after the replacement, its drain proves the
+        # cron has run at least one tick.
+        build_sparse "{c}b" b 400
+
+        set_aggressive_compaction_params
+        # A tick processes whole bottom nodes until at least this many items
+        # are covered, so after one tick the cursor is >= 1000 > 500.
+        r config set zset-compaction-cycle-elements 1000
+        r config set zset-compaction yes
+        set leaves [zset_num_leaves "{c}z"]
+        r zrem "{c}z" m1
+        assert_equal 1 [s zset_compaction_pending_keys]
+        # Let the first tick land, then freeze the cron mid-sweep.
+        wait_for_condition 100 10 {
+            [zset_num_leaves "{c}z"] < $leaves
+        } else {
+            fail "sweep did not start"
+        }
+        r debug pause-cron 1
+        assert_equal 1 [s zset_compaction_pending_keys]
+
+        # Replace the key under sweep. The sweep is dropped on the spot.
+        r rename "{c}r" "{c}z"
+        assert_equal 0 [s zset_compaction_pending_keys]
+        assert_equal 500 [r zcard "{c}z"]
+
+        # Run the cron past the barrier. Nothing refers to the replacement by
+        # name, so it is untouched: still sparse, and not parked.
+        r zrem "{c}b" b1
+        assert_equal 1 [s zset_compaction_pending_keys]
+        r debug pause-cron 0
+        wait_for_condition 50 100 {
+            [s zset_compaction_pending_keys] == 0
+        } else {
+            fail "barrier did not drain"
+        }
+        assert {[zset_load_factor "{c}z"] < 0.6}
+        assert_equal 0 [zset_compact_parked "{c}z"]
+
+        # Its own next delete enqueues it, and that sweep compacts it.
+        r zrem "{c}z" r1
+        assert_equal 1 [s zset_compaction_pending_keys]
+        wait_for_condition 50 100 {
+            [zset_load_factor "{c}z"] > 0.70
+        } else {
+            fail "replacement was not compacted (lf=[zset_load_factor "{c}z"])"
+        }
+        assert_equal 499 [r zcard "{c}z"]
+        assert_equal {r3 r5 r7} [r zrange "{c}z" 0 2]
+    }
 }

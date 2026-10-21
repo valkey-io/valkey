@@ -4330,6 +4330,8 @@ void msetexCommand(client *c);
 void zaddCommand(client *c);
 /* Background load-factor compaction (t_zset.c). */
 void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj);
+void zsetCompactionKeyReplaced(serverDb *db, sds key);
+void zsetCompactionDbReplaced(int dbid);
 void zsetCompactionCron(void);
 void zsetCompactionCleanup(void);
 size_t zsetCompactionPendingCount(void);

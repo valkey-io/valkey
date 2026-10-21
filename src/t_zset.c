@@ -1471,6 +1471,29 @@ static void zsetCompactionFinishCurrent(void) {
     zsetCompaction.cursor = 0;
 }
 
+/* The value under `key` in `db` is being deleted or replaced by another
+ * object. If that key is the candidate mid-sweep, drop the sweep: its cursor
+ * and leaf tally describe a tree that no longer lives under this name, and
+ * resuming against the replacement would skip part of it or park it unswept.
+ * Nothing is enqueued for the replacement: if it is sparse, its own next
+ * delete enqueues it. Candidates still queued need no action, they are looked
+ * up afresh when popped. */
+void zsetCompactionKeyReplaced(serverDb *db, sds key) {
+    if (zsetCompaction.current == NULL) return;
+    zsetCompactCandidate probe = {.dbid = db->id, .key = key};
+    if (!zsetCompactCandidateCompare(zsetCompaction.current, &probe)) return;
+    zsetCompactionFinishCurrent();
+}
+
+/* Every key in database `dbid` (all databases if -1) is being replaced or
+ * removed: FLUSHDB/FLUSHALL, SWAPDB, a full sync load. Same contract as
+ * zsetCompactionKeyReplaced, for the whole database. */
+void zsetCompactionDbReplaced(int dbid) {
+    if (zsetCompaction.current == NULL) return;
+    if (dbid != -1 && zsetCompaction.current->dbid != dbid) return;
+    zsetCompactionFinishCurrent();
+}
+
 /* Drain one throttled compaction step from serverCron. Resumes an in-progress
  * candidate, else pops the next live one, and runs orderedIndexCompactStep
  * with a bounded budget. A refilled set self-heals: compaction never expands,

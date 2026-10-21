@@ -1330,6 +1330,7 @@ typedef struct ClientReplicationData {
     long long read_reploff;              /* Read replication offset if this is a primary. */
     long long reploff;                   /* Applied replication offset if this is a primary. */
     long long repl_applied;              /* Applied replication data count in querybuf, if this is a replica. */
+    int repl_applied_dbid;               /* DB selected at repl_applied in the stream, if this is a slot import. */
     long long repl_ack_off;              /* Replication ack offset, if this is a replica. */
     long long repl_aof_off;              /* Replication AOF fsync ack offset, if this is a replica. */
     long long repl_ack_time;             /* Replication ack time, if this is a replica. */
@@ -2530,7 +2531,7 @@ struct valkeyServer {
     /* Coordinate failover info */
     mstime_t failover_end_time;              /* Deadline for failover command. */
     int force_failover;                      /* If true then failover will be forced at the
-                                              * deadline, otherwise failover is aborted. */
+                                              * deadline; otherwise, failover is aborted. */
     char *target_replica_host;               /* Failover target host. If null during a
                                               * failover then any replica can be used. */
     int target_replica_port;                 /* Failover target port */
@@ -3226,6 +3227,7 @@ void protectClient(client *c);
 void unprotectClient(client *c);
 void initSharedQueryBuf(void);
 void freeSharedQueryBuf(void);
+int isSharedQueryBufRegistered(int tid);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void clientSetUser(client *c, user *u, int authenticated);
@@ -3418,6 +3420,7 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 int prepareReplicasToWrite(void);
 void replicationFeedReplicas(int dictid, robj **argv, int argc);
 void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen);
+void replicationFeedStreamFromSlotImport(int start_dbid, int end_dbid, char *buf, size_t buflen);
 void resetReplicationBuffer(void);
 void feedReplicationBuffer(char *buf, size_t len);
 void freeReplicaReferencedReplBuffer(client *replica);

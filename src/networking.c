@@ -163,6 +163,12 @@ static int parseMultibulk(client *c,
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 _Thread_local sds thread_shared_qb = NULL;
 
+/* fork() only preserves the calling thread's TLS. Keep a process-wide reference
+ * to each thread's shared query buffer so allocations owned by vanished worker
+ * threads remain reachable in the child. The registry is otherwise used only
+ * to verify worker cleanup. */
+static _Atomic(sds) shared_querybuf_registry[IO_THREADS_MAX_NUM];
+
 typedef enum {
     PARSE_OK = 0,
     PARSE_ERR = -1,
@@ -871,7 +877,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
  * -ERRORCODE Error Message<CR><LF>
  *
  * If the error code is already passed in the string 's', the error
- * code provided is used, otherwise the string "-ERR " for the generic
+ * code provided is used; otherwise, the string "-ERR " for the generic
  * error code is automatically added.
  * Note that 's' must NOT end with \r\n. */
 void addReplyErrorLength(client *c, const char *s, size_t len) {
@@ -965,11 +971,18 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
 
         if (len > 4096) len = 4096;
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
+        /* The error text may echo command arguments, which can be user data. */
+        const char *err = s;
+        int err_len = (int)len;
+        if (server.hide_user_data_from_log) {
+            err = "*redacted*";
+            err_len = (int)strlen(err);
+        }
         serverLog(LL_WARNING,
                   "== CRITICAL == This %s is sending an error "
                   "to its %s: '%.*s' after processing the command "
                   "'%s'",
-                  from, to, (int)len, s, cmdname ? cmdname : "<unknown>");
+                  from, to, err_len, err, cmdname ? cmdname : "<unknown>");
         if (ctype == CLIENT_TYPE_PRIMARY && server.repl_backlog && server.repl_backlog->histlen > 0) {
             showLatestBacklog();
         }
@@ -1064,7 +1077,7 @@ void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list 
     va_end(copy);
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
-    /* Make sure there are no newlines in the middle of the string, otherwise
+    /* Make sure there are no newlines in the middle of the string; otherwise,
      * invalid protocol is emitted. */
     s = sdsmapchars(s, "\r\n", "  ", 2);
     addReplyErrorLength(c, s, sdslen(s));
@@ -1128,7 +1141,7 @@ void trimReplyUnusedTailSpace(client *c) {
     if (!tail) return;
 
     /* We only try to trim the space is relatively high (more than a 1/4 of the
-     * allocation), otherwise there's a high chance realloc will NOP.
+     * allocation); otherwise, there's a high chance realloc will NOP.
      * Also, to avoid large memmove which happens as part of realloc, we only do
      * that if the used part is small.
      *
@@ -1558,8 +1571,34 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
+/* Fuse small bulk replies into one append to avoid repeating reply-routing
+ * bookkeeping. The limit bounds the additional copy and stack usage. */
+#define BULK_REPLY_FUSE_LIMIT 512
+
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
     client *c = (client *)wpc;
+    if (len <= BULK_REPLY_FUSE_LIMIT) {
+        /* Keep reply routing and accounting in _addReplyToBufferOrList(). */
+        char buf[LONG_STR_SIZE + 3 + BULK_REPLY_FUSE_LIMIT + 2];
+        char *dst = buf;
+        if (len < OBJ_SHARED_BULKHDR_LEN) {
+            /* Reuse the shared "$<len>\r\n" strings for small lengths. */
+            size_t hdr_len = OBJ_SHARED_HDR_STRLEN(len);
+            memcpy(dst, objectGetVal(shared.bulkhdr[len]), hdr_len);
+            dst += hdr_len;
+        } else {
+            *dst++ = '$';
+            dst += ll2string(dst, LONG_STR_SIZE, (long long)len);
+            *dst++ = '\r';
+            *dst++ = '\n';
+        }
+        memcpy(dst, p, len);
+        dst += len;
+        *dst++ = '\r';
+        *dst++ = '\n';
+        _addReplyToBufferOrList(c, buf, (size_t)(dst - buf));
+        return;
+    }
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);
@@ -3148,7 +3187,7 @@ static void proceedToUnwritten(replyIOV *reply, int nwritten) {
 
 /* This function should be called from _writeToClient when the reply list is not empty,
  * it gathers the scattered buffers from reply list and sends them away with connWritev.
- * If we write successfully, it returns C_OK, otherwise, C_ERR is returned.
+ * If we write successfully, it returns C_OK; otherwise, C_ERR is returned.
  * Sets the c->nwritten to the number of bytes the server wrote to the client.
  * Can be called from the main thread or an I/O thread */
 static int writevToClient(client *c) {
@@ -3260,7 +3299,7 @@ static int writevToClient(client *c) {
 }
 
 /* This function does actual writing output buffers to non-replica client, it is called by writeToClient.
- * If we write successfully, it returns C_OK, otherwise, C_ERR is returned,
+ * If we write successfully, it returns C_OK; otherwise, C_ERR is returned,
  * and 'c->nwritten' is set to the number of bytes the server wrote to the client. */
 int _writeToClient(client *c) {
     listNode *lastblock;
@@ -3469,7 +3508,7 @@ static void _postWriteToClient(client *c) {
 
 /* Updates the client's memory usage and bucket and server stats after writing.
  * If a write handler is installed , it will attempt to clear the write event.
- * If the client is no longer valid, it will return C_ERR, otherwise C_OK. */
+ * If the client is no longer valid, it will return C_ERR; otherwise, C_OK. */
 int postWriteToClient(client *c) {
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -3669,7 +3708,7 @@ int isParsingError(client *c) {
 
 /* This function is called after the query-buffer was parsed.
  * It is used to handle parsing errors and to update the client state.
- * The function returns C_OK if a command can be executed, otherwise C_ERR. */
+ * The function returns C_OK if a command can be executed; otherwise, C_ERR. */
 parseResult handleParseResults(client *c) {
     if (isParsingError(c)) {
         handleParseError(c);
@@ -3860,13 +3899,20 @@ void resetClientIOState(client *c) {
 /* Initializes the shared query buffer to a new sds with the default capacity.
  * Need to ensure the initlen is not less than readlen in readToQueryBuf. */
 void initSharedQueryBuf(void) {
-    thread_shared_qb = sdsnewlen(NULL, PROTO_IOBUF_LEN);
-    sdsclear(thread_shared_qb);
+    sds querybuf = sdsnewlen(NULL, PROTO_IOBUF_LEN);
+    sdsclear(querybuf);
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], querybuf, memory_order_relaxed);
+    thread_shared_qb = querybuf;
 }
 
 void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], NULL, memory_order_relaxed);
+}
+
+int isSharedQueryBufRegistered(int tid) {
+    return atomic_load_explicit(&shared_querybuf_registry[tid], memory_order_relaxed) != NULL;
 }
 
 /* This function is used when we want to re-enter the event loop but there
@@ -4359,7 +4405,15 @@ void commandProcessed(client *c) {
     if (isReplicatedClient(c)) {
         long long applied = c->repl_data->reploff - prev_offset;
         if (applied) {
-            replicationFeedStreamFromPrimaryStream(c->querybuf + c->repl_data->repl_applied, applied);
+            char *stream = c->querybuf + c->repl_data->repl_applied;
+            if (c->slot_migration_job) {
+                /* What was applied ends with a command (or EXEC), so the db
+                 * of the client is the one the proxied stream ends in. */
+                replicationFeedStreamFromSlotImport(c->repl_data->repl_applied_dbid, c->db->id, stream, applied);
+                c->repl_data->repl_applied_dbid = c->db->id;
+            } else {
+                replicationFeedStreamFromPrimaryStream(stream, applied);
+            }
             c->repl_data->repl_applied += applied;
         }
     }
@@ -4372,7 +4426,7 @@ void commandProcessed(client *c) {
  * 2. calls commandProcessed() if the command was handled.
  *
  * The function returns C_ERR in case the client was freed as a side effect
- * of processing the command, otherwise C_OK is returned. */
+ * of processing the command; otherwise, C_OK is returned. */
 int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
@@ -4889,7 +4943,7 @@ void genClientAddrString(client *client, char *addr, size_t addr_len, int remote
 }
 
 /* This function returns the client peer id, by creating and caching it
- * if client->peerid is NULL, otherwise returning the cached value.
+ * if client->peerid is NULL; otherwise, returning the cached value.
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientPeerId(client *c) {
@@ -4903,7 +4957,7 @@ char *getClientPeerId(client *c) {
 }
 
 /* This function returns the client bound socket name, by creating and caching
- * it if client->sockname is NULL, otherwise returning the cached value.
+ * it if client->sockname is NULL; otherwise, returning the cached value.
  * The Socket Name never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientSockname(client *c) {

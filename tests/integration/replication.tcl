@@ -638,7 +638,7 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
             # to the slave.
             after 5000
 
-            # Stop the ability of the slave to process data by sendig
+            # Stop the ability of the slave to process data by sending
             # a script that will put it in BUSY state.
             $slave eval {for i=1,3000000000 do end} 0
 
@@ -1794,6 +1794,31 @@ start_server {tags {"repl" "external:skip"}} {
         $rd close
         waitForBgsave r
     }
+
+    foreach hide {no yes} {
+        test "Error sent to replica is logged with hide-user-data-from-log $hide" {
+            r config set hide-user-data-from-log $hide
+            set rd [valkey_deferring_client]
+            set lines [count_log_lines 0]
+
+            $rd psync replicationid -1
+            assert_match {FULLRESYNC * *} [$rd read]
+            $rd notacommand secretvalue
+            catch {$rd read} e
+            assert_equal "PONG" [r ping]
+
+            if {$hide} {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: '\\*redacted\\*'*" $lines
+                verify_no_log_message 0 "*secretvalue*" $lines
+            } else {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *secretvalue*" $lines
+            }
+
+            $rd close
+            waitForBgsave r
+        }
+    }
+    r config set hide-user-data-from-log no
 
     test "PSYNC with wrong offset should throw error" {
         # It used to accept the FULL SYNC, but also replied with an error.

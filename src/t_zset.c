@@ -106,7 +106,9 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         char *s = objectGetVal(min);
         size_t len = sdslen(s);
+        if (len == 0) return C_ERR;
         if (s[0] == '(') {
+            if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->min = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
             spec->minex = 1;
@@ -120,7 +122,9 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         char *s = objectGetVal(max);
         size_t len = sdslen(s);
+        if (len == 0) return C_ERR;
         if (s[0] == '(') {
+            if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->max = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
             spec->maxex = 1;
@@ -2664,11 +2668,10 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
                                  long limit,
                                  int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
 
     /* For invalid offset, return directly. */
-    if (offset > 0 && offset >= (long)zsetLength(zobj)) {
+    if (offset < 0 || offset >= (long)zsetLength(zobj)) {
         handler->finalizeResultEmission(handler, 0);
         return;
     }
@@ -2898,8 +2901,13 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                                long limit,
                                int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
+
+    /* For invalid offset, return directly. */
+    if (offset < 0 || offset >= (long)zsetLength(zobj)) {
+        handler->finalizeResultEmission(handler, 0);
+        return;
+    }
 
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
@@ -3370,7 +3378,7 @@ void genericZpopCommand(client *c,
 
     if (deleted) *deleted = 0;
 
-    /* Check type and break on the first error, otherwise identify candidate. */
+    /* Check type and break on the first error; otherwise, identify candidate. */
     idx = 0;
     while (idx < keyc) {
         key = keyv[idx++];
@@ -3795,7 +3803,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
             /* Try to add the object to the hashtable. If it already exists
-             * free it, otherwise increment the number of objects we have
+             * free it; otherwise, increment the number of objects we have
              * in the result hashtable. */
             sds skey = zsetSdsFromListpackEntry(&key);
             if (!hashtableAdd(ht, skey)) {

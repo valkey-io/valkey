@@ -840,7 +840,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             r del $key
         }
         
-        # Verify all keys deleted and save still in progress
+        # Verify all non-filler keys deleted and save still in progress
         assert_equal [r dbsize] $filler_count
         assert_equal [s rdb_bgsave_in_progress] 1
         
@@ -848,7 +848,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         r config set rdb-key-save-delay 0
         waitForBgsave r
         
-        # Reload from RDB and verify ORIGINAL keys and filler keys still exist
+        # Reload from RDB and verify ORIGINAL keys still exist
         catch {r debug reload nosave}
         assert_equal [r dbsize] [expr {[llength $keys] + $filler_count}]
         foreach {prefix count} {"" 20 "filler_" 200} {

@@ -6512,12 +6512,10 @@ void clusterHandleReplicaMigration(int max_replicas) {
      * primaries with the greatest number of ok replicas, I'm the one with the
      * smallest node ID (the "candidate replica").
      *
-     * Note: this means that eventually a replica migration will occur
-     * since replicas that are reachable again always have their FAIL flag
-     * cleared, so eventually there must be a candidate.
-     * There is a possible race condition causing multiple
-     * replicas to migrate at the same time, but this is unlikely to
-     * happen and relatively harmless when it does. */
+     * Note: Replicas flagged FAIL or PFAIL are skipped so that an unreachable
+     * or failing replica does not prevent migration. There is a possible race condition
+     * causing multiple replicas to migrate at the same time, but this is
+     * unlikely to happen and relatively harmless when it does. */
     candidate = myself;
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
@@ -6550,6 +6548,7 @@ void clusterHandleReplicaMigration(int max_replicas) {
          * node ID. */
         if (ok_replicas == max_replicas) {
             for (j = 0; j < node->num_replicas; j++) {
+                if (nodeFailed(node->replicas[j]) || nodeTimedOut(node->replicas[j])) continue;
                 if (memcmp(node->replicas[j]->name, candidate->name, CLUSTER_NAMELEN) < 0) {
                     candidate = node->replicas[j];
                 }

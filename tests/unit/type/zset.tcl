@@ -4098,10 +4098,15 @@ start_server {tags {"zset" "needs:debug"} overrides {save ""}} {
         r exec
         assert_equal 0 [r exists "{c}z"]
         assert_equal 999 [r zcard "{c}z2"]
+        assert_equal 1 [s zset_compaction_pending_keys]
 
-        # Give the drain a few ticks to hit (and drop) the stale "z" candidate.
-        # The renamed set is untouched: nothing refers to it by its new name yet.
-        after 300
+        # Wait for the drain to hit (and drop) the stale "z" candidate. The
+        # renamed set is untouched: nothing refers to it by its new name yet.
+        wait_for_condition 50 100 {
+            [s zset_compaction_pending_keys] == 0
+        } else {
+            fail "stale candidate did not drain"
+        }
         assert {[zset_load_factor "{c}z2"] < 0.6}
 
         # A delete under the new name must enqueue it afresh.

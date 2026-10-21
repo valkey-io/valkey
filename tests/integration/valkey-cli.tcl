@@ -386,6 +386,10 @@ start_server {tags {"cli logreqres:skip"}} {
         # -a on the command line still warns and overrides VALKEYCLI_AUTH.
         assert_equal "$warning\nOK" [exec env VALKEYCLI_AUTH=wrongpass {*}$cmd -a mypass set envkey envval 2>@1]
 
+        # So does a password in a -u URI.
+        set uri [valkeycliuri "redis://clienv:mypass@" [srv host] [srv port] [list -n $::dbnum]]
+        assert_equal "$warning\nOK" [exec env VALKEYCLI_AUTH=wrongpass {*}$uri set envkey envval 2>@1]
+
         r ACL deluser clienv
     }
 

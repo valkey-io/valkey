@@ -110,6 +110,8 @@ if (BUILD_TLS_MODULE)
     message(STATUS "Building TLS as a module")
     set(MODULE_NAME "valkey-tls")
     add_library(${MODULE_NAME} SHARED ${VALKEY_TLS_MODULE_SRCS})
+    # tls.c includes the generated release.h
+    add_dependencies(${MODULE_NAME} release_header)
     target_compile_options(${MODULE_NAME} PRIVATE -DUSE_OPENSSL=2 -DBUILD_TLS_MODULE=2)
     if (APPLE)
         # Some symbols can only be resolved during runtime (they exist in the executable)

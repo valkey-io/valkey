@@ -49,7 +49,6 @@ if (NOT BUILD_LUA STREQUAL "no")
                    INSTALL_RPATH_USE_LINK_PATH TRUE
                    BUILD_WITH_INSTALL_RPATH TRUE)
 endif ()
-unset(BUILD_LUA CACHE)
 
 if (VALKEY_RELEASE_BUILD)
     # Enable LTO for Release build

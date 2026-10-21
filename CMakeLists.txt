@@ -37,7 +37,6 @@ add_subdirectory(tests)
 include(Packaging)
 
 # Clear cached variables from the cache
-unset(BUILD_LUA CACHE)
 unset(BUILD_TESTS CACHE)
 unset(CLANGPP CACHE)
 unset(CLANG CACHE)
@@ -47,8 +46,6 @@ unset(BUILD_UNIT_GTESTS CACHE)
 unset(BUILD_TEST_MODULES CACHE)
 unset(BUILD_EXAMPLE_MODULES CACHE)
 unset(USE_TLS CACHE)
-unset(USE_LIBBACKTRACE CACHE)
-unset(LIBBACKTRACE_PREFIX CACHE)
 unset(DEBUG_FORCE_DEFRAG CACHE)
 
 # Helper to copy runtest scripts to allow running tests with CMake built binaries

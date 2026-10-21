@@ -75,7 +75,7 @@ proc freeze_election {reason_name} {
     test "Freeze the election ($reason_name): voters drop FAILOVER_AUTH_REQUEST, primary is paused" {
         R 1 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST
         R 2 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST
-        pause_process [srv 0 pid]
+        pause_process_persistent [srv 0 pid]
 
         wait_for_condition 1000 50 {
             [cluster_all_see_flag {1 2 3} [list $primary_id] fail]

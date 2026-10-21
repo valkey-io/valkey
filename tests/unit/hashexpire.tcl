@@ -375,6 +375,15 @@ start_server {tags {"hashexpire"}} {
             set e
         } {ERR *}
     }
+
+    test {HGETEX on a key named fields} {
+        r FLUSHALL
+        r HSET fields f1 v1
+        assert_equal {v1} [r HGETEX fields FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields PERSIST FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields EX 100 FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f1] 1 100
+    }
 }
 
 start_server {tags {"hashexpire"}} {
@@ -553,6 +562,15 @@ start_server {tags {"hashexpire"}} {
         catch {r HSETEX myhash EX 10 FIELDS 2 field1 val1} e
         set e
     } {ERR *}
+
+    test {HSETEX on a key named fields} {
+        r FLUSHALL
+        assert_equal 1 [r HSETEX fields FIELDS 1 f1 v1]
+        assert_equal 1 [r HSETEX fields EX 100 FIELDS 1 f2 v2]
+        assert_equal {v1 v2} [r HMGET fields f1 f2]
+        assert_equal -1 [r HTTL fields FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f2] 1 100
+    }
 
     foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command 0/past time works correctly with 2 fields" {

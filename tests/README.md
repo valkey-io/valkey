@@ -98,7 +98,10 @@ Both authors and reviewers should check new or changed tests against it.
    times and sleeps `delay` milliseconds after each false result, so the budget
    is at least `maxtries * delay` milliseconds plus the time the checks
    themselves take. Be generous: a budget that passes locally with margin to
-   spare can still time out under valgrind, which is often 10x slower.
+   spare can still time out under valgrind, which is often 10x slower. The
+   budget only covers false results: an error in the condition (`LOADING` while
+   a server restarts or loads an RDB, `BUSY`, a closed connection) ends the wait
+   immediately instead of retrying, so wrap a command that can fail in `catch`.
 
 2. **Scale budgets for slow modes.** When a wait is long by nature (a full sync,
    a large migration), scale it: `[expr {$::valgrind ? 7000 : 700}]`. For
@@ -151,7 +154,9 @@ Both authors and reviewers should check new or changed tests against it.
    script to run when the test ends. `pause_process` is resumed automatically at
    test end; use `pause_process_persistent` only when a later test depends on the
    process staying paused. `with_config <name> <value> {...}` and
-   `with_cleanup {...} {...}` remain for a scoped block inside a test.
+   `with_cleanup {...} {...}` remain for a scoped block inside a test;
+   `with_config` always acts on `r`, so for another server such as `$primary`
+   use `test_config_set` or `with_cleanup`.
 
 10. **Treat output-buffer-limit tests as racy by construction.** A client can be
     disconnected before or after your next poll depending on when the write
@@ -195,7 +200,10 @@ Both authors and reviewers should check new or changed tests against it.
 16. **Stop replication PINGs before measuring offsets or network stats.** The
     primary pings replicas every `repl-ping-replica-period` seconds, which moves
     `master_repl_offset` and the `total_net_*` counters under your assertion.
-    Raise the period on the primary for the duration of the measurement.
+    Raise the period on the primary for the duration of the measurement. This
+    holds the offset still, but replicas keep sending `REPLCONF ACK` every
+    second regardless, so the `total_net_*` counters keep moving: allow for
+    that, or measure without replicas attached.
 
 17. **Wait for a closed client to be freed.** `CLIENT KILL`, closing a connection,
     and dropping a `WATCH`ing client all take effect after the command returns.

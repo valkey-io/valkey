@@ -68,7 +68,6 @@ if (BUILD_SANITIZER)
     target_compile_options(valkey-server PRIVATE ${VALKEY_SANITIZER_CFLAGS})
     target_link_options(valkey-server PRIVATE ${VALKEY_SANITIZER_LDFLAGS})
 endif ()
-unset(BUILD_SANITIZER CACHE)
 
 # Target: valkey-cli
 list(APPEND CLI_LIBS "fpconv")
@@ -118,6 +117,7 @@ if (BUILD_TLS_MODULE)
     endif ()
     target_link_libraries(${MODULE_NAME} valkey::valkey_tls OpenSSL::SSL)
     set_target_properties(${MODULE_NAME} PROPERTIES PREFIX "")
+    valkey_install_bin(${MODULE_NAME})
 endif ()
 
 if (BUILD_EXAMPLE_MODULES)

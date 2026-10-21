@@ -182,6 +182,7 @@ if (BUILD_TLS)
 
     if (USE_TLS EQUAL 2)
         message(STATUS "Building TLS as a module")
+        add_valkey_server_compiler_options("-DUSE_OPENSSL=2")
         set(BUILD_TLS_MODULE 2)
     elseif (USE_TLS EQUAL 1)
         message(STATUS "Building TLS as builtin")

@@ -784,7 +784,16 @@ start_server {tags {"incr"}} {
         assert_error "*ERR syntax error*" {r increx k lbound}
         assert_error "*ERR syntax error*" {r increx k ubound}
 
-        # Inf bounds validation
+        # Integer mode rejects inf for bounds
+        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k ubound inf}
+        assert_error "*ERR LBOUND is not an integer or out of range*" {r increx k lbound inf}
+    }
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulates long double with double precision, so inf bounds
+    # and ldbl_overflow_operand() don't behave as expected.
+    test {INCREX inf bound validation} {
+        r set k 10
         assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 ubound -inf}
         assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound inf}
         assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound +inf}
@@ -799,17 +808,18 @@ start_server {tags {"incr"}} {
         assert_equal {10 0} [r increx k byfloat 1.0 lbound -inf ubound -inf]
         r set k 10
         assert_equal {10 0} [r increx k byfloat 1.0 lbound inf ubound inf]
-
-        # Integer mode rejects inf for bounds
-        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k ubound inf}
-        assert_error "*ERR LBOUND is not an integer or out of range*" {r increx k lbound inf}
-    }
+    } {} {valgrind:skip}
 
     test {INCREX applied delta overflow errors} {
         r set k 9223372036854775807
         assert_error "*ERR applied increment would overflow*" {r increx k byint -5 ubound -9223372036854775808 saturate}
         assert_equal 9223372036854775807 [r get k]
+    }
 
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulates long double with double precision, so inf bounds
+    # and ldbl_overflow_operand() don't behave as expected.
+    test {INCREX BYFLOAT applied delta Infinity errors} {
         set big [ldbl_overflow_operand]
         r set k -$big
         assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat $big lbound $big saturate}
@@ -820,7 +830,7 @@ start_server {tags {"incr"}} {
         assert_equal 10 [r get k]
         assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound inf ubound inf saturate}
         assert_equal 10 [r get k]
-    }
+    } {} {valgrind:skip}
 
     test {INCREX PERSIST option} {
         # Removes TTL on existing key with TTL
@@ -850,13 +860,6 @@ start_server {tags {"incr"}} {
         assert_equal {9223372036854775807 0} [r increx k byint 1 persist]
         assert_range [r ttl k] 400 500
 
-        set big [ldbl_overflow_operand]
-        r set k $big ex 500
-        set res [r increx k byfloat $big persist]
-        assert_equal 0 [lindex $res 1]
-        assert_equal $big [r get k]
-        assert_range [r ttl k] 400 500
-
         # Bound declined preserves existing TTL
         r set k 10 ex 500
         assert_equal {10 0} [r increx k byint 5 ubound 5 persist]
@@ -872,6 +875,18 @@ start_server {tags {"incr"}} {
         assert_error "*ERR syntax error*" {r increx k persist enx}
         assert_error "*ERR syntax error*" {r increx k enx persist}
     }
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulates long double with double precision, so inf bounds
+    # and ldbl_overflow_operand() don't behave as expected.
+    test {INCREX BYFLOAT overflow with PERSIST preserves existing TTL} {
+        set big [ldbl_overflow_operand]
+        r set k $big ex 500
+        set res [r increx k byfloat $big persist]
+        assert_equal 0 [lindex $res 1]
+        assert_equal $big [r get k]
+        assert_range [r ttl k] 400 500
+    } {} {valgrind:skip}
 
     test {INCREX rejects repeated options} {
         r set k 10

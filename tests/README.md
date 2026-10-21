@@ -113,9 +113,11 @@ Both authors and reviewers should check new or changed tests against it.
 4. **Wait for replication and cluster convergence explicitly.** Before asserting
    on a replica or a peer, use the helper that matches what you need:
    `wait_for_ofs_sync`, `wait_replica_online`, `wait_for_sync`,
-   `wait_for_slot_state`, `wait_for_cluster_state`,
+   `wait_for_slot_state`, `wait_for_cluster_state`, `wait_for_cluster_size`,
    `wait_for_cluster_propagation`, or a poll on `debug digest`. Gossip and
-   `PSYNC` are not instant.
+   `PSYNC` are not instant. This includes `valkey-cli --cluster` operations
+   (`add-node`, `reshard`, `rebalance`): the CLI returns before gossip has
+   finished.
 
 5. **Read related stats atomically.** Two consecutive `INFO` calls can straddle
    background traffic (replication keepalives, expiry). Compare fields from one
@@ -201,13 +203,7 @@ Both authors and reviewers should check new or changed tests against it.
     (`wait_for_watched_clients_count`) or `blocked_clients` rather than asserting
     on the very next command.
 
-18. **Let the cluster converge around `valkey-cli --cluster` operations.** Before
-    and after `add-node`, `reshard`, `rebalance` or `check`, wait for every node
-    to agree on membership (`wait_for_cluster_size`, `wait_for_cluster_propagation`)
-    and for `--cluster check` to exit 0. The CLI returns before gossip has
-    finished.
-
-19. **Sentinel: wait for the Sentinel timer, not for your command.** After
+18. **Sentinel: wait for the Sentinel timer, not for your command.** After
     `SENTINEL SET`, `SENTINEL RESET`, or shrinking `down-after-milliseconds`,
     `failover-timeout` or the tilt period for test speed, the effect lands on the
     next Sentinel timer tick and INFO exchange. Wait for the resulting state

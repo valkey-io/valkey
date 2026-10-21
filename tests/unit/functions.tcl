@@ -258,9 +258,7 @@ start_server {tags {"scripting"}} {
         r config set busy-reply-threshold 10
         r function load REPLACE [get_function_code lua test test {local a = 1 while true do a = a + 1 end}]
         $rd fcall test 0
-        after 200
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy 0 10
         assert_match {running_script {name test command {fcall test 0} duration_ms *} engines {*}} [r FUNCTION STATS]
         r function kill
         after 200 ; # Give some time to Lua to call the hook again...
@@ -274,9 +272,7 @@ start_server {tags {"scripting"}} {
         r config set busy-reply-threshold 10
         r function load REPLACE [get_function_code lua test test {local a = 1 while true do a = a + 1 end}]
         $rd fcall test 0
-        after 200
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy 0 10
         catch {r script kill} e
         assert_match {BUSY*} $e
         r function kill
@@ -290,9 +286,7 @@ start_server {tags {"scripting"}} {
         set rd [valkey_deferring_client]
         r config set busy-reply-threshold 10
         $rd eval {local a = 1 while true do a = a + 1 end} 0
-        after 200
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy 0 10
         catch {r function kill} e
         assert_match {BUSY*} $e
         r script kill
@@ -300,6 +294,29 @@ start_server {tags {"scripting"}} {
         assert_equal [r ping] "PONG"
         assert_error {ERR Script killed by user with SCRIPT KILL*} {$rd read}
         $rd close
+    }
+
+    test {FUNCTION - commands sent during function timeout are deferred and executed after function ends} {
+        set rd [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        r config set busy-reply-threshold 10
+        r function load REPLACE [get_function_code lua test test {local a = 1 while true do a = a + 1 end}]
+        $rd fcall test 0
+
+        wait_for_script_busy 0 10
+
+        # Send a command that should be deferred during the busy function
+        $rd2 set deferredkey deferredval
+
+        r function kill
+
+        # After the function is killed, the deferred command executes
+        assert_equal {OK} [$rd2 read]
+        assert_equal {deferredval} [r get deferredkey]
+
+        catch {$rd read} _
+        $rd close
+        $rd2 close
     }
 
     test {FUNCTION - test function flush} {

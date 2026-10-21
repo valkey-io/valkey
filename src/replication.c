@@ -1148,7 +1148,7 @@ int replicationSetupReplicaForFullResync(client *replica, long long offset) {
 /* This function handles the PSYNC command from the point of view of a
  * primary receiving a request for partial resynchronization.
  *
- * On success return C_OK, otherwise C_ERR is returned and we proceed
+ * On success return C_OK; otherwise, C_ERR is returned and we proceed
  * with the usual full resync. */
 int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     long long psync_len;
@@ -1333,8 +1333,8 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         socket_target = (mincapa & REPLICA_CAPA_EOF) && server.repl_diskless_sync;
     }
 
-    /* Only do rdbSave* when rsiptr is not NULL,
-     * otherwise replica will miss repl-stream-db. */
+    /* Only do rdbSave* when rsiptr is not NULL;
+     * otherwise, replica will miss repl-stream-db. */
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
     if (!rsiptr) {
@@ -1368,7 +1368,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     /* If the target is socket, rdbSaveToReplicasSockets() already setup the replicas
      * for a full resync. For a disk target do it now, and remember that dump.rdb was
      * generated for replication so that we can later delete the file if needed. Note
-     * that we don't set the flag if the feature is disabled, otherwise it would never
+     * that we don't set the flag if the feature is disabled; otherwise, it would never
      * be cleared: the file is not deleted. This way if the user enables it later with
      * CONFIG SET, we are fine. */
     if (!socket_target) {
@@ -2368,8 +2368,8 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
 
 /* This function is called at the end of every background saving.
  *
- * The argument bgsaveerr is C_OK if the background saving succeeded
- * otherwise C_ERR is passed to the function.
+ * The argument bgsaveerr is C_OK if the background saving succeeded;
+ * otherwise, C_ERR is passed to the function.
  * The 'type' argument is the type of the child that terminated
  * (if it had a disk or socket target). */
 void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
@@ -2377,7 +2377,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
     listIter li;
 
     /* Note: there's a chance we got here from within the REPLCONF ACK command
-     * so we must avoid using freeClient, otherwise we'll crash on our way up. */
+     * so we must avoid using freeClient; otherwise, we'll crash on our way up. */
 
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
@@ -2604,12 +2604,12 @@ static int useDisklessLoad(void) {
                   (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY && dbTotalServerKeyCount() == 0);
 
     if (enabled) {
-        /* Check all modules handle read errors, otherwise it's not safe to use diskless load. */
+        /* Check all modules handle read errors; otherwise, it's not safe to use diskless load. */
         if (!moduleAllDatatypesHandleErrors()) {
             serverLog(LL_NOTICE, "Skipping diskless-load because there are modules that don't handle read errors.");
             enabled = 0;
         }
-        /* Check all modules handle async replication, otherwise it's not safe to use diskless load. */
+        /* Check all modules handle async replication; otherwise, it's not safe to use diskless load. */
         else if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB && !moduleAllModulesHandleReplAsyncLoad()) {
             serverLog(LL_NOTICE,
                       "Skipping diskless-load because there are modules that are not aware of async replication.");
@@ -2728,7 +2728,7 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
 
 void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     /* We need to stop any AOF rewriting child before flushing and parsing
-     * the RDB, otherwise we'll create a copy-on-write disaster. */
+     * the RDB; otherwise, we'll create a copy-on-write disaster. */
     if (server.aof_state != AOF_OFF) stopAppendOnly();
     /* Also try to stop save RDB child before flushing and parsing the RDB:
      * 1. Ensure background save doesn't overwrite synced data after being loaded.
@@ -2746,7 +2746,7 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     }
 
     /* Before loading the DB into memory we need to delete the readable
-     * handler, otherwise it will get called recursively since
+     * handler; otherwise, it will get called recursively since
      * rdbLoad() will call the event loop to process events from time to
      * time for non blocking loading. */
     connSetReadHandler(conn, NULL);
@@ -3254,7 +3254,7 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel, c
             goto done;
         }
 
-        /* Sync data on disk from time to time, otherwise at the end of the
+        /* Sync data on disk from time to time; otherwise, at the end of the
          * transfer we may suffer a big delay as the memory buffers are copied
          * into the actual disk. Keyed on the file offset, which the transcoder
          * advances (it differs from the wire offset once the codec changes). */
@@ -4153,7 +4153,7 @@ int replicaProcessPsyncReply(connection *conn) {
      * not understand PSYNC or because it is in a special state and cannot
      * serve our request), or an unexpected reply from the primary.
      *
-     * Return PSYNC_NOT_SUPPORTED on errors we don't understand, otherwise
+     * Return PSYNC_NOT_SUPPORTED on errors we don't understand; otherwise,
      * return PSYNC_TRY_LATER if we believe this is a transient error. */
 
     /* The primary replied with a transient error: it cannot serve a PSYNC
@@ -5496,7 +5496,7 @@ void refreshGoodReplicasCount(void) {
     server.repl_good_replicas_count = good;
 }
 
-/* return true if status of good replicas is OK. otherwise false */
+/* return true if status of good replicas is OK. otherwise, false */
 int checkGoodReplicasStatus(void) {
     return server.primary_host ||                                                /* not a primary status should be OK */
            !server.repl_min_replicas_max_lag ||                                  /* Min replica max lag not configured */

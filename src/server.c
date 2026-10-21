@@ -4643,9 +4643,7 @@ int processCommand(client *c) {
 
     if (!scriptIsTimedOut()) {
         /* Both EXEC and scripts call call() directly so there should be
-         * no way in_exec or scriptIsRunning() is 1.
-         * That is unless lua_timedout, in which case client may run
-         * some commands. */
+         * no way in_exec or scriptIsRunning() is 1. */
         serverAssert(!server.in_exec);
         serverAssert(!scriptIsRunning());
     }

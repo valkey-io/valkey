@@ -232,6 +232,9 @@ struct ValkeyModuleKey {
             OrderedIndexIterator oi; /* OrderedIndex iterator for skiplist encoding. */
             int er;                  /* Zset iterator end reached flag
                                          (true if end was reached). */
+            int fwd;                 /* The ordered index cursor sits between
+                                         items: 1 when it is just after
+                                         'current', 0 when just before it. */
         } zset;
         struct {
             /* Stream, use only if value->type == OBJ_STREAM */
@@ -3447,7 +3450,7 @@ int VM_ReplyWithSet(ValkeyModuleCtx *ctx, long len) {
 
 
 /* Add attributes (metadata) to the reply. Should be done before adding the
- * actual reply. see https://valkey.io/topics/protocol#attribute-type
+ * actual reply. see https://valkey.io/topics/protocol
  *
  * After starting an attribute's reply, the module must make `len*2` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the attribute map.
@@ -4532,7 +4535,9 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL || (expire < 0 && expire != VALKEYMODULE_NO_EXPIRE))
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
-        expire += commandTimeSnapshot();
+        mstime_t basetime = commandTimeSnapshot();
+        if (expire > LLONG_MAX - basetime) return VALKEYMODULE_ERR;
+        expire += basetime;
         key->value = setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
@@ -5188,7 +5193,9 @@ void VM_ZsetRangeStop(ValkeyModuleKey *key) {
     zsetKeyReset(key);
 }
 
-/* Return the "End of range" flag value to signal the end of the iteration. */
+/* Return the "End of range" flag value to signal the end of the iteration:
+ * set when the range is empty or the most recent step found no element in its
+ * direction, cleared again by a step that moves. */
 int VM_ZsetRangeEndReached(ValkeyModuleKey *key) {
     if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 1;
     return key->u.zset.er;
@@ -5222,6 +5229,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToScoreRange(&key->u.zset.oi, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
         key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
+        key->u.zset.fwd = first;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5267,7 +5275,6 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     if (!key->value || objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
 
     VM_ZsetRangeStop(key);
-    key->u.zset.er = 0;
 
     /* Set up the range structure used by the sorted set core implementation
      * in order to seek at the specified element. */
@@ -5277,6 +5284,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     /* Set the range type to lex only after successfully parsing the range,
      * otherwise we don't want the zlexrangespec to be freed. */
     key->u.zset.type = VALKEYMODULE_ZSET_RANGE_LEX;
+    key->u.zset.er = 0;
 
     if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
         key->u.zset.current =
@@ -5286,6 +5294,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToLexRange(&key->u.zset.oi, zlrs->min, zlrs->max, zlrs->minex, zlrs->maxex, first ? 0 : -1);
         key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
+        key->u.zset.fwd = first;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5383,30 +5392,41 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 }
             }
             key->u.zset.current = next;
+            key->u.zset.er = 0;
             return 1;
         }
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexItem *next = orderedIndexNext(&key->u.zset.oi);
-        if (next == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        } else {
+        OrderedIndexIterator *oi = &key->u.zset.oi;
+        /* After a backward step the cursor is before 'current': step over it
+         * first, otherwise 'current' would be returned again. */
+        if (!key->u.zset.fwd) {
+            orderedIndexNext(oi);
+            key->u.zset.fwd = 1;
+        }
+        OrderedIndexItem *next = orderedIndexNext(oi);
+        if (next != NULL) {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreLteMax(orderedIndexItemGetScore(next), &key->u.zset.rs)) {
-                key->u.zset.er = 1;
-                return 0;
+            int in_range = 1;
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
+                in_range = zsetScoreLteMax(orderedIndexItemGetScore(next), &key->u.zset.rs);
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexItemGetElement(next, &ele, &ele_len);
-                if (!zsetLexLteMax(ele, ele_len, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
+                in_range = zsetLexLteMax(ele, ele_len, &key->u.zset.lrs);
             }
-            key->u.zset.current = next;
-            return 1;
+            if (!in_range) {
+                orderedIndexPrev(oi); /* Keep the cursor next to 'current'. */
+                next = NULL;
+            }
         }
+        if (next == NULL) {
+            key->u.zset.er = 1;
+            return 0;
+        }
+        key->u.zset.current = next;
+        key->u.zset.er = 0;
+        return 1;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5448,30 +5468,41 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 }
             }
             key->u.zset.current = prev;
+            key->u.zset.er = 0;
             return 1;
         }
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexItem *prev = orderedIndexPrev(&key->u.zset.oi);
-        if (prev == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        } else {
+        OrderedIndexIterator *oi = &key->u.zset.oi;
+        /* After a forward step the cursor is after 'current': step back over
+         * it first, otherwise 'current' would be returned again. */
+        if (key->u.zset.fwd) {
+            orderedIndexPrev(oi);
+            key->u.zset.fwd = 0;
+        }
+        OrderedIndexItem *prev = orderedIndexPrev(oi);
+        if (prev != NULL) {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreGteMin(orderedIndexItemGetScore(prev), &key->u.zset.rs)) {
-                key->u.zset.er = 1;
-                return 0;
+            int in_range = 1;
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
+                in_range = zsetScoreGteMin(orderedIndexItemGetScore(prev), &key->u.zset.rs);
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexItemGetElement(prev, &ele, &ele_len);
-                if (!zsetLexGteMin(ele, ele_len, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
+                in_range = zsetLexGteMin(ele, ele_len, &key->u.zset.lrs);
             }
-            key->u.zset.current = prev;
-            return 1;
+            if (!in_range) {
+                orderedIndexNext(oi); /* Keep the cursor next to 'current'. */
+                prev = NULL;
+            }
         }
+        if (prev == NULL) {
+            key->u.zset.er = 1;
+            return 0;
+        }
+        key->u.zset.current = prev;
+        key->u.zset.er = 0;
+        return 1;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5491,18 +5522,29 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * For example, valkey-search uses this interface to avoid maintaining two copies of the
  * indexed vectors.
  *
- * The function receives the hash key, field name, buffer to share along with its size. */
+ * The function receives the hash key, field name, buffer to share along with its size.
+ *
+ * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if the key or field
+ * is missing, the key is not a hash, or the update fails. */
 int VM_HashSetStringRef(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
-    return hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len);
+    if (hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len) != C_OK) return VALKEYMODULE_ERR;
+    return VALKEYMODULE_OK;
 }
 
 /* Checks if the value of a hash entry is a shared string reference (stringRef).
- * The function receives the hash key and field name to perform the check against. */
+ * The function receives the hash key and field name to perform the check against.
+ *
+ * Returns 1 if the field exists and holds a string reference. Returns 0 in every
+ * other case, including a missing or non-hash key, a missing field name and a
+ * field which doesn't exist or is already expired. Note that the return value is
+ * a plain boolean and not an OK/ERR status, since VALKEYMODULE_ERR can't be told
+ * apart from a positive answer. */
 int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
-    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH) return VALKEYMODULE_ERR;
+    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field) return 0;
     return hashTypeHasStringRef(key->value, objectGetVal(field));
 }
+
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty
  * hash value, in order to set the specified field.
@@ -12315,6 +12357,8 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
         cursor->done = 1;
         ret = 0;
     } else if (objectGetType(o) == OBJ_ZSET || objectGetType(o) == OBJ_HASH) {
+        /* Only hash listpacks carry field TTL metadata. */
+        int is_hash = objectGetType(o) == OBJ_HASH;
         unsigned char *p = lpSeek(objectGetVal(o), 0);
         unsigned char *vstr;
         unsigned int vlen;
@@ -12324,6 +12368,12 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
             robj *field =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
             p = lpNext(objectGetVal(o), p);
+            /* Skip hash fields not visible in the current context, like HSCAN. */
+            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(objectGetVal(o), p))) {
+                decrRefCount(field);
+                p = lpNext(objectGetVal(o), p);
+                continue;
+            }
             vstr = lpGetValue(p, &vlen, &vll);
             robj *value =
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
@@ -12464,6 +12514,8 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
          * String entries are borrowed; integer-encoded entries are materialized
          * (callback-scoped). Integers may be either field or value. */
         unsigned char *lp = objectGetVal(o);
+        /* Only hash listpacks carry field TTL metadata. */
+        int is_hash = objectGetType(o) == OBJ_HASH;
         unsigned char *p = lpSeek(lp, 0);
         while (p) {
             unsigned int flen;
@@ -12481,6 +12533,11 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
             }
             p = lpNext(lp, p);
             if (!p) break;
+            /* Skip hash fields not visible in the current context, like HSCAN. */
+            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(lp, p))) {
+                p = lpNext(lp, p);
+                continue;
+            }
             unsigned int vlen;
             long long vll;
             char vbuf[LONG_STR_SIZE];

@@ -756,7 +756,7 @@ void hashHashtableTypeDestructor(void *entry) {
 }
 
 size_t hashHashtableTypeMetadataSize(void) {
-    return sizeof(void *);
+    return sizeof(vset);
 }
 
 extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
@@ -1497,7 +1497,7 @@ void checkChildrenDone(void) {
 
         if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
-        /* sigKillChildHandler catches the signal and calls exit(), but we
+        /* sigKillChildHandler catches the signal and calls _exit(), but we
          * must make sure not to flag lastbgsave_status, etc incorrectly.
          * We could directly terminate the child process via SIGUSR1
          * without handling it */
@@ -1788,6 +1788,13 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * executed changes the value via CONFIG SET, the server will perform
      * the operation even if completely idle. */
     if (server.tracking_clients) trackingLimitUsedSlots();
+
+    /* Reclaim dead client IDs from the tracking table. NOT gated on
+     * server.tracking_clients: dead IDs can linger in inner RAXes after every
+     * tracking client has disconnected, so tracking_clients may be zero while
+     * stale items remain. The sweep schedules itself on an adaptive period
+     * and time-budgets each step, so calling it every tick is cheap. */
+    trackingSweepDeadClients();
 
     /* Start a scheduled BGSAVE if the corresponding flag is set. This is
      * useful when we are forced to postpone a BGSAVE because an AOF
@@ -3920,12 +3927,22 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
 
     if (!shouldPropagate(target)) return;
 
-    /* Don't propagate commands on slot migration clients, these will be proxied
-     * in replicationFeedStreamFromPrimaryStream().
+    /* Don't propagate what executing a command of a slot import client produces,
+     * the stream of that client will be proxied in commandProcessed().
+     *
+     * Only suppress it while a command is executing: call() sets executing_client
+     * for the whole call tree. Anything propagated while the import client is the
+     * current client but no command is executing (e.g. the evictions done by
+     * performEvictions() in processCommand()) is a decision of this node that is
+     * not part of the proxied stream, so it must reach our replicas like any other
+     * eviction. Note that c->flag.executing_command can't be used instead, it is
+     * cleared before call() propagates the command.
      *
      * However, if we need to propagate to AOF, we should still do that. */
     bool propagate_aof = (target & PROPAGATE_AOF) && server.aof_state != AOF_OFF;
-    if (server.current_client != NULL && server.current_client->slot_migration_job) {
+    client *cc = server.current_client;
+    if (cc != NULL && cc->slot_migration_job && isImportSlotMigrationJob(cc->slot_migration_job) &&
+        server.executing_client != NULL) {
         if (!propagate_aof) return;
         /* Disable propagation to replication (just do the AOF) */
         target &= ~PROPAGATE_REPL;
@@ -6459,6 +6476,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
  * on memory corruption problems. */
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
+    info = sdsMakeRoomFor(info, 4096);
     time_t uptime = server.unixtime - server.stat_starttime;
     int j;
     int sections = 0;
@@ -7488,7 +7506,12 @@ static void sigKillChildHandler(int sig) {
     UNUSED(sig);
     int level = server.in_fork_child == CHILD_TYPE_MODULE ? LL_VERBOSE : LL_WARNING;
     serverLogRawFromHandler(level, "Received SIGUSR1 in child, exiting now.");
-    exitFromChild(SERVER_CHILD_NOERROR_RETVAL);
+    /* Only async-signal-safe functions may be called from a signal handler,
+     * so use _exit() directly rather than exitFromChild(), whose exit() path
+     * in coverage builds runs the gcov atexit dump. A child killed by its
+     * parent intentionally skips the coverage dump: the dump serializes on
+     * profile data files shared with every concurrently exiting process. */
+    _exit(SERVER_CHILD_NOERROR_RETVAL);
 }
 
 void setupChildSignalHandlers(void) {
@@ -8257,13 +8280,13 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
+ * INCREX specific command extended options - BYINT/BYFLOAT/LBOUND/UBOUND/SATURATE/ENX/PERSIST
  * DELEX specific command extended options - IFEQ/IFNE
- * INCREX specific command extended options - BYINT/BYFLOAT
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj, pointer to pointer of incrby obj, and command_type
- * which can be COMMAND_*.
+ * pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
+ * lbound obj, pointer to pointer of ubound obj, and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
@@ -8273,7 +8296,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
@@ -8284,12 +8307,14 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
             !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
+            !(command_type == COMMAND_INCREX && (*flags & ARGS_SET_NX)) && /* except for INCREX */
             (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_SET_XX)) && /* except for INCREX */
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_XX;
@@ -8337,17 +8362,21 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_KEEPTTL;
-        } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
+        } else if (!strcasecmp(opt,"PERSIST") &&
+                   (command_type == COMMAND_GET || command_type == COMMAND_HGET || command_type == COMMAND_INCREX) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
                    !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
-                   !(*flags & ARGS_KEEPTTL))
+                   !(*flags & ARGS_KEEPTTL) &&
+                   !(*flags & ARGS_ENX) &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PERSIST)))
         {
             *flags |= ARGS_PERSIST;
         } else if ((opt[0] == 'e' || opt[0] == 'E') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EX)))
         {
             *flags |= ARGS_EX;
             *expire = next;
@@ -8357,7 +8386,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PX)))
         {
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
@@ -8370,7 +8400,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EXAT)))
         {
             *flags |= ARGS_EXAT;
             *expire = next;
@@ -8382,7 +8413,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PXAT)))
         {
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;
@@ -8413,6 +8445,26 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
             *flags |= ARGS_BYFLOAT;
             if (incrby_val) *incrby_val = next;
             j++;
+        } else if (!strcasecmp(opt, "LBOUND") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_LBOUND) && next)
+        {
+            *flags |= ARGS_LBOUND;
+            if (lbound_val) *lbound_val = next;
+            j++;
+        } else if (!strcasecmp(opt, "UBOUND") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_UBOUND) && next)
+        {
+            *flags |= ARGS_UBOUND;
+            if (ubound_val) *ubound_val = next;
+            j++;
+        } else if (!strcasecmp(opt, "SATURATE") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_SATURATE))
+        {
+            *flags |= ARGS_SATURATE;
+        } else if (!strcasecmp(opt, "ENX") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_PERSIST) && !(*flags & ARGS_ENX))
+        {
+            *flags |= ARGS_ENX;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;

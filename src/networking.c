@@ -163,6 +163,12 @@ static int parseMultibulk(client *c,
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 _Thread_local sds thread_shared_qb = NULL;
 
+/* fork() only preserves the calling thread's TLS. Keep a process-wide reference
+ * to each thread's shared query buffer so allocations owned by vanished worker
+ * threads remain reachable in the child. The registry is otherwise used only
+ * to verify worker cleanup. */
+static _Atomic(sds) shared_querybuf_registry[IO_THREADS_MAX_NUM];
+
 typedef enum {
     PARSE_OK = 0,
     PARSE_ERR = -1,
@@ -965,11 +971,18 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
 
         if (len > 4096) len = 4096;
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
+        /* The error text may echo command arguments, which can be user data. */
+        const char *err = s;
+        int err_len = (int)len;
+        if (server.hide_user_data_from_log) {
+            err = "*redacted*";
+            err_len = (int)strlen(err);
+        }
         serverLog(LL_WARNING,
                   "== CRITICAL == This %s is sending an error "
                   "to its %s: '%.*s' after processing the command "
                   "'%s'",
-                  from, to, (int)len, s, cmdname ? cmdname : "<unknown>");
+                  from, to, err_len, err, cmdname ? cmdname : "<unknown>");
         if (ctype == CLIENT_TYPE_PRIMARY && server.repl_backlog && server.repl_backlog->histlen > 0) {
             showLatestBacklog();
         }
@@ -3860,13 +3873,20 @@ void resetClientIOState(client *c) {
 /* Initializes the shared query buffer to a new sds with the default capacity.
  * Need to ensure the initlen is not less than readlen in readToQueryBuf. */
 void initSharedQueryBuf(void) {
-    thread_shared_qb = sdsnewlen(NULL, PROTO_IOBUF_LEN);
-    sdsclear(thread_shared_qb);
+    sds querybuf = sdsnewlen(NULL, PROTO_IOBUF_LEN);
+    sdsclear(querybuf);
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], querybuf, memory_order_relaxed);
+    thread_shared_qb = querybuf;
 }
 
 void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], NULL, memory_order_relaxed);
+}
+
+int isSharedQueryBufRegistered(int tid) {
+    return atomic_load_explicit(&shared_querybuf_registry[tid], memory_order_relaxed) != NULL;
 }
 
 /* This function is used when we want to re-enter the event loop but there
@@ -4365,7 +4385,15 @@ void commandProcessed(client *c) {
     if (isReplicatedClient(c)) {
         long long applied = c->repl_data->reploff - prev_offset;
         if (applied) {
-            replicationFeedStreamFromPrimaryStream(c->querybuf + c->repl_data->repl_applied, applied);
+            char *stream = c->querybuf + c->repl_data->repl_applied;
+            if (c->slot_migration_job) {
+                /* What was applied ends with a command (or EXEC), so the db
+                 * of the client is the one the proxied stream ends in. */
+                replicationFeedStreamFromSlotImport(c->repl_data->repl_applied_dbid, c->db->id, stream, applied);
+                c->repl_data->repl_applied_dbid = c->db->id;
+            } else {
+                replicationFeedStreamFromPrimaryStream(stream, applied);
+            }
             c->repl_data->repl_applied += applied;
         }
     }

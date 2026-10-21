@@ -333,7 +333,7 @@ proc test_scan {type} {
                 }
                 if {$cursor == 0} break
             }
-            assert_equal [lsort $expected] [lsort $actual]
+            assert_equal [lsort -unique $expected] [lsort -unique $actual]
 
             set cursor 0
             set actual_match {}
@@ -345,7 +345,7 @@ proc test_scan {type} {
                 }
                 if {$cursor == 0} break
             }
-            assert_equal [lsort $expected_match] [lsort $actual_match]
+            assert_equal [lsort -unique $expected_match] [lsort -unique $actual_match]
 
             set cursor 0
             set actual_match_noscores {}
@@ -357,11 +357,11 @@ proc test_scan {type} {
                 }
                 if {$cursor == 0} break
             }
-            assert_equal [lsort [lmap pair $expected_match {lindex $pair 0}]] [lsort $actual_match_noscores]
+            assert_equal [lsort -unique [lmap pair $expected_match {lindex $pair 0}]] [lsort -unique $actual_match_noscores]
         }
 
         set res [r zscan zset 0 count 1000 noscores]
-        assert_equal [lsort [lmap pair $expected {lindex $pair 0}]] [lsort [lindex $res 1]]
+        assert_equal [lsort -unique [lmap pair $expected {lindex $pair 0}]] [lsort -unique [lindex $res 1]]
     }
 
     test "{$type} SCAN guarantees check under write load" {

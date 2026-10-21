@@ -96,6 +96,8 @@ static mstime_t sentinel_election_timeout = 10000;
 static mstime_t sentinel_script_max_runtime = 60000; /* 60 seconds max exec time. */
 static mstime_t sentinel_script_retry_delay = 30000; /* 30 seconds between retries. */
 static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
+static int config_dirty = 0;
+static mstime_t flush_config_timestamp = 0;
 
 #define SENTINEL_HELLO_CHANNEL "__sentinel__:hello"
 #define SENTINEL_DEFAULT_REPLICA_PRIORITY 100
@@ -419,7 +421,7 @@ void sentinelDiscardReplyCallback(valkeyAsyncContext *c, void *reply, void *priv
 int sentinelKillClients(sentinelValkeyInstance *ri);
 int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr);
 char *sentinelVoteLeader(sentinelValkeyInstance *primary, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch);
-int sentinelFlushConfig(void);
+int sentinelFlushConfig(int force);
 void sentinelGenerateInitialMonitorEvents(void);
 int sentinelSendPing(sentinelValkeyInstance *ri);
 int sentinelForceHelloUpdateForPrimary(sentinelValkeyInstance *primary);
@@ -551,7 +553,7 @@ void sentinelIsRunning(void) {
     if (j == CONFIG_RUN_ID_SIZE) {
         /* Pick ID and persist the config. */
         getRandomHexChars(sentinel.myid, CONFIG_RUN_ID_SIZE);
-        sentinelFlushConfig();
+        sentinelFlushConfig(1);
     }
 
     /* Log its ID to make debugging of issues simpler. */
@@ -1640,7 +1642,7 @@ int sentinelResetPrimaryAndChangeAddress(sentinelValkeyInstance *primary, char *
     /* Release the old address at the end so we are safe even if the function
      * gets the primary->addr->ip and primary->addr->port as arguments. */
     releaseSentinelAddr(oldaddr);
-    sentinelFlushConfig();
+    sentinelFlushConfig(0);
     return C_OK;
 }
 
@@ -2226,9 +2228,14 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
  * the state of the Sentinel in the current configuration file.
  *
  * On failure the function logs a warning on the server log. */
-int sentinelFlushConfig(void) {
+int sentinelFlushConfig(int force) {
     int saved_hz = server.hz;
     int rewrite_status;
+
+    if (!force) {
+        config_dirty++;
+        return C_OK;
+    }
 
     server.hz = CONFIG_DEFAULT_HZ;
     rewrite_status = rewriteConfig(server.configfile, 0);
@@ -2240,6 +2247,8 @@ int sentinelFlushConfig(void) {
         return C_ERR;
     } else {
         serverLog(LL_NOTICE, "Sentinel new configuration saved on disk");
+        config_dirty = 0;
+        flush_config_timestamp = server.mstime;
         return C_OK;
     }
 }
@@ -2248,7 +2257,7 @@ int sentinelFlushConfig(void) {
  * calling client.
  */
 static void sentinelFlushConfigAndReply(client *c) {
-    if (sentinelFlushConfig() == C_ERR)
+    if (sentinelFlushConfig(1) == C_ERR)
         addReplyError(c, "Failed to save config file. Check server logs.");
     else
         addReply(c, shared.ok);
@@ -2514,7 +2523,7 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
                 if ((replica = createSentinelValkeyInstance(NULL, SRI_REPLICA, ip, atoi(port), ri->quorum, ri)) !=
                     NULL) {
                     sentinelEvent(LL_NOTICE, "+slave", replica, "%@");
-                    sentinelFlushConfig();
+                    sentinelFlushConfig(0);
                 }
             }
         }
@@ -2619,7 +2628,7 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
             ri->primary->config_epoch = ri->primary->failover_epoch;
             ri->primary->failover_state = SENTINEL_FAILOVER_STATE_RECONF_REPLICAS;
             ri->primary->failover_state_change_time = mstime();
-            sentinelFlushConfig();
+            sentinelFlushConfig(0);
             sentinelEvent(LL_WARNING, "+promoted-slave", ri, "%@");
             if (sentinel.simfailure_flags & SENTINEL_SIMFAILURE_CRASH_AFTER_PROMOTION) sentinelSimFailureCrash();
             if (ri->primary->flags & SRI_COORD_FAILOVER) {
@@ -2837,14 +2846,14 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
                 si->runid = sdsnew(token[2]);
                 sentinelTryConnectionSharing(si);
                 if (removed) sentinelUpdateSentinelAddressInAllPrimaries(si);
-                sentinelFlushConfig();
+                sentinelFlushConfig(1);
             }
         }
 
         /* Update local current_epoch if received current_epoch is greater.*/
         if (current_epoch > sentinel.current_epoch) {
             sentinel.current_epoch = current_epoch;
-            sentinelFlushConfig();
+            sentinelFlushConfig(1);
             sentinelEvent(LL_WARNING, "+new-epoch", primary, "%llu", (unsigned long long)sentinel.current_epoch);
         }
 
@@ -4420,7 +4429,7 @@ badfmt: /* Bad format errors */
 seterr:
     /* TODO: Handle the case of both bad input and save error, possibly handling
      * SENTINEL SET atomically. */
-    if (changes) sentinelFlushConfig();
+    if (changes) sentinelFlushConfig(1);
 }
 
 /* Our fake PUBLISH command: it is actually useful only to receive hello messages
@@ -4637,7 +4646,7 @@ void sentinelSimFailureCrash(void) {
 char *sentinelVoteLeader(sentinelValkeyInstance *primary, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
     if (req_epoch > sentinel.current_epoch) {
         sentinel.current_epoch = req_epoch;
-        sentinelFlushConfig();
+        sentinelFlushConfig(1);
         sentinelEvent(LL_WARNING, "+new-epoch", primary, "%llu", (unsigned long long)sentinel.current_epoch);
     }
 
@@ -4645,7 +4654,7 @@ char *sentinelVoteLeader(sentinelValkeyInstance *primary, uint64_t req_epoch, ch
         sdsfree(primary->leader);
         primary->leader = sdsnew(req_runid);
         primary->leader_epoch = sentinel.current_epoch;
-        sentinelFlushConfig();
+        sentinelFlushConfig(1);
         sentinelEvent(LL_WARNING, "+vote-for-leader", primary, "%s %llu", primary->leader,
                       (unsigned long long)primary->leader_epoch);
         /* If we did not voted for ourselves, set the primary failover start
@@ -5469,7 +5478,7 @@ void sentinelTimer(void) {
     sentinelRunPendingScripts();
     sentinelCollectTerminatedScripts();
     sentinelKillTimedoutScripts();
-
+    if (config_dirty && server.mstime - flush_config_timestamp > 1000) sentinelFlushConfig(1);
     /* We continuously change the frequency of the server "timer interrupt"
      * in order to desynchronize every Sentinel from every other.
      * This non-determinism avoids that Sentinels started at the same time

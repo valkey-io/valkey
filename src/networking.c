@@ -1571,8 +1571,34 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
+/* Fuse small bulk replies into one append to avoid repeating reply-routing
+ * bookkeeping. The limit bounds the additional copy and stack usage. */
+#define BULK_REPLY_FUSE_LIMIT 512
+
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
     client *c = (client *)wpc;
+    if (len <= BULK_REPLY_FUSE_LIMIT) {
+        /* Keep reply routing and accounting in _addReplyToBufferOrList(). */
+        char buf[LONG_STR_SIZE + 3 + BULK_REPLY_FUSE_LIMIT + 2];
+        char *dst = buf;
+        if (len < OBJ_SHARED_BULKHDR_LEN) {
+            /* Reuse the shared "$<len>\r\n" strings for small lengths. */
+            size_t hdr_len = OBJ_SHARED_HDR_STRLEN(len);
+            memcpy(dst, objectGetVal(shared.bulkhdr[len]), hdr_len);
+            dst += hdr_len;
+        } else {
+            *dst++ = '$';
+            dst += ll2string(dst, LONG_STR_SIZE, (long long)len);
+            *dst++ = '\r';
+            *dst++ = '\n';
+        }
+        memcpy(dst, p, len);
+        dst += len;
+        *dst++ = '\r';
+        *dst++ = '\n';
+        _addReplyToBufferOrList(c, buf, (size_t)(dst - buf));
+        return;
+    }
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);

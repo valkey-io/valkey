@@ -33,14 +33,16 @@ tags {"modules external:skip"} {
         }
 
         test {Scripts cannot call a renamed or removed command by its original name} {
-            assert_error {*nknown*} {r eval "return server.call('echo', 'hi')" 0}
-            assert_error {*nknown*} {r eval "return server.call('lastsave')" 0}
+            assert_error {*command called from script*} {r eval "return server.call('echo', 'hi')" 0}
+            assert_error {*command called from script*} {r eval "return server.call('lastsave')" 0}
+            # also through a module command that the script runs
+            assert_error {*unknown command*} {r eval "return server.call('do_rm_call', 'lastsave')" 0}
             assert_equal hi [r eval "return server.call('vecho', 'hi')" 0]
             assert_equal hi [r do_rm_call echo hi]
         }
 
         test {A replicated module call needs the current name of a renamed command} {
-            assert_error {*nknown*} {r do_rm_call_fire_and_forget set k v}
+            assert_error {*unknown command*} {r do_rm_call_fire_and_forget set k v}
             assert_equal OK [r do_rm_call_fire_and_forget vset k v]
             assert_equal v [r get k]
         }

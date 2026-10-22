@@ -914,6 +914,12 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
         return 0;
     }
 
+    /* Both encodings store negative zero as positive zero (the listpack keeps
+     * integral scores as integers, the ordered index collapses it in
+     * scoreToSortable()). Do the same here, so that the score reported through
+     * 'newscore' is the score that was stored, and not "-0". */
+    if (score == 0.0) score = 0.0;
+
     /* Update the sorted set according to its encoding. */
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *eptr;

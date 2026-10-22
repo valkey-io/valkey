@@ -382,6 +382,19 @@ start_server {tags {"zset"}} {
             assert_error "*NaN*" {r zincrby myzset -inf abc}
         }
 
+        test "ZADD INCR and ZINCRBY reply the stored score for -0 on a new member - $encoding" {
+            r del ztmp
+            assert_equal 0 [r zadd ztmp incr -0 a]
+            assert_equal 0 [r zscore ztmp a]
+            assert_equal 0 [r zincrby ztmp -0 b]
+            assert_equal 0 [r zscore ztmp b]
+            # An INCR of -0 on existing members already replied 0.
+            assert_equal 0 [r zadd ztmp incr -0 a]
+            assert_equal 0 [r zincrby ztmp -0 b]
+            assert_equal {a 0 b 0} [r zrange ztmp 0 -1 withscores]
+            assert_encoding $encoding ztmp
+        }
+
         test "ZINCRBY against invalid incr value - $encoding" {
             r del zincr
             r zadd zincr 1 "one"

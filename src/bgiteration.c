@@ -93,34 +93,6 @@ static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid
     return true;
 }
 
-
-/* Get parameters for the SELECT command.
- * The optional permission_client allows for checking of a client's permission for select.
- * Returns true if command would be executed. */
-static bool getParamsForSelect(int argc, robj **argv, client *permission_client, int *dbid_p) {
-    static struct serverCommand *select_cmd = NULL;
-
-    // We don't need to check permissions in the replication phase
-    if (permission_client != NULL) {
-        if (select_cmd == NULL) {
-            select_cmd = lookupCommandByCString("select");
-            serverAssert(select_cmd != NULL);
-        }
-
-        int idxptr;
-        if (ACLCheckAllUserCommandPerm(permission_client->user, select_cmd, argv, argc,
-                                       permission_client->db->id, &idxptr) != ACL_OK) return false;
-    }
-
-    long long dbid;
-    if (argc != 2) return false;
-    if (getLongLongFromObject(argv[1], &dbid) != C_OK) return false;
-    if (dbid < 0 || dbid >= server.dbnum) return false;
-
-    *dbid_p = (int)dbid;
-    return true;
-}
-
 /* Get parameters for the SWAPDB command.
  * The optional permission_client allows for checking of a client's permission for swapdb.
  * Returns true if command would be executed. */
@@ -150,6 +122,33 @@ static bool getParamsForSwapdb(int argc, robj **argv, client *permission_client,
 
     *id1_p = (int)dbid1;
     *id2_p = (int)dbid2;
+    return true;
+}
+
+/* Get parameters for the SELECT command.
+ * The optional permission_client allows for checking of a client's permission for select.
+ * Returns true if command would be executed. */
+static bool getParamsForSelect(int argc, robj **argv, client *permission_client, int *dbid_p) {
+    static struct serverCommand *select_cmd = NULL;
+
+    // We don't need to check permissions in the replication phase
+    if (permission_client != NULL) {
+        if (select_cmd == NULL) {
+            select_cmd = lookupCommandByCString("select");
+            serverAssert(select_cmd != NULL);
+        }
+
+        int idxptr;
+        if (ACLCheckAllUserCommandPerm(permission_client->user, select_cmd, argv, argc,
+                                       permission_client->db->id, &idxptr) != ACL_OK) return false;
+    }
+
+    long long dbid;
+    if (argc != 2) return false;
+    if (getLongLongFromObject(argv[1], &dbid) != C_OK) return false;
+    if (dbid < 0 || dbid >= server.dbnum) return false;
+
+    *dbid_p = (int)dbid;
     return true;
 }
 

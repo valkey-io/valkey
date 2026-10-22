@@ -175,6 +175,7 @@ jobs:
           uname -a
           mkdir -p tests/rdma/rxe
           git clone https://github.com/pizhenwei/rxe.git tests/rdma/rxe
+          git -C tests/rdma/rxe checkout --detach cdcd539ade4e2797bcc4da9161a26feca997a9a4
           make -C tests/rdma/rxe
       - name: clear-kernel-log
         run: sudo dmesg -c > /dev/null

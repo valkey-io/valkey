@@ -314,10 +314,10 @@ jobs:
           apt-get update && apt-get install -y make gcc-13 git cmake g++ python3
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
           cd libbacktrace && ./configure && make && make install
-      - name: Install gtest
-        run: apt-get install -y pkg-config libgtest-dev libgmock-dev
+      - name: Install build dependencies
+        run: apt-get install -y pkg-config libgtest-dev libgmock-dev libzstd-dev
       - name: make
-        run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
@@ -565,8 +565,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes BUILD_ZSTD=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -725,8 +727,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes BUILD_ZSTD=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -835,7 +839,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-valgrind-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-valgrind-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
     strategy:
@@ -863,8 +872,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install Zstandard
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
       - name: make
-        run: make valgrind SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -892,7 +903,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-valgrind-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-valgrind-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 1440
     steps:
@@ -916,10 +932,10 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
-      - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+      - name: Install build dependencies
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev libzstd-dev
       - name: make
-        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -948,7 +964,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-valgrind-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-valgrind-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
     strategy:
@@ -1005,7 +1026,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-valgrind-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-valgrind-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 1440
     steps:
@@ -1466,7 +1492,7 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
+          sudo apt-get update && sudo apt-get install lttng-tools liblttng-ust-dev
           cd libbacktrace && ./configure && make && sudo make install
       - name: make
         run: make -j4 USE_LTTNG=yes USE_LIBBACKTRACE=yes
@@ -1916,11 +1942,11 @@ jobs:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: test
-        uses: cross-platform-actions/action@39a2a80642eca0947594ad03e4355dc3d28c617a # v0.32.0
+        uses: cross-platform-actions/action@e0b9770014ba65d5e0815f15b74031c3a635f641 # v1.6.0
         with:
           operating_system: freebsd
           environment_variables: MAKE
-          version: 13.2
+          version: 14.5
           shell: bash
           run: |
             sudo pkg install -y bash gmake lang/tcl86 lang/tclX
@@ -1966,10 +1992,10 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          apk add build-base git
+          apk add build-base git zstd-dev zstd-static
           cd libbacktrace && ./configure && make && make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test

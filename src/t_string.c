@@ -34,6 +34,7 @@
 
 #include "server.h"
 #include <math.h> /* isnan(), isinf() */
+#include <float.h>
 
 /* Forward declarations */
 int getGenericCommand(client *c);
@@ -244,13 +245,15 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
     if (unit == UNIT_SECONDS) *milliseconds *= 1000;
 
     if ((flags & ARGS_PX) || (flags & ARGS_EX)) {
-        *milliseconds += commandTimeSnapshot();
-    }
-
-    if (*milliseconds <= 0) {
-        /* Overflow detected. */
-        addReplyErrorExpireTime(c);
-        return C_ERR;
+        /* Relative expire: check for overflow *before* adding the base time.
+         * Signed overflow is undefined behavior in C, so we can't rely on the
+         * wrapped result coming out negative. */
+        mstime_t basetime = commandTimeSnapshot();
+        if (*milliseconds > LLONG_MAX - basetime) {
+            addReplyErrorExpireTime(c);
+            return C_ERR;
+        }
+        *milliseconds += basetime;
     }
 
     return C_OK;
@@ -265,7 +268,7 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -290,16 +293,42 @@ void psetexCommand(client *c) {
     setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
-/* DELIFEQ key value */
-void delifeqCommand(client *c) {
-    robj *o;
-    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+/* Function handling DELEX key <IFEQ | IFNE> value */
+void delexCommand(client *c) {
+    int flags = ARGS_NO_FLAGS;
+    robj *compare_val = NULL;
+    robj *incrby_val = NULL;
 
-    if (compareStringObjects(o, c->argv[2]) != 0) {
-        addReply(c, shared.czero);
+    if (parseExtendedCommandArgumentsOrReply(
+            c, COMMAND_DELEX, 2, c->argc,
+            &flags, NULL, NULL, NULL, &compare_val, &incrby_val, NULL, NULL) != C_OK) {
         return;
     }
 
+    delexGenericCommand(c, flags, compare_val);
+}
+
+/* DELIFEQ key value */
+void delifeqCommand(client *c) {
+    delexGenericCommand(c, ARGS_SET_IFEQ, c->argv[2]);
+}
+
+/* Implements DELEX and its conditional variants. */
+void delexGenericCommand(client *c, int flag, robj *compare_value) {
+    robj *o;
+    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+
+    if (flag & ARGS_SET_IFEQ) {
+        if (compareStringObjects(o, compare_value) != 0) {
+            addReply(c, shared.czero);
+            return;
+        }
+    } else if (flag & ARGS_SET_IFNE) {
+        if (compareStringObjects(o, compare_value) == 0) {
+            addReply(c, shared.czero);
+            return;
+        }
+    }
     serverAssert(dbSyncDelete(c->db, c->argv[1]));
 
     /* Propagate as DEL command */
@@ -353,7 +382,7 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -635,7 +664,7 @@ void msetexCommand(client *c) {
         return;
     }
     if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
-                                             &flags, &unit, &expire_idx, &expire, NULL) != C_OK) {
+                                             &flags, &unit, &expire_idx, &expire, NULL, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -797,6 +826,271 @@ void incrbyfloatCommand(client *c) {
     rewriteClientCommandArgument(c, 0, shared.set);
     rewriteClientCommandArgument(c, 2, new);
     rewriteClientCommandArgument(c, 3, shared.keepttl);
+}
+
+void increxCommand(client *c) {
+    robj *expire = NULL;
+    robj *incr_obj = NULL;   /* value token for BYINT/BYFLOAT, if present */
+    robj *lbound_obj = NULL; /* value token for LBOUND, if present */
+    robj *ubound_obj = NULL; /* value token for UBOUND, if present */
+    int unit = UNIT_SECONDS;
+    int flags = ARGS_NO_FLAGS;
+    long long incr_ll = 1;
+    long double incr_ld = 1.0L;
+    int use_float = 0;
+
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj, &lbound_obj, &ubound_obj) != C_OK) {
+        return;
+    }
+
+    if (flags & ARGS_BYINT) {
+        if (getLongLongFromObjectOrReply(c, incr_obj, &incr_ll, "Increment is not an integer or out of range") != C_OK) {
+            return;
+        }
+    } else if (flags & ARGS_BYFLOAT) {
+        if (getLongDoubleFromObjectOrReply(c, incr_obj, &incr_ld, "Increment is not a valid float") != C_OK) {
+            return;
+        }
+        if (isinf(incr_ld)) {
+            addReplyError(c, "BYFLOAT increment cannot be Infinity");
+            return;
+        }
+        use_float = 1;
+    }
+
+    long long lbound_ll = LLONG_MIN, ubound_ll = LLONG_MAX;
+    long double lbound_ld = -LDBL_MAX, ubound_ld = LDBL_MAX;
+
+    if (use_float) {
+        if (flags & ARGS_LBOUND) {
+            if (getLongDoubleFromObjectOrReply(c, lbound_obj, &lbound_ld, "LBOUND is not a valid float") != C_OK) {
+                return;
+            }
+        }
+        if (flags & ARGS_UBOUND) {
+            if (getLongDoubleFromObjectOrReply(c, ubound_obj, &ubound_ld, "UBOUND is not a valid float") != C_OK) {
+                return;
+            }
+        }
+        if (lbound_ld > ubound_ld) {
+            addReplyError(c, "LBOUND can't be greater than UBOUND");
+            return;
+        }
+    } else {
+        if (flags & ARGS_LBOUND) {
+            if (getLongLongFromObjectOrReply(c, lbound_obj, &lbound_ll, "LBOUND is not an integer or out of range") != C_OK) {
+                return;
+            }
+        }
+        if (flags & ARGS_UBOUND) {
+            if (getLongLongFromObjectOrReply(c, ubound_obj, &ubound_ll, "UBOUND is not an integer or out of range") != C_OK) {
+                return;
+            }
+        }
+        if (lbound_ll > ubound_ll) {
+            addReplyError(c, "LBOUND can't be greater than UBOUND");
+            return;
+        }
+    }
+
+    if ((flags & ARGS_ENX) && !(flags & (ARGS_EX | ARGS_PX | ARGS_EXAT | ARGS_PXAT))) {
+        addReplyError(c, "ENX flag requires an expiration");
+        return;
+    }
+
+    long long milliseconds = 0;
+    if (expire &&
+        getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
+    long long value_ll = 0, oldvalue_ll = 0, applied_ll = 0;
+    long double value_ld = 0, oldvalue_ld = 0, applied_ld = 0;
+    robj *o, *new;
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+
+    if (o) {
+        if (checkType(c, o, OBJ_STRING)) return;
+        if (use_float) {
+            if (getLongDoubleFromObjectOrReply(c, o, &oldvalue_ld, NULL) != C_OK) return;
+            if (isinf(oldvalue_ld)) {
+                addReplyError(c, "value cannot be Infinity");
+                return;
+            }
+        } else {
+            if (getLongLongFromObjectOrReply(c, o, &oldvalue_ll, NULL) != C_OK) return;
+        }
+    }
+
+    if ((flags & ARGS_SET_NX) && o != NULL) {
+        if (use_float) {
+            addReplyArrayLen(c, 2);
+            addReplyHumanLongDouble(c, oldvalue_ld);
+            addReplyHumanLongDouble(c, 0);
+        } else {
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, oldvalue_ll);
+            addReplyLongLong(c, 0);
+        }
+        return;
+    }
+    if ((flags & ARGS_SET_XX) && o == NULL) {
+        /* A non-existent key is treated as zero by the INCR family, and a
+         * declined operation reports the current value with a zero delta. */
+        addReplyArrayLen(c, 2);
+        if (use_float) {
+            addReplyHumanLongDouble(c, 0);
+            addReplyHumanLongDouble(c, 0);
+        } else {
+            addReplyLongLong(c, 0);
+            addReplyLongLong(c, 0);
+        }
+        return;
+    }
+
+    if (use_float) {
+        long double computed_ld = oldvalue_ld + incr_ld;
+
+        int out_of_bounds = 0;
+        int upper_violation = 0;
+        if (isinf(computed_ld)) {
+            out_of_bounds = 1;
+            upper_violation = (computed_ld > 0);
+        } else if ((flags & ARGS_UBOUND) && computed_ld > ubound_ld) {
+            out_of_bounds = 1;
+            upper_violation = 1;
+        } else if ((flags & ARGS_LBOUND) && computed_ld < lbound_ld) {
+            out_of_bounds = 1;
+            upper_violation = 0;
+        }
+
+        if (out_of_bounds) {
+            if (flags & ARGS_SATURATE) {
+                value_ld = upper_violation ? ubound_ld : lbound_ld;
+                applied_ld = value_ld - oldvalue_ld;
+                if (isinf(value_ld) || isinf(applied_ld)) {
+                    addReplyError(c, "applied increment would be Infinity");
+                    return;
+                }
+            } else {
+                addReplyArrayLen(c, 2);
+                addReplyHumanLongDouble(c, oldvalue_ld);
+                addReplyHumanLongDouble(c, 0);
+                return;
+            }
+        } else {
+            value_ld = computed_ld;
+            applied_ld = value_ld - oldvalue_ld;
+        }
+    } else {
+        int out_of_bounds = 0;
+        int upper_violation = 0;
+        long long computed_ll = 0;
+
+        if (incr_ll > 0 && oldvalue_ll > 0 && incr_ll > (LLONG_MAX - oldvalue_ll)) {
+            out_of_bounds = 1;
+            upper_violation = 1;
+        } else if (incr_ll < 0 && oldvalue_ll < 0 && incr_ll < (LLONG_MIN - oldvalue_ll)) {
+            out_of_bounds = 1;
+            upper_violation = 0;
+        } else {
+            computed_ll = oldvalue_ll + incr_ll;
+            if ((flags & ARGS_UBOUND) && computed_ll > ubound_ll) {
+                out_of_bounds = 1;
+                upper_violation = 1;
+            } else if ((flags & ARGS_LBOUND) && computed_ll < lbound_ll) {
+                out_of_bounds = 1;
+                upper_violation = 0;
+            }
+        }
+
+        if (out_of_bounds) {
+            if (flags & ARGS_SATURATE) {
+                value_ll = upper_violation ? ubound_ll : lbound_ll;
+                if ((oldvalue_ll < 0 && value_ll > LLONG_MAX + oldvalue_ll) ||
+                    (oldvalue_ll > 0 && value_ll < LLONG_MIN + oldvalue_ll)) {
+                    addReplyError(c, "applied increment would overflow");
+                    return;
+                }
+                applied_ll = value_ll - oldvalue_ll;
+            } else {
+                addReplyArrayLen(c, 2);
+                addReplyLongLong(c, oldvalue_ll);
+                addReplyLongLong(c, 0);
+                return;
+            }
+        } else {
+            value_ll = computed_ll;
+            applied_ll = value_ll - oldvalue_ll;
+        }
+    }
+
+    /* Check if expiration should be applied considering ENX */
+    int apply_expire = (expire != NULL);
+    if (apply_expire && (flags & ARGS_ENX)) {
+        if (o != NULL && getExpire(c->db, c->argv[1]) != -1) {
+            apply_expire = 0;
+        }
+    }
+
+    /* If the `milliseconds` have expired, then we don't need to set it into the
+     * database, and then wait for the active expire to delete it, it is wasteful.
+     * If the key already exists, delete it. */
+    if (apply_expire && checkAlreadyExpired(milliseconds)) {
+        if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
+        addReplyArrayLen(c, 2);
+        if (use_float) {
+            addReplyHumanLongDouble(c, value_ld);
+            addReplyHumanLongDouble(c, applied_ld);
+        } else {
+            addReplyLongLong(c, value_ll);
+            addReplyLongLong(c, applied_ll);
+        }
+        return;
+    }
+
+    if (!use_float && o && o->refcount == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
+        value_ll >= LONG_MIN && value_ll <= LONG_MAX) {
+        new = o;
+        objectSetVal(o, (void *)((long)value_ll));
+    } else {
+        new = use_float ? createStringObjectFromLongDouble(value_ld, 1)
+                        : createStringObjectFromLongLongForValue(value_ll);
+        if (o) {
+            dbReplaceValue(c->db, c->argv[1], &new);
+        } else {
+            dbAdd(c->db, c->argv[1], &new);
+        }
+    }
+
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, use_float ? "incrbyfloat" : "incrby", c->argv[1], c->db->id);
+    server.dirty++;
+
+    if (apply_expire) {
+        new = setExpire(c, c->db, c->argv[1], milliseconds);
+        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandVector(c, 5, shared.set, c->argv[1], new, shared.pxat, milliseconds_obj);
+        decrRefCount(milliseconds_obj);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
+    } else if (flags & ARGS_PERSIST) {
+        if (removeExpire(c->db, c->argv[1])) {
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "persist", c->argv[1], c->db->id);
+        }
+        rewriteClientCommandVector(c, 3, shared.set, c->argv[1], new);
+    } else {
+        rewriteClientCommandVector(c, 4, shared.set, c->argv[1], new, shared.keepttl);
+    }
+
+    addReplyArrayLen(c, 2);
+    if (use_float) {
+        addReplyHumanLongDouble(c, value_ld);
+        addReplyHumanLongDouble(c, applied_ld);
+    } else {
+        addReplyLongLong(c, value_ll);
+        addReplyLongLong(c, applied_ll);
+    }
 }
 
 void appendCommand(client *c) {

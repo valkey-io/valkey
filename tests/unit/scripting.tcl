@@ -1338,7 +1338,7 @@ start_server {tags {"scripting external:skip large-memory"}} {
 # Start a new server since the last test in this stanza will kill the
 # instance at all.
 start_server {tags {"scripting"}} {
-    test {Timedout read-only scripts can be killed by SCRIPT KILL} {
+    test {Timed out read-only scripts can be killed by SCRIPT KILL} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {while true do end} 0
@@ -1351,7 +1351,7 @@ start_server {tags {"scripting"}} {
         $rd close
     }
 
-    test {Timedout read-only scripts can be killed by SCRIPT KILL even when use pcall} {
+    test {Timed out read-only scripts can be killed by SCRIPT KILL even when use pcall} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {local f = function() while 1 do redis.call('ping') end end while 1 do pcall(f) end} 0
@@ -1379,7 +1379,7 @@ start_server {tags {"scripting"}} {
         assert_match {*killed by user*} $res
     }
 
-    test {Timedout script does not cause a false dead client} {
+    test {Timed out script does not cause a false dead client} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
@@ -1427,13 +1427,13 @@ start_server {tags {"scripting"}} {
         $rd close
     }
 
-    test {Timedout script link is still usable after Lua returns} {
+    test {Timed out script link is still usable after Lua returns} {
         r config set lua-time-limit 10
         run_script {for i=1,100000 do redis.call('ping') end return 'ok'} 0
         r ping
     } {PONG}
 
-    test {Timedout scripts and unblocked command} {
+    test {Timed out scripts and unblocked command} {
         # make sure a command that's allowed during BUSY doesn't trigger an unblocked command
 
         # enable AOF to also expose an assertion if the bug would happen
@@ -1481,7 +1481,7 @@ start_server {tags {"scripting"}} {
         r DEBUG set-disable-deny-scripts 0
     } {OK} {external:skip needs:debug}
 
-    test {Timedout scripts that modified data can't be killed by SCRIPT KILL} {
+    test {Timed out scripts that modified data can't be killed by SCRIPT KILL} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {redis.call('set',KEYS[1],'y'); while true do end} 1 x
@@ -1496,7 +1496,7 @@ start_server {tags {"scripting"}} {
 
     # Note: keep this test at the end of this server stanza because it
     # kills the server.
-    test {SHUTDOWN NOSAVE can kill a timedout script anyway} {
+    test {SHUTDOWN NOSAVE can kill a timed out script anyway} {
         # The server should be still unresponding to normal commands.
         catch {r ping} e
         assert_match {BUSY*} $e
@@ -1917,6 +1917,144 @@ start_server {tags {"scripting external:skip"}} {
         } elseif {$arch_bits == 32} {
             assert_morethan $diff [expr 52 * 500]
         }
+    }
+
+    test {maxmemory-scripts does not change the EVAL script count limit} {
+        r script flush sync
+        r config resetstat
+        r config set maxmemory-scripts 100MB
+
+        for {set j 1} {$j <= 501} {incr j} {
+            assert_equal $j [r eval "return $j" 0]
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+        assert_equal 1 [s evicted_scripts]
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts will trigger eviction during large EVAL scripts} {
+        r script flush sync
+        r config resetstat
+        r config set maxmemory-scripts 1MB
+
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            assert_equal $j [r eval "--$padding\nreturn $j" 0]
+        }
+        assert_morethan [s evicted_scripts] 0
+        assert_lessthan [s number_of_cached_scripts] 500
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts set in runtime will trigger eviction} {
+        r script flush sync
+        r config resetstat
+
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            assert_equal $j [r eval "--$padding\nreturn $j" 0]
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+
+        r config set maxmemory-scripts 1MB
+        wait_for_condition 1000 10 {
+            [s evicted_scripts] > 0 &&
+            [s number_of_cached_scripts] < 500
+        } else {
+            fail "scripts eviction did not start in time"
+        }
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts only evicts EVAL scripts} {
+        r script flush sync
+        r config resetstat
+        r config set maxmemory-scripts 1MB
+
+        set padding [string repeat x 100000]
+        set shas {}
+        for {set j 1} {$j <= 500} {incr j} {
+            set sha [r script load "--$padding\nreturn $j"]
+            lappend shas $sha
+            assert_equal $j [r evalsha $sha 0]
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+        assert_equal 0 [s evicted_scripts]
+
+        for {set j 1001} {$j <= 1500} {incr j} {
+            assert_equal $j [r eval "--$padding\nreturn $j" 0]
+        }
+        assert_morethan [s evicted_scripts] 0
+
+        for {set j 1} {$j <= 500} {incr j} {
+            set sha [lindex $shas [expr {$j - 1}]]
+            assert_equal $j [r evalsha $sha 0]
+        }
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {The combination of maxmemory-scripts and maxmemory} {
+        r script flush sync
+        r config resetstat
+
+        # maxmemory-scripts percentage value is not working if maxmemory is 0
+        r config set maxmemory 0
+        r config set maxmemory-scripts 1%
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            assert_equal $j [r eval "--$padding\nreturn $j" 0]
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+        assert_equal 0 [s evicted_scripts]
+
+        r config set maxmemory 100MB
+        wait_for_condition 1000 10 {
+            [s evicted_scripts] > 0 &&
+            [s number_of_cached_scripts] < 500
+        } else {
+            fail "scripts eviction did not start in time"
+        }
+
+        r config set maxmemory 0
+        r config set maxmemory-scripts 0
+    }
+
+    test {SCRIPT LOAD returns OOM after evicting keys} {
+        r flushall sync
+        r script flush sync
+        r config resetstat
+        r config set maxmemory 0
+        r config set maxmemory-policy allkeys-random
+
+        set value [string repeat x [expr 1024 * 1024]]
+        for {set j 0} {$j < 50} {incr j} {
+            r set "script-load-key:$j" $value
+        }
+
+        set used [expr {[s used_memory] - [s mem_not_counted_for_evict]}]
+        set limit [expr {$used + 10*1024}]
+        r config set maxmemory $limit
+
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 5000} {incr j} {
+            catch {r script load "--$padding\nreturn $j"} e
+            if {[string match "OOM *" $e]} {
+                break
+            }
+        }
+        r config set maxmemory 1
+        assert_error {OOM command not allowed*} {r script load "--$padding\nreturn 0"}
+        assert_morethan [s evicted_keys] 0
+        assert_equal 0 [s evicted_scripts]
+        assert_morethan [s number_of_cached_scripts] 0
+        assert_lessthan [s number_of_cached_scripts] 5000
+
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
     }
 }
 

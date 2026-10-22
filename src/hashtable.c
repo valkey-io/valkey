@@ -122,6 +122,12 @@ uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len) {
     return siphash_nocase((const uint8_t *)buf, len, hash_function_seed);
 }
 
+/* Hash function for tables keyed by a pointer value. Cheaper than the default,
+ * which runs siphash over the pointer's bytes. */
+uint64_t hashtablePointerHash(const void *key) {
+    return wangHash64((uint64_t)(uintptr_t)key);
+}
+
 /* --- Global resize policy API --- */
 
 /* The global resize policy is one of
@@ -1021,7 +1027,7 @@ static void fillBucketHole(hashtable *ht, bucket *b, int pos_in_bucket, int tabl
 }
 
 /* When entries are deleted while rehashing is paused, they leave empty holes in
- * the buckets. This functions attempts to fill the holes by moving entries from
+ * the buckets. This function attempts to fill the holes by moving entries from
  * the end of the bucket chain to fill the holes and free any empty buckets in
  * the end of the chain. */
 static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_index) {

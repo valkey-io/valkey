@@ -37,6 +37,7 @@
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "compression_stream.h"
 #include "throttle.h"
 #include "throttle_repl.h"
 #include "stat_calc.h"
@@ -162,6 +163,12 @@ static int parseMultibulk(client *c,
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 _Thread_local sds thread_shared_qb = NULL;
 
+/* fork() only preserves the calling thread's TLS. Keep a process-wide reference
+ * to each thread's shared query buffer so allocations owned by vanished worker
+ * threads remain reachable in the child. The registry is otherwise used only
+ * to verify worker cleanup. */
+static _Atomic(sds) shared_querybuf_registry[IO_THREADS_MAX_NUM];
+
 typedef enum {
     PARSE_OK = 0,
     PARSE_ERR = -1,
@@ -236,6 +243,12 @@ void linkClient(client *c) {
     c->client_list_node = listLast(server.clients);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index, (unsigned char *)&id, sizeof(id), c, NULL);
+
+    /* Increment active client counters. These counters are paired with decrements
+     * in unlinkClient() and track connected clients in the global active clients list. */
+    if (connIsPriority(c->conn)) {
+        server.stat_num_active_priority_clients++;
+    }
 }
 
 /* Initialize client authentication state. */
@@ -401,6 +414,7 @@ client *createClient(connection *conn) {
     c->client_list_node = NULL;
     c->io_read_state = CLIENT_IDLE;
     c->io_write_state = CLIENT_IDLE;
+    c->cur_tid = 0;
     c->nwritten = 0;
     c->last_memory_usage = 0;
     c->last_memory_type = CLIENT_TYPE_NORMAL;
@@ -863,7 +877,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
  * -ERRORCODE Error Message<CR><LF>
  *
  * If the error code is already passed in the string 's', the error
- * code provided is used, otherwise the string "-ERR " for the generic
+ * code provided is used; otherwise, the string "-ERR " for the generic
  * error code is automatically added.
  * Note that 's' must NOT end with \r\n. */
 void addReplyErrorLength(client *c, const char *s, size_t len) {
@@ -957,11 +971,18 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
 
         if (len > 4096) len = 4096;
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
+        /* The error text may echo command arguments, which can be user data. */
+        const char *err = s;
+        int err_len = (int)len;
+        if (server.hide_user_data_from_log) {
+            err = "*redacted*";
+            err_len = (int)strlen(err);
+        }
         serverLog(LL_WARNING,
                   "== CRITICAL == This %s is sending an error "
                   "to its %s: '%.*s' after processing the command "
                   "'%s'",
-                  from, to, (int)len, s, cmdname ? cmdname : "<unknown>");
+                  from, to, err_len, err, cmdname ? cmdname : "<unknown>");
         if (ctype == CLIENT_TYPE_PRIMARY && server.repl_backlog && server.repl_backlog->histlen > 0) {
             showLatestBacklog();
         }
@@ -1056,7 +1077,7 @@ void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list 
     va_end(copy);
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
-    /* Make sure there are no newlines in the middle of the string, otherwise
+    /* Make sure there are no newlines in the middle of the string; otherwise,
      * invalid protocol is emitted. */
     s = sdsmapchars(s, "\r\n", "  ", 2);
     addReplyErrorLength(c, s, sdslen(s));
@@ -1120,7 +1141,7 @@ void trimReplyUnusedTailSpace(client *c) {
     if (!tail) return;
 
     /* We only try to trim the space is relatively high (more than a 1/4 of the
-     * allocation), otherwise there's a high chance realloc will NOP.
+     * allocation); otherwise, there's a high chance realloc will NOP.
      * Also, to avoid large memmove which happens as part of realloc, we only do
      * that if the used part is small.
      *
@@ -1550,8 +1571,34 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
+/* Fuse small bulk replies into one append to avoid repeating reply-routing
+ * bookkeeping. The limit bounds the additional copy and stack usage. */
+#define BULK_REPLY_FUSE_LIMIT 512
+
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
     client *c = (client *)wpc;
+    if (len <= BULK_REPLY_FUSE_LIMIT) {
+        /* Keep reply routing and accounting in _addReplyToBufferOrList(). */
+        char buf[LONG_STR_SIZE + 3 + BULK_REPLY_FUSE_LIMIT + 2];
+        char *dst = buf;
+        if (len < OBJ_SHARED_BULKHDR_LEN) {
+            /* Reuse the shared "$<len>\r\n" strings for small lengths. */
+            size_t hdr_len = OBJ_SHARED_HDR_STRLEN(len);
+            memcpy(dst, objectGetVal(shared.bulkhdr[len]), hdr_len);
+            dst += hdr_len;
+        } else {
+            *dst++ = '$';
+            dst += ll2string(dst, LONG_STR_SIZE, (long long)len);
+            *dst++ = '\r';
+            *dst++ = '\n';
+        }
+        memcpy(dst, p, len);
+        dst += len;
+        *dst++ = '\r';
+        *dst++ = '\n';
+        _addReplyToBufferOrList(c, buf, (size_t)(dst - buf));
+        return;
+    }
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);
@@ -1810,6 +1857,15 @@ int clientHasPendingReplies(client *c) {
         /* Replicas use global shared replication buffer instead of
          * private output buffer. */
         serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
+
+        /* Unsent compressed data counts as pending. Skip while CLIENT_PENDING_IO:
+         * the IO thread owns the compression state; postWriteToReplica re-checks
+         * when the job completes. */
+        if (c->repl_data->repl_compression && c->io_write_state != CLIENT_PENDING_IO &&
+            c->repl_data->repl_compression->out_buf_pos < sdslen(c->repl_data->repl_compression->out_buf)) {
+            return 1;
+        }
+
         if (c->repl_data->ref_repl_buf_node == NULL) return 0;
 
         /* If the last replication buffer block content is totally sent,
@@ -1885,9 +1941,171 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+/* ====================================================================
+ * Priority Subnets and Admission Control
+ * ==================================================================== */
+
+/* parseSubnetList parses a string containing a list of subnets separated by spaces, tabs, or commas.
+ * On success, it allocates an array of anetSubnet, populates it, and sets *subnets and *count.
+ * Returns C_OK on success, and C_ERR on any parsing error.
+ * Caller is responsible for freeing *subnets using zfree() if it is non-NULL. */
+static int parseSubnetList(const char *raw_sources, anetSubnet **subnets, int *count) {
+    if (!subnets || !count) return C_ERR;
+    *subnets = NULL;
+    *count = 0;
+
+    if (!raw_sources || raw_sources[0] == '\0') {
+        return C_OK;
+    }
+
+    /* First pass: count non-empty tokens */
+    char *sources_to_count = zstrdup(raw_sources);
+    char *token;
+    char *saveptr;
+    int sources_count = 0;
+
+    token = strtok_r(sources_to_count, " \t,", &saveptr);
+    while (token != NULL) {
+        if (strlen(token) > 0) {
+            sources_count++;
+        }
+        token = strtok_r(NULL, " \t,", &saveptr);
+    }
+    zfree(sources_to_count);
+
+    if (sources_count == 0) {
+        return C_OK;
+    }
+
+    anetSubnet *new_subnets = zmalloc(sizeof(anetSubnet) * sources_count);
+    char *sources_to_parse = zstrdup(raw_sources);
+
+    int source_index = 0;
+    int success = 1;
+    token = strtok_r(sources_to_parse, " \t,", &saveptr);
+    while (token != NULL) {
+        if (strlen(token) > 0) {
+            if (anetParseSubnet(NULL, token, &new_subnets[source_index++]) != ANET_OK) {
+                success = 0;
+                break;
+            }
+        }
+        token = strtok_r(NULL, " \t,", &saveptr);
+    }
+    zfree(sources_to_parse);
+
+    if (!success) {
+        zfree(new_subnets);
+        return C_ERR;
+    }
+
+    *subnets = new_subnets;
+    *count = sources_count;
+    return C_OK;
+}
+
+/* Re-evaluate connection priority for all currently connected clients when
+ * priority-subnets is updated dynamically at runtime via CONFIG SET.
+ *
+ * 1. Immediate dynamic reclassification: Existing clients connecting before a
+ *    subnet update that match the new configuration are immediately promoted
+ *    to priority status without requiring a reconnect. Similarly, clients that
+ *    no longer match are demoted to normal priority.
+ * 2. Strict counter reconciliation: Accurately recomputes
+ *    server.stat_num_active_priority_clients to reflect the exact
+ *    ground truth of active priority connections, preventing telemetry drift
+ *    or underflow/overflow desync across dynamic config changes.
+ * 3. Safe transport handling: Fake clients (c->conn == NULL) and non-IP
+ *    connections (such as UNIX domain sockets or unresolved peers) are safely
+ *    classified as normal (non-priority) connections. */
+static void reclassifyClientsPriority(void) {
+    if (!server.clients) return;
+
+    long long count = 0;
+    listIter li;
+    listNode *ln;
+    listRewind(server.clients, &li);
+
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
+        if (!c->conn) continue;
+
+        char ip[CONN_ADDR_STR_LEN];
+        int port = 0;
+        if (connAddrPeerName(c->conn, ip, sizeof(ip), &port) != C_OK) {
+            connSetPriority(c->conn, false);
+            continue;
+        }
+
+        bool is_prio = (server.priority_subnets_count > 0 &&
+                        anetMatchIpSubnet(ip, server.priority_subnets_array, server.priority_subnets_count));
+        connSetPriority(c->conn, is_prio);
+        if (is_prio) count++;
+    }
+
+    server.stat_num_active_priority_clients = count;
+}
+
+/* Validate priority-subnets configuration string.
+ * Returns C_OK if valid, C_ERR otherwise and sets *err if provided. */
+int validatePrioritySubnets(const char *subnets_str, const char **err) {
+    anetSubnet *subnets = NULL;
+    int count = 0;
+    if (parseSubnetList(subnets_str, &subnets, &count) != C_OK) {
+        if (err) *err = "Invalid IP address or CIDR subnet in priority-subnets";
+        return C_ERR;
+    }
+    if (subnets) zfree(subnets);
+    return C_OK;
+}
+
+/* Update compiled priority-subnets from configuration string and reclassify clients.
+ * Returns C_OK on success, C_ERR on parsing failure. */
+int updatePrioritySubnets(const char *subnets_str) {
+    anetSubnet *new_subnets = NULL;
+    int new_count = 0;
+    if (parseSubnetList(subnets_str, &new_subnets, &new_count) != C_OK) {
+        return C_ERR;
+    }
+    zfree(server.priority_subnets_array);
+    server.priority_subnets_array = new_subnets;
+    server.priority_subnets_count = new_count;
+    reclassifyClientsPriority();
+    return C_OK;
+}
+
+/* Admission Control:
+ * 1. Total clients can never exceed maxclients.
+ * 2. Normal clients are capped at max(0, maxclients - maxclients-reserved).
+ * 3. Priority clients originating from priority-subnets can take up to maxclients.
+ * 4. maxclients-reserved connection slots are guaranteed for priority clients.
+ */
+static bool hasMaxClientsLimitReached(bool is_prioritized) {
+    long long total_clients = (long long)listLength(server.clients) +
+                              (long long)getClusterConnectionsCount();
+    if (total_clients >= (long long)server.maxclients) {
+        return true;
+    }
+
+    if (is_prioritized) {
+        return false;
+    }
+
+    if (server.maxclients_reserved > 0 && server.priority_subnets_count > 0) {
+        long long normal_limit = 0;
+        if (server.maxclients > server.maxclients_reserved) {
+            normal_limit = (long long)server.maxclients - (long long)server.maxclients_reserved;
+        }
+        long long prioritized_clients = server.stat_num_active_priority_clients;
+        long long normal_clients = (total_clients > prioritized_clients) ? (total_clients - prioritized_clients) : 0;
+        return normal_clients >= normal_limit;
+    }
+
+    return false;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
-    UNUSED(ip);
 
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
@@ -1906,7 +2124,9 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
+    bool is_prioritized = (server.priority_subnets_count > 0 && ip != NULL &&
+                           anetMatchIpSubnet(ip, server.priority_subnets_array, server.priority_subnets_count));
+    if (hasMaxClientsLimitReached(is_prioritized)) {
         char *err;
         if (server.cluster_enabled)
             err = "-ERR max number of clients + cluster "
@@ -1921,10 +2141,14 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
             /* Nothing to do, Just to avoid the warning... */
         }
         server.stat_rejected_conn++;
+        if (is_prioritized) {
+            server.stat_rejected_priority_conn++;
+        }
         connClose(conn);
         return;
     }
-
+    /* Set the priority of the connection */
+    connSetPriority(conn, is_prioritized);
     /* Create connection and client */
     if ((c = createClient(conn)) == NULL) {
         serverLog(LL_WARNING, "Error registering fd event for the new client connection: %s (addr=%s laddr=%s)",
@@ -2028,6 +2252,15 @@ void unlinkClient(client *c) {
             raxRemove(server.clients_index, (unsigned char *)&id, sizeof(id), NULL);
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
+
+            /* Decrement active client counters. Fake clients (where c->conn is NULL)
+             * and unlinked clients (c->client_list_node is NULL) do not increment these
+             * counters on creation, so we only decrement here for linked, active connections. */
+            if (connIsPriority(c->conn)) {
+                if (server.stat_num_active_priority_clients > 0) {
+                    server.stat_num_active_priority_clients--;
+                }
+            }
         }
         removeClientFromPendingCommandsBatch(c);
 
@@ -2475,61 +2708,238 @@ client *lookupClientByID(uint64_t id) {
     return c;
 }
 
+/* Advance the replica's replication-buffer cursor (ref_repl_buf_node /
+ * ref_block_pos) past consumed raw bytes, releasing the reference on each
+ * fully-sent block. Shared by the compressed and plaintext post-write paths. */
+static void advanceReplicaReplBufferCursor(client *c, size_t consumed) {
+    listNode *node = c->repl_data->ref_repl_buf_node;
+    listNode *next_node = NULL;
+    size_t remaining = consumed + c->repl_data->ref_block_pos;
+    replBufBlock *block = listNodeValue(node);
+
+    while (remaining >= block->used) {
+        next_node = listNextNode(node);
+        if (!next_node) break; /* End of list */
+
+        remaining -= block->used;
+        block->refcount--;
+
+        node = next_node;
+        block = listNodeValue(node);
+        block->refcount++;
+    }
+
+    serverAssert(remaining <= block->used);
+    c->repl_data->ref_repl_buf_node = node;
+    c->repl_data->ref_block_pos = remaining;
+}
+
 static void postWriteToReplica(client *c) {
+    replicaCompressionState *compression = c->repl_data->repl_compression;
+    if (c->write_flags & WRITE_FLAGS_COMPRESSION_ERROR) {
+        serverAssert(compression != NULL);
+        serverLog(LL_WARNING, "Compression error on replica %s (algo=%s, batch_uncompressed_bytes=%zu), disconnecting",
+                  replicationGetReplicaName(c), compressionAlgoName(compression->compressor.algo),
+                  compression->batch_uncompressed_bytes);
+        freeClientAsync(c);
+        return;
+    }
+
     if (c->nwritten <= 0) return;
 
     server.stat_net_repl_output_bytes += c->nwritten;
 
-    /* Locate the last node which has leftover data and
-     * decrement reference counts of all nodes in front of it.
-     * Set c->ref_repl_buf_node to point to the last node and
-     * c->ref_block_pos to the offset within that node  */
-    listNode *curr = c->repl_data->ref_repl_buf_node;
-    listNode *next = NULL;
-    size_t nwritten = c->nwritten + c->repl_data->ref_block_pos;
-    replBufBlock *o = listNodeValue(curr);
+    if (compression) {
+        /* An IO thread may send the batch but cannot update replication block
+         * refcounts while the main thread appends and trims them. Advance the
+         * cursor here only after the whole compressed batch has been sent. */
+        if (compression->out_buf_pos == sdslen(compression->out_buf)) {
+            size_t batch_uncompressed_bytes = compression->batch_uncompressed_bytes;
 
-    while (nwritten >= o->used) {
-        next = listNextNode(curr);
-        if (!next) break; /* End of list */
+            advanceReplicaReplBufferCursor(c, batch_uncompressed_bytes);
 
-        nwritten -= o->used;
-        o->refcount--;
+            compression->uncompressed_bytes += batch_uncompressed_bytes;
+            compression->compressed_bytes += sdslen(compression->out_buf);
 
-        curr = next;
-        o = listNodeValue(curr);
-        o->refcount++;
+            /* Start the next batch. One batch's compressed output is bounded
+             * by REPL_COMPRESSION_BATCH_SIZE plus the codec's small
+             * worst-case expansion margin, so the allocation is retained. */
+            sdsclear(compression->out_buf);
+            compression->out_buf_pos = 0;
+            compression->batch_uncompressed_bytes = 0;
+
+            incrementalTrimReplicationBacklog(REPL_BACKLOG_TRIM_BLOCKS_PER_CALL);
+        }
+        return;
     }
 
-    serverAssert(nwritten <= o->used);
-    c->repl_data->ref_repl_buf_node = curr;
-    c->repl_data->ref_block_pos = nwritten;
+    advanceReplicaReplBufferCursor(c, c->nwritten);
 
     incrementalTrimReplicationBacklog(REPL_BACKLOG_TRIM_BLOCKS_PER_CALL);
 }
 
-static void writeToReplica(client *c) {
-    listNode *last_node;
-    size_t bufpos;
-
-    serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
-    /* Determine the last block and buffer position based on thread context */
+/* Resolve the replication-buffer range available to replica c: the
+ * last block to send and the end position within it (the start is the
+ * replica's own cursor, ref_repl_buf_node/ref_block_pos). The main thread
+ * reads the live buffer tail; an IO thread uses the snapshot taken when the
+ * write job was dispatched. Returns false only when the buffer has no blocks.
+ * Shared by the plaintext and compressed write paths. */
+static bool getReplicaWriteRange(client *c, listNode **last_node, size_t *last_pos) {
     if (inMainThread()) {
-        last_node = listLast(server.repl_buffer_blocks);
-        if (!last_node) return;
-        bufpos = ((replBufBlock *)listNodeValue(last_node))->used;
+        *last_node = listLast(server.repl_buffer_blocks);
+        if (!*last_node) return false;
+        *last_pos = ((replBufBlock *)listNodeValue(*last_node))->used;
     } else {
-        last_node = c->io_last_reply_block;
-        serverAssert(last_node != NULL);
-        bufpos = c->io_last_bufpos;
+        *last_node = c->io_last_reply_block;
+        serverAssert(*last_node != NULL);
+        *last_pos = c->io_last_bufpos;
     }
+    return true;
+}
+
+/* Append compressed input to the link's staging buffer. The first call emits
+ * the replication envelope. Frames may span multiple socket-write batches;
+ * later frames start without repeating the envelope. */
+static int compressReplicaDataToOutputBuffer(replicaCompressionState *compression,
+                                             const uint8_t *input,
+                                             size_t input_len,
+                                             compressFlushMode flush_mode) {
+    if (!compression->envelope_written) {
+        uint8_t envelope[VCS_ENVELOPE_SIZE];
+        if (vcsBuildEnvelope(envelope, compression->compressor.algo, VCS_STREAM_REPL) == C_ERR) return C_ERR;
+        compression->out_buf = sdscatlen(compression->out_buf, envelope, sizeof(envelope));
+        compression->envelope_written = true;
+    }
+    size_t bound = streamCompressorOutputBound(&compression->compressor, input_len);
+    serverAssert(bound > 0);
+    compression->out_buf = sdsMakeRoomFor(compression->out_buf, bound);
+    ssize_t compressed =
+        streamCompressorFeed(&compression->compressor, (uint8_t *)compression->out_buf + sdslen(compression->out_buf),
+                             sdsavail(compression->out_buf), input, input_len, flush_mode);
+    if (compressed < 0) return C_ERR;
+    sdsIncrLen(compression->out_buf, (size_t)compressed);
+    return C_OK;
+}
+
+/* Compressed write path for replicas on either the IO thread or the main thread. */
+static void writeToReplicaCompressed(client *c) {
+    replicaCompressionState *compression = c->repl_data->repl_compression;
+
+    /* Finish sending the previous batch's leftover first; compressed bytes
+     * must reach the socket in order. */
+    if (compression->out_buf_pos < sdslen(compression->out_buf)) {
+        size_t avail = sdslen(compression->out_buf) - compression->out_buf_pos;
+        c->nwritten = connWrite(c->conn,
+                                compression->out_buf + compression->out_buf_pos,
+                                avail);
+        if (c->nwritten <= 0) {
+            c->write_flags |= WRITE_FLAGS_WRITE_ERROR;
+            return;
+        }
+        compression->out_buf_pos += c->nwritten;
+        /* Skip trim here; postWriteToReplica trims only after the batch fully
+         * drains. Worst-case trim delay is one batch (REPL_COMPRESSION_BATCH_SIZE). */
+        return;
+    }
+
+    /* postWriteToReplica resets the batch once it fully drains, so a fresh
+     * batch always starts from an empty buffer. */
+    serverAssert(sdslen(compression->out_buf) == 0 && compression->out_buf_pos == 0 &&
+                 compression->batch_uncompressed_bytes == 0);
+
+    listNode *last_node;
+    size_t last_pos;
+    if (!getReplicaWriteRange(c, &last_node, &last_pos)) return;
+    listNode *first_node = c->repl_data->ref_repl_buf_node;
+
+    /* Compress new replication-backlog bytes, capped at
+     * REPL_COMPRESSION_BATCH_SIZE raw bytes per cycle to bound per-batch
+     * latency and keep out_buf size predictable. */
+    size_t batch_uncompressed_bytes = 0;
+    for (listNode *cur = first_node; cur != NULL; cur = listNextNode(cur)) {
+        replBufBlock *block = listNodeValue(cur);
+        size_t start = (cur == first_node) ? c->repl_data->ref_block_pos : 0;
+        size_t end = (cur == last_node) ? last_pos : block->used;
+
+        serverAssert(end >= start);
+        if (end == start) {
+            if (cur == last_node) break;
+            continue;
+        }
+
+        size_t len = end - start;
+        /* Cap this write at the remaining batch budget; the cursor resumes mid-block next cycle. */
+        size_t remaining = REPL_COMPRESSION_BATCH_SIZE - batch_uncompressed_bytes;
+        if (len > remaining) len = remaining;
+        if (compressReplicaDataToOutputBuffer(compression, (const uint8_t *)block->buf + start, len,
+                                              COMPRESS_FLUSH_CONTINUE) == C_ERR) {
+            c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
+            return;
+        }
+        batch_uncompressed_bytes += len;
+        if (batch_uncompressed_bytes >= REPL_COMPRESSION_BATCH_SIZE) break;
+        if (cur == last_node) break;
+    }
+
+    if (batch_uncompressed_bytes == 0) return;
+
+    /* Drain codec-buffered bytes so the whole batch lands in out_buf. Codecs
+     * that need bounded frames for integrity retain history across small write
+     * batches and close after reaching the configured raw-byte threshold. */
+    compressFlushMode flush_mode = COMPRESS_FLUSH_SYNC;
+    if (compression->frame_max_bytes &&
+        compression->frame_uncompressed_bytes + batch_uncompressed_bytes >= compression->frame_max_bytes) {
+        flush_mode = COMPRESS_FLUSH_END;
+    }
+    if (compressReplicaDataToOutputBuffer(compression, NULL, 0, flush_mode) != C_OK) {
+        c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
+        return;
+    }
+
+    if (compression->frame_max_bytes) {
+        if (flush_mode == COMPRESS_FLUSH_END) {
+            compression->frame_uncompressed_bytes = 0;
+        } else {
+            compression->frame_uncompressed_bytes += batch_uncompressed_bytes;
+        }
+    }
+    compression->batch_uncompressed_bytes = batch_uncompressed_bytes;
+
+    /* Send out_buf. The backlog cursor advances only after a full send
+     * (postWriteToReplica), so a partial send keeps it pinned to the start of
+     * the batch. */
+    size_t avail = sdslen(compression->out_buf);
+    serverAssert(avail > 0);
+
+    c->nwritten = connWrite(c->conn, compression->out_buf, avail);
+    if (c->nwritten <= 0) {
+        c->write_flags |= WRITE_FLAGS_WRITE_ERROR;
+        return;
+    }
+    compression->out_buf_pos = c->nwritten;
+}
+
+static void writeToReplica(client *c) {
+    serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
+
+    /* Compressed replicas use the framed write path; the decision lives here so
+     * callers do not branch on the per-replica compression state. */
+    if (c->repl_data->repl_compression != NULL) {
+        writeToReplicaCompressed(c);
+        return;
+    }
+
+    listNode *last_node;
+    size_t last_pos;
+
+    if (!getReplicaWriteRange(c, &last_node, &last_pos)) return;
 
     listNode *first_node = c->repl_data->ref_repl_buf_node;
 
     /* Handle the single block case */
     if (first_node == last_node) {
         replBufBlock *b = listNodeValue(first_node);
-        c->nwritten = connWrite(c->conn, b->buf + c->repl_data->ref_block_pos, bufpos - c->repl_data->ref_block_pos);
+        c->nwritten = connWrite(c->conn, b->buf + c->repl_data->ref_block_pos, last_pos - c->repl_data->ref_block_pos);
         if (c->nwritten <= 0) {
             c->write_flags |= WRITE_FLAGS_WRITE_ERROR;
         }
@@ -2546,7 +2956,7 @@ static void writeToReplica(client *c) {
     for (listNode *cur_node = first_node; cur_node != NULL && iovcnt < iovmax; cur_node = listNextNode(cur_node)) {
         replBufBlock *cur_block = listNodeValue(cur_node);
         size_t start = (cur_node == first_node) ? c->repl_data->ref_block_pos : 0;
-        size_t len = (cur_node == last_node) ? bufpos : cur_block->used;
+        size_t len = (cur_node == last_node) ? last_pos : cur_block->used;
         len -= start;
 
         /* For TLS, we should not call SSL_write() with num=0 */
@@ -2777,7 +3187,7 @@ static void proceedToUnwritten(replyIOV *reply, int nwritten) {
 
 /* This function should be called from _writeToClient when the reply list is not empty,
  * it gathers the scattered buffers from reply list and sends them away with connWritev.
- * If we write successfully, it returns C_OK, otherwise, C_ERR is returned.
+ * If we write successfully, it returns C_OK; otherwise, C_ERR is returned.
  * Sets the c->nwritten to the number of bytes the server wrote to the client.
  * Can be called from the main thread or an I/O thread */
 static int writevToClient(client *c) {
@@ -2889,7 +3299,7 @@ static int writevToClient(client *c) {
 }
 
 /* This function does actual writing output buffers to non-replica client, it is called by writeToClient.
- * If we write successfully, it returns C_OK, otherwise, C_ERR is returned,
+ * If we write successfully, it returns C_OK; otherwise, C_ERR is returned,
  * and 'c->nwritten' is set to the number of bytes the server wrote to the client. */
 int _writeToClient(client *c) {
     listNode *lastblock;
@@ -3098,7 +3508,7 @@ static void _postWriteToClient(client *c) {
 
 /* Updates the client's memory usage and bucket and server stats after writing.
  * If a write handler is installed , it will attempt to clear the write event.
- * If the client is no longer valid, it will return C_ERR, otherwise C_OK. */
+ * If the client is no longer valid, it will return C_ERR; otherwise, C_OK. */
 int postWriteToClient(client *c) {
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -3216,7 +3626,9 @@ int handleReadResult(client *c) {
     c->last_interaction = server.unixtime;
     c->net_input_bytes += c->nread;
     if (isReplicatedClient(c)) {
-        c->repl_data->read_reploff += c->nread;
+        /* A reader-active primary link advances read_reploff with decoded
+         * bytes (replDecodeToQueryBuf); c->nread counts wire bytes here. */
+        if (!(c->flag.primary && server.repl_stream_reader)) c->repl_data->read_reploff += c->nread;
         if (getClientType(c) == CLIENT_TYPE_PRIMARY) {
             server.stat_net_repl_input_bytes += c->nread;
         } else {
@@ -3264,6 +3676,9 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNBALANCED_QUOTES) {
         addReplyError(c, "Protocol error: unbalanced quotes in request");
         setProtocolError("unbalanced quotes in inline request", c);
+    } else if (flags & READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL) {
+        addReplyError(c, "Protocol error: embedded NUL byte in inline request");
+        setProtocolError("embedded NUL byte in inline request", c);
     } else if (flags & READ_FLAGS_ERROR_INVALID_CRLF) {
         addReplyError(c, "Protocol error: invalid CRLF in request");
         setProtocolError("invalid CRLF in request", c);
@@ -3288,12 +3703,12 @@ int isParsingError(client *c) {
                             READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
                             READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
                             READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT | READ_FLAGS_ERROR_UNBALANCED_QUOTES |
-                            READ_FLAGS_ERROR_INVALID_CRLF);
+                            READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL | READ_FLAGS_ERROR_INVALID_CRLF);
 }
 
 /* This function is called after the query-buffer was parsed.
  * It is used to handle parsing errors and to update the client state.
- * The function returns C_OK if a command can be executed, otherwise C_ERR. */
+ * The function returns C_OK if a command can be executed; otherwise, C_ERR. */
 parseResult handleParseResults(client *c) {
     if (isParsingError(c)) {
         handleParseError(c);
@@ -3484,13 +3899,20 @@ void resetClientIOState(client *c) {
 /* Initializes the shared query buffer to a new sds with the default capacity.
  * Need to ensure the initlen is not less than readlen in readToQueryBuf. */
 void initSharedQueryBuf(void) {
-    thread_shared_qb = sdsnewlen(NULL, PROTO_IOBUF_LEN);
-    sdsclear(thread_shared_qb);
+    sds querybuf = sdsnewlen(NULL, PROTO_IOBUF_LEN);
+    sdsclear(querybuf);
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], querybuf, memory_order_relaxed);
+    thread_shared_qb = querybuf;
 }
 
 void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
+    atomic_store_explicit(&shared_querybuf_registry[getCurTid()], NULL, memory_order_relaxed);
+}
+
+int isSharedQueryBufRegistered(int tid) {
+    return atomic_load_explicit(&shared_querybuf_registry[tid], memory_order_relaxed) != NULL;
 }
 
 /* This function is used when we want to re-enter the event loop but there
@@ -3538,7 +3960,7 @@ void parseInlineBuffer(client *c) {
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
     /* Search for end of line */
-    newline = strchr(c->querybuf + c->qb_pos, '\n');
+    newline = memchr(c->querybuf + c->qb_pos, '\n', sdslen(c->querybuf) - c->qb_pos);
 
     /* Nothing to do without a \r\n */
     if (newline == NULL) {
@@ -3553,6 +3975,14 @@ void parseInlineBuffer(client *c) {
 
     /* Split the input buffer up to the \r\n */
     querylen = newline - (c->querybuf + c->qb_pos);
+
+    /* Reject a raw NUL byte in the line, because sdssplitargs() doesn't
+     * handle it. Binary payloads must use the quoted \x00 escape form. */
+    if (memchr(c->querybuf + c->qb_pos, '\0', querylen)) {
+        c->read_flags |= READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL;
+        return;
+    }
+
     argv = sdsnsplitargs(c->querybuf + c->qb_pos, querylen, &argc);
     if (argv == NULL) {
         c->read_flags |= READ_FLAGS_ERROR_UNBALANCED_QUOTES;
@@ -3975,7 +4405,15 @@ void commandProcessed(client *c) {
     if (isReplicatedClient(c)) {
         long long applied = c->repl_data->reploff - prev_offset;
         if (applied) {
-            replicationFeedStreamFromPrimaryStream(c->querybuf + c->repl_data->repl_applied, applied);
+            char *stream = c->querybuf + c->repl_data->repl_applied;
+            if (c->slot_migration_job) {
+                /* What was applied ends with a command (or EXEC), so the db
+                 * of the client is the one the proxied stream ends in. */
+                replicationFeedStreamFromSlotImport(c->repl_data->repl_applied_dbid, c->db->id, stream, applied);
+                c->repl_data->repl_applied_dbid = c->db->id;
+            } else {
+                replicationFeedStreamFromPrimaryStream(stream, applied);
+            }
             c->repl_data->repl_applied += applied;
         }
     }
@@ -3988,7 +4426,7 @@ void commandProcessed(client *c) {
  * 2. calls commandProcessed() if the command was handled.
  *
  * The function returns C_ERR in case the client was freed as a side effect
- * of processing the command, otherwise C_OK is returned. */
+ * of processing the command; otherwise, C_OK is returned. */
 int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
@@ -4423,6 +4861,26 @@ static bool readToQueryBuf(client *c) {
 }
 
 #define REPL_MAX_READS_PER_IO_EVENT 25
+
+/* Keep the wire scratch buffer off the stack of ordinary client reads. */
+__attribute__((noinline)) static bool readAndDecodePrimaryStream(client *primary,
+                                                                 size_t output_budget,
+                                                                 ssize_t *decoded_bytes,
+                                                                 bool *full_read) {
+    uint8_t wire_buf[PROTO_IOBUF_LEN];
+    if (primary->flag.close_asap) {
+        primary->nread = 0;
+        *full_read = false;
+    } else {
+        primary->nread = connRead(primary->conn, wire_buf, sizeof(wire_buf));
+        *full_read = primary->nread == (int)sizeof(wire_buf);
+    }
+    if (handleReadResult(primary) != C_OK) return false;
+
+    *decoded_bytes = replDecodeToQueryBuf(primary, wire_buf, (size_t)primary->nread, output_budget);
+    return true;
+}
+
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     /* Check if we can send the client to be handled by the IO-thread */
@@ -4432,15 +4890,38 @@ void readQueryFromClient(connection *conn) {
 
     bool repeat = false;
     int iter = 0;
+    size_t decoded_bytes = 0;
     do {
-        bool full_read = readToQueryBuf(c);
-        if (handleReadResult(c) == C_OK) {
+        ssize_t decoded_this_iteration = 0;
+        bool full_read;
+        bool read_ok = true;
+        bool decode_repl_stream = c->flag.primary && server.repl_stream_reader;
+        bool resume_decode = decode_repl_stream && replStreamHasPendingDecode();
+        size_t decode_budget = REPL_DECODE_EVENT_BUDGET - decoded_bytes;
+        if (resume_decode) {
+            decoded_this_iteration = replDecodeToQueryBuf(c, NULL, 0, decode_budget);
+            full_read = !replStreamHasPendingDecode();
+        } else if (decode_repl_stream) {
+            read_ok = readAndDecodePrimaryStream(c, decode_budget, &decoded_this_iteration, &full_read);
+        } else {
+            full_read = readToQueryBuf(c);
+            read_ok = handleReadResult(c) == C_OK;
+        }
+        if (read_ok) {
+            if (decoded_this_iteration < 0) {
+                serverLog(LL_WARNING, "Disconnecting primary due to replication stream decompression failure");
+                freeClientAsync(c);
+                return;
+            }
+            decoded_bytes += (size_t)decoded_this_iteration;
             if (processInputBuffer(c) == C_ERR) return;
             trimCommandQueue(c);
+            if (decode_repl_stream && replStreamHasPendingDecode()) full_read = false;
         }
         repeat = (c->flag.primary &&
                   !c->flag.close_asap &&
                   ++iter < REPL_MAX_READS_PER_IO_EVENT &&
+                  decoded_bytes < REPL_DECODE_EVENT_BUDGET &&
                   full_read);
         beforeNextClient(c);
     } while (repeat);
@@ -4462,7 +4943,7 @@ void genClientAddrString(client *client, char *addr, size_t addr_len, int remote
 }
 
 /* This function returns the client peer id, by creating and caching it
- * if client->peerid is NULL, otherwise returning the cached value.
+ * if client->peerid is NULL; otherwise, returning the cached value.
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientPeerId(client *c) {
@@ -4476,7 +4957,7 @@ char *getClientPeerId(client *c) {
 }
 
 /* This function returns the client bound socket name, by creating and caching
- * it if client->sockname is NULL, otherwise returning the cached value.
+ * it if client->sockname is NULL; otherwise, returning the cached value.
  * The Socket Name never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientSockname(client *c) {
@@ -4511,7 +4992,7 @@ int isClientConnIpV6(client *c) {
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char flags[18], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
+    char flags[32], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
     if (client->flag.replica) {
@@ -4540,6 +5021,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.import_source) *p++ = 'I';
     if (client->slot_migration_job && isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'i';
     if (client->slot_migration_job && !isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'E';
+    if (connIsPriority(client->conn)) *p++ = 'H';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -5067,6 +5549,7 @@ static int validateClientFlagFilter(sds flag_filter) {
         case 'I':
         case 'i':
         case 'E':
+        case 'H':
         case 'N':
             /* Valid flag, do nothing. */
             break;
@@ -5230,6 +5713,9 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
         case 'E': /* Slot migration export flag */
             if (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) return 0;
             break;
+        case 'H': /* High priority connection */
+            if (!connIsPriority(c->conn)) return 0;
+            break;
         case 'N': /* Check for no flags */
             if (c->flag.replica || c->flag.primary || c->flag.pubsub ||
                 c->flag.multi || c->flag.blocked || c->flag.tracking ||
@@ -5238,7 +5724,8 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.unblocked || c->flag.close_asap ||
                 c->flag.unix_socket || c->flag.readonly ||
                 c->flag.no_evict || c->flag.no_touch || c->flag.throttled ||
-                c->flag.import_source || c->slot_migration_job) {
+                c->flag.import_source || c->slot_migration_job ||
+                connIsPriority(c->conn)) {
                 return 0;
             }
             break;
@@ -5576,7 +6063,7 @@ void clientUnblockCommand(client *c) {
     /* Note that we never try to unblock a client blocked on a module command,
      * or a client blocked by CLIENT PAUSE or some other blocking type which
      * doesn't have a timeout callback (even in the case of UNBLOCK ERROR).
-     * The reason is that we assume that if a command doesn't expect to be timedout,
+     * The reason is that we assume that if a command doesn't expect to be timed out,
      * it also doesn't expect to be unblocked by CLIENT UNBLOCK */
     if (target && target->flag.blocked && blockedClientMayTimeout(target)) {
         if (unblock_error)
@@ -6183,6 +6670,8 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
             repl_buf_size = last->repl_offset + last->size - cur->repl_offset;
             repl_node_num = last->id - cur->id + 1;
         }
+        /* A compressed batch keeps this cursor pinned until the staged output
+         * drains, so repl_buf_size already represents all unsent data. */
         return repl_buf_size + (repl_node_size * repl_node_num);
     }
 
@@ -6208,6 +6697,23 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     mem += c->querybuf ? sdsAllocSize(c->querybuf) : 0;
     mem += zmalloc_size(c);
     mem += c->buf_usable_size;
+    /* Compression staging capacity is retained for reuse, so account it as
+     * client memory rather than pending output. Skip while an IO thread may
+     * reallocate the buffer. */
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_compression &&
+        c->io_write_state != CLIENT_PENDING_IO) {
+        replicaCompressionState *compression = c->repl_data->repl_compression;
+        mem += zmalloc_size(compression) + sdsAllocSize(compression->out_buf) + compression->compressor.ctx_memory;
+    }
+    /* The stream decoder for a compressed upstream link hangs off the server
+     * struct, but it exists for exactly this link, so attribute it to the
+     * primary client. Reads are not offloaded to IO threads while the decoder
+     * is active, so its buffers are stable here. */
+    if (c->flag.primary && server.repl_stream_reader) {
+        streamPushReader *reader = server.repl_stream_reader;
+        mem += zmalloc_size(reader) + reader->decompressor.ctx_memory;
+        mem += reader->pending_input ? sdsAllocSize(reader->pending_input) : 0;
+    }
     /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */

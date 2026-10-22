@@ -12,6 +12,9 @@ list(APPEND SERVER_LIBS "fpconv")
 list(APPEND SERVER_LIBS "hdr_histogram")
 list(APPEND SERVER_LIBS "ffc")
 list(APPEND SERVER_LIBS "lz4")
+if (USE_ZSTD)
+    list(APPEND SERVER_LIBS "valkey_zstd")
+endif ()
 valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
                              "redis-server")
 add_dependencies(valkey-server generate_commands_def)
@@ -61,10 +64,10 @@ endif ()
 
 if (BUILD_SANITIZER)
     # 'BUILD_SANITIZER' is defined in ValkeySetup module (based on user input) If defined, the variables
-    # 'VALKEY_SANITAIZER_CFLAGS' and 'VALKEY_SANITAIZER_LDFLAGS' are set with the link & compile flags required
+    # 'VALKEY_SANITIZER_CFLAGS' and 'VALKEY_SANITIZER_LDFLAGS' are set with the link & compile flags required
     message(STATUS "Adding sanitizer flags for target valkey-server")
-    target_compile_options(valkey-server PRIVATE ${VALKEY_SANITAIZER_CFLAGS})
-    target_link_options(valkey-server PRIVATE ${VALKEY_SANITAIZER_LDFLAGS})
+    target_compile_options(valkey-server PRIVATE ${VALKEY_SANITIZER_CFLAGS})
+    target_link_options(valkey-server PRIVATE ${VALKEY_SANITIZER_LDFLAGS})
 endif ()
 unset(BUILD_SANITIZER CACHE)
 

@@ -113,7 +113,7 @@ static void maybeConvertToIntset(robj *set) {
 /* Add the specified sds value into a set.
  *
  * If the value was already member of the set, nothing is done and 0 is
- * returned, otherwise the new element is added and 1 is returned. */
+ * returned; otherwise, the new element is added and 1 is returned. */
 int setTypeAdd(robj *subject, sds value) {
     return setTypeAddAux(subject, value, sdslen(value), 0, 1);
 }
@@ -731,8 +731,27 @@ static void smismemberReplyWithHashtable(client *c, hashtable *ht, robj **member
 
 void sismemberCommand(client *c) {
     robj *set;
+    int xx = 0;
 
-    if ((set = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
+    if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "XX")) {
+        xx = 1;
+    } else if (c->argc > 3) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    set = lookupKeyRead(c->db, c->argv[1]);
+    if (set == NULL) {
+        if (xx)
+            /* If key doesn't exist and XX is specified, return -1 */
+            addReplyLongLong(c, -1);
+        else
+            /* If key doesn't exist and XX is not specified, return 0 */
+            addReply(c, shared.czero);
+        return;
+    }
+
+    if (checkType(c, set, OBJ_SET)) return;
 
     sismemberReply(c, set, c->argv[2]);
 }
@@ -1210,7 +1229,7 @@ void srandmemberWithCountCommand(client *c) {
                 sdsele = sdsnewlen(str, len);
             }
             /* Try to add the object to the dictionary. If it already exists
-             * free it, otherwise increment the number of objects we have
+             * free it; otherwise, increment the number of objects we have
              * in the result dictionary. */
             if (hashtableAdd(ht, sdsele))
                 added++;

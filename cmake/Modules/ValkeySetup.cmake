@@ -261,17 +261,17 @@ endif ()
 # Sanitizer
 if (BUILD_SANITIZER)
     # Common CFLAGS
-    list(APPEND VALKEY_SANITAIZER_CFLAGS "-fno-sanitize-recover=all")
-    list(APPEND VALKEY_SANITAIZER_CFLAGS "-fno-omit-frame-pointer")
+    list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-sanitize-recover=all")
+    list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-omit-frame-pointer")
     if ("${BUILD_SANITIZER}" STREQUAL "address")
-        list(APPEND VALKEY_SANITAIZER_CFLAGS "-fsanitize=address")
-        list(APPEND VALKEY_SANITAIZER_LDFLAGS "-fsanitize=address")
+        list(APPEND VALKEY_SANITIZER_CFLAGS "-fsanitize=address")
+        list(APPEND VALKEY_SANITIZER_LDFLAGS "-fsanitize=address")
     elseif ("${BUILD_SANITIZER}" STREQUAL "thread")
-        list(APPEND VALKEY_SANITAIZER_CFLAGS "-fsanitize=thread")
-        list(APPEND VALKEY_SANITAIZER_LDFLAGS "-fsanitize=thread")
+        list(APPEND VALKEY_SANITIZER_CFLAGS "-fsanitize=thread")
+        list(APPEND VALKEY_SANITIZER_LDFLAGS "-fsanitize=thread")
     elseif ("${BUILD_SANITIZER}" STREQUAL "undefined")
-        list(APPEND VALKEY_SANITAIZER_CFLAGS "-fsanitize=undefined")
-        list(APPEND VALKEY_SANITAIZER_LDFLAGS "-fsanitize=undefined")
+        list(APPEND VALKEY_SANITIZER_CFLAGS "-fsanitize=undefined")
+        list(APPEND VALKEY_SANITIZER_LDFLAGS "-fsanitize=undefined")
     else ()
         message(FATAL_ERROR "Unknown sanitizer: ${BUILD_SANITIZER}")
     endif ()
@@ -283,6 +283,40 @@ include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
 include_directories("${CMAKE_SOURCE_DIR}/deps/lz4")
+
+string(TOLOWER "${BUILD_ZSTD}" BUILD_ZSTD_LOWER)
+if (NOT "${BUILD_ZSTD_LOWER}" MATCHES "^(yes|no|on|off|1|0)$")
+    message(FATAL_ERROR "BUILD_ZSTD can be one of: [yes | no | on | off | 1 | 0], but '${BUILD_ZSTD}' was provided")
+endif ()
+
+set(USE_ZSTD 0)
+if (BUILD_ZSTD)
+    unset(ZSTD_STATIC_LIBRARY CACHE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ZSTD REQUIRED libzstd>=1.4.7)
+    find_library(
+        ZSTD_STATIC_LIBRARY
+        NAMES libzstd.a zstd_static.lib
+        HINTS ${ZSTD_LIBRARY_DIRS})
+    if (NOT ZSTD_STATIC_LIBRARY)
+        message(FATAL_ERROR "BUILD_ZSTD=yes requires the static libzstd archive")
+    endif ()
+    message(STATUS "Zstandard support is enabled")
+    set(USE_ZSTD 1)
+    add_valkey_server_compiler_options("-DHAVE_ZSTD")
+    add_library(valkey_zstd STATIC IMPORTED GLOBAL)
+    set(ZSTD_PRIVATE_LIBRARIES "${ZSTD_STATIC_LIBRARIES}")
+    list(REMOVE_ITEM ZSTD_PRIVATE_LIBRARIES zstd)
+    set_target_properties(
+        valkey_zstd
+        PROPERTIES IMPORTED_LOCATION "${ZSTD_STATIC_LIBRARY}"
+                   INTERFACE_COMPILE_OPTIONS "${ZSTD_STATIC_CFLAGS_OTHER}"
+                   INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_STATIC_INCLUDE_DIRS}"
+                   INTERFACE_LINK_LIBRARIES "${ZSTD_PRIVATE_LIBRARIES}"
+                   INTERFACE_LINK_OPTIONS "${ZSTD_STATIC_LDFLAGS_OTHER}")
+else ()
+    message(STATUS "Zstandard support is disabled")
+endif ()
 
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
 
@@ -362,6 +396,7 @@ unset(USE_TLS CACHE)
 unset(USE_RDMA CACHE)
 unset(BUILD_TLS CACHE)
 unset(BUILD_RDMA CACHE)
+unset(BUILD_ZSTD CACHE)
 unset(BUILD_MALLOC CACHE)
 unset(USE_JEMALLOC CACHE)
 unset(BUILD_TLS_MODULE CACHE)

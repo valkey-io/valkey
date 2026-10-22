@@ -72,7 +72,7 @@ void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request);
-void clusterSendFailoverNack(clusterNode *node, uint8_t reason);
+void clusterSendFailoverNack(clusterNode *node, uint64_t request_epoch, uint8_t reason);
 static const char *clusterNackReasonString(uint8_t reason);
 void clusterUpdateState(void);
 list *clusterGetNodesInMyShard(clusterNode *node);
@@ -162,7 +162,7 @@ static inline clusterMsgLight *toClusterMsgLight(void *buf) {
 }
 
 /* Only primaries that own slots have voting rights.
- * Returns 1 if the node has voting rights, otherwise returns 0. */
+ * Returns 1 if the node has voting rights, otherwise, returns 0. */
 int clusterNodeIsVotingPrimary(clusterNode *n) {
     return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
 }
@@ -279,21 +279,11 @@ dictType clusterSdsToListType = {
     .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
-static uint64_t dictPtrHash(const void *key) {
-    /* We hash the pointer value itself. */
-    return dictGenHashFunction((const char *)&key, sizeof(key));
-}
-
-static int dictPtrCompare(const void *key1, const void *key2) {
-    return key1 == key2;
-}
-
 /* Dictionary type for mapping hash slots to cluster nodes.
- * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
-dictType clusterSlotDictType = {
+ * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers.
+ * The default hash function and key comparison already handle pointer keys. */
+static dictType clusterSlotDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictPtrHash,
-    .keyCompare = dictPtrCompare,
     .entryDestructor = zfree,
 };
 
@@ -1105,10 +1095,11 @@ static sds clusterGenNodesConfContent(void) {
  * Note: we need to write the file in an atomic way from the point of view
  * of the POSIX filesystem semantics, so that if the server is stopped
  * or crashes during the write, we'll end with either the old file or the
- * new one. Since we have the full payload to write available we can use
- * a single write to write the whole file. If the preexisting file was
- * bigger we pad our payload with newlines that are anyway ignored and truncate
- * the file afterward.
+ * new one. We get that by writing the whole payload to a temp file and
+ * publishing it with rename(), so every save installs a new inode under the
+ * configured name. Nothing here may hold a descriptor on either file across
+ * the rename: the lock guarding the config lives on a separate file for that
+ * reason, see clusterLockConfig().
  *
  * This function will be called by either the main thread or a bio thread.
  * When called from a bio thread, latency is not recorded because it is not
@@ -1120,6 +1111,7 @@ static int clusterSaveConfigImpl(sds content, bool from_bio, bool do_fsync) {
     size_t content_size, offset = 0;
     ssize_t written_bytes;
     int fd = -1;
+    int close_errno = 0;
     int retval = C_ERR;
     mstime_t latency;
     content_size = sdslen(content);
@@ -1157,6 +1149,22 @@ static int clusterSaveConfigImpl(sds content, bool from_bio, bool do_fsync) {
         latencyEndMonitor(latency);
         if (!from_bio) latencyAddSampleIfNeeded("cluster-config-fsync", latency);
         if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_fsync, latency);
+    }
+
+    /* Close the temp file before publishing it with rename(). A write error the
+     * kernel deferred is reported by close() and by nothing before it, so a
+     * truncated temp file would otherwise be renamed over a good nodes.conf,
+     * and clusterLoadConfig() panics on a corrupt file at the next start.
+     * ACLSaveToFile() closes before renaming for the same reason. */
+    latencyStartMonitor(latency);
+    close_errno = close(fd) == -1 ? errno : 0;
+    fd = -1;
+    latencyEndMonitor(latency);
+    if (!from_bio) latencyAddSampleIfNeeded("cluster-config-close", latency);
+    if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_close, latency);
+    if (close_errno) {
+        serverLog(LL_WARNING, "Could not close tmp cluster config file %s: %s", tmpfilename, strerror(close_errno));
+        goto cleanup;
     }
 
     latencyStartMonitor(latency);
@@ -1248,11 +1256,18 @@ static void clusterSaveConfigBackground(bool do_fsync) {
 /* Lock the cluster config using flock(), and retain the file descriptor used to
  * acquire the lock so that the file will be locked as long as the process is up.
  *
- * This works because we always update nodes.conf with a new version
- * in-place, reopening the file, and writing to it in place (later adjusting
- * the length with ftruncate()).
+ * The lock is taken on a sibling file, nodes.conf.lock, rather than on nodes.conf
+ * itself. flock() applies to the inode and not to the name, and
+ * clusterSaveConfig() publishes every new version with rename(), so a lock held
+ * on nodes.conf stops protecting it the moment the first save installs a
+ * different inode under the name. The lock file is only ever created, never
+ * replaced, so its inode is stable for as long as the directory lives.
  *
- * On success C_OK is returned, otherwise an error is logged and
+ * Keeping the lock off nodes.conf also leaves no descriptor open on the rename
+ * destination, which filesystems with Windows semantics, such as SMB, refuse to
+ * replace.
+ *
+ * On success C_OK is returned; otherwise, an error is logged and
  * the function returns C_ERR to signal a lock was not acquired. */
 int clusterLockConfig(char *filename) {
 /* flock() does not exist on Solaris
@@ -1261,11 +1276,13 @@ int clusterLockConfig(char *filename) {
  */
 #if !defined(__sun)
     /* To lock it, we need to open the file in a way it is created if
-     * it does not exist, otherwise there is a race condition with other
+     * it does not exist; otherwise, there is a race condition with other
      * processes. */
-    int fd = open(filename, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+    sds lockfile = sdscatfmt(sdsempty(), "%s.lock", filename);
+    int fd = open(lockfile, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
     if (fd == -1) {
-        serverLog(LL_WARNING, "Can't open %s in order to acquire a lock: %s", filename, strerror(errno));
+        serverLog(LL_WARNING, "Can't open %s in order to acquire a lock: %s", lockfile, strerror(errno));
+        sdsfree(lockfile);
         return C_ERR;
     }
 
@@ -1278,11 +1295,14 @@ int clusterLockConfig(char *filename) {
                       "files.",
                       filename);
         } else {
-            serverLog(LL_WARNING, "Impossible to lock %s: %s", filename, strerror(errno));
+            serverLog(LL_WARNING, "Impossible to lock %s: %s", lockfile, strerror(errno));
         }
         close(fd);
+        sdsfree(lockfile);
         return C_ERR;
     }
+    sdsfree(lockfile);
+
     /* Lock acquired: leak the 'fd' by not closing it until shutdown time, so that
      * we'll retain the lock to the file as long as the process exists.
      *
@@ -1329,7 +1349,7 @@ void deriveAnnouncedPorts(int *announced_tcp_port,
 void clusterUpdateMyselfFlags(void) {
     if (!myself) return;
     int oldflags = myself->flags;
-    int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
+    int nofailover = server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
@@ -2052,6 +2072,9 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
+        /* Tag inbound cluster bus link as high-priority so cluster gossip and heartbeats
+         * are processed via QoS ahead of normal client traffic. */
+        connSetPriority(conn, true);
         /* Mark as cluster-owned before any TLS accept retries so generic
          * accept offload routing can safely avoid client assumptions. */
         connSetOwnerKind(conn, CONN_OWNER_CLUSTER_LINK);
@@ -3097,7 +3120,7 @@ int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * otherwise we risk joining another cluster.
              *
              * Note that we require that the sender of this gossip message
-             * is a well known node in our cluster, otherwise we risk
+             * is a well known node in our cluster; otherwise, we risk
              * joining another cluster. */
             if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename, CLUSTER_NAMELEN)) {
                 clusterNode *node;
@@ -3431,7 +3454,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     /* A primary reason why we are here is likely due to my primary crashing during the
                      * slot finalization process, leading me to become the new primary without
                      * inheriting the slot ownership, while the source shard continued and relinquished
-                     * theslot to its old primary. Under such circumstances, the node would undergo
+                     * the slot to its old primary. Under such circumstances, the node would undergo
                      * an election and have its config epoch increased with consensus. That said, we
                      * will still explicitly bump the config epoch here to be consistent with the
                      * existing practice.
@@ -4138,7 +4161,7 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
  * packet, modifying the cluster state if needed.
  *
  * The function returns 1 if the link is still valid after the packet
- * was processed, otherwise 0 if the link was freed since the packet
+ * was processed; otherwise, 0 if the link was freed since the packet
  * processing lead to some inconsistency error (for instance a PONG
  * received from the wrong sender ID). */
 int clusterProcessPacket(clusterLink *link) {
@@ -4790,13 +4813,19 @@ int clusterProcessPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
         if (!sender) return 1; /* We don't know that node. */
 
-        /* We consider this nack only if the sender is a primary serving
-         * a non-zero number of slots, and its currentEpoch is greater or
-         * equal to epoch where this node started the election. */
+        /* We consider this nack only if the sender is a primary serving a
+         * non-zero number of slots, we have an election in progress, and the
+         * NACK rejects the request of *this* election. The NACK echoes the
+         * epoch of the request it rejects; the sender's header currentEpoch
+         * is not usable for this (see clusterSendFailoverNack), because a
+         * voter rejecting an old request already claims a newer epoch, which
+         * would let a NACK for a previous election be counted against the
+         * current one and reset an election we could still win. */
+        uint64_t nack_epoch = ntohu64(msg->data.failover_nack.nack.epoch);
         if (server.cluster->failover_auth_time &&
             server.cluster->failover_auth_sent &&
             clusterNodeIsVotingPrimary(sender) &&
-            sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
+            nack_epoch == server.cluster->failover_auth_epoch) {
             clusterProcessFailoverAuthNack(sender, msg);
         }
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
@@ -5009,7 +5038,7 @@ void clusterLinkConnectHandler(connection *conn) {
     clusterSendPing(link, nodeInMeetState(node) ? CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
     if (old_ping_sent) {
         /* If there was an active ping before the link was
-         * disconnected, we want to restore the ping time, otherwise
+         * disconnected, we want to restore the ping time; otherwise,
          * replaced by the clusterSendPing() call. */
         node->ping_sent = old_ping_sent;
     }
@@ -5694,7 +5723,7 @@ void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type, cons
  * addresses are represented in the modules side, resolves the node, and sends
  * the message. If the target is NULL the message is broadcasted.
  *
- * The function returns C_OK if the target is valid, otherwise C_ERR is
+ * The function returns C_OK if the target is valid; otherwise, C_ERR is
  * returned. */
 int clusterSendModuleMessageToTarget(const char *target,
                                      uint64_t module_id,
@@ -5807,8 +5836,15 @@ static const char *clusterNackReasonString(uint8_t reason) {
     }
 }
 
-/* Send a FAILOVER_AUTH_NACK message to the specified node. */
-void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
+/* Send a FAILOVER_AUTH_NACK message to the specified node, rejecting its
+ * FAILOVER_AUTH_REQUEST for 'request_epoch'.
+ *
+ * The rejected request's epoch is echoed in the payload because the header's
+ * currentEpoch describes the voter, not the request: a REQ_EPOCH_OLD rejection
+ * is by definition sent while our currentEpoch is already past the request
+ * epoch, so a candidate that has since started a newer election could not
+ * otherwise tell this NACK apart from one rejecting that newer election. */
+void clusterSendFailoverNack(clusterNode *node, uint64_t request_epoch, uint8_t reason) {
     if (!node->link) return;
     if (!nodeSupportsFailoverAuthNack(node)) return;
 
@@ -5816,7 +5852,10 @@ void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK, msglen);
 
     clusterMsg *hdr = getMessageFromSendBlock(msgblock);
-    memcpy(&hdr->data.failover_nack.nack.reason, &reason, sizeof(reason));
+    clusterMsgDataFailoverNack *nack = &hdr->data.failover_nack.nack;
+    nack->epoch = htonu64(request_epoch);
+    nack->reason = reason;
+    memset(nack->reserved, 0, sizeof(nack->reserved));
 
     clusterSendMessage(node->link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
@@ -5852,7 +5891,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (!server.cluster->safe_to_join) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
                   node->name, humanNodename(node));
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE);
         return;
     }
 
@@ -5864,7 +5903,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): reqEpoch (%llu) < curEpoch(%llu)", node->name,
                   humanNodename(node), (unsigned long long)requestCurrentEpoch,
                   (unsigned long long)server.cluster->currentEpoch);
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD);
         return;
     }
 
@@ -5872,7 +5911,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (server.cluster->lastVoteEpoch == server.cluster->currentEpoch) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): already voted for epoch %llu", node->name,
                   humanNodename(node), (unsigned long long)server.cluster->currentEpoch);
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED);
+        clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED);
         return;
     }
 
@@ -5883,15 +5922,15 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         if (clusterNodeIsPrimary(node)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: it is a primary node", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY);
         } else if (primary == NULL) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: I don't know its primary",
                       node->name, humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY);
         } else if (!nodeFailed(primary)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
         }
         return;
     }
@@ -5932,7 +5971,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
              * for auth_timeout. TCP ordering on the same link guarantees the
              * UPDATE arrives before the NACK. */
             clusterSendUpdate(node->link, slot_owner);
-            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
+            clusterSendFailoverNack(node, requestCurrentEpoch, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
             return;
         }
     }
@@ -5945,12 +5984,42 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
               (unsigned long long)server.cluster->currentEpoch);
 }
 
+/* Returns non-zero if a voter rejecting us for this reason is telling us
+ * something a new election can act on:
+ * - ALREADY_VOTED: It already spent its vote on another replica in this epoch.
+ * - REQ_EPOCH_OLD: It answered a request from an older epoch.
+ * - STALE_CONFIG: It qualifies as well because the voter sends an UPDATE right
+ *   before the NACK, so the retry runs with a corrected slot config.
+ *
+ * Every other reason describes state that a new epoch leaves unchanged,
+ * counting those would reset elections that no retry can win. */
+static int clusterNackIsPerRoundReason(uint8_t reason) {
+    return reason == CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED ||
+           reason == CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD ||
+           reason == CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG;
+}
+
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
     /* Ignore NACKs from FAIL nodes to avoid double-counting: FAIL nodes are
      * already accounted for in size_fail, and they will never ACK, so including
      * their NACK would undercount achievable votes. */
     if (nodeFailed(sender)) {
+        return;
+    }
+
+    /* Ignore NACKs that a new epoch cannot fix: those voters answer the next
+     * request the same way, so counting them only resets the election over and
+     * over at a high frequency, each round bumping the epoch and re-broadcasting
+     * a request that cannot win. Skipping them leaves the election to expire and
+     * be rescheduled on the auth_retry_time cadence, keeping fast-fail for the
+     * rejections that carry split-vote information. */
+    if (!clusterNackIsPerRoundReason(request->data.failover_nack.nack.reason)) {
+        serverLog(LL_NOTICE,
+                  "Ignoring failover auth NACK [%s] from %.40s (%s) for epoch %llu: "
+                  "a new election would draw the same answer.",
+                  clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
+                  humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch);
         return;
     }
 
@@ -6141,6 +6210,10 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_NO_DATA:
+        msg = "Replication offset is 0 and no data has been received from the primary. "
+              "Please check the 'cluster-replica-no-failover' configuration option.";
+        break;
     default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
@@ -6246,7 +6319,7 @@ void clusterHandleReplicaFailover(void) {
      *    not a manual failover. */
     if (clusterNodeIsPrimary(myself) || myself->replicaof == NULL ||
         (!nodeFailed(myself->replicaof) && !manual_failover) ||
-        (server.cluster_replica_no_failover && !manual_failover)) {
+        (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES && !manual_failover)) {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
@@ -6277,6 +6350,23 @@ void clusterHandleReplicaFailover(void) {
             clusterLogCantFailover(CLUSTER_CANT_FAILOVER_DATA_AGE);
             return;
         }
+    }
+
+    /* Refuse to start an automatic failover while we are still empty, when
+     * configured to do so. An empty replica has never received any data from
+     * its primary (e.g. it was just added and hasn't finished the initial
+     * sync, so its replication offset is 0), so promoting it would make an
+     * empty dataset the new primary and lose all the data of the shard.
+     *
+     * Note that "empty" refers to the data received from the primary, not to
+     * the number of keys: a replica fully synced with an empty primary has a
+     * non-zero offset and is therefore not considered empty.
+     *
+     * Check bypassed for manual failovers. */
+    if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY &&
+        !manual_failover && replicationGetReplicaOffset() == 0) {
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_NO_DATA);
+        return;
     }
 
     /* If the previous failover attempt timeout and the retry time has
@@ -6586,7 +6676,7 @@ void manualFailoverCanStart(void) {
          * manual failover again when the previous manual failover timed out.
          * Otherwise, if the previous election timed out (see auth_timeout) and
          * before the next retry (see auth_retry_time), the new manual failover
-         * will pause the primary and replica can not do anything to advance the
+         * will pause the primary and replica cannot do anything to advance the
          * manual failover, and then the manual failover eventually times out. */
         server.cluster->failover_auth_time = 0;
         serverLog(LL_WARNING,
@@ -6711,6 +6801,9 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         (*cluster_conn_attempts)--;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
+        /* Tag outbound cluster bus link as high-priority so node reconnects, gossip ping/pong,
+         * and failure detection heartbeats operate with QoS priority. */
+        connSetPriority(link->conn, true);
         connSetPrivateData(link->conn, link);
         connSetOwnerKind(link->conn, CONN_OWNER_CLUSTER_LINK);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
@@ -7128,7 +7221,7 @@ int clusterAddSlot(clusterNode *n, int slot) {
 }
 
 /* Delete the specified slot marking it as unassigned.
- * Returns C_OK if the slot was assigned, otherwise if the slot was
+ * Returns C_OK if the slot was assigned; otherwise, if the slot was
  * already unassigned C_ERR is returned. */
 int clusterDelSlot(int slot) {
     clusterNode *n = server.cluster->slots[slot];
@@ -7588,7 +7681,7 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
                    (node->link || node->flags & CLUSTER_NODE_MYSELF) ? "connected" : "disconnected");
 
     /* Slots served by this instance. If we already have slots info,
-     * append it directly, otherwise, generate slots only if it has. */
+     * append it directly; otherwise, generate slots only if it has. */
     if (node->slot_info_pairs) {
         ci = representSlotInfo(ci, node->slot_info_pairs, node->slot_info_pairs_count);
     } else if (node->numslots > 0) {

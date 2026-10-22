@@ -40,6 +40,31 @@ proc read_binary_file {path} {
     return $data
 }
 
+# Compare two files without reading them entirely into memory, and without relying
+# on an external tool like cmp, which isn't available in every test environment.
+proc files_are_identical {path1 path2} {
+    if {[file size $path1] != [file size $path2]} {
+        return 0
+    }
+    set fd1 [open $path1 r]
+    set fd2 [open $path2 r]
+    fconfigure $fd1 -translation binary
+    fconfigure $fd2 -translation binary
+    set identical 1
+    while {1} {
+        set chunk1 [read $fd1 65536]
+        set chunk2 [read $fd2 65536]
+        if {$chunk1 ne $chunk2} {
+            set identical 0
+            break
+        }
+        if {$chunk1 eq ""} break
+    }
+    close $fd1
+    close $fd2
+    return $identical
+}
+
 proc write_binary_file {path data} {
     set fd [open $path w]
     fconfigure $fd -translation binary
@@ -177,10 +202,13 @@ proc waitForBgrewriteaof r {
 }
 
 proc wait_for_sync {r {maxtries 50} {delay 100}} {
+    # A replica that fails to load the payload terminates, so catch the error
+    # from the lost connection and report it as a test failure rather than
+    # letting it surface as an I/O error aborting the whole run.
     wait_for_condition $maxtries $delay {
-        [status $r master_link_status] eq "up"
+        [catch {status $r master_link_status} res] == 0 && $res eq "up"
     } else {
-        fail "replica didn't sync in time"
+        fail "replica didn't sync in time (master_link_status: '$res')"
     }
 }
 
@@ -796,7 +824,23 @@ proc wait_process_paused {pid {retries auto}} {
     }
 }
 
+# The process is resumed automatically when the current test ends. Use
+# pause_process_persistent to keep it paused across tests. Outside a test it
+# behaves like pause_process_persistent.
 proc pause_process pid {
+    if {$::cur_test eq ""} {
+        pause_process_persistent $pid
+        return
+    }
+    if {[lsearch -exact $::test_paused_pids $pid] < 0} {
+        lappend ::test_paused_pids $pid
+    }
+    pause_process_persistent $pid
+}
+
+# Like pause_process, but the process stays paused until resume_process is
+# called, even after the current test ends.
+proc pause_process_persistent pid {
     exec kill -SIGSTOP $pid
     # We sent the signal, so the stop is near-immediate. Keep the short budget.
     wait_process_paused $pid 50
@@ -804,6 +848,10 @@ proc pause_process pid {
 
 proc resume_process pid {
     exec kill -SIGCONT $pid
+    set idx [lsearch -exact $::test_paused_pids $pid]
+    if {$idx >= 0} {
+        set ::test_paused_pids [lreplace $::test_paused_pids $idx $idx]
+    }
 }
 
 proc cmdrstat {cmd r} {
@@ -824,7 +872,10 @@ proc latencyrstat_percentiles {cmd r} {
     }
 }
 
-proc generate_fuzzy_traffic_on_key {key duration} {
+# When adding a new data type & its commands here, do create a key of that type
+# in generate_types in tests/integration/corrupt-dump-fuzzer.tcl, otherwise the
+# fuzzer has no coverage for it.
+proc fuzzy_traffic_commands_by_type {} {
     # Commands per type, blocking commands removed
     # TODO: extract these from COMMAND DOCS, and improve to include other types
     set string_commands {APPEND BITCOUNT BITFIELD BITOP BITPOS DECR DECRBY GET GETBIT GETRANGE GETSET INCR INCRBY INCRBYFLOAT MGET MSET MSETNX PSETEX SET SETBIT SETEX SETNX SETRANGE LCS STRLEN}
@@ -833,9 +884,18 @@ proc generate_fuzzy_traffic_on_key {key duration} {
     set list_commands {LINDEX LINSERT LLEN LPOP LPOS LPUSH LPUSHX LRANGE LREM LSET LTRIM RPOP RPOPLPUSH RPUSH RPUSHX}
     set set_commands {SADD SCARD SDIFF SDIFFSTORE SINTER SINTERSTORE SISMEMBER SMEMBERS SMOVE SPOP SRANDMEMBER SREM SSCAN SUNION SUNIONSTORE}
     set stream_commands {XACK XADD XCLAIM XDEL XGROUP XINFO XLEN XPENDING XRANGE XREAD XREADGROUP XREVRANGE XTRIM}
-    set commands [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands]
+    set pathhash_commands {PHCARD PHDEL PHDELPREFIX PHEXISTS PHGET PHGETALL PHLONGEST PHMGET PHMSET PHPREFIXES PHSCAN PHSET}
+    return [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands pathhash $pathhash_commands]
+}
+
+proc generate_fuzzy_traffic_on_key {key duration} {
+    set commands [fuzzy_traffic_commands_by_type]
 
     set type [r type $key]
+    # A type missing from the list above would fail with an opaque "key not known in dictionary" error.
+    if {![dict exists $commands $type]} {
+        error "generate_fuzzy_traffic_on_key: no command list for type '$type', add one to fuzzy_traffic_commands_by_type"
+    }
     set cmds [dict get $commands $type]
     set start_time [clock seconds]
     set sent {}
@@ -883,6 +943,15 @@ proc generate_fuzzy_traffic_on_key {key duration} {
             lappend cmd [randomValue]
             lappend cmd [randomValue]
             incr i 4
+        }
+        if {$cmd == "PHSET"} {
+            lappend cmd $key
+            lappend cmd [randomValue]
+            lappend cmd "FIELDS"
+            lappend cmd 1
+            lappend cmd [randomValue]
+            lappend cmd [randomValue]
+            incr i 6
         }
         for {} {$i < $arity} {incr i} {
             if {$i == $firstkey || $i == $lastkey} {
@@ -1150,6 +1219,17 @@ proc config_get_set {param value {options {}}} {
     set config [lindex [r config get $param] 1]
     config_set $param $value $options
     return $config
+}
+
+# Return whether a CONFIG parameter accepts a value without changing its
+# current setting.
+proc config_value_supported {client param value} {
+    set old [lindex [$client config get $param] 1]
+    set supported [expr {[catch {$client config set $param $value}] == 0}]
+    if {$supported} {
+        $client config set $param $old
+    }
+    return $supported
 }
 
 proc delete_lines_with_pattern {filename tmpfilename pattern} {
@@ -1468,4 +1548,30 @@ proc cluster_nodes_conf_path {id} {
     set dir [lindex [R $id config get dir] 1]
     set conf [lindex [R $id config get cluster-config-file] 1]
     return [file join $dir $conf]
+}
+
+# Return a finite operand `x` such that `x + x` overflows the server's `long double`.
+#
+# The width of `long double` is platform dependent, so no single constant works
+# everywhere:
+#
+#   x86-64 / aarch64 Linux   80-bit or 128-bit, LDBL_MAX ~1.19e4932
+#   Apple Silicon            long double == double, LDBL_MAX ~1.80e308
+#
+# Rather than branch on the build, ask the server: a value it cannot represent is
+# rejected when parsed as a long double, so the first candidate it accepts is the
+# right magnitude for this build.
+#
+# `level` selects the server instance, matching the convention of `r` (0 is the
+# current server, -1 the previous one, and so on).
+proc ldbl_overflow_operand {{level 0}} {
+    foreach candidate {1e4932 1e308} {
+        r $level set __ldbl_probe $candidate
+        if {![catch {r $level increx __ldbl_probe byfloat 0}]} {
+            r $level del __ldbl_probe
+            return $candidate
+        }
+    }
+    r $level del __ldbl_probe
+    error "no long double operand large enough to overflow on this platform"
 }

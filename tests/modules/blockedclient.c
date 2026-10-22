@@ -952,6 +952,18 @@ int stop_slow_fg_command(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int ar
     return VALKEYMODULE_OK;
 }
 
+int get_repl_read_offset(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModuleServerInfoData *info = ValkeyModule_GetServerInfo(ctx, "replication");
+    int err = VALKEYMODULE_OK;
+    long long offset = ValkeyModule_ServerInfoGetFieldSigned(info, "slave_read_repl_offset", &err);
+    ValkeyModule_FreeServerInfo(ctx, info);
+    if (err != VALKEYMODULE_OK) return ValkeyModule_ReplyWithError(ctx, "replication offset unavailable");
+    return ValkeyModule_ReplyWithLongLong(ctx, offset);
+}
+
 /* used to enable or disable slow operation in do_bg_rm_call */
 static int set_slow_bg_operation(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
@@ -1103,6 +1115,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "stop_slow_fg_command", stop_slow_fg_command,"allow-busy", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "get_repl_read_offset", get_repl_read_offset, "allow-busy", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "set_slow_bg_operation", set_slow_bg_operation, "allow-busy", 0, 0, 0) == VALKEYMODULE_ERR)

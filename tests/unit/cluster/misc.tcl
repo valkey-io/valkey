@@ -40,6 +40,36 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_error {CROSSSLOT *} {r exec}
     }
 
+    test {Conditional EXEC rejects cross-slot condition keys} {
+        set condition1 "{condition1}key"
+        set condition2 "{condition2}key"
+        set destination "{condition1}destination"
+        assert {[R 0 cluster keyslot $condition1] != [R 0 cluster keyslot $condition2]}
+
+        R 0 del $condition1
+        R 0 del $condition2
+        R 0 del $destination
+        R 0 set $condition1 value
+        R 0 multi
+        R 0 set $destination should-not-execute
+        assert_error {CROSSSLOT Keys*} {R 0 exec ifeq $condition1 value nx $condition2}
+        assert_equal 0 [R 0 exists $destination]
+    }
+
+    test {Conditional EXEC rejects a queued key in a different slot} {
+        set condition "{condition}key"
+        set destination "{destination}key"
+        assert {[R 0 cluster keyslot $condition] != [R 0 cluster keyslot $destination]}
+
+        R 0 del $condition
+        R 0 del $destination
+        R 0 set $condition value
+        R 0 multi
+        R 0 set $destination should-not-execute
+        assert_error {CROSSSLOT Keys*} {R 0 exec ifeq $condition value}
+        assert_equal 0 [R 0 exists $destination]
+    }
+
     # Regression tests for WATCHed keys that hash to a different slot than the transaction's commands. EXEC
     # committed such a transaction even when the WATCHed key had expired or had been removed.
     test {WATCHed key in another slot that expired aborts EXEC} {
@@ -111,6 +141,44 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 }
 
+start_cluster 2 0 {tags {external:skip cluster}} {
+    test {EXEC with conditions without MULTI returns EXEC without MULTI, not MOVED or CROSSSLOT} {
+        set remote_key key_for_other_node
+        while {![catch {R 0 get $remote_key} err] || ![string match {MOVED *} $err]} {
+            append remote_key x
+        }
+
+        set slotA "{slotA}key"
+        set slotB "{slotB}key"
+        assert {[R 0 cluster keyslot $slotA] != [R 0 cluster keyslot $slotB]}
+        assert_error {*EXEC without MULTI*} {R 0 exec ifeq $remote_key val}
+        assert_error {*EXEC without MULTI*} {R 0 exec ifeq $slotA val1 ifeq $slotB val2}
+    }
+
+    test {Queue-time MOVED followed by EXEC with remote condition returns EXECABORT} {
+        set other_key key_for_other_node
+        while {![catch {R 0 get $other_key} err] || ![string match {MOVED *} $err]} {
+            append other_key x
+        }
+
+        R 0 multi
+        assert_error {MOVED *} {R 0 set $other_key val}
+        assert_error {EXECABORT*previous errors*} {R 0 exec ifeq $other_key val}
+    }
+
+    test {Keyless queued commands with remote condition key on EXEC returns MOVED} {
+        set other_key key_for_other_node
+        while {![catch {R 0 get $other_key} err] || ![string match {MOVED *} $err]} {
+            append other_key x
+        }
+
+        R 0 multi
+        assert_equal {QUEUED} [R 0 dbsize]
+        assert_error {MOVED *} {R 0 exec ifeq $other_key val}
+        assert_equal {PONG} [R 0 ping]
+    }
+}
+
 # Get the path to the cluster config file.
 proc get_nodes_conf_path {srv_idx} {
     set dir [lindex [R $srv_idx config get dir] 1]
@@ -131,6 +199,17 @@ proc create_nodes_conf_folder {srv_idx} {
 proc remove_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
     exec rm -rf $cluster_conf_path
+}
+
+proc file_inode {path} {
+    file stat $path st
+    return $st(ino)
+}
+
+# The temp files a save leaves behind, if any. A save writes one and renames it
+# over the cluster config file, so none should survive a completed save.
+proc leftover_nodes_conf_tmp_files {srv_idx} {
+    return [glob -nocomplain "[get_nodes_conf_path $srv_idx].tmp-*"]
 }
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
@@ -208,6 +287,13 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
 
+        # A node whose renames keep failing must not accumulate temp files. This
+        # holds before this commit too; it is here to keep the invariant from
+        # regressing as the save path is reordered. The bio jobs were drained
+        # above, so no save is still in flight.
+        assert_equal {} [leftover_nodes_conf_tmp_files 0]
+        assert_equal {} [leftover_nodes_conf_tmp_files 1]
+
         # Check the info field is err.
         assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
         assert_equal "err" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
@@ -256,6 +342,45 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         # cluster_config_last_save_time must have advanced after a successful save.
         assert_morethan_equal [getInfoProperty [R 0 cluster info] cluster_config_last_save_time] $last_save_time_0
         assert_morethan_equal [getInfoProperty [R 1 cluster info] cluster_config_last_save_time] $last_save_time_1
+    }
+}
+
+start_server {tags {external:skip cluster singledb} overrides {cluster-enabled yes}} {
+    test {nodes.conf stays locked after the config is saved} {
+        set dir [lindex [r config get dir] 1]
+        set cluster_conf [lindex [r config get cluster-config-file] 1]
+        set conf_path [file join $dir $cluster_conf]
+
+        # Every save publishes nodes.conf with rename(), which puts a new inode
+        # under the name. Force one, then confirm the running node still holds
+        # the lock that stops a second node from using the same file.
+        set inode_before [file_inode $conf_path]
+        assert_equal {OK} [r cluster saveconfig]
+        wait_for_condition 50 100 {
+            [file_inode $conf_path] != $inode_before
+        } else {
+            fail "the save did not replace $cluster_conf"
+        }
+
+        # flock() does not exist on Solaris, so clusterLockConfig() does not lock
+        # at all there and a second node is expected to start.
+        if {$::tcl_platform(os) ne "SunOS"} {
+            set logfile [file join $dir second-node.log]
+            set pid [exec $::VALKEY_SERVER_BIN --port 0 \
+                         --unixsocket [file join $dir second-node.sock] \
+                         --cluster-enabled yes \
+                         --dir $dir \
+                         --cluster-config-file $cluster_conf \
+                         --logfile $logfile &]
+
+            wait_for_condition 100 100 {
+                ![process_is_alive $pid]
+            } else {
+                catch {exec kill -9 $pid}
+                fail "a second node started while $cluster_conf was already in use"
+            }
+            assert_match "*already used by a different Cluster node*" [exec cat $logfile]
+        }
     }
 }
 

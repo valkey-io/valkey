@@ -85,6 +85,71 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [$A debug digest] [$B debug digest]
         }
 
+        test {INCREX replication, should not remove expire} {
+            r set test 1 EX 100
+            r increx test byint 1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT replication, should not remove expire} {
+            r set test 1 EX 100
+            r increx test byfloat 0.1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX byint with EX propagates the correct TTL to replica} {
+            r del test
+            r increx test ex 100 byint 1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_range [$B ttl test] 1 100
+        }
+
+        test {INCREX byfloat with EX propagates the correct TTL to replica} {
+            r del test
+            r increx test ex 100 byfloat 1.1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_range [$B ttl test] 1 100
+        }
+
+        test {INCREX BYFLOAT without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1
+            r increx test byfloat 0.2
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with NX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1 NX
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with XX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1
+            r increx test byfloat 0.1 XX
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
         test {GETSET replication} {
             $A config resetstat
             $A config set loglevel debug
@@ -313,6 +378,128 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
+        test {INCREX with expire propagates as SET with PXAT} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo ex 100 byint 5
+            assert_replication_stream $repl {
+                {set foo 5 PXAT *}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX BYFLOAT propagates as SET, not literal command} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byfloat 0.1
+            assert_replication_stream $repl {
+                {set foo *}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX BYINT without expire propagates as SET with KEEPTTL} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5
+            assert_replication_stream $repl {
+                {set foo 5 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX with PERSIST propagates as SET} {
+            r -1 set foo 1 ex 100
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 persist
+            assert_replication_stream $repl {
+                {set foo 6}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX declined bounds operation does not propagate} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 10
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX ENX with existing TTL propagates as SET with KEEPTTL} {
+            r -1 set foo 1 ex 500
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ex 100 enx
+            assert_replication_stream $repl {
+                {set foo 6 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX SATURATE propagates the clamped value} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 12 saturate
+            assert_replication_stream $repl {
+                {set foo 12 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX applied-increment errors do not propagate} {
+            r -1 set foo 9223372036854775807
+            set repl [attach_to_replication_stream]
+            catch {r -1 increx foo byint -5 ubound -9223372036854775808 saturate} err
+            assert_match "*applied increment would overflow*" $err
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX NX no-op does not propagate} {
+            r -1 set foo 1
+            set repl [attach_to_replication_stream]
+            r -1 increx foo nx byint 1
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX XX no-op does not propagate} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo xx byint 1
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        # This test can't be executed on x86 when valgrind is enabled,
+        # valgrind simulation will return a finite result on 1e4932 + 1e4932
+        test {INCREX BYFLOAT arithmetic overflow does not propagate} {
+            set big [ldbl_overflow_operand -1]
+            r -1 del foo
+            r -1 set foo $big
+            set repl [attach_to_replication_stream]
+            # Overflows to infinity; no change to DB, should not propagate
+            r -1 increx foo byfloat $big
+            assert_equal $big [r -1 get foo]
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        } {} {valgrind:skip}
+
         test {ROLE in master reports master with a slave} {
             set res [r -1 role]
             lassign $res role offset slaves
@@ -451,7 +638,7 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
             # to the slave.
             after 5000
 
-            # Stop the ability of the slave to process data by sendig
+            # Stop the ability of the slave to process data by sending
             # a script that will put it in BUSY state.
             $slave eval {for i=1,3000000000 do end} 0
 
@@ -1119,7 +1306,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
 # per-key save delay keeps the compressed diskless transfer in flight while one
 # replica is killed. The primary's RDB child must complete without crashing and
 # the surviving replica must converge.
-start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}} {
+start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4 repl-compression lz4}} {
     set master [srv 0 client]
     $master config set repl-diskless-sync yes
     $master config set repl-diskless-sync-delay 5
@@ -1134,16 +1321,16 @@ start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}
     $master config set rdb-key-save-delay 1000
 
     test "diskless replica drops during compressed rdb pipe" {
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+        start_server {overrides {save "" rdbcompression lz4 repl-compression lz4 repl-diskless-load swapdb}} {
             set survivor [srv 0 client]
-            start_server {overrides {save "" rdbcompression lz4}} {
+            start_server {overrides {save "" rdbcompression lz4 repl-compression lz4}} {
                 set loglines [count_log_lines -2]
                 $survivor replicaof $master_host $master_port
                 [srv 0 client] replicaof $master_host $master_port
 
                 # Wait for a compressed transfer to be in flight: the cohort
                 # negotiated compression and the survivor began the socket load.
-                wait_for_log_messages -2 {"*Diskless full sync with compression: lz4*"} $loglines 1500 10
+                wait_for_log_messages -2 {"*target: replicas sockets*compression: lz4*"} $loglines 1500 10
                 wait_for_log_messages -1 {"*Loading DB in memory*"} 0 1500 10
 
                 # Kill one replica mid-transfer.
@@ -1607,6 +1794,31 @@ start_server {tags {"repl" "external:skip"}} {
         $rd close
         waitForBgsave r
     }
+
+    foreach hide {no yes} {
+        test "Error sent to replica is logged with hide-user-data-from-log $hide" {
+            r config set hide-user-data-from-log $hide
+            set rd [valkey_deferring_client]
+            set lines [count_log_lines 0]
+
+            $rd psync replicationid -1
+            assert_match {FULLRESYNC * *} [$rd read]
+            $rd notacommand secretvalue
+            catch {$rd read} e
+            assert_equal "PONG" [r ping]
+
+            if {$hide} {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: '\\*redacted\\*'*" $lines
+                verify_no_log_message 0 "*secretvalue*" $lines
+            } else {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *secretvalue*" $lines
+            }
+
+            $rd close
+            waitForBgsave r
+        }
+    }
+    r config set hide-user-data-from-log no
 
     test "PSYNC with wrong offset should throw error" {
         # It used to accept the FULL SYNC, but also replied with an error.

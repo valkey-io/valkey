@@ -34,6 +34,9 @@ fbtreeIndex *fbtreeIteratorGetIndex(fbtreeIterator *iterator);
  * position, or NULL when there are no more elements in that direction. */
 const_sds fbtreeNext(fbtreeIterator *iterator);
 const_sds fbtreePrev(fbtreeIterator *iterator);
+/* Same as fbtreeNext/fbtreePrev, without moving the iterator. */
+const_sds fbtreePeekNext(fbtreeIterator *iterator);
+const_sds fbtreePeekPrev(fbtreeIterator *iterator);
 
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
 const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);

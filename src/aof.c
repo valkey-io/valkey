@@ -1448,17 +1448,26 @@ sds genAofTimestampAnnotationIfNeeded(int force) {
  *          to avoid writing `select` command in any case.
  * argv   - The command to write to the aof.
  * argc   - Number of values in argv
+ *
+ * If AOF is not actively writing (i.e. not AOF_ON, and not in an active
+ * rewrite), this function returns immediately without side effects.
  */
 void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
-    sds buf = sdsempty();
-
     serverAssert(dictid == -1 || (dictid >= 0 && dictid < server.dbnum));
+
+    /* The caller (propagateNow) only checks AOF_OFF. We additionally skip
+     * AOF_WAIT_REWRITE without an active rewrite child, since aof_buf
+     * data has nowhere to be merged from in that transient state. */
+    if (!(server.aof_state == AOF_ON ||
+          (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF))) {
+        return;
+    }
 
     /* Feed timestamp if needed */
     if (server.aof_timestamp_enabled) {
         sds ts = genAofTimestampAnnotationIfNeeded(0);
         if (ts != NULL) {
-            buf = sdscatsds(buf, ts);
+            server.aof_buf = sdscatsds(server.aof_buf, ts);
             sdsfree(ts);
         }
     }
@@ -1469,22 +1478,14 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
         char seldb[64];
 
         snprintf(seldb, sizeof(seldb), "%d", dictid);
-        buf = sdscatprintf(buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
+        server.aof_buf =
+            sdscatprintf(server.aof_buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
         server.aof_selected_db = dictid;
     }
 
     /* All commands should be propagated the same way in AOF as in replication.
      * No need for AOF-specific translation. */
-    buf = catAppendOnlyGenericCommand(buf, argc, argv);
-
-    /* Append to the AOF buffer. This will be flushed on disk just before
-     * of re-entering the event loop, so before the client will get a
-     * positive reply about the operation performed. */
-    if (server.aof_state == AOF_ON || (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF)) {
-        server.aof_buf = sdscatlen(server.aof_buf, buf, sdslen(buf));
-    }
-
-    sdsfree(buf);
+    server.aof_buf = catAppendOnlyGenericCommand(server.aof_buf, argc, argv);
 }
 
 /* ----------------------------------------------------------------------------
@@ -1570,11 +1571,12 @@ int loadSingleAppendOnlyFile(char *filename) {
     fakeClient = createAOFClient();
     server.current_client = server.executing_client = fakeClient;
 
-    /* Check if the AOF file is in RDB format (it may be RDB encoded base AOF
-     * or old style RDB-preamble AOF). In that case we need to load the RDB file
-     * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
-    char sig[6]; /* "REDIS" or "VALKEY" */
-    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS0", 6) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
+    /* Check if the AOF starts with a plain or streaming-compressed RDB (it may
+     * be an RDB-encoded base AOF or old-style RDB-preamble AOF). In that case,
+     * load the RDB and then continue with any old-style AOF tail. */
+    char sig[6]; /* "REDIS0", "VALKEY", or the three-byte "VCS" prefix. */
+    size_t siglen = fread(sig, 1, sizeof(sig), fp);
+    if (!rdbHasFileSignature(sig, siglen)) {
         /* Not in RDB format, seek back at 0 offset. */
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {
@@ -1588,7 +1590,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != RDB_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL, aof_filepath) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1598,6 +1600,8 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
+            /* rdbLoadRio() leaves fp at the first byte after the RDB, where an
+             * old-style AOF tail starts. */
             valid_up_to = ftello(fp);
             loadingAbsProgress(valid_up_to);
             last_progress_report_size = valid_up_to;
@@ -1678,7 +1682,8 @@ int loadSingleAppendOnlyFile(char *filename) {
         sds err = NULL;
         fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
         if ((!cmd && !commandCheckExistence(fakeClient, &err)) || (cmd && !commandCheckArity(cmd, argc, &err))) {
-            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename, err);
+            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename,
+                      (server.hide_user_data_from_log && !cmd) ? "*redacted*" : err);
             sdsfree(err);
             freeClientArgv(fakeClient);
             ret = AOF_FAILED;
@@ -2408,6 +2413,8 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
         if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_STREAM) {
         if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        if (rewritePathHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_MODULE) {
         if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {
@@ -2555,7 +2562,9 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
+        if (rdbSaveRio(compression_algo, REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
+                       RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }

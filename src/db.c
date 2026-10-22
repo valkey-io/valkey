@@ -208,7 +208,7 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
  * function.
  *
  * If the update_if_existing argument is false, the program is aborted
- * if the key already exists, otherwise, it can fall back to dbOverwrite. */
+ * if the key already exists; otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
     int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **oldref = NULL;
@@ -291,7 +291,7 @@ int getCachedKeySlot(sds key) {
  * give more control to the caller, nor will signal the key as ready
  * since it is not useful in this context.
  *
- * The function returns 1 if the key was added to the database, otherwise 0 is returned.
+ * The function returns 1 if the key was added to the database; otherwise, 0 is returned.
  */
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     int dict_index = getKVStoreIndexForKey(key);
@@ -824,7 +824,7 @@ void signalFlushedDb(int dbid, int async) {
  * async: flushes the database in an async manner.
  * no option: determine sync or async according to the value of lazyfree-lazy-user-flush.
  *
- * On success the C_OK is returned, otherwise C_ERR is returned. */
+ * On success the C_OK is returned; otherwise, C_ERR is returned. */
 int parseFlushCommandFlags(client *c, int *flags) {
     /* Parse the optional ASYNC option. */
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "sync")) {
@@ -1258,7 +1258,7 @@ int parseScanOptionsOrReply(client *c, robj *o, int start_idx, bool allow_slot, 
 }
 
 /* This command implements SCAN, HSCAN, SSCAN and CLUSTERSCAN commands.
- * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
+ * If object 'o' is passed, then it must be a Hash, Set or Zset object; otherwise,
  * if 'o' is NULL the command will operate on the dictionary associated with
  * the current database.
  *
@@ -1324,7 +1324,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
          * 4. data.pattern: the pattern string;
          * 5. data.sampled: the maxiteration limit is there in case we're
          * working on an empty dict, one with a lot of empty buckets, and
-         * for the buckets are not empty, we need to limit the spampled number
+         * for the buckets are not empty, we need to limit the sampled number
          * to prevent a long hang time caused by filtering too many keys;
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */
@@ -1814,10 +1814,10 @@ static void copyDbExpiry(serverDb *target, const serverDb *source) {
 /* Swap two databases at runtime so that all clients will magically see
  * the new database even if already connected. Note that the client
  * structure c->db points to a given DB, so we need to be smarter and
- * swap the underlying referenced structures, otherwise we would need
+ * swap the underlying referenced structures; otherwise, we would need
  * to fix all the references to the DB structure.
  *
- * Returns C_ERR if at least one of the DB ids are out of range, otherwise
+ * Returns C_ERR if at least one of the DB ids are out of range; otherwise,
  * C_OK is returned. */
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
@@ -1955,11 +1955,11 @@ int removeExpire(serverDb *db, robj *key) {
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
- * of a user calling a command 'c' is the client, otherwise 'c' is set
+ * of a user calling a command 'c' is the client; otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid.
  *
- * This functions may reallocate the value. The new allocation is returned and
+ * This function may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. */
 robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* TODO: Add val as a parameter to this function, to avoid looking it up. */
@@ -2284,7 +2284,7 @@ static int dbExpandSkipSlot(int slot) {
 }
 
 /*
- * This functions increases size of the main/expires db to match desired number.
+ * This function increases size of the main/expires db to match desired number.
  * In cluster mode resizes all individual dictionaries for slots that this node owns.
  *
  * Based on the parameter `try_expand`, appropriate dict expand API is invoked.
@@ -2709,7 +2709,7 @@ int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc
  * table, according to the command name in argv[0].
  *
  * This function uses the command table if a command-specific helper function
- * is not required, otherwise it calls the command-specific function. */
+ * is not required; otherwise, it calls the command-specific function. */
 int getKeysFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     if (cmd->flags & CMD_MODULE_GETKEYS) {
         return moduleGetCommandKeysViaAPI(cmd, argv, argc, result);

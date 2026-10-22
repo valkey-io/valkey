@@ -328,7 +328,7 @@ find the right reviewer:
   to anyone's attention.
 * Reviewing other people's pull requests is one of the best ways to get
   involved and to learn the codebase. Reviews from non-maintainers are read
-  and valued; a maintainer still gives the final approval.
+  and valued; a maintainer still performs the final merge.
 
 ## How a pull request gets merged
 

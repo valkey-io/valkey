@@ -831,7 +831,7 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
     raxStart(&ri, pel);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
-        /* We store IDs in raw form as 128 big big endian numbers, like
+        /* We store IDs in raw form as 128 bit big endian numbers, like
          * they are inside the radix tree key. */
         if ((n = rdbWriteRaw(rdb, ri.key, sizeof(streamID))) == -1) {
             raxStop(&ri);
@@ -1004,12 +1004,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             if ((n = rdbSaveLen(rdb, orderedIndexLength(zs->oi))) == -1) return -1;
             nwritten += n;
 
-            /* We save the skiplist elements from the greatest to the smallest
-             * (that's trivial since the elements are already ordered in the
-             * skiplist): this improves the load process, since the next loaded
-             * element will always be the smaller, so adding to the skiplist
-             * will always immediately stop at the head, making the insertion
-             * O(1) instead of O(log(N)). */
+            /* We save the elements from the greatest to the smallest
+             * (that's trivial since the elements are already ordered in
+             * the ordered index): this improves the load process, since
+             * the next loaded element will always be the smaller, so
+             * adding to the ordered index will always immediately stop
+             * at the head, making the insertion O(1) instead of O(log(N)). */
             OrderedIndexIterator iter;
             orderedIndexInitIterator(&iter, zs->oi);
             OrderedIndexItem *item;
@@ -2844,10 +2844,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 return NULL;
             }
-            /* See the RDB_TYPE_ZSET_LISTPACK case: a NAN score would crash the
-             * server when the zset is converted to a skiplist. The legacy
-             * ziplist format is converted to a listpack above, so apply the
-             * same NAN check on the resulting listpack. */
+            /* See the RDB_TYPE_ZSET_LISTPACK case: a NAN score would crash
+             * the server when the zset is converted to the ordered index
+             * encoding. The legacy ziplist format is converted to a listpack
+             * above, so apply the same NAN check on the resulting listpack. */
             if (!zzlValidateScores(lp)) {
                 rdbReportCorruptRDB("Zset ziplist with NAN score detected");
                 zfree(lp);
@@ -2881,10 +2881,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 return NULL;
             }
-            /* A NAN score would crash the server when the zset is converted to
-             * a skiplist (zslInsertNode asserts the score is not NAN). The
-             * skiplist RDB format rejects NAN scores at load time; do the same
-             * for the listpack format. */
+            /* A NAN score would crash the server when the zset is converted
+             * to the ordered index encoding: the index packs each score
+             * into a sortable 8-byte key and asserts the score is not NAN.
+             * The ordered index RDB format rejects NAN scores at load time;
+             * do the same for the listpack format. */
             if (!zzlValidateScores(encoded)) {
                 rdbReportCorruptRDB("Zset listpack with NAN score detected");
                 zfree(encoded);

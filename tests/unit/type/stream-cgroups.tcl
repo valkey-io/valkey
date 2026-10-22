@@ -1245,6 +1245,19 @@ start_server {
         assert_equal [dict get $group lag] 0
     }
 
+    test {Consumer group lag after XTRIM empties the stream} {
+        r DEL x
+        for {set i 1} {$i <= 6} {incr i} {
+            r XADD x $i-0 data $i
+        }
+        r XGROUP CREATE x g1 0
+        r XREADGROUP GROUP g1 c1 COUNT 1 STREAMS x >
+        r XTRIM x MAXLEN 0
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group lag] 0
+    }
+
     test {Consumer group lag with XDELs} {
         r DEL x
         r XADD x 1-0 data a

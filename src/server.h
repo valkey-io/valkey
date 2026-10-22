@@ -797,6 +797,10 @@ typedef enum {
 #define ARGS_SET_IFNE (1 << 13) /* Set only if values are not equal */
 #define ARGS_BYINT (1 << 14)    /* Set if the value needs to be incremented by an integer. */
 #define ARGS_BYFLOAT (1 << 15)  /* Set if the value needs to be incremented by a float. */
+#define ARGS_LBOUND (1 << 16)   /* Set if lower bound is specified. */
+#define ARGS_UBOUND (1 << 17)   /* Set if upper bound is specified. */
+#define ARGS_SATURATE (1 << 18) /* Set if saturation is enabled. */
+#define ARGS_ENX (1 << 19)      /* Set if expire only when no ttl exists. */
 
 #define ARGS_SET_CONDITIONAL \
     (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
@@ -1338,6 +1342,7 @@ typedef struct ClientReplicationData {
     long long read_reploff;                /* Read replication offset if this is a primary. */
     long long reploff;                     /* Applied replication offset if this is a primary. */
     long long repl_applied;                /* Applied replication data count in querybuf, if this is a replica. */
+    int repl_applied_dbid;                 /* DB selected at repl_applied in the stream, if this is a slot import. */
     long long repl_ack_off;                /* Replication ack offset, if this is a replica. */
     long long repl_aof_off;                /* Replication AOF fsync ack offset, if this is a replica. */
     long long repl_ack_time;               /* Replication ack time, if this is a replica. */
@@ -2548,7 +2553,7 @@ struct valkeyServer {
     /* Coordinate failover info */
     mstime_t failover_end_time;              /* Deadline for failover command. */
     int force_failover;                      /* If true then failover will be forced at the
-                                              * deadline, otherwise failover is aborted. */
+                                              * deadline; otherwise, failover is aborted. */
     char *target_replica_host;               /* Failover target host. If null during a
                                               * failover then any replica can be used. */
     int target_replica_port;                 /* Failover target port */
@@ -2807,7 +2812,7 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  *                      allowed under circumstances where write commands are disallowed.
  *                      Examples include PUBLISH, which replicates pubsub messages,and
  *                      EVAL, which may execute write commands, which are replicated,
- *                      or may just execute read commands. A command can not be marked
+ *                      or may just execute read commands. A command cannot be marked
  *                      both CMD_WRITE and CMD_MAY_REPLICATE
  *
  * CMD_SENTINEL:    This command is present in sentinel mode.
@@ -2829,7 +2834,7 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  *                   populateCommandLegacyRangeSpec.
  *
  * CMD_ALLOW_BUSY: The command can run while another command is running for
- *                 a long time (timedout script, module command that yields)
+ *                 a long time (timed out script, module command that yields)
  *
  * CMD_MODULE_GETCHANNELS: Use the modules getchannels interface.
  *
@@ -3244,6 +3249,7 @@ void protectClient(client *c);
 void unprotectClient(client *c);
 void initSharedQueryBuf(void);
 void freeSharedQueryBuf(void);
+int isSharedQueryBufRegistered(int tid);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void clientSetUser(client *c, user *u, int authenticated);
@@ -3260,7 +3266,7 @@ void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 int clientConnPostponeMask(client *c);
 
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val);
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);
@@ -3436,6 +3442,7 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 int prepareReplicasToWrite(void);
 void replicationFeedReplicas(int dictid, robj **argv, int argc);
 void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen);
+void replicationFeedStreamFromSlotImport(int start_dbid, int end_dbid, char *buf, size_t buflen);
 void resetReplicationBuffer(void);
 void feedReplicationBuffer(char *buf, size_t len);
 void freeReplicaReferencedReplBuffer(client *replica);

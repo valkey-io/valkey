@@ -162,6 +162,11 @@ proc set_debug_prevent_pause {value} {
     for {set i 0} {$i < [llength $::servers]} {incr i} {
         assert_match "OK" [R $i DEBUG SLOTMIGRATION PREVENT-PAUSE $value]
     }
+
+    # Inside a test, reset if the test fails. Outside a test nothing is registered
+    if {$value && $::cur_test ne ""} {
+        test_defer_fail { set_debug_prevent_pause 0 }
+    }
 }
 
 proc set_debug_prevent_failover {value} {
@@ -708,9 +713,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
     test "Import with hz set to 1" {
         assert_does_not_resync {
-            set old_hz [lindex [R 0 CONFIG GET hz] 1]
-            R 0 CONFIG SET hz 1
-            R 2 CONFIG SET hz 1
+            test_config_set {R 0} hz 1
+            test_config_set {R 2} hz 1
 
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
@@ -736,8 +740,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_equal "OK" [R 0 FLUSHDB SYNC]
             assert_equal "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
-            R 0 CONFIG SET hz $old_hz
-            R 2 CONFIG SET hz $old_hz
         }
     }
 
@@ -1294,8 +1296,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Trigger failover. Give a large repl backlog to ensure PSYNC will
         # succeed even after the new primary cleans up the importing keys.
-        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
-        R 3 CONFIG SET repl-backlog-size 100mb
+        test_config_set {R 3} repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -1322,7 +1323,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
-        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
         set_debug_prevent_pause 0
     }
 
@@ -1410,8 +1410,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     test "Export unpauses itself even if slot failover doesn't occur" {
         assert_does_not_resync {
             # Lower manual failover timeout for this test
-            set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
-            R 0 CONFIG SET cluster-manual-failover-timeout 100
+            test_config_set {R 0} cluster-manual-failover-timeout 100
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
@@ -1432,9 +1431,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Validate no longer paused
             assert_match "none" [s -0 paused_reason]
 
-            # Reset manual failover timeout
-            R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
-
             # Cleanup for the next test
             set_debug_prevent_failover 0
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1444,8 +1440,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     test "Export unpauses when cancelled" {
         assert_does_not_resync {
             # Lower manual failover timeout for this test
-            set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
-            R 0 CONFIG SET cluster-manual-failover-timeout 100
+            test_config_set {R 0} cluster-manual-failover-timeout 100
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
@@ -1462,9 +1457,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field 2 $jobname state failed
 
             assert_match "none" [s -0 paused_reason]
-
-            # Reset manual failover timeout
-            R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
 
             # Cleanup for the next test
             set_debug_prevent_failover 0
@@ -2047,8 +2039,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 2 $jobname state waiting-to-pause
-            set old_cob [lindex [R 2 config get client-output-buffer-limit] 1]
-            R 2 config set client-output-buffer-limit "replica 10k 0 0"
+            test_config_set {R 2} client-output-buffer-limit "replica 10k 0 0"
 
             # Pause the target
             set node0_pid [srv -0 pid]
@@ -2077,7 +2068,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # Cleanup for the next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
-            R 2 config set client-output-buffer-limit "$old_cob"
             set_debug_prevent_pause 0
         }
     }
@@ -2486,8 +2476,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
 
         # Trigger failover. Give a large repl backlog to ensure PSYNC will
         # succeed even after the new primary cleans up the importing keys.
-        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
-        R 3 CONFIG SET repl-backlog-size 100mb
+        test_config_set {R 3} repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -2515,7 +2504,6 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
         set_debug_prevent_pause 0
-        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
     }
 }
 
@@ -2820,5 +2808,233 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
         # Resume R0 and wait for R0 to finish the migration.
         resume_process [srv 0 pid]
         wait_for_migration 0 16383
+    }
+}
+
+# Configure node idx to start evicting once about $headroom bytes of keys are
+# stored, with evictions done inline in processCommand(). Unlike
+# setup_eviction_test, this keeps the default replica output buffer limit, so
+# replicas stay connected: a resync would hide a primary/replica divergence.
+# Only keys with a TTL are evicted, so that the keys written by
+# fill_until_evicting can be evicted, but not the imported ones.
+proc setup_import_eviction {idx headroom} {
+    set saved [dict create]
+    foreach config {maxmemory maxmemory-policy lazyfree-lazy-eviction maxmemory-eviction-tenacity repl-backlog-size} {
+        dict set saved $config [lindex [R $idx CONFIG GET $config] 1]
+    }
+    R $idx CONFIG SET maxmemory-policy volatile-random
+    R $idx CONFIG SET lazyfree-lazy-eviction no
+    R $idx CONFIG SET maxmemory-eviction-tenacity 100
+    R $idx CONFIG SET repl-backlog-size 1mb
+    # limit = current used + repl backlog max size + headroom for keys
+    R $idx CONFIG SET maxmemory [expr {[s -$idx used_memory] + 1024*1024 + $headroom}]
+    return $saved
+}
+
+proc teardown_import_eviction {idx saved} {
+    R $idx CONFIG SET maxmemory 0
+    dict for {config value} $saved {
+        R $idx CONFIG SET $config $value
+    }
+}
+
+# Write keys with a TTL to node idx through a normal client until it starts
+# evicting.
+proc fill_until_evicting {idx prefix} {
+    set start [s -$idx evicted_keys]
+    for {set batch 0} {[s -$idx evicted_keys] == $start} {incr batch} {
+        if {$batch > 200} {
+            fail "Node $idx did not start evicting"
+        }
+        populate 100 "$prefix:$batch:" 1000 -$idx false 100000
+    }
+}
+
+# Wait for the replica to catch up with its primary, then assert that both
+# hold the same data in each of the given dbs. A primary at maxmemory can
+# evict on any command, including the ones checking it, so it must not evict
+# until the check is done.
+proc assert_in_sync {primary replica dbs} {
+    set policy [lindex [R $primary CONFIG GET maxmemory-policy] 1]
+    R $primary CONFIG SET maxmemory-policy noeviction
+    wait_for_ofs_sync [Rn $primary] [Rn $replica]
+    foreach db $dbs {
+        R $primary SELECT $db
+        R $replica SELECT $db
+        assert_equal [R $primary DBSIZE] [R $replica DBSIZE] "DBSIZE of db $db"
+    }
+    R $primary SELECT 0
+    R $replica SELECT 0
+    assert_equal [R $primary DEBUG DIGEST] [R $replica DEBUG DIGEST]
+    R $primary CONFIG SET maxmemory-policy $policy
+}
+
+# The import target evicts keys of the slots it owns to make room for the
+# imported ones. Those evictions are not part of the import stream that is
+# proxied to its replicas, so they must be replicated like any other eviction.
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 1}} {
+    set node0_id [R 0 CLUSTER MYID]
+    set node2_id [R 2 CLUSTER MYID]
+
+    set 0_slot_tag "{06S}"
+    set 16383_slot_tag "{6ZJ}"
+
+    # Node 0 is the import target, node 3 its replica and node 2 the source.
+    test "Evictions on a full import target are replicated" {
+        assert_does_not_resync {
+            set saved [setup_import_eviction 0 [expr {300*1024}]]
+            fill_until_evicting 0 "$0_slot_tag:own"
+            assert_in_sync 0 3 {0}
+
+            populate 100 "$16383_slot_tag:imported:" 1000 -2
+            set evicted_before [s -0 evicted_keys]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+            wait_for_migration_field 0 $jobname state success
+            wait_for_migration_field 2 $jobname state success
+
+            # The target made room by evicting keys of the slots it owns
+            assert_morethan [s -0 evicted_keys] $evicted_before
+            assert_equal 100 [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+
+            # And its replica must have dropped the same keys
+            assert_in_sync 0 3 {0}
+
+            teardown_import_eviction 0 $saved
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
+    test "Evictions on an import target that runs out of memory are replicated" {
+        assert_does_not_resync {
+            set saved [setup_import_eviction 0 [expr {200*1024}]]
+            fill_until_evicting 0 "$0_slot_tag:own"
+            assert_in_sync 0 3 {0}
+
+            # More than the target can make room for: it evicts all the keys it
+            # owns and then fails the import, dropping the imported keys.
+            populate 2000 "$16383_slot_tag:imported:" 1000 -2
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 0 $jobname state failed
+            assert_match {*OOM*} [dict get [get_migration_by_name 0 $jobname] message]
+            wait_for_countkeysinslot 0 16383 0
+            wait_for_countkeysinslot 3 16383 0
+
+            # The replica must not keep the keys its primary evicted
+            assert_in_sync 0 3 {0}
+
+            teardown_import_eviction 0 $saved
+            wait_for_migration_field 2 $jobname state failed
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 2 FLUSHALL SYNC]
+    }
+}
+
+# The import stream proxied to the target's replicas can select a db (e.g. the
+# snapshot of keys in db 2), and the target also propagates its own writes and
+# evictions to the same replicas. Both must leave the replicas in the db that
+# the next command is meant for.
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+    set node0_id [R 0 CLUSTER MYID]
+    set node2_id [R 2 CLUSTER MYID]
+
+    set 0_slot_tag "{06S}"
+    set 16383_slot_tag "{6ZJ}"
+
+    # Node 0 is the import target, node 3 its replica and node 2 the source.
+    test "Writes in other DBs during a slot import are replicated to the right DB" {
+        assert_does_not_resync {
+            # The target last replicated a write in db 1
+            R 0 SELECT 1
+            assert_match "OK" [R 0 SET $0_slot_tag:pre value]
+            R 0 SELECT 0
+
+            # Snapshot of keys in db 2
+            R 2 SELECT 2
+            populate 10 "$16383_slot_tag:snapshot:" 100 -2
+            R 2 SELECT 0
+            set_debug_prevent_pause 1
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
+
+            # Incremental write in db 2, proxied after the snapshot
+            R 2 SELECT 2
+            assert_match "OK" [R 2 SET $16383_slot_tag:incremental1 value]
+            R 0 SELECT 2
+            wait_for_countkeysinslot 0 16383 11
+
+            # The target's own writes, while the proxied stream is in db 2
+            R 0 SELECT 1
+            assert_match "OK" [R 0 SET $0_slot_tag:a value]
+            R 0 SELECT 0
+            assert_match "OK" [R 0 SET $0_slot_tag:b value]
+
+            # Proxied again, after the target selected db 0 for its replicas
+            assert_match "OK" [R 2 SET $16383_slot_tag:incremental2 value]
+            R 2 SELECT 0
+            R 0 SELECT 2
+            wait_for_countkeysinslot 0 16383 12
+            R 0 SELECT 0
+
+            set_debug_prevent_pause 0
+            wait_for_migration 0 16383
+            wait_for_migration_field 0 $jobname state success
+
+            assert_in_sync 0 3 {0 1 2}
+            foreach {db slot count} {0 0 1 0 16383 0 1 0 2 2 16383 12} {
+                R 3 SELECT $db
+                assert_equal $count [R 3 CLUSTER COUNTKEYSINSLOT $slot] "replica db $db slot $slot"
+            }
+            R 3 SELECT 0
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
+    test "Evictions in another DB than the imported keys are replicated to the right DB" {
+        assert_does_not_resync {
+            # Dbs are created on first use, create them before sizing maxmemory
+            R 0 SELECT 2
+            R 0 SELECT 1
+            set saved [setup_import_eviction 0 [expr {300*1024}]]
+            fill_until_evicting 0 "$0_slot_tag:own"
+            R 0 SELECT 0
+            assert_in_sync 0 3 {0 1 2}
+
+            R 2 SELECT 2
+            populate 100 "$16383_slot_tag:imported:" 1000 -2
+            R 2 SELECT 0
+            set evicted_before [s -0 evicted_keys]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+            wait_for_migration_field 0 $jobname state success
+            assert_morethan [s -0 evicted_keys] $evicted_before
+
+            assert_in_sync 0 3 {0 1 2}
+            R 3 SELECT 2
+            assert_equal 100 [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+            R 3 SELECT 0
+
+            teardown_import_eviction 0 $saved
+        }
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
     }
 }

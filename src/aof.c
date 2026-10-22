@@ -1715,7 +1715,8 @@ int loadSingleAppendOnlyFile(char *filename) {
         sds err = NULL;
         int is_multi_start = 0;
         if (loadCommandFromArgv(fakeClient, argv, argc, &is_multi_start, &err) == C_ERR) {
-            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename, err);
+            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename,
+                      (server.hide_user_data_from_log && !cmd) ? "*redacted*" : err);
             sdsfree(err);
             ret = AOF_FAILED;
             goto cleanup;

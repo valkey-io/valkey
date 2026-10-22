@@ -380,6 +380,15 @@ start_server {tags {"hashexpire"}} {
             set e
         } {ERR *}
     }
+
+    test {HGETEX on a key named fields} {
+        r FLUSHALL
+        r HSET fields f1 v1
+        assert_equal {v1} [r HGETEX fields FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields PERSIST FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields EX 100 FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f1] 1 100
+    }
 }
 
 start_server {tags {"hashexpire"}} {
@@ -558,6 +567,15 @@ start_server {tags {"hashexpire"}} {
         catch {r HSETEX myhash EX 10 FIELDS 2 field1 val1} e
         set e
     } {ERR *}
+
+    test {HSETEX on a key named fields} {
+        r FLUSHALL
+        assert_equal 1 [r HSETEX fields FIELDS 1 f1 v1]
+        assert_equal 1 [r HSETEX fields EX 100 FIELDS 1 f2 v2]
+        assert_equal {v1 v2} [r HMGET fields f1 f2]
+        assert_equal -1 [r HTTL fields FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f2] 1 100
+    }
 
     foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command 0/past time works correctly with 2 fields" {
@@ -5178,6 +5196,63 @@ start_server {tags {"hash expire listpack"}} {
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
 
+    foreach live_ttl_fields {0 3} {
+        test "Conversion tracks every expired-but-unreaped field (live volatile fields: $live_ttl_fields)" {
+            r DEBUG SET-ACTIVE-EXPIRE 0
+            r config set hash-max-listpack-value $original_max_value
+            r config set hash-max-listpack-entries $original_max_entries
+            # Earlier tests leave expired fields behind; they would be reaped
+            # below and skew the expired_fields count.
+            r flushall
+            r hset myhash p v e1 v e2 v e3 v
+            r hpexpire myhash 1 FIELDS 3 e1 e2 e3
+            for {set i 1} {$i <= $live_ttl_fields} {incr i} {
+                r hsetex myhash PX 100000 FIELDS 1 l$i v
+            }
+            wait_for_condition 100 10 {
+                [r hexists myhash e1] == 0 && [r hexists myhash e2] == 0 && [r hexists myhash e3] == 0
+            } else {
+                fail "Fields e1, e2 and e3 were never logically expired"
+            }
+            assert_encoding listpack myhash
+            set original_notify [lindex [r config get notify-keyspace-events] 1]
+            set rd [setup_single_keyspace_notification r]
+
+            # The conversion registers each expiring entry in the volatile set.
+            # The first one creates the set and switches the hashtable to the
+            # TTL-validating type, so every expired field must still be
+            # tracked after that, not only the first one visited.
+            r hset myhash big [string repeat x 128]
+            assert_encoding hashtable myhash
+            set expected_len [expr {2 + $live_ttl_fields}]
+
+            # All three expired fields must be reaped. An untracked one is
+            # never reaped: it stays counted by HLEN and either reappears with
+            # its value (once the volatile set empties) or stays hidden.
+            set initial_expired [info_field [r info stats] expired_fields]
+            r DEBUG SET-ACTIVE-EXPIRE 1
+            wait_for_active_expiry r myhash $expected_len $initial_expired 3
+            assert_equal {} [lsearch -all -inline -glob [r hkeys myhash] e*]
+
+            # Writing to the field must work too. With an untracked entry this
+            # crashed in the volatile set update or removal.
+            assert_equal 1 [r hset myhash e1 n]
+            assert_equal {1} [r hexpire myhash 100 FIELDS 1 e1]
+            assert_equal {1} [r hpersist myhash FIELDS 1 e1]
+            assert_equal 1 [r hdel myhash e1]
+            assert_equal $expected_len [r hlen myhash]
+            assert_equal {PONG} [r ping]
+
+            # Active expiry reaps the three fields in one batch, which emits a
+            # single hexpired. The writes to e1 must not emit another one: that
+            # only happens when a write overwrites a field that expired but was
+            # never reaped.
+            assert_keyevent_patterns $rd myhash hset hexpired hset hexpire hpersist hdel
+            $rd close
+            r config set notify-keyspace-events $original_notify
+        } {OK} {needs:debug}
+    }
+
     r config set hash-max-listpack-value $original_max_value
     r config set hash-max-listpack-entries $original_max_entries
 }
@@ -5341,6 +5416,44 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {} [$replica HGET myhash f1]
             assert_equal {f2 f3 f4} [lsort [$replica HKEYS myhash]]
         } {} {needs:debug}
+
+        # The value size picks the encoding on both sides.
+        foreach {encoding f2_value} [list listpack v2 hashtable [string repeat x 128]] {
+            test "COPY of a hash holding an expired-but-unreaped field keeps the replica in sync - $encoding" {
+                lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+                $primary DEBUG SET-ACTIVE-EXPIRE 0
+                $replica DEBUG SET-ACTIVE-EXPIRE 0
+
+                $primary HSET myhash f1 v1 f2 $f2_value
+                $primary HPEXPIRE myhash 1 FIELDS 1 f1
+                wait_for_condition 100 10 {
+                    [$primary HEXISTS myhash f1] == 0
+                } else {
+                    fail "Field f1 was never logically expired on the primary"
+                }
+                assert_equal $encoding [$primary object encoding myhash]
+
+                # The replica ignores field expiry while applying COPY, so its
+                # copy has f1. The primary has to copy f1 too, otherwise it
+                # never propagates the deletion of f1 from the copy.
+                $primary COPY myhash mycopy
+                wait_for_ofs_sync $primary $replica
+                assert_equal $encoding [$primary object encoding mycopy]
+                assert_equal $encoding [$replica object encoding mycopy]
+                assert_equal 2 [$primary HLEN mycopy]
+                assert_equal [$primary HLEN mycopy] [$replica HLEN mycopy]
+                # The copy must be tracked, otherwise active expiry never reaps f1 from it.
+                assert_equal 2 [get_keys_with_volatile_items $primary]
+
+                $primary DEBUG SET-ACTIVE-EXPIRE 1
+                $replica DEBUG SET-ACTIVE-EXPIRE 1
+                wait_for_active_expiry $primary mycopy 1 $primary_initial_expired 2
+                wait_for_ofs_sync $primary $replica
+                assert_equal {f2} [$replica HKEYS mycopy]
+                assert_equal {f2} [$replica HKEYS myhash]
+            } {} {needs:debug}
+        }
     }
 }
 

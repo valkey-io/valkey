@@ -878,6 +878,7 @@ slotMigrationJob *createSlotImportJob(client *c,
         job->client->qb_applied = job->client->qb_pos;
     }
     job->client->repl_data->read_reploff = sdslen(job->client->querybuf);
+    job->client->repl_data->repl_applied_dbid = job->client->db->id;
 
     return job;
 }

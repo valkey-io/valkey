@@ -6670,9 +6670,12 @@ fmterr:
  *
  * * **...**: The actual arguments to the command.
  *
- * The command is looked up by its original name, so a command hidden from
- * clients with the `rename-command` configuration can still be called by a
- * module. A renamed command can also be called by its new name.
+ * A command hidden with the `rename-command` configuration can still be called
+ * by its original name, and a renamed command also by its new name. The
+ * original name is not accepted when the call comes from a script, which must
+ * not bypass the rename, nor when the call is replicated with `!`, since the
+ * original name would be propagated and replicas and AOF replay only know the
+ * current one.
  *
  * On success a ValkeyModuleCallReply object is returned; otherwise,
  * NULL is returned and errno is set to the following values:
@@ -6828,7 +6831,13 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
     /* Lookup command now, after filters had a chance to make modifications
      * if necessary.
      */
-    c->cmd = c->lastcmd = c->realcmd = lookupCommandOrOriginal(c->argv, c->argc);
+    c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
+    /* A command hidden with rename-command can still be called by its original name, except from a script, which must
+     * not bypass the rename, and in a replicated call, since the original name would be propagated while replicas and
+     * AOF replay only know the current one. */
+    if (c->cmd == NULL && !is_running_script && !replicate) {
+        c->cmd = c->lastcmd = c->realcmd = lookupCommandOrOriginal(c->argv, c->argc);
+    }
     if (!commandCheckExistence(c, error_as_call_replies ? &reply_error_msg : NULL)) {
         errno = ENOENT;
         goto cleanup;

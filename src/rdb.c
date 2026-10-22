@@ -3992,7 +3992,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             /* On an unknown or invalid command, stop the load. Skipping it
              * would leave this replica with different data than the primary. */
             sds err = NULL;
-            if (loadCommandFromArgv(fakeClient, argv, argc, NULL, &err) == C_ERR) {
+            if (loadCommandFromArgv(fakeClient, argv, argc, 1, &err) != LOAD_CMD_OK) {
                 serverLog(LL_WARNING, "Error applying inline command from RDB stream: %s", err);
                 sdsfree(err);
                 /* loadCommandFromArgv already freed argv via the fake client. */

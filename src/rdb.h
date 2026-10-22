@@ -45,6 +45,14 @@ typedef enum {
     RESP_PARSE_FMTERR  /* Malformed input (bad protocol bytes). */
 } respParseResult;
 
+/* Result of loadCommandFromArgv(), which replays one command against a fake client */
+typedef enum {
+    LOAD_CMD_OK = 0,      /* Command ran. */
+    LOAD_CMD_MULTI_START, /* Command ran and it was MULTI. */
+    LOAD_CMD_ERR_UNKNOWN, /* Failed: unknown command. */
+    LOAD_CMD_ERR          /* Failed: other. */
+} loadCommandResult;
+
 /* The current RDB version. When the format changes in a way that is no longer
  * backward compatible this number gets incremented.
  *
@@ -285,6 +293,6 @@ void rdbClearSaveState(time_t save_end);
 /* RESP command replay parsers shared by RDB and AOF loading. */
 respParseResult parseRespArgsFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int argc, robj ***argv_out);
 struct client *createAOFClient(void);
-int loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int *is_multi_start, sds *err);
+loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int ignore_multi_exec, sds *err);
 
 #endif

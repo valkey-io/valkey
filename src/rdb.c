@@ -724,7 +724,7 @@ int rdbLoadDoubleValue(rio *rdb, double *val) {
 }
 
 /* Saves a double for RDB 8 or greater, where IE754 binary64 format is assumed.
- * We just make sure the integer is always stored in little endian, otherwise
+ * We just make sure the integer is always stored in little endian; otherwise,
  * the value is copied verbatim from memory to disk.
  *
  * Return -1 on error, the size of the serialized value on success. */
@@ -734,7 +734,7 @@ int rdbSaveBinaryDoubleValue(rio *rdb, double val) {
 }
 
 /* Loads a double from RDB 8 or greater. See rdbSaveBinaryDoubleValue() for
- * more info. On error -1 is returned, otherwise 0. */
+ * more info. On error -1 is returned; otherwise, 0. */
 int rdbLoadBinaryDoubleValue(rio *rdb, double *val) {
     if (rioRead(rdb, val, sizeof(*val)) == 0) return -1;
     memrev64ifbe(val);
@@ -831,7 +831,7 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
     raxStart(&ri, pel);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
-        /* We store IDs in raw form as 128 big big endian numbers, like
+        /* We store IDs in raw form as 128 bit big endian numbers, like
          * they are inside the radix tree key. */
         if ((n = rdbWriteRaw(rdb, ri.key, sizeof(streamID))) == -1) {
             raxStop(&ri);
@@ -1004,12 +1004,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             if ((n = rdbSaveLen(rdb, orderedIndexLength(zs->oi))) == -1) return -1;
             nwritten += n;
 
-            /* We save the skiplist elements from the greatest to the smallest
-             * (that's trivial since the elements are already ordered in the
-             * skiplist): this improves the load process, since the next loaded
-             * element will always be the smaller, so adding to the skiplist
-             * will always immediately stop at the head, making the insertion
-             * O(1) instead of O(log(N)). */
+            /* We save the elements from the greatest to the smallest
+             * (that's trivial since the elements are already ordered in
+             * the ordered index): this improves the load process, since
+             * the next loaded element will always be the smaller, so
+             * adding to the ordered index will always immediately stop
+             * at the head, making the insertion O(1) instead of O(log(N)). */
             OrderedIndexIterator iter;
             orderedIndexInitIterator(&iter, zs->oi);
             OrderedIndexItem *item;
@@ -1570,7 +1570,7 @@ werr:
 }
 
 /* Produces a dump of the database in RDB format sending it to the specified
- * I/O channel. On success C_OK is returned, otherwise C_ERR
+ * I/O channel. On success C_OK is returned; otherwise, C_ERR
  * is returned and part of the output, or all the output, can be
  * missing because of I/O errors.
  *
@@ -2143,7 +2143,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int al
 }
 
 /* Load an Object of the specified type from the specified file.
- * On success a newly allocated object is returned, otherwise NULL.
+ * On success a newly allocated object is returned; otherwise, NULL.
  * When the function returns NULL and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the type of error that occurred */
 robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now) {
@@ -2844,10 +2844,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 return NULL;
             }
-            /* See the RDB_TYPE_ZSET_LISTPACK case: a NAN score would crash the
-             * server when the zset is converted to a skiplist. The legacy
-             * ziplist format is converted to a listpack above, so apply the
-             * same NAN check on the resulting listpack. */
+            /* See the RDB_TYPE_ZSET_LISTPACK case: a NAN score would crash
+             * the server when the zset is converted to the ordered index
+             * encoding. The legacy ziplist format is converted to a listpack
+             * above, so apply the same NAN check on the resulting listpack. */
             if (!zzlValidateScores(lp)) {
                 rdbReportCorruptRDB("Zset ziplist with NAN score detected");
                 zfree(lp);
@@ -2881,10 +2881,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 return NULL;
             }
-            /* A NAN score would crash the server when the zset is converted to
-             * a skiplist (zslInsertNode asserts the score is not NAN). The
-             * skiplist RDB format rejects NAN scores at load time; do the same
-             * for the listpack format. */
+            /* A NAN score would crash the server when the zset is converted
+             * to the ordered index encoding: the index packs each score
+             * into a sortable 8-byte key and asserts the score is not NAN.
+             * The ordered index RDB format rejects NAN scores at load time;
+             * do the same for the listpack format. */
             if (!zzlValidateScores(encoded)) {
                 rdbReportCorruptRDB("Zset listpack with NAN score detected");
                 zfree(encoded);
@@ -4578,7 +4579,7 @@ void bgsaveCommand(client *c) {
  * if the rdbSave*() family functions receive a NULL rsi structure also
  * the Replication ID/offset is not saved. The function populates 'rsi'
  * that is normally stack-allocated in the caller, returns the populated
- * pointer if the instance has a valid primary client, otherwise NULL
+ * pointer if the instance has a valid primary client; otherwise, NULL
  * is returned, and the RDB saving will not persist any replication related
  * information. */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {

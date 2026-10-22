@@ -2531,7 +2531,7 @@ struct valkeyServer {
     /* Coordinate failover info */
     mstime_t failover_end_time;              /* Deadline for failover command. */
     int force_failover;                      /* If true then failover will be forced at the
-                                              * deadline, otherwise failover is aborted. */
+                                              * deadline; otherwise, failover is aborted. */
     char *target_replica_host;               /* Failover target host. If null during a
                                               * failover then any replica can be used. */
     int target_replica_port;                 /* Failover target port */
@@ -2790,7 +2790,7 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  *                      allowed under circumstances where write commands are disallowed.
  *                      Examples include PUBLISH, which replicates pubsub messages,and
  *                      EVAL, which may execute write commands, which are replicated,
- *                      or may just execute read commands. A command can not be marked
+ *                      or may just execute read commands. A command cannot be marked
  *                      both CMD_WRITE and CMD_MAY_REPLICATE
  *
  * CMD_SENTINEL:    This command is present in sentinel mode.
@@ -2812,7 +2812,7 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  *                   populateCommandLegacyRangeSpec.
  *
  * CMD_ALLOW_BUSY: The command can run while another command is running for
- *                 a long time (timedout script, module command that yields)
+ *                 a long time (timed out script, module command that yields)
  *
  * CMD_MODULE_GETCHANNELS: Use the modules getchannels interface.
  *

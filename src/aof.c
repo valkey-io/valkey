@@ -1524,12 +1524,6 @@ struct client *createAOFClient(void) {
     return c;
 }
 
-/* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
- * otherwise, one of the following is returned:
- * AOF_OPEN_ERR: Failed to open the AOF file.
- * AOF_NOT_EXIST: AOF file doesn't exist.
- * AOF_EMPTY: The AOF file is empty (nothing to load).
- * AOF_FAILED: Failed to load the AOF file. */
 /* Adapts fread to the read_fn signature used by parseRespArgsFromReader. */
 static size_t aofFileReader(void *ctx, void *buf, size_t len) {
     return fread(buf, len, 1, (FILE *)ctx) == 1 ? len : 0;
@@ -1599,6 +1593,12 @@ int loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int *is_multi
     return C_OK;
 }
 
+/* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
+ * otherwise, one of the following is returned:
+ * AOF_OPEN_ERR: Failed to open the AOF file.
+ * AOF_NOT_EXIST: AOF file doesn't exist.
+ * AOF_EMPTY: The AOF file is empty (nothing to load).
+ * AOF_FAILED: Failed to load the AOF file. */
 int loadSingleAppendOnlyFile(char *filename) {
     struct client *fakeClient;
     struct valkey_stat sb;

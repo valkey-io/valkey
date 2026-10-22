@@ -2309,3 +2309,43 @@ foreach primary_diskless {yes no} {
     }
 }
 
+foreach load_mode {disabled swapdb} {
+    start_server {tags {"repl external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        $primary config set forkless-policy prefer-forkless
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary debug populate 200000
+
+        start_server {overrides {save ""}} {
+            set replica [srv 0 client]
+            $replica config set repl-diskless-load $load_mode
+
+            test "Forkless diskless full sync under write load, repl-diskless-load=$load_mode" {
+                set loglines [count_log_lines -1]
+                set load1 [start_write_load $primary_host $primary_port 60]
+                set load2 [start_write_load $primary_host $primary_port 60]
+                after 200
+                $replica replicaof $primary_host $primary_port
+
+                # Make sure the forkless socket path (with inline commands) ran.
+                wait_for_log_messages -1 {"*Beginning forklessSaveToSockets*"} $loglines 100 100
+
+                # Replica must sync while writes are still flowing.
+                wait_for_condition 100 100 {
+                    [s 0 master_link_status] eq {up}
+                } else {
+                    fail "Replica didn't sync (repl-diskless-load=$load_mode)"
+                }
+
+                stop_write_load $load1
+                stop_write_load $load2
+                wait_for_ofs_sync $primary $replica
+                assert_equal [$primary dbsize] [$replica dbsize]
+                assert_equal [$primary debug digest] [$replica debug digest]
+            }
+        }
+    }
+}

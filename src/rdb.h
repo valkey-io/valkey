@@ -199,7 +199,6 @@ enum RdbType {
 #define RDBFLAGS_KEEP_CACHE (1 << 4)    /* Don't reclaim cache after rdb file is generated */
 #define RDBFLAGS_EMPTY_DATA (1 << 5)    /* Flush the database after validating magic and rdb version*/
 #define RDBFLAGS_FORKLESS_SAVE (1 << 6) /* Save is performed by forkless save (background thread). */
-#define RDBFLAGS_INBAND_REPL (1 << 7)   /* Load of a live replication stream that negotiated inband-repl. */
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */

@@ -3963,18 +3963,26 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             goto loaderr;
         }
 
-        /* Inline replication commands run on load, so only honor them in a
-         * live inband-repl stream; reject in any other load. */
+        /* Inline replication commands run on load. The opcode is honored on any
+         * load, but the embedded command is validated first: it must be a write
+         * command or one that may replicate (e.g. PUBLISH, EVAL). This prevents a
+         * crafted RDB from invoking arbitrary commands through the fake client,
+         * which bypasses ACL checks. */
         if (type == RDB_OPCODE_UPDATE) {
-            if (!(rdbflags & RDBFLAGS_INBAND_REPL)) {
-                serverLog(LL_WARNING, "Rejecting inline replication opcode %d in a non-replication RDB load",
-                          type);
-                goto loaderr;
-            }
             robj **argv;
             int argc;
             if (parseRespHeaderFromReader(rdbRioReader, rdb, &argc) != RESP_PARSE_OK) goto eoferr;
             if (parseRespArgsFromReader(rdbRioReader, rdb, argc, &argv) != RESP_PARSE_OK) goto eoferr;
+
+            struct serverCommand *inline_cmd = lookupCommand(argv, argc);
+            if (inline_cmd == NULL || !(inline_cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
+                serverLog(LL_WARNING,
+                          "Rejecting inline replication opcode %d: command '%s' is not a replicable write",
+                          type, (argc > 0) ? (char *)objectGetVal(argv[0]) : "<none>");
+                for (int k = 0; k < argc; k++) decrRefCount(argv[k]);
+                zfree(argv);
+                goto loaderr;
+            }
 
             /* Edge case: SWAPDB during a swapdb-mode load must be handled
              * separately and not through the fake client. */

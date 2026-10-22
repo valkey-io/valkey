@@ -672,6 +672,19 @@ size_t testOnlyGetClusterIOPendingResponses(void) {
     return cluster_io_pending_responses;
 }
 
+/* Addresses of the IO thread counters, so unit tests can check their cache line layout. */
+const void *testOnlyGetIOThreadActiveTimeSlot(int id) {
+    return &used_active_time_io_thread[id].value;
+}
+
+const void *testOnlyGetIOJobsFinishedCounter(void) {
+    return &io_jobs_finished.value;
+}
+
+const void *testOnlyGetIOJobsSubmittedCounter(void) {
+    return &io_jobs_submitted;
+}
+
 /* This function attempts to offload the client's read to an I/O thread.
  * Returns C_OK if the read was offloaded, or if an I/O thread is already reading
  * or writing for this client, so the main thread must not read now.

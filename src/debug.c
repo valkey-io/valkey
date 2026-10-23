@@ -1849,10 +1849,25 @@ static void bt_simple_error_cb(void *data, const char *msg, int errnum) {
 
 static struct backtrace_state *bt_frame_state = NULL;
 
-/* Preallocate at startup: backtrace_create_state() calls malloc, which is not
- * async-signal-safe and could deadlock if called from a crash signal handler. */
+/* No-op full callback for the startup warmup call. */
+static int bt_simple_warmup_full_cb(void *data, uintptr_t pc, const char *filename, int lineno, const char *function) {
+    (void)data;
+    (void)pc;
+    (void)filename;
+    (void)lineno;
+    (void)function;
+    return 0;
+}
+
+/* Preallocate & warm up libbacktrace at startup so the crash handler never
+ * triggers its one-time lazy initialization. */
 void initLibbacktraceFrameState(void) {
     bt_frame_state = backtrace_create_state(NULL, 1, bt_simple_error_cb, NULL);
+    if (bt_frame_state) {
+        /* Force the lazy one-time init to run now by resolving one address. */
+        backtrace_pcinfo(bt_frame_state, (uintptr_t)&initLibbacktraceFrameState,
+                         bt_simple_warmup_full_cb, bt_simple_error_cb, NULL);
+    }
 }
 
 static int valkey_backtrace(void **trace, int max_size) {
@@ -1914,9 +1929,9 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
     pid_t pid = fork();
 
     if (pid == 0) {
-        /* Child process - safe to use libbacktrace here */
-        struct backtrace_state *state = backtrace_create_state(
-            NULL, 0, libbacktrace_error_cb, &fd);
+        /* Child process - symbolize here. reuse the shared state warmed at
+         * startup by initLibbacktraceFrameState(). */
+        struct backtrace_state *state = bt_frame_state;
         if (state) {
             backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0};
             for (int i = uplevel; i < trace_size; i++) {
@@ -1937,11 +1952,11 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
 #endif
             }
         } else {
-            /* Fallback if state creation fails */
+            /* The shared state is NULL, meaning the startup warmup failed. */
 #ifdef HAVE_EXECINFO
             backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
 #else
-            char *msg = "(libbacktrace state creation failed, no fallback available)\n";
+            char *msg = "(libbacktrace state unavailable, no fallback available)\n";
             if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
             }
 #endif

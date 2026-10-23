@@ -2187,9 +2187,13 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                      * iterating, so explicitly check for equal object. */
                     if (src[j].subject == src[0].subject) {
                         value = zval.score * src[j].weight;
+                        /* As for the first input and in the union case, a NaN
+                         * weighted score (0*inf) counts as 0. */
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else if (zuiFind(&src[j], &zval, &value)) {
                         value *= src[j].weight;
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else {
                         break;

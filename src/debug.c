@@ -1886,6 +1886,7 @@ typedef struct {
     int fd;
     int count;
     int found_symbols;
+    int resolved_current;
 } backtrace_callback_data;
 
 /* Error callback for libbacktrace */
@@ -1903,6 +1904,8 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
     char buf[512];
     int len;
 
+    cb_data->resolved_current = 0;
+
     if (function) {
         if (filename && lineno > 0) {
             len = snprintf(buf, sizeof(buf), "#%d 0x%lx %s at %s:%d\n",
@@ -1913,6 +1916,7 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
         }
         /* Mark that we found a real function name */
         cb_data->found_symbols = 1;
+        cb_data->resolved_current = 1;
     } else {
         len = snprintf(buf, sizeof(buf), "#%d 0x%lx <unknown>\n",
                        cb_data->count, (unsigned long)pc);
@@ -1933,10 +1937,31 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
          * startup by initLibbacktraceFrameState(). */
         struct backtrace_state *state = bt_frame_state;
         if (state) {
-            backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0};
+            backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0, .resolved_current = 0};
+            /* Pass 1: resolve every frame with the warmed state. */
+            int unresolved[BACKTRACE_MAX_SIZE];
+            int unresolved_count = 0;
             for (int i = uplevel; i < trace_size; i++) {
                 backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb,
                                  libbacktrace_error_cb, &cb_data);
+                if (!cb_data.resolved_current && unresolved_count < BACKTRACE_MAX_SIZE) {
+                    unresolved[unresolved_count++] = i;
+                }
+            }
+
+            /* Pass 2: if any frame is still unresolved, it is likely in a
+             * library loaded after startup (may deadlock). */
+            if (unresolved_count > 0) {
+                struct backtrace_state *retry_state = backtrace_create_state(NULL, 0, libbacktrace_error_cb, &fd);
+                if (retry_state) {
+                    char *hdr = "\n(frames from libraries loaded after startup)\n";
+                    if (write(fd, hdr, strlen(hdr)) == -1) { /* Avoid warning. */
+                    }
+                    for (int j = 0; j < unresolved_count; j++) {
+                        backtrace_pcinfo(retry_state, (uintptr_t)trace[unresolved[j]],
+                                         libbacktrace_full_cb, libbacktrace_error_cb, &cb_data);
+                    }
+                }
             }
             /* If libbacktrace produced no frames or no useful function names, fall back to standard backtrace */
             if (cb_data.count == 0 || !cb_data.found_symbols) {

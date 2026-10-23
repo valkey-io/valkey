@@ -1904,7 +1904,8 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
     char buf[512];
     int len;
 
-    cb_data->resolved_current = 0;
+    // Base frame is often reported as -1ULL so skip second pass for it.
+    cb_data->resolved_current = pc == UINTPTR_MAX;
 
     if (function) {
         if (filename && lineno > 0) {
@@ -1945,7 +1946,8 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
                 backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb,
                                  libbacktrace_error_cb, &cb_data);
                 if (!cb_data.resolved_current && unresolved_count < BACKTRACE_MAX_SIZE) {
-                    unresolved[unresolved_count++] = i;
+                    /* Store the frame number this PC printed under. */
+                    unresolved[unresolved_count++] = i - uplevel;
                 }
             }
 
@@ -1958,7 +1960,10 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
                     if (write(fd, hdr, strlen(hdr)) == -1) { /* Avoid warning. */
                     }
                     for (int j = 0; j < unresolved_count; j++) {
-                        backtrace_pcinfo(retry_state, (uintptr_t)trace[unresolved[j]],
+                        /* Restore the original frame number so the resolved line
+                         * matches the placeholder pass 1 already printed. */
+                        cb_data.count = unresolved[j];
+                        backtrace_pcinfo(retry_state, (uintptr_t)trace[unresolved[j] + uplevel],
                                          libbacktrace_full_cb, libbacktrace_error_cb, &cb_data);
                     }
                 }

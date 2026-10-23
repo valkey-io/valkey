@@ -1117,11 +1117,7 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "libbacktrace-wait-iterations") && c->argc == 3) {
         long iterations;
-        if (getLongFromObjectOrReply(c, c->argv[2], &iterations, NULL) != C_OK) return;
-        if (iterations < 0 || iterations > INT_MAX) {
-            addReplyError(c, "iterations must be between 0 and INT_MAX");
-            return;
-        }
+        if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, INT_MAX, &iterations, NULL) != C_OK) return;
         server.debug_libbacktrace_wait_iterations = iterations;
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "delay-rdb-client-free-seconds") && c->argc == 3) {

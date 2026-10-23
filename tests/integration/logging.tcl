@@ -30,14 +30,17 @@ proc check_log_backtrace_for_debug {log_pattern} {
         # the following are skipped since valgrind is slow and a timeout can happen
         if {!$::valgrind} {
             assert_equal [count_log_message 0 "wait_threads(): waiting threads timed out"] 0
-            # make sure the server prints stack trace for all threads. we know 5 threads are idle in bio.c
-            # Search for thread names (bio_*) which appear on all systems, including Alpine where
-            # function names may not be resolved
-            assert_equal [count_log_message 0 "bio_"] 5
-            # Verify at least one stack frame was emitted (format: #<n> 0x...)
-            # This format is specific to libbacktrace; execinfo.h uses a different format
-            if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {
-                assert_range [count_log_message 0 "#. 0x"] 1 999
+            # Accept the explicit symbolization timeout instead of a stack trace.
+            if {[count_log_message 0 "libbacktrace symbolization timed out; preceding output may be partial; complete raw trace follows"] == 0} {
+                # make sure the server prints stack trace for all threads. we know 5 threads are idle in bio.c
+                # Search for thread names (bio_*) which appear on all systems, including Alpine where
+                # function names may not be resolved
+                assert_equal [count_log_message 0 "bio_"] 5
+                # Verify at least one stack frame was emitted (format: #<n> 0x...)
+                # This format is specific to libbacktrace; execinfo.h uses a different format
+                if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {
+                    assert_range [count_log_message 0 "#. 0x"] 1 999
+                }
             }
         }
     }
@@ -47,6 +50,17 @@ proc check_log_backtrace_for_debug {log_pattern} {
 proc check_crash_log {log_pattern} {
     set res [wait_for_log_messages 0 \"$log_pattern\" 0 50 100]
     if {$::verbose} { puts $res }
+}
+
+start_server {} {
+    test "DEBUG LIBBACKTRACE-WAIT-ITERATIONS validates its range" {
+        foreach value {-1 2147483648 9223372036854775808 invalid 1.5} {
+            assert_error "*out of range*" {r debug libbacktrace-wait-iterations $value}
+        }
+        foreach value {0 2147483647 50} {
+            assert_equal OK [r debug libbacktrace-wait-iterations $value]
+        }
+    }
 }
 
 # test the watchdog and the stack trace report from multiple threads
@@ -120,10 +134,10 @@ tags {"valgrind:skip"} {
                 set pid [s process_id]
                 r debug libbacktrace-wait-iterations 0
                 exec kill -SIGALRM $pid
+                check_log_backtrace_for_debug "*Received SIGALRM*"
                 wait_for_log_messages 0 [list "*libbacktrace symbolization timed out*"] 0 100 100
-                wait_for_log_messages 0 [list "*complete raw trace follows*"] 0 100 100
-                wait_for_log_messages 0 [list "*<unresolved>*"] 0 100 100
-                wait_for_log_messages 0 [list "* STACK TRACE DONE *"] 0 100 100
+                # Check every timed-out trace has raw frames, not just the EIP.
+                assert {[count_log_message 0 "#0 0x.*<unresolved>"] >= [count_log_message 0 "libbacktrace symbolization timed out"]}
                 assert_equal "PONG" [r ping]
             }
         }

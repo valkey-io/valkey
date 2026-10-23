@@ -4,6 +4,10 @@
 
 #define UNUSED(V) ((void) V)
 
+/* Forward declarations of module API functions not publicly exposed */
+extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
+#define ValkeyModule_ReplyRaw VM_ReplyRaw
+
 ValkeyModuleUser *user = NULL;
 
 int call_without_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {

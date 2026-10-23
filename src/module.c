@@ -545,7 +545,8 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
 /* Common helper functions. */
 int moduleVerifyResourceName(const char *name);
 
-static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error);
+int moduleCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
+static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error, int *would_block);
 
 /* --------------------------------------------------------------------------
  * ## Heap allocation raw functions
@@ -3701,6 +3702,7 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
  * `proto` must point to a valid, complete RESP-encoded reply of length
  * `proto_len`.  Returns VALKEYMODULE_OK.  If there is no client context
  * (script, timer, etc.) the call is a no-op and returns VALKEYMODULE_OK. */
+// NON-PUBLIC API: remove this line when making this API public.
 int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return VALKEYMODULE_OK;
@@ -6424,6 +6426,7 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
  * Note: as with VM_CallReplyPromiseAbort, if the underlying blocking command
  * belongs to a module that does not honour disconnect callbacks, the abort may
  * succeed internally without the command actually stopping. */
+// NON-PUBLIC API: remove this line when making this API public.
 int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle) {
     ValkeyModuleAsyncRMCallPromise *promise = handle;
     serverAssert(promise->from_call_argv);
@@ -6707,7 +6710,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     va_end(ap);
 
     c = moduleAllocTempClient();
-    moduleCallCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
+    moduleCallCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg, NULL);
 
     if (errno == 0) {
         if (!c->flag.blocked) {
@@ -6745,8 +6748,9 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 }
 
 /* Helper function that supports VM_Call and VM_CallArgv.
- */
-static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error) {
+ * If supplied, would_block reports infrastructure blocking separately from
+ * command errors without changing the legacy VM_Call reply behavior. */
+static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error, int *would_block) {
     sds reply_error_msg = NULL;
     int replicate = 0;             /* Replicate this command? */
     int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
@@ -7106,6 +7110,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
              * command to block. Unblock the client and return an error. */
             c->flag.pending_command = 0;
             unblockClient(c, 0);
+            if (would_block) *would_block = 1;
             addReplyError(c, "-INUSE Key is being processed");
             goto cleanup;
         }
@@ -7161,7 +7166,15 @@ cleanup:
  * reply is delivered directly through the `resp_handlers` callbacks, enabling
  * zero-copy pass-through and avoiding intermediate parsing overhead.
  *
- * The ownership of the `argv` array remains with the caller.
+ * This API is synchronous. VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK is not supported.
+ * The ownership of the `argv` array remains with the caller. The reply callbacks
+ * run before this function returns; `reply_ctx` need only remain valid until then.
+ *
+ * If infrastructure (such as a forkless operation) prevents the command from
+ * executing without blocking, returns VALKEYMODULE_ERR with errno = EAGAIN.
+ * The command has not executed and is not queued for later execution. No reply
+ * callbacks are invoked, even with VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES.
+ * The caller may retry later, but must not busy-wait on the server thread.
  *
  * * **argv**: The array of arguments.
  * * **argc**: The length of the array of arguments.
@@ -7182,26 +7195,26 @@ cleanup:
  *     execution (format specifier: "S").
  *   * `VALKEYMODULE_CALL_ARGV_NO_WRITES`: Disallow write commands in this call
  *     (format specifier: "W").
- *   * `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES`: Deliver error replies through
- *     reply_handlers rather than setting errno on the module context
- *     (format specifier: "E").
+ *   * `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES`: Deliver command and validation
+ *     errors through reply_handlers. Infrastructure refusal (EAGAIN) and an
+ *     unsupported ALLOW_BLOCK flag (EINVAL) still return VALKEYMODULE_ERR
+ *     without callbacks (format specifier: "E").
  *   * `VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM`: Respect deny-oom policy when
  *     executing the command (format specifier: "M").
  *   * `VALKEYMODULE_CALL_ARGV_DRY_RUN`: Execute in dry-run mode; implies
  *     `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES` (format specifier: "D").
- *   * `VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK`: Allow blocking commands/calls
- *     (format specifier: "K").
  *   * `VALKEYMODULE_CALL_ARGV_REPLY_EXACT`: Request exact reply parsing (do not
  *     coerce reply types) (format specifier: "X").
  * * **resp_handlers**: Struct of callbacks that receive the command reply. The
  *     `onRespAvailable` callback is called first with the raw RESP bytes; if it
- *     returns 0 the per-type callbacks are skipped. If the inner command blocks,
- *     `onBlocked` is called instead.
+ *     returns 0 the per-type callbacks are skipped. `onBlocked` is not used.
  *
  * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if an error
  * occurred before invoking the command and errno is set to one of:
+ * * EAGAIN: Infrastructure would block the command (regardless of ERRORS_AS_REPLIES).
  * * EBADF: wrong format specifier.
- * * EINVAL: wrong command arity.
+ * * EINVAL: wrong command arity or VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK was specified
+ *           (returned regardless of ERRORS_AS_REPLIES).
  * * ENOENT: command does not exist.
  * * EPERM: operation in Cluster instance with key in non local slot.
  * * EROFS: operation in Cluster instance when a write command is sent
@@ -7218,6 +7231,20 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 int flags,
                 const ValkeyModuleReplyHandlers *resp_handlers,
                 void *reply_ctx) {
+    if (flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+    return moduleCallArgv(ctx, argv, argc, flags, resp_handlers, reply_ctx);
+}
+
+/* Internal implementation, including asynchronous calls that are not public. */
+int moduleCallArgv(ValkeyModuleCtx *ctx,
+                   ValkeyModuleString **argv,
+                   int argc,
+                   int flags,
+                   const ValkeyModuleReplyHandlers *resp_handlers,
+                   void *reply_ctx) {
     serverAssert(resp_handlers == NULL || resp_handlers->version == VALKEYMODULE_REPLY_HANDLERS_VERSION);
 
     int ret = VALKEYMODULE_OK;
@@ -7226,7 +7253,13 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
 
     c = moduleAllocTempClient();
     c->flag.argv_borrowed = 1;
-    moduleCallCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
+    int would_block = 0;
+    moduleCallCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg, &would_block);
+    if (would_block) {
+        moduleReleaseTempClient(c);
+        errno = EAGAIN;
+        return VALKEYMODULE_ERR;
+    }
 
     if (errno != 0 && !(flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES)) {
         /* Signal the caller that an error occurred */
@@ -15672,7 +15705,6 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithNull);
     REGISTER_API(ReplyWithBool);
     REGISTER_API(ReplyWithCallReply);
-    REGISTER_API(ReplyRaw);
     REGISTER_API(ReplyWithDouble);
     REGISTER_API(ReplyWithBigNumber);
     REGISTER_API(ReplyWithLongDouble);
@@ -15697,7 +15729,6 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(StringToStreamID);
     REGISTER_API(Call);
     REGISTER_API(CallArgv);
-    REGISTER_API(CallArgvAbort);
     REGISTER_API(CallReplyProto);
     REGISTER_API(FreeCallReply);
     REGISTER_API(CallReplyInteger);

@@ -1853,6 +1853,13 @@ int resolveBgsaveType(void) {
 /* Start a background save, choosing fork or forkless based on bgsave_type. */
 int rdbStartBgsave(int bgsave_type) {
     if (bgsave_type == RDB_BGSAVE_TYPE_FORKLESS) {
+        /* A forkless save borrows live keyspace references; an incoming full
+         * sync frees that keyspace. Don't start one during full-sync.
+         * (A fork-based save is handled at load time.) */
+        if (server.repl_state == REPL_STATE_TRANSFER ||
+            server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RDB_LOAD) {
+            return C_ERR;
+        }
         return forklessSaveToDisk(server.rdb_filename);
     } else {
         rdbSaveInfo rsi, *rsiptr;

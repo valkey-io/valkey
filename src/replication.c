@@ -44,6 +44,7 @@
 #include "cluster_migrateslots.h"
 #include "io_threads.h"
 #include "rdb_transcoder.h"
+#include "forkless.h"
 
 #include <memory.h>
 #include <stddef.h>
@@ -4783,6 +4784,12 @@ void syncWithPrimary(connection *conn) {
 
     /* Mark the beginning of the full sync */
     elapsedStart(&server.repl_full_sync_start_time);
+
+    /* A full sync replaces the whole dataset, which is incompatible with an
+     * in-progress forkless save still iterating it (the save borrows live
+     * keyspace references). Cancel it now, at the start of the sync, so its
+     * iterator is torn down normally before any load frees the keyspace. */
+    if (isForklessSaveInProgress()) forklessSaveCancel();
 
     /* Fall back to SYNC if needed. Otherwise, psync_result == PSYNC_FULLRESYNC
      * and the server.primary_replid and primary_initial_offset are

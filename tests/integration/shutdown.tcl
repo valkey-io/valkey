@@ -209,6 +209,9 @@ test "Shutting down master waits for replica then fails" {
             assert_match "*Errors trying to SHUTDOWN. Check logs*" $e2
             assert_equal {PONG} [$rd1 read]
 
+            $rd1 ping
+            assert_equal {PONG} [$rd1 read]
+
             $rd1 close
             $rd2 close
 

@@ -433,6 +433,9 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
+    memset(&c->reply_blocking_state, 0, sizeof(c->reply_blocking_state));
+    replyBlockingClientInit(c);
+
     return c;
 }
 
@@ -1771,10 +1774,12 @@ void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
         return;
     }
 
+    replyBlockingSnapshotBeforeDeferredReplyCommit(c);
     listJoin(c->reply, c->deferred_reply);
     c->reply_bytes += c->deferred_reply_bytes;
 
     resetDeferredReplyBuffer(c);
+    replyBlockingApplyDeferredReplyBoundary(c);
     if (prepareClientToWrite(c) != C_OK) {
         return;
     }
@@ -1850,9 +1855,48 @@ void copyReplicaOutputBuffer(client *dst, client *src) {
     ((replBufBlock *)listNodeValue(dst->repl_data->ref_repl_buf_node))->refcount++;
 }
 
+/* Return true if the client has any unsent output, sendable or not.
+ * Unlike clientHasPendingReplies(), this also counts bytes held behind a
+ * reply-blocking boundary. Use it where the buffers must be truly empty. */
+int clientHasUnsentOutput(client *c) {
+    if (c->bufpos || listLength(c->reply)) return 1;
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->ref_repl_buf_node != NULL) {
+        /* A replica's output is the shared buffer from its cursor to the
+         * tail. Under reply blocking part of it may not be sendable yet, but
+         * it is still unsent. */
+        listNode *ln = listLast(server.repl_buffer_blocks);
+        replBufBlock *tail = listNodeValue(ln);
+        if (ln != c->repl_data->ref_repl_buf_node || c->repl_data->ref_block_pos != tail->used) return 1;
+    }
+    return clientHasPendingReplies(c);
+}
+
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
 int clientHasPendingReplies(client *c) {
+    if (isClientReplyBufferLimited(c)) {
+        /* Check if our first allowed reply boundary is in a position that comes
+         * after the current position that valkey has written up to in the COB. */
+        const blockedResponse *n = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if ((c->bufpos && n->disallowed_reply_block == NULL) ||
+            (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {
+            /* The comparison is only valid when the write cursor (io_last_written)
+             * and the boundary are measured against the same buffer. That holds
+             * because: (a) the static buf only fills while c->reply is empty, (b)
+             * _postWriteToClient zeroes bufpos once a write passes the static buf,
+             * and (c) it frees every reply block before io_last_written.buf. Assert
+             * it so a future change that breaks these invariants fails tests rather
+             * than silently comparing offsets across different buffers. */
+            debugServerAssert(c->io_last_written.buf == NULL ||
+                              c->io_last_written.buf == (n->disallowed_reply_block == NULL
+                                                             ? c->buf
+                                                             : ((clientReplyBlock *)listNodeValue(n->disallowed_reply_block))->buf));
+            /* Both positions are pointing both at the initial 16KB buffer or the
+             * first reply block, compare the sentlen with the last allowed byte offset. */
+            return c->io_last_written.bufpos < n->disallowed_byte_offset;
+        }
+    }
+
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
         /* Replicas use global shared replication buffer instead of
          * private output buffer. */
@@ -1873,6 +1917,15 @@ int clientHasPendingReplies(client *c) {
         listNode *ln = listLast(server.repl_buffer_blocks);
         replBufBlock *tail = listNodeValue(ln);
         if (ln == c->repl_data->ref_repl_buf_node && c->repl_data->ref_block_pos == tail->used) return 0;
+
+        /* Under reply blocking only bytes up to the durable send limit are
+         * pending. The replica is queued again when the limit advances. */
+        if (isPrimaryReplyBlockingEnabled()) {
+            listNode *limit_node;
+            size_t limit_pos;
+            if (!getReplicationSendLimit(&limit_node, &limit_pos)) return 0;
+            return replicaCursorBeforeSendLimit(c, limit_node, limit_pos);
+        }
 
         return 1;
     } else {
@@ -2238,6 +2291,9 @@ void disconnectReplicas(void) {
  * This is used by freeClient() and replicationCachePrimary(). */
 void unlinkClient(client *c) {
     listNode *ln;
+
+    replyBlockingClientReset(c);
+
 
     /* If this is marked as current client unset it. */
     if (c->conn && server.current_client == c) server.current_client = NULL;
@@ -2781,14 +2837,22 @@ static void postWriteToReplica(client *c) {
 /* Resolve the replication-buffer range available to replica c: the
  * last block to send and the end position within it (the start is the
  * replica's own cursor, ref_repl_buf_node/ref_block_pos). The main thread
- * reads the live buffer tail; an IO thread uses the snapshot taken when the
- * write job was dispatched. Returns false only when the buffer has no blocks.
+ * reads the live send limit (the buffer tail, or the last durable byte under
+ * reply blocking); an IO thread uses the snapshot taken when the write job was
+ * dispatched. Returns false when there is nothing the replica may be sent.
  * Shared by the plaintext and compressed write paths. */
 static bool getReplicaWriteRange(client *c, listNode **last_node, size_t *last_pos) {
     if (inMainThread()) {
-        *last_node = listLast(server.repl_buffer_blocks);
-        if (!*last_node) return false;
-        *last_pos = ((replBufBlock *)listNodeValue(*last_node))->used;
+        if (!isPrimaryReplyBlockingEnabled()) {
+            *last_node = listLast(server.repl_buffer_blocks);
+            if (!*last_node) return false;
+            *last_pos = ((replBufBlock *)listNodeValue(*last_node))->used;
+            return true;
+        }
+        if (!getReplicationSendLimit(last_node, last_pos)) return false;
+        /* A range ending at or before the cursor would make writeToReplica's
+         * block loop run past last_node. */
+        if (!replicaCursorBeforeSendLimit(c, *last_node, *last_pos)) return false;
     } else {
         *last_node = c->io_last_reply_block;
         serverAssert(*last_node != NULL);
@@ -3217,6 +3281,24 @@ static int writevToClient(client *c) {
     replyIOV reply;
     initReplyIOV(c, iovmax, iov_arr, prefixes, crlf, &reply);
 
+    /* Cap the iov at disallowed_byte_offset when reply blocking is active. */
+    listNode *disallowed_block = NULL;
+    size_t disallowed_offset = 0;
+    if (isClientReplyBufferLimited(c)) {
+        const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if (br->disallowed_reply_block == NULL) {
+            /* Boundary is in c->buf — cap bufpos and skip reply blocks. */
+            if (br->disallowed_byte_offset < bufpos) {
+                bufpos = br->disallowed_byte_offset;
+            }
+            lastblock = NULL;
+        } else {
+            /* Boundary is in a reply block — remember it for capping below. */
+            disallowed_block = br->disallowed_reply_block;
+            disallowed_offset = br->disallowed_byte_offset;
+        }
+    }
+
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
     if (bufpos > 0) {
@@ -3240,8 +3322,13 @@ static int writevToClient(client *c) {
              * that may not yet be visible to the current thread*/
             if (!inMainThread() && next == lastblock) used = c->io_last_bufpos;
 
+            /* Cap at disallowed_byte_offset if this is the disallowed block. */
+            if (next == disallowed_block) {
+                if (disallowed_offset < used) used = disallowed_offset;
+            }
+
             if (used == 0) { /* empty node, skip over it. */
-                if (next == lastblock) break;
+                if (next == lastblock || next == disallowed_block) break;
                 continue;
             }
 
@@ -3253,7 +3340,7 @@ static int writevToClient(client *c) {
             if (!buf_metadata[bufcnt].data_len) break;
             bufcnt++;
 
-            if (next == lastblock) break;
+            if (next == lastblock || next == disallowed_block) break;
 
             if (reply.iovcnt == reply.iovsize) {
                 reply.limit_reached = 1;
@@ -3321,6 +3408,16 @@ int _writeToClient(client *c) {
 
     /* If io_last_written_data_len is nonzero it must relate to c->buf */
     serverAssert(c->io_last_written.data_len == 0 || c->io_last_written.buf == c->buf);
+
+    /* Cap bufpos at disallowed_byte_offset when reply blocking is active and
+     * the boundary is in c->buf (disallowed_reply_block == NULL). */
+    if (isClientReplyBufferLimited(c)) {
+        const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if (br->disallowed_reply_block == NULL && br->disallowed_byte_offset < bufpos) {
+            bufpos = br->disallowed_byte_offset;
+        }
+    }
+
     ssize_t bytes_to_write = bufpos - c->io_last_written.data_len;
     ssize_t tot_written = 0;
 
@@ -3536,13 +3633,16 @@ int postWriteToClient(client *c) {
         if (!isReplicatedClient(c)) c->last_interaction = server.unixtime;
     }
     if (!clientHasPendingReplies(c)) {
-        resetLastWrittenBuf(c);
+        /* A reply-blocked client may have unsent bytes behind the boundary:
+         * keep the write cursor and the connection until they are delivered. */
+        int drained = !clientHasUnsentOutput(c);
+        if (drained) resetLastWrittenBuf(c);
         if (connHasWriteHandler(c->conn)) {
             connSetWriteHandler(c->conn, NULL);
         }
 
         /* Close connection after entire reply has been sent. */
-        if (c->flag.close_after_reply) {
+        if (drained && c->flag.close_after_reply) {
             freeClientAsync(c);
             return C_ERR;
         }

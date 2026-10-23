@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include "util.h"
+#include "dict.h"
 
 /* Special Expiry values */
 #define EXPIRY_NONE -1

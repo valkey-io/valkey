@@ -363,4 +363,8 @@ bool bgIteration_isEntryInuse(dbEntry *de);
 void bgIteration_dbEntryModified(dbEntry *de);
 void bgIteration_keyModified(int dbid, const_sds key);
 
+/* Parse the parameters of the COPY command, extracting the target DBID.
+ * Returns FALSE if the command would not run. */
+bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *target_dbid);
+
 #endif

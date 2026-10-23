@@ -25,6 +25,7 @@ tags {"modules" "valgrind:skip"} {
                 assert_equal 1 [count_log_message 0 "STACK TRACE -"]
 
                 assert_range [count_log_message 0 "#. 0x"] 1 999
+                assert_equal 0 [count_log_message 0 "libbacktrace failed to resolve symbols"]
             }
         }
     }

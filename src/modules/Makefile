@@ -14,7 +14,8 @@ endif
 # Link with the compiler driver on macOS so libSystem is resolved from the
 # active SDK; raw ld can't parse newer SDKs' libSystem.tbd stubs.
 ifeq ($(uname_S),Darwin)
-LD = $(CC)
+# CFLAGS may select a non-native architecture and must reach the driver.
+LD = $(CC) $(CFLAGS)
 endif
 
 .SUFFIXES: .c .so .xo .o

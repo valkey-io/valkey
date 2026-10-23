@@ -421,6 +421,72 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+    # Regression tests for https://github.com/valkey-io/valkey/issues/4604 (item 3).
+    #
+    # During a forkless (consistent) bgsave, an early iterated key, removed from the main
+    # dictionary, was not handled properly and resulted in a crash.  A single RENAME is enough to
+    # reproduce.  These paths only exist for forkless (consistent) iteration; fork-mode bgsave is
+    # unaffected, so the tests target forkless only.
+    test "forkless save survives RENAME over an existing key" {
+        r flushall
+        r config set bgsave-default-method forkless
+        r config set rdb-key-save-delay 0
+
+        # Populate keys that are part of the snapshot.  The iterator has not yet reached them when
+        # we mutate them mid-save, so they get expedited into early_iterate_entries.
+        r debug populate 100000
+
+        # Hold the forkless save open so the rename happens mid-iteration.
+        r config set rdb-key-save-delay 10000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        # RENAME an existing snapshot key over another existing snapshot key: at the dbEntry level
+        # delete(dst) + delete(src) + add(new).
+        set before [r get key:1]
+        r rename key:1 key:2
+        assert_equal [r get key:2] $before
+        assert_equal [r exists key:1] 0
+
+        # Server must still be alive and the save must complete cleanly.
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal [r ping] "PONG"
+    } {} {needs:debug}
+
+    test "forkless save survives PEXPIRE/PERSIST/SETEX on an existing key" {
+        r flushall
+        r config set bgsave-default-method forkless
+        r config set rdb-key-save-delay 0
+        r debug populate 100000
+
+        r config set rdb-key-save-delay 10000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        # PEXPIRE / PERSIST / SETEX on existing snapshot keys all go through setExpire ->
+        # objectSetKeyAndExpire, which reallocates the dbEntry onto a freed (expedited) slot -- the
+        # same reuse trigger as RENAME, with no RENAME in the workload.
+        r pexpire key:10 10000000
+        r persist key:11
+        r setex key:12 1000 newval
+        assert_equal [r get key:12] "newval"
+
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal [r ping] "PONG"
+    } {} {needs:debug}
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         
         # Populate database with complex dataset

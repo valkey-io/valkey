@@ -1943,6 +1943,8 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
             int unresolved[BACKTRACE_MAX_SIZE];
             int unresolved_count = 0;
             for (int i = uplevel; i < trace_size; i++) {
+                /* If backtrace_pcinfo fails don't retry. */
+                cb_data.resolved_current = 1;
                 backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb,
                                  libbacktrace_error_cb, &cb_data);
                 if (!cb_data.resolved_current && unresolved_count < BACKTRACE_MAX_SIZE) {

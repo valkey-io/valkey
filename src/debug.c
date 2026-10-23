@@ -1961,6 +1961,9 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
                     char *hdr = "\n(frames from libraries loaded after startup)\n";
                     if (write(fd, hdr, strlen(hdr)) == -1) { /* Avoid warning. */
                     }
+                    /* Restore number of frames after second pass completes. */
+                    int count = cb_data.count;
+
                     for (int j = 0; j < unresolved_count; j++) {
                         /* Restore the original frame number so the resolved line
                          * matches the placeholder pass 1 already printed. */
@@ -1968,6 +1971,7 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
                         backtrace_pcinfo(retry_state, (uintptr_t)trace[unresolved[j] + uplevel],
                                          libbacktrace_full_cb, libbacktrace_error_cb, &cb_data);
                     }
+                    cb_data.count = count;
                 }
             }
             /* If libbacktrace produced no frames or no useful function names, fall back to standard backtrace */

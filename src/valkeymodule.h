@@ -1416,7 +1416,9 @@ typedef struct ValkeyModuleReplyHandlersV1 {
     void (*setEnd)(void *ctx);
     void (*replyParsingError)(void *ctx);
 
-    /* This callback is invoked when the client is blocked waiting for a reply.
+    /* Reserved for internal asynchronous calls; public ValkeyModule_CallArgv
+     * does not invoke this callback.
+     * This callback is invoked when the client is blocked waiting for a reply.
      * `handle` can be passed to ValkeyModule_CallArgvAbort to cancel the
      * pending call before a reply arrives. The handle is valid until either
      * onRespAvailable is invoked or ValkeyModule_CallArgvAbort is called. */
@@ -1650,7 +1652,6 @@ VALKEYMODULE_API int (*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
                                               int flags,
                                               const ValkeyModuleReplyHandlers *reply_handlers,
                                               void *reply_ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_CallArgvAbort)(ValkeyModuleCallArgvBlockedHandle *handle) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CallReplyType)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
@@ -1739,9 +1740,6 @@ VALKEYMODULE_API int (*ValkeyModule_ReplyWithBigNumber)(ValkeyModuleCtx *ctx,
                                                         size_t len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithCallReply)(ValkeyModuleCtx *ctx,
                                                         ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_ReplyRaw)(ValkeyModuleCtx *ctx,
-                                              const char *proto,
-                                              size_t proto_len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StringToLongLong)(const ValkeyModuleString *str, long long *ll) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StringToULongLong)(const ValkeyModuleString *str,
                                                        unsigned long long *ull) VALKEYMODULE_ATTR;
@@ -2411,7 +2409,6 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ReplyWithNull);
     VALKEYMODULE_GET_API(ReplyWithBool);
     VALKEYMODULE_GET_API(ReplyWithCallReply);
-    VALKEYMODULE_GET_API(ReplyRaw);
     VALKEYMODULE_GET_API(ReplyWithDouble);
     VALKEYMODULE_GET_API(ReplyWithBigNumber);
     VALKEYMODULE_GET_API(ReplyWithLongDouble);
@@ -2436,7 +2433,6 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(StringToStreamID);
     VALKEYMODULE_GET_API(Call);
     VALKEYMODULE_GET_API(CallArgv);
-    VALKEYMODULE_GET_API(CallArgvAbort);
     VALKEYMODULE_GET_API(CallReplyProto);
     VALKEYMODULE_GET_API(FreeCallReply);
     VALKEYMODULE_GET_API(CallReplyInteger);

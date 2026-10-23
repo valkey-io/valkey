@@ -7196,9 +7196,11 @@ cleanup:
  *   * `VALKEYMODULE_CALL_ARGV_NO_WRITES`: Disallow write commands in this call
  *     (format specifier: "W").
  *   * `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES`: Deliver command and validation
- *     errors through reply_handlers. Infrastructure refusal (EAGAIN) and an
- *     unsupported ALLOW_BLOCK flag (EINVAL) still return VALKEYMODULE_ERR
- *     without callbacks (format specifier: "E").
+ *     errors through reply_handlers and return VALKEYMODULE_OK, while leaving
+ *     errno set for validation errors such as wrong command arity.
+ *     Infrastructure refusal (EAGAIN), an unsupported ALLOW_BLOCK flag or reply
+ *     handlers version (EINVAL) still return VALKEYMODULE_ERR without callbacks
+ *     (format specifier: "E").
  *   * `VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM`: Respect deny-oom policy when
  *     executing the command (format specifier: "M").
  *   * `VALKEYMODULE_CALL_ARGV_DRY_RUN`: Execute in dry-run mode; implies
@@ -7208,13 +7210,18 @@ cleanup:
  * * **resp_handlers**: Struct of callbacks that receive the command reply. The
  *     `onRespAvailable` callback is called first with the raw RESP bytes; if it
  *     returns 0 the per-type callbacks are skipped. `onBlocked` is not used.
+ *     May be NULL to discard the reply. Otherwise, version must be between 1
+ *     and VALKEYMODULE_REPLY_HANDLERS_VERSION, inclusive.
  *
  * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if an error
  * occurred before invoking the command and errno is set to one of:
  * * EAGAIN: Infrastructure would block the command (regardless of ERRORS_AS_REPLIES).
  * * EBADF: wrong format specifier.
- * * EINVAL: wrong command arity or VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK was specified
- *           (returned regardless of ERRORS_AS_REPLIES).
+ * * EINVAL: wrong command arity (delivered through reply_handlers and returns
+ *           VALKEYMODULE_OK when ERRORS_AS_REPLIES is set).
+ * * EINVAL: VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK was specified or the reply handlers
+ *           version is unsupported (returned regardless of ERRORS_AS_REPLIES,
+ *           without invoking reply callbacks or executing the command).
  * * ENOENT: command does not exist.
  * * EPERM: operation in Cluster instance with key in non local slot.
  * * EROFS: operation in Cluster instance when a write command is sent
@@ -7232,6 +7239,11 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 const ValkeyModuleReplyHandlers *resp_handlers,
                 void *reply_ctx) {
     if (flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+    if (resp_handlers && (resp_handlers->version == 0 ||
+                          resp_handlers->version > VALKEYMODULE_REPLY_HANDLERS_VERSION)) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
     }

@@ -81,6 +81,20 @@ start_server {tags {"modules"}} {
         }
     }
 
+    test "CallArgv rejects unsupported reply handlers versions before executing" {
+        foreach flags {0 2 E0 E2} {
+            assert_equal {1 0 1 0} [r test.call_argv_status $flags set invalid-version 1]
+            assert_equal 0 [r exists invalid-version]
+        }
+        assert_equal {0 0 0 1} [r test.call_argv_status {} ping]
+        assert_equal {0 0 0 0} [r test.call_argv_status N ping]
+    }
+
+    test "CallArgv wrong arity respects ERRORS_AS_REPLIES" {
+        assert_equal {1 0 1 1} [r test.call_argv_status {} set]
+        assert_equal {0 0 1 1} [r test.call_argv_status E set]
+    }
+
     test "Test CallArgvRaw" {
         set reply [r test.call_argv_raw ping hello]
         assert_equal "\$5\r\nhello\r\n" $reply

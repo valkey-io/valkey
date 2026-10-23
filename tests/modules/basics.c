@@ -171,7 +171,10 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
         .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = countRawReply,
     };
-    int ret = ValkeyModule_CallArgv(ctx, argv + 2, argc - 2, flags, &handlers, &callbacks);
+    if (strchr(fmt, '0')) handlers.version = 0;
+    if (strchr(fmt, '2')) handlers.version = VALKEYMODULE_REPLY_HANDLERS_VERSION + 1;
+    int ret = ValkeyModule_CallArgv(ctx, argv + 2, argc - 2, flags,
+                                    strchr(fmt, 'N') ? NULL : &handlers, &callbacks);
     int call_errno = errno;
     ValkeyModule_ReplyWithArray(ctx, 4);
     ValkeyModule_ReplyWithLongLong(ctx, ret == VALKEYMODULE_ERR);

@@ -923,7 +923,9 @@ typedef struct {
 /* Last known (active) TLS materials metadata */
 static tlsMaterialsMetadata active_metadata = {0};
 
-/* Compute certificate fingerprint from file. */
+/* Compute a fingerprint over every certificate in the file, so that a change to any
+ * of them is detected, not just the first: a root appended to a CA bundle, or a new
+ * intermediate in a chain. */
 static int getCertFingerprint(const char *cert_file, unsigned char *fingerprint, unsigned int *fingerprint_len) {
     if (!cert_file) return C_ERR;
 
@@ -933,21 +935,48 @@ static int getCertFingerprint(const char *cert_file, unsigned char *fingerprint,
         return C_ERR;
     }
 
-    X509 *cert = PEM_read_X509(fp, NULL, NULL, NULL);
-    fclose(fp);
-    if (!cert) {
-        serverLog(LL_WARNING, "Failed to parse X509 certificate from '%s'", cert_file);
-        return C_ERR;
-    }
-
     const EVP_MD *digest = EVP_sha256();
-    if (X509_digest(cert, digest, fingerprint, fingerprint_len) != 1) {
+    EVP_MD_CTX *md_ctx = EVP_MD_CTX_create();
+    if (!md_ctx || EVP_DigestInit_ex(md_ctx, digest, NULL) != 1) {
         serverLog(LL_WARNING, "Failed to compute certificate fingerprint for '%s'", cert_file);
-        X509_free(cert);
+        EVP_MD_CTX_destroy(md_ctx);
+        fclose(fp);
         return C_ERR;
     }
 
-    X509_free(cert);
+    int certs = 0;
+    X509 *cert;
+    while ((cert = PEM_read_X509(fp, NULL, NULL, NULL)) != NULL) {
+        unsigned char cert_digest[EVP_MAX_MD_SIZE];
+        unsigned int cert_digest_len;
+        int ok = X509_digest(cert, digest, cert_digest, &cert_digest_len) == 1 &&
+                 EVP_DigestUpdate(md_ctx, cert_digest, cert_digest_len) == 1;
+        X509_free(cert);
+        if (!ok) {
+            serverLog(LL_WARNING, "Failed to compute certificate fingerprint for '%s'", cert_file);
+            EVP_MD_CTX_destroy(md_ctx);
+            fclose(fp);
+            return C_ERR;
+        }
+        certs++;
+    }
+    fclose(fp);
+    /* The read that ends the loop leaves an error on the queue. */
+    ERR_clear_error();
+
+    if (certs == 0) {
+        serverLog(LL_WARNING, "Failed to parse X509 certificate from '%s'", cert_file);
+        EVP_MD_CTX_destroy(md_ctx);
+        return C_ERR;
+    }
+
+    if (EVP_DigestFinal_ex(md_ctx, fingerprint, fingerprint_len) != 1) {
+        serverLog(LL_WARNING, "Failed to compute certificate fingerprint for '%s'", cert_file);
+        EVP_MD_CTX_destroy(md_ctx);
+        return C_ERR;
+    }
+
+    EVP_MD_CTX_destroy(md_ctx);
     return C_OK;
 }
 

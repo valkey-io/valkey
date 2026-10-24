@@ -1849,10 +1849,25 @@ static void bt_simple_error_cb(void *data, const char *msg, int errnum) {
 
 static struct backtrace_state *bt_frame_state = NULL;
 
-/* Preallocate at startup: backtrace_create_state() calls malloc, which is not
- * async-signal-safe and could deadlock if called from a crash signal handler. */
+/* No-op full callback for the startup warmup call. */
+static int bt_simple_warmup_full_cb(void *data, uintptr_t pc, const char *filename, int lineno, const char *function) {
+    (void)data;
+    (void)pc;
+    (void)filename;
+    (void)lineno;
+    (void)function;
+    return 0;
+}
+
+/* Preallocate & warm up libbacktrace at startup so the crash handler never
+ * triggers its one-time lazy initialization. */
 void initLibbacktraceFrameState(void) {
     bt_frame_state = backtrace_create_state(NULL, 1, bt_simple_error_cb, NULL);
+    if (bt_frame_state) {
+        /* Force the lazy one-time init to run now by resolving one address. */
+        backtrace_pcinfo(bt_frame_state, (uintptr_t)&initLibbacktraceFrameState,
+                         bt_simple_warmup_full_cb, bt_simple_error_cb, NULL);
+    }
 }
 
 static int valkey_backtrace(void **trace, int max_size) {
@@ -1871,6 +1886,7 @@ typedef struct {
     int fd;
     int count;
     int found_symbols;
+    int resolved_current;
 } backtrace_callback_data;
 
 /* Error callback for libbacktrace */
@@ -1888,6 +1904,9 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
     char buf[512];
     int len;
 
+    // Base frame is often reported as -1ULL so skip second pass for it.
+    cb_data->resolved_current = pc == UINTPTR_MAX;
+
     if (function) {
         if (filename && lineno > 0) {
             len = snprintf(buf, sizeof(buf), "#%d 0x%lx %s at %s:%d\n",
@@ -1898,6 +1917,7 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
         }
         /* Mark that we found a real function name */
         cb_data->found_symbols = 1;
+        cb_data->resolved_current = 1;
     } else {
         len = snprintf(buf, sizeof(buf), "#%d 0x%lx <unknown>\n",
                        cb_data->count, (unsigned long)pc);
@@ -1914,14 +1934,45 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
     pid_t pid = fork();
 
     if (pid == 0) {
-        /* Child process - safe to use libbacktrace here */
-        struct backtrace_state *state = backtrace_create_state(
-            NULL, 0, libbacktrace_error_cb, &fd);
+        /* Child process - symbolize here. reuse the shared state warmed at
+         * startup by initLibbacktraceFrameState(). */
+        struct backtrace_state *state = bt_frame_state;
         if (state) {
-            backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0};
+            backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0, .resolved_current = 0};
+            /* Pass 1: resolve every frame with the warmed state. */
+            int unresolved[BACKTRACE_MAX_SIZE];
+            int unresolved_count = 0;
             for (int i = uplevel; i < trace_size; i++) {
+                /* If backtrace_pcinfo fails don't retry. */
+                cb_data.resolved_current = 1;
                 backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb,
                                  libbacktrace_error_cb, &cb_data);
+                if (!cb_data.resolved_current && unresolved_count < BACKTRACE_MAX_SIZE) {
+                    /* Store the frame number this PC printed under. */
+                    unresolved[unresolved_count++] = i - uplevel;
+                }
+            }
+
+            /* Pass 2: if any frame is still unresolved, it is likely in a
+             * library loaded after startup (may deadlock). */
+            if (unresolved_count > 0) {
+                struct backtrace_state *retry_state = backtrace_create_state(NULL, 0, libbacktrace_error_cb, &fd);
+                if (retry_state) {
+                    char *hdr = "\n(frames from libraries loaded after startup)\n";
+                    if (write(fd, hdr, strlen(hdr)) == -1) { /* Avoid warning. */
+                    }
+                    /* Restore number of frames after second pass completes. */
+                    int count = cb_data.count;
+
+                    for (int j = 0; j < unresolved_count; j++) {
+                        /* Restore the original frame number so the resolved line
+                         * matches the placeholder pass 1 already printed. */
+                        cb_data.count = unresolved[j];
+                        backtrace_pcinfo(retry_state, (uintptr_t)trace[unresolved[j] + uplevel],
+                                         libbacktrace_full_cb, libbacktrace_error_cb, &cb_data);
+                    }
+                    cb_data.count = count;
+                }
             }
             /* If libbacktrace produced no frames or no useful function names, fall back to standard backtrace */
             if (cb_data.count == 0 || !cb_data.found_symbols) {
@@ -1937,11 +1988,11 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
 #endif
             }
         } else {
-            /* Fallback if state creation fails */
+            /* The shared state is NULL, meaning the startup warmup failed. */
 #ifdef HAVE_EXECINFO
             backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
 #else
-            char *msg = "(libbacktrace state creation failed, no fallback available)\n";
+            char *msg = "(libbacktrace state unavailable, no fallback available)\n";
             if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
             }
 #endif

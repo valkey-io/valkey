@@ -354,6 +354,8 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         moduleNotifyKeyUnlink(key, old, db->id, DB_FLAG_KEY_OVERWRITE);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
         signalDeletedKeyAsReady(db, key, old->type);
+        /* A sorted set mid background compaction must not be resumed against its replacement. */
+        zsetCompactionKeyReplaced(db, objectGetVal(key));
         decrRefCount(old);
         /* Because of VM_StringDMA, old may be changed, so we need get old again */
         old = *oldref;
@@ -507,6 +509,8 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         moduleNotifyKeyUnlink(key, val, db->id, flags);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
         signalDeletedKeyAsReady(db, key, val->type);
+        /* A sorted set mid background compaction must not be resumed against a later value. */
+        zsetCompactionKeyReplaced(db, objectGetVal(key));
         /* Match the incrRefCount above. */
         decrRefCount(val);
         /* Because of dbUnshareStringValue, the val in de may change. */
@@ -709,6 +713,8 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
+
+    zsetCompactionDbReplaced(dbnum);
 
     if (hotkeysEnabled()) {
         if (dbnum == -1)
@@ -1835,6 +1841,11 @@ int dbSwapDatabases(int id1, int id2) {
     scanDatabaseForDeletedKeys(db1, db2);
     scanDatabaseForDeletedKeys(db2, db1);
 
+    /* A sorted set mid background compaction in either db now lives under
+     * another db id; the sweep must not resume against whatever took its place. */
+    zsetCompactionDbReplaced(id1);
+    zsetCompactionDbReplaced(id2);
+
     /* Swap hash tables. Note that we don't swap blocking_keys,
      * ready_keys and watched_keys, since we want clients to
      * remain in the same DB they were. */
@@ -1867,6 +1878,8 @@ int dbSwapDatabases(int id1, int id2) {
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
 void swapMainDbWithTempDb(serverDb **tempDb) {
+    /* Every key is about to be replaced by the loaded dataset. */
+    zsetCompactionDbReplaced(-1);
     for (int i = 0; i < server.dbnum; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);

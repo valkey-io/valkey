@@ -1958,5 +1958,30 @@ start_server {
             assert {[dict get [r xinfo stream mystream] length] == 0}
             assert_equal [r xinfo groups mystream] $grpinfo
         }
+
+        # rewritten AOF used to drop PEL entries of XDEL'd stream IDs.
+        test {AOF rewrite keeps PEL entries whose stream entry was deleted} {
+            r DEL mystream
+            r XADD mystream 0-3 f v
+            r XADD mystream 0-4 f w
+            r XGROUP CREATE mystream mygroup 0
+            r XREADGROUP GROUP mygroup consumer1 COUNT 10 STREAMS mystream >
+            r XDEL mystream 0-3
+            set pel [r XPENDING mystream mygroup - + 10]
+            assert_equal 2 [llength $pel]
+            assert_equal {0-3 0-4} [list [lindex $pel 0 0] [lindex $pel 1 0]]
+
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+
+            set pel [r XPENDING mystream mygroup - + 10]
+            assert_equal 2 [llength $pel]
+            assert_equal {0-3 0-4} [list [lindex $pel 0 0] [lindex $pel 1 0]]
+            assert_equal consumer1 [lindex $pel 0 1]
+            assert_equal consumer1 [lindex $pel 1 1]
+            assert_equal 1 [lindex $pel 0 3]
+            assert_equal 1 [lindex $pel 1 3]
+        }
     }
 }

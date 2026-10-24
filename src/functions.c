@@ -47,7 +47,6 @@ typedef enum {
 
 /* Forward declaration */
 static void engineFunctionDispose(void *obj);
-static void engineStatsDispose(void *obj);
 static void engineLibraryDispose(void *obj);
 static int functionsVerifyName(sds name);
 
@@ -79,7 +78,7 @@ dictType functionDictType = {
 static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
     dictEntry *de = entry;
     dictSdsDestructor(dictGetKey(de));
-    engineStatsDispose(dictGetVal(de));
+    zfree(dictGetVal(de));
     zfree(de);
 }
 
@@ -132,11 +131,6 @@ static size_t functionMallocSize(functionInfo *fi) {
 
 static size_t libraryMallocSize(functionLibInfo *li) {
     return zmalloc_size(li) + sdsAllocSize(li->name) + sdsAllocSize(li->code);
-}
-
-static void engineStatsDispose(void *obj) {
-    functionsLibEngineStats *stats = obj;
-    zfree(stats);
 }
 
 /* Dispose function memory */

@@ -556,6 +556,7 @@ ENGINE_SERVER_OBJ = \
     geohash.o \
     geohash_helper.o \
     hashtable.o \
+    hashtable_helpers.o \
     hotkeys.o \
     space_saving.o \
     hyperloglog.o \
@@ -652,6 +653,7 @@ ENGINE_CLI_OBJ = \
     crccombine.o \
     crcspeed.o \
     hashtable.o \
+    hashtable_helpers.o \
     monotonic.o \
     mt19937-64.o \
     release.o \
@@ -678,6 +680,7 @@ ENGINE_BENCHMARK_OBJ = \
     fuzzer_client.o \
     fuzzer_command_generator.o \
     hashtable.o \
+    hashtable_helpers.o \
     monotonic.o \
     mt19937-64.o \
     release.o \

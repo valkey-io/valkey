@@ -1069,7 +1069,7 @@ jobs:
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
         run: |
-          sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
+          sudo apt-get update && sudo apt-get install lttng-tools liblttng-ust-dev
           make -j4 USE_LTTNG=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
@@ -1434,11 +1434,11 @@ jobs:
           repository: ${{ env.GITHUB_REPOSITORY }}
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: test
-        uses: cross-platform-actions/action@39a2a80642eca0947594ad03e4355dc3d28c617a # v0.32.0
+        uses: cross-platform-actions/action@e0b9770014ba65d5e0815f15b74031c3a635f641 # v1.6.0
         with:
           operating_system: freebsd
           environment_variables: MAKE
-          version: 13.2
+          version: 14.5
           shell: bash
           run: |
             sudo pkg install -y bash gmake lang/tcl86 lang/tclX

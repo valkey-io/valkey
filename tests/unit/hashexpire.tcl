@@ -375,6 +375,15 @@ start_server {tags {"hashexpire"}} {
             set e
         } {ERR *}
     }
+
+    test {HGETEX on a key named fields} {
+        r FLUSHALL
+        r HSET fields f1 v1
+        assert_equal {v1} [r HGETEX fields FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields PERSIST FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields EX 100 FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f1] 1 100
+    }
 }
 
 start_server {tags {"hashexpire"}} {
@@ -553,6 +562,15 @@ start_server {tags {"hashexpire"}} {
         catch {r HSETEX myhash EX 10 FIELDS 2 field1 val1} e
         set e
     } {ERR *}
+
+    test {HSETEX on a key named fields} {
+        r FLUSHALL
+        assert_equal 1 [r HSETEX fields FIELDS 1 f1 v1]
+        assert_equal 1 [r HSETEX fields EX 100 FIELDS 1 f2 v2]
+        assert_equal {v1 v2} [r HMGET fields f1 f2]
+        assert_equal -1 [r HTTL fields FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f2] 1 100
+    }
 
     foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command 0/past time works correctly with 2 fields" {
@@ -4829,6 +4847,54 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     $r2 close
+}
+
+start_server {tags {"hashexpire external:skip"}} {
+    start_server {tags {needs:repl external:skip}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        # Setting a field TTL converts the hash to hashtable encoding, so only
+        # that encoding can hold the expired field this test relies on.
+        foreach {encoding f2_value} [list hashtable [string repeat x 128]] {
+            test "COPY of a hash holding an expired-but-unreaped field keeps the replica in sync - $encoding" {
+                lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+                $primary DEBUG SET-ACTIVE-EXPIRE 0
+                $replica DEBUG SET-ACTIVE-EXPIRE 0
+
+                $primary HSET myhash f1 v1 f2 $f2_value
+                $primary HPEXPIRE myhash 1 FIELDS 1 f1
+                wait_for_condition 100 10 {
+                    [$primary HEXISTS myhash f1] == 0
+                } else {
+                    fail "Field f1 was never logically expired on the primary"
+                }
+                assert_equal $encoding [$primary object encoding myhash]
+
+                # The replica ignores field expiry while applying COPY, so its
+                # copy has f1. The primary has to copy f1 too, otherwise it
+                # never propagates the deletion of f1 from the copy.
+                $primary COPY myhash mycopy
+                wait_for_ofs_sync $primary $replica
+                assert_equal $encoding [$primary object encoding mycopy]
+                assert_equal $encoding [$replica object encoding mycopy]
+                assert_equal 2 [$primary HLEN mycopy]
+                assert_equal [$primary HLEN mycopy] [$replica HLEN mycopy]
+                # The copy must be tracked, otherwise active expiry never reaps f1 from it.
+                assert_equal 2 [get_keys_with_volatile_items $primary]
+
+                $primary DEBUG SET-ACTIVE-EXPIRE 1
+                $replica DEBUG SET-ACTIVE-EXPIRE 1
+                wait_for_active_expiry $primary mycopy 1 $primary_initial_expired 2
+                wait_for_ofs_sync $primary $replica
+                assert_equal {f2} [$replica HKEYS mycopy]
+                assert_equal {f2} [$replica HKEYS myhash]
+            } {} {needs:debug}
+        }
+    }
 }
 
 # Loading and the replication stream ignore field expiry, so HDEL, HPERSIST

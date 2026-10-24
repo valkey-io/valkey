@@ -2425,6 +2425,7 @@ void initServerConfig(void) {
     int j;
     char *default_bindaddr[CONFIG_DEFAULT_BINDADDR_COUNT] = CONFIG_DEFAULT_BINDADDR;
 
+    server.debug_libbacktrace_wait_iterations = 50;
     initConfigValues();
     updateCachedTime(1);
     server.cmd_time_snapshot = server.mstime;

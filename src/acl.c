@@ -2293,7 +2293,11 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
                 return ACL_DENIED_DB;
             }
         }
-    } else if (shouldRestrictCmd(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+    } else if (shouldRestrictCmd(cmd) && !(cmd->proc == execCommand && argc == 1) &&
+               !ACLSelectorCanAccessDb(selector, dbid)) {
+        /* EXEC only reads the active database through its condition keys. The
+         * queued commands are checked against their own database when they
+         * run, so a bare EXEC does not need access to the active database. */
         if (keyidxptr) *keyidxptr = 0;
         return ACL_DENIED_DB;
     }

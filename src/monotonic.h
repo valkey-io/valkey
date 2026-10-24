@@ -1,5 +1,5 @@
-#ifndef __MONOTONIC_H
-#define __MONOTONIC_H
+#ifndef MONOTONIC_H
+#define MONOTONIC_H
 /* The monotonic clock is an always increasing clock source.  It is unrelated to
  * the actual time of day and should only be used for relative timings.  The
  * monotonic clock is also not guaranteed to be chronologically precise; there

@@ -20,8 +20,8 @@
  *    - Allows producer to batch jobs
  */
 
-#ifndef __QUEUES_H__
-#define __QUEUES_H__
+#ifndef QUEUES_H
+#define QUEUES_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -141,4 +141,4 @@ size_t spscDequeueBatch(spscQueue *q, void **jobs_out, size_t num_jobs);
 /* Check if queue is empty from producer's perspective. */
 bool spscIsEmpty(spscQueue *q);
 
-#endif /* __QUEUES_H__ */
+#endif /* QUEUES_H */

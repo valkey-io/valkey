@@ -3538,13 +3538,18 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  *
  * #### Return value
  *
- * The command returns VALKEYMODULE_ERR if the format specifiers are invalid
- * or the command name does not belong to a known command. */
+ * The command returns VALKEYMODULE_ERR if the format specifiers are invalid,
+ * the command name does not belong to a known command, or the server is
+ * paused for replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER
+ * FAILOVER). */
 int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
     struct serverCommand *cmd;
     robj **argv = NULL;
     int argc = 0, flags = 0, j;
     va_list ap;
+
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
 
     cmd = lookupCommandByCString((char *)cmdname);
     if (!cmd) return VALKEYMODULE_ERR;
@@ -3581,8 +3586,13 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
  * the command can just be re-executed to deterministically re-create the
  * new state starting from the old one.
  *
- * The function always returns VALKEYMODULE_OK. */
+ * The function returns VALKEYMODULE_ERR if the server is paused for
+ * replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER FAILOVER),
+ * otherwise VALKEYMODULE_OK is returned. */
 int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
+
     alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL);
     server.dirty++;
     return VALKEYMODULE_OK;
@@ -4183,7 +4193,9 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL || (expire < 0 && expire != VALKEYMODULE_NO_EXPIRE))
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
-        expire += commandTimeSnapshot();
+        mstime_t basetime = commandTimeSnapshot();
+        if (expire > LLONG_MAX - basetime) return VALKEYMODULE_ERR;
+        expire += basetime;
         setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
@@ -6399,6 +6411,21 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
             goto cleanup;
         }
+    }
+
+    /* Reject write commands from modules when replica traffic is paused.
+     * This prevents module timer callbacks and thread-safe contexts from
+     * bypassing the pause and hitting the assertion in propagateNow(). */
+    if (replicate && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)) && isPausedActions(PAUSE_ACTION_REPLICA)) {
+        errno = ENOSPC;
+        if (error_as_call_replies) {
+            sds msg = sdscatfmt(sdsempty(),
+                                "Write command '%S' was "
+                                "called while the server is paused for writes.",
+                                c->cmd->fullname);
+            reply = callReplyCreateError(msg, ctx);
+        }
+        goto cleanup;
     }
 
     /* Check if the user can run this command according to the current
@@ -9590,7 +9617,9 @@ ValkeyModuleUser *VM_CreateModuleUser(const char *name) {
 }
 
 /* Frees a given user and disconnects all of the clients that have been
- * authenticated with it. See VM_CreateModuleUser for detailed usage.*/
+ * authenticated with it. See VM_CreateModuleUser for detailed usage.
+ *
+ * Returns VALKEYMODULE_OK. */
 int VM_FreeModuleUser(ValkeyModuleUser *user) {
     if (user->free_user) ACLFreeUserAndKillClients(user->user);
     zfree(user);

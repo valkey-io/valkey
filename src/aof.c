@@ -1537,8 +1537,8 @@ int loadSingleAppendOnlyFile(char *filename) {
         /* Command lookup */
         cmd = lookupCommand(argv, argc);
         if (!cmd) {
-            serverLog(LL_WARNING, "Unknown command '%s' reading the append only file %s", (char *)argv[0]->ptr,
-                      filename);
+            serverLog(LL_WARNING, "Unknown command '%s' reading the append only file %s",
+                      server.hide_user_data_from_log ? "*redacted*" : (char *)argv[0]->ptr, filename);
             freeClientArgv(fakeClient);
             ret = AOF_FAILED;
             goto cleanup;

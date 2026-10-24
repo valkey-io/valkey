@@ -1524,6 +1524,76 @@ struct client *createAOFClient(void) {
     return c;
 }
 
+/* Adapts fread to the read_fn signature used by parseRespArgsFromReader. */
+static size_t aofFileReader(void *ctx, void *buf, size_t len) {
+    return fread(buf, len, 1, (FILE *)ctx) == 1 ? len : 0;
+}
+
+/* Run one command that has already been parsed into argv/argc, using a fake
+ * client. This is used when we replay commands while loading data. The fake
+ * client sends no reply and is never allowed to block.
+ *
+ * The fake client takes over argv. When this function returns, argv has
+ * already been freed (running the command can change argv, so we free the
+ * client's own argv, not the pointer that was passed in).
+ *
+ * Returns LOAD_CMD_OK if the command ran, or LOAD_CMD_MULTI_START if it ran and
+ * was a MULTI. Returns LOAD_CMD_ERR_UNKNOWN if the command name is not known, or
+ * LOAD_CMD_ERR if the number of arguments is wrong. In the error cases *err is
+ * set to a short message that the caller must free.
+ *
+ * When ignore_multi_exec is non-zero the caller is replaying individual
+ * commands, so MULTI/EXEC are skipped rather than queued into a transaction. */
+loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int ignore_multi_exec, sds *err) {
+    struct serverCommand *cmd;
+
+    fakeClient->argc = argc;
+    fakeClient->argv = argv;
+    fakeClient->argv_len = argc;
+
+    fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
+    if ((!cmd && !commandCheckExistence(fakeClient, err)) || (cmd && !commandCheckArity(cmd, argc, err))) {
+        /* An unknown command's error text can echo user data; an arity error
+         * cannot. Report them distinctly so the caller can redact. */
+        loadCommandResult res = (cmd == NULL) ? LOAD_CMD_ERR_UNKNOWN : LOAD_CMD_ERR;
+        freeClientArgv(fakeClient);
+        return res;
+    }
+
+    /* A caller replaying individual commands skips MULTI/EXEC framing so each
+     * command applies immediately instead of being queued into a transaction. */
+    if (ignore_multi_exec && (cmd->proc == multiCommand || cmd->proc == execCommand)) {
+        serverLog(LL_DEBUG, "Skipping %s command while replaying individual commands", cmd->fullname);
+        freeClientArgv(fakeClient);
+        return LOAD_CMD_OK;
+    }
+
+    /* Note whether this command is a MULTI before running it, so the caller
+     * replaying an AOF can track transaction boundaries. */
+    loadCommandResult res = (cmd->proc == multiCommand) ? LOAD_CMD_MULTI_START : LOAD_CMD_OK;
+
+    /* Run the command in the context of a fake client */
+    if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
+        /* Note: we don't have to attempt calling evalGetCommandFlags,
+         * since this is a replay, the checks in processCommand are not made
+         * anyway.*/
+        queueMultiCommand(fakeClient, cmd->flags);
+    } else {
+        cmd->proc(fakeClient);
+    }
+
+    /* The fake client should not have a reply */
+    serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
+
+    /* The fake client should never get blocked */
+    serverAssert(fakeClient->flag.blocked == 0);
+
+    /* Clean up. Command code may have changed argv/argc so we use the
+     * argv/argc of the client instead of the local variables. */
+    freeClientArgv(fakeClient);
+    return res;
+}
+
 /* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
  * otherwise, one of the following is returned:
  * AOF_OPEN_ERR: Failed to open the AOF file.
@@ -1611,12 +1681,9 @@ int loadSingleAppendOnlyFile(char *filename) {
 
     /* Read the actual AOF file, in REPL format, command by command. */
     while (1) {
-        int argc, j;
-        unsigned long len;
+        int argc;
         robj **argv;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
-        sds argsds;
-        struct serverCommand *cmd;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1024)) {
@@ -1640,77 +1707,24 @@ int loadSingleAppendOnlyFile(char *filename) {
         if (argc < 1) goto fmterr;
         if ((size_t)argc > SIZE_MAX / sizeof(robj *)) goto fmterr;
 
-        /* Load the next command in the AOF as our fake client
-         * argv. */
-        argv = zmalloc(sizeof(robj *) * argc);
-        fakeClient->argc = argc;
-        fakeClient->argv = argv;
-        fakeClient->argv_len = argc;
+        /* Read the argument list into the fake client's argv. */
+        respParseResult pr = parseRespArgsFromReader(aofFileReader, fp, argc, &argv);
+        if (pr == RESP_PARSE_EOF) goto readerr;
+        if (pr == RESP_PARSE_FMTERR) goto fmterr;
 
-        for (j = 0; j < argc; j++) {
-            /* Parse the argument len. */
-            char *readres = fgets(buf, sizeof(buf), fp);
-            if (readres == NULL || buf[0] != '$') {
-                fakeClient->argc = j; /* Free up to j-1. */
-                freeClientArgv(fakeClient);
-                if (readres == NULL)
-                    goto readerr;
-                else
-                    goto fmterr;
-            }
-            len = strtol(buf + 1, NULL, 10);
-
-            /* Read it into a string object. */
-            argsds = sdsnewlen(SDS_NOINIT, len);
-            if (len && fread(argsds, len, 1, fp) == 0) {
-                sdsfree(argsds);
-                fakeClient->argc = j; /* Free up to j-1. */
-                freeClientArgv(fakeClient);
-                goto readerr;
-            }
-            argv[j] = createObject(OBJ_STRING, argsds);
-
-            /* Discard CRLF. */
-            if (fread(buf, 2, 1, fp) == 0) {
-                fakeClient->argc = j + 1; /* Free up to j. */
-                freeClientArgv(fakeClient);
-                goto readerr;
-            }
-        }
-
-        /* Command lookup */
+        /* Command lookup, validation and execution. Keep MULTI framing (0) so
+         * AOF transactions replay as transactions. */
         sds err = NULL;
-        fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
-        if ((!cmd && !commandCheckExistence(fakeClient, &err)) || (cmd && !commandCheckArity(cmd, argc, &err))) {
+        loadCommandResult lr = loadCommandFromArgv(fakeClient, argv, argc, 0, &err);
+        if (lr == LOAD_CMD_ERR_UNKNOWN || lr == LOAD_CMD_ERR) {
             serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename,
-                      (server.hide_user_data_from_log && !cmd) ? "*redacted*" : err);
+                      (server.hide_user_data_from_log && lr == LOAD_CMD_ERR_UNKNOWN) ? "*redacted*" : err);
             sdsfree(err);
-            freeClientArgv(fakeClient);
             ret = AOF_FAILED;
             goto cleanup;
         }
+        if (lr == LOAD_CMD_MULTI_START) valid_before_multi = valid_up_to;
 
-        if (cmd->proc == multiCommand) valid_before_multi = valid_up_to;
-
-        /* Run the command in the context of a fake client */
-        if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
-            /* Note: we don't have to attempt calling evalGetCommandFlags,
-             * since this is AOF, the checks in processCommand are not made
-             * anyway.*/
-            queueMultiCommand(fakeClient, cmd->flags);
-        } else {
-            cmd->proc(fakeClient);
-        }
-
-        /* The fake client should not have a reply */
-        serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
-
-        /* The fake client should never get blocked */
-        serverAssert(fakeClient->flag.blocked == 0);
-
-        /* Clean up. Command code may have changed argv/argc so we use the
-         * argv/argc of the client instead of the local variables. */
-        freeClientArgv(fakeClient);
         if (server.aof_load_truncated) valid_up_to = ftello(fp);
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }

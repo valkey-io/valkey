@@ -37,6 +37,22 @@
 /* TBD: include only necessary headers. */
 #include "server.h"
 
+/* Result of the RESP command parse helpers (parseRespArgsFromReader and the
+ * RDB/AOF replay parsers). */
+typedef enum {
+    RESP_PARSE_OK = 0, /* Parsed successfully. */
+    RESP_PARSE_EOF,    /* Reader hit end of input (possibly a truncated tail). */
+    RESP_PARSE_FMTERR  /* Malformed input (bad protocol bytes). */
+} respParseResult;
+
+/* Result of loadCommandFromArgv(), which replays one command against a fake client */
+typedef enum {
+    LOAD_CMD_OK = 0,      /* Command ran. */
+    LOAD_CMD_MULTI_START, /* Command ran and it was MULTI. */
+    LOAD_CMD_ERR_UNKNOWN, /* Failed: unknown command. */
+    LOAD_CMD_ERR          /* Failed: other. */
+} loadCommandResult;
+
 /* The current RDB version. When the format changes in a way that is no longer
  * backward compatible this number gets incremented.
  *
@@ -145,6 +161,7 @@ enum RdbType {
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
  * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_UPDATE 242          /* Inline replication command during forkless sync. */
 #define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state (9.0). */
 #define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
@@ -208,7 +225,7 @@ int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbStartBgsave(int bgsave_type);
-int resolveBgsaveType(void);
+int resolveBgsaveType(const char **err);
 int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
 int rdbSaveToFile(const char *filename);
@@ -257,13 +274,24 @@ void rdbFreeStreamReader(rio *rdb, streamReader *reader);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);
 int rdbSaveRio(compressionAlgo compression_algo, int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
+int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
+int rdbSaveInfoReplAuxFields(rio *rdb, rdbSaveInfo *rsi);
+ssize_t rdbSaveAuxFieldStrStr(rio *rdb, char *key, char *val);
+ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 void replicationEmptyDbCallback(hashtable *ht);
 ssize_t rdbSaveDbSizeHints(rio *rdb, serverDb *db, int include_importing);
 int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi);
 int rdbWriteFooter(rio *rdb, int req);
-void rdbRecordStartMetrics(int bgsave_type);
+int rdbWriteEofMarkStart(rio *rdb, char *eofmark);
+int rdbWriteEofMarkEnd(rio *rdb, const char *eofmark);
+void rdbRecordStartMetrics(int bgsave_type, int write_target);
 void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end);
 void rdbClearSaveState(time_t save_end);
+
+/* RESP command replay parsers shared by RDB and AOF loading. */
+respParseResult parseRespArgsFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int argc, robj ***argv_out);
+struct client *createAOFClient(void);
+loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int ignore_multi_exec, sds *err);
 
 #endif

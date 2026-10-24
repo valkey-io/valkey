@@ -1481,7 +1481,10 @@ typedef struct client {
     unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
-    _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
+    uint64_t io_tracked_reply_len;                /* Logical size of copy-avoided BULK_STR_REF replies in the output
+                                                   * buffers. Main-thread only. Exempt references are finalized
+                                                   * before usage is observed or command logging runs.
+                                                   * Configured limits are enforced at enqueue. */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
     int nwritten;                                 /* Number of bytes of the last write. */
     int nread;                                    /* Number of bytes of the last read. */
@@ -1520,6 +1523,9 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
+    /* First buffer containing unaccounted copy-avoided references. */
+    payloadHeader *pending_bulk_header;
+    listNode *pending_bulk_node; /* NULL when the first buffer is c->buf. */
 } client;
 
 /* Forward declaration */
@@ -3133,6 +3139,10 @@ void addReplyProto(client *c, const char *s, size_t len);
 void AddReplyFromClient(client *c, client *src);
 void commitDeferredReplyBuffer(client *c, int skip_if_blocked);
 void addReplyBulk(client *c, robj *obj);
+writePreparedClient *prepareClientForBulk(client *c, int *exempt);
+void addWritePreparedBulk(writePreparedClient *c, robj *obj);
+void addWritePreparedBulkExempt(writePreparedClient *c, robj *obj);
+void finishWritePreparedBulk(writePreparedClient *c);
 void addReplyBulkCString(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len);

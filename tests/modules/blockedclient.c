@@ -21,8 +21,8 @@ extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len
 #define ValkeyModule_ReplyRaw VM_ReplyRaw
 
 /* used to test processing events during slow bg operation */
-static volatile int g_slow_bg_operation = 0;
-static volatile int g_is_in_slow_bg_operation = 0;
+static int g_slow_bg_operation = 0;
+static int g_is_in_slow_bg_operation = 0;
 
 void *sub_worker(void *arg) {
     // Get module context
@@ -120,13 +120,13 @@ void *bg_call_worker(void *arg) {
     ValkeyModule_ThreadSafeContextLock(ctx);
 
     // Test slow operation yielding
-    if (g_slow_bg_operation) {
-        g_is_in_slow_bg_operation = 1;
-        while (g_slow_bg_operation) {
+    if (__atomic_load_n(&g_slow_bg_operation, __ATOMIC_SEQ_CST)) {
+        __atomic_store_n(&g_is_in_slow_bg_operation, 1, __ATOMIC_SEQ_CST);
+        while (__atomic_load_n(&g_slow_bg_operation, __ATOMIC_SEQ_CST)) {
             ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "Slow module operation");
             usleep(1000);
         }
-        g_is_in_slow_bg_operation = 0;
+        __atomic_store_n(&g_is_in_slow_bg_operation, 0, __ATOMIC_SEQ_CST);
     }
 
     // Call the command
@@ -975,7 +975,7 @@ static int set_slow_bg_operation(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
         ValkeyModule_ReplyWithError(ctx, "Invalid integer value");
         return VALKEYMODULE_OK;
     }
-    g_slow_bg_operation = ll;
+    __atomic_store_n(&g_slow_bg_operation, ll, __ATOMIC_SEQ_CST);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return VALKEYMODULE_OK;
 }
@@ -988,7 +988,7 @@ static int is_in_slow_bg_operation(ValkeyModuleCtx *ctx, ValkeyModuleString **ar
         return VALKEYMODULE_OK;
     }
 
-    ValkeyModule_ReplyWithLongLong(ctx, g_is_in_slow_bg_operation);
+    ValkeyModule_ReplyWithLongLong(ctx, __atomic_load_n(&g_is_in_slow_bg_operation, __ATOMIC_SEQ_CST));
     return VALKEYMODULE_OK;
 }
 

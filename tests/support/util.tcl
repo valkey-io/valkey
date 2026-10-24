@@ -1252,7 +1252,11 @@ proc get_nonloopback_addr {} {
 }
 
 proc get_nonloopback_client {} {
-    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
+    set tlsoptions {}
+    if {$::tls} {
+        set tlsoptions {-servername localhost}
+    }
+    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls $tlsoptions]
 }
 
 # The following functions and variables are used only when running large-memory

@@ -103,14 +103,14 @@ void pathHashTypeDigest(unsigned char *digest, robj *o) {
         hashTypeInitIterator(paths.data, &fields);
         while (hashTypeNext(&fields) != C_ERR) {
             unsigned char entry_digest[20] = {0};
-            sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
-            sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
+            char fbuf[LONG_STR_SIZE], vbuf[LONG_STR_SIZE];
+            size_t flen, vlen;
+            char *field = hashTypeCurrentObjectRawString(&fields, OBJ_HASH_FIELD, fbuf, &flen);
+            char *value = hashTypeCurrentObjectRawString(&fields, OBJ_HASH_VALUE, vbuf, &vlen);
             mixDigest(entry_digest, paths.key, paths.key_len);
-            mixDigest(entry_digest, field, sdslen(field));
-            mixDigest(entry_digest, value, sdslen(value));
+            mixDigest(entry_digest, field, flen);
+            mixDigest(entry_digest, value, vlen);
             xorDigest(digest, entry_digest, sizeof(entry_digest));
-            sdsfree(field);
-            sdsfree(value);
         }
         hashTypeResetIterator(&fields);
     }
@@ -129,29 +129,21 @@ static robj *pathHashLookupPayload(robj *o, robj *path) {
 static void pathHashReplyPayload(client *c, robj *payload) {
     /* A payload is a field/value map, so reply like HGETALL does: a map in
      * RESP3 and a flat array in RESP2. */
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
     addReplyMapLen(c, hashTypeLength(payload));
     hashTypeIterator iter;
     hashTypeInitIterator(payload, &iter);
     while (hashTypeNext(&iter) != C_ERR) {
-        addReplyBulkSds(c, hashTypeCurrentObjectNewSds(&iter, OBJ_HASH_FIELD));
-        addReplyBulkSds(c, hashTypeCurrentObjectNewSds(&iter, OBJ_HASH_VALUE));
+        addHashIteratorCursorToReply(wpc, &iter, OBJ_HASH_FIELD);
+        addHashIteratorCursorToReply(wpc, &iter, OBJ_HASH_VALUE);
     }
     hashTypeResetIterator(&iter);
 }
 
-static void pathHashReplyField(client *c, robj *payload, robj *field) {
-    robj *value = payload ? hashTypeGetValueObject(payload, objectGetVal(field)) : NULL;
-    if (value) {
-        addReplyBulk(c, value);
-        decrRefCount(value);
-    } else {
-        addReplyNull(c);
-    }
-}
-
 static void pathHashReplyFields(client *c, robj *payload, robj **fields, long numfields) {
     addReplyArrayLen(c, numfields);
-    for (long i = 0; i < numfields; i++) pathHashReplyField(c, payload, fields[i]);
+    for (long i = 0; i < numfields; i++) addHashFieldToReply(c, payload, objectGetVal(fields[i]));
 }
 
 static void pathHashReplyMatch(client *c,
@@ -335,7 +327,8 @@ void phmgetCommand(client *c) {
         serverAssert(getLongLongFromObject(c->argv[argpos + 2], &numfields) == C_OK);
         int fields_index = argpos + 3;
         robj *payload = pathHashLookupPayload(o, c->argv[argpos]);
-        for (long long i = 0; i < numfields; i++) pathHashReplyField(c, payload, c->argv[fields_index + i]);
+        for (long long i = 0; i < numfields; i++)
+            addHashFieldToReply(c, payload, objectGetVal(c->argv[fields_index + i]));
         argpos = fields_index + numfields;
     }
 }
@@ -787,14 +780,14 @@ int rewritePathHashObject(rio *r, robj *key, robj *o) {
         hashTypeIterator fields;
         hashTypeInitIterator(paths.data, &fields);
         while (hashTypeNext(&fields) != C_ERR) {
-            sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
-            sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
+            char fbuf[LONG_STR_SIZE], vbuf[LONG_STR_SIZE];
+            size_t flen, vlen;
+            char *field = hashTypeCurrentObjectRawString(&fields, OBJ_HASH_FIELD, fbuf, &flen);
+            char *value = hashTypeCurrentObjectRawString(&fields, OBJ_HASH_VALUE, vbuf, &vlen);
             int ok = rioWriteBulkCount(r, '*', 7) && rioWriteBulkString(r, "PHSET", 5) &&
                      rioWriteBulkObject(r, key) && rioWriteBulkString(r, (char *)paths.key, paths.key_len) &&
                      rioWriteBulkString(r, "FIELDS", 6) && rioWriteBulkLongLong(r, 1) &&
-                     rioWriteBulkString(r, field, sdslen(field)) && rioWriteBulkString(r, value, sdslen(value));
-            sdsfree(field);
-            sdsfree(value);
+                     rioWriteBulkString(r, field, flen) && rioWriteBulkString(r, value, vlen);
             if (!ok) {
                 hashTypeResetIterator(&fields);
                 raxStop(&paths);

@@ -926,6 +926,27 @@ void dismissStreamObject(robj *o, size_t size_hint) {
     }
 }
 
+/* See dismissObject() */
+void dismissPathHashObject(robj *o, size_t size_hint) {
+    pathHashObject *path_hash = objectGetVal(o);
+    rax *index = path_hash->index;
+    if (raxSize(index) == 0) return;
+
+    /* We iterate and dismiss the payloads only when the approximate average
+     * serialized payload size is bigger than a page size, since otherwise
+     * there's a high chance we'll just iterate without releasing anything. */
+    size_t payload_size_hint = size_hint / raxSize(index);
+    if (payload_size_hint < server.page_size) return;
+
+    raxIterator iter;
+    raxStart(&iter, index);
+    raxSeek(&iter, "^", NULL, 0);
+    while (raxNext(&iter)) {
+        dismissHashObject(iter.data, payload_size_hint);
+    }
+    raxStop(&iter);
+}
+
 /* When creating a snapshot in a fork child process, the main process and child
  * process share the same physical memory pages, and if / when the parent
  * modifies any keys due to write traffic, it'll cause CoW which consume
@@ -954,6 +975,7 @@ void dismissObject(robj *o, size_t size_hint) {
     case OBJ_ZSET: dismissZsetObject(o, size_hint); break;
     case OBJ_HASH: dismissHashObject(o, size_hint); break;
     case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
+    case OBJ_PATH_HASH: dismissPathHashObject(o, size_hint); break;
     default: break;
     }
 #else

@@ -58,6 +58,36 @@ test "Sentinel announces hostnames" {
     assert {[verify_hostname_announced "127.0.0.1"] || [verify_hostname_announced "::1"]}
 }
 
+test "Sentinel preserves unresolved replica hostnames across config rewrites" {
+    S 0 SENTINEL CONFIG SET announce-hostnames yes
+    kill_instance sentinel 0
+    set f [open "sentinel_0/sentinel.conf" a]
+    puts $f "sentinel monitor unresolved-primary primary.invalid 6379 1"
+    puts $f "sentinel known-replica unresolved-primary replica-a.invalid 6379"
+    puts $f "sentinel known-replica unresolved-primary replica-b.invalid 6379"
+    close $f
+    restart_instance sentinel 0
+    test_defer {
+        S 0 SENTINEL REMOVE unresolved-primary
+        S 0 SENTINEL CONFIG SET announce-hostnames no
+    }
+
+    S 0 SENTINEL FLUSHCONFIG
+    set c [split [read_file "sentinel_0/sentinel.conf"] "\n"]
+    foreach h {replica-a.invalid replica-b.invalid} {
+        assert_equal 1 [llength [lsearch -all -exact $c \
+            "sentinel known-replica unresolved-primary $h 6379"]]
+    }
+
+    kill_instance sentinel 0
+    restart_instance sentinel 0
+    set h {}
+    foreach r [S 0 SENTINEL REPLICAS unresolved-primary] {
+        lappend h [dict get $r ip]
+    }
+    assert_equal {replica-a.invalid replica-b.invalid} [lsort $h]
+}
+
 # We need to revert any special configuration because all tests currently
 # share the same instances.
 test "(post-cleanup) Configure instances and sentinel for IPs" {

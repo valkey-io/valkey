@@ -616,7 +616,7 @@ void releaseSentinelAddr(sentinelAddr *sa) {
  * or by hostname if they could not have been resolved.
  */
 int sentinelAddrOrHostnameEqual(sentinelAddr *a, sentinelAddr *b) {
-    return a->port == b->port && (!strcmp(a->ip, b->ip) || !strcasecmp(a->hostname, b->hostname));
+    return a->port == b->port && ((a->ip[0] != '\0' && !strcmp(a->ip, b->ip)) || !strcasecmp(a->hostname, b->hostname));
 }
 
 /* Return non-zero if a hostname matches an address. */

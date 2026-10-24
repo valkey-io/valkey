@@ -928,7 +928,7 @@ void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]) {
 
     for (int i = 0; i < num_keys; ++i) {
         robj *key = keys[i];
-        serverAssert(key->type == OBJ_STRING);
+        serverAssert(objectGetType(key) == OBJ_STRING);
 
         /* Deduplicate via bstate->keys dict */
         if (dictAdd(c->bstate->keys, key, NULL) != DICT_OK) continue;

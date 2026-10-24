@@ -934,13 +934,13 @@ class BgIterationTest : public ::testing::Test {
         dbEntry *de = getItem(itemNum);
         ASSERT_NE(de, nullptr); // Should be there before expire
         EXPECT_TRUE(bgIteration_isEntryInuse(de));
-        EXPECT_EQ(de->refcount, 2u);
+        EXPECT_EQ(objectGetRefcount(de), 2u);
 
         simulateExpiration(itemNum);
 
         // At this point, the item is removed from the DB, but still exists, and the refcount
         //  has been reduced to 1.  This allows a background thread to continue using the item.
-        EXPECT_EQ(de->refcount, 1u);
+        EXPECT_EQ(objectGetRefcount(de), 1u);
     }
 
 
@@ -951,7 +951,7 @@ class BgIterationTest : public ::testing::Test {
         dbEntry *de = getItem(itemNum);
         ASSERT_NE(de, nullptr);                     // Should be there before expire
         EXPECT_FALSE(bgIteration_isEntryInuse(de)); // Not yet inuse
-        EXPECT_EQ(de->refcount, 1u);
+        EXPECT_EQ(objectGetRefcount(de), 1u);
 
         simulateExpiration(itemNum);
 
@@ -959,7 +959,7 @@ class BgIterationTest : public ::testing::Test {
         //  has been reduced to 1.  This allows a background thread to continue using the item.
         EXPECT_TRUE(bgIteration_isEntryInuse(de)); // It's inuse now
         EXPECT_EQ(getItem(itemNum), nullptr);      // but it's not in the DB anymore
-        EXPECT_EQ(de->refcount, 1u);
+        EXPECT_EQ(objectGetRefcount(de), 1u);
     }
 
 
@@ -1013,7 +1013,7 @@ class BgIterationTest : public ::testing::Test {
         dbEntry *de_in_use;
         if (anInUseItem >= 0) {
             de_in_use = getItem(anInUseItem);
-            EXPECT_EQ(de_in_use->refcount, 2u);
+            EXPECT_EQ(objectGetRefcount(de_in_use), 2u);
         }
 
         simulateUnblockedWrite_inCall(c); // FLUSHDB should never block
@@ -1029,7 +1029,7 @@ class BgIterationTest : public ::testing::Test {
         }
 
         if (anInUseItem >= 0) {
-            EXPECT_EQ(de_in_use->refcount, 1u);
+            EXPECT_EQ(objectGetRefcount(de_in_use), 1u);
         }
 
         // and replicate

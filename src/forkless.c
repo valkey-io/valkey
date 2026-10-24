@@ -93,12 +93,12 @@ static void *forklessSaveProcessor(void *arg) {
             if ((err = writeSelectDb(saveInfo, item->dbid)) == C_ERR) break;
             items++;
 
-            robj key;
-            initStaticStringObject(key, objectGetKey(item->u.dbe.de));
+            robjStatic key_buf;
+            robj *key = initStaticStringObject(&key_buf, objectGetKey(item->u.dbe.de));
             robj *o = item->u.dbe.de;
 
             long long expire = objectGetExpire(item->u.dbe.de);
-            if (rdbSaveKeyValuePair(&saveInfo->save_rio, &key, o, expire, item->dbid, RDB_VERSION) == -1) {
+            if (rdbSaveKeyValuePair(&saveInfo->save_rio, key, o, expire, item->dbid, RDB_VERSION) == -1) {
                 serverLog(LL_WARNING, "forkless-save: error writing KV pair");
                 err = C_ERR;
             }

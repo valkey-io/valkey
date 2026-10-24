@@ -274,7 +274,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
     int i;
     size_t sum = 0;
 
-    if (o->encoding != OBJ_ENCODING_LISTPACK) return;
+    if (objectGetEncoding(o) != OBJ_ENCODING_LISTPACK) return;
 
     /* We guess that most of the values in the input are unique, so
      * if there are enough arguments we create a pre-sized hash, which
@@ -805,7 +805,7 @@ unsigned long hashTypeLength(const robj *o) {
 
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
-    hi->encoding = subject->encoding;
+    hi->encoding = objectGetEncoding(subject);
     hi->iterator_type = HASH_ITER_ALL;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
@@ -820,7 +820,7 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
 
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
-    hi->encoding = subject->encoding;
+    hi->encoding = objectGetEncoding(subject);
     hi->iterator_type = HASH_ITER_VOLATILE;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
@@ -835,7 +835,7 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
 
 void hashTypeInitPersistentIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
-    hi->encoding = subject->encoding;
+    hi->encoding = objectGetEncoding(subject);
     hi->iterator_type = HASH_ITER_PERSISTENT;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
@@ -1106,12 +1106,12 @@ robj *hashTypeDup(robj *o) {
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         hobj = createObject(OBJ_HASH, new_zl);
-        hobj->encoding = OBJ_ENCODING_LISTPACK;
+        objectSetEncoding(hobj, OBJ_ENCODING_LISTPACK);
     } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = hashtableCreate(&hashHashtableType);
         hashtableExpand(ht, hashtableSize((const hashtable *)objectGetVal(o)));
         hobj = createObject(OBJ_HASH, ht);
-        hobj->encoding = OBJ_ENCODING_HASHTABLE;
+        objectSetEncoding(hobj, OBJ_ENCODING_HASHTABLE);
 
         /* Copy logically-expired fields too, like the listpack branch does. A
          * replica applying the same COPY ignores field expiry and keeps them,
@@ -1169,7 +1169,7 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
 
     bool has_volatile = hashTypeHasVolatileFields(hashobj);
 
-    if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
+    if (objectGetEncoding(hashobj) == OBJ_ENCODING_HASHTABLE) {
         /* Fast path: O(1)-expected fair-random probe, rejecting expired
          * ("ghost") entries. Also serves the non-volatile case, where the
          * first probe is always live. */
@@ -1190,7 +1190,7 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
             return C_OK;
         }
         /* Probe defeated by dense ghosts: fall through to the reservoir. */
-    } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(hashobj) == OBJ_ENCODING_LISTPACK) {
         if (!has_volatile) {
             /* No volatile fields: every pair is live, fetch directly. */
             lpRandomPair(objectGetVal(hashobj), hashsize, field, val);
@@ -1471,7 +1471,7 @@ void hmgetCommand(client *c) {
     }
 
     /* Prefer hashtable batch lookup to improve performance. */
-    if (o->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE && count > 1) {
         hmgetReplyWithHashtable(c, objectGetVal(o), c->argv + 2, count);
         return;
     }
@@ -1504,7 +1504,7 @@ void hdelCommand(client *c) {
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, objectGetVal(c->argv[j]))) {
             if (skipped) {
@@ -1523,7 +1523,7 @@ void hdelCommand(client *c) {
             skipped = j;
         }
     }
-    if (!keyremoved && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
+    if (!keyremoved && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
@@ -1571,7 +1571,7 @@ void hgetdelCommand(client *c) {
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
     robj **new_argv = NULL;
     int new_argc = 0, skipped = 0;
-    if (o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
+    if (o && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
 
     initDeferredReplyBuffer(c);
 
@@ -1599,7 +1599,7 @@ void hgetdelCommand(client *c) {
             skipped = i;
         }
     }
-    if (!keyremoved && o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
+    if (!keyremoved && o && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
 
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
@@ -2841,7 +2841,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * structures. This case is the only one that also needs to return the
      * elements in random order. */
     if (!uniq || count == 1) {
-        if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
+        if (objectGetEncoding(hash) == OBJ_ENCODING_HASHTABLE) {
             while (count--) {
                 listpackEntry field, value;
 
@@ -2856,7 +2856,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 if (c->flag.close_asap) break;
                 reply_size++;
             }
-        } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
+        } else if (objectGetEncoding(hash) == OBJ_ENCODING_LISTPACK) {
             listpackEntry *fields, *vals = NULL;
             unsigned long limit, sample_count;
 
@@ -2903,7 +2903,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      *
      * And it is inefficient to repeatedly pick one random element from a
      * listpack in CASE 4. So we use this instead. */
-    if (hash->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(hash) == OBJ_ENCODING_LISTPACK) {
         reply_size = count < size ? count : size;
         listpackEntry *fields, *vals = NULL;
         fields = zmalloc(sizeof(listpackEntry) * count);
@@ -3157,12 +3157,12 @@ static void defragHashTypeEntry(void *privdata, void *element_ref) {
 }
 
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *)) {
-    if (ob->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(ob) == OBJ_ENCODING_LISTPACK) {
         unsigned char *newzl;
         if ((newzl = activeDefragAlloc(objectGetVal(ob)))) objectSetVal(ob, newzl);
         return 0;
     }
-    serverAssert(ob->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(objectGetEncoding(ob) == OBJ_ENCODING_HASHTABLE);
     static struct volatileSetCursor {
         size_t cursor;
         bool is_vsetDefrag;

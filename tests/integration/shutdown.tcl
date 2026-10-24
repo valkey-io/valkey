@@ -183,6 +183,7 @@ test "Shutting down master waits for replica then fails" {
             set rd1 [valkey_deferring_client -1]
             set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
+            $rd1 ping
             $rd2 shutdown
             wait_for_condition 50 100 {
                 [llength [lsearch -all [split [string trim [$master client list]] "\r\n"] *cmd=shutdown*]] == 2
@@ -206,6 +207,11 @@ test "Shutting down master waits for replica then fails" {
             catch { $rd2 read } e2
             assert_match "*Errors trying to SHUTDOWN. Check logs*" $e1
             assert_match "*Errors trying to SHUTDOWN. Check logs*" $e2
+            assert_equal {PONG} [$rd1 read]
+
+            $rd1 ping
+            assert_equal {PONG} [$rd1 read]
+
             $rd1 close
             $rd2 close
 

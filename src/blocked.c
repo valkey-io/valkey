@@ -169,6 +169,16 @@ void processUnblockedClients(void) {
         c->flag.unblocked = 0;
         serverAssert(!c->flag.throttled);
 
+        /* Reset the client for a new query, unless the client has pending command to process. */
+        if (!c->flag.pending_command) {
+            /* Clients that are not blocked on keys are not reprocessed so we must
+             * call reqresAppendResponse here (for clients blocked on key,
+             * unblockClientOnKey is called, which eventually calls processCommand,
+             * which calls reqresAppendResponse) */
+            reqresAppendResponse(c);
+            resetClient(c);
+        }
+
         if (c->flag.module) {
             if (!c->flag.blocked) {
                 moduleCallCommandUnblockedHandler(c);
@@ -246,17 +256,6 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         serverPanic("Unknown btype in unblockClient().");
     }
 
-    /* Reset the client for a new query, unless the client has pending command to process
-     * or in case a shutdown operation was canceled and we are still in the processCommand sequence  */
-    if (!c->flag.pending_command && c->bstate->btype != BLOCKED_SHUTDOWN) {
-        /* Clients that are not blocked on keys are not reprocessed so we must
-         * call reqresAppendResponse here (for clients blocked on key,
-         * unblockClientOnKey is called, which eventually calls processCommand,
-         * which calls reqresAppendResponse) */
-        reqresAppendResponse(c);
-        resetClient(c);
-    }
-
     /* We count blocked client stats on regular clients and not on module clients */
     if (!c->flag.module) server.blocked_clients--;
     server.blocked_clients_by_type[c->bstate->btype]--;
@@ -321,6 +320,8 @@ void replyToClientsBlockedOnShutdown(void) {
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         if (c->flag.blocked && c->bstate->btype == BLOCKED_SHUTDOWN) {
+            /* call() left duration set because the client was blocked. */
+            c->duration = 0;
             addReplyError(c, "Errors trying to SHUTDOWN. Check logs.");
             unblockClient(c, 1);
         }

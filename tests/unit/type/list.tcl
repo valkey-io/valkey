@@ -1498,6 +1498,158 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         assert_equal 0 [r linsert not-a-key before 0 0]
     }
 
+    test {LPOPIF basic} {
+        r del lpopif_key{t}
+        r rpush lpopif_key{t} a b c
+        assert_equal a [r lpopif lpopif_key{t} eq a]
+        assert_equal 0 [r lpopif lpopif_key{t} eq x]
+        assert_equal {b c} [r lrange lpopif_key{t} 0 -1]
+        assert_equal b [r lpopif lpopif_key{t} ne x]
+        assert_equal c [r lpopif lpopif_key{t} ne x]
+        assert_equal {} [r lpopif lpopif_key{t} eq c]
+    }
+
+    test {RPOPIF basic} {
+        r del rpopif_key{t}
+        r rpush rpopif_key{t} a b c
+        assert_equal c [r rpopif rpopif_key{t} eq c]
+        assert_equal 0 [r rpopif rpopif_key{t} eq x]
+        assert_equal {a b} [r lrange rpopif_key{t} 0 -1]
+        assert_equal b [r rpopif rpopif_key{t} ne x]
+        assert_equal a [r rpopif rpopif_key{t} ne x]
+        assert_equal {} [r rpopif rpopif_key{t} eq a]
+    }
+
+    test {LPUSHIF basic} {
+        r del lpushif_key{t}
+        r rpush lpushif_key{t} a b c
+        assert_equal 4 [r lpushif lpushif_key{t} eq a x]
+        assert_equal {x a b c} [r lrange lpushif_key{t} 0 -1]
+        assert_equal 0 [r lpushif lpushif_key{t} eq a y]
+        assert_equal {x a b c} [r lrange lpushif_key{t} 0 -1]
+        assert_equal 5 [r lpushif lpushif_key{t} ne a y]
+        assert_equal {y x a b c} [r lrange lpushif_key{t} 0 -1]
+        assert_equal 0 [r lpushif lpushif_key{t} ne y z]
+        assert_equal {y x a b c} [r lrange lpushif_key{t} 0 -1]
+    }
+
+    test {RPUSHIF basic} {
+        r del rpushif_key{t}
+        r rpush rpushif_key{t} a b c
+        assert_equal 4 [r rpushif rpushif_key{t} eq c x]
+        assert_equal {a b c x} [r lrange rpushif_key{t} 0 -1]
+        assert_equal 0 [r rpushif rpushif_key{t} eq c y]
+        assert_equal {a b c x} [r lrange rpushif_key{t} 0 -1]
+        assert_equal 5 [r rpushif rpushif_key{t} ne c y]
+        assert_equal {a b c x y} [r lrange rpushif_key{t} 0 -1]
+        assert_equal 0 [r rpushif rpushif_key{t} ne y z]
+        assert_equal {a b c x y} [r lrange rpushif_key{t} 0 -1]
+    }
+
+    test {LPOPIF/RPOPIF/LPUSHIF/RPUSHIF with integer elements} {
+        r del int_key{t}
+        r rpush int_key{t} 1 2 3
+        assert_equal 4 [r lpushif int_key{t} eq 1 0]
+        assert_equal {0 1 2 3} [r lrange int_key{t} 0 -1]
+        assert_equal 0 [r lpushif int_key{t} eq 1 9]
+        assert_equal 5 [r rpushif int_key{t} eq 3 4]
+        assert_equal {0 1 2 3 4} [r lrange int_key{t} 0 -1]
+        assert_equal 0 [r lpopif int_key{t} eq 1]
+        assert_equal 0 [r lpopif int_key{t} ne 0]
+        assert_equal 4 [r rpopif int_key{t} ne 0]
+        assert_equal {0 1 2 3} [r lrange int_key{t} 0 -1]
+    }
+
+    test {LPOPIF/RPOPIF against empty key} {
+        r del empty_key{t}
+        assert_equal {} [r lpopif empty_key{t} eq a]
+        assert_equal {} [r lpopif empty_key{t} ne a]
+        assert_equal {} [r rpopif empty_key{t} eq a]
+        assert_equal {} [r rpopif empty_key{t} ne a]
+    }
+
+    test {LPUSHIF/RPUSHIF against empty key} {
+        r del empty_key{t}
+        assert_equal 0 [r lpushif empty_key{t} eq a x]
+        assert_equal 0 [r lpushif empty_key{t} ne a x]
+        assert_equal 0 [r rpushif empty_key{t} eq a x]
+        assert_equal 0 [r rpushif empty_key{t} ne a x]
+        assert_equal 0 [r exists empty_key{t}]
+    }
+
+    test {LPOPIF/RPOPIF/LPUSHIF/RPUSHIF against non-list value error} {
+        r set str_key{t} str
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r lpopif str_key{t} eq a}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r lpopif str_key{t} ne a}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r rpopif str_key{t} eq a}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r rpopif str_key{t} ne a}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r lpushif str_key{t} eq a x}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r lpushif str_key{t} ne a x}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r rpushif str_key{t} eq a x}
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r rpushif str_key{t} ne a x}
+    }
+
+    test {LPOPIF/RPOPIF/LPUSHIF/RPUSHIF wrong arity} {
+        assert_error "ERR wrong number*" {r lpopif}
+        assert_error "ERR wrong number*" {r lpopif k}
+        assert_error "ERR wrong number*" {r lpopif k eq}
+        assert_error "ERR wrong number*" {r lpopif k eq a extra}
+        assert_error "ERR wrong number*" {r rpopif}
+        assert_error "ERR wrong number*" {r rpopif k eq a extra}
+        assert_error "ERR wrong number*" {r lpushif}
+        assert_error "ERR wrong number*" {r lpushif k eq a}
+        assert_error "ERR wrong number*" {r lpushif k eq a x extra}
+        assert_error "ERR wrong number*" {r rpushif}
+        assert_error "ERR wrong number*" {r rpushif k eq a}
+        assert_error "ERR wrong number*" {r rpushif k eq a x extra}
+    }
+
+    test {LPOPIF/RPOPIF/LPUSHIF/RPUSHIF invalid comparison flag} {
+        assert_error "ERR syntax error" {r lpopif k xx a}
+        assert_error "ERR syntax error" {r rpopif k xx a}
+        assert_error "ERR syntax error" {r lpushif k xx a b}
+        assert_error "ERR syntax error" {r rpushif k xx a b}
+    }
+
+    test {LPOPIF deletes key when last element popped} {
+        r del single_key{t}
+        r rpush single_key{t} a
+        assert_equal a [r lpopif single_key{t} eq a]
+        assert_equal 0 [r exists single_key{t}]
+        r rpush single_key{t} a
+        assert_equal 0 [r rpopif single_key{t} eq b]
+        assert_equal 1 [r exists single_key{t}]
+        assert_equal a [r rpopif single_key{t} eq a]
+        assert_equal 0 [r exists single_key{t}]
+    }
+
+    test {LPOPIF/LPUSHIF/RPUSHIF propagation} {
+        r del popif_key{t} pushif_key{t}
+        r rpush popif_key{t} a b c
+        r rpush pushif_key{t} a b c
+
+        set repl [attach_to_replication_stream]
+
+        # Failed conditions are not propagated.
+        assert_equal 0 [r lpopif popif_key{t} eq x]
+        assert_equal 0 [r lpopif popif_key{t} ne a]
+        assert_equal 0 [r lpushif pushif_key{t} eq x y]
+        assert_equal 0 [r rpushif pushif_key{t} ne c z]
+
+        # Successful operations are propagated as the command itself.
+        assert_equal a [r lpopif popif_key{t} eq a]
+        assert_equal 4 [r lpushif pushif_key{t} eq a x]
+        assert_equal 5 [r rpushif pushif_key{t} eq c z]
+
+        assert_replication_stream $repl {
+            {select *}
+            {lpopif popif_key{t} eq a}
+            {lpushif pushif_key{t} eq a x}
+            {rpushif pushif_key{t} eq c z}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
 foreach type {listpack quicklist} {
     foreach {num} {250 500} {
         if {$type == "quicklist"} {

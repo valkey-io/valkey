@@ -73,6 +73,27 @@
 #define REDIS_TLS_PROTO_DEFAULT (REDIS_TLS_PROTO_TLSv1_2)
 #endif
 
+/* Support for TLS key-exchange groups (named groups / curves).
+ *
+ * CONN_TLS_SUPPORTS_GROUPS is enabled when OpenSSL provides an API to configure
+ * named groups on an SSL context (SSL_CTX_set1_groups_list or the older
+ * SSL_CTX_set1_curves_list alias).
+ *
+ * Define TLS_NO_GROUPS to compile without group configuration support.
+ * If neither API is present and TLS_NO_GROUPS is not set, a compile-time
+ * error is raised so that an operator-requested group list is not silently ignored. */
+#if defined(TLS_NO_GROUPS)
+#define CONN_TLS_SUPPORTS_GROUPS 0
+#elif defined(SSL_CTX_set1_groups_list)
+#define CONN_TLS_SUPPORTS_GROUPS 1
+#define valkeyTlsCtxSetGroupsList(ctx, list) SSL_CTX_set1_groups_list((ctx), (list))
+#elif defined(SSL_CTX_set1_curves_list)
+#define CONN_TLS_SUPPORTS_GROUPS 1
+#define valkeyTlsCtxSetGroupsList(ctx, list) SSL_CTX_set1_curves_list((ctx), (list))
+#else
+#error "tls-groups requires SSL_CTX_set1_groups_list or SSL_CTX_set1_curves_list. Build with -DTLS_NO_GROUPS to disable."
+#endif
+
 SSL_CTX *valkey_tls_ctx = NULL;
 SSL_CTX *valkey_tls_client_ctx = NULL;
 
@@ -730,6 +751,20 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
 #ifdef TLS1_3_VERSION
     if (ctx_config->ciphersuites && !SSL_CTX_set_ciphersuites(ctx, ctx_config->ciphersuites)) {
         serverLog(LL_WARNING, "Failed to configure ciphersuites: %s", ctx_config->ciphersuites);
+        goto error;
+    }
+#endif
+
+#if CONN_TLS_SUPPORTS_GROUPS
+    if (ctx_config->groups && !valkeyTlsCtxSetGroupsList(ctx, ctx_config->groups)) {
+        serverLog(LL_WARNING, "Failed to configure TLS groups: %s", ctx_config->groups);
+        goto error;
+    }
+#else
+    if (ctx_config->groups) {
+        serverLog(LL_WARNING, "tls-groups is configured but this build does not support "
+                              "setting TLS groups; recompile without -DTLS_NO_GROUPS "
+                              "or upgrade OpenSSL");
         goto error;
     }
 #endif

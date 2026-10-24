@@ -181,15 +181,12 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-/* For hash keys, checks if they contain volatile items and updates tracking accordingly.
- * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
+/* This always accesses the tracking kvstore, even when state is unchanged. */
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
-    if (objectGetType(o) == OBJ_HASH) {
-        if (hashTypeHasVolatileFields(o)) {
-            dbTrackKeyWithVolatileItems(db, o);
-        } else {
-            dbUntrackKeyWithVolatileItems(db, o);
-        }
+    if (objectHasVolatileItems(o)) {
+        dbTrackKeyWithVolatileItems(db, o);
+    } else {
+        dbUntrackKeyWithVolatileItems(db, o);
     }
 }
 
@@ -391,14 +388,12 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         }
     }
 
-    /* If overwriting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-    if (old->type == OBJ_HASH && hashTypeHasVolatileFields(old)) {
+    if (objectHasVolatileItems(old)) {
         /* Some commands create a new value (with NO key) and use setKey to change the value of an existing key.
          * In this case the old can be replaced with the provided value and be left without a key
-         * however it is still a hashObject with optional volatile items and we need to untrack it. */
+         * so the key-bearing replacement must be used to remove its tracking entry. */
         dbUntrackKeyWithVolatileItems(db, old->hasembkey ? old : new);
     }
-    /* If the new object is a hash with volatile items we need to track it again */
     dbTrackKeyWithVolatileItems(db, new);
 
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
@@ -522,8 +517,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(!kvstoreHashtableDelete(db->expires, dict_index, objectGetVal(key)));
         }
 
-        /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-        if (objectGetType(val) == OBJ_HASH && hashTypeHasVolatileFields(val)) {
+        if (objectHasVolatileItems(val)) {
             dbUntrackKeyWithVolatileItems(db, val);
         }
 
@@ -548,7 +542,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 /* Add a key with volatile items to the tracking kvstore. */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     serverAssert(objectGetKey(o));
-    if (objectGetType(o) == OBJ_HASH && hashTypeHasVolatileFields(o)) {
+    if (objectHasVolatileItems(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
     }
@@ -1390,7 +1384,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             unsigned char *vptr = p;
             /* Skip fields not visible in the current context */
             long long expiry = hashTypeListpackGetExpiry(zl, vptr);
-            int is_valid = hashTypeListpackFieldIsValid(expiry);
+            int is_valid = listpackObjectItemIsValid(expiry);
             p = lpNext(zl, vptr);
             if (!is_valid) continue;
             if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
@@ -1975,7 +1969,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     long long old_when = objectGetExpire(val);
 
     robj *newval = objectSetExpire(val, when);
-    if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
+    if (objectHasVolatileItems(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexUsingCachedSlot(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
@@ -2086,28 +2080,25 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
     server.replication_allowed = prev_replication_allowed;
 }
 
-#define EXPIRE_BULK_LIMIT ((size_t)1024) /* Maximum number of fields to active-expire (per replicated HDEL command */
+/* Maximum number of items to active-expire per replicated HDEL/SREM command. */
+#define EXPIRE_BULK_LIMIT ((size_t)1024)
 
-/* Propagate HDEL commands for deleted hash fields to AOF and replicas.
- *
- * This function builds and propagates a single HDEL command with multiple fields
- * for the given hash object `o`. It temporarily enables replication (if needed),
- * constructs the command using the field names, and sends it via alsoPropagate().
- * Returns how many fields where propagated */
-int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
+/* Propagate HDEL or SREM for deleted items of `o` to AOF and replicas, at most
+ * EXPIRE_BULK_LIMIT per call. Returns how many items were propagated; consumes one
+ * reference of every robj in `items`. */
+int propagateItemsDeletion(serverDb *db, robj *o, size_t n_items, robj *items[], int didx) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
-    robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
-    if (n_fields > EXPIRE_BULK_LIMIT) n_fields = EXPIRE_BULK_LIMIT;
+    robj *argv[EXPIRE_BULK_LIMIT + 2];
+    if (n_items > EXPIRE_BULK_LIMIT) n_items = EXPIRE_BULK_LIMIT;
 
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
-    argv[argc++] = shared.hdel; // HDEL command
-    argv[argc++] = keyobj;      // key name
-    for (size_t i = 0; i < n_fields; i++) {
-        // field to delete
-        argv[argc++] = fields[i];
+    argv[argc++] = objectGetType(o) == OBJ_SET ? shared.srem : shared.hdel;
+    argv[argc++] = keyobj;
+    for (size_t i = 0; i < n_items; i++) {
+        argv[argc++] = items[i];
     }
 
     alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL, didx);
@@ -2115,51 +2106,145 @@ int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields
     for (int i = 0; i < argc; i++) {
         decrRefCount(argv[i]);
     }
-    return n_fields;
+    return n_items;
 }
 
-/* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
+void propagateCommandAndKeyExpiration(client *c, robj *key, mstime_t when) {
+    alsoPropagate(c->db->id, c->argv, c->argc, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+
+    robj *whenobj = createStringObjectFromLongLong(when);
+    robj *argv[] = {shared.pexpireat, key, whenobj};
+    alsoPropagate(c->db->id, argv, 3, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+    decrRefCount(whenobj);
+    preventCommandPropagation(c);
+}
+
+/* Appends one ZADD score/member pair to 'argv', flushing a full batch first.
+ * Returns the new argument count. */
+static void propagateStoreFlush(client *c, robj **argv, int *n) {
+    alsoPropagate(c->db->id, argv, *n, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+    while (*n > 2) decrRefCount(argv[--*n]);
+}
+
+static int propagateZaddPair(client *c, robj **argv, int n, double score, const char *member, size_t len) {
+    if (n + 2 > 2 + (int)EXPIRE_BULK_LIMIT) propagateStoreFlush(c, argv, &n);
+    char buf[MAX_D2STRING_CHARS];
+    int buflen = d2string(buf, sizeof(buf), score);
+    argv[n++] = createStringObject(buf, buflen);
+    argv[n++] = createStringObject(member, len);
+    return n;
+}
+
+/* Replace a STORE command by DEL dst plus the stored members, so a replica cannot recompute
+ * over members that were expired here. */
+void propagateStoreAsEffects(client *c, robj *dstkey, robj *dst) {
+    if (!shouldPropagate(PROPAGATE_AOF | PROPAGATE_REPL) && !bgIteration_iterationActive()) return;
+
+    robj *argv[EXPIRE_BULK_LIMIT + 2];
+    argv[0] = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
+    argv[1] = dstkey;
+    alsoPropagate(c->db->id, argv, 2, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+
+    if (dst) {
+        int n = 2;
+        if (dst->type == OBJ_SET) {
+            argv[0] = shared.sadd;
+            char *str;
+            size_t len;
+            int64_t llval;
+            setTypeIterator *si = setTypeInitIterator(dst);
+            while (setTypeNext(si, &str, &len, &llval) != -1) {
+                argv[n++] = str ? createStringObject(str, len) : createStringObjectFromLongLong(llval);
+                if (n == 2 + (int)EXPIRE_BULK_LIMIT) propagateStoreFlush(c, argv, &n);
+            }
+            setTypeReleaseIterator(si);
+        } else if (dst->type == OBJ_ZSET) {
+            argv[0] = shared.zadd;
+            if (dst->encoding == OBJ_ENCODING_LISTPACK) {
+                unsigned char *zl = objectGetVal(dst);
+                unsigned char *eptr = lpSeek(zl, 0);
+                unsigned char *sptr = eptr ? lpNext(zl, eptr) : NULL;
+                while (eptr != NULL) {
+                    unsigned int vlen;
+                    long long vlong;
+                    unsigned char *vstr = lpGetValue(eptr, &vlen, &vlong);
+                    char numbuf[LONG_STR_SIZE];
+                    const char *ele = (const char *)vstr;
+                    size_t elelen = vlen;
+                    if (vstr == NULL) {
+                        elelen = ll2string(numbuf, sizeof(numbuf), vlong);
+                        ele = numbuf;
+                    }
+                    n = propagateZaddPair(c, argv, n, zzlGetScore(sptr), ele, elelen);
+                    zzlNext(zl, &eptr, &sptr);
+                }
+            } else {
+                zset *zs = objectGetVal(dst);
+                OrderedIndexIterator iter;
+                orderedIndexInitIterator(&iter, zs->oi);
+                OrderedIndexItem *node;
+                while ((node = orderedIndexNext(&iter)) != NULL) {
+                    const char *ele;
+                    size_t elelen;
+                    orderedIndexItemGetElement(node, &ele, &elelen);
+                    n = propagateZaddPair(c, argv, n, orderedIndexItemGetScore(node), ele, elelen);
+                }
+            }
+        } else {
+            argv[0] = shared.rpush;
+            listTypeEntry entry;
+            listTypeIterator *li = listTypeInitIterator(dst, 0, LIST_TAIL);
+            while (listTypeNext(li, &entry)) {
+                argv[n++] = listTypeGet(&entry);
+                if (n == 2 + (int)EXPIRE_BULK_LIMIT) propagateStoreFlush(c, argv, &n);
+            }
+            listTypeReleaseIterator(li);
+        }
+        if (n > 2) propagateStoreFlush(c, argv, &n);
+    }
+    preventCommandPropagation(c);
+}
+
+/* Process expired items of a hash or a set, delete them and propagate changes to replicas and AOF.
  *
  * This routine:
- *  - iteratively identifies expired hash fields from the volatile set (batching up to 1024 at a time)
- *  - deletes the expired fields
- *  - deletes the entire key if the hash becomes empty
- *  - propagates HDEL commands for deleted fields if the key remains, or DEL if the key is fully deleted
+ *  - iteratively identifies expired items from the volatile set (batching up to 1024 at a time)
+ *  - deletes the expired items
+ *  - deletes the key if it becomes empty
+ *  - propagates HDEL/SREM commands for deleted items if the key remains, or DEL if the key is fully deleted
  *
  * Batching avoids large stack allocations while allowing max_entries to be arbitrarily large.
- * Returns the total number of expired fields removed. */
-size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries, int didx) {
+ * Returns the total number of expired items removed. */
+size_t dbReclaimExpiredItems(robj *o, serverDb *db, mstime_t now, unsigned long max_entries, int didx) {
     size_t total_expired = 0;
     bool deleteKey = false;
+    bool is_set = objectGetType(o) == OBJ_SET;
 
     while (max_entries > 0) {
-        /* Process in batches to avoid large stack allocations. */
         unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
         robj *entries[EXPIRE_BULK_LIMIT];
-        size_t expired = hashTypeDeleteExpiredFields(o, now, batch_size, entries);
+        size_t expired = is_set ? setTypeDeleteExpiredMembers(o, now, batch_size, entries)
+                                : hashTypeDeleteExpiredFields(o, now, batch_size, entries);
         if (expired == 0) break;
 
-        /* Clean up volatile set if no more volatile fields remain */
-        if (!hashTypeHasVolatileFields(o)) {
+        if (!objectHasVolatileItems(o)) {
             dbUntrackKeyWithVolatileItems(db, o);
         }
 
-        /* Check if key is now empty after removing expired fields */
-        deleteKey = hashTypeLength(o) == 0;
+        deleteKey = is_set ? setTypeSize(o) == 0 : hashTypeLength(o) == 0;
 
         enterExecutionUnit(1, 0);
         robj *keyobj = createStringObjectFromSds(objectGetKey(o));
         /* Note that even though if might have been more efficient to only propagate del in case the key has no more items left,
          * we must keep consistency in order to allow the replica to report hdel notifications before del. */
-        propagateFieldsDeletion(db, o, expired, entries, didx);
-        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+        propagateItemsDeletion(db, o, expired, entries, didx);
+        notifyKeyspaceEvent(NOTIFY_EXPIRED, is_set ? "sexpired" : "hexpired", keyobj, db->id);
         if (deleteKey) {
             dbDelete(db, keyobj);
             propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, didx);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
             server.dirty++;
         } else {
-            if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
             server.dirty += (long long)expired;
         }
         signalModifiedKey(NULL, db, keyobj);

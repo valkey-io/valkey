@@ -859,6 +859,8 @@ void clusterCommandHelp(client *c) {
         "    Return the node id.",
         "MYSHARDID",
         "    Return the node's shard id.",
+        "MYSHARD",
+        "    Return slot ranges and nodes in the current shard.",
         "NODES",
         "    Return cluster configuration seen by node. Output format:",
         "    <id> <ip:port@bus-port[,hostname]> <flags> <primary> <pings> <pongs> <epoch> <link> <slot> ...",
@@ -901,6 +903,9 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "myshardid") && c->argc == 2) {
         /* CLUSTER MYSHARDID */
         clusterCommandMyShardId(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "myshard") && c->argc == 2) {
+        /* CLUSTER MYSHARD */
+        clusterCommandMyShard(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "slots") && c->argc == 2) {
         /* CLUSTER SLOTS */
         clusterCommandSlots(c);

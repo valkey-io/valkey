@@ -752,6 +752,56 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Single source import - write during snapshot is applied to the right database" {
+        assert_does_not_resync {
+            set_debug_prevent_pause 1
+
+            # A key in db 15 makes the snapshot end in db 15 on the target.
+            assert_match "OK" [R 2 SET $16383_slot_tag:balance 100]
+            for {set i 0} {$i < 5} {incr i} {
+                assert_match "OK" [R 2 SET $16383_slot_tag:pad$i p]
+            }
+            assert_match "OK" [R 2 SELECT 15]
+            assert_match "OK" [R 2 SET $16383_slot_tag:balance 500]
+            assert_match "OK" [R 2 SELECT 0]
+
+            # 7 keys * 200ms/key keeps the snapshot running during the write below.
+            R 2 CONFIG SET rdb-key-save-delay 200000
+            set errcode [catch {
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+                set jobname [get_job_name 2 16383]
+                wait_for_migration_field 2 $jobname state snapshotting
+                assert_equal 101 [R 2 INCRBY $16383_slot_tag:balance 1]
+            } errmsg options]
+
+            # Restore even on failure, a leaked delay slows every later test.
+            R 2 CONFIG SET rdb-key-save-delay 0
+            if {$errcode} {
+                catch {R 2 CLUSTER CANCELSLOTMIGRATIONS}
+                set_debug_prevent_pause 0
+                R 2 SELECT 15
+                R 2 DEL $16383_slot_tag:balance
+                R 2 SELECT 0
+                R 2 DEL $16383_slot_tag:balance $16383_slot_tag:pad0 $16383_slot_tag:pad1 $16383_slot_tag:pad2 $16383_slot_tag:pad3 $16383_slot_tag:pad4
+                return -options $options $errmsg
+            }
+
+            set_debug_prevent_pause 0
+            wait_for_migration 0 16383
+
+            # The db 0 write must not run in db 15 on the target.
+            assert_equal 101 [R 0 GET $16383_slot_tag:balance]
+            assert_match "OK" [R 0 SELECT 15]
+            assert_equal 500 [R 0 GET $16383_slot_tag:balance]
+            assert_match "OK" [R 0 SELECT 0]
+
+            # Cleanup for the next test
+            assert_match "OK" [R 0 FLUSHALL SYNC]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+        }
+    }
+
     # Test with both migrating slot < existing slot and vice versa, since a lot of the
     # kvstore logic is ordering dependent
     foreach testcase [list \

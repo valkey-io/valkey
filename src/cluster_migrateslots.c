@@ -1579,6 +1579,8 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
             }
         }
     }
+    /* Restore the db the parent assumes, since it doesn't see the SELECTs above. */
+    if (rewriteSelectDbRio(aof, job->client->db->id) == C_ERR) return C_ERR;
     rioWrite(aof, "*3\r\n", 4);
     rioWriteBulkString(aof, "CLUSTER", 7);
     rioWriteBulkString(aof, "SYNCSLOTS", 9);

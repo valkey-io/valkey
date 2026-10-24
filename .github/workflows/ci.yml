@@ -139,13 +139,13 @@ jobs:
         # build with TLS module just for compilation coverage
         run: |
           sudo apt-get install pkg-config libzstd-dev libgtest-dev libgmock-dev
-          make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
+          make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror -DNO_MALLOC_USABLE_SIZE' BUILD_TLS=module BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
         run: ./runtest --verbose --tags -slow --dump-logs
       - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
+        run: CFLAGS='-Werror -DNO_MALLOC_USABLE_SIZE' ./runtest-moduleapi --verbose --dump-logs
       - name: unit tests
         run: |
           make test-unit

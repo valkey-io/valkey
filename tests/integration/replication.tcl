@@ -1829,6 +1829,39 @@ start_server {tags {"repl" "external:skip"}} {
     }
 }
 
+start_server {tags {"repl external:skip"} overrides {repl-diskless-sync yes repl-diskless-sync-delay 0 save {}}} {
+    test "REPLCONF RDB-ONLY sent after a diskless full sync does not crash the primary" {
+        # Regression for a primary abort: after a diskless full sync the replica
+        # is marked online with repl_start_cmd_stream_on_ack set, and a later
+        # "REPLCONF rdb-only 1 ... ACK <offset>" used to flip repl_rdbonly on the
+        # online replica so the ACK tripped the
+        # serverAssert(!(replica->flag.repl_rdbonly)) in replicaStartCommandStream().
+        set lines [count_log_lines 0]
+
+        set rd [valkey_deferring_client]
+        $rd replconf capa eof
+        assert_equal "OK" [$rd read]
+        $rd psync ? -1
+        assert_match {FULLRESYNC * *} [$rd read]
+
+        # Let the primary stream the RDB over the socket and mark the replica
+        # online (arming repl_start_cmd_stream_on_ack) before we send rdb-only.
+        wait_replica_online r
+
+        # One REPLCONF carrying both rdb-only and ACK: the guard must reject
+        # rdb-only before the ACK branch runs, so the primary stays up.
+        $rd write "*5\r\n\$8\r\nREPLCONF\r\n\$8\r\nrdb-only\r\n\$1\r\n1\r\n\$3\r\nACK\r\n\$1\r\n0\r\n"
+        $rd flush
+
+        # The primary must survive.
+        assert_equal "PONG" [r ping]
+        wait_for_log_messages 0 {"*Replica generated a reply to command 'replconf', disconnecting it: *"} $lines 50 100
+
+        $rd close
+        waitForBgsave r
+    }
+}
+
 start_server {tags {"repl external:skip"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]

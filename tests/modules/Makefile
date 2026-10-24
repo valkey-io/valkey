@@ -16,10 +16,11 @@ ifeq ($(uname_S),Linux)
     CC = gcc
 endif
 
-# Link through the compiler driver on macOS so the correct SDK and libSystem
-# are picked up implicitly; raw ld with a hardcoded SDK path fails on newer SDKs.
+# Link with the compiler driver on macOS so libSystem is resolved from the
+# active SDK; raw ld can't parse newer SDKs' libSystem.tbd stubs.
 ifeq ($(uname_S),Darwin)
-    LD = $(CC)
+    # CFLAGS may select a non-native architecture and must reach the driver.
+    LD = $(CC) $(CFLAGS)
 endif
 
 TEST_MODULES = \

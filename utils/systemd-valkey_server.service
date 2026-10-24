@@ -12,6 +12,18 @@
 # this example service unit file, but you are highly encouraged to set them to
 # fit your needs.
 #
+# Socket activation (optional): if you want clients to survive a valkey restart
+# without receiving ECONNREFUSED, enable systemd socket activation by also
+# enabling the companion valkey-server.socket unit:
+#
+#   systemctl enable --now valkey-server.socket
+#   systemctl enable valkey-server.service
+#
+# When socket activation is in use, valkey-server automatically inherits the
+# listening sockets from systemd (both TCP and Unix) without any extra
+# configuration. The server must be compiled with libsystemd support
+# (USE_SYSTEMD=yes, the default when libsystemd-dev is installed).
+#
 # Please refer to systemd.unit(5), systemd.service(5), and systemd.exec(5) for
 # more information.
 

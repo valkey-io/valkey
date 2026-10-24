@@ -4626,6 +4626,7 @@ void unprepareCommand(client *c) {
     c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
                        READ_FLAGS_BAD_ARITY |
                        READ_FLAGS_CROSSSLOT |
+                       READ_FLAGS_CROSSSLOT_UNRESOLVED |
                        READ_FLAGS_NO_KEYS);
     c->slot = -1;
 }

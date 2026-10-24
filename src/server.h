@@ -3089,6 +3089,10 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_PREFETCHED (1 << 21)
 #define READ_FLAGS_ERROR_INVALID_CRLF (1 << 22)
 #define READ_FLAGS_ERROR_NUL_IN_INLINE_PROTOCOL (1 << 23)
+/* BRPOP/BLPOP whose keys hash to multiple slots. Whether those slots are served by the same node
+ * must be resolved on the main thread (see getNodeByQuery),
+ * since reading server.cluster->slots from I/O threads is a data race. */
+#define READ_FLAGS_CROSSSLOT_UNRESOLVED (1 << 24)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)

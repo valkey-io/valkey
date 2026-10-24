@@ -4509,21 +4509,24 @@ void sentinelCheckSubjectivelyDown(sentinelValkeyInstance *ri) {
 void sentinelCheckObjectivelyDown(sentinelValkeyInstance *primary) {
     dictIterator *di;
     dictEntry *de;
-    unsigned int quorum = 0, odown = 0;
+    unsigned int quorum = 1, odown = 0; /* Count the current sentinel. */
+    mstime_t now = mstime();
 
-    if (primary->flags & SRI_S_DOWN) {
-        /* Is down for enough sentinels? */
-        quorum = 1; /* the current sentinel. */
-        /* Count all the other sentinels. */
-        di = dictGetIterator(primary->sentinels);
-        while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *ri = dictGetVal(de);
+    /* Expire stale replies even when the primary is healthy, before counting
+     * the other sentinels towards the quorum. */
+    di = dictGetIterator(primary->sentinels);
+    while ((de = dictNext(di)) != NULL) {
+        sentinelValkeyInstance *ri = dictGetVal(de);
 
-            if (ri->flags & SRI_PRIMARY_DOWN) quorum++;
+        if (now - ri->last_primary_down_reply_time > sentinel_ask_period * 5) {
+            ri->flags &= ~SRI_PRIMARY_DOWN;
+            sdsfree(ri->leader);
+            ri->leader = NULL;
         }
-        dictReleaseIterator(di);
-        if (quorum >= primary->quorum) odown = 1;
+        if (ri->flags & SRI_PRIMARY_DOWN) quorum++;
     }
+    dictReleaseIterator(di);
+    if ((primary->flags & SRI_S_DOWN) && quorum >= primary->quorum) odown = 1;
 
     /* Set the flag accordingly to the outcome. */
     if (odown) {
@@ -4592,15 +4595,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
     di = dictGetIterator(primary->sentinels);
     while ((de = dictNext(di)) != NULL) {
         sentinelValkeyInstance *ri = dictGetVal(de);
-        mstime_t elapsed = mstime() - ri->last_primary_down_reply_time;
         int retval;
-
-        /* If the primary state from other sentinel is too old, we clear it. */
-        if (elapsed > sentinel_ask_period * 5) {
-            ri->flags &= ~SRI_PRIMARY_DOWN;
-            sdsfree(ri->leader);
-            ri->leader = NULL;
-        }
 
         /* Only ask if primary is down to other sentinels if:
          *

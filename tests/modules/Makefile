@@ -16,11 +16,10 @@ ifeq ($(uname_S),Linux)
     CC = gcc
 endif
 
-# OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
+# Link with the compiler driver on macOS so libSystem is resolved from the
+# active SDK; raw ld can't parse newer SDKs' libSystem.tbd stubs.
 ifeq ($(uname_S),Darwin)
-ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
-LIBS = -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lsystem
-endif
+    LD = $(CC)
 endif
 
 TEST_MODULES = \
@@ -68,7 +67,8 @@ TEST_MODULES = \
     crash.so \
     cluster.so \
     helloscripting.so \
-    deferred_reply.so
+    deferred_reply.so \
+    pausetest.so
 
 .PHONY: all
 

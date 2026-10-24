@@ -59,7 +59,7 @@ typedef uint64_t monotime;
 /* Use the engine's version */
 #include "../../monotonic.h"
 #else
-monotime getMonotonicUs(void) {
+static monotime getMonotonicUs(void) {
     /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
      * did not support this until much later.  CLOCK_MONOTONIC is technically
      * optional and may not be supported - but it appears to be universal.
@@ -68,11 +68,11 @@ monotime getMonotonicUs(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
-inline uint64_t elapsedUs(monotime start_time) {
+static inline uint64_t elapsedUs(monotime start_time) {
     return getMonotonicUs() - start_time;
 }
 
-inline uint64_t elapsedMs(monotime start_time) {
+static inline uint64_t elapsedMs(monotime start_time) {
     return elapsedUs(start_time) / 1000;
 }
 #endif
@@ -112,7 +112,7 @@ static void freeCompiledFunc(lua_State *lua,
 
 /*
  * Compile a given script code by generating a set of compiled functions. These
- * functions are also saved into the the registry of the Lua environment.
+ * functions are also saved into the registry of the Lua environment.
  *
  * Returns an array of compiled functions. The `compileFunction` struct stores a
  * Lua ref that allows to later retrieve the function from the registry.

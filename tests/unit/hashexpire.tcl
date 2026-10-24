@@ -380,6 +380,15 @@ start_server {tags {"hashexpire"}} {
             set e
         } {ERR *}
     }
+
+    test {HGETEX on a key named fields} {
+        r FLUSHALL
+        r HSET fields f1 v1
+        assert_equal {v1} [r HGETEX fields FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields PERSIST FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields EX 100 FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f1] 1 100
+    }
 }
 
 start_server {tags {"hashexpire"}} {
@@ -558,6 +567,15 @@ start_server {tags {"hashexpire"}} {
         catch {r HSETEX myhash EX 10 FIELDS 2 field1 val1} e
         set e
     } {ERR *}
+
+    test {HSETEX on a key named fields} {
+        r FLUSHALL
+        assert_equal 1 [r HSETEX fields FIELDS 1 f1 v1]
+        assert_equal 1 [r HSETEX fields EX 100 FIELDS 1 f2 v2]
+        assert_equal {v1 v2} [r HMGET fields f1 f2]
+        assert_equal -1 [r HTTL fields FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f2] 1 100
+    }
 
     foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command 0/past time works correctly with 2 fields" {
@@ -5178,6 +5196,63 @@ start_server {tags {"hash expire listpack"}} {
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
 
+    foreach live_ttl_fields {0 3} {
+        test "Conversion tracks every expired-but-unreaped field (live volatile fields: $live_ttl_fields)" {
+            r DEBUG SET-ACTIVE-EXPIRE 0
+            r config set hash-max-listpack-value $original_max_value
+            r config set hash-max-listpack-entries $original_max_entries
+            # Earlier tests leave expired fields behind; they would be reaped
+            # below and skew the expired_fields count.
+            r flushall
+            r hset myhash p v e1 v e2 v e3 v
+            r hpexpire myhash 1 FIELDS 3 e1 e2 e3
+            for {set i 1} {$i <= $live_ttl_fields} {incr i} {
+                r hsetex myhash PX 100000 FIELDS 1 l$i v
+            }
+            wait_for_condition 100 10 {
+                [r hexists myhash e1] == 0 && [r hexists myhash e2] == 0 && [r hexists myhash e3] == 0
+            } else {
+                fail "Fields e1, e2 and e3 were never logically expired"
+            }
+            assert_encoding listpack myhash
+            set original_notify [lindex [r config get notify-keyspace-events] 1]
+            set rd [setup_single_keyspace_notification r]
+
+            # The conversion registers each expiring entry in the volatile set.
+            # The first one creates the set and switches the hashtable to the
+            # TTL-validating type, so every expired field must still be
+            # tracked after that, not only the first one visited.
+            r hset myhash big [string repeat x 128]
+            assert_encoding hashtable myhash
+            set expected_len [expr {2 + $live_ttl_fields}]
+
+            # All three expired fields must be reaped. An untracked one is
+            # never reaped: it stays counted by HLEN and either reappears with
+            # its value (once the volatile set empties) or stays hidden.
+            set initial_expired [info_field [r info stats] expired_fields]
+            r DEBUG SET-ACTIVE-EXPIRE 1
+            wait_for_active_expiry r myhash $expected_len $initial_expired 3
+            assert_equal {} [lsearch -all -inline -glob [r hkeys myhash] e*]
+
+            # Writing to the field must work too. With an untracked entry this
+            # crashed in the volatile set update or removal.
+            assert_equal 1 [r hset myhash e1 n]
+            assert_equal {1} [r hexpire myhash 100 FIELDS 1 e1]
+            assert_equal {1} [r hpersist myhash FIELDS 1 e1]
+            assert_equal 1 [r hdel myhash e1]
+            assert_equal $expected_len [r hlen myhash]
+            assert_equal {PONG} [r ping]
+
+            # Active expiry reaps the three fields in one batch, which emits a
+            # single hexpired. The writes to e1 must not emit another one: that
+            # only happens when a write overwrites a field that expired but was
+            # never reaped.
+            assert_keyevent_patterns $rd myhash hset hexpired hset hexpire hpersist hdel
+            $rd close
+            r config set notify-keyspace-events $original_notify
+        } {OK} {needs:debug}
+    }
+
     r config set hash-max-listpack-value $original_max_value
     r config set hash-max-listpack-entries $original_max_entries
 }
@@ -5341,5 +5416,254 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {} [$replica HGET myhash f1]
             assert_equal {f2 f3 f4} [lsort [$replica HKEYS myhash]]
         } {} {needs:debug}
+
+        # The value size picks the encoding on both sides.
+        foreach {encoding f2_value} [list listpack v2 hashtable [string repeat x 128]] {
+            test "COPY of a hash holding an expired-but-unreaped field keeps the replica in sync - $encoding" {
+                lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+
+                $primary DEBUG SET-ACTIVE-EXPIRE 0
+                $replica DEBUG SET-ACTIVE-EXPIRE 0
+
+                $primary HSET myhash f1 v1 f2 $f2_value
+                $primary HPEXPIRE myhash 1 FIELDS 1 f1
+                wait_for_condition 100 10 {
+                    [$primary HEXISTS myhash f1] == 0
+                } else {
+                    fail "Field f1 was never logically expired on the primary"
+                }
+                assert_equal $encoding [$primary object encoding myhash]
+
+                # The replica ignores field expiry while applying COPY, so its
+                # copy has f1. The primary has to copy f1 too, otherwise it
+                # never propagates the deletion of f1 from the copy.
+                $primary COPY myhash mycopy
+                wait_for_ofs_sync $primary $replica
+                assert_equal $encoding [$primary object encoding mycopy]
+                assert_equal $encoding [$replica object encoding mycopy]
+                assert_equal 2 [$primary HLEN mycopy]
+                assert_equal [$primary HLEN mycopy] [$replica HLEN mycopy]
+                # The copy must be tracked, otherwise active expiry never reaps f1 from it.
+                assert_equal 2 [get_keys_with_volatile_items $primary]
+
+                $primary DEBUG SET-ACTIVE-EXPIRE 1
+                $replica DEBUG SET-ACTIVE-EXPIRE 1
+                wait_for_active_expiry $primary mycopy 1 $primary_initial_expired 2
+                wait_for_ofs_sync $primary $replica
+                assert_equal {f2} [$replica HKEYS mycopy]
+                assert_equal {f2} [$replica HKEYS myhash]
+            } {} {needs:debug}
+        }
+    }
+}
+
+# Loading and the replication stream ignore field expiry, so HDEL, HGETDEL,
+# HPERSIST and HEXPIRE must not propagate an expired field that they treat as
+# nonexistent but active expiry has not yet reclaimed.
+start_server {tags {"hashexpire needs:debug external:skip"}} {
+    r debug set-active-expire 0
+    set exat [get_long_expire_value HEXPIREAT]
+
+    # myhash holds live and live2 with a TTL, nottl without one, and an expired
+    # field that the server does not serve.
+    proc setup_expired_field_stream {encoding} {
+        r flushall
+        r hset myhash nottl v
+        r hsetex myhash PX 100000 FIELDS 2 live v live2 v
+        r hsetex myhash PX 1 FIELDS 1 expired v
+        wait_for_condition 50 10 {
+            [r hexists myhash expired] == 0
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        assert_equal 4 [r hlen myhash]
+        assert_encoding $encoding myhash
+    }
+
+    foreach {encoding max_entries} {listpack 128 hashtable 0} {
+        r config set hash-max-listpack-entries $max_entries
+
+        foreach {name cmd expected} [list \
+            HDEL "hdel myhash expired live" "hdel myhash live" \
+            HGETDEL "hgetdel myhash FIELDS 2 expired live" "hdel myhash live" \
+            {HDEL multiple} "hdel myhash live expired live2" "hdel myhash live live2" \
+            {HGETDEL multiple} "hgetdel myhash FIELDS 3 live expired live2" "hdel myhash live live2" \
+            {HGETDEL no skip} "hgetdel myhash FIELDS 1 live" "hgetdel myhash FIELDS 1 live" \
+            HPERSIST "hpersist myhash FIELDS 2 expired live" "hpersist myhash FIELDS 1 live" \
+            HEXPIREAT "hexpireat myhash $exat XX GT FIELDS 2 expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
+            HPEXPIREAT "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
+            HEXPIRE "hexpire myhash 1000 FIELDS 2 expired live" "hpexpireat myhash * FIELDS 1 live" \
+            HPEXPIRE "hpexpire myhash 1000000 FIELDS 2 expired live" "hpexpireat myhash * FIELDS 1 live" \
+            {HPERSIST multiple} "hpersist myhash FIELDS 4 live expired missing live2" "hpersist myhash FIELDS 2 live live2" \
+            {HEXPIREAT multiple} "hexpireat myhash $exat XX GT FIELDS 4 live expired missing live2" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 live live2" \
+            {HDEL trailing} "hdel myhash live expired" "hdel myhash live" \
+            {HGETDEL trailing} "hgetdel myhash FIELDS 2 live expired" "hdel myhash live" \
+            {HPERSIST trailing} "hpersist myhash FIELDS 2 live expired" "hpersist myhash FIELDS 1 live" \
+            {HEXPIREAT trailing} "hexpireat myhash $exat XX GT FIELDS 2 live expired" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 1 live" \
+            {HPERSIST no TTL} "hpersist myhash FIELDS 3 nottl expired live" "hpersist myhash FIELDS 2 nottl live" \
+            {HEXPIREAT condition not met} "hexpireat myhash $exat XX GT FIELDS 3 nottl expired live" "hpexpireat myhash [expr {$exat * 1000}] XX GT FIELDS 2 nottl live" \
+            {HEXPIREAT past time} "hexpireat myhash 1 FIELDS 2 expired live" "hdel myhash live"] {
+            test "$name does not propagate the expired field - $encoding" {
+                setup_expired_field_stream $encoding
+                set repl [attach_to_replication_stream]
+                r {*}$cmd
+                assert_replication_stream $repl [list {select *} $expected]
+                close_replication_stream $repl
+            }
+        }
+
+        foreach {name cmd} [list \
+            HDEL "hdel myhash expired missing" \
+            HGETDEL "hgetdel myhash FIELDS 2 expired missing" \
+            HPERSIST "hpersist myhash FIELDS 2 expired missing" \
+            HEXPIREAT "hexpireat myhash $exat XX GT FIELDS 2 expired missing"] {
+            test "$name that changes no field propagates nothing - $encoding" {
+                setup_expired_field_stream $encoding
+                set repl [attach_to_replication_stream]
+                r {*}$cmd
+                r set marker 1
+                assert_replication_stream $repl {{select *} {set marker 1}}
+                close_replication_stream $repl
+            }
+        }
+    }
+}
+
+# A replica applies its primary's stream ignoring field expiry, so an expired
+# field that HDEL, HGETDEL, HPERSIST or HEXPIRE treats as nonexistent, but
+# active expiry has not yet reclaimed, must not be applied on the replica.
+start_server {tags {"hashexpire external:skip"}} {
+    start_server {tags {needs:repl needs:debug external:skip}} {
+        set primary [srv -1 client]
+        set replica [srv 0 client]
+        $replica replicaof [srv -1 host] [srv -1 port]
+        wait_for_sync $replica
+        $primary debug set-active-expire 0
+
+        # myhash holds a live field and an expired one that neither server serves.
+        proc setup_expired_field {primary replica} {
+            $primary flushall
+            $primary hsetex myhash PX 100000 FIELDS 1 live v
+            $primary hsetex myhash PX 1 FIELDS 1 expired v
+            wait_for_condition 50 10 {
+                [$primary hexists myhash expired] == 0
+            } else {
+                fail "Hash is showing expired elements"
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal {} [$primary hget myhash expired]
+            assert_equal {} [$replica hget myhash expired]
+        }
+
+        foreach {encoding max_entries} {listpack 128 hashtable 0} {
+            $primary config set hash-max-listpack-entries $max_entries
+            $replica config set hash-max-listpack-entries $max_entries
+
+            test "HPERSIST of an expired field is not applied on the replica - $encoding" {
+                setup_expired_field $primary $replica
+                assert_equal $encoding [$primary object encoding myhash]
+
+                # The primary reports the field as nonexistent.
+                assert_equal {-2 1} [$primary hpersist myhash FIELDS 2 expired live]
+                wait_for_ofs_sync $primary $replica
+
+                assert_equal {} [$primary hget myhash expired]
+                assert_equal {} [$replica hget myhash expired]
+                assert_equal -2 [$replica hpttl myhash FIELDS 1 expired]
+            }
+
+            test "HEXPIRE of an expired field is not applied on the replica - $encoding" {
+                setup_expired_field $primary $replica
+
+                assert_equal {-2 1} [$primary hexpire myhash 100 FIELDS 2 expired live]
+                wait_for_ofs_sync $primary $replica
+
+                assert_equal {} [$primary hget myhash expired]
+                assert_equal {} [$replica hget myhash expired]
+                assert_equal -2 [$replica httl myhash FIELDS 1 expired]
+            }
+
+            test "HDEL of an expired field is not applied on the replica - $encoding" {
+                setup_expired_field $primary $replica
+
+                # The primary deletes live and keeps the key for the stored expired field.
+                assert_equal 1 [$primary hdel myhash live expired]
+                wait_for_ofs_sync $primary $replica
+
+                assert_equal 1 [$primary exists myhash]
+                assert_equal 1 [$replica exists myhash]
+            }
+
+            test "HGETDEL of an expired field is not applied on the replica - $encoding" {
+                setup_expired_field $primary $replica
+
+                assert_equal {{} v} [$primary hgetdel myhash FIELDS 2 expired live]
+                wait_for_ofs_sync $primary $replica
+
+                assert_equal 1 [$primary exists myhash]
+                assert_equal 1 [$replica exists myhash]
+            }
+        }
+    }
+}
+
+# Loading ignores field expiry as well, so the same commands must not be
+# applied to an expired field when the AOF is replayed.
+start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appendonly yes appendfsync always}} {
+    r debug set-active-expire 0
+
+    # myhash holds a live field and an expired one that the server does not serve.
+    proc setup_expired_field_aof {} {
+        r flushall
+        r hsetex myhash PX 100000 FIELDS 1 live v
+        r hsetex myhash PX 1 FIELDS 1 expired v
+        wait_for_condition 50 10 {
+            [r hexists myhash expired] == 0
+        } else {
+            fail "Hash is showing expired elements"
+        }
+    }
+
+    foreach {encoding max_entries} {listpack 128 hashtable 0} {
+        r config set hash-max-listpack-entries $max_entries
+
+        test "HPERSIST of an expired field is not applied when loading the AOF - $encoding" {
+            setup_expired_field_aof
+            assert_encoding $encoding myhash
+            assert_equal {-2 1} [r hpersist myhash FIELDS 2 expired live]
+
+            r debug loadaof
+            assert_equal -1 [r hpttl myhash FIELDS 1 live]
+            assert_equal {} [r hget myhash expired]
+            assert_equal -2 [r hpttl myhash FIELDS 1 expired]
+        }
+
+        test "HEXPIRE of an expired field is not applied when loading the AOF - $encoding" {
+            setup_expired_field_aof
+            assert_equal {-2 1} [r hexpire myhash 100 FIELDS 2 expired live]
+
+            r debug loadaof
+            assert_morethan [r httl myhash FIELDS 1 live] 0
+            assert_equal {} [r hget myhash expired]
+            assert_equal -2 [r httl myhash FIELDS 1 expired]
+        }
+
+        test "HDEL of an expired field is not applied when loading the AOF - $encoding" {
+            setup_expired_field_aof
+            assert_equal 1 [r hdel myhash expired live]
+
+            r debug loadaof
+            assert_equal 0 [r hexists myhash live]
+            assert_equal 1 [r exists myhash]
+        }
+
+        test "HGETDEL of an expired field is not applied when loading the AOF - $encoding" {
+            setup_expired_field_aof
+            assert_equal {{} v} [r hgetdel myhash FIELDS 2 expired live]
+
+            r debug loadaof
+            assert_equal 0 [r hexists myhash live]
+            assert_equal 1 [r exists myhash]
+        }
     }
 }

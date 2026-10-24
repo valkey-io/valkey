@@ -152,7 +152,7 @@ void createDumpPayload(rio *payload, robj *o, robj *key, int dbid) {
 
 /* Verify that the RDB version of the dump payload matches the one of this
  * instance and that the checksum is ok.
- * If the DUMP payload looks valid C_OK is returned, otherwise C_ERR
+ * If the DUMP payload looks valid C_OK is returned; otherwise, C_ERR
  * is returned. If rdbver_ptr is not NULL, its populated with the value read
  * from the input buffer. */
 int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
@@ -246,6 +246,9 @@ void restoreCommand(client *c) {
         return;
     } else if (ttl < 0) {
         addReplyError(c, "Invalid TTL value, must be >= 0");
+        return;
+    } else if (!absttl && ttl > LLONG_MAX - commandTimeSnapshot()) {
+        addReplyErrorExpireTime(c);
         return;
     }
 
@@ -406,7 +409,7 @@ void migrateCloseSocket(robj *host, robj *port) {
     sdsfree(name);
 }
 
-void migrateCloseTimedoutSockets(void) {
+void migrateCloseTimedOutSockets(void) {
     dictIterator *di = dictGetSafeIterator(server.migrate_cached_sockets);
     dictEntry *de;
 
@@ -1109,7 +1112,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
     /* If we are migrating or importing this slot, we need to check
      * if we have all the keys in the request (the only way we
-     * can safely serve the request, otherwise we return a TRYAGAIN
+     * can safely serve the request; otherwise, we return a TRYAGAIN
      * error). To do so we set the importing/migrating state and
      * increment a counter for every missing key. */
     if (clusterNodeIsPrimary(myself) || c->flag.readonly) {

@@ -1261,38 +1261,45 @@ robj *ACLDescribeUser(user *u) {
     return u->acl_string;
 }
 
-/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
- * string holding the hex representation of the digest.
- *
- * The digest is the XOR-combined SHA256("username rules") for all users. The
- * username is part of what is hashed because XOR cancels out two equal values,
- * which would otherwise drop a pair of users having the same rules. */
-static sds ACLDigest(void) {
-    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+/* XOR the digest of every entry of 'table' into 'digest'. An entry is hashed as
+ * the line ACL LIST reports for it, so the keyword keeps a role and a user of
+ * the same name from cancelling each other out. */
+static void ACLDigestAddTable(rax *table, const char *keyword, unsigned char *digest) {
     raxIterator ri;
 
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
         robj *rules = ACLDescribeUser(u);
         sds rulestr = objectGetVal(rules);
-        unsigned char userdigest[SHA256_BLOCK_SIZE];
+        unsigned char entry[SHA256_BLOCK_SIZE];
         SHA256_CTX ctx;
 
-        /* Usernames can't contain spaces, so the separator makes the pair of
-         * name and rules unambiguous. */
         sha256_init(&ctx);
+        sha256_update(&ctx, (unsigned char *)keyword, strlen(keyword));
         sha256_update(&ctx, (unsigned char *)u->name, sdslen(u->name));
         sha256_update(&ctx, (unsigned char *)" ", 1);
         sha256_update(&ctx, (unsigned char *)rulestr, sdslen(rulestr));
-        sha256_final(&ctx, userdigest);
+        sha256_final(&ctx, entry);
         decrRefCount(rules);
 
-        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= userdigest[j];
+        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= entry[j];
     }
     raxStop(&ri);
+}
 
+/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
+ * string holding the hex representation of the digest.
+ *
+ * The digest is the XOR-combined SHA256 of every line ACL LIST reports, roles
+ * included. A user only names the roles it holds, so the role rules have to be
+ * hashed on their own for an edit to one to reach the digest. */
+static sds ACLDigest(void) {
+    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+
+    ACLDigestAddTable(Roles, "role ", digest);
+    ACLDigestAddTable(Users, "user ", digest);
     return ACLHexDigest(digest, SHA256_BLOCK_SIZE);
 }
 
@@ -2106,7 +2113,7 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  *                 patterns using prefixmatchlen rather than a full string match.
  *
  * This function returns ACL_OK if the key matches at least one pattern that allows the requested
- * operations; otherwise ACL_DENIED_KEY.
+ * operations; otherwise, ACL_DENIED_KEY.
  */
 static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags, bool is_prefix) {
     /* The selector can access any key */
@@ -2142,7 +2149,7 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     return ACL_DENIED_KEY;
 }
 
-/* Checks if the provided selector selector has access specified in flags
+/* Checks if the provided selector has access specified in flags
  * to all keys in the keyspace. For example, CMD_KEY_READ access requires either
  * '%R~*', '~*', or allkeys to be granted to the selector. Returns 1 if all
  * the access flags are satisfied with this selector or 0 otherwise.
@@ -2235,7 +2242,7 @@ static inline int shouldRestrictCmd(struct serverCommand *cmd) {
 /* Check if the command is ready to be executed according to the
  * ACLs associated with the specified selector.
  *
- * If the selector can execute the command ACL_OK is returned, otherwise
+ * If the selector can execute the command ACL_OK is returned; otherwise,
  * ACL_DENIED_CMD, ACL_DENIED_KEY, ACL_DENIED_CHANNEL or ACL_DENIED_DB is returned: the first in case the
  * command cannot be executed because the selector is not allowed to run such
  * command, the second, third and fourth if the command is denied because the selector is trying
@@ -2469,7 +2476,7 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
 /* Check if the channel can be accessed by the client according to
  * the ACLs associated with the specified user.
  *
- * If the user can access the key, ACL_OK is returned, otherwise
+ * If the user can access the key, ACL_OK is returned; otherwise,
  * ACL_DENIED_CHANNEL is returned. */
 int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
     /* If there is no associated user, the connection can run anything. */
@@ -2813,7 +2820,7 @@ cleanup:
  * the user definition to a list for later loading.
  *
  * The rules are tested for validity and if there obvious syntax errors
- * the function returns C_ERR and does nothing, otherwise C_OK is returned
+ * the function returns C_ERR and does nothing; otherwise, C_OK is returned
  * and the user is appended to the list.
  *
  * Note that this function cannot stop in case of commands that are not found
@@ -2873,7 +2880,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 
 /* This function will load the configured users appended to the server
  * configuration via ACLAppendUserForLoading(). On loading errors it will
- * log an error and return C_ERR, otherwise C_OK will be returned. */
+ * log an error and return C_ERR; otherwise, C_OK will be returned. */
 static int ACLLoadConfiguredUsers(void) {
     listIter li;
     listNode *ln;
@@ -3237,6 +3244,8 @@ static sds ACLLoadFromFile(const char *filename) {
         if (!acl_args) {
             errors = sdscatprintf(errors, "%s:%d: Unmatched parenthesis in selector definition.", server.acl_filename,
                                   linenum);
+            sdsfreesplitres(argv, argc);
+            continue;
         }
 
         int syntax_error = 0;
@@ -3262,7 +3271,7 @@ static sds ACLLoadFromFile(const char *filename) {
         zfree(acl_args);
 
         /* Apply the rule to the new users set only if so far there
-         * are no errors, otherwise it's useless since we are going
+         * are no errors; otherwise, it's useless since we are going
          * to discard the new users set anyway. */
         if (sdslen(errors) != 0) {
             sdsfreesplitres(argv, argc);
@@ -3635,7 +3644,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
         }
     }
 
-    /* If there is a match update the entry, otherwise add it as a
+    /* If there is a match update the entry; otherwise, add it as a
      * new one. */
     if (match) {
         /* We update a few fields of the existing entry and bump the
@@ -4020,7 +4029,10 @@ void aclCommand(client *c) {
         }
 
         long chars = (bits + 3) / 4; /* Round to number of characters to emit. */
-        getRandomHexChars(pass, chars);
+        if (!getSecureRandomHexChars(pass, chars)) {
+            addReplyError(c, "The crypto provider could not supply random bytes");
+            return;
+        }
         addReplyBulkCBuffer(c, pass, chars);
     } else if (!strcasecmp(sub, "log") && (c->argc == 2 || c->argc == 3)) {
         long count = 10; /* Number of entries to emit by default. */

@@ -165,7 +165,7 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
 
 /* Calculate a set of areas (center + 8) that are able to cover a range query
  * for the specified position and shape (see geohash.h GeoShape).
- * the bounding box saved in shaple.bounds */
+ * the bounding box saved in shape.bounds */
 GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
     GeoHashRange long_range, lat_range;
     GeoHashRadius radius;
@@ -285,7 +285,7 @@ GeoHashFix52Bits geohashAlign52Bits(const GeoHashBits hash) {
  * we can simplify arcsin(sin(x)) to x.
  */
 double geohashGetLatDistance(double lat1d, double lat2d) {
-    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d) - deg_rad(lat1d));
+    return EARTH_RADIUS_IN_METERS * fabs(deg_rad(lat2d - lat1d));
 }
 
 /* Calculate distance using haversine great circle distance formula. */

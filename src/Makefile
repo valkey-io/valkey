@@ -591,6 +591,7 @@ ENGINE_SERVER_OBJ = \
     rand.o \
     rax.o \
     rdb.o \
+    rdb_transcoder.o \
     rdma.o \
     release.o \
     replication.o \

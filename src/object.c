@@ -375,7 +375,7 @@ static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long exp
     return size <= 128;
 }
 
-/* Create a string object with EMBSTR encoding if it is small, otherwise RAW encoding */
+/* Create a string object with EMBSTR encoding if it is small; otherwise, RAW encoding */
 robj *createStringObject(const char *ptr, size_t len) {
     if (shouldEmbedStringObject(len, NULL, EXPIRY_NONE))
         return createEmbeddedStringObject(ptr, len);
@@ -446,7 +446,7 @@ mstime_t objectGetExpire(const robj *o) {
     }
 }
 
-/* This functions may reallocate the value. The new allocation is returned and
+/* This function may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. Use the
  * returned object instead of 'o' after calling this function. */
 robj *objectSetExpire(robj *o, long long expire) {
@@ -490,7 +490,7 @@ void objectUnembedVal(robj *o) {
     o->val_ptr = new_val;
 }
 
-/* This functions may reallocate the value. The new allocation is returned and
+/* This function may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. Use the
  * returned object instead of 'o' after calling this function. */
 robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
@@ -1138,7 +1138,7 @@ int collateStringObjects(const robj *a, const robj *b) {
 }
 
 /* Equal string objects return 1 if the two objects are the same from the
- * point of view of a string comparison, otherwise 0 is returned. Note that
+ * point of view of a string comparison; otherwise, 0 is returned. Note that
  * this function is faster than checking for (compareStringObject(a,b) == 0)
  * because it can perform some more optimization. */
 int equalStringObjects(robj *a, robj *b) {

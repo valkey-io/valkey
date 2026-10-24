@@ -105,8 +105,8 @@
 
 #define CLUSTER_MANAGER_INVALID_HOST_ARG                        \
     "[ERR] Invalid arguments: you need to pass either a valid " \
-    "address (ie. 120.0.0.1:7000) or space separated IP "       \
-    "and port (ie. 120.0.0.1 7000)\n"
+    "address (ie. 120.0.0.1:7000 or [::1]:7000) or space "      \
+    "separated IP and port (ie. 120.0.0.1 7000)\n"
 #define CLUSTER_MANAGER_MODE() (config.cluster_manager_command.name != NULL)
 #define CLUSTER_MANAGER_PRIMARIES_COUNT(nodes, replicas) ((nodes) / ((replicas) + 1))
 #define CLUSTER_MANAGER_COMMAND(n, ...) (valkeyCommand((n)->context, __VA_ARGS__))
@@ -911,7 +911,7 @@ static void cliInitHelp(void) {
     dict *groups;
 
     if (cliConnect(CC_QUIET) == VALKEY_ERR) {
-        /* Can not connect to the server, but we still want to provide
+        /* Cannot connect to the server, but we still want to provide
          * help, generate it only from the static cli_commands.c data instead. */
         groups = dictCreate(&groupsdt);
         cliLegacyInitHelp(groups);
@@ -1165,7 +1165,10 @@ static sds addHintForArgument(sds hint, cliCommandArg *arg) {
     }
 
     /* Surround an optional arg with brackets, unless it's partially matched. */
-    if ((arg->flags & CMD_ARG_OPTIONAL) && !arg->matched) {
+    /* We store this in a variable since arg->matched flag would be reset inside
+     * addHintForRepeatedArgument() which is being called in this codepath. */
+    int optional_unmatched = (arg->flags & CMD_ARG_OPTIONAL) && !arg->matched;
+    if (optional_unmatched) {
         hint = sdscat(hint, "[");
     }
 
@@ -1205,7 +1208,7 @@ static sds addHintForArgument(sds hint, cliCommandArg *arg) {
 
     hint = addHintForRepeatedArgument(hint, arg);
 
-    if ((arg->flags & CMD_ARG_OPTIONAL) && !arg->matched) {
+    if (optional_unmatched) {
         hint = sdscat(hint, "]");
     }
 
@@ -2427,7 +2430,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             /* When a push callback is set, valkeyGetReply (libvalkey) loops until
              * an in-band message is received, but these commands are confirmed
              * using push replies only. There is one push reply per channel if
-             * channels are specified, otherwise at least one. */
+             * channels are specified; otherwise, at least one. */
             num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
             /* Unset our default PUSH handler so this works in RESP2/RESP3 */
             valkeySetPushCallback(context, NULL);
@@ -2438,7 +2441,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             replicaMode(0);
             config.replica_mode = 0;
             zfree(argvlen);
-            return VALKEY_ERR; /* Error = replilcaMode lost connection to primary */
+            return VALKEY_ERR; /* Error = replicaMode lost connection to primary */
         }
 
         /* Read response, possibly skipping pubsub/push messages. */
@@ -3863,13 +3866,21 @@ static int parseClusterNodeAddress(char *addr, char **ip_ptr, int *port_ptr, int
         *c = '\0';
         if (bus_port_ptr != NULL) *bus_port_ptr = atoi(c + 1);
     }
-    c = strrchr(addr, ':');
-    if (c != NULL) {
+
+    if (addr[0] == '[') {
+        /* [IPv6]:port */
+        c = strchr(addr, ']');
+        if (c == NULL || c[1] != ':') return 0;
+        *c = '\0';
+        *ip_ptr = addr + 1;
+        *port_ptr = atoi(c + 2);
+    } else {
+        c = strrchr(addr, ':');
+        if (c == NULL) return 0;
         *c = '\0';
         *ip_ptr = addr;
-        *port_ptr = atoi(++c);
-    } else
-        return 0;
+        *port_ptr = atoi(c + 1);
+    }
     return 1;
 }
 
@@ -6243,7 +6254,7 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
             return n;
         }
     }
-    /* Can not be reached */
+    /* Cannot be reached */
     assert(0);
     /* Make compiler happy */
     return 0;

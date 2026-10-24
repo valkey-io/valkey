@@ -3,6 +3,7 @@
  */
 
 #include "valkeymodule.h"
+#include <float.h>
 #include <math.h>
 
 int rw_string(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -156,6 +157,27 @@ int rw_error(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithError(ctx, "An error");
 }
 
+/* Replies with [err, [err], {k: err, k2: 1}, LDBL_MAX, err, 1]: errors nested in
+ * arrays and maps, and one after a RESP3 double that overflows when parsed
+ * (where long double is wider than double). */
+int rw_nested_error(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModule_ReplyWithArray(ctx, 6);
+    ValkeyModule_ReplyWithError(ctx, "ERR first");
+    ValkeyModule_ReplyWithArray(ctx, 1);
+    ValkeyModule_ReplyWithError(ctx, "ERR second");
+    ValkeyModule_ReplyWithMap(ctx, 2);
+    ValkeyModule_ReplyWithCString(ctx, "k");
+    ValkeyModule_ReplyWithError(ctx, "ERR third");
+    ValkeyModule_ReplyWithCString(ctx, "k2");
+    ValkeyModule_ReplyWithLongLong(ctx, 1);
+    ValkeyModule_ReplyWithLongDouble(ctx, LDBL_MAX);
+    ValkeyModule_ReplyWithError(ctx, "ERR fifth");
+    return ValkeyModule_ReplyWithLongLong(ctx, 1);
+}
+
 int rw_error_format(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
 
@@ -204,6 +226,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"rw.null",rw_null,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"rw.error",rw_error,"",0,0,0) != VALKEYMODULE_OK)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"rw.nested_error",rw_nested_error,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"rw.error_format",rw_error_format,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;

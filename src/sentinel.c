@@ -220,6 +220,7 @@ typedef struct sentinelValkeyInstance {
     int role_reported;
     mstime_t role_reported_time;
     mstime_t replica_conf_change_time; /* Last time replica primary addr changed. */
+    int has_config_file;               /* 1 if started with a config file, 0 if without. */
 
     int monitored_instance_failover_state;            /* Whether the Valkey instance supports/reports a failover in "master_failover_state" */
     mstime_t monitored_instance_failover_change_time; /* Last time monitored_instance_failover_state changed. */
@@ -1362,6 +1363,7 @@ sentinelValkeyInstance *createSentinelValkeyInstance(char *name,
     ri->role_reported = ri->flags & (SRI_PRIMARY | SRI_REPLICA);
     ri->role_reported_time = mstime();
     ri->replica_conf_change_time = mstime();
+    ri->has_config_file = 1;
 
     ri->monitored_instance_failover_state = SENTINEL_MONITORED_INSTANCE_FAILOVER_NS;
     ri->monitored_instance_failover_change_time = mstime();
@@ -2474,6 +2476,13 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
                     ri->runid = sdsnewlen(l + 7, 40);
                 }
             }
+        }
+
+        /* config_file:<path> */
+        if (sdslen(l) >= 12 && !memcmp(l, "config_file:", 12)) {
+            char *p = l + 12;
+            while (*p == ' ' || *p == '\t') p++;
+            ri->has_config_file = (*p != '\0');
         }
 
         /* old versions: slave0:<ip>,<port>,<state>
@@ -4826,11 +4835,13 @@ int sentinelKillClients(sentinelValkeyInstance *ri) {
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = valkeyAsyncCommand(ri->link->cc,
-                                sentinelDiscardReplyCallback, ri, "%s REWRITE",
-                                sentinelInstanceMapCommand(ri, "CONFIG"));
-    if (retval == C_ERR) return retval;
-    ri->link->pending_commands++;
+    if (ri->has_config_file) {
+        retval = valkeyAsyncCommand(ri->link->cc,
+                                    sentinelDiscardReplyCallback, ri, "%s REWRITE",
+                                    sentinelInstanceMapCommand(ri, "CONFIG"));
+        if (retval == C_ERR) return retval;
+        ri->link->pending_commands++;
+    }
 
     for (int type = 0; type < 2; type++) {
         retval = valkeyAsyncCommand(ri->link->cc,
@@ -4910,10 +4921,12 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
-                                sentinelInstanceMapCommand(ri, "CONFIG"));
-    if (retval == C_ERR) return retval;
-    ri->link->pending_commands++;
+    if (ri->has_config_file) {
+        retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
+                                    sentinelInstanceMapCommand(ri, "CONFIG"));
+        if (retval == C_ERR) return retval;
+        ri->link->pending_commands++;
+    }
 
     /* CLIENT KILL TYPE <type> is only supported starting from Redis OSS 2.8.12,
      * however sending it to an instance not understanding this command is not

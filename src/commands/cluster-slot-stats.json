@@ -44,6 +44,12 @@
                             },
                             "network-bytes-out": {
                                 "type": "integer"
+                            },
+                            "keyspace-hits": {
+                                "type": "integer"
+                            },
+                            "keyspace-misses": {
+                                "type": "integer"
                             }
                         }
                     }

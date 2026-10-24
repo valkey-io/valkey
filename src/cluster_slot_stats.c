@@ -12,6 +12,8 @@ typedef enum {
     CPU_USEC,
     NETWORK_BYTES_IN,
     NETWORK_BYTES_OUT,
+    KEYSPACE_HITS,
+    KEYSPACE_MISSES,
     SLOT_STAT_COUNT,
     INVALID
 } slotStatType;
@@ -51,6 +53,8 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
     case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
     case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
+    case KEYSPACE_HITS: slot_stat = server.cluster->slot_stats[slot].keyspace_hits; break;
+    case KEYSPACE_MISSES: slot_stat = server.cluster->slot_stats[slot].keyspace_misses; break;
     case SLOT_STAT_COUNT:
     case INVALID: serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
@@ -99,17 +103,21 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
                                                           : 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
-    addReplyLongLong(c, countKeysInSlot(slot));
+    addReplyLongLong(c, (long long)getSlotStat(slot, KEY_COUNT));
 
     /* Any additional metrics aside from key-count come with a performance trade-off,
      * and are aggregated and returned based on its server config. */
     if (server.cluster_slot_stats_enabled) {
         addReplyBulkCString(c, "cpu-usec");
-        addReplyLongLong(c, server.cluster->slot_stats[slot].cpu_usec);
+        addReplyLongLong(c, (long long)getSlotStat(slot, CPU_USEC));
         addReplyBulkCString(c, "network-bytes-in");
-        addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_in);
+        addReplyLongLong(c, (long long)getSlotStat(slot, NETWORK_BYTES_IN));
         addReplyBulkCString(c, "network-bytes-out");
-        addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_out);
+        addReplyLongLong(c, (long long)getSlotStat(slot, NETWORK_BYTES_OUT));
+        addReplyBulkCString(c, "keyspace-hits");
+        addReplyLongLong(c, (long long)getSlotStat(slot, KEYSPACE_HITS));
+        addReplyBulkCString(c, "keyspace-misses");
+        addReplyLongLong(c, (long long)getSlotStat(slot, KEYSPACE_MISSES));
     }
 }
 
@@ -254,6 +262,20 @@ void clusterSlotStatsAddNetworkBytesInForUserClient(client *c) {
     server.cluster->slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
 }
 
+void clusterSlotStatsAddKeyspaceHits(int slot) {
+    if (!clusterSlotStatsEnabled(slot)) return;
+
+    serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[slot].keyspace_hits++;
+}
+
+void clusterSlotStatsAddKeyspaceMisses(int slot) {
+    if (!clusterSlotStatsEnabled(slot)) return;
+
+    serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[slot].keyspace_misses++;
+}
+
 void clusterSlotStatsCommand(client *c) {
     if (!server.cluster_enabled) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -289,6 +311,10 @@ void clusterSlotStatsCommand(client *c) {
             order_by = NETWORK_BYTES_IN;
         } else if (!strcasecmp(objectGetVal(c->argv[3]), "network-bytes-out") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_OUT;
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-hits") && server.cluster_slot_stats_enabled) {
+            order_by = KEYSPACE_HITS;
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-misses") && server.cluster_slot_stats_enabled) {
+            order_by = KEYSPACE_MISSES;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;

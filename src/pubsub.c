@@ -30,6 +30,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
+#include "module.h"
 
 /* Structure to hold the pubsub related metadata. Currently used
  * for pubsub and pubsubshard feature. */
@@ -292,6 +293,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
     hashtable *clients = NULL;
     int retval = 0;
     unsigned int slot = 0;
+    size_t subscribers = 0;
 
     if (!c->pubsub_data) initClientPubSubData(c);
 
@@ -320,12 +322,14 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         }
 
         serverAssert(hashtableAdd(clients, c));
+        subscribers = hashtableSize(clients);
         hashtableInsertAtPosition(type.clientPubSubChannels(c), channel, &position);
         incrRefCount(channel);
         c->pubsub_data->pubsub_object_mem += getStringObjectMemory(channel);
     }
     /* Notify the client */
     addReplyPubsubSubscribed(c, channel, type);
+    if (retval) moduleNotifyPubSubSubscriptionDelta(channel, subscribers - 1, subscribers, type.shard);
     return retval;
 }
 
@@ -335,6 +339,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
     hashtable *clients;
     int retval = 0;
     int slot = 0;
+    size_t subscribers = 0;
 
     /* Remove the channel from the client -> channels hash table */
     incrRefCount(channel); /* channel may be just a pointer to the same object
@@ -353,7 +358,8 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
         serverAssertWithInfo(c, NULL, found);
         clients = found;
         serverAssertWithInfo(c, NULL, hashtableDelete(clients, c));
-        if (hashtableSize(clients) == 0) {
+        subscribers = hashtableSize(clients);
+        if (subscribers == 0) {
             /* Free the dict and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
              * PUBSUB creating millions of channels. */
@@ -366,6 +372,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
     if (notify) {
         addReplyPubsubUnsubscribed(c, channel, type);
     }
+    if (retval) moduleNotifyPubSubSubscriptionDelta(channel, subscribers + 1, subscribers, type.shard);
     decrRefCount(channel); /* it is finally safe to release it */
     return retval;
 }
@@ -379,6 +386,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
     while (kvstoreHashtableIteratorNext(kvs_di, &element)) {
         hashtable *clients = element;
         robj *channel = *(robj **)hashtableMetadata(clients);
+        size_t subscribers = hashtableSize(clients);
         /* For each client subscribed to the channel, unsubscribe it. */
         hashtableIterator client_iter;
         hashtableInitIterator(&client_iter, clients, 0);
@@ -396,7 +404,10 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
             c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(channel);
         }
         hashtableCleanupIterator(&client_iter);
+        incrRefCount(channel); /* Freed with the clients table below. */
         kvstoreHashtableDelete(server.pubsubshard_channels, slot, channel);
+        moduleNotifyPubSubSubscriptionDelta(channel, subscribers, 0, 1);
+        decrRefCount(channel);
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 }

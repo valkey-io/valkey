@@ -67,6 +67,7 @@
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
 #include "module.h"
+#include "key_memory_delta.h"
 #include "call_reply.h"
 #include "io_threads.h"
 #include "scripting_engine.h"
@@ -431,6 +432,7 @@ static int commandResultSuccessListeners = 0;     /* Count of modules listening 
 static int commandResultFailureListeners = 0;     /* Count of modules listening for command result failure. */
 static int commandResultRejectedListeners = 0;    /* Count of modules listening for command result rejected. */
 static int commandResultACLRejectedListeners = 0; /* Count of modules listening for command result ACL rejected. */
+static int pubsubSubscriptionDeltaListeners = 0;  /* Count of modules listening for subscription changes. */
 
 /* Data structures related to the module users */
 
@@ -12127,6 +12129,8 @@ static void moduleScanCallback(void *privdata, void *element, int didx) {
     ValkeyModuleKey kp = {0};
     moduleInitKey(&kp, data->ctx, keyname, val, VALKEYMODULE_READ);
 
+    /* Reads through the key handle bypass lookupKey(). */
+    keyMemoryDeltaTrackResize(data->ctx->client->db->id, val);
     data->fn(data->ctx, keyname, &kp, data->user_data);
 
     moduleCloseKey(&kp);
@@ -12689,6 +12693,8 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED */
+    VALKEYMODULE_KEYMEMORYDELTA_VERSION,           /* VALKEYMODULE_EVENT_KEY_MEMORY_DELTA */
+    VALKEYMODULE_PUBSUBSUBSCRIPTIONDELTA_VERSION,  /* VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -13103,6 +13109,72 @@ static uint64_t moduleEventVersions[] = {
  *         the denied key or channel name from argv
  *       - All other ACL subevents: NULL
  *
+ * * ValkeyModuleEvent_KeyMemoryDelta
+ *
+ *     Called once for every key whose existence or memory usage changed,
+ *     when the outermost execution unit (a command, a whole transaction or
+ *     script, a module timer or event callback, the expiration or eviction of
+ *     a key, and so on) completes: after the post notification jobs, and
+ *     before the unit is propagated. A key modified several times during the
+ *     unit is reported once, in the database it ends up in (e.g. after
+ *     SWAPDB), and keys are reported in no particular order. Changes caused
+ *     by the callbacks (writes of the post notification jobs they add, values
+ *     resized by their reads) are reported by further events. The event is
+ *     also called for every key loaded from an RDB (from disk or from a
+ *     primary), before its "loaded" keyspace notification, and for keys
+ *     modified while replaying an AOF file, as when executing its commands.
+ *
+ *     The memory usage is the estimate reported by MEMORY USAGE with its
+ *     default number of samples. For aggregate types, the difference between
+ *     old_bytes and new_bytes may not match the memory allocated or freed by
+ *     the unit, but the old fields of an event match the new fields of the
+ *     previous event for the same key, unless the key was removed or replaced
+ *     together with its database in between (see below).
+ *
+ *     Keys removed or replaced together with a whole database are not
+ *     reported, see ValkeyModuleEvent_FlushDB, ValkeyModuleEvent_SwapDB and
+ *     ValkeyModuleEvent_ReplAsyncLoad. During an asynchronous load, events only
+ *     describe the dataset being loaded, while changes to the dataset being
+ *     served are not reported, and opening the key from the callback accesses
+ *     the latter. A Loading event doesn't imply an empty dataset: DEBUG RELOAD
+ *     NOFLUSH loads on top of it.
+ *
+ *     The callback must not modify the keyspace: it can use
+ *     ValkeyModule_AddPostNotificationJob() for that. Keys are only tracked
+ *     while some module is subscribed to this event, using memory proportional
+ *     to the number of keys an execution unit touches.
+ *
+ *     The data pointer can be casted to a ValkeyModuleKeyMemoryDelta
+ *     structure with the following fields:
+ *
+ *         ValkeyModuleString *key; // Key name, only valid during the callback:
+ *                                  // use ValkeyModule_HoldString() to keep it.
+ *         uint64_t old_bytes;      // Memory usage before, 0 if the key did not exist.
+ *         uint64_t new_bytes;      // Memory usage after, 0 if the key does not exist.
+ *         int32_t dbnum;           // Database of the key.
+ *         int32_t old_exists;      // Non-zero if the key existed before.
+ *         int32_t new_exists;      // Non-zero if the key exists after.
+ *
+ * * ValkeyModuleEvent_PubSubSubscriptionDelta
+ *
+ *     Called when the number of clients subscribed to a channel or to a shard
+ *     channel changes. The callback runs synchronously from within SUBSCRIBE,
+ *     SSUBSCRIBE, UNSUBSCRIBE, SUNSUBSCRIBE and RESET, when a client is freed
+ *     (including clients freed asynchronously, outside of any command), and
+ *     when the shard channels of a slot are removed because the node no longer
+ *     serves it. Pattern subscriptions are not reported. The callback must not
+ *     try to change subscriptions.
+ *
+ *     The data pointer can be casted to a ValkeyModulePubSubSubscriptionDelta
+ *     structure with the following fields:
+ *
+ *         ValkeyModuleString *channel; // Channel name, only valid during the
+ *                                      // callback: use ValkeyModule_HoldString()
+ *                                      // to keep it.
+ *         uint64_t old_subscribers;    // Number of subscribers before.
+ *         uint64_t new_subscribers;    // Number of subscribers after.
+ *         int32_t sharded;             // 1 for a shard channel, 0 otherwise.
+ *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
  * is given then VALKEYMODULE_ERR is returned. */
@@ -13137,6 +13209,10 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
                 commandResultRejectedListeners--;
             else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED)
                 commandResultACLRejectedListeners--;
+            else if (event.id == VALKEYMODULE_EVENT_KEY_MEMORY_DELTA)
+                key_memory_delta_listeners--;
+            else if (event.id == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA)
+                pubsubSubscriptionDeltaListeners--;
         } else {
             el->callback = callback; /* Update the callback with the new one. */
         }
@@ -13159,6 +13235,10 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         commandResultRejectedListeners++;
     else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED)
         commandResultACLRejectedListeners++;
+    else if (event.id == VALKEYMODULE_EVENT_KEY_MEMORY_DELTA)
+        key_memory_delta_listeners++;
+    else if (event.id == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA)
+        pubsubSubscriptionDeltaListeners++;
     return VALKEYMODULE_OK;
 }
 
@@ -13189,6 +13269,8 @@ int VM_IsSubEventSupported(ValkeyModuleEvent event, int64_t subevent) {
         return subevent == 0;
     case VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED:
         return subevent < 5; /* ValkeyModuleACLLogEntryReason has 5 values (0-4) */
+    case VALKEYMODULE_EVENT_KEY_MEMORY_DELTA: return subevent == 0;
+    case VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA: return subevent == 0;
     default: break;
     }
     return 0;
@@ -13283,6 +13365,12 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                        eid == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED ||
                        eid == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED) {
                 moduledata = data;
+            } else if (eid == VALKEYMODULE_EVENT_KEY_MEMORY_DELTA) {
+                ValkeyModuleKeyMemoryDeltaV1 *info = data;
+                selectDb(ctx.client, info->dbnum);
+                moduledata = data;
+            } else if (eid == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA) {
+                moduledata = data;
             }
 
             el->module->in_hook++;
@@ -13317,6 +13405,10 @@ void moduleUnsubscribeAllServerEvents(ValkeyModule *module) {
                 commandResultRejectedListeners--;
             else if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED)
                 commandResultACLRejectedListeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_KEY_MEMORY_DELTA)
+                key_memory_delta_listeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA)
+                pubsubSubscriptionDeltaListeners--;
             listDelNode(ValkeyModule_EventListeners, ln);
             zfree(el);
         }
@@ -13366,6 +13458,25 @@ void moduleNotifyKeyUnlink(robj *key, robj *val, int dbid, int flags) {
         }
     }
     server.lazy_expire_disabled--;
+}
+
+/* Fire the key memory delta event, see keyMemoryDeltaFlush(). */
+void moduleNotifyKeyMemoryDelta(int dbid, sds key, size_t old_bytes, size_t new_bytes, int old_exists, int new_exists) {
+    robj keyobj;
+    initStaticStringObject(keyobj, key);
+    ValkeyModuleKeyMemoryDeltaV1 info = {VALKEYMODULE_KEYMEMORYDELTA_VERSION, &keyobj, old_bytes, new_bytes, dbid,
+                                         old_exists, new_exists};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_KEY_MEMORY_DELTA, 0, &info);
+}
+
+/* Fire the Pub/Sub subscription delta event for a channel whose number of
+ * subscribers changed. */
+void moduleNotifyPubSubSubscriptionDelta(robj *channel, size_t old_subscribers, size_t new_subscribers, int sharded) {
+    if (pubsubSubscriptionDeltaListeners == 0) return;
+    debugServerAssert(sdsEncodedObject(channel));
+    ValkeyModulePubSubSubscriptionDeltaV1 info = {VALKEYMODULE_PUBSUBSUBSCRIPTIONDELTA_VERSION, channel,
+                                                  old_subscribers, new_subscribers, sharded};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PUBSUB_SUBSCRIPTION_DELTA, 0, &info);
 }
 
 /* Return the free_effort of the module, it will automatically choose to call

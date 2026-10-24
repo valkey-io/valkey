@@ -1332,7 +1332,6 @@ char *strEncoding(int encoding) {
  * Note that the returned value is just an approximation, especially in the
  * case of aggregated data types where only "sample_size" elements
  * are checked and averaged to estimate the total size. */
-#define OBJ_COMPUTE_SIZE_DEF_SAMPLES 5 /* Default sample size. */
 size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     size_t elesize = 0, samples = 0;
     size_t asize = zmalloc_size((void *)o);
@@ -1408,7 +1407,12 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             hashtable *ht = objectGetVal(o);
             hashtableIterator iter;
             vset *volatile_fields = hashtableMetadata(ht);
-            hashtableInitIterator(&iter, ht, 0);
+            /* Sample from the same population that hashtableSize() counts:
+             * expired fields still occupy memory until they are reclaimed,
+             * and validating them here would make the estimate depend on the
+             * expiration policy (e.g. while loading, or when applying the
+             * replication stream, expired fields are not filtered). */
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;
 
             asize += hashtableMemUsage(ht);

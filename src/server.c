@@ -33,6 +33,7 @@
  */
 #include "server.h"
 #include "hotkeys.h"
+#include "key_memory_delta.h"
 #include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
@@ -2033,6 +2034,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * this can't be done where the ACK is received since failover will disconnect
      * our clients. */
     updateFailoverStatus();
+
+    /* Key lookups done outside of any execution unit (e.g. by getNodeByQuery()
+     * or handleClientsBlockedOnKeys() on a value being rehashed), active defrag,
+     * values released by background iterations, or a reprocessed blocked client
+     * freed mid-command, can leave tracked keys behind. The next execution unit
+     * would deliver them anyway: this only bounds the delay. */
+    if (keyMemoryDeltaHasPending()) postExecutionUnitOperations();
 
     /* Since we rely on current_client to send scheduled invalidation messages
      * we have to flush them after each command, so when we get here, the list
@@ -4042,9 +4050,9 @@ static void propagatePendingCommands(void) {
     serverOpArrayFree(&server.also_propagate);
 }
 
-/* Whether any of the module-jobs / propagation / module-yield post-execution-
- * unit work is pending. Shared by postExecutionUnitOperations() and
- * afterCommand() so the "is there anything to do?" condition for these three
+/* Whether any of the module-jobs / key-memory-delta / propagation / module-yield
+ * post-execution-unit work is pending. Shared by postExecutionUnitOperations() and
+ * afterCommand() so the "is there anything to do?" condition for these
  * sub-systems has a single home instead of being duplicated at both call
  * sites - static inline costs nothing here since both callers are in this
  * same translation unit. moduleHasPostExecUnitJobs() is a tiny cross-TU
@@ -4054,7 +4062,8 @@ static void propagatePendingCommands(void) {
  * Must stay an OR of every condition below - never drop one as an
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
-    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+    return moduleHasPostExecUnitJobs() || keyMemoryDeltaHasPending() || server.also_propagate.numops ||
+           server.busy_module_yield_flags;
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4075,10 +4084,10 @@ void postExecutionUnitOperations(void) {
     if (server.execution_nesting) return;
 
     /* Combined pending-work gate: in the overwhelming majority of calls
-     * (e.g. after a plain read-only command like GET) none of the three
+     * (e.g. after a plain read-only command like GET) none of the
      * sub-systems below have anything queued. Fold all of their "is there
      * anything to do?" checks into a single branch here so the common case
-     * pays for one memory read + one branch instead of three separate
+     * pays for one memory read + one branch instead of several separate
      * (partly cross-translation-unit, non-inlinable) function calls.
      *
      * Deliberately NOT hinted unlikely() here: unlike the afterCommand()
@@ -4087,6 +4096,15 @@ void postExecutionUnitOperations(void) {
      * typically true, so a fixed hint would be wrong for those call sites. */
     if (hasPostExecutionUnitPendingWork()) {
         firePostExecutionUnitJobs();
+
+        /* Key memory deltas are delivered after the post notification jobs,
+         * whose writes belong to this unit. Event callbacks must not write,
+         * but may add post notification jobs that write, which belong to this
+         * unit as well. */
+        while (keyMemoryDeltaHasPending()) {
+            keyMemoryDeltaFlush();
+            firePostExecutionUnitJobs();
+        }
 
         /* If we are at the top-most call() and not inside an active module
          * context (e.g. within a module timer) we can propagate what we accumulated. */

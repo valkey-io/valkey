@@ -34,6 +34,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "key_memory_delta.h"
 #include "ordered_index.h"
 #include "lzf.h" /* LZF compression library */
 #include "zipmap.h"
@@ -4100,8 +4101,14 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             /* Set usage information (for eviction). */
             objectSetLRUOrLFU(val, lfu_freq, lru_idle);
 
+            /* Report the loaded key before the notification below, which may
+             * modify it, and then the changes made by the notification. */
+            keyMemoryDeltaLoaded(db, key, val);
+
             /* call key space notification on key loaded for modules only */
             moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+
+            if (unlikely(keyMemoryDeltaHasPending())) keyMemoryDeltaFlush();
 
             /* Release key (sds), dictEntry stores a copy of it in embedded data */
             sdsfree(key);

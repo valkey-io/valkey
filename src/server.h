@@ -3335,6 +3335,7 @@ void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
 void dismissObject(robj *o, size_t dump_size);
+#define OBJ_COMPUTE_SIZE_DEF_SAMPLES 5 /* Default sample size. */
 size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);

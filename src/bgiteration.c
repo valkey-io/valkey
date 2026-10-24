@@ -1137,7 +1137,12 @@ static bool expediteSingleKeyWithoutOptimization(bgIterator *it,
     sds key = objectGetVal(oKey);
     dbEntry *de = (server.db[dbid]) ? dbFind(server.db[dbid], key) : NULL;
     if (de != NULL) {
-        if (!iteratorHasPassedKey(it, dbid, key, de)) {
+        /* A consistent iterator holds the dataset as of its creation.  Entries created or replaced
+         * after that point are not part of the snapshot and must not be expedited into it. */
+        bool inSnapshot = !(it->iteration_flags & BGITERATOR_FLAG_CONSISTENT) ||
+                          ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <=
+                              it->consistent_modification_id;
+        if (!iteratorHasPassedKey(it, dbid, key, de) && inSnapshot) {
             if (addEarlyIterationKey(it, de, dbid)) {
                 mustBlock = true;
                 hashtableAdd(waitingOnKeys, oKey);

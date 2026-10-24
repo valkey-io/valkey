@@ -111,6 +111,41 @@ proc cluster_nodes_all_know_each_other {num_nodes} {
     return 1
 }
 
+tags {external:skip cluster singledb} {
+    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-node-timeout 1000}} {
+        test "A two-node handshake recovers after only the receiver times out" {
+            set node0_id [dict get [get_myself 0] id]
+            set node1_id [dict get [get_myself 1] id]
+            cluster_allocate_slots 2 0
+
+            # Node 0 receives the PONG and inbound PING from node 1. Node 1
+            # never receives the final PONG, so only its handshake times out.
+            R 1 DEBUG DROP-CLUSTER-PACKET-FILTER 1
+            R 0 CLUSTER MEET [srv -1 host] [srv -1 port]
+            wait_for_condition 100 50 {
+                [cluster_get_node_by_id 0 $node1_id] ne {} &&
+                [llength [R 0 CLUSTER LINKS]] == 2 &&
+                [CI 1 cluster_stats_messages_pong_received] > 0
+            } else {
+                fail "Node 0 never completed its side of the handshake"
+            }
+            wait_for_condition 100 50 {
+                [llength [get_cluster_nodes 1]] == 1
+            } else {
+                fail "Node 1 never timed out its side of the handshake"
+            }
+            assert {[cluster_get_node_by_id 1 $node0_id] eq {}}
+
+            R 1 DEBUG DROP-CLUSTER-PACKET-FILTER -1
+            wait_for_condition 100 100 {
+                [cluster_nodes_all_know_each_other 2]
+            } else {
+                fail "The two nodes did not recover their partial handshake"
+            }
+        }
+    }
+}
+
 start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 4000 cluster-replica-no-failover yes}} {
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1

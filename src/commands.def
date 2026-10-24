@@ -8490,6 +8490,27 @@ const char *LATENCY_DOCTOR_Tips[] = {
 #define LATENCY_DOCTOR_Keyspecs NULL
 #endif
 
+/********** LATENCY E2E_HISTOGRAM ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* LATENCY E2E_HISTOGRAM history */
+#define LATENCY_E2E_HISTOGRAM_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* LATENCY E2E_HISTOGRAM tips */
+const char *LATENCY_E2E_HISTOGRAM_Tips[] = {
+"nondeterministic_output",
+"request_policy:all_nodes",
+"response_policy:special",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* LATENCY E2E_HISTOGRAM key specs */
+#define LATENCY_E2E_HISTOGRAM_Keyspecs NULL
+#endif
+
 /********** LATENCY GRAPH ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -8634,6 +8655,7 @@ struct COMMAND_ARG LATENCY_RESET_Args[] = {
 /* LATENCY command table */
 struct COMMAND_STRUCT LATENCY_Subcommands[] = {
 {MAKE_CMD("doctor","Returns a human-readable latency analysis report.","O(1)","2.8.13",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LATENCY_DOCTOR_History,0,LATENCY_DOCTOR_Tips,3,latencyCommand,2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,LATENCY_DOCTOR_Keyspecs,0,NULL,0)},
+{MAKE_CMD("e2e_histogram","Returns the cumulative distribution of end-to-end latencies of every command kind.","O(1)","10.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LATENCY_E2E_HISTOGRAM_History,0,LATENCY_E2E_HISTOGRAM_Tips,3,latencyCommand,2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,LATENCY_E2E_HISTOGRAM_Keyspecs,0,NULL,0)},
 {MAKE_CMD("graph","Returns a latency graph for an event.","O(1)","2.8.13",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LATENCY_GRAPH_History,0,LATENCY_GRAPH_Tips,3,latencyCommand,3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,LATENCY_GRAPH_Keyspecs,0,NULL,1),.args=LATENCY_GRAPH_Args},
 {MAKE_CMD("help","Returns helpful text about the different subcommands.","O(1)","2.8.13",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LATENCY_HELP_History,0,LATENCY_HELP_Tips,0,latencyCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,LATENCY_HELP_Keyspecs,0,NULL,0)},
 {MAKE_CMD("histogram","Returns the cumulative distribution of latencies of a subset or all commands.","O(N) where N is the number of commands with latency information being retrieved.","7.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LATENCY_HISTOGRAM_History,0,LATENCY_HISTOGRAM_Tips,3,latencyCommand,-2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,LATENCY_HISTOGRAM_Keyspecs,0,NULL,1),.args=LATENCY_HISTOGRAM_Args},

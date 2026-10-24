@@ -1674,6 +1674,27 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
 
         break;
     }
+    case CONN_STATE_ERROR:
+    case CONN_STATE_CLOSED: {
+        /* Dispatch to the installed handlers, as the socket connection type
+         * does, so they observe the failure and close the connection.
+         * Otherwise the fd stays registered with nobody consuming its events
+         * and the event loop spins. Handlers must use connGetState(), not
+         * errno, to tell this apart from a transient error. */
+        int call_read = conn->c.read_handler && (mask & AE_READABLE);
+        int call_write = conn->c.write_handler && (mask & AE_WRITABLE);
+        int invert = conn->c.flags & CONN_FLAG_WRITE_BARRIER;
+        if (!invert && call_read) {
+            if (!callHandler((connection *)conn, conn->c.read_handler)) return;
+        }
+        if (call_write) {
+            if (!callHandler((connection *)conn, conn->c.write_handler)) return;
+        }
+        if (invert && call_read) {
+            if (!callHandler((connection *)conn, conn->c.read_handler)) return;
+        }
+        break;
+    }
     default: break;
     }
 
@@ -1864,7 +1885,18 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     if (total_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
         ssize_t tot_sent = 0;
         for (int i = 0; i < iovcnt; i++) {
-            ssize_t sent = connTLSWrite(conn_, iov[i].iov_base, iov[i].iov_len);
+            ssize_t sent;
+            if (unlikely(server.debug_tls_writev_fail_last_iov) && i == iovcnt - 1 &&
+                tot_sent > NET_MAX_WRITES_PER_EVENT) {
+                /* Testing only: simulate the peer resetting the connection
+                 * right before we write the last iovec. */
+                server.debug_tls_writev_fail_last_iov = 0;
+                conn->c.last_errno = EPIPE;
+                conn->c.state = CONN_STATE_ERROR;
+                sent = -1;
+            } else {
+                sent = connTLSWrite(conn_, iov[i].iov_base, iov[i].iov_len);
+            }
             if (sent <= 0) return tot_sent > 0 ? tot_sent : sent;
             tot_sent += sent;
             if ((size_t)sent != iov[i].iov_len) break;

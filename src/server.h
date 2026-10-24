@@ -2545,6 +2545,7 @@ struct valkeyServer {
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
     int debug_force_tls_write_error;
+    int debug_tls_writev_fail_last_iov; /* One-shot: fail the last iovec of a large TLS writev. */
     /* Hot key detection parameters */
     int hotkeys_sampling_percentage; /* Percentage (1-100) of key accesses sampled for hot-key detection. */
     int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */

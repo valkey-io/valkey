@@ -349,6 +349,11 @@ typedef struct ValkeyModuleKeyspaceSubscriber {
     /* Active flag set on entry, to avoid reentrant subscribers
      * calling themselves */
     int active;
+    /* Set when the subscriber was unsubscribed while a dispatch was in
+     * progress. The entry is freed once the outermost dispatch returns.
+     * A removed entry always has an empty event_mask, so checking the mask
+     * alone would skip it too; the flag is checked explicitly for clarity. */
+    int removed;
 } ValkeyModuleKeyspaceSubscriber;
 
 typedef struct ValkeyModulePostExecUnitJob {
@@ -362,6 +367,13 @@ typedef struct ValkeyModulePostExecUnitJob {
 
 /* The module keyspace notification subscribers list */
 static list *moduleKeyspaceSubscribers;
+
+/* Nesting depth of moduleNotifyKeyspaceEvent(), and whether some subscriber
+ * was marked as removed while dispatching. Subscribers can't be freed while
+ * a dispatch is iterating the list, since the callback being executed (or the
+ * iterator's next node) may be the one being removed. */
+static int moduleKeyspaceDispatchDepth = 0;
+static int moduleKeyspaceSubscribersPendingRemoval = 0;
 
 /* The module post keyspace jobs list */
 static list *modulePostExecUnitJobs;
@@ -9569,6 +9581,8 @@ void moduleReleaseGIL(void) {
  * runs is dangerous and discouraged. In order to react to key space events with
  * write actions, please refer to `VM_AddPostNotificationJob`.
  *
+ * To remove a subscription, use `VM_UnsubscribeFromKeyspaceEvents`.
+ *
  * See https://valkey.io/topics/notifications for more information.
  */
 int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc callback) {
@@ -9577,9 +9591,69 @@ int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNo
     sub->event_mask = types;
     sub->notify_callback = callback;
     sub->active = 0;
+    sub->removed = 0;
 
     listAddNodeTail(moduleKeyspaceSubscribers, sub);
     return VALKEYMODULE_OK;
+}
+
+/* Unsubscribe from keyspace notifications previously subscribed with
+ * VM_SubscribeToKeyspaceEvents().
+ *
+ * The event types in `types` are removed from every subscription of the
+ * calling module that uses `callback`. A subscription left with no event
+ * types is removed entirely. Types that were not subscribed are ignored.
+ * If `callback` was subscribed more than once, `types` are removed from all
+ * of those subscriptions.
+ *
+ * It is safe to call this function from within a notification callback,
+ * including the callback being unsubscribed. The removed event types are not
+ * delivered to `callback` from that point on.
+ *
+ * Returns VALKEYMODULE_OK if at least one subscription was affected,
+ * otherwise VALKEYMODULE_ERR. VALKEYMODULE_ERR is also returned if the
+ * context is not associated with a module. */
+int VM_UnsubscribeFromKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc callback) {
+    if (ctx->module == NULL) return VALKEYMODULE_ERR;
+
+    int found = 0;
+    listIter li;
+    listNode *ln;
+    listRewind(moduleKeyspaceSubscribers, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModuleKeyspaceSubscriber *sub = ln->value;
+        if (sub->removed || sub->module != ctx->module || sub->notify_callback != callback ||
+            (sub->event_mask & types) == 0)
+            continue;
+
+        found = 1;
+        sub->event_mask &= ~types;
+        if (sub->event_mask != 0) continue;
+
+        if (moduleKeyspaceDispatchDepth > 0) {
+            sub->removed = 1;
+            moduleKeyspaceSubscribersPendingRemoval = 1;
+        } else {
+            listDelNode(moduleKeyspaceSubscribers, ln);
+            zfree(sub);
+        }
+    }
+    return found ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
+}
+
+/* Free the subscribers that were unsubscribed during a dispatch. */
+static void moduleFreeRemovedKeyspaceSubscribers(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(moduleKeyspaceSubscribers, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModuleKeyspaceSubscriber *sub = ln->value;
+        if (sub->removed) {
+            listDelNode(moduleKeyspaceSubscribers, ln);
+            zfree(sub);
+        }
+    }
+    moduleKeyspaceSubscribersPendingRemoval = 0;
 }
 
 /* Whether any module post-execution-unit job is pending. Kept as a tiny
@@ -9694,10 +9768,16 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
      * This is a special case where we need to increase 'execution_nesting'
      * but we do not want to update the cached time */
     enterExecutionUnit(0, 0);
+    moduleKeyspaceDispatchDepth++;
 
     listIter li;
     listNode *ln;
     listRewind(moduleKeyspaceSubscribers, &li);
+
+    /* Subscribers added by a callback during this dispatch are appended after
+     * 'last' and don't receive the event being dispatched. 'last' can't be
+     * freed before we reach it, since removal is deferred while dispatching. */
+    listNode *last = listLast(moduleKeyspaceSubscribers);
 
     /* Remove irrelevant flags from the type mask */
     type &= ~(NOTIFY_KEYEVENT | NOTIFY_KEYSPACE);
@@ -9714,7 +9794,7 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
         ValkeyModuleKeyspaceSubscriber *sub = ln->value;
         /* Only notify subscribers on events matching the registration,
          * and avoid subscribers triggering themselves */
-        if ((sub->event_mask & type) &&
+        if (!sub->removed && (sub->event_mask & type) &&
             (sub->active == 0 || (sub->module->options & VALKEYMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS))) {
             ValkeyModuleCtx ctx;
             if (server.executing_client == NULL) {
@@ -9737,10 +9817,14 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
             sub->active = prev_active;
             moduleFreeContext(&ctx);
         }
+        if (ln == last) break;
     }
 
     /* Restore the executing client's originally selected DB. */
     if (executing_client != NULL) selectDb(executing_client, origin_dbid);
+
+    if (--moduleKeyspaceDispatchDepth == 0 && moduleKeyspaceSubscribersPendingRemoval)
+        moduleFreeRemovedKeyspaceSubscribers();
 
     exitExecutionUnit();
 }
@@ -15853,6 +15937,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(NotifyKeyspaceEvent);
     REGISTER_API(GetNotifyKeyspaceEvents);
     REGISTER_API(SubscribeToKeyspaceEvents);
+    REGISTER_API(UnsubscribeFromKeyspaceEvents);
     REGISTER_API(AddPostNotificationJob);
     REGISTER_API(RegisterClusterMessageReceiver);
     REGISTER_API(SendClusterMessage);

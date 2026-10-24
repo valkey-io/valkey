@@ -14141,6 +14141,7 @@ void moduleUnloadAllModules(void) {
 
         const char *errmsg = NULL;
         if (moduleUnloadInternal(module, &errmsg) == C_ERR) {
+            if (errmsg == NULL) errmsg = "operation not possible.";
             serverLog(LL_WARNING, "Failed to unload module %s: %s", module->name, errmsg);
         }
     }

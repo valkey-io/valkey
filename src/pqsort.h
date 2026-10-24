@@ -30,8 +30,8 @@
  *
  * See the pqsort.c file for the original copyright notice. */
 
-#ifndef __PQSORT_H
-#define __PQSORT_H
+#ifndef VALKEY_PQSORT_H
+#define VALKEY_PQSORT_H
 
 void
 pqsort(void *a, size_t n, size_t es,

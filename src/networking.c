@@ -2426,7 +2426,7 @@ int freeClient(client *c) {
      *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
-    if (server.primary && c->flag.primary) {
+    if (c == server.primary && c->flag.primary) {
         serverLog(LL_NOTICE, "Connection with primary lost.");
         if (!c->flag.dont_cache_primary && !(c->flag.protocol_error || c->flag.blocked)) {
             c->flag.close_asap = 0;
@@ -4883,6 +4883,7 @@ __attribute__((noinline)) static bool readAndDecodePrimaryStream(client *primary
 
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
+    bool was_primary = (c == server.primary);
     /* Check if we can send the client to be handled by the IO-thread */
     if (postponeClientRead(c)) return;
 
@@ -4925,6 +4926,8 @@ void readQueryFromClient(connection *conn) {
                   full_read);
         beforeNextClient(c);
     } while (repeat);
+
+    if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
 }
 
 /* An "Address String" is a colon separated ip:port pair.
@@ -7164,7 +7167,11 @@ int processClientIOReadsDone(client *c) {
     int ret = addCommandToBatchAndProcessIfFull(c);
     /* If the command was not added to the commands batch, process it immediately */
     if (ret == C_ERR) {
-        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+        bool was_primary = c == server.primary;
+        if (processPendingCommandAndInputBuffer(c) == C_OK) {
+            beforeNextClient(c);
+            if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
+        }
     }
     return needs_post_read_update;
 }

@@ -2749,9 +2749,13 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                      * iterating, so explicitly check for equal object. */
                     if (src[j].subject == src[0].subject) {
                         value = zval.score * src[j].weight;
+                        /* As for the first input and in the union case, a NaN
+                         * weighted score (0*inf) counts as 0. */
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else if (zuiFind(&src[j], &zval, &value)) {
                         value *= src[j].weight;
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else {
                         break;
@@ -3220,11 +3224,10 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
                                  long limit,
                                  int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
 
     /* For invalid offset, return directly. */
-    if (offset > 0 && offset >= (long)zsetLength(zobj)) {
+    if (offset < 0 || offset >= (long)zsetLength(zobj)) {
         handler->finalizeResultEmission(handler, 0);
         return;
     }
@@ -3493,8 +3496,13 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                                long limit,
                                int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
+
+    /* For invalid offset, return directly. */
+    if (offset < 0 || offset >= (long)zsetLength(zobj)) {
+        handler->finalizeResultEmission(handler, 0);
+        return;
+    }
 
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);

@@ -3638,12 +3638,22 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
 
     if (!shouldPropagate(target)) return;
 
-    /* Don't propagate commands on slot migration clients, these will be proxied
-     * in replicationFeedStreamFromPrimaryStream().
+    /* Don't propagate what executing a command of a slot import client produces,
+     * the stream of that client will be proxied in commandProcessed().
+     *
+     * Only suppress it while a command is executing: call() sets executing_client
+     * for the whole call tree. Anything propagated while the import client is the
+     * current client but no command is executing (e.g. the evictions done by
+     * performEvictions() in processCommand()) is a decision of this node that is
+     * not part of the proxied stream, so it must reach our replicas like any other
+     * eviction. Note that c->flag.executing_command can't be used instead, it is
+     * cleared before call() propagates the command.
      *
      * However, if we need to propagate to AOF, we should still do that. */
     bool propagate_aof = (target & PROPAGATE_AOF) && server.aof_state != AOF_OFF;
-    if (server.current_client != NULL && server.current_client->slot_migration_job) {
+    client *cc = server.current_client;
+    if (cc != NULL && cc->slot_migration_job && isImportSlotMigrationJob(cc->slot_migration_job) &&
+        server.executing_client != NULL) {
         if (!propagate_aof) return;
         /* Disable propagation to replication (just do the AOF) */
         target &= ~PROPAGATE_REPL;

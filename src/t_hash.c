@@ -843,6 +843,11 @@ robj *hashTypeDup(robj *o) {
         hobj = createObject(OBJ_HASH, ht);
         hobj->encoding = OBJ_ENCODING_HASHTABLE;
 
+        /* Copy logically-expired fields too, like the listpack branch does. A
+         * replica applying the same COPY ignores field expiry and keeps them,
+         * so dropping them here means their deletion is never propagated. The
+         * reaper deletes them from the copy and propagates it. */
+        hashTypeIgnoreTTL(o, true);
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             /* Extract a field-value pair from an original hash object.*/
@@ -858,6 +863,7 @@ robj *hashTypeDup(robj *o) {
                 hashTypeTrackEntry(hobj, entry);
         }
         hashTypeResetIterator(&hi);
+        hashTypeIgnoreTTL(o, false);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -1422,7 +1428,7 @@ void hsetexCommand(client *c) {
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
-    int fields_index = 0;
+    int fields_index = 2; /* Skip the command name and the key. */
     long long num_fields = 0;
     mstime_t when = EXPIRY_NONE;
     int i = 0;
@@ -1682,7 +1688,7 @@ void hgetexCommand(client *c) {
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
-    int fields_index = 0;
+    int fields_index = 2; /* Skip the command name and the key. */
     long long num_fields = -1;
     mstime_t when = EXPIRY_NONE;
     int i = 0;

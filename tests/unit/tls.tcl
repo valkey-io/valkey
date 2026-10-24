@@ -598,6 +598,34 @@ start_server {tags {"tls"}} {
             }
         }
 
+        test {TLS: Auto-reload picks up a certificate appended to the CA bundle} {
+            if {$::tls_module} {
+                # Auto-reload requires built-in TLS
+                skip "Not supported with TLS built as a module"
+            }
+            set orig_ca [lindex [r config get tls-ca-cert-file] 1]
+            set temp_ca "$orig_ca.temp"
+            file copy -force $orig_ca $temp_ca
+
+            try {
+                r CONFIG SET tls-ca-cert-file $temp_ca
+                r CONFIG SET tls-auto-reload-interval 1
+                after 1100
+
+                # Keep the first certificate and append another one, as a CA bundle
+                # gets a new root ahead of a rotation.
+                set loglines [count_log_lines 0]
+                set fd [open $temp_ca a]
+                puts -nonewline $fd [exec cat [format "%s/tests/tls/client.crt" [pwd]]]
+                close $fd
+
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} $loglines 150 100
+            } finally {
+                r CONFIG SET tls-ca-cert-file $orig_ca tls-auto-reload-interval 0
+                file delete -force $temp_ca
+            }
+        }
+
         test {TLS: Auto-reload skips unchanged materials} {
             if {$::tls_module} {
                 # Auto-reload requires built-in TLS

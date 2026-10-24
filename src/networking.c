@@ -4317,9 +4317,11 @@ static int parseMultibulk(client *c,
         } else {
             /* Check if we have space in argv, grow if needed */
             if (*argc >= *argv_len) {
+                int old_len = *argv_len;
                 *argv_len = min(*argv_len < INT_MAX / 2 ? (*argv_len) * 2 : INT_MAX,
                                 *argc + c->multibulklen);
                 *argv = zrealloc(*argv, sizeof(robj *) * (*argv_len));
+                memset(*argv + old_len, 0, sizeof(robj *) * (*argv_len - old_len));
             }
 
             /* Check that what follows argv is a real \r\n */
@@ -4333,7 +4335,9 @@ static int parseMultibulk(client *c,
              * just use the current sds string. */
             if (!is_replicated && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 sdslen(c->querybuf) == (size_t)(c->bulklen + 2)) {
-                (*argv)[(*argc)++] = createObject(OBJ_STRING, c->querybuf);
+                robj *o = createObject(OBJ_STRING, c->querybuf);
+                (*argv)[*argc] = o;
+                (*argc)++;
                 *argv_len_sum += c->bulklen;
                 sdsIncrLen(c->querybuf, -2); /* remove CRLF */
                 /* Assume that if we saw a fat argument we'll see another one
@@ -4341,7 +4345,9 @@ static int parseMultibulk(client *c,
                 c->querybuf = sdsnewlen(SDS_NOINIT, c->bulklen + 2);
                 sdsclear(c->querybuf);
             } else {
-                (*argv)[(*argc)++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
+                robj *o = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
+                (*argv)[*argc] = o;
+                (*argc)++;
                 *argv_len_sum += c->bulklen;
                 c->qb_pos += c->bulklen + 2;
             }

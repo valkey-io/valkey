@@ -2425,6 +2425,7 @@ void initServerConfig(void) {
     int j;
     char *default_bindaddr[CONFIG_DEFAULT_BINDADDR_COUNT] = CONFIG_DEFAULT_BINDADDR;
 
+    server.debug_libbacktrace_wait_iterations = 50;
     initConfigValues();
     updateCachedTime(1);
     server.cmd_time_snapshot = server.mstime;
@@ -3117,7 +3118,6 @@ void initServer(void) {
     server.debug_cluster_disable_reconnection = 0;
     server.debug_cluster_failover_delay = -1;
     server.debug_cluster_failover_epoch = -1;
-    server.debug_libbacktrace_wait_iterations = 50;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;

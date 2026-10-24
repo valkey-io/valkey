@@ -30,12 +30,12 @@ proc check_log_backtrace_for_debug {log_pattern} {
         # the following are skipped since valgrind is slow and a timeout can happen
         if {!$::valgrind} {
             assert_equal [count_log_message 0 "wait_threads(): waiting threads timed out"] 0
+            # make sure the server prints stack trace for all threads. we know 5 threads are idle in bio.c
+            # Search for thread names (bio_*) which appear on all systems, including Alpine where
+            # function names may not be resolved
+            assert_equal [count_log_message 0 "bio_"] 5
             # Accept the explicit symbolization timeout instead of a stack trace.
             if {[count_log_message 0 "libbacktrace symbolization timed out; preceding output may be partial; complete raw trace follows"] == 0} {
-                # make sure the server prints stack trace for all threads. we know 5 threads are idle in bio.c
-                # Search for thread names (bio_*) which appear on all systems, including Alpine where
-                # function names may not be resolved
-                assert_equal [count_log_message 0 "bio_"] 5
                 # Verify at least one stack frame was emitted (format: #<n> 0x...)
                 # This format is specific to libbacktrace; execinfo.h uses a different format
                 if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {

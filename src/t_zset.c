@@ -914,12 +914,6 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
         return 0;
     }
 
-    /* Both encodings store negative zero as positive zero (the listpack keeps
-     * integral scores as integers, the ordered index collapses it in
-     * scoreToSortable()). Do the same here, so that the score reported through
-     * 'newscore' is the score that was stored, and not "-0". */
-    if (score == 0.0) score = 0.0;
-
     /* Update the sorted set according to its encoding. */
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *eptr;
@@ -946,7 +940,9 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                 return 1;
             }
 
-            if (newscore) *newscore = score;
+            /* Report the stored score when it does not change: a legacy listpack
+             * may hold the string "-0", and -0 + 0 is +0 but compares equal. */
+            if (newscore) *newscore = (score == curscore) ? curscore : score;
 
             if (score != curscore) {
                 objectSetVal(zobj, zzlUpdateScore(objectGetVal(zobj), eptr, ele, score, curscore));
@@ -961,7 +957,8 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                 zsetConvertAndExpand(zobj, OBJ_ENCODING_BTREE, zsetLength(zobj) + 1);
             } else {
                 objectSetVal(zobj, zzlInsert(objectGetVal(zobj), ele, score));
-                if (newscore) *newscore = score;
+                /* Negative zero is stored as +0 (integer score entry). */
+                if (newscore) *newscore = (score == 0.0) ? 0.0 : score;
                 *out_flags |= ZADD_OUT_ADDED;
                 return 1;
             }
@@ -1004,7 +1001,8 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                 return 1;
             }
 
-            if (newscore) *newscore = score;
+            /* Report the stored score when it does not change. */
+            if (newscore) *newscore = (score == curscore) ? curscore : score;
 
             /* Remove and re-insert when score changes. */
             if (score != curscore) {
@@ -1018,7 +1016,8 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
             OrderedIndexItem *new_node = orderedIndexInsert(zs->oi, score, ele, sdslen(ele));
             serverAssert(hashtableAdd(zs->ht, new_node));
             *out_flags |= ZADD_OUT_ADDED;
-            if (newscore) *newscore = score;
+            /* Negative zero is collapsed to +0 by scoreToSortable(). */
+            if (newscore) *newscore = (score == 0.0) ? 0.0 : score;
             return 1;
         } else {
             *out_flags |= ZADD_OUT_NOP;

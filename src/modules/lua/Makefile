@@ -66,13 +66,6 @@ else
 OBJS = $(SRCS:.c=.o)
 endif
 
-# OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
-ifeq ($(uname_S),Darwin)
-ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
-	SHOBJ_LDFLAGS+= -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lsystem
-endif
-endif
-
 all: $(LUA_TARGET)
 ifeq ($(BUILD_LUA),module)
 $(LUA_TARGET): $(OBJS) $(LIBS)

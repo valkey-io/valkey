@@ -1852,6 +1852,7 @@ int loadSingleAppendOnlyFile(char *filename) {
                 goto readerr;
             }
         }
+        if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
         if (ch == '#') { /* Skip annotations */
             /* A line without a newline at the end of the file is a torn annotation.
              * Treat it as a short read. Otherwise the next write would be appended

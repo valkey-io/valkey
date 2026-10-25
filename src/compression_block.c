@@ -41,7 +41,6 @@ blockCompressor *blockCompressorCreate(compressionAlgo id, const blockCompressor
     switch (id) {
     case ALGO_LZ4:
         c->api = &blockCompressorApiLz4;
-        c->dict_max_size = BLOCK_COMPRESSOR_LZ4_DICT_MAX;
         break;
     case ALGO_ZSTD:
         /* zstd is not vendored yet, so there is no function table to point at. */

@@ -5,33 +5,22 @@
  */
 
 /* The LZ4 backend for inline in-memory value compression. See
- * compression_block_interface.h for the interface and
- * design-docs/inline-compression.md section 8 for why the interface has this
- * shape.
+ * compression_block_interface.h for the interface.
  *
- * Three choices in this file are worth explaining.
+ * Two choices in this file are worth explaining.
  *
  * 1. We use the LZ4 block API, not lz4frame.
  *    compression_lz4.c uses lz4frame, because the RDB and replication byte stream
  *    needs framing. We do not. The header that the caller stores with each value
- *    (design-docs/inline-compression.md, section 6.4) already holds the
- *    uncompressed length and the dictionary id, and LZ4F_HEADER_SIZE_MAX is 19
+ *    already holds the uncompressed length, and LZ4F_HEADER_SIZE_MAX is 19
  *    bytes. That is a lot next to a 256-byte value, and it would buy nothing.
  *
- * 2. The dictionary is digested once, in dict_load.
- *    LZ4_loadDictSlow builds the match tables, which is the costly part. We pay
- *    it once per dictionary version. Each compress call then calls
- *    LZ4_attach_dictionary, which only points the working stream at the loaded
- *    one. No copy and no table rebuild per value.
- *
- * 3. Every allocation goes through zmalloc, never LZ4's own malloc.
+ * 2. Every allocation goes through zmalloc, never LZ4's own malloc.
  *    This is a memory-saving feature, so all of its memory must show up in
  *    used_memory. compression_lz4.c does the same for lz4frame.
  *
  * Threads: an instance belongs to one thread, so its working stream needs no lock
- * and no atomics. A cdict is read only once dict_load returns, so any number of
- * instances on any number of threads may share one. LZ4_attach_dictionary only
- * writes to the working stream in the instance and only reads the dictionary. */
+ * and no atomics. */
 
 #include "fmacros.h" /* must come before any system header */
 #include "compression_block_interface.h"
@@ -39,7 +28,6 @@
 #include "serverassert.h"
 #include "zmalloc.h"
 #include <limits.h>
-#include <string.h>
 
 #include <lz4.h>
 
@@ -57,15 +45,6 @@ typedef struct lz4State {
     void *cstream_buf;     /* zmalloc'd storage that cstream lives in */
     LZ4_stream_t *cstream; /* working stream, reset before every compress */
 } lz4State;
-
-/* One digested dictionary version. Read only once dict_load returns, so it is
- * shared by every instance on every thread. */
-typedef struct lz4Dict {
-    char *dict;            /* our own copy, at most BLOCK_COMPRESSOR_LZ4_DICT_MAX bytes */
-    int dict_len;          /* length of dict */
-    void *dstream_buf;     /* zmalloc'd storage that dstream lives in */
-    LZ4_stream_t *dstream; /* dict digested by LZ4_loadDictSlow */
-} lz4Dict;
 
 /* Allocates one LZ4_stream_t through zmalloc and initializes it. Returns NULL on
  * failure, and sets *buf_out either way, so the caller can always free it. */
@@ -100,47 +79,6 @@ static void lz4StateFree(blockCompressor *instance) {
     instance->state = NULL;
 }
 
-static void *lz4DictLoad(const void *dict_buf, size_t len) {
-    if (dict_buf == NULL || len < BLOCK_COMPRESSOR_LZ4_DICT_MIN) return NULL;
-
-    /* Keep only the tail LZ4 can actually use. Compression and decompression must
-     * see the same bytes, and both read this one copy, so they cannot disagree. */
-    if (len > BLOCK_COMPRESSOR_LZ4_DICT_MAX) {
-        dict_buf = (const char *)dict_buf + (len - BLOCK_COMPRESSOR_LZ4_DICT_MAX);
-        len = BLOCK_COMPRESSOR_LZ4_DICT_MAX;
-    }
-
-    lz4Dict *d = zcalloc(sizeof(*d));
-    d->dict = zmalloc(len);
-    memcpy(d->dict, dict_buf, len);
-    d->dict_len = (int)len;
-
-    d->dstream = lz4StreamNew(&d->dstream_buf);
-    if (d->dstream == NULL) goto fail;
-
-    /* LZ4_loadDictSlow costs more CPU than LZ4_loadDict but gives a slightly
-     * better ratio. We pay it once and reuse the result for every value, so it is
-     * the right side of that trade. Only LZ4_loadDict and LZ4_loadDictSlow
-     * produce a stream that LZ4_attach_dictionary accepts. */
-    if (LZ4_loadDictSlow(d->dstream, d->dict, d->dict_len) != d->dict_len) goto fail;
-
-    return d;
-
-fail:
-    zfree(d->dstream_buf);
-    zfree(d->dict);
-    zfree(d);
-    return NULL;
-}
-
-static void lz4DictFree(void *cdict) {
-    lz4Dict *d = cdict;
-    if (d == NULL) return;
-    zfree(d->dstream_buf);
-    zfree(d->dict);
-    zfree(d);
-}
-
 static size_t lz4LibMaxOutputSize(size_t input_len) {
     if (input_len == 0 || input_len > (size_t)LZ4_MAX_INPUT_SIZE) return 0;
     int max_size = LZ4_compressBound((int)input_len);
@@ -149,14 +87,12 @@ static size_t lz4LibMaxOutputSize(size_t input_len) {
 }
 
 static size_t lz4Compress(blockCompressor *instance,
-                          void *cdict,
                           const void *src,
                           size_t srclen,
                           void *dst,
                           size_t dstcap) {
     assert(instance != NULL && src != NULL && dst != NULL);
     lz4State *st = instance->state;
-    lz4Dict *d = cdict;
 
     instance->last_error = BLOCK_COMPRESSOR_ERR_NONE;
 
@@ -166,11 +102,9 @@ static size_t lz4Compress(blockCompressor *instance,
     }
     if (dstcap > (size_t)INT_MAX) dstcap = (size_t)INT_MAX;
 
-    /* Reset, then attach. LZ4_attach_dictionary drops the dictionary again at the
-     * end of the next compress call, so both steps belong to every call. Passing
-     * NULL unsets any dictionary, which is the no-dictionary path. */
+    /* Reset before every call, so each value is compressed on its own and no
+     * bytes from the previous value are used as history. */
     LZ4_resetStream_fast(st->cstream);
-    LZ4_attach_dictionary(st->cstream, d != NULL ? d->dstream : NULL);
 
     int written = LZ4_compress_fast_continue(st->cstream,
                                              src,
@@ -191,13 +125,11 @@ static size_t lz4Compress(blockCompressor *instance,
 }
 
 static size_t lz4Decompress(blockCompressor *instance,
-                            void *cdict,
                             const void *body,
                             size_t body_len,
                             void *dst,
                             size_t dstcap) {
     assert(instance != NULL && body != NULL && dst != NULL);
-    lz4Dict *d = cdict;
 
     instance->last_error = BLOCK_COMPRESSOR_ERR_NONE;
 
@@ -208,12 +140,7 @@ static size_t lz4Decompress(blockCompressor *instance,
 
     /* LZ4 decompresses without any scratch, so instance->state is unused here. zstd
      * needs a ZSTD_DCtx, which is why the interface passes the instance. */
-    int written;
-    if (d != NULL) {
-        written = LZ4_decompress_safe_usingDict(body, dst, (int)body_len, (int)dstcap, d->dict, d->dict_len);
-    } else {
-        written = LZ4_decompress_safe(body, dst, (int)body_len, (int)dstcap);
-    }
+    int written = LZ4_decompress_safe(body, dst, (int)body_len, (int)dstcap);
     if (written <= 0) {
         instance->last_error = BLOCK_COMPRESSOR_ERR_DECOMPRESS;
         return 0;
@@ -224,14 +151,7 @@ static size_t lz4Decompress(blockCompressor *instance,
 const blockCompressorApi blockCompressorApiLz4 = {
     .state_new = lz4StateNew,
     .state_free = lz4StateFree,
-    /* No trainer. LZ4 has none of its own and its headers point at Zstandard's
-     * dictionary builder instead. The dictionary layer supplies the bytes. */
-    .train = NULL,
-    .dict_load = lz4DictLoad,
-    .dict_free = lz4DictFree,
     .lib_max_output_size = lz4LibMaxOutputSize,
     .compress = lz4Compress,
     .decompress = lz4Decompress,
-    /* No per-frame library state to drop. */
-    .release = NULL,
 };

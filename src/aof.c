@@ -1774,12 +1774,12 @@ loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). *
     goto cleanup;
 
 readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
-    if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
     if (!feof(fp)) {
         serverLog(LL_WARNING, "Unrecoverable error reading the append only file %s: %s", filename, strerror(errno));
         ret = AOF_FAILED;
         goto cleanup;
     }
+    if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
     goto uxeof;
 
 zeropad: /* The parser reached the zero padding at the end of the file, handle it as a short read. */

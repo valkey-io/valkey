@@ -6,7 +6,7 @@
 
 #include "generated_wrappers.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 extern "C" {
 #include "io_threads.h"
@@ -15,23 +15,21 @@ extern "C" {
 
 /* Each IO thread writes its own counters on every busy loop iteration. These tests
  * check that no two threads' counters, and no main-thread state, share a cache line. */
-class IOThreadsTest : public ::testing::Test {
-  protected:
-    static uintptr_t addr(const void *p) {
-        return reinterpret_cast<uintptr_t>(p);
-    }
-    static uintptr_t cacheLine(const void *p) {
-        return addr(p) / CACHE_LINE_SIZE;
-    }
-};
+static uintptr_t addr(const void *p) {
+    return (uintptr_t)p;
+}
 
-TEST_F(IOThreadsTest, ActiveTimeSlotsAreCacheLineAligned) {
+static uintptr_t cacheLine(const void *p) {
+    return addr(p) / CACHE_LINE_SIZE;
+}
+
+TEST(IOThreadsTest, ActiveTimeSlotsAreCacheLineAligned) {
     for (int id = 0; id < IO_THREADS_MAX_NUM; id++) {
         ASSERT_EQ(addr(testOnlyGetIOThreadActiveTimeSlot(id)) % CACHE_LINE_SIZE, 0u) << "slot " << id;
     }
 }
 
-TEST_F(IOThreadsTest, ActiveTimeSlotsDoNotShareCacheLines) {
+TEST(IOThreadsTest, ActiveTimeSlotsDoNotShareCacheLines) {
     for (int id = 1; id < IO_THREADS_MAX_NUM; id++) {
         ASSERT_EQ(addr(testOnlyGetIOThreadActiveTimeSlot(id)) - addr(testOnlyGetIOThreadActiveTimeSlot(id - 1)),
                   (uintptr_t)CACHE_LINE_SIZE)
@@ -39,7 +37,7 @@ TEST_F(IOThreadsTest, ActiveTimeSlotsDoNotShareCacheLines) {
     }
 }
 
-TEST_F(IOThreadsTest, JobsFinishedCounterHasItsOwnCacheLine) {
+TEST(IOThreadsTest, JobsFinishedCounterHasItsOwnCacheLine) {
     const void *finished = testOnlyGetIOJobsFinishedCounter();
     ASSERT_EQ(addr(finished) % CACHE_LINE_SIZE, 0u);
     ASSERT_NE(cacheLine(finished), cacheLine(testOnlyGetIOJobsSubmittedCounter()));

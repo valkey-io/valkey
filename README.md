@@ -337,7 +337,7 @@ Other options supported by Valkey's `CMake` build system:
 
 ## Special build flags
 
-- `-DBUILD_TLS=<yes|no>` enable TLS build for Valkey. Default: `no`
+- `-DBUILD_TLS=<yes|no|module>` enable TLS build for Valkey. `yes` builds TLS into the server, `module` builds it as a loadable module. Default: `no`
 - `-DBUILD_RDMA=<no|module>` enable RDMA module build (only module mode supported). Default: `no`
 - `-DBUILD_ZSTD=<yes|no>` configure Zstandard streaming compression support. Default: `no`
 - `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`

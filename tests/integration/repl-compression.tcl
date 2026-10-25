@@ -376,6 +376,9 @@ start_server {tags {"repl"} overrides {save ""}} {
         # The cursor advances only on full out_buf drain: pause the replica and
         # uncompressed_bytes must freeze while master_repl_offset grows.
         $primary config set repl-compression lz4
+        # The paused replica cannot send REPLCONF ACK. On a slow runner the
+        # burst can outlast the default repl-timeout and drop the replica.
+        $primary config set repl-timeout 3600
         $primary flushall
 
         start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb}} {
@@ -463,6 +466,7 @@ start_server {tags {"repl"} overrides {save ""}} {
         }
 
         $primary config set repl-compression no
+        $primary config set repl-timeout 60
     }
 
     test {Compressed replica obeys the hard output buffer limit and resynchronizes} {

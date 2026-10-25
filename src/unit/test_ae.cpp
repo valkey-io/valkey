@@ -127,12 +127,35 @@ TEST_F(AeTest, SelectGrowthRespectsBackendLimit) {
     int high_fd_calls = 0;
     ASSERT_EQ(aeCreateFileEvent(loop, highfd, AE_READABLE, aeTestCountFileProc, &high_fd_calls), AE_OK);
     EXPECT_EQ(aeGetSetSize(loop), highfd + 1);
+    aeProcessEvents(loop, AE_FILE_EVENTS | AE_DONT_WAIT);
+    EXPECT_EQ(high_fd_calls, 1);
+
+    aeDeleteFileEvent(loop, highfd, AE_READABLE);
+    close(highfd);
+    highfd = fcntl(pipefds[0], F_DUPFD, FD_SETSIZE - 1);
+    if (highfd == -1) GTEST_SKIP() << "Process file descriptor limit is too low";
+    if (highfd != FD_SETSIZE - 1) GTEST_SKIP() << "Last select file descriptor is already in use";
+    high_fd_calls = 0;
+    ASSERT_EQ(aeCreateFileEvent(loop, highfd, AE_READABLE, aeTestCountFileProc, &high_fd_calls), AE_OK);
+    EXPECT_EQ(aeGetSetSize(loop), FD_SETSIZE);
 
     EXPECT_EQ(aeCreateFileEvent(loop, FD_SETSIZE, AE_READABLE, aeTestFileProc, NULL), AE_ERR);
     EXPECT_EQ(errno, ERANGE);
-    EXPECT_EQ(aeGetSetSize(loop), highfd + 1);
+    EXPECT_EQ(aeGetSetSize(loop), FD_SETSIZE);
     aeProcessEvents(loop, AE_FILE_EVENTS | AE_DONT_WAIT);
     EXPECT_EQ(high_fd_calls, 1);
+}
+
+TEST_F(AeTest, SelectCanCreateLoopAtMaximumCapacity) {
+    if (strcmp(aeGetApiName(), "select")) GTEST_SKIP() << "Requires the select backend";
+    aeEventLoop *max_loop = aeCreateEventLoop(FD_SETSIZE);
+    ASSERT_NE(max_loop, nullptr);
+    EXPECT_EQ(aeGetSetSize(max_loop), FD_SETSIZE);
+    int calls = 0;
+    EXPECT_EQ(aeCreateFileEvent(max_loop, pipefds[0], AE_READABLE, aeTestCountFileProc, &calls), AE_OK);
+    aeProcessEvents(max_loop, AE_FILE_EVENTS | AE_DONT_WAIT);
+    EXPECT_EQ(calls, 1);
+    aeDeleteEventLoop(max_loop);
 }
 
 TEST_F(AeTest, InvalidFileDescriptorsDoNotGrowLoop) {

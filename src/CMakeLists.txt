@@ -122,6 +122,8 @@ if (BUILD_TLS_MODULE)
         target_link_options(${MODULE_NAME} PRIVATE -undefined dynamic_lookup)
     endif ()
     target_link_libraries(${MODULE_NAME} valkey::valkey_tls OpenSSL::SSL)
+    # The static libvalkey archives are linked into a shared object, so they must be PIC
+    set_target_properties(valkey valkey_tls PROPERTIES POSITION_INDEPENDENT_CODE ON)
     set_target_properties(${MODULE_NAME} PROPERTIES PREFIX "")
     valkey_install_bin(${MODULE_NAME})
 endif ()

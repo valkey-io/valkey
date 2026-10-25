@@ -1337,6 +1337,7 @@ start_server {tags {"introspection"}} {
             requirepass
             server-cpulist
             bio-cpulist
+            bio-pool-threads
             aof-rewrite-cpulist
             bgsave-cpulist
             server_cpulist

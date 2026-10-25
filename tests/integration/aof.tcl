@@ -139,6 +139,33 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    ## A partial timestamp annotation and zero padding can be read by one fgets.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "#TS:1628217470"
+    }
+    append_zeroes_to_aof $aof_file 100
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero padded tail: Partial timestamp annotation is truncated before appending" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            set valid_size [string length [formatCommand set foo hello]]
+            assert_equal $valid_size [file size [get_last_incr_aof_path $client]]
+            $client set bar world
+        }
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "Zero padded tail: Command after partial timestamp annotation survives a restart" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "world" [$client get bar]
+        }
+    }
+
     ## A command cut off by the zero padding. Its last argument and CRLF are
     ## all zero bytes, so it parses, but it must not be executed.
     create_aof $aof_dirpath $aof_file {

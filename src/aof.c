@@ -1672,6 +1672,7 @@ int loadSingleAppendOnlyFile(char *filename) {
                 goto readerr;
             }
         }
+        if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
         if (buf[0] == '#') continue; /* Skip annotations */
         if (buf[0] != '*') goto fmterr;
         if (buf[1] == '\0') goto readerr;

@@ -1,7 +1,6 @@
 #include "server.h"
 #include "zmalloc.h"
 #include "script.h"
-#include "bgiteration.h"
 #include <stdatomic.h>
 
 /* Forward declarations from module.h to avoid pulling in full module internals
@@ -496,6 +495,25 @@ void updateFuncStoreBlockingOffsetForWrite(long long blocking_repl_offset) {
 
 /*========================== Command offset calculation ===================== */
 
+/* Destination DB of a COPY command: the last DB option wins, defaulting to the
+ * source DB. Mirrors the argument parsing in copyCommand; returns false when
+ * copyCommand would reject the arguments. */
+static bool getCopyCommandDestDbId(client *c, int *dest_dbid) {
+    *dest_dbid = c->db->id;
+    for (int j = 3; j < c->argc; j++) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) continue;
+        if (!strcasecmp(objectGetVal(c->argv[j]), "db") && j + 1 < c->argc) {
+            int dbid;
+            if (getIntFromObject(c->argv[j + 1], &dbid) != C_OK || dbid < 0 || dbid >= server.dbnum) return false;
+            *dest_dbid = dbid;
+            j++; /* Consume additional arg. */
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
 // Process a single replicating command for consistent write blocking.
 static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) {
     if (!(c->cmd->flags & CMD_WRITE)) {
@@ -524,7 +542,7 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
                 handleUncommittedKeyForClient(c, c->argv[keys[0].pos], server.db[dest_dbid]);
             } else if (c->cmd->proc == copyCommand) {
                 int dest_dbid;
-                if (!getTargetDbIdForCopyCommand(c->argc, c->argv, c->db->id, &dest_dbid)) {
+                if (!getCopyCommandDestDbId(c, &dest_dbid)) {
                     getKeysFreeResult(&result);
                     return -1;
                 }
@@ -582,7 +600,7 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
             }
         } else if (c->cmd->proc == copyCommand) {
             int dest_dbid;
-            if (getTargetDbIdForCopyCommand(c->argc, c->argv, c->db->id, &dest_dbid) && dest_dbid != c->db->id) {
+            if (getCopyCommandDestDbId(c, &dest_dbid) && dest_dbid != c->db->id) {
                 long long offset = getUncommittedKeyOffset(objectGetVal(c->argv[2]), server.db[dest_dbid], server.reply_blocking.previous_acked_offset);
                 if (offset > blocking_repl_offset) blocking_repl_offset = offset;
             }

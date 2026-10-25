@@ -1129,7 +1129,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
 static void zsetScanReferenceCallback(void *privdata, void *entry) {
     scanData *data = privdata;
     data->sampled++;
-    if (data->pattern || !HAS_BUILTIN_PREFETCH) {
+    if (data->pattern) {
         const char *element;
         size_t len;
         orderedIndexItemGetElement(entry, &element, &len);

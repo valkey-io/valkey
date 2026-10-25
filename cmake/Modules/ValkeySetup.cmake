@@ -84,8 +84,9 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
     target_link_libraries(${target} PRIVATE ${libs} ${ld_flags})
     target_link_libraries(${target} PRIVATE valkey::valkey)
-    if (USE_TLS)
-        # Add required libraries needed for TLS
+    if (USE_TLS EQUAL 1)
+        # Add required libraries needed for TLS. When TLS is built as a module only the client tools need them, see
+        # TLS_CLIENT_LIBS below.
         target_link_libraries(${target} PRIVATE OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
@@ -177,6 +178,9 @@ if (BUILD_TLS)
         message(STATUS "Building TLS as a module")
         add_valkey_server_compiler_options("-DUSE_OPENSSL=2")
         set(BUILD_TLS_MODULE 2)
+        # The server loads the module at runtime, but valkey-cli and valkey-benchmark have no module support, so they
+        # link OpenSSL directly. Mirrors TLS_CLIENT_LIBS in the Makefile.
+        set(TLS_CLIENT_LIBS OpenSSL::SSL valkey::valkey_tls)
     elseif (USE_TLS EQUAL 1)
         message(STATUS "Building TLS as builtin")
         add_valkey_server_compiler_options("-DUSE_OPENSSL=1")

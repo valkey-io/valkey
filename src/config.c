@@ -2337,11 +2337,9 @@ static int numericConfigSet(standardConfig *config, sds *argv, int argc, const c
     return (config->flags & VOLATILE_CONFIG) ? 1 : 2;
 }
 
-static sds numericConfigGet(standardConfig *config) {
+/* Formats a numeric config value the way CONFIG GET returns it. */
+static sds numericConfigFormat(standardConfig *config, long long value) {
     char buf[128];
-
-    long long value = 0;
-    GET_NUMERIC_TYPE(value)
 
     if (config->data.numeric.flags & PERCENT_CONFIG && value < 0) {
         int len = ll2string(buf, sizeof(buf), -value);
@@ -2359,6 +2357,12 @@ static sds numericConfigGet(standardConfig *config) {
         ll2string(buf, sizeof(buf), value);
     }
     return sdsnew(buf);
+}
+
+static sds numericConfigGet(standardConfig *config) {
+    long long value = 0;
+    GET_NUMERIC_TYPE(value)
+    return numericConfigFormat(config, value);
 }
 
 static void numericConfigRewrite(standardConfig *config, const char *name, struct rewriteConfigState *state) {
@@ -3882,9 +3886,25 @@ void configHelpCommand(client *c) {
  * CONFIG INFO
  *----------------------------------------------------------------------------*/
 
+/* Returns the config's default value formatted the way CONFIG GET returns it,
+ * so it can be passed back to CONFIG SET. Returns NULL for special configs,
+ * which have no single stored default. */
+static sds configDefaultValue(standardConfig *config) {
+    switch (config->type) {
+    case BOOL_CONFIG: return sdsnew(config->data.yesno.default_value ? "yes" : "no");
+    case STRING_CONFIG: return sdsnew(config->data.string.default_value ? config->data.string.default_value : "");
+    case SDS_CONFIG: return sdsnew(config->data.sds.default_value ? config->data.sds.default_value : "");
+    case ENUM_CONFIG: return configEnumGetName(config->data.enumd.enum_value, config->data.enumd.default_value, !!(config->flags & MULTI_ARG_CONFIG));
+    case NUMERIC_CONFIG: return numericConfigFormat(config, config->data.numeric.default_value);
+    default: return NULL;
+    }
+}
+
 static void addConfigInfoReply(client *c, standardConfig *config) {
+    sds default_value = configDefaultValue(config);
     int fields = 3; /* name, type, flags */
     if (config->alias) fields++;
+    if (default_value) fields++;
     if (config->type == ENUM_CONFIG || config->type == NUMERIC_CONFIG) fields++;
 
     addReplyMapLen(c, fields);
@@ -3922,6 +3942,12 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
     if (config->alias) {
         addReplyBulkCString(c, "alias");
         addReplyBulkCString(c, config->alias);
+    }
+
+    /* Default */
+    if (default_value) {
+        addReplyBulkCString(c, "default");
+        addReplyBulkSds(c, default_value);
     }
 
     /* Values (enum) or Range (numeric) */

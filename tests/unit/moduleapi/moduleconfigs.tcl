@@ -25,6 +25,21 @@ start_server {tags {"modules"}} {
         assert_equal [r config get moduleconfigs.numeric] "moduleconfigs.numeric -1"
     }
 
+    test {CONFIG INFO reports module config defaults} {
+        set defaults [dict create]
+        foreach info [r config info moduleconfigs.*] {
+            dict set defaults [dict get $info name] [dict get $info default]
+        }
+        assert_equal [dict get $defaults moduleconfigs.mutable_bool] "yes"
+        assert_equal [dict get $defaults moduleconfigs.immutable_bool] "no"
+        assert_equal [dict get $defaults moduleconfigs.memory_numeric] "1024"
+        assert_equal [dict get $defaults moduleconfigs.string] "secret password"
+        assert_equal [dict get $defaults moduleconfigs.enum] "one"
+        assert_equal [dict get $defaults moduleconfigs.flags] "one two"
+        assert_equal [dict get $defaults moduleconfigs.numeric] "-1"
+        assert_equal [dict get $defaults moduleconfigs.unsigned_numeric] "1"
+    }
+
     test {Config set commands work} {
         # Make sure that config sets work during runtime
         r config set moduleconfigs.mutable_bool no

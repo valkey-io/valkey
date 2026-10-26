@@ -3150,6 +3150,14 @@ bool hashTypeMayChangeOnDeleteExpired(robj *o, mstime_t now) {
     return set && vsetMayChangeOnRemoveExpired(set, entryGetExpiryVsetFunc, now);
 }
 
+/* Returns true if hashTypeScanDefrag() may change the memory used by the set of
+ * volatile fields of the hash, see vsetMayChangeOnDefrag(). */
+bool hashTypeMayChangeVolatileSetOnDefrag(robj *o) {
+    if (objectGetEncoding(o) != OBJ_ENCODING_HASHTABLE) return false;
+    vset *set = hashTypeGetVolatileSet(o);
+    return set && vsetMayChangeOnDefrag(set);
+}
+
 /* Hashtable scan callback for hash datatype */
 static void defragHashTypeEntry(void *privdata, void *element_ref) {
     entry **entry_ref = (entry **)element_ref;

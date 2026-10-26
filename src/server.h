@@ -3810,6 +3810,7 @@ void hashTypeFreeVolatileSet(robj *o);                                       /* 
 void hashTypeTrackEntry(robj *o, entry *entry);                              /* needed only for rdbLoadObject */
 void hashTypeUpdateVolatileCount(robj *o, long delta);                       /* exported only for rdbLoadObject's HASH_2-to-listpack path */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
+bool hashTypeMayChangeVolatileSetOnDefrag(robj *o);
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 bool hashTypeMayChangeOnDeleteExpired(robj *o, mstime_t now);
 

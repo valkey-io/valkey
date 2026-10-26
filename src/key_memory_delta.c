@@ -129,14 +129,11 @@ static bool valueMayChangeOnRead(robj *val) {
 
 /* Like valueMayChangeOnRead(), for code that resumes the paused rehashing of
  * a value's hashtables (active defrag, background iterations), which doesn't
- * apply to path hashes and lists. Defragmenting a hash with volatile fields
- * also scans the hashtables of its set of volatile fields, which may then
- * shrink. */
+ * apply to path hashes and lists. Defragmenting a hash may also change the
+ * hashtables of its set of volatile fields. */
 static bool valueMayResize(robj *val) {
     if (objectGetType(val) == OBJ_PATH_HASH || objectGetType(val) == OBJ_LIST) return false;
-    if (objectGetType(val) == OBJ_HASH && objectGetEncoding(val) == OBJ_ENCODING_HASHTABLE &&
-        hashTypeHasVolatileFields(val))
-        return true;
+    if (objectGetType(val) == OBJ_HASH && hashTypeMayChangeVolatileSetOnDefrag(val)) return true;
     return valueMayChangeOnRead(val);
 }
 

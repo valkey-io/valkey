@@ -103,5 +103,6 @@ size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc 
 bool vsetMayChangeOnRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
 size_t vsetMemUsage(vset *set);
 size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *));
+bool vsetMayChangeOnDefrag(vset *set);
 
 #endif

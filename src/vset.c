@@ -2533,6 +2533,17 @@ static int defragRaxNode(raxNode **noderef) {
     return 0;
 }
 
+/* Returns true if defragmenting the set with vsetScanDefrag(), or updating the
+ * entries it tracks after the defragmentation moved them, may change its memory
+ * usage. Single, vector and RAX allocations are moved as they are, but the
+ * hashtable buckets of a RAX are pointer sets: an update deletes and re-adds
+ * the moved entry, which may chain or unchain buckets and resize the table, and
+ * vsetScanDefrag() resumes their paused shrinking. The RAX isn't walked to find
+ * such buckets, so that this takes constant time. */
+bool vsetMayChangeOnDefrag(vset *set) {
+    return vsetBucketType(set->bucket) == VSET_BUCKET_RAX;
+}
+
 size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *)) {
     switch (vsetBucketType(set->bucket)) {
     case VSET_BUCKET_NONE:

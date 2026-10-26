@@ -272,6 +272,7 @@ endif ()
 
 # Sanitizer
 if (BUILD_SANITIZER)
+    message(STATUS "Sanitizer to build with is ${BUILD_SANITIZER}")
     # Common CFLAGS
     list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-sanitize-recover=all")
     list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-omit-frame-pointer")

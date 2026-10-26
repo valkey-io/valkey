@@ -19,6 +19,7 @@ nd = "nd"
 [default]
 extend-ignore-re = [
     "SELECTed",
+    "SELECTs",
     "WATCHed",
 ]
 

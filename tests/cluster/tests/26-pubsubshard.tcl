@@ -43,6 +43,29 @@ test "Pub/Sub shard basics" {
     $anotherclient close
 }
 
+test "Oversized SPUBLISH is rejected before local delivery" {
+    set slot [$cluster cluster keyslot "channel.0"]
+    array set publishnode [$cluster masternode_for_slot $slot]
+    set publishclient [redis_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeclient [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+
+    $subscribeclient ssubscribe channel.0
+    $subscribeclient read
+
+    $publishclient debug cluster-publish-message-limit 32
+    catch {$publishclient spublish channel.0 [string repeat x 32]} err
+    $publishclient debug cluster-publish-message-limit 0
+    assert_match {*Publish message is too large for the cluster bus*} $err
+
+    set data [randomValue]
+    $publishclient spublish channel.0 $data
+    set msg [$subscribeclient read]
+    assert_equal $data [lindex $msg 2]
+
+    $publishclient close
+    $subscribeclient close
+}
+
 test "client can't subscribe to multiple shard channels across different slots in same call" {
     catch {$cluster ssubscribe channel.0 channel.1} err
     assert_match {CROSSSLOT Keys*} $err

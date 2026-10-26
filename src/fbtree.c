@@ -1387,12 +1387,6 @@ unsigned long fbtreeNumLeaves(fbtreeIndex *fbt) {
     return fbt->num_leaves;
 }
 
-double fbtreeLoadFactor(fbtreeIndex *fbt) {
-    /* An empty index has no slack to reclaim. */
-    if (fbt->num_leaves == 0) return 1.0;
-    return (double)fbtreeLength(fbt) / ((double)fbt->num_leaves * NODE_SIZE);
-}
-
 void fbtreeResetIterator(fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
     it->fbt = NULL;

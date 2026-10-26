@@ -6035,6 +6035,13 @@ static sds scatteredKey(unsigned int *seed, int *counter) {
     return createString(buf);
 }
 
+/* Leaf fill: items / (leaves * NODE_SIZE). What compaction keeps bounded. */
+static double loadFactor(fbtreeIndex *fbt) {
+    unsigned long leaves = fbtreeNumLeaves(fbt);
+    if (leaves == 0) return 1.0;
+    return (double)fbtreeLength(fbt) / ((double)leaves * NODE_SIZE);
+}
+
 /* Forward iteration must visit items in non-decreasing order. */
 static bool iterationSorted(fbtreeIndex *fbt) {
     fbtreeIterator it;
@@ -6075,7 +6082,7 @@ TEST_F(FbtreeTest, CompactOnScatteredDeletesKeepsLeavesPacked) {
     deleteStrided(parked, parked_items, n, 5, 2);
     deleteStrided(parked, parked_items, n, 5, 4);
     fbtreeSetCompactionAllowed(true);
-    double parked_lf = fbtreeLoadFactor(parked);
+    double parked_lf = loadFactor(parked);
     size_t parked_leaves = fbtreeNumLeaves(parked);
     EXPECT_TRUE(fbtreeDebugValidate(parked, false, NULL, 0));
     fbtreeFree(parked);
@@ -6090,7 +6097,7 @@ TEST_F(FbtreeTest, CompactOnScatteredDeletesKeepsLeavesPacked) {
     /* 60% of the items are gone. Without compaction the leaves stay at ~40%
      * fill; with it every bottom inner node has been re-packed at least once. */
     EXPECT_LT(parked_lf, 0.45);
-    EXPECT_GT(fbtreeLoadFactor(fbt), 0.6);
+    EXPECT_GT(loadFactor(fbt), 0.6);
     EXPECT_LT(fbtreeNumLeaves(fbt) * 3, parked_leaves * 2);
 }
 
@@ -6144,14 +6151,14 @@ TEST_F(FbtreeTest, CompactOnPopMinAndPopMax) {
         zfree(items);
         expectValid();
         size_t sparse_leaves = fbtreeNumLeaves(fbt);
-        ASSERT_LT(fbtreeLoadFactor(fbt), 0.45);
+        ASSERT_LT(loadFactor(fbt), 0.45);
 
         sds popped = end == 0 ? fbtreePopMin(fbt) : fbtreePopMax(fbt);
         ASSERT_NE(popped, nullptr);
         sdsfree(popped);
         expectValid();
         EXPECT_LT(fbtreeNumLeaves(fbt) * 3, sparse_leaves * 2) << "end=" << end;
-        EXPECT_GT(fbtreeLoadFactor(fbt), 0.65) << "end=" << end;
+        EXPECT_GT(loadFactor(fbt), 0.65) << "end=" << end;
         EXPECT_TRUE(iterationSorted(fbt));
 
         /* Draining the rest from that end keeps the structure valid throughout. */
@@ -6202,8 +6209,8 @@ TEST_F(FbtreeTest, CompactOnRangeDelete) {
     }
     expectValid();
     EXPECT_TRUE(iterationSorted(fbt));
-    EXPECT_LT(fbtreeLoadFactor(parked), fbtreeLoadFactor(fbt));
-    EXPECT_GT(fbtreeLoadFactor(fbt), 0.5);
+    EXPECT_LT(loadFactor(parked), loadFactor(fbt));
+    EXPECT_GT(loadFactor(fbt), 0.5);
     fbtreeFree(parked);
 }
 
@@ -6222,7 +6229,7 @@ TEST_F(FbtreeTest, CompactParkedThenResumesOnNextDelete) {
     deleteStrided(fbt, items, n, 2, 0);
     EXPECT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0));
     EXPECT_EQ(fbtreeNumLeaves(fbt), full_leaves) << "parked compaction must not free non-empty leaves";
-    EXPECT_LT(fbtreeLoadFactor(fbt), 0.55);
+    EXPECT_LT(loadFactor(fbt), 0.55);
     fbtreeSetCompactionAllowed(true);
 
     size_t i = 1;
@@ -6230,7 +6237,7 @@ TEST_F(FbtreeTest, CompactParkedThenResumesOnNextDelete) {
     ASSERT_TRUE(fbtreeDelete(fbt, items[i]));
     expectValid();
     EXPECT_LT(fbtreeNumLeaves(fbt) * 3, full_leaves * 2);
-    EXPECT_GT(fbtreeLoadFactor(fbt), 0.65);
+    EXPECT_GT(loadFactor(fbt), 0.65);
     zfree(items);
 }
 
@@ -6255,7 +6262,7 @@ TEST_F(FbtreeTest, CompactDeepTreeParentNotRoot) {
     deleteStrided(fbt, items, n, 5, 4);
     expectValid();
     EXPECT_LT(fbtreeNumLeaves(fbt) * 4, leaves_before * 3);
-    EXPECT_GT(fbtreeLoadFactor(fbt), 0.55);
+    EXPECT_GT(loadFactor(fbt), 0.55);
     EXPECT_GE(fbtreeHeight(fbt), 4u); /* compaction never collapses inner levels */
     EXPECT_TRUE(iterationSorted(fbt));
 

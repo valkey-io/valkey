@@ -680,14 +680,6 @@ size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi) {
     return fbtreeEstimateStructureMemory((fbtreeIndex *)oi);
 }
 
-unsigned long orderedIndexNumLeaves(const OrderedIndex *oi) {
-    return fbtreeNumLeaves((fbtreeIndex *)oi);
-}
-
-double orderedIndexLoadFactor(const OrderedIndex *oi) {
-    return fbtreeLoadFactor((fbtreeIndex *)oi);
-}
-
 void orderedIndexSetCompactionAllowed(int allowed) {
     fbtreeSetCompactionAllowed(allowed != 0);
 }

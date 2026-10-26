@@ -2144,6 +2144,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         }
     }
 
+    /* Commands processed after the delivery of key memory deltas above may
+     * have left tracked keys behind (e.g. lookups by getNodeByQuery() for a
+     * command that isn't executed): deliver them without waiting for events. */
+    if (keyMemoryDeltaHasPending()) dont_sleep = 1;
+
     /* Don't sleep at all before the next beforeSleep() if needed (e.g. a
      * connection has pending data) */
     aeSetDontWait(server.el, dont_sleep);

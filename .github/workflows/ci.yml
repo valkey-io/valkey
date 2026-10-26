@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test-ubuntu-latest:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
@@ -40,7 +40,7 @@ jobs:
           ./src/valkey-unit-tests
 
   test-sanitizer-address:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
@@ -54,7 +54,7 @@ jobs:
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
 
   test-rdma:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
@@ -74,7 +74,7 @@ jobs:
         run: sudo dmesg -c
 
   build-debian-old:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     container: debian:bookworm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -102,7 +102,7 @@ jobs:
           make test-unit
 
   build-32bit:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
@@ -111,14 +111,14 @@ jobs:
           make SERVER_CFLAGS='-Werror' 32bit
 
   build-libc-malloc:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         run: make SERVER_CFLAGS='-Werror' MALLOC=libc
 
   build-almalinux8-jemalloc:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     container: almalinux:8
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -129,7 +129,7 @@ jobs:
           make -j SERVER_CFLAGS='-Werror'
 
   format-yaml:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

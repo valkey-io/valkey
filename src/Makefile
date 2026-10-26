@@ -583,7 +583,7 @@ lcov:
 	$(MAKE) gcov
 	@(set -e; cd ..; ./runtest)
 	@geninfo -o valkey.info .
-	@genhtml --legend -o lcov-html valkey.info
+	@genhtml $(GENHTML_FLAGS) --legend -o lcov-html valkey.info
 
 .PHONY: lcov
 

@@ -72,9 +72,6 @@ static keyMemoryDeltaSnapshot *findSnapshot(serverDb *db, sds key) {
 }
 
 void keyMemoryDeltaTrackSlow(serverDb *db, sds key, robj *val) {
-    /* During an asynchronous load, only the dataset being loaded is reported:
-     * consumers can't tell changes to the dataset it replaces apart. */
-    if (server.async_loading && db == server.db[db->id]) return;
     if (findSnapshot(db, key)) return;
 
     keyMemoryDeltaSnapshot *s = &first;
@@ -174,7 +171,7 @@ void keyMemoryDeltaLoadedSlow(serverDb *db, sds key, robj *val) {
     /* See keyMemoryDeltaFlush(). */
     enterExecutionUnit(0, 0);
     server.lazy_expire_disabled++;
-    moduleNotifyKeyMemoryDelta(db->id, key, 0, bytes, 0, 1);
+    moduleNotifyKeyMemoryDelta(db, key, 0, bytes, 0, 1);
     server.lazy_expire_disabled--;
     exitExecutionUnit();
 }
@@ -229,7 +226,7 @@ void keyMemoryDeltaFlush(void) {
             for (size_t i = 0; i < count; i++) {
                 keyMemoryDeltaSnapshot *s = items[i];
                 if (s->old_exists == s->new_exists && s->old_bytes == s->new_bytes) continue;
-                moduleNotifyKeyMemoryDelta(s->db->id, s->key, s->old_bytes, s->new_bytes, s->old_exists,
+                moduleNotifyKeyMemoryDelta(s->db, s->key, s->old_bytes, s->new_bytes, s->old_exists,
                                            s->new_exists);
             }
         }

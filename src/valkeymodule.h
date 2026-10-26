@@ -916,6 +916,7 @@ typedef struct ValkeyModuleKeyMemoryDelta {
     int32_t dbnum;           /* Database of the key. */
     int32_t old_exists;      /* Non-zero if the key existed before. */
     int32_t new_exists;      /* Non-zero if the key exists after. */
+    int32_t loading_dataset; /* Non-zero if the key belongs to the dataset being loaded by an asynchronous load, not the served one. */
 } ValkeyModuleKeyMemoryDeltaV1;
 
 #define ValkeyModuleKeyMemoryDelta ValkeyModuleKeyMemoryDeltaV1

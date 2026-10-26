@@ -8,7 +8,8 @@
  *
  * Like a real consumer, the module rebuilds the shadow from scratch when a
  * load starts, clears it on FLUSHDB/FLUSHALL, swaps it on SWAPDB, and stages a
- * separate shadow during asynchronous loading.
+ * separate shadow for the dataset being loaded by an asynchronous load, which
+ * replaces the shadow if the load completes.
  *
  * Commands:
  * - KMD.RESET                - clear the shadow, the counters and the log
@@ -77,18 +78,19 @@ static void onKeyMemoryDelta(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t
     VALKEYMODULE_NOT_USED(e);
     VALKEYMODULE_NOT_USED(sub);
     ValkeyModuleKeyMemoryDelta *info = data;
-    if (info->version != VALKEYMODULE_KEYMEMORYDELTA_VERSION || info->dbnum < 0 || info->dbnum >= MAX_DBS) {
+    if (info->version != VALKEYMODULE_KEYMEMORYDELTA_VERSION || info->dbnum < 0 || info->dbnum >= MAX_DBS ||
+        (info->loading_dataset && !async_loading)) {
         chain_errors++;
         return;
     }
 
     size_t len;
     const char *key = ValkeyModule_StringPtrLen(info->key, &len);
-    ValkeyModuleDict *d = (async_loading ? staging : shadow)[info->dbnum];
+    ValkeyModuleDict *d = (info->loading_dataset ? staging : shadow)[info->dbnum];
 
     events++;
     if (loading) loading_events++;
-    if (async_loading) {
+    if (info->loading_dataset) {
         async_events++;
         if (info->old_exists && !info->new_exists) async_deletions++;
     }

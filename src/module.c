@@ -13205,10 +13205,14 @@ static uint64_t moduleEventVersions[] = {
  *
  *     Keys removed or replaced together with a whole database are not
  *     reported, see ValkeyModuleEvent_FlushDB, ValkeyModuleEvent_SwapDB and
- *     ValkeyModuleEvent_ReplAsyncLoad. During an asynchronous load, events only
- *     describe the dataset being loaded, while changes to the dataset being
- *     served are not reported, and opening the key from the callback accesses
- *     the latter. A Loading event doesn't imply an empty dataset: DEBUG RELOAD
+ *     ValkeyModuleEvent_ReplAsyncLoad. During an asynchronous load, events
+ *     describe both datasets: keys of the dataset being loaded are reported
+ *     with loading_dataset set, and changes to the dataset being served, which
+ *     is kept if the load is aborted, with loading_dataset 0. In both cases,
+ *     the database selected in the callback's context is database dbnum of
+ *     the served dataset: opening the key accesses the served dataset, and
+ *     selecting the database creates it in the served dataset if it didn't
+ *     exist. A Loading event doesn't imply an empty dataset: DEBUG RELOAD
  *     NOFLUSH loads on top of it.
  *
  *     The callback must not modify the keyspace: it can use
@@ -13226,6 +13230,9 @@ static uint64_t moduleEventVersions[] = {
  *         int32_t dbnum;           // Database of the key.
  *         int32_t old_exists;      // Non-zero if the key existed before.
  *         int32_t new_exists;      // Non-zero if the key exists after.
+ *         int32_t loading_dataset; // Non-zero if the key belongs to the dataset
+ *                                  // being loaded by an asynchronous load, not
+ *                                  // the served one.
  *
  * * ValkeyModuleEvent_PubSubSubscriptionDelta
  *
@@ -13532,12 +13539,14 @@ void moduleNotifyKeyUnlink(robj *key, robj *val, int dbid, int flags) {
     server.lazy_expire_disabled--;
 }
 
-/* Fire the key memory delta event, see keyMemoryDeltaFlush(). */
-void moduleNotifyKeyMemoryDelta(int dbid, sds key, size_t old_bytes, size_t new_bytes, int old_exists, int new_exists) {
+/* Fire the key memory delta event, see keyMemoryDeltaFlush(). 'db' may be a
+ * database of the dataset being loaded by an asynchronous load. */
+void moduleNotifyKeyMemoryDelta(serverDb *db, sds key, size_t old_bytes, size_t new_bytes, int old_exists, int new_exists) {
     robj keyobj;
     initStaticStringObject(keyobj, key);
-    ValkeyModuleKeyMemoryDeltaV1 info = {VALKEYMODULE_KEYMEMORYDELTA_VERSION, &keyobj, old_bytes, new_bytes, dbid,
+    ValkeyModuleKeyMemoryDeltaV1 info = {VALKEYMODULE_KEYMEMORYDELTA_VERSION, &keyobj, old_bytes, new_bytes, db->id,
                                          old_exists, new_exists};
+    info.loading_dataset = server.db[db->id] != db;
     moduleFireServerEvent(VALKEYMODULE_EVENT_KEY_MEMORY_DELTA, 0, &info);
 }
 

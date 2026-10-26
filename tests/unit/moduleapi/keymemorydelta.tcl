@@ -627,6 +627,53 @@ end)}
                 wait_for_ofs_sync $primary r
                 assert_kmd_consistent
             } {} {needs:debug}
+
+            test {Key memory delta after an aborted asynchronous load} {
+                # As above, with members of the same size, so that sampling
+                # them doesn't make MEMORY USAGE vary.
+                for {set i 0} {$i < 5000} {incr i} {
+                    $primary sadd aborted [format m%05d $i]
+                    if {$i < 200} continue
+                    wait_for_ofs_sync $primary r
+                    if {[string match {*Hash table 1*} [r debug htstats-key aborted full]]} break
+                }
+                assert_kmd_consistent
+
+                # The primary saves keys slowly, so that the load can't complete
+                # before it is aborted below.
+                $primary config set rdb-key-save-delay 2000
+                $primary multi
+                $primary client kill type replica
+                $primary set overrun1 [string repeat o 100000]
+                $primary set overrun2 [string repeat o 100000]
+                $primary del overrun1 overrun2
+                $primary exec
+                wait_for_condition 500 10 {
+                    [s async_loading] eq 1
+                } else {
+                    fail "the replica did not load asynchronously"
+                }
+
+                # Reads complete the rehash of the set in the served dataset,
+                # which the replica keeps when the load is aborted.
+                set usage [r memory usage aborted]
+                r eval_ro {for i = 1, 2000 do redis.call('sismember', KEYS[1], 'm00001') end} 1 aborted
+                assert_lessthan [r memory usage aborted] $usage
+                # Keep the replica from starting another load right away.
+                $primary config set repl-diskless-sync-delay 5
+                $primary client kill type replica
+                wait_for_condition 100 100 {
+                    [s async_loading] eq 0
+                } else {
+                    fail "the asynchronous load was not aborted"
+                }
+                assert_equal 1 [r sismember aborted m00001]
+                r replicaof no one
+                $primary config set rdb-key-save-delay 0
+                $primary config set repl-diskless-sync-delay 0
+                r sadd aborted extra
+                assert_kmd_consistent
+            } {} {needs:debug}
         }
     }
 

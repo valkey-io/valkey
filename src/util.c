@@ -1159,6 +1159,11 @@ int reclaimFilePageCache(int fd, size_t offset, size_t length) {
 #include <sys/mman.h>
 #include "testhelp.h"
 
+#if defined(__linux__)
+#include <sys/statfs.h>
+#include <linux/magic.h>
+#endif
+
 static void test_string2ll(void) {
     char buf[32];
     long long v;
@@ -1391,6 +1396,11 @@ static int cache_exist(int fd) {
 }
 
 static void test_reclaimFilePageCache(void) {
+    struct statfs stats;
+
+    /* fadvise(FADV_DONTNEED) has no effect on memory-backed filesystems */
+    if (statfs("/tmp", &stats) == 0 && stats.f_type == TMPFS_MAGIC) return;
+
     char *tmpfile = "/tmp/redis-reclaim-cache-test";
     int fd = open(tmpfile, O_RDWR|O_CREAT, 0644);
     assert(fd >= 0);

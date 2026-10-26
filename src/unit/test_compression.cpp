@@ -145,6 +145,48 @@ static ssize_t decompressAll(streamDecompressor *decompressor,
     return (ssize_t)output_len;
 }
 
+/* Like decompressAll, but decodes back-to-back frames, resetting the
+ * decompressor after each one as the replica does. Stores the number of
+ * complete frames in *frames. Fails if the input is empty or ends partway
+ * through a frame. */
+static ssize_t decompressAllFrames(streamDecompressor *decompressor,
+                                   const uint8_t *input,
+                                   size_t input_len,
+                                   uint8_t *output,
+                                   size_t output_capacity,
+                                   int *frames) {
+    size_t input_offset = 0;
+    size_t output_len = 0;
+    /* Reset clears frame_done, so track separately whether the last frame
+     * reached its end mark. */
+    bool last_frame_complete = false;
+    *frames = 0;
+
+    while (input_offset < input_len) {
+        size_t consumed = 0;
+        ssize_t produced = streamDecompressorFeed(
+            decompressor, output + output_len, output_capacity - output_len,
+            input + input_offset, input_len - input_offset, &consumed);
+        if (produced < 0 || consumed > input_len - input_offset ||
+            (size_t)produced > output_capacity - output_len) {
+            return -1;
+        }
+        input_offset += consumed;
+        output_len += (size_t)produced;
+        if (decompressor->frame_done) {
+            last_frame_complete = true;
+            (*frames)++;
+            if (streamDecompressorReset(decompressor) != C_OK) return -1;
+        } else if (consumed > 0) {
+            last_frame_complete = false;
+        }
+        if (consumed == 0 && produced == 0) return -1;
+    }
+
+    if (!last_frame_complete) return -1;
+    return (ssize_t)output_len;
+}
+
 /* ===================================================================
  * Streaming compression/decompression tests
  * =================================================================== */
@@ -535,6 +577,53 @@ static void fillRoundTripPayload(uint8_t *payload, size_t len) {
     }
 }
 
+/* Fills len bytes by repeating pattern, giving input that compresses well. */
+static void fillRepeatingPayload(uint8_t *payload, size_t len, const char *pattern) {
+    size_t pattern_len = strlen(pattern);
+    for (size_t i = 0; i < len; i++) payload[i] = (uint8_t)pattern[i % pattern_len];
+}
+
+/* Phases fed in order by encodeLZ4CompressionSwitchRoundTripPayload; true
+ * feeds that phase uncompressed. */
+static const bool uncompressed_feed_phases[] = {false, true, false};
+#define UNCOMPRESSED_FEED_PHASE_COUNT (sizeof(uncompressed_feed_phases) / sizeof(uncompressed_feed_phases[0]))
+
+/* Encodes payload as one LZ4 frame per phase, changing feed_uncompressed only
+ * between frames as the replication writer does. payload_len must split
+ * evenly into the phases; phase_output_len receives each phase's encoded size. */
+static int encodeLZ4CompressionSwitchRoundTripPayload(const uint8_t *payload,
+                                                      size_t payload_len,
+                                                      sds *encoded,
+                                                      size_t *phase_output_len) {
+    *encoded = NULL;
+    if (payload_len % UNCOMPRESSED_FEED_PHASE_COUNT != 0) return C_ERR;
+    size_t phase_len = payload_len / UNCOMPRESSED_FEED_PHASE_COUNT;
+
+    streamCompressor compressor;
+    if (streamCompressorInit(&compressor, ALGO_LZ4, 0, STREAM_CHECKSUM_BLOCK | STREAM_CHECKSUM_CONTENT) == C_ERR)
+        return C_ERR;
+
+    sds output = sdsempty();
+    for (size_t i = 0; i < UNCOMPRESSED_FEED_PHASE_COUNT; i++) {
+        /* Safe to change here: the previous phase closed its frame. */
+        compressor.feed_uncompressed = uncompressed_feed_phases[i];
+        output = sdsMakeRoomFor(output, streamCompressorOutputBound(&compressor, phase_len));
+        ssize_t written = streamCompressorFeed(&compressor, (uint8_t *)output + sdslen(output), sdsavail(output),
+                                               payload + i * phase_len, phase_len, COMPRESS_FLUSH_END);
+        if (written <= 0) {
+            streamCompressorFree(&compressor);
+            sdsfree(output);
+            return C_ERR;
+        }
+        sdsIncrLen(output, written);
+        phase_output_len[i] = (size_t)written;
+    }
+    streamCompressorFree(&compressor);
+    *encoded = output;
+    return C_OK;
+}
+
+
 static int encodeRoundTripPayload(compressionAlgo algo,
                                   testCompressionLayer layer,
                                   const uint8_t *payload,
@@ -727,6 +816,65 @@ TEST(CompressionTest, compressionLayersRoundTrip) {
             zfree(payload);
         }
     }
+}
+
+/* Phase length of 1.5 LZ4 blocks, so each phase ends with a partial block. */
+#define UNCOMPRESSED_FEED_PHASE_LEN (96 * 1024)
+
+/* Compressed and uncompressed frames in one stream decode back to the original
+ * bytes the way a replica decodes them, and only the uncompressed phase skips
+ * compression. */
+TEST(CompressionTest, lz4UncompressedFramesRoundTrip) {
+    const size_t phase_len = UNCOMPRESSED_FEED_PHASE_LEN;
+    const size_t payload_len = UNCOMPRESSED_FEED_PHASE_COUNT * phase_len;
+
+    /* Every phase is compressible, so an uncompressed phase can only come out
+     * unshrunk if compression was really skipped: LZ4 stores incompressible
+     * input by itself, which would hide a missing bypass. Each phase repeats
+     * its own pattern, so a swapped or duplicated frame fails the compare. */
+    const char *phase_patterns[UNCOMPRESSED_FEED_PHASE_COUNT] = {"phase one: valkey replication ",
+                                                                 "phase two: fed uncompressed ",
+                                                                 "phase three: compressible again "};
+    uint8_t *payload = (uint8_t *)zmalloc(payload_len);
+    for (size_t p = 0; p < UNCOMPRESSED_FEED_PHASE_COUNT; p++) {
+        fillRepeatingPayload(payload + p * phase_len, phase_len, phase_patterns[p]);
+    }
+
+    sds encoded = NULL;
+    size_t phase_output_len[UNCOMPRESSED_FEED_PHASE_COUNT];
+    ASSERT_EQ(encodeLZ4CompressionSwitchRoundTripPayload(payload, payload_len, &encoded, phase_output_len), C_OK);
+
+    /* Stored blocks carry the input as-is plus framing, so an uncompressed
+     * phase never shrinks, while the compressed phases around it must. */
+    for (size_t p = 0; p < UNCOMPRESSED_FEED_PHASE_COUNT; p++) {
+        if (uncompressed_feed_phases[p]) {
+            EXPECT_GE(phase_output_len[p], phase_len) << "phase " << p;
+        } else {
+            EXPECT_LT(phase_output_len[p], phase_len) << "phase " << p;
+        }
+    }
+
+    streamDecompressor decompressor;
+    ASSERT_EQ(streamDecompressorInit(&decompressor, ALGO_LZ4, false), C_OK);
+    uint8_t *decoded = (uint8_t *)zmalloc(payload_len);
+    int frames = 0;
+    ssize_t decoded_len = decompressAllFrames(&decompressor, (const uint8_t *)encoded, sdslen(encoded), decoded,
+                                              payload_len, &frames);
+    EXPECT_EQ(decoded_len, (ssize_t)payload_len);
+    EXPECT_EQ(frames, (int)UNCOMPRESSED_FEED_PHASE_COUNT);
+    if (decoded_len == (ssize_t)payload_len) EXPECT_EQ(memcmp(decoded, payload, payload_len), 0);
+
+    /* A stream cut inside the last frame, here before its content checksum,
+     * must not decode as complete. */
+    ASSERT_EQ(streamDecompressorReset(&decompressor), C_OK);
+    EXPECT_EQ(decompressAllFrames(&decompressor, (const uint8_t *)encoded, sdslen(encoded) - 4, decoded,
+                                  payload_len, &frames),
+              -1);
+
+    streamDecompressorFree(&decompressor);
+    zfree(decoded);
+    sdsfree(encoded);
+    zfree(payload);
 }
 
 TEST(CompressionTest, streamReaderClassifiesSourceCallbackFailuresAsIoErrors) {

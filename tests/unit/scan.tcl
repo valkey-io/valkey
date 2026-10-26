@@ -262,6 +262,47 @@ proc test_scan {type} {
         }
     }
 
+    test "{$type} HSCAN hashtable with MATCH, NOVALUES and binary fields" {
+        r del hash
+        set pairs {}
+        set expected [dict create]
+        for {set j 0} {$j < 600} {incr j} {
+            set prefix [expr {$j % 2 ? "m" : "x"}]
+            set field "${prefix}:$j\x00"
+            set value "v:$j:[string repeat x [expr {$j % 3 ? 4 : 200}]]\x00"
+            lappend pairs $field $value
+            if {$j % 2} {dict set expected $field $value}
+        }
+        r hset hash {*}$pairs
+        assert_encoding hashtable hash
+
+        set cursor 0
+        set seen [dict create]
+        while 1 {
+            set reply [r hscan hash $cursor count 100 match "m*"]
+            set cursor [lindex $reply 0]
+            foreach {field value} [lindex $reply 1] {
+                assert_equal [dict get $expected $field] $value
+                dict set seen $field $value
+            }
+            if {$cursor == 0} break
+        }
+        assert_equal [dict size $expected] [dict size $seen]
+
+        set cursor 0
+        set seen [dict create]
+        while 1 {
+            set reply [r hscan hash $cursor count 100 match "m*" novalues]
+            set cursor [lindex $reply 0]
+            foreach field [lindex $reply 1] {
+                assert {[dict exists $expected $field]}
+                dict set seen $field 1
+            }
+            if {$cursor == 0} break
+        }
+        assert_equal [dict size $expected] [dict size $seen]
+    }
+
     foreach enc {listpack btree} {
         test "{$type} ZSCAN with encoding $enc" {
             # Create the Sorted Set

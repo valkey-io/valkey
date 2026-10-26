@@ -221,7 +221,10 @@ end)}
         } {} {needs:debug}
 
         test {Key memory delta tracks write commands that look keys up for reading} {
-            # Keyspace statistics must not depend on the tracking.
+            # Keyspace statistics must not depend on the tracking. GETEX,
+            # HGETEX, XREADGROUP, XACK, XCLAIM and XAUTOCLAIM modify keys they
+            # look up for reading, while other write commands (e.g. SORT with
+            # BY and GET, or SUNIONSTORE) only read some of their keys.
             set commands {
                 {set string value} {getex string EX 100} {getex string PERSIST} {getdel string}
                 {getex missing EX 100} {set string value} {getset string a-value-longer-than-the-previous-one}
@@ -229,6 +232,8 @@ end)}
                 {xadd stream 1-0 a 1} {xgroup create stream group 0} {xreadgroup GROUP group c1 STREAMS stream >}
                 {xack stream group 1-0} {xadd stream 2-0 b 2} {xreadgroup GROUP group c1 STREAMS stream >}
                 {xclaim stream group c2 0 2-0} {xautoclaim stream group c3 0 0-0}
+                {rpush list 3 1 2} {mset w_1 3 w_2 2 w_3 1 o_1 a o_2 b o_3 c}
+                {sort list BY w_* GET o_* STORE sorted} {sadd s1 a b} {sadd s2 b c} {sunionstore union s1 s2}
             }
             set stats {}
             foreach subscribe {kmd.unsubscribe kmd.subscribe} {
@@ -240,6 +245,30 @@ end)}
                 lappend stats [list [expr {[s keyspace_hits] - $hits}] [expr {[s keyspace_misses] - $misses}]]
             }
             assert_equal [lindex $stats 0] [lindex $stats 1]
+            assert_kmd_consistent
+            # The keys only read were reported once, when they were written.
+            foreach key {list w_1 w_2 w_3 o_1 o_2 o_3 s1 s2} {
+                assert_equal 1 [llength [kmd_log_for $key]]
+            }
+            assert_equal {c b a} [r lrange sorted 0 -1]
+
+            # The stream commands always change the size of the stream, and
+            # SORT and SUNIONSTORE only that of their destination.
+            kmd_reset
+            r xadd stream 1-0 a 1
+            r xgroup create stream group 0
+            assert_kmd_events 1 {r xreadgroup GROUP group c1 STREAMS stream >}
+            assert_kmd_events 1 {r xack stream group 1-0}
+            r xadd stream 2-0 b 2
+            r xreadgroup GROUP group c1 STREAMS stream >
+            assert_kmd_events 1 {r xclaim stream group c2 0 2-0}
+            assert_kmd_events 1 {r xautoclaim stream group c3 0 0-0}
+            r rpush list 3 1 2
+            r mset w_1 3 w_2 2 w_3 1 o_1 a o_2 b o_3 c
+            assert_kmd_events 1 {r sort list BY w_* GET o_* STORE sorted}
+            r sadd s1 a b
+            r sadd s2 b c
+            assert_kmd_events 1 {r sunionstore union s1 s2}
             assert_kmd_consistent
 
             # PFCOUNT unshares the string of a freshly loaded HyperLogLog.

@@ -134,15 +134,11 @@ static bool valueMayResize(robj *val) {
     return valueMayChangeOnRead(val);
 }
 
-/* Write lookups are tracked, and so are read lookups done by write commands:
- * some of them (e.g. GETEX, HGETEX or XREADGROUP) look keys up for reading and
- * then modify them. */
+/* Write lookups are tracked, and so are reads that may resize the value. The
+ * few write commands that look a key up for reading and then modify it (GETEX,
+ * HGETEX, XREADGROUP, XACK, XCLAIM and XAUTOCLAIM) track it themselves. */
 void keyMemoryDeltaTrackLookupSlow(serverDb *db, robj *key, robj *val, int flags) {
-    if (!(flags & LOOKUP_WRITE)) {
-        client *c = server.executing_client;
-        bool write_command = c && c->cmd && (c->cmd->flags & CMD_WRITE);
-        if (!write_command && !valueMayChangeOnRead(val)) return;
-    }
+    if (!(flags & LOOKUP_WRITE) && !valueMayChangeOnRead(val)) return;
     keyMemoryDeltaTrackSlow(db, objectGetVal(key), val);
 }
 

@@ -40,6 +40,7 @@
 #include "util.h"
 #include "vset.h"
 #include "server.h"
+#include "key_memory_delta.h"
 #include "zmalloc.h"
 #include <math.h>
 #include <string.h>
@@ -2066,6 +2067,8 @@ void hgetexCommand(client *c) {
     o = lookupKeyRead(c->db, c->argv[1]);
 
     if (checkType(c, o, OBJ_HASH)) return;
+    /* Looked up for reading, but may be modified below. */
+    if (o) keyMemoryDeltaTrackValue(c->db, o);
 
     /* Check if the hash object has volatile fields, used for active-expiry tracking */
     bool has_volatile_fields = hashTypeHasVolatileFields(o);

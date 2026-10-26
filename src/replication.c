@@ -3634,6 +3634,11 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
     return C_OK;
 }
 
+/** Parse the RDB channel's end-offset metadata and prepare both data streams.
+ * Initialize the provisional primary, restart the main channel's handshake for
+ * PSYNC at the snapshot offset, and install the RDB transfer handler. Return
+ * C_OK when ready, C_RETRY for an empty response, or C_ERR for a read/format
+ * failure. The caller must free any non-NULL response returned through err. */
 static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     uint64_t rdb_client_id;
     *err = receiveSynchronousResponse(conn);
@@ -4473,6 +4478,10 @@ int syncWithPrimaryHandleReceiveAuthReplyState(connection *conn) {
     return C_OK;
 }
 
+/** Consume the REPLCONF listening-port reply immediately after authentication.
+ * A negative reply from an older primary is noncritical and does not prevent
+ * synchronization. Free the reply and return C_OK for either server response;
+ * return C_ERR only when the response could not be read. */
 int syncWithPrimaryHandleReceivePortReplyState(connection *conn) {
     sds err = receiveSynchronousResponse(conn);
     if (err == NULL) return C_ERR;

@@ -473,6 +473,9 @@ void debugCommand(client *c) {
 "QUICKLIST-PACKED-THRESHOLD <size>",
 "    Sets the threshold for elements to be inserted as plain vs packed nodes",
 "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
+"CLUSTER-PUBLISH-MESSAGE-LIMIT <size>",
+"    Sets a lower cluster publish payload limit for testing.",
+"    Setting to 0 restores the default.",
 "SET-SKIP-CHECKSUM-VALIDATION <0|1>",
 "    Enables or disables checksum checks for RDB files and RESTORE's payload.",
 "SLEEP <seconds>",
@@ -863,6 +866,17 @@ NULL
         if (memerr || !quicklistisSetPackedThreshold(sz)) {
             addReplyError(c, "argument must be a memory value bigger than 1 and smaller than 4gb");
         } else {
+            addReply(c,shared.ok);
+        }
+    } else if (!strcasecmp(c->argv[1]->ptr,"cluster-publish-message-limit") &&
+               c->argc == 3)
+    {
+        int memerr;
+        unsigned long long sz = memtoull((const char *)c->argv[2]->ptr, &memerr);
+        if (memerr || sz > SIZE_MAX) {
+            addReplyError(c,"argument must be a valid memory value");
+        } else {
+            clusterSetPublishMessageLengthLimitForTesting((size_t)sz);
             addReply(c,shared.ok);
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"set-skip-checksum-validation") &&

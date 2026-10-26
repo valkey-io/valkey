@@ -596,8 +596,12 @@ void punsubscribeCommand(client *c) {
 }
 
 /* This function wraps pubsubPublishMessage and also propagates the message to cluster.
- * Used by the commands PUBLISH/SPUBLISH and their respective module APIs.*/
+ * Used by the commands PUBLISH/SPUBLISH and their respective module APIs.
+ * Returns zero without publishing if the message exceeds the supported cluster
+ * bus publish size. */
 int pubsubPublishMessageAndPropagateToCluster(robj *channel, robj *message, int sharded) {
+    if (server.cluster_enabled && !clusterPublishMessageLengthValid(channel, message)) return 0;
+
     int receivers = pubsubPublishMessage(channel, message, sharded);
     if (server.cluster_enabled)
         clusterPropagatePublish(channel, message, sharded);
@@ -611,6 +615,10 @@ void publishCommand(client *c) {
         return;
     }
 
+    if (server.cluster_enabled && !clusterPublishMessageLengthValid(c->argv[1],c->argv[2])) {
+        addReplyError(c,"Publish message is too large for the cluster bus");
+        return;
+    }
     int receivers = pubsubPublishMessageAndPropagateToCluster(c->argv[1],c->argv[2],0);
     if (!server.cluster_enabled)
         forceCommandPropagation(c,PROPAGATE_REPL);
@@ -701,6 +709,10 @@ void channelList(client *c, sds pat, dict *pubsub_channels) {
 
 /* SPUBLISH <shardchannel> <message> */
 void spublishCommand(client *c) {
+    if (server.cluster_enabled && !clusterPublishMessageLengthValid(c->argv[1],c->argv[2])) {
+        addReplyError(c,"Publish message is too large for the cluster bus");
+        return;
+    }
     int receivers = pubsubPublishMessageAndPropagateToCluster(c->argv[1],c->argv[2],1);
     if (!server.cluster_enabled)
         forceCommandPropagation(c,PROPAGATE_REPL);

@@ -508,13 +508,25 @@ static unsigned char *zzlFind(unsigned char *lp, sds ele, double *score) {
     return NULL;
 }
 
+static uint64_t zzl_mod_count = 0;
+
+uint64_t zzlGetModCount(void) {
+    return __atomic_load_n(&zzl_mod_count, __ATOMIC_RELAXED);
+}
+
+void zzlBumpModCount(void) {
+    __atomic_add_fetch(&zzl_mod_count, 1, __ATOMIC_RELAXED);
+}
+
 /* Delete (element,score) pair from listpack. Use local copy of eptr because we
  * don't want to modify the one given as argument. */
 static unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr) {
+    zzlBumpModCount();
     return lpDeleteRangeWithEntry(zl, &eptr, 2);
 }
 
 static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, const char *ele, size_t ele_len, double score) {
+    zzlBumpModCount();
     unsigned char *sptr;
     char scorebuf[MAX_D2STRING_CHARS];
     int scorelen = 0;
@@ -611,6 +623,7 @@ static unsigned char *zzlUpdateScore(unsigned char *zl, unsigned char *eptr, sds
     }
 
     if (keep_position) {
+        zzlBumpModCount();
         long long lscore;
         if (double2ll(score, &lscore)) {
             zl = lpReplaceInteger(zl, &sptr, lscore);
@@ -635,6 +648,7 @@ static unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range
 
     eptr = zzlFirstInRange(zl, range);
     if (eptr == NULL) return zl;
+    zzlBumpModCount();
 
     /* When the tail of the listpack is deleted, eptr will be NULL. */
     while (eptr && (sptr = lpNext(zl, eptr)) != NULL) {
@@ -661,6 +675,7 @@ static unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *rang
 
     eptr = zzlFirstInLexRange(zl, range);
     if (eptr == NULL) return zl;
+    zzlBumpModCount();
 
     /* When the tail of the listpack is deleted, eptr will be NULL. */
     while (eptr && (sptr = lpNext(zl, eptr)) != NULL) {
@@ -681,6 +696,7 @@ static unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *rang
 /* Delete all the elements with rank between start and end from the listpack.
  * Start and end are inclusive. Note that start and end need to be 1-based */
 unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsigned int end, unsigned long *deleted) {
+    zzlBumpModCount();
     unsigned int num = (end - start) + 1;
     if (deleted) *deleted = num;
     zl = lpDeleteRange(zl, 2 * (start - 1), 2 * num);

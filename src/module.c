@@ -223,18 +223,25 @@ struct ValkeyModuleKey {
         } list;
         struct {
             /* Zset iterator, use only if value->type == OBJ_ZSET */
-            uint32_t type;           /* VALKEYMODULE_ZSET_RANGE_* */
-            zrangespec rs;           /* Score range. */
-            zlexrangespec lrs;       /* Lex range. */
-            uint32_t start;          /* Start pos for positional ranges. */
-            uint32_t end;            /* End pos for positional ranges. */
-            void *current;           /* Zset iterator current node. */
-            OrderedIndexIterator oi; /* OrderedIndex iterator for OBJ_ENCODING_BTREE encoding. */
-            int er;                  /* Zset iterator end reached flag
-                                         (true if end was reached). */
-            int fwd;                 /* The ordered index cursor sits between
-                                         items: 1 when it is just after
-                                         'current', 0 when just before it. */
+            uint32_t type;                      /* VALKEYMODULE_ZSET_RANGE_* */
+            zrangespec rs;                      /* Score range. */
+            zlexrangespec lrs;                  /* Lex range. */
+            uint32_t start;                     /* Start pos for positional ranges. */
+            uint32_t end;                       /* End pos for positional ranges. */
+            sds current;                        /* Current member copy, or NULL when inactive;
+                                                   kept by value to re-seek after mutations. */
+            double score;                       /* Score of 'current' when visited. */
+            uint64_t mod_count;                 /* Stamp of cached cursor's container. */
+            OrderedIndex *btree_oi;             /* Cached B+tree index, or NULL. */
+            OrderedIndexIterator oi;            /* Cached B+tree iterator. */
+            const OrderedIndexItem *btree_item; /* Cached B+tree item. */
+            unsigned char *lp_buf;              /* Cached listpack buffer, or NULL. */
+            unsigned char *lp_eptr;             /* Cached listpack entry. */
+            int er;                             /* Zset iterator end reached flag
+                                                   (true if end was reached). */
+            int fwd;                            /* The ordered index cursor sits between
+                                                   items: 1 when it is just after
+                                                   'btree_item', 0 when just before it. */
         } zset;
         struct {
             /* Stream, use only if value->type == OBJ_STREAM */
@@ -878,6 +885,7 @@ int moduleDelKeyIfEmpty(ValkeyModuleKey *key) {
 
     if (isempty) {
         if (key->iter) moduleFreeKeyIterator(key);
+        if (objectGetType(o) == OBJ_ZSET) VM_ZsetRangeStop(key);
         dbDelete(key->db, key->key);
         key->value = NULL;
         return 1;
@@ -4492,6 +4500,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
 int VM_DeleteKey(ValkeyModuleKey *key) {
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value) {
+        if (objectGetType(key->value) == OBJ_ZSET) VM_ZsetRangeStop(key);
         dbDelete(key->db, key->key);
         key->value = NULL;
     }
@@ -4506,6 +4515,7 @@ int VM_DeleteKey(ValkeyModuleKey *key) {
 int VM_UnlinkKey(ValkeyModuleKey *key) {
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value) {
+        if (objectGetType(key->value) == OBJ_ZSET) VM_ZsetRangeStop(key);
         dbAsyncDelete(key->db, key->key);
         key->value = NULL;
     }
@@ -5169,12 +5179,121 @@ int VM_ZsetScore(ValkeyModuleKey *key, ValkeyModuleString *ele, double *score) {
 
 /* --------------------------------------------------------------------------
  * ## Key API for Sorted Set iterator
+ *
+ * Unmutated scans walk the cached listpack pointer or B+tree leaf cursor in
+ * O(1) per step. If a sorted set is modified while an iterator is active,
+ * VM_ZsetRangeCurrentElement() returns NULL if the current element was removed
+ * or moved out of range (without setting the end-of-range flag), and
+ * VM_ZsetRangeNext() / VM_ZsetRangePrev() re-seek from the saved (score,
+ * member) position to the next or previous element still in range.
  * -------------------------------------------------------------------------- */
 
 void zsetKeyReset(ValkeyModuleKey *key) {
     key->u.zset.type = VALKEYMODULE_ZSET_RANGE_NONE;
     key->u.zset.current = NULL;
+    key->u.zset.score = 0;
+    key->u.zset.mod_count = 0;
+    key->u.zset.btree_oi = NULL;
+    orderedIndexResetIterator(&key->u.zset.oi);
+    key->u.zset.btree_item = NULL;
+    key->u.zset.lp_buf = NULL;
+    key->u.zset.lp_eptr = NULL;
     key->u.zset.er = 1;
+    key->u.zset.fwd = 1;
+}
+
+static void zsetKeyClearFastPath(ValkeyModuleKey *key) {
+    key->u.zset.btree_oi = NULL;
+    orderedIndexResetIterator(&key->u.zset.oi);
+    key->u.zset.btree_item = NULL;
+    key->u.zset.lp_buf = NULL;
+    key->u.zset.lp_eptr = NULL;
+}
+
+static void zsetKeySaveCurrentBytes(ValkeyModuleKey *key, const char *ele, size_t ele_len, double score) {
+    if (key->u.zset.current == NULL) {
+        size_t init_cap = ele_len < 32 ? 32 : ele_len;
+        key->u.zset.current = sdsnewlen(SDS_NOINIT, init_cap);
+        sdssetlen(key->u.zset.current, 0);
+    }
+    key->u.zset.current = sdscpylen(key->u.zset.current, ele, ele_len);
+    key->u.zset.score = score;
+}
+
+static void zsetKeySetCurrentFromListpackScore(ValkeyModuleKey *key, unsigned char *zl, unsigned char *eptr, double score) {
+    unsigned int vlen;
+    long long vlong;
+    unsigned char *vstr = lpGetValue(eptr, &vlen, &vlong);
+    char intbuf[LONG_STR_SIZE];
+    if (vstr == NULL) {
+        vlen = ll2string(intbuf, sizeof(intbuf), vlong);
+        vstr = (unsigned char *)intbuf;
+    }
+    zsetKeySaveCurrentBytes(key, (const char *)vstr, vlen, score);
+    key->u.zset.lp_buf = zl;
+    key->u.zset.lp_eptr = eptr;
+    key->u.zset.btree_oi = NULL;
+    key->u.zset.btree_item = NULL;
+    key->u.zset.mod_count = zzlGetModCount();
+}
+
+static void zsetKeySetCurrentFromListpack(ValkeyModuleKey *key, unsigned char *zl, unsigned char *eptr) {
+    zsetKeySetCurrentFromListpackScore(key, zl, eptr, zzlGetScore(lpNext(zl, eptr)));
+}
+
+static void zsetKeySetCurrentFromBtree(ValkeyModuleKey *key, OrderedIndex *oi, const OrderedIndexItem *item, int fwd) {
+    const char *ele;
+    size_t ele_len;
+    orderedIndexItemGetElement(item, &ele, &ele_len);
+    zsetKeySaveCurrentBytes(key, ele, ele_len, orderedIndexItemGetScore(item));
+    key->u.zset.btree_oi = oi;
+    key->u.zset.btree_item = item;
+    key->u.zset.fwd = fwd;
+    key->u.zset.lp_buf = NULL;
+    key->u.zset.lp_eptr = NULL;
+    key->u.zset.mod_count = orderedIndexGetModCount(oi);
+}
+
+static inline int zsetKeyListpackFastPathValid(ValkeyModuleKey *key) {
+    if (objectGetEncoding(key->value) != OBJ_ENCODING_LISTPACK) return 0;
+    unsigned char *zl = objectGetVal(key->value);
+    return key->u.zset.lp_buf == zl &&
+           key->u.zset.lp_eptr != NULL &&
+           zzlGetModCount() == key->u.zset.mod_count;
+}
+
+static inline int zsetKeyBtreeFastPathValid(ValkeyModuleKey *key) {
+    if (objectGetEncoding(key->value) != OBJ_ENCODING_BTREE) return 0;
+    zset *zs = objectGetVal(key->value);
+    return key->u.zset.btree_oi == zs->oi &&
+           key->u.zset.btree_item != NULL &&
+           orderedIndexGetModCount(zs->oi) == key->u.zset.mod_count;
+}
+
+static int zsetElementInRange(ValkeyModuleKey *key, double score, const char *ele, size_t len) {
+    if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
+        return zsetScoreGteMin(score, &key->u.zset.rs) && zsetScoreLteMax(score, &key->u.zset.rs);
+    } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
+        return zsetLexGteMin(ele, len, &key->u.zset.lrs) && zsetLexLteMax(ele, len, &key->u.zset.lrs);
+    }
+    return 0;
+}
+
+/* Compare a listpack (element, score) pair against a saved (score, ele) key
+ * under sorted-set total order. */
+static int zzlCompareScoreAndElement(unsigned char *eptr, unsigned char *sptr, double score, sds ele) {
+    double escore = zzlGetScore(sptr);
+    if (escore < score) return -1;
+    if (escore > score) return 1;
+    unsigned int vlen;
+    long long vlong;
+    unsigned char *vstr = lpGetValue(eptr, &vlen, &vlong);
+    char buf[LONG_STR_SIZE];
+    if (vstr == NULL) {
+        vlen = ll2string(buf, sizeof(buf), vlong);
+        vstr = (unsigned char *)buf;
+    }
+    return zsetLexCompare((const char *)vstr, vlen, ele);
 }
 
 /* Stop a sorted set iteration. */
@@ -5182,11 +5301,7 @@ void VM_ZsetRangeStop(ValkeyModuleKey *key) {
     if (!key->value || objectGetType(key->value) != OBJ_ZSET) return;
     /* Free resources if needed. */
     if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) zsetFreeLexRange(&key->u.zset.lrs);
-    /* Reset the ordered index iterator if one was active. */
-    if (key->value->encoding == OBJ_ENCODING_BTREE &&
-        key->u.zset.type != VALKEYMODULE_ZSET_RANGE_NONE) {
-        orderedIndexResetIterator(&key->u.zset.oi);
-    }
+    if (key->u.zset.type != VALKEYMODULE_ZSET_RANGE_NONE) sdsfree(key->u.zset.current);
     /* Setup sensible values so that misused iteration API calls when an
      * iterator is not active will result into something more sensible
      * than crashing. */
@@ -5223,13 +5338,19 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
     zrs->maxex = maxex;
 
     if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        key->u.zset.current = first ? zzlFirstInRange(objectGetVal(key->value), zrs) : zzlLastInRange(objectGetVal(key->value), zrs);
+        unsigned char *zl = objectGetVal(key->value);
+        unsigned char *eptr = first ? zzlFirstInRange(zl, zrs) : zzlLastInRange(zl, zrs);
+        if (eptr) zsetKeySetCurrentFromListpack(key, zl, eptr);
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(key->value);
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToScoreRange(&key->u.zset.oi, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
-        key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
-        key->u.zset.fwd = first;
+        OrderedIndexItem *item = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
+        if (item) {
+            zsetKeySetCurrentFromBtree(key, zs->oi, item, first);
+        } else {
+            orderedIndexResetIterator(&key->u.zset.oi);
+        }
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5287,14 +5408,19 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     key->u.zset.er = 0;
 
     if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        key->u.zset.current =
-            first ? zzlFirstInLexRange(objectGetVal(key->value), zlrs) : zzlLastInLexRange(objectGetVal(key->value), zlrs);
+        unsigned char *zl = objectGetVal(key->value);
+        unsigned char *eptr = first ? zzlFirstInLexRange(zl, zlrs) : zzlLastInLexRange(zl, zlrs);
+        if (eptr) zsetKeySetCurrentFromListpack(key, zl, eptr);
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(key->value);
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToLexRange(&key->u.zset.oi, zlrs->min, zlrs->max, zlrs->minex, zlrs->maxex, first ? 0 : -1);
-        key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
-        key->u.zset.fwd = first;
+        OrderedIndexItem *item = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
+        if (item) {
+            zsetKeySetCurrentFromBtree(key, zs->oi, item, first);
+        } else {
+            orderedIndexResetIterator(&key->u.zset.oi);
+        }
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5325,187 +5451,165 @@ int VM_ZsetLastInLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyM
     return zsetInitLexRange(key, min, max, 0);
 }
 
-/* Return the current sorted set element of an active sorted set iterator
- * or NULL if the range specified in the iterator does not include any
- * element. */
+/* Return the current sorted set element of an active sorted set iterator,
+ * or NULL if the range is empty or the current element was removed or moved
+ * out of range. Does not modify the end-of-range flag. */
 ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *score) {
-    ValkeyModuleString *str;
-
     if (!key->value || objectGetType(key->value) != OBJ_ZSET) return NULL;
-    if (key->u.zset.current == NULL) return NULL;
-    if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *eptr, *sptr;
-        eptr = key->u.zset.current;
-        sds ele = lpGetObject(eptr);
-        if (score) {
-            sptr = lpNext(objectGetVal(key->value), eptr);
-            *score = zzlGetScore(sptr);
+    if (!key->u.zset.type || key->u.zset.current == NULL) return NULL;
+
+    double cur_score;
+    if (zsetKeyBtreeFastPathValid(key) || zsetKeyListpackFastPathValid(key)) {
+        cur_score = key->u.zset.score;
+    } else {
+        if (zsetScore(key->value, key->u.zset.current, &cur_score) == C_ERR ||
+            !zsetElementInRange(key, cur_score, key->u.zset.current, sdslen(key->u.zset.current))) {
+            return NULL;
         }
-        str = createObject(OBJ_STRING, ele);
+    }
+    if (score) *score = cur_score;
+    ValkeyModuleString *str = createStringObject(key->u.zset.current, sdslen(key->u.zset.current));
+    autoMemoryAdd(key->ctx, VALKEYMODULE_AM_STRING, str);
+    return str;
+}
+
+/* Advance (reverse == 0) or retreat (reverse == 1) the sorted set iterator.
+ * Uses the cached listpack or B+tree cursor when the container stamp matches,
+ * and falls back to re-seeking from the saved (score, current) key when the
+ * sorted set was modified or converted mid-iteration. */
+static int zsetRangeStep(ValkeyModuleKey *key, int reverse) {
+    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 0;
+    if (!key->u.zset.type || !key->u.zset.current) return 0; /* No active iterator. */
+
+    if (zsetKeyListpackFastPathValid(key)) {
+        unsigned char *zl = key->u.zset.lp_buf;
+        unsigned char *eptr = key->u.zset.lp_eptr;
+        unsigned char *step;
+        if (!reverse) {
+            step = lpNext(zl, eptr);
+            if (step) step = lpNext(zl, step);
+        } else {
+            step = lpPrev(zl, eptr);
+            if (step) step = lpPrev(zl, step);
+        }
+        if (step != NULL) {
+            double s = zzlGetScore(lpNext(zl, step));
+            int in_range = 1;
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
+                in_range = reverse ? zsetScoreGteMin(s, &key->u.zset.rs) : zsetScoreLteMax(s, &key->u.zset.rs);
+            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
+                in_range = reverse ? zzlLexValueGteMin(step, &key->u.zset.lrs) : zzlLexValueLteMax(step, &key->u.zset.lrs);
+            }
+            if (in_range) {
+                zsetKeySetCurrentFromListpackScore(key, zl, step, s);
+                key->u.zset.er = 0;
+                return 1;
+            }
+        }
+        key->u.zset.er = 1;
+        return 0;
+    }
+
+    if (zsetKeyBtreeFastPathValid(key)) {
+        OrderedIndexIterator *oi = &key->u.zset.oi;
+        if (!reverse && !key->u.zset.fwd) {
+            orderedIndexNext(oi);
+            key->u.zset.fwd = 1;
+        } else if (reverse && key->u.zset.fwd) {
+            orderedIndexPrev(oi);
+            key->u.zset.fwd = 0;
+        }
+        OrderedIndexItem *step = reverse ? orderedIndexPrev(oi) : orderedIndexNext(oi);
+        if (step != NULL) {
+            int in_range = 1;
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
+                double s = orderedIndexItemGetScore(step);
+                in_range = reverse ? zsetScoreGteMin(s, &key->u.zset.rs) : zsetScoreLteMax(s, &key->u.zset.rs);
+            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(step, &ele, &ele_len);
+                in_range = reverse ? zsetLexGteMin(ele, ele_len, &key->u.zset.lrs) : zsetLexLteMax(ele, ele_len, &key->u.zset.lrs);
+            }
+            if (in_range) {
+                zsetKeySetCurrentFromBtree(key, key->u.zset.btree_oi, step, !reverse);
+                key->u.zset.er = 0;
+                return 1;
+            }
+            if (reverse)
+                orderedIndexNext(oi);
+            else
+                orderedIndexPrev(oi);
+        }
+        key->u.zset.er = 1;
+        return 0;
+    }
+
+    /* Slow path: the sorted set was mutated since the cursor was cached. */
+    if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(key->value);
+        unsigned char *eptr = lpSeek(zl, reverse ? -2 : 0);
+        unsigned char *sptr = eptr ? lpNext(zl, eptr) : NULL;
+        while (eptr != NULL) {
+            int cmp = zzlCompareScoreAndElement(eptr, sptr, key->u.zset.score, key->u.zset.current);
+            if (reverse ? (cmp < 0) : (cmp > 0)) break;
+            if (reverse)
+                zzlPrev(zl, &eptr, &sptr);
+            else
+                zzlNext(zl, &eptr, &sptr);
+        }
+        if (eptr != NULL) {
+            unsigned int vlen;
+            long long vlong;
+            unsigned char *vstr = lpGetValue(eptr, &vlen, &vlong);
+            char intbuf[LONG_STR_SIZE];
+            if (vstr == NULL) {
+                vlen = ll2string(intbuf, sizeof(intbuf), vlong);
+                vstr = (unsigned char *)intbuf;
+            }
+            double next_score = zzlGetScore(sptr);
+            if (zsetElementInRange(key, next_score, (const char *)vstr, vlen)) {
+                zsetKeySetCurrentFromListpackScore(key, zl, eptr, next_score);
+                key->u.zset.er = 0;
+                return 1;
+            }
+        }
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        const OrderedIndexItem *ln = key->u.zset.current;
-        if (score) *score = orderedIndexItemGetScore(ln);
-        const char *ele;
-        size_t ele_len;
-        orderedIndexItemGetElement(ln, &ele, &ele_len);
-        str = createStringObject(ele, ele_len);
+        zset *zs = objectGetVal(key->value);
+        orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
+        orderedIndexSeekFromKey(&key->u.zset.oi, key->u.zset.score, key->u.zset.current, sdslen(key->u.zset.current), reverse);
+        OrderedIndexItem *item = reverse ? orderedIndexPrev(&key->u.zset.oi) : orderedIndexNext(&key->u.zset.oi);
+        if (item != NULL) {
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement(item, &ele, &ele_len);
+            double item_score = orderedIndexItemGetScore(item);
+            if (zsetElementInRange(key, item_score, ele, ele_len)) {
+                zsetKeySetCurrentFromBtree(key, zs->oi, item, !reverse);
+                key->u.zset.er = 0;
+                return 1;
+            }
+        }
     } else {
         serverPanic("Unsupported zset encoding");
     }
-    autoMemoryAdd(key->ctx, VALKEYMODULE_AM_STRING, str);
-    return str;
+    zsetKeyClearFastPath(key);
+    key->u.zset.er = 1;
+    return 0;
 }
 
 /* Go to the next element of the sorted set iterator. Returns 1 if there was
  * a next element, 0 if we are already at the latest element or the range
  * does not include any item at all. */
 int VM_ZsetRangeNext(ValkeyModuleKey *key) {
-    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 0;
-    if (!key->u.zset.type || !key->u.zset.current) return 0; /* No active iterator. */
-
-    if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = objectGetVal(key->value);
-        unsigned char *eptr = key->u.zset.current;
-        unsigned char *next;
-        next = lpNext(zl, eptr);           /* Skip element. */
-        if (next) next = lpNext(zl, next); /* Skip score. */
-        if (next == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                /* Fetch the next element score for the
-                 * range check. */
-                unsigned char *saved_next = next;
-                next = lpNext(zl, next);          /* Skip next element. */
-                double score = zzlGetScore(next); /* Obtain the next score. */
-                if (!zsetScoreLteMax(score, &key->u.zset.rs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-                next = saved_next;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zzlLexValueLteMax(next, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-            }
-            key->u.zset.current = next;
-            key->u.zset.er = 0;
-            return 1;
-        }
-    } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexIterator *oi = &key->u.zset.oi;
-        /* After a backward step the cursor is before 'current': step over it
-         * first, otherwise 'current' would be returned again. */
-        if (!key->u.zset.fwd) {
-            orderedIndexNext(oi);
-            key->u.zset.fwd = 1;
-        }
-        OrderedIndexItem *next = orderedIndexNext(oi);
-        if (next != NULL) {
-            /* Are we still within the range? */
-            int in_range = 1;
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                in_range = zsetScoreLteMax(orderedIndexItemGetScore(next), &key->u.zset.rs);
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                const char *ele;
-                size_t ele_len;
-                orderedIndexItemGetElement(next, &ele, &ele_len);
-                in_range = zsetLexLteMax(ele, ele_len, &key->u.zset.lrs);
-            }
-            if (!in_range) {
-                orderedIndexPrev(oi); /* Keep the cursor next to 'current'. */
-                next = NULL;
-            }
-        }
-        if (next == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        }
-        key->u.zset.current = next;
-        key->u.zset.er = 0;
-        return 1;
-    } else {
-        serverPanic("Unsupported zset encoding");
-    }
+    return zsetRangeStep(key, 0);
 }
 
 /* Go to the previous element of the sorted set iterator. Returns 1 if there was
  * a previous element, 0 if we are already at the first element or the range
  * does not include any item at all. */
 int VM_ZsetRangePrev(ValkeyModuleKey *key) {
-    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 0;
-    if (!key->u.zset.type || !key->u.zset.current) return 0; /* No active iterator. */
-
-    if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = objectGetVal(key->value);
-        unsigned char *eptr = key->u.zset.current;
-        unsigned char *prev;
-        prev = lpPrev(zl, eptr);           /* Go back to previous score. */
-        if (prev) prev = lpPrev(zl, prev); /* Back to previous ele. */
-        if (prev == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                /* Fetch the previous element score for the
-                 * range check. */
-                unsigned char *saved_prev = prev;
-                prev = lpNext(zl, prev);          /* Skip element to get the score.*/
-                double score = zzlGetScore(prev); /* Obtain the prev score. */
-                if (!zsetScoreGteMin(score, &key->u.zset.rs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-                prev = saved_prev;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zzlLexValueGteMin(prev, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-            }
-            key->u.zset.current = prev;
-            key->u.zset.er = 0;
-            return 1;
-        }
-    } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexIterator *oi = &key->u.zset.oi;
-        /* After a forward step the cursor is after 'current': step back over
-         * it first, otherwise 'current' would be returned again. */
-        if (key->u.zset.fwd) {
-            orderedIndexPrev(oi);
-            key->u.zset.fwd = 0;
-        }
-        OrderedIndexItem *prev = orderedIndexPrev(oi);
-        if (prev != NULL) {
-            /* Are we still within the range? */
-            int in_range = 1;
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                in_range = zsetScoreGteMin(orderedIndexItemGetScore(prev), &key->u.zset.rs);
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                const char *ele;
-                size_t ele_len;
-                orderedIndexItemGetElement(prev, &ele, &ele_len);
-                in_range = zsetLexGteMin(ele, ele_len, &key->u.zset.lrs);
-            }
-            if (!in_range) {
-                orderedIndexNext(oi); /* Keep the cursor next to 'current'. */
-                prev = NULL;
-            }
-        }
-        if (prev == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        }
-        key->u.zset.current = prev;
-        key->u.zset.er = 0;
-        return 1;
-    } else {
-        serverPanic("Unsupported zset encoding");
-    }
+    return zsetRangeStep(key, 1);
 }
 
 /* --------------------------------------------------------------------------

@@ -218,10 +218,11 @@ double zzlGetScore(unsigned char *sptr) {
  * The structural layout (member, score, member, score, ...) must already have
  * been validated by lpValidateIntegrityAndDups. Returns 1 if all scores are
  * valid, 0 if a NAN score is found. This guards against crafted RESTORE
- * payloads: zslInsertNode() asserts the score is not NAN, so a NAN score in a
- * listpack zset would crash the server when it is later converted to a
- * skiplist. The skiplist RDB format rejects NAN scores at load time; this is
- * the equivalent check for the listpack format. */
+ * payloads: the ordered index packs each score into a sortable 8-byte key
+ * and asserts the score is not NAN, so a NAN score in a listpack zset
+ * would crash the server when it is later converted to the ordered index
+ * encoding. The ordered index RDB format rejects NAN scores at
+ * load time; this is the equivalent check for the listpack format. */
 int zzlValidateScores(unsigned char *zl) {
     unsigned char *eptr = lpSeek(zl, 0), *sptr;
     while (eptr != NULL) {
@@ -2186,9 +2187,13 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                      * iterating, so explicitly check for equal object. */
                     if (src[j].subject == src[0].subject) {
                         value = zval.score * src[j].weight;
+                        /* As for the first input and in the union case, a NaN
+                         * weighted score (0*inf) counts as 0. */
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else if (zuiFind(&src[j], &zval, &value)) {
                         value *= src[j].weight;
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else {
                         break;
@@ -3378,7 +3383,7 @@ void genericZpopCommand(client *c,
 
     if (deleted) *deleted = 0;
 
-    /* Check type and break on the first error, otherwise identify candidate. */
+    /* Check type and break on the first error; otherwise, identify candidate. */
     idx = 0;
     while (idx < keyc) {
         key = keyv[idx++];
@@ -3803,7 +3808,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
             /* Try to add the object to the hashtable. If it already exists
-             * free it, otherwise increment the number of objects we have
+             * free it; otherwise, increment the number of objects we have
              * in the result hashtable. */
             sds skey = zsetSdsFromListpackEntry(&key);
             if (!hashtableAdd(ht, skey)) {

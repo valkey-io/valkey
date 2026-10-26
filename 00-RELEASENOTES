@@ -29,7 +29,6 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Clear a stale primary-failure gossip flag on replicas so later failovers don't incorrectly skip the election delay by @charsyam (#4533)
 * Correct `ValkeyModule_FreeModuleUser`, `ValkeyModule_ACLAddLogEntry` and `ValkeyModule_ACLAddLogEntryByUserName` declarations to return int as implemented, fixing undefined behavior on targets with strict call signature checks by @rainsupreme (#4676)
 * valkey-check-aof now recognizes RDB base files with the `VALKEY` signature instead of misreporting a valid multipart AOF as invalid by @sarthakaggarwal97 (#4739)
-* Fix valkey-benchmark spinning on would-block writes, which could starve reply processing and the `--duration` timer by @thweetkomputer (#4567)
 * Fix module commands that access undeclared keys in other slots reading or writing the wrong slot in cluster mode, and aborting in debug builds by @patrickswedish (#4424)
 * Reject relative expire times in `SET`/`GETEX`, `RESTORE`, and `ValkeyModule_SetExpire` that overflow when added to the current time, preventing server aborts from negative expires by @madolson (#4880)
 * `HDEL`, `HGETDEL`, `HPERSIST`, and `HEXPIRE` no longer propagate fields they treat as expired, preventing replica and AOF-reload divergence by @xdk-amz (#4772)

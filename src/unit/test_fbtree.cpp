@@ -6269,16 +6269,126 @@ TEST_F(FbtreeTest, CompactDeepTreeParentNotRoot) {
     zfree(items);
 }
 
+/* Dense runs of keys sharing an 8-byte prefix, as packed zset items do for
+ * equal scores. Leaf boundaries fall inside the runs, so compaction rewrites
+ * exactly the boundaries where shared-prefix handling and anchors matter.
+ * After scattered deletes every survivor must still be found at its own rank
+ * and each prefix group must still answer a value-range count correctly. */
+TEST_F(FbtreeTest, CompactWithDenseSharedPrefixRuns) {
+    const int groups = 4;
+    const int per_group = 1200;
+    const int n = groups * per_group;
+    sds *items = (sds *)zmalloc(n * sizeof(sds));
+    bool *alive = (bool *)zmalloc(n * sizeof(bool));
+
+    /* Insert in a scattered order within each group so items do not simply
+     * append at the right edge. 7919 is prime and larger than per_group, so
+     * (i * 7919) % per_group is a permutation. */
+    for (int g = 0; g < groups; g++) {
+        for (int i = 0; i < per_group; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "PFX%05d%06d", g, (i * 7919) % per_group);
+            items[g * per_group + i] = fbtreeInsert(fbt, createString(buf));
+            alive[g * per_group + i] = true;
+        }
+    }
+    ASSERT_EQ(fbtreeLength(fbt), (unsigned long)n);
+    ASSERT_GE(fbtreeHeight(fbt), 3u);
+    unsigned long leaves_before = fbtreeNumLeaves(fbt);
+
+    /* Delete two of every three items in insertion order, which is scattered
+     * in key order, so every leaf thins without emptying. */
+    for (int i = 0; i < n; i++) {
+        if (i % 3 == 0) continue;
+        ASSERT_TRUE(fbtreeDelete(fbt, items[i]));
+        alive[i] = false;
+    }
+    ASSERT_LT(fbtreeNumLeaves(fbt) * 2, leaves_before) << "compaction did not run";
+    EXPECT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0));
+    EXPECT_TRUE(iterationSorted(fbt));
+
+    unsigned long survivors = 0;
+    for (int i = 0; i < n; i++) {
+        if (!alive[i]) continue;
+        survivors++;
+        long rank = fbtreeGetIndexOfItem(fbt, items[i]);
+        ASSERT_GE(rank, 0) << "survivor " << i << " lost";
+        ASSERT_EQ(fbtreeGetAtRank(fbt, (unsigned long)rank), items[i]) << "survivor " << i;
+    }
+    EXPECT_EQ(fbtreeLength(fbt), survivors);
+
+    /* Each prefix group must still be addressable as a value range. */
+    for (int g = 0; g < groups; g++) {
+        char lo[16], hi[16];
+        snprintf(lo, sizeof(lo), "PFX%05d", g);
+        snprintf(hi, sizeof(hi), "PFX%05d~", g);
+        sds min_val = createString(lo);
+        sds max_val = createString(hi);
+        unsigned long expected = 0;
+        for (int i = g * per_group; i < (g + 1) * per_group; i++) expected += alive[i];
+        EXPECT_EQ(fbtreeCountRangeByValue(fbt, min_val, max_val, 0, 0), expected) << "group " << g;
+        sdsfree(min_val);
+        sdsfree(max_val);
+    }
+
+    zfree(alive);
+    zfree(items);
+}
+
+/* Reference set for the property test: the stored sds pointers the tree must
+ * hold, in no particular order. Pointer identity is enough because the tree
+ * stores the sds it is given and hands that same pointer back from lookups,
+ * pops and the range-delete callback. */
+#define LIVE_SET_CAPACITY 8192
+typedef struct {
+    sds items[LIVE_SET_CAPACITY];
+    int n;
+} liveSet;
+
+static void liveSetAdd(liveSet *s, sds item) {
+    ASSERT_LT(s->n, LIVE_SET_CAPACITY);
+    s->items[s->n++] = item;
+}
+
+static void liveSetRemove(liveSet *s, const_sds item) {
+    for (int i = 0; i < s->n; i++) {
+        if (s->items[i] == item) {
+            s->items[i] = s->items[--s->n];
+            return;
+        }
+    }
+    FAIL() << "removed an item the reference set did not hold";
+}
+
+static void liveSetRemoveCallback(sds item, void *ctx) {
+    liveSetRemove((liveSet *)ctx, item);
+}
+
+/* The tree holds exactly the reference set: the same count, and every
+ * reference item is found at a rank that hands back that same pointer. With
+ * equal counts, n items each at its own rank leaves no room for a stray or
+ * duplicated item, so this is a full content check. */
+static bool treeMatchesLiveSet(fbtreeIndex *fbt, const liveSet *s) {
+    if (fbtreeLength(fbt) != (unsigned long)s->n) return false;
+    for (int i = 0; i < s->n; i++) {
+        long rank = fbtreeGetIndexOfItem(fbt, s->items[i]);
+        if (rank < 0 || fbtreeGetAtRank(fbt, (unsigned long)rank) != s->items[i]) return false;
+    }
+    return true;
+}
+
 /* Random mix of inserts, deletes, pops and range deletes on trees of varied
  * size and shape. Every operation must leave the structure valid, the items
- * conserved and in order. */
+ * in order, and the content equal to a reference set maintained alongside. */
 TEST_F(FbtreeTest, PropertyMutationsWithInlineCompaction) {
     const int NUM_ITERATIONS = 120;
     unsigned int seed = 4526;
     int key_counter = 0;
+    liveSet live;
 
     for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
         fbtreeEmpty(fbt);
+        live.n = 0;
 
         int target_size;
         if (iter < 40) {
@@ -6288,47 +6398,49 @@ TEST_F(FbtreeTest, PropertyMutationsWithInlineCompaction) {
         } else {
             target_size = 1000 + (rand_r(&seed) % 3000);
         }
-        for (int i = 0; i < target_size; i++) fbtreeInsert(fbt, scatteredKey(&seed, &key_counter));
+        for (int i = 0; i < target_size; i++) liveSetAdd(&live, fbtreeInsert(fbt, scatteredKey(&seed, &key_counter)));
         ASSERT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0)) << "iter=" << iter;
 
         int num_ops = 20 + (rand_r(&seed) % 60);
         for (int op = 0; op < num_ops; op++) {
             int op_type = rand_r(&seed) % 6;
             unsigned long len = fbtreeLength(fbt);
-            unsigned long expected_len = len;
 
             if (op_type == 0) {
                 int k = 1 + (int)(rand_r(&seed) % 40);
-                for (int j = 0; j < k; j++) fbtreeInsert(fbt, scatteredKey(&seed, &key_counter));
-                expected_len += k;
+                for (int j = 0; j < k; j++) liveSetAdd(&live, fbtreeInsert(fbt, scatteredKey(&seed, &key_counter)));
             } else if (op_type == 1 && len > 0) {
-                ASSERT_TRUE(fbtreeDelete(fbt, fbtreeGetAtRank(fbt, rand_r(&seed) % len)));
-                expected_len--;
+                const_sds victim = fbtreeGetAtRank(fbt, rand_r(&seed) % len);
+                liveSetRemove(&live, victim);
+                ASSERT_TRUE(fbtreeDelete(fbt, victim));
             } else if (op_type == 2 && len > 0) {
                 sds popped = (rand_r(&seed) % 2) ? fbtreePopMin(fbt) : fbtreePopMax(fbt);
                 ASSERT_NE(popped, nullptr);
+                liveSetRemove(&live, popped);
                 sdsfree(popped);
-                expected_len--;
             } else if (op_type == 3 && len >= 2) {
                 unsigned long start = rand_r(&seed) % len;
                 unsigned long end = start + (rand_r(&seed) % (len - start));
                 if (end >= len) end = len - 1;
-                expected_len -= fbtreeDeleteRangeByRank(fbt, start, end, NULL, NULL);
+                unsigned long deleted = fbtreeDeleteRangeByRank(fbt, start, end, liveSetRemoveCallback, &live);
+                ASSERT_EQ(deleted, end - start + 1) << "op " << op << " iter=" << iter;
             } else if (len > 0) {
                 /* Burst delete: many single deletes clustered in one region, the
                  * shape that leaves near-empty leaves next to full ones. */
                 unsigned long base = rand_r(&seed) % len;
                 for (int k = 0; k < 30 && fbtreeLength(fbt) > 0; k++) {
                     unsigned long r = base < fbtreeLength(fbt) ? base : fbtreeLength(fbt) - 1;
-                    ASSERT_TRUE(fbtreeDelete(fbt, fbtreeGetAtRank(fbt, r)));
-                    expected_len--;
+                    const_sds victim = fbtreeGetAtRank(fbt, r);
+                    liveSetRemove(&live, victim);
+                    ASSERT_TRUE(fbtreeDelete(fbt, victim));
                 }
             }
 
-            ASSERT_EQ(fbtreeLength(fbt), expected_len) << "op " << op << " type=" << op_type << " iter=" << iter;
             ASSERT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0))
                 << "Validation failed after op " << op << " type=" << op_type << " iter=" << iter;
             ASSERT_TRUE(iterationSorted(fbt)) << "op " << op << " type=" << op_type << " iter=" << iter;
+            ASSERT_TRUE(treeMatchesLiveSet(fbt, &live))
+                << "Content differs from the reference set after op " << op << " type=" << op_type << " iter=" << iter;
         }
     }
 }

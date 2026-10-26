@@ -215,6 +215,19 @@ int zset_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* ZSET.ISMEMBER key element
+ *
+ * Calls ValkeyModule_ZsetScore with a NULL score pointer, which only tests
+ * membership. Replies with 1 if the element exists, 0 otherwise.
+ */
+int zset_ismember(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    int found = ValkeyModule_ZsetScore(key, argv[2], NULL) == VALKEYMODULE_OK;
+    return ValkeyModule_ReplyWithLongLong(ctx, found);
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -230,6 +243,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.incrby", zset_incrby, "write",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.ismember", zset_ismember, "readonly",
                                   1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 

@@ -17,7 +17,7 @@ Valkey 7.2.15  -  Released Mon 26 October 2026
 Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
 
 ### Security Fixes
-* GHSA-f4q9-j22m-xqq9: Fix a heap buffer overflow in cluster Pub/Sub message construction that could allow an authenticated client to crash the server or potentially execute arbitrary code by publishing an oversized message. Only affects servers running in cluster mode (#5030)
+* GHSA-f4q9-j22m-xqq9: Fix a heap buffer overflow in cluster Pub/Sub message construction that could allow an authenticated client to crash the server or potentially execute arbitrary code by publishing an oversized message (#5030)
 
 ### Bug Fixes
 * Fix a double-free crash when a module timer callback stops its own timer with `ValkeyModule_StopTimer` by @quanyeyang (#4211)

@@ -548,7 +548,7 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
 }
 
 /* optional callback used defrag each rax element (not including the element pointer itself) */
-typedef void *(raxDefragFunction)(raxIterator *ri, void *privdata);
+typedef void *(raxDefragFunction)(raxIterator * ri, void *privdata);
 
 /* defrag radix tree including:
  * 1) rax struct
@@ -592,6 +592,16 @@ static void *defragStreamConsumerPendingEntry(raxIterator *ri, void *privdata) {
     return newnack;
 }
 
+/* Consumer PEL defrag walk catches most PEL entries, but for any that have been
+ * disowned by XNACK, we need to do those as a callback to the group-level
+ * defragRadixTree. */
+static void *defragStreamGroupPendingEntry(raxIterator *ri, void *privdata) {
+    streamNACK *nack = ri->data;
+    UNUSED(privdata);
+    if (nack->consumer != NULL) return NULL;
+    return activeDefragAlloc(nack);
+}
+
 static void *defragStreamConsumer(raxIterator *ri, void *privdata) {
     streamConsumer *c = ri->data;
     streamCG *cg = privdata;
@@ -612,7 +622,7 @@ static void *defragStreamConsumerGroup(raxIterator *ri, void *privdata) {
     streamCG *cg = ri->data;
     UNUSED(privdata);
     if (cg->consumers) defragRadixTree(&cg->consumers, 0, defragStreamConsumer, cg);
-    if (cg->pel) defragRadixTree(&cg->pel, 0, NULL, NULL);
+    if (cg->pel) defragRadixTree(&cg->pel, 0, defragStreamGroupPendingEntry, NULL);
     return NULL;
 }
 

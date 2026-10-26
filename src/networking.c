@@ -2734,6 +2734,34 @@ static void advanceReplicaReplBufferCursor(client *c, size_t consumed) {
     c->repl_data->ref_block_pos = remaining;
 }
 
+/* Decide whether the next batches on this link are fed uncompressed, from one
+ * fully sent batch of uncompressed_len raw bytes that went out as
+ * compressed_len bytes. Only compressed batches large enough to be
+ * representative are judged: uncompressed batches never shrink, so judging
+ * them would keep compression off forever. After an incompressible batch,
+ * send the next batches uncompressed, then compress one probe batch to check
+ * whether the data has changed. Both size products stay near 100 MiB, well
+ * within size_t. */
+static void updateReplicaCompressionBypass(replicaCompressionState *compression,
+                                           size_t uncompressed_len,
+                                           size_t compressed_len) {
+    bool saved_too_little = compressed_len * 100 > uncompressed_len * (100 - REPL_COMPRESSION_SAVINGS_THRESHOLD_PCT);
+    if (!compression->is_compression_skipped &&
+        uncompressed_len >= REPL_COMPRESSION_SAVINGS_MIN_BATCH_SIZE &&
+        saved_too_little) {
+        compression->is_compression_skipped = true;
+        compression->compression_probe_counter = REPL_COMPRESSION_PROBE_BATCHES;
+    } else if (compression->is_compression_skipped) {
+        if (compression->compression_probe_counter > 0) {
+            compression->compression_probe_counter--;
+        }
+
+        if (compression->compression_probe_counter == 0) {
+            compression->is_compression_skipped = false;
+        }
+    }
+}
+
 static void postWriteToReplica(client *c) {
     replicaCompressionState *compression = c->repl_data->repl_compression;
     if (c->write_flags & WRITE_FLAGS_COMPRESSION_ERROR) {
@@ -2760,6 +2788,10 @@ static void postWriteToReplica(client *c) {
 
             compression->uncompressed_bytes += batch_uncompressed_bytes;
             compression->compressed_bytes += sdslen(compression->out_buf);
+
+            /* feed_uncompressed still holds the mode this batch was sent with. */
+            if (compression->compressor.feed_uncompressed) compression->bypassed_batches++;
+            updateReplicaCompressionBypass(compression, batch_uncompressed_bytes, sdslen(compression->out_buf));
 
             /* Start the next batch. One batch's compressed output is bounded
              * by REPL_COMPRESSION_BATCH_SIZE plus the codec's small
@@ -2871,6 +2903,21 @@ static void writeToReplicaCompressed(client *c) {
         /* Cap this write at the remaining batch budget; the cursor resumes mid-block next cycle. */
         size_t remaining = REPL_COMPRESSION_BATCH_SIZE - batch_uncompressed_bytes;
         if (len > remaining) len = remaining;
+        /* Apply the bypass decision made by postWriteToReplica. The LZ4 block
+         * mode is fixed for a whole frame, so switching between compressed and
+         * uncompressed feeding ends the open frame and the next feed starts a
+         * new one. This runs only once the batch is known to have data, so the
+         * frame end never lands in an otherwise empty batch. */
+        if (streamCodecSupportsUncompressedBlocks(compression->compressor.algo) &&
+            compression->is_compression_skipped != compression->compressor.feed_uncompressed) {
+            if (compression->compressor.stream_started) {
+                if (compressReplicaDataToOutputBuffer(compression, NULL, 0, COMPRESS_FLUSH_END) == C_ERR) {
+                    c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
+                    return;
+                }
+            }
+            compression->compressor.feed_uncompressed = compression->is_compression_skipped;
+        }
         if (compressReplicaDataToOutputBuffer(compression, (const uint8_t *)block->buf + start, len,
                                               COMPRESS_FLUSH_CONTINUE) == C_ERR) {
             c->write_flags |= WRITE_FLAGS_COMPRESSION_ERROR | WRITE_FLAGS_WRITE_ERROR;
@@ -7310,6 +7357,12 @@ void ioThreadWriteToClient(client *c) {
 
 void testOnlyPostWriteToReplica(client *c) {
     postWriteToReplica(c);
+}
+
+void testOnlyUpdateReplicaCompressionBypass(replicaCompressionState *compression,
+                                            size_t uncompressed_len,
+                                            size_t compressed_len) {
+    updateReplicaCompressionBypass(compression, uncompressed_len, compressed_len);
 }
 
 void testOnlyWriteToReplica(client *c) {

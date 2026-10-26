@@ -7046,10 +7046,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     info = sdscatprintf(info,
                                         ",repl_compression=%s"
                                         ",repl_compressed_bytes=%lld"
-                                        ",repl_uncompressed_bytes=%lld",
+                                        ",repl_uncompressed_bytes=%lld"
+                                        ",repl_bypassed_batches=%lld",
                                         compressionAlgoName(replica->repl_data->repl_compression->compressor.algo),
                                         replica->repl_data->repl_compression->compressed_bytes,
-                                        replica->repl_data->repl_compression->uncompressed_bytes);
+                                        replica->repl_data->repl_compression->uncompressed_bytes,
+                                        replica->repl_data->repl_compression->bypassed_batches);
                 }
                 info = sdscat(info, "\r\n");
                 replica_id++;

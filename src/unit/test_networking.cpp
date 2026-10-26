@@ -64,6 +64,9 @@ int clusterSlotStatsEnabled(int slot);
 
 /* Wrapper functions for static functions in networking.c */
 void testOnlyPostWriteToReplica(client *c);
+void testOnlyUpdateReplicaCompressionBypass(replicaCompressionState *compression,
+                                            size_t uncompressed_len,
+                                            size_t compressed_len);
 void testOnlyWriteToReplica(client *c);
 void testOnlyBackupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv);
 size_t testOnlyUpsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available);
@@ -338,6 +341,67 @@ TEST_F(NetworkingTest, TestPostWriteToReplica) {
     listRelease(server.repl_buffer_blocks);
     listRelease(c->reply);
     zfree(c);
+}
+
+/* Feeds one judged batch to the bypass decision. */
+static void bypassBatch(replicaCompressionState *state, size_t uncompressed_len, size_t compressed_len) {
+    testOnlyUpdateReplicaCompressionBypass(state, uncompressed_len, compressed_len);
+}
+
+TEST_F(NetworkingTest, TestReplicaCompressionBypassDecision) {
+    const size_t batch = REPL_COMPRESSION_BATCH_SIZE;
+    /* Random values still shrink slightly (RESP framing): 0.9996 of raw. */
+    const size_t incompressible = batch / 10000 * 9996;
+    const size_t compressible = batch / 5;
+    /* Stored batches come out slightly larger than raw. */
+    const size_t stored = batch + 64;
+    replicaCompressionState *state = (replicaCompressionState *)zcalloc(sizeof(*state));
+
+    /* Compressible batches keep compression on. */
+    for (int i = 0; i < 20; i++) bypassBatch(state, batch, compressible);
+    ASSERT_FALSE(state->is_compression_skipped);
+
+    /* An incompressible batch starts the bypass, which lasts exactly
+     * REPL_COMPRESSION_PROBE_BATCHES batches. Those batches are not judged,
+     * however badly they compress. */
+    bypassBatch(state, batch, incompressible);
+    ASSERT_TRUE(state->is_compression_skipped);
+    ASSERT_EQ(state->compression_probe_counter, REPL_COMPRESSION_PROBE_BATCHES);
+    for (int i = 1; i < REPL_COMPRESSION_PROBE_BATCHES; i++) {
+        bypassBatch(state, batch, stored);
+        ASSERT_TRUE(state->is_compression_skipped) << "bypassed batch " << i;
+    }
+    bypassBatch(state, batch, stored);
+    ASSERT_FALSE(state->is_compression_skipped) << "the next batch must be a probe";
+
+    /* A probe that still saves too little restarts the bypass. */
+    bypassBatch(state, batch, incompressible);
+    ASSERT_TRUE(state->is_compression_skipped);
+    ASSERT_EQ(state->compression_probe_counter, REPL_COMPRESSION_PROBE_BATCHES);
+
+    /* A probe that compresses well keeps compression on. */
+    for (int i = 0; i < REPL_COMPRESSION_PROBE_BATCHES; i++) bypassBatch(state, batch, stored);
+    ASSERT_FALSE(state->is_compression_skipped);
+    bypassBatch(state, batch, compressible);
+    ASSERT_FALSE(state->is_compression_skipped);
+
+    /* Batches below the minimum size are never judged. */
+    const size_t small = REPL_COMPRESSION_SAVINGS_MIN_BATCH_SIZE - 1;
+    bypassBatch(state, small, small);
+    ASSERT_FALSE(state->is_compression_skipped);
+    bypassBatch(state, REPL_COMPRESSION_SAVINGS_MIN_BATCH_SIZE, REPL_COMPRESSION_SAVINGS_MIN_BATCH_SIZE);
+    ASSERT_TRUE(state->is_compression_skipped) << "a batch at the minimum size is judged";
+
+    /* Exactly at the threshold counts as saving enough; one byte more does not. */
+    zfree(state);
+    state = (replicaCompressionState *)zcalloc(sizeof(*state));
+    const size_t at_threshold = batch / 100 * (100 - REPL_COMPRESSION_SAVINGS_THRESHOLD_PCT);
+    bypassBatch(state, batch / 100 * 100, at_threshold);
+    ASSERT_FALSE(state->is_compression_skipped);
+    bypassBatch(state, batch / 100 * 100, at_threshold + 1);
+    ASSERT_TRUE(state->is_compression_skipped);
+
+    zfree(state);
 }
 
 TEST_F(NetworkingTest, TestBackupAndUpdateClientArgv) {

@@ -1307,17 +1307,33 @@ typedef struct ClientPubSubData {
 /* Bound compression work and staging memory for one write dispatch. */
 #define REPL_COMPRESSION_BATCH_SIZE (1024 * 1024)
 
+/* A compressed batch saving less than this percentage of its raw size is
+ * treated as incompressible. The threshold sits well above zero because RESP
+ * framing still compresses slightly when the values themselves are random. */
+#define REPL_COMPRESSION_SAVINGS_THRESHOLD_PCT 4
+
+/* Batches sent uncompressed after an incompressible batch before compressing
+ * one probe batch to check whether the workload has become compressible. */
+#define REPL_COMPRESSION_PROBE_BATCHES 8
+
+/* Batches smaller than this are not judged: a few KiB say little about the
+ * workload, and fixed per-block and frame-header overhead dominates them. */
+#define REPL_COMPRESSION_SAVINGS_MIN_BATCH_SIZE (4 * 1024)
+
 /* Primary-side compression state for one replica link. */
 typedef struct replicaCompressionState {
-    streamCompressor compressor;     /* Codec state retained across replication write batches. */
-    bool envelope_written;           /* The VCS envelope is emitted once per link. */
-    sds out_buf;                     /* Compressed bytes waiting for the socket. */
-    size_t out_buf_pos;              /* Next byte to send from out_buf. */
-    size_t batch_uncompressed_bytes; /* Backlog bytes represented by out_buf. */
-    size_t frame_uncompressed_bytes; /* Raw bytes accumulated in the current codec frame. */
-    size_t frame_max_bytes;          /* Close a frame at this raw-byte threshold, or 0 to keep it open. */
-    long long compressed_bytes;      /* Completed batches, for INFO replication. */
-    long long uncompressed_bytes;    /* Completed batches, for INFO replication. */
+    streamCompressor compressor;       /* Codec state retained across replication write batches. */
+    bool envelope_written;             /* The VCS envelope is emitted once per link. */
+    sds out_buf;                       /* Compressed bytes waiting for the socket. */
+    size_t out_buf_pos;                /* Next byte to send from out_buf. */
+    size_t batch_uncompressed_bytes;   /* Backlog bytes represented by out_buf. */
+    size_t frame_uncompressed_bytes;   /* Raw bytes accumulated in the current codec frame. */
+    size_t frame_max_bytes;            /* Close a frame at this raw-byte threshold, or 0 to keep it open. */
+    long long compressed_bytes;        /* Completed batches, for INFO replication. */
+    long long uncompressed_bytes;      /* Completed batches, for INFO replication. */
+    long long bypassed_batches;        /* Completed batches sent uncompressed, for INFO replication. */
+    bool is_compression_skipped;       /* Feed batches uncompressed until the next probe batch. */
+    uint8_t compression_probe_counter; /* Uncompressed batches left before the next probe batch. */
 } replicaCompressionState;
 
 typedef struct ClientReplicationData {

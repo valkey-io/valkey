@@ -72,7 +72,7 @@ permissions:
   pull-requests: read
 jobs:
   test-ubuntu-jemalloc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # pull_request gate breakdown:
     # 1) (base != unstable) OR PR currently has run-extra-tests.
     # 2) Exclude all labeled events, except unstable + newly added run-extra-tests.
@@ -227,7 +227,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-s390x:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -268,7 +268,7 @@ jobs:
               exit 1
             fi
   test-ubuntu-jemalloc-fortify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -335,7 +335,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-libc-malloc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -387,7 +387,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-no-malloc-usable-size:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -439,7 +439,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-32bit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -524,7 +524,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-tls:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -581,7 +581,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-tls-no-tls:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -638,7 +638,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-io-threads:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -684,7 +684,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-tls-io-threads:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -733,7 +733,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-reclaim-cache:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -769,7 +769,7 @@ jobs:
       - name: make
         run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: "sudo apt-get install vmtouch\nmkdir /tmp/master \nmkdir /tmp/slave\n"
+        run: "sudo apt-get install vmtouch\nmkdir -p ${RUNNER_TEMP}/master \nmkdir -p ${RUNNER_TEMP}/slave\n"
       - name: warm up
         run: |
           ./src/valkey-server --daemonize yes --logfile /dev/null
@@ -781,13 +781,13 @@ jobs:
           echo "test SAVE doesn't increase cache"
           CACHE0=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
           echo "$CACHE0"
-          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080 --repl-diskless-sync no --pidfile /tmp/master/valkey.pid --rdbcompression no --enable-debug-command yes
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir ${RUNNER_TEMP}/master --port 8080 --repl-diskless-sync no --pidfile ${RUNNER_TEMP}/master/valkey.pid --rdbcompression no --enable-debug-command yes
           sleep 1 # wait for server startup
           ./src/valkey-cli -p 8080 debug populate 10000 k 102400
-          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/slave --port 8081 --repl-diskless-load disabled --rdbcompression no
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir ${RUNNER_TEMP}/slave --port 8081 --repl-diskless-load disabled --rdbcompression no
           sleep 1 # wait for server startup
           ./src/valkey-cli -p 8080 save > /dev/null
-          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/master/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
           CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
@@ -797,10 +797,10 @@ jobs:
           ./src/valkey-cli -p 8081 REPLICAOF 127.0.0.1 8080 > /dev/null
           while [ $(./src/valkey-cli -p 8081 info replication | grep "master_link_status:down") ]; do sleep 1; done;
           sleep 1 # wait for the completion of cache reclaim bio
-          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/master/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
-          VMOUT=$(vmtouch -v /tmp/slave/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/slave/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
           CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
@@ -808,21 +808,21 @@ jobs:
           if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
 
           echo "test reboot doesn't increase cache"
-          PID=$(cat /tmp/master/valkey.pid)
+          PID=$(cat ${RUNNER_TEMP}/master/valkey.pid)
           kill -15 $PID
           while [ -x /proc/${PID} ]; do sleep 1; done
-          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir ${RUNNER_TEMP}/master --port 8080
           sleep 1 # wait for server startup
           while [ $(./src/valkey-cli -p 8080 info persistence | grep "loading:1") ]; do sleep 1; done;
           sleep 1 # wait for the completion of cache reclaim bio
-          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/master/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
           CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
           echo "$CACHE"
           if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
   test-valgrind-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -865,7 +865,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-misc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -920,7 +920,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-no-malloc-usable-size-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -963,7 +963,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-no-malloc-usable-size-misc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1018,7 +1018,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-sanitizer-address:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1091,7 +1091,7 @@ jobs:
   # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
   # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-address-large-memory:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1173,7 +1173,7 @@ jobs:
         with:
           job-name: ${{ github.job }}-${{ matrix.compiler }}
   test-sanitizer-undefined:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1246,7 +1246,7 @@ jobs:
   # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
   # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-undefined-large-memory:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1328,7 +1328,7 @@ jobs:
         with:
           job-name: ${{ github.job }}-${{ matrix.compiler }}
   test-sanitizer-force-defrag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1394,7 +1394,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-lttng:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1477,7 +1477,7 @@ jobs:
           - name: test-fedorarawhide-jemalloc
             container: fedora:rawhide
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ${{ matrix.container }}
     timeout-minutes: 1440
     steps:
@@ -1554,7 +1554,7 @@ jobs:
           - name: test-fedorarawhide-tls-module
             container: fedora:rawhide
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ${{ matrix.container }}
     timeout-minutes: 1440
     steps:
@@ -1631,7 +1631,7 @@ jobs:
           - name: test-fedorarawhide-tls-module-no-tls
             container: fedora:rawhide
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ${{ matrix.container }}
     timeout-minutes: 1440
     steps:
@@ -1855,7 +1855,7 @@ jobs:
       - name: make
         run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
   test-freebsd:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1894,7 +1894,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-alpine-jemalloc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1949,7 +1949,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-alpine-libc-malloc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -2004,7 +2004,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-alpine-32bit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -2085,7 +2085,7 @@ jobs:
           job-name: ${{ github.job }}
 
   reply-schemas-validator:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 1440
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -2143,7 +2143,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   consolidate-test-failures:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: |
       always() &&
       (github.event_name == 'workflow_dispatch' ||
@@ -2249,7 +2249,7 @@ jobs:
             }
             console.log('Done. Individual artifacts deleted.');
   notify-about-job-results:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: always() && github.event_name == 'schedule' && github.repository == 'valkey-io/valkey'
     needs:
       - test-ubuntu-jemalloc

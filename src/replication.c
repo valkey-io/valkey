@@ -3483,6 +3483,10 @@ int sendCurrentOffsetToReplica(client *replica) {
     return C_OK;
 }
 
+/** Send AUTH using explicit byte lengths so credentials may contain NUL or CRLF.
+ * A NULL user selects the password-only form for the default user. The caller
+ * retains the credential buffers. Return NULL on a successful send or an owned
+ * SDS error that the caller must free; this function does not read the reply. */
 sds replicationSendAuth(connection *conn, const char *user, size_t user_len, const char *pass, size_t pass_len) {
     char *args[] = {"AUTH", NULL, NULL};
     size_t lens[] = {4, 0, 0};
@@ -4338,6 +4342,10 @@ int syncWithPrimaryHandleConnectingState(connection *conn) {
     return C_OK;
 }
 
+/** Validate the primary's initial PING reply before sending authentication.
+ * Accept a positive reply or an authentication/permission error, including the
+ * legacy error text, because AUTH has not yet been attempted. Free the response
+ * and return C_OK to continue; return C_ERR for read failures or other replies. */
 int syncWithPrimaryHandleReceivePingReplyState(connection *conn) {
     sds err = receiveSynchronousResponse(conn);
 
@@ -4540,6 +4548,10 @@ int syncWithPrimaryHandleReceiveNodeIDReplyState(connection *conn) {
     return C_OK;
 }
 
+/** Send the main channel's PSYNC request after handshake negotiation.
+ * Honor the one-shot debug pause before sending. Return C_OK when the request
+ * was written so the caller can await its reply; on a write error, abort any
+ * failover, log the failure, and return C_ERR for handshake cleanup. */
 int syncWithPrimaryHandleSendPsyncState(connection *conn) {
     /* Debug hook: pause the replica right before it sends PSYNC to its
      * primary, so a test can put the primary into a transient (e.g. BUSY)

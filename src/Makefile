@@ -512,7 +512,7 @@ lcov:
 	$(MAKE) gcov
 	@(set -e; cd ..; ./runtest)
 	@geninfo -o redis.info .
-	@genhtml --legend -o lcov-html redis.info
+	@genhtml $(GENHTML_FLAGS) --legend -o lcov-html redis.info
 
 .PHONY: lcov
 

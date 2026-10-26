@@ -4223,7 +4223,26 @@ void clusterBroadcastPong(int target) {
     dictReleaseIterator(di);
 }
 
-/* Create a PUBLISH message block.
+static size_t cluster_publish_message_length_limit = 0;
+
+void clusterSetPublishMessageLengthLimitForTesting(size_t limit) {
+    cluster_publish_message_length_limit = limit;
+}
+
+int clusterPublishMessageLengthValid(robj *channel, robj *message) {
+    size_t channel_len = stringObjectLen(channel);
+    size_t message_len = stringObjectLen(message);
+    size_t max_payload_len = (size_t)UINT32_MAX - offsetof(clusterMsgSendBlock, data) - CLUSTERMSG_MIN_LEN -
+                             offsetof(clusterMsgDataPublish, bulk_data);
+
+    if (cluster_publish_message_length_limit && cluster_publish_message_length_limit < max_payload_len)
+        max_payload_len = cluster_publish_message_length_limit;
+
+    return channel_len <= max_payload_len && message_len <= max_payload_len - channel_len;
+}
+
+/* Create a PUBLISH message block, or return NULL if it exceeds the supported
+ * cluster bus publish size.
  *
  * Sanitizer suppression: In clusterMsgDataPublish, sizeof(bulk_data) is 8.
  * As all the struct is used as a buffer, when more than 8 bytes are copied into
@@ -4231,13 +4250,14 @@ void clusterBroadcastPong(int target) {
  * positive in this context. */
 VALKEY_NO_SANITIZE("bounds")
 clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, int is_light, int is_sharded) {
-    uint32_t channel_len, message_len;
     uint16_t type = is_sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH;
+
+    if (!clusterPublishMessageLengthValid(channel, message)) return NULL;
 
     channel = getDecodedObject(channel);
     message = getDecodedObject(message);
-    channel_len = sdslen(channel->ptr);
-    message_len = sdslen(message->ptr);
+    size_t channel_len = sdslen(channel->ptr);
+    size_t message_len = sdslen(message->ptr);
     size_t msglen;
 
     if (is_light) {
@@ -4258,10 +4278,10 @@ clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, 
         clusterMsg *hdr = getMessageFromSendBlock(msgblock);
         hdr_data_msg = &hdr->data.publish.msg;
     }
-    hdr_data_msg->channel_len = htonl(channel_len);
-    hdr_data_msg->message_len = htonl(message_len);
-    memcpy(hdr_data_msg->bulk_data, channel->ptr, sdslen(channel->ptr));
-    memcpy(hdr_data_msg->bulk_data + sdslen(channel->ptr), message->ptr, sdslen(message->ptr));
+    hdr_data_msg->channel_len = htonl((uint32_t)channel_len);
+    hdr_data_msg->message_len = htonl((uint32_t)message_len);
+    memcpy(hdr_data_msg->bulk_data, channel->ptr, channel_len);
+    memcpy(hdr_data_msg->bulk_data + channel_len, message->ptr, message_len);
 
     decrRefCount(channel);
     decrRefCount(message);
@@ -4373,6 +4393,7 @@ int clusterSendModuleMessageToTarget(const char *target,
 void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
     clusterMsgSendBlock *msgblock, *msgblock_light;
     msgblock_light = clusterCreatePublishMsgBlock(channel, message, 1, sharded);
+    if (msgblock_light == NULL) return;
     /* We will only create msgblock with normal hdr if there are any nodes that do not support light hdr */
     msgblock = NULL;
     ClusterNodeIterator iter;

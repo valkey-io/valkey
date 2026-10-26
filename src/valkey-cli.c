@@ -7367,18 +7367,15 @@ assign_replicas:
                 zfree(err);
         }
         clusterManagerLogInfo(">>> Nodes configuration updated\n");
-        clusterManagerEnsureProtocolDetected(listFirst(cluster_manager.nodes)->value);
-        if (cluster_manager.protocol != CLUSTER_MANAGER_PROTOCOL_RAFT) {
-            clusterManagerLogInfo(">>> Assign a different config epoch to "
-                                  "each node\n");
-            int config_epoch = 1;
-            listRewind(cluster_manager.nodes, &li);
-            while ((ln = listNext(&li)) != NULL) {
-                clusterManagerNode *node = ln->value;
-                valkeyReply *reply = NULL;
-                reply = CLUSTER_MANAGER_COMMAND(node, "cluster set-config-epoch %d", config_epoch++);
-                if (reply != NULL) freeReplyObject(reply);
-            }
+        clusterManagerLogInfo(">>> Assign a different config epoch to "
+                              "each node\n");
+        int config_epoch = 1;
+        listRewind(cluster_manager.nodes, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            clusterManagerNode *node = ln->value;
+            valkeyReply *reply = NULL;
+            reply = CLUSTER_MANAGER_COMMAND(node, "cluster set-config-epoch %d", config_epoch++);
+            if (reply != NULL) freeReplyObject(reply);
         }
         clusterManagerLogInfo(">>> Sending CLUSTER MEET messages to join "
                               "the cluster\n");

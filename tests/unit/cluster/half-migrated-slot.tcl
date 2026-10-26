@@ -7,8 +7,7 @@
 
 source tests/support/cluster_util.tcl
 
-# Raft: slot migration / SETSLOT NODE paths differ; CLI fix is covered in cluster-raft-cli.tcl.
-start_cluster 2 0 {tags {external:skip cluster cluster-raft:skip}} {
+start_cluster 2 0 {tags {external:skip cluster}} {
 
 config_set_all_nodes cluster-allow-replica-migration no
 
@@ -44,6 +43,15 @@ test "Half init migration in 'importing' is fixable" {
     assert_equal "xyz" [$cluster get aga]
 }
 
+test "Uncovered slot is reassigned by cluster fix" {
+    reset_cluster
+    assert_equal {OK} [$nodefrom(link) cluster delslots 609]
+    fix_cluster $nodefrom(addr)
+    $cluster set aga xyz
+}
+
+# Remaining cases use MIGRATE / SETSLOT NODE. Those paths are not yet
+# stored in the Raft log (#3865) and fail independently of --cluster fix.
 test "Init migration and move key" {
     assert_equal {OK} [$nodefrom(link) cluster setslot 609 migrating $nodeto(id)]
     assert_equal {OK} [$nodeto(link) cluster setslot 609 importing $nodefrom(id)]
@@ -52,7 +60,7 @@ test "Init migration and move key" {
     assert_equal "xyz" [$cluster get aga]
     fix_cluster $nodefrom(addr)
     assert_equal "xyz" [$cluster get aga]
-}
+} {} {cluster-raft:skip}
 
 reset_cluster
 
@@ -63,14 +71,14 @@ test "Move key again" {
     assert_equal {OK} [$nodefrom(link) migrate $nodeto(host) $nodeto(port) aga 0 10000]
     wait_for_cluster_propagation
     assert_equal "xyz" [$cluster get aga]
-}
+} {} {cluster-raft:skip}
 
 test "Half-finish migration" {
     # half finish migration on 'migrating' node
     assert_equal {OK} [$nodefrom(link) cluster setslot 609 node $nodeto(id)]
     fix_cluster $nodefrom(addr)
     assert_equal "xyz" [$cluster get aga]
-}
+} {} {cluster-raft:skip}
 
 reset_cluster
 
@@ -80,14 +88,14 @@ test "Move key back" {
     assert_equal {OK} [$nodeto(link) cluster setslot 609 importing $nodefrom(id)]
     assert_equal {OK} [$nodefrom(link) migrate $nodeto(host) $nodeto(port) aga 0 10000]
     assert_equal "xyz" [$cluster get aga]
-}
+} {} {cluster-raft:skip}
 
 test "Half-finish importing" {
     # Now we half finish 'importing' node
     assert_equal {OK} [$nodeto(link) cluster setslot 609 node $nodeto(id)]
     fix_cluster $nodefrom(addr)
     assert_equal "xyz" [$cluster get aga]
-}
+} {} {cluster-raft:skip}
 
 config_set_all_nodes cluster-allow-replica-migration yes
 

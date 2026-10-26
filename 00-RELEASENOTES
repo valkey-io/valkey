@@ -11,6 +11,29 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 8.0.12  -  Released Mon 26 October 2026
+----------------------------------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
+
+### Security Fixes
+* GHSA-f4q9-j22m-xqq9: Fix a heap buffer overflow in cluster Pub/Sub message construction that could allow an authenticated client to potentially execute arbitrary code by publishing an oversized message by @roshkhatri (#5030)
+
+### Bug Fixes
+* Fix stream commands that mutate consumer-group or PEL state (`XGROUP`, `XSETID`, `XREADGROUP`, `XACK`, `XCLAIM`, `XAUTOCLAIM`) not triggering `WATCH` and client-side tracking invalidation by @Tarte12 (#3459)
+* Fix a server abort on a RESTORE payload declaring a string length that overflows the allocation size; such payloads are now rejected as bad data by @enjoy-binbin (#4733)
+* Reject module write commands while the server is paused for writes, preventing a crash from module timer callbacks during `CLIENT PAUSE WRITE` or `CLUSTER FAILOVER` by @smkher (#3645)
+* Fix ZINTER/ZINTERSTORE returning input-order-dependent scores when a weighted term is 0*inf; a NaN weighted score now counts as 0, matching ZUNION by @leomurillo (#4997)
+* Correct `ValkeyModule_FreeModuleUser`, `ValkeyModule_ACLAddLogEntry` and `ValkeyModule_ACLAddLogEntryByUserName` declarations to return int as implemented, fixing undefined behavior on targets with strict call signature checks by @rainsupreme (#4676)
+* Fix valkey-benchmark spinning on would-block writes, which could starve reply processing and the `--duration` timer by @thweetkomputer (#4567)
+* Fix a huge memory allocation when a command such as COMMAND GETKEYS EVAL declares a far larger key count than the arguments provided by @murphyjacob4 (#3598)
+* Reject relative expire times in `SET`/`GETEX`, `RESTORE`, and `ValkeyModule_SetExpire` that overflow when added to the current time, preventing server aborts from negative expires by @madolson (#4880)
+* Fix a server crash when loading an ACL file containing a selector with an unmatched parenthesis by @magic-peach (#4214)
+* Sorted set range commands with a negative `LIMIT` offset now return an empty result instead of a spurious element on btree-encoded keys by @xiaocj (#4637)
+* Redact error text in server logs when `hide-user-data-from-log` is enabled, so command arguments no longer leak into logs by @zackcam (#4815)
+* Fix cluster config saving to avoid publishing truncated `nodes.conf` files, losing the startup lock after the first save, and failing every save on SMB filesystems such as Azure Files; the lock now lives on a separate `nodes.conf.lock` file by @KewangZhili (#4489)
+* Fix `LSET` on 64-bit builds silently modifying the wrong element for out-of-range indexes instead of returning an index out of range error by @charsyam (#4823)
+
 Valkey 8.0.11  -  Released Mon 31 August 2026
 ---------------------------------------------
 
@@ -659,11 +682,14 @@ We appreciate the efforts of all who contributed code to this release!
 
 ### Contributors
 * abmathur-ie @abmathur-ie
+* Akanksha Trehun @magic-peach
 * Amit Nagler @naglera
 * bandalgomsu @bandalgomsu
+* Bara' Hasheesh @Baraa-Hasheesh
 * Binbin @enjoy-binbin
 * Björn Svensson @bjosv
 * Brennan @BCathcart
+* charsyam @charsyam
 * Chen Tianjie @CharlesChen888
 * chenshi @chenshi5012
 * chzhoo @chzhoo
@@ -685,6 +711,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Harkrishn Patro @hpatro
 * Harry Lin @harrylin98
 * Hassaan Khan @hqkhan
+* Himangshu Deka @KewangZhili
 * Hwang Si Yeon @lowgiant
 * Ian Slang
 * ICHINOSE Shogo @shogo82148
@@ -696,6 +723,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Jacob Murphy @murphyjacob4
 * Jason Elbaum @jhelbaum
 * Jeff Liu @LiuLiujie
+* Jerry Zhao @thweetkomputer
 * jjuleslasarte @jjuleslasarte
 * Joe Hu @jowhuw
 * John Sully @JohnSully
@@ -711,8 +739,10 @@ We appreciate the efforts of all who contributed code to this release!
 * Karthick Ariyaratnam @karthyuom
 * Karthik Subbarao @KarthikSubbarao
 * kell0gg @kell0gg
+* KimHuiSu @Tarte12
 * Kyle Kim @kyle-yh-kim
 * Leibale Eidelman @leibale
+* Leo Murillo @leomurillo
 * LiiNen @LiiNen
 * Lior Kogan @LiorKogan
 * Lior Lahav @llahav-amzn
@@ -745,6 +775,7 @@ We appreciate the efforts of all who contributed code to this release!
 * pkhartsk @pkhartsk
 * pshankinclarke @pshankinclarke
 * Quanye Yang @quanyeyang
+* Rain Valentine @rainsupreme
 * Ran Shidlansik @ranshid
 * Rick Ramsay @rickrams
 * Ronen Kalish @ronen-kalish
@@ -780,6 +811,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Wen Hui @hwware
 * Wenwen Chen @Wenwen-Chen
 * xbasel @xbasel
+* xiaocj @xiaocj
 * Yaacov Hazan @YaacovHazan
 * Yang Zhao @yang-z-o
 * Yanqi Lv @lyq2333

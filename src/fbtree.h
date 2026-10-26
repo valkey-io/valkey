@@ -29,6 +29,13 @@ size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt);
 unsigned long fbtreeHeight(const fbtreeIndex *fbt);
 /* Number of leaf nodes currently allocated. */
 unsigned long fbtreeNumLeaves(fbtreeIndex *fbt);
+/* Leaf fill: items / (leaves * leaf capacity), in (0, 1]. 1.0 when empty. */
+double fbtreeLoadFactor(fbtreeIndex *fbt);
+/* Deletes re-pack sparse leaves inline (see "Leaf compaction" in fbtree.c).
+ * Pass false to park that while a fork child shares this process's pages, as
+ * hashtableSetResizePolicy() does for rehashing; true to resume. Applies to
+ * all trees. Defaults to allowed. */
+void fbtreeSetCompactionAllowed(bool allowed);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
 void fbtreeResetIterator(fbtreeIterator *iterator);
 fbtreeIndex *fbtreeIteratorGetIndex(fbtreeIterator *iterator);

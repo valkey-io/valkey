@@ -754,6 +754,12 @@ void debugCommand(client *c) {
                 nextra += used;
                 remaining -= used;
             }
+        } else if (val->encoding == OBJ_ENCODING_BTREE) {
+            /* Leaf count and leaf fill of the B+tree index, for inspecting
+             * how deletes and leaf compaction shape the tree. */
+            zset *zs = objectGetVal(val);
+            snprintf(extra, sizeof(extra), " bt_num_leaves:%lu bt_load_factor:%.4f",
+                     orderedIndexNumLeaves(zs->oi), orderedIndexLoadFactor(zs->oi));
         }
 
         sds s = sdsempty();

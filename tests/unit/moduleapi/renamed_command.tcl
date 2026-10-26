@@ -1,8 +1,8 @@
 set testmodule [file normalize tests/modules/blockedclient.so]
 
 # rename-command hides a command from clients. A module is part of the server,
-# so ValkeyModule_Call also accepts the original name, except from a script and
-# in a replicated call.
+# so ValkeyModule_Call also accepts the original name, except from a script.
+# A renamed command is replicated under its current name.
 tags {"modules external:skip"} {
     set renames [list rename-command "CONFIG VCONFIG" \
                       rename-command "SET VSET" \
@@ -41,10 +41,30 @@ tags {"modules external:skip"} {
             assert_equal hi [r do_rm_call echo hi]
         }
 
-        test {A replicated module call needs the current name of a renamed command} {
-            assert_error {*unknown command*} {r do_rm_call_fire_and_forget set k v}
-            assert_equal OK [r do_rm_call_fire_and_forget vset k v]
+        test {A removed command cannot be called in a replicated call} {
+            assert_error {*unknown command*} {r do_rm_call_fire_and_forget lastsave}
+        }
+    }
+
+    # CONFIG stays available here, the replication stream helpers need it.
+    start_server [list config_lines [list rename-command "SET VSET" appendonly yes]] {
+        r module load $testmodule
+
+        test {A replicated call by the original name of a renamed command is propagated under its current name} {
+            set repl [attach_to_replication_stream]
+            assert_equal OK [r do_rm_call_fire_and_forget set k v]
+            assert_replication_stream $repl {
+                {select *}
+                {vset k v}
+            }
+            close_replication_stream $repl
             assert_equal v [r get k]
+        }
+
+        test {A write replicated by the original name of a renamed command survives an AOF reload} {
+            assert_equal OK [r do_rm_call_fire_and_forget set k2 v2]
+            r debug loadaof
+            assert_equal v2 [r get k2]
         }
     }
 }

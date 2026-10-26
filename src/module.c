@@ -6671,11 +6671,12 @@ fmterr:
  * * **...**: The actual arguments to the command.
  *
  * A command hidden with the `rename-command` configuration can still be called
- * by its original name, and a renamed command also by its new name. The
- * original name is not accepted when the call comes from a script (directly or
- * through a module command the script runs), which must not bypass the rename,
- * nor when the call is replicated with `!`, since the original name would be
- * propagated and replicas and AOF replay only know the current one.
+ * by its original name, and a renamed command also by its new name. A renamed
+ * command is executed, and so replicated, under its new name. The original name
+ * is not accepted when the call comes from a script (directly or through a
+ * module command the script runs), which must not bypass the rename, nor for a
+ * command removed with `rename-command X ""` when the call is replicated with
+ * `!`, since replicas and AOF replay have no name to execute it by.
  *
  * On success a ValkeyModuleCallReply object is returned; otherwise,
  * NULL is returned and errno is set to the following values:
@@ -6833,10 +6834,21 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
      */
     c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
     /* A command hidden with rename-command can still be called by its original name, except from a script, which must
-     * not bypass the rename, and in a replicated call, since the original name would be propagated while replicas and
-     * AOF replay only know the current one. */
-    if (c->cmd == NULL && !is_running_script && !scriptIsRunning() && !replicate) {
-        c->cmd = c->lastcmd = c->realcmd = lookupCommandOrOriginal(c->argv, c->argc);
+     * not bypass the rename. A renamed command is executed, and so propagated, under its current name, which replicas
+     * and AOF replay know. A removed command has no such name, so it is not accepted in a replicated call. */
+    if (c->cmd == NULL && !is_running_script && !scriptIsRunning()) {
+        struct serverCommand *orig = lookupCommandOrOriginal(c->argv, c->argc);
+        if (orig != NULL) {
+            struct serverCommand *top = orig->parent ? orig->parent : orig;
+            if (lookupCommandBySds(top->current_name) == top) {
+                robj *current_name = createStringObject(top->current_name, sdslen(top->current_name));
+                rewriteClientCommandArgument(c, 0, current_name);
+                decrRefCount(current_name);
+                c->lastcmd = c->realcmd = c->cmd;
+            } else if (!replicate) {
+                c->cmd = c->lastcmd = c->realcmd = orig;
+            }
+        }
     }
     if (!commandCheckExistence(c, error_as_call_replies ? &reply_error_msg : NULL)) {
         errno = ENOENT;

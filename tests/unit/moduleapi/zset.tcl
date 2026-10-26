@@ -167,6 +167,7 @@ start_server {tags {"modules"}} {
 
         test "Module zset score with a NULL score pointer tests membership - $enc" {
             r del k
+            assert_equal 0 [r zset.ismember k a]
             r zadd k 1 a 2 b
             assert_equal $enc [r object encoding k]
             assert_equal 1 [r zset.ismember k a]

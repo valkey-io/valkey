@@ -224,6 +224,7 @@ int zset_ismember(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
     ValkeyModule_AutoMemory(ctx);
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    if (key == NULL) return ValkeyModule_ReplyWithLongLong(ctx, 0);
     int found = ValkeyModule_ZsetScore(key, argv[2], NULL) == VALKEYMODULE_OK;
     return ValkeyModule_ReplyWithLongLong(ctx, found);
 }

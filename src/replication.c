@@ -3498,6 +3498,27 @@ sds replicationSendAuth(connection *conn, const char *user, size_t user_len, con
     return sendCommandArgv(conn, argc, args, lens);
 }
 
+/* Resolve credentials once for this handshake and remember whether its reply
+ * must be consumed, independently of later config changes or module unloads. */
+static sds replicationSendHandshakeAuth(connection *conn, int *auth_sent) {
+    *auth_sent = 0;
+    sds user = NULL, pass = NULL;
+    if (moduleGetReplicationCredentials(&user, &pass) == C_ERR)
+        return sdsnew("Replication credentials callback failed");
+    if (!pass && server.primary_auth) {
+        pass = sdsdup(server.primary_auth);
+        if (server.primary_user) user = sdsnew(server.primary_user);
+    }
+    sds err = NULL;
+    if (pass) {
+        err = replicationSendAuth(conn, user, user ? sdslen(user) : 0, pass, sdslen(pass));
+        if (!err) *auth_sent = 1;
+    }
+    sdsfree(user);
+    sdsfree(pass);
+    return err;
+}
+
 robj *generateSelectCommand(int dictid) {
     /* For a few DBs we have pre-computed SELECT command. */
     if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
@@ -3513,14 +3534,10 @@ robj *generateSelectCommand(int dictid) {
 static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     dualChannelServerLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
     /* AUTH with the primary if required. */
-    if (server.primary_auth) {
-        const char *user = server.primary_user;
-        size_t user_len = user ? strlen(user) : 0;
-        *err = replicationSendAuth(conn, user, user_len, server.primary_auth, sdslen(server.primary_auth));
-        if (*err) {
-            dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
-            return C_ERR;
-        }
+    *err = replicationSendHandshakeAuth(conn, &server.repl_rdb_auth_sent);
+    if (*err) {
+        dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
+        return C_ERR;
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
@@ -3689,7 +3706,7 @@ static void dualChannelFullSyncWithPrimary(connection *conn) {
         if (ret == C_OK) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY;
         break;
     case REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY:
-        if (server.primary_auth) {
+        if (server.repl_rdb_auth_sent) {
             ret = dualChannelReplHandleAuthReply(conn, &err);
             if (ret == C_OK) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
             /* Wait for next bulk before trying to read replconf reply. */
@@ -3713,6 +3730,8 @@ static void dualChannelFullSyncWithPrimary(connection *conn) {
     return;
 
 error:
+    server.repl_auth_sent = 0;
+    server.repl_rdb_auth_sent = 0;
     if (err) {
         serverLog(LL_WARNING, "Dual channel sync failed with error %s", err);
         sdsfree(err);
@@ -4337,14 +4356,9 @@ int syncWithPrimaryHandleReceivePingReplyState(connection *conn) {
 }
 
 int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
-    sds err;
     /* AUTH with the primary if required. */
-    if (server.primary_auth) {
-        const char *user = server.primary_user;
-        size_t user_len = user ? strlen(user) : 0;
-        err = replicationSendAuth(conn, user, user_len, server.primary_auth, sdslen(server.primary_auth));
-        if (err) goto err;
-    }
+    sds err = replicationSendHandshakeAuth(conn, &server.repl_auth_sent);
+    if (err) goto err;
 
     /* Set the replica port, so that primary's INFO command can list the
      * replica listening port correctly. */
@@ -4424,7 +4438,7 @@ err:
 }
 
 int syncWithPrimaryHandleReceiveAuthReplyState(connection *conn) {
-    if (server.primary_auth) {
+    if (server.repl_auth_sent) {
         sds err = receiveSynchronousResponse(conn);
         if (err == NULL) return C_ERR;
         if (err[0] == '-') {
@@ -4532,6 +4546,8 @@ int syncWithPrimaryHandleSendPsyncState(connection *conn) {
 }
 
 void syncWithPrimaryHandleError(connection **conn) {
+    server.repl_auth_sent = 0;
+    server.repl_rdb_auth_sent = 0;
     connClose(*conn);
     *conn = NULL;
     server.repl_transfer_s = NULL;
@@ -4670,7 +4686,7 @@ void syncWithPrimary(connection *conn) {
             return;
         }
         server.repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
-        if (server.primary_auth) return;
+        if (server.repl_auth_sent) return;
         /* fall through */
     /* Receive REPLCONF listening-port reply. */
     case REPL_STATE_RECEIVE_PORT_REPLY:
@@ -4876,6 +4892,8 @@ void syncWithPrimary(connection *conn) {
 }
 
 int connectWithPrimary(void) {
+    server.repl_auth_sent = 0;
+    server.repl_rdb_auth_sent = 0;
     server.repl_compression_advertised = REPL_COMPRESSION_CAPA_UNKNOWN;
     server.repl_transfer_s = connCreate(connTypeOfReplication());
     /* Tag main replication connection as high-priority before connecting so handshake,
@@ -4952,6 +4970,8 @@ void replicationAbortSyncTransfer(void) {
  *
  * Otherwise, zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
+    server.repl_auth_sent = 0;
+    server.repl_rdb_auth_sent = 0;
     if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
         /* Wait for the disk-saving bio thread to notice the abort flag
          * and exit. If it is blocked in a socket read this stalls the

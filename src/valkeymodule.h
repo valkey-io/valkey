@@ -1545,6 +1545,9 @@ typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx,
                                         ValkeyModuleString *username,
                                         ValkeyModuleString *password,
                                         ValkeyModuleString **err);
+typedef int (*ValkeyModuleReplicationCredentialsCallback)(ValkeyModuleCtx *ctx,
+                                                          ValkeyModuleString **username,
+                                                          ValkeyModuleString **password);
 
 typedef struct ValkeyModuleTypeMethods {
     uint64_t version;
@@ -1984,6 +1987,8 @@ VALKEYMODULE_API int (*ValkeyModule_DictCompare)(ValkeyModuleDictIter *di,
 VALKEYMODULE_API int (*ValkeyModule_RegisterInfoFunc)(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RegisterAuthCallback)(ValkeyModuleCtx *ctx,
                                                            ValkeyModuleAuthCallback cb) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterReplicationCredentialsCallback)(ValkeyModuleCtx *ctx,
+                                                                            ValkeyModuleReplicationCredentialsCallback cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoAddSection)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoBeginDictField)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoEndDictField)(ValkeyModuleInfoCtx *ctx) VALKEYMODULE_ATTR;
@@ -2581,6 +2586,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(DictCompareC);
     VALKEYMODULE_GET_API(RegisterInfoFunc);
     VALKEYMODULE_GET_API(RegisterAuthCallback);
+    VALKEYMODULE_GET_API(RegisterReplicationCredentialsCallback);
     VALKEYMODULE_GET_API(InfoAddSection);
     VALKEYMODULE_GET_API(InfoBeginDictField);
     VALKEYMODULE_GET_API(InfoEndDictField);

@@ -45,9 +45,6 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Fix `LSET` on 64-bit builds silently modifying the wrong element for out-of-range indexes instead of returning an index out of range error by @charsyam (#4823)
 * Fix atomic slot migration with `cluster-databases` > 1 applying writes made during the snapshot to the wrong database on the target by @pirate329 (#4952)
 
-### Build and Tooling
-* Update the fast-uri dependency of the reply-schema-linter utility to clear reported CVEs by @stavBenShahar (#4571)
-
 Valkey 9.1.2  -  Released Mon 31 August 2026
 --------------------------------------------
 

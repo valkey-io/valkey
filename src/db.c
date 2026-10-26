@@ -2164,8 +2164,9 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
         robj *entries[EXPIRE_BULK_LIMIT];
         /* The fields are deleted before the execution unit below starts. Even
-         * when none expired, the volatile set may have been restructured. */
-        keyMemoryDeltaTrackValue(db, o);
+         * when none expired, the volatile set may be restructured. */
+        if (keyMemoryDeltaEnabled() && hashTypeMayChangeOnDeleteExpired(o, now))
+            keyMemoryDeltaTrackSlow(db, objectGetKey(o), o);
         size_t expired = hashTypeDeleteExpiredFields(o, now, batch_size, entries);
         if (expired == 0) break;
 

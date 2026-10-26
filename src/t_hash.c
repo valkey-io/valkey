@@ -3142,6 +3142,14 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
     return expired;
 }
 
+/* Returns true if hashTypeDeleteExpiredFields() may change the hash at 'now'.
+ * Listpacks aren't scanned for expired fields: measuring them is cheaper. */
+bool hashTypeMayChangeOnDeleteExpired(robj *o, mstime_t now) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return true;
+    vset *set = hashTypeGetVolatileSet(o);
+    return set && vsetMayChangeOnRemoveExpired(set, entryGetExpiryVsetFunc, now);
+}
+
 /* Hashtable scan callback for hash datatype */
 static void defragHashTypeEntry(void *privdata, void *element_ref) {
     entry **entry_ref = (entry **)element_ref;

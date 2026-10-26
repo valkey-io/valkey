@@ -2205,6 +2205,33 @@ int rioWriteStreamPendingEntry(rio *r,
     return 1;
 }
 
+/* Helper for rewriteStreamObject(): emit the XNACK needed in order to re-create
+ * any pending entry's that are not owned by any consumer. Here, we use the
+ * FORCE & RETRYCOUNT trailing options to set absolute state & use FAIL mode
+ * since that respects RETRYCOUNT. */
+int rioWriteStreamDisownedPendingEntry(rio *r,
+                                       robj *key,
+                                       const char *groupname,
+                                       size_t groupname_len,
+                                       unsigned char *rawid,
+                                       streamNACK *nack) {
+    /* XNACK <key> <group> FAIL IDS 1 <id> RETRYCOUNT <count> FORCE */
+    streamID id;
+    streamDecodeID(rawid, &id);
+    if (rioWriteBulkCount(r, '*', 10) == 0) return 0;
+    if (rioWriteBulkString(r, "XNACK", 5) == 0) return 0;
+    if (rioWriteBulkObject(r, key) == 0) return 0;
+    if (rioWriteBulkString(r, groupname, groupname_len) == 0) return 0;
+    if (rioWriteBulkString(r, "FAIL", 4) == 0) return 0;
+    if (rioWriteBulkString(r, "IDS", 3) == 0) return 0;
+    if (rioWriteBulkString(r, "1", 1) == 0) return 0;
+    if (rioWriteBulkStreamID(r, &id) == 0) return 0;
+    if (rioWriteBulkString(r, "RETRYCOUNT", 10) == 0) return 0;
+    if (rioWriteBulkLongLong(r, nack->delivery_count) == 0) return 0;
+    if (rioWriteBulkString(r, "FORCE", 5) == 0) return 0;
+    return 1;
+}
+
 /* Helper for rewriteStreamObject(): emit the XGROUP CREATECONSUMER is
  * needed in order to create consumers that do not have any pending entries.
  * All this in the context of the specified key and group. */
@@ -2301,6 +2328,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
              * have pending entries. Empty consumers would be generated with
              * XGROUP CREATECONSUMER. */
             raxIterator ri_cons;
+            uint64_t cons_pel_count = 0;
             raxStart(&ri_cons, group->consumers);
             raxSeek(&ri_cons, "^", NULL, 0);
             while (raxNext(&ri_cons)) {
@@ -2321,6 +2349,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
                 raxStart(&ri_pel, consumer->pel);
                 raxSeek(&ri_pel, "^", NULL, 0);
                 while (raxNext(&ri_pel)) {
+                    cons_pel_count++;
                     streamNACK *nack = ri_pel.data;
                     if (rioWriteStreamPendingEntry(r, key, (char *)ri.key, ri.key_len, consumer, ri_pel.key, nack) ==
                         0) {
@@ -2334,6 +2363,25 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
                 raxStop(&ri_pel);
             }
             raxStop(&ri_cons);
+
+            /* Since above only handles owned PEL entries, we also need to emit
+             * XNACKs for disowned entries with no consumer. */
+            if (cons_pel_count != raxSize(group->pel)) {
+                raxIterator ri_pel;
+                raxStart(&ri_pel, group->pel);
+                raxSeek(&ri_pel, "^", NULL, 0);
+                while (raxNext(&ri_pel)) {
+                    streamNACK *nack = ri_pel.data;
+                    if (nack->consumer != NULL) continue;
+                    if (rioWriteStreamDisownedPendingEntry(r, key, (char *)ri.key, ri.key_len, ri_pel.key, nack) == 0) {
+                        raxStop(&ri_pel);
+                        raxStop(&ri);
+                        streamIteratorStop(&si);
+                        return 0;
+                    }
+                }
+                raxStop(&ri_pel);
+            }
         }
         raxStop(&ri);
     }

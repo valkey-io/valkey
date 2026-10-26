@@ -2085,6 +2085,90 @@ start_server {
     }
 
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
+        test {PEL entries disowned by XNACK survive AOF rewrite} {
+            r DEL mystream
+            r XADD mystream 1-0 f v ;# will be delivered w/ retry count 3
+            r XADD mystream 2-0 f v ;# will be delivered w/ retry count 5
+            r XADD mystream 3-0 f v ;# will never be delivered, instead XNACK FORCE'd
+            r XADD mystream 4-0 f v ;# will be made pending via XCLAIM FORCE to a specific consumer
+            r XGROUP CREATE mystream mygroup 0
+
+            r XREADGROUP GROUP mygroup alice COUNT 2 STREAMS mystream ">"
+            r XCLAIM mystream mygroup alice 0 1-0 RETRYCOUNT 3
+            r XCLAIM mystream mygroup alice 0 2-0 RETRYCOUNT 5
+            r XCLAIM mystream mygroup alice 0 4-0 FORCE JUSTID
+
+            # Return 1-0 and 2-0 to the group, owned by no consumer. Use FORCE
+            # to get 3-0 into group PEL without having been delivered.
+            assert_equal 2 [r XNACK mystream mygroup FAIL IDS 2 1-0 2-0]
+            assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 3-0 RETRYCOUNT 9 FORCE]
+
+            set pend [r XPENDING mystream mygroup - + 10]
+            assert_equal 4 [llength $pend]
+
+            # Trigger rewrite, causing aof to change to XNACK ... RETRYCOUNT ... FORCE
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+
+            # XNACK'd entries keep their state: id, ownership, idle time, delivery count.
+            set pend [r XPENDING mystream mygroup - + 10]
+            assert_equal 4 [llength $pend]
+            assert_equal {1-0 {} -1 3} [lindex $pend 0]
+            assert_equal {2-0 {} -1 5} [lindex $pend 1]
+            assert_equal {3-0 {} -1 9} [lindex $pend 2]
+
+            # The one owned entry (4-0) is untouched: still alice's with delivery count 1.
+            assert_equal 4-0 [lindex $pend 3 0]
+            assert_equal alice [lindex $pend 3 1]
+            assert_equal 1 [lindex $pend 3 3]
+            set consumers [r XINFO CONSUMERS mystream mygroup]
+            assert_equal 1 [llength $consumers]
+            assert_equal {name alice pending 1} [lrange [lindex $consumers 0] 0 3]
+        }
+    }
+
+    start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
+        test {AOF rewrite works with only owned PEL entries} {
+            # This covers the shortcut where all PEL entries are owned.
+            # ie. cons_pel_count == raxSize(group->pel)
+            r DEL mystream
+            r XADD mystream 1-0 f v
+            r XADD mystream 2-0 f v
+            r XGROUP CREATE mystream mygroup 0
+
+            # Consumer bob exists but owns nothing; alice owns every PEL entry,
+            # so we can skip the group->pel walk, just hitting the consumer
+            # walks, and we don't need to emit any XNACK's.
+            assert_equal 1 [r XGROUP CREATECONSUMER mystream mygroup bob]
+            r XREADGROUP GROUP mygroup alice COUNT 2 STREAMS mystream ">"
+            r XCLAIM mystream mygroup alice 0 1-0 RETRYCOUNT 7
+            r XCLAIM mystream mygroup alice 0 2-0 RETRYCOUNT 11
+
+            set pend [r XPENDING mystream mygroup - + 10]
+            assert_equal 2 [llength $pend]
+
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+
+            # Owned entries keep their owner and delivery counts exactly.
+            set pend [r XPENDING mystream mygroup - + 10]
+            assert_equal 2 [llength $pend]
+            assert_equal alice [lindex $pend 0 1]
+            assert_equal 7 [lindex $pend 0 3]
+            assert_equal alice [lindex $pend 1 1]
+            assert_equal 11 [lindex $pend 1 3]
+
+            # Both alice (has all entries) and bob (no entries) survive the rewrite.
+            set consumers [r XINFO CONSUMERS mystream mygroup]
+            assert_equal 2 [llength $consumers]
+            assert_equal {name alice pending 2} [lrange [lindex $consumers 0] 0 3]
+            assert_equal {name bob pending 0} [lrange [lindex $consumers 1] 0 3]
+        }
+    }
+
+    start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
         test {Empty stream with no lastid can be rewrite into AOF correctly} {
             r XGROUP CREATE mystream group-name $ MKSTREAM
             assert {[dict get [r xinfo stream mystream] length] == 0}

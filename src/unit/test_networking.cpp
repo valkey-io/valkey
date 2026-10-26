@@ -13,6 +13,7 @@
 #include <cstring>
 
 extern "C" {
+#include "object_internals.h"
 #include "server.h"
 
 /* Internal types from networking.c */

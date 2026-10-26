@@ -735,7 +735,7 @@ static genericIterator *clusterSlotIteratorCreate(const int *slots, size_t slots
 /* While an item is potentially in use by a background thread, we can't have rehashing by the main
  * thread.  Returns true if rehashing was paused. */
 static bool pauseRehashing(dbEntry *de) {
-    switch (de->encoding) {
+    switch (objectGetEncoding(de)) {
     case OBJ_ENCODING_HASHTABLE: { // SET or HASH
         hashtable *ht = objectGetVal(de);
         hashtablePauseRehashing(ht);
@@ -752,7 +752,7 @@ static bool pauseRehashing(dbEntry *de) {
 }
 
 static void resumeRehashing(dbEntry *de) {
-    switch (de->encoding) {
+    switch (objectGetEncoding(de)) {
     case OBJ_ENCODING_HASHTABLE: { // SET or HASH
         hashtable *ht = objectGetVal(de);
         hashtableResumeRehashing(ht);
@@ -816,7 +816,7 @@ static dbEntry *tryCloneDbEntry(dbEntry *de) {
 
     /* Future optimization: Incorporate small ziplists, sorted sets, etc.
      * OBJ_ENCODING_INT is omitted only because there isn't a good API for cloning it yet. */
-    if (de->type == OBJ_STRING && de->encoding != OBJ_ENCODING_INT) {
+    if (objectGetType(de) == OBJ_STRING && objectGetEncoding(de) != OBJ_ENCODING_INT) {
         ssize_t itemSize = computeStringDbEntrySize(de);
 
         if (itemSize <= bgiter_max_clone_item_bytes) {
@@ -835,7 +835,7 @@ static dbEntry *tryCloneDbEntry(dbEntry *de) {
 }
 
 static void freeClonedDictEntry(dbEntry *clonedEntry) {
-    serverAssert(clonedEntry->type == OBJ_STRING);
+    serverAssert(objectGetType(clonedEntry) == OBJ_STRING);
 
     bgiteration_current_clone_memory_pool_size -= computeStringDbEntrySize(clonedEntry);
 
@@ -955,14 +955,14 @@ static sds createEntryString(int dbid, dbEntry *de) {
 
     sds entrySds = sdsempty();
     entrySds = sdscatprintf(entrySds, "(%d)'%s'", dbid, key);
-    if (de->type == OBJ_STRING) {
+    if (objectGetType(de) == OBJ_STRING) {
         robj *o = getDecodedObject(de); // might be encoded as int
         const unsigned valuePrintLen = 20;
         entrySds = sdscatprintf(entrySds, " : '%.*s'", valuePrintLen, (char *)objectGetVal(o));
         if (sdslen((sds)objectGetVal(o)) > valuePrintLen) entrySds = sdscat(entrySds, "...");
         decrRefCount(o);
     } else {
-        entrySds = sdscatprintf(entrySds, " : type(%d)", de->type);
+        entrySds = sdscatprintf(entrySds, " : type(%d)", objectGetType(de));
     }
     return entrySds;
 }

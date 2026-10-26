@@ -2907,3 +2907,59 @@ TEST_F(OrderedIndexTest, HtConsistency_ByLex_EmptyRange) {
     sdsfree(max);
     simHtFree(&simulatedHt);
 }
+
+/* ========== Inline Leaf Compaction Through the Index ========== */
+
+TEST_F(OrderedIndexTest, DeleteKeepsLeavesPacked) {
+    const int N = 5000;
+    OrderedIndexItem **items = (OrderedIndexItem **)zmalloc(sizeof(OrderedIndexItem *) * N);
+    for (int i = 0; i < N; i++) {
+        char b[32];
+        int n = snprintf(b, sizeof(b), "e%06d", i);
+        items[i] = orderedIndexInsert(oi, (double)(i * 7919 % 1000), b, (size_t)n);
+    }
+    unsigned long leaves_full = orderedIndexNumLeaves(oi);
+
+    /* Delete 60% in a scattered order. */
+    for (int i = 0; i < N; i++) {
+        if (i % 5 == 1 || i % 5 == 3) continue;
+        orderedIndexDelete(oi, items[i]);
+    }
+    zfree(items);
+
+    VERIFY_INTEGRITY(oi);
+    EXPECT_EQ(orderedIndexLength(oi), (unsigned long)N * 2 / 5);
+    EXPECT_LT(orderedIndexNumLeaves(oi) * 3, leaves_full * 2);
+    EXPECT_GT(orderedIndexLoadFactor(oi), 0.6);
+}
+
+/* A score update is a delete followed by an insert, so a churn of score
+ * updates must not let the leaf count drift upward: every leaf that a
+ * reinsertion splits is paid back by compaction where the deletes land. */
+TEST_F(OrderedIndexTest, UpdateScoreChurnKeepsLeavesBounded) {
+    const int N = 5000;
+    const int UPDATES = 100000;
+    OrderedIndexItem **items = (OrderedIndexItem **)zmalloc(sizeof(OrderedIndexItem *) * N);
+    for (int i = 0; i < N; i++) {
+        char b[32];
+        int n = snprintf(b, sizeof(b), "m%06d", i);
+        items[i] = orderedIndexInsert(oi, (double)i, b, (size_t)n);
+    }
+    unsigned long leaves_start = orderedIndexNumLeaves(oi);
+
+    unsigned int seed = 100000;
+    for (int u = 0; u < UPDATES; u++) {
+        int i = rand_r(&seed) % N;
+        double score = (double)(rand_r(&seed) % 1000000);
+        items[i] = orderedIndexUpdateScore(oi, items[i], score);
+    }
+    zfree(items);
+
+    VERIFY_INTEGRITY(oi);
+    EXPECT_EQ(orderedIndexLength(oi), (unsigned long)N);
+    /* Random reinsertion splits leaves 50/50, so the steady state sits below
+     * sequential-load fill, but far from the unbounded growth of a tree that
+     * never re-packs. */
+    EXPECT_GT(orderedIndexLoadFactor(oi), 0.5);
+    EXPECT_LT(orderedIndexNumLeaves(oi), leaves_start * 2);
+}

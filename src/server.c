@@ -891,6 +891,9 @@ void updateDictResizePolicy(void) {
     } else {
         hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
     }
+    /* Leaf compaction in B+tree sorted sets rewrites node pages the same way
+     * a rehash does, so it follows the same fork-aware policy. */
+    orderedIndexSetCompactionAllowed(server.in_fork_child == CHILD_TYPE_NONE && !hasActiveChildProcess());
 }
 
 const char *strChildType(int type) {

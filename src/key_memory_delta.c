@@ -104,6 +104,12 @@ static bool hashtableMayChangeOnRead(hashtable *ht) {
     return hashtableIsRehashing(ht) || hashtableNeedsShrink(ht);
 }
 
+/* Only the nodes beyond the compress depth from both ends are compressed (see
+ * __quicklistCompress()), so a quicklist without any has none to compress. */
+static bool quicklistMayChangeOnRead(quicklist *ql) {
+    return ql->compress && ql->len > 2 * (unsigned long)ql->compress;
+}
+
 static bool valueMayChangeOnRead(robj *val) {
     switch (objectGetType(val)) {
     case OBJ_SET:
@@ -113,7 +119,7 @@ static bool valueMayChangeOnRead(robj *val) {
         return objectGetEncoding(val) == OBJ_ENCODING_BTREE &&
                hashtableMayChangeOnRead(((zset *)objectGetVal(val))->ht);
     case OBJ_LIST:
-        return objectGetEncoding(val) == OBJ_ENCODING_QUICKLIST && ((quicklist *)objectGetVal(val))->compress != 0;
+        return objectGetEncoding(val) == OBJ_ENCODING_QUICKLIST && quicklistMayChangeOnRead(objectGetVal(val));
     case OBJ_PATH_HASH:
         /* Its size is estimated from nested hashes that reads may resize. */
         return true;

@@ -30,7 +30,9 @@
  *
  * BIO_USER_WORK jobs are different: they run on a pool of
  * server.bio_pool_threads threads that share a single queue. These jobs have
- * no order guarantee, and jobs may run in parallel.
+ * no order guarantee, and jobs may run in parallel. The pool is created on
+ * the first bioCreateTask() call, so a server that never uses it has no pool
+ * threads.
  *
  * Jobs handled by the same worker are guaranteed to be processed from the
  * least-recently-inserted to the most-recently-inserted (older jobs processed
@@ -119,6 +121,7 @@ static _Thread_local size_t bio_worker_num = 0;
 static mutexQueue *bio_pool_jobs = NULL;
 static pthread_t *bio_pool_threads = NULL;
 static _Thread_local bool bio_in_pool_thread = false;
+static pthread_once_t bio_pool_once = PTHREAD_ONCE_INIT;
 
 /* This structure represents a background Job. It is only used locally to this
  * file as the API does not expose the internals at all. */
@@ -200,7 +203,15 @@ void bioInit(void) {
             exit(1);
         }
     }
+    pthread_attr_destroy(&attr);
+}
 
+/* Create the BIO_USER_WORK queue and threads. Called once, through
+ * pthread_once(), on the first bioCreateTask() call. */
+static void bioPoolInit(void) {
+    pthread_attr_t attr;
+
+    serverInitThreadAttribute(&attr);
     bio_pool_jobs = mutexQueueCreate();
     bio_pool_threads = zcalloc(sizeof(pthread_t) * server.bio_pool_threads);
     for (int i = 0; i < server.bio_pool_threads; i++) {
@@ -289,6 +300,7 @@ void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
 }
 
 void bioCreateTask(bioFunctionPtr func, void *context) {
+    pthread_once(&bio_pool_once, bioPoolInit);
     bio_job *job = allocBioJob(0);
     job->user_task.callback = func;
     job->user_task.context = context;

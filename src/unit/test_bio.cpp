@@ -59,13 +59,9 @@ static void threadNameTask(void *context) {
 class BioPoolTest : public ::testing::Test {
   protected:
     static void SetUpTestSuite() {
-        /* The bio threads can't be stopped cleanly, so start them once for
-         * the whole test binary. */
-        static bool initialized = false;
-        if (initialized) return;
+        /* The pool is created on the first bioCreateTask() call, with the
+         * size set here. It is created once for the whole test binary. */
         server.bio_pool_threads = TEST_POOL_THREADS;
-        bioInit();
-        initialized = true;
     }
 };
 

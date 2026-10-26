@@ -68,6 +68,8 @@ void clusterUpdateMyselfHostname(void);
 void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
 
+int clusterPublishMessageLengthValid(robj *channel, robj *message);
+void clusterSetPublishMessageLengthLimitForTesting(size_t limit);
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
 void clusterBroadcastPong(int target);
 

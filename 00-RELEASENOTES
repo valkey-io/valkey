@@ -25,7 +25,6 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Fix a server abort on a RESTORE payload declaring a string length that overflows the allocation size; such payloads are now rejected as bad data by @enjoy-binbin (#4733)
 * Fix ZINTER/ZINTERSTORE returning input-order-dependent scores when a weighted term is 0*inf; a NaN weighted score now counts as 0, matching ZUNION by @leomurillo (#4997)
 * Correct `ValkeyModule_FreeModuleUser`, `ValkeyModule_ACLAddLogEntry` and `ValkeyModule_ACLAddLogEntryByUserName` declarations to return int as implemented, fixing undefined behavior on targets with strict call signature checks by @rainsupreme (#4676)
-* Fix valkey-benchmark spinning on would-block writes, which could starve reply processing and the `--duration` timer by @thweetkomputer (#4567)
 * Fix a huge memory allocation when a command such as COMMAND GETKEYS EVAL declares a far larger key count than the arguments provided by @murphyjacob4 (#3598)
 * Reject relative expire times in `SET`/`GETEX`, `RESTORE`, and the module `SetExpire` API that overflow when the current time is added, preventing negative expires that abort the server by @madolson (#4880)
 * Fix a server crash when loading an ACL file containing a selector with an unmatched parenthesis by @magic-peach (#4214)

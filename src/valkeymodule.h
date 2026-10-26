@@ -1545,6 +1545,10 @@ typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx,
                                         ValkeyModuleString *username,
                                         ValkeyModuleString *password,
                                         ValkeyModuleString **err);
+/** Provide credentials for one outgoing replication authentication handshake.
+ * Return VALKEYMODULE_OK with a borrowed password and optional username, or
+ * VALKEYMODULE_ERR to abort. The server copies outputs before freeing ctx;
+ * use AutoMemory for temporary strings and refresh tokens outside this call. */
 typedef int (*ValkeyModuleReplicationCredentialsCallback)(ValkeyModuleCtx *ctx,
                                                           ValkeyModuleString **username,
                                                           ValkeyModuleString **password);
@@ -1987,6 +1991,9 @@ VALKEYMODULE_API int (*ValkeyModule_DictCompare)(ValkeyModuleDictIter *di,
 VALKEYMODULE_API int (*ValkeyModule_RegisterInfoFunc)(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RegisterAuthCallback)(ValkeyModuleCtx *ctx,
                                                            ValkeyModuleAuthCallback cb) VALKEYMODULE_ATTR;
+/** Register an OnLoad-only credential provider; return VALKEYMODULE_ERR for
+ * a NULL callback or invalid context. The latest loaded provider takes priority
+ * over static auth; provider failures abort the attempt without static fallback. */
 VALKEYMODULE_API int (*ValkeyModule_RegisterReplicationCredentialsCallback)(ValkeyModuleCtx *ctx,
                                                                             ValkeyModuleReplicationCredentialsCallback cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoAddSection)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
@@ -2356,7 +2363,9 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleUs
                                                                   unsigned int flags) VALKEYMODULE_ATTR;
 
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
-/* This is included inline inside each Valkey module. */
+/** Bootstrap the API table and identity for a module during OnLoad.
+ * Check optional API pointers before use. Return VALKEYMODULE_ERR if another
+ * loaded module already owns name; otherwise return VALKEYMODULE_OK. */
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
 /** Resolve server APIs and initialize the calling module's identity.
  * This inline bootstrap runs during OnLoad. Unavailable optional API pointers

@@ -256,6 +256,9 @@ struct ValkeyModuleKey {
 struct ValkeyModuleBlockedClient;
 typedef int (*ValkeyModuleCmdFunc)(ValkeyModuleCtx *ctx, void **argv, int argc);
 typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx, void *username, void *password, ValkeyModuleString **err);
+/** Use the internal provider signature for the exported module callback type.
+ * The module API implementation passes borrowed object strings through this
+ * alias, then copies successful outputs before destroying its temporary context. */
 typedef moduleReplicationCredentialsCallback ValkeyModuleReplicationCredentialsCallback;
 typedef void (*ValkeyModuleDisconnectFunc)(ValkeyModuleCtx *ctx, struct ValkeyModuleBlockedClient *bc);
 

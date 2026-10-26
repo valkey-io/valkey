@@ -38,6 +38,8 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "util.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
@@ -56,14 +58,14 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
  * This function will try to expire the key-value entry 'val'.
  *
  * If the key is found to be expired, it is removed from the database and
- * 1 is returned. Otherwise no operation is performed and 0 is returned.
+ * 1 is returned. Otherwise, no operation is performed and 0 is returned.
  *
  * When a key is expired, server.stat_expiredkeys is incremented.
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
-int activeExpireCycleTryExpire(serverDb *db, robj *val, long long now, int didx) {
-    long long t = objectGetExpire(val);
+int activeExpireCycleTryExpire(serverDb *db, robj *val, mstime_t now, int didx) {
+    mstime_t t = objectGetExpire(val);
     serverAssert(t >= 0);
     if (now > t) {
         enterExecutionUnit(1, 0);
@@ -71,6 +73,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, long long now, int didx)
         robj *keyobj = createStringObject(key, sdslen(key));
         deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, didx);
         decrRefCount(keyobj);
+        server.dirty++;
         exitExecutionUnit();
         return 1;
     } else {
@@ -79,7 +82,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, long long now, int didx)
 }
 
 /* Try to expire a few timed out keys. The algorithm used is adaptive and
- * will use few CPU cycles if there are few expiring keys, otherwise
+ * will use few CPU cycles if there are few expiring keys; otherwise,
  * it will get more aggressive to avoid that too much memory is used by
  * keys that can be removed from the keyspace.
  *
@@ -126,10 +129,10 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, long long now, int didx)
 /* Data used by the key expire kvstore scan callback. */
 typedef struct {
     serverDb *db;
-    long long now;
+    mstime_t now;
     unsigned long sampled; /* num keys checked */
     unsigned long expired; /* num keys expired */
-    long long ttl_sum;     /* sum of ttl for key with ttl not yet expired */
+    mstime_t ttl_sum;      /* sum of ttl for key with ttl not yet expired */
     int ttl_samples;       /* num keys with ttl not yet expired */
 
     /* Entry-specific fields */
@@ -145,7 +148,7 @@ typedef struct activeExpireFieldIterator {
 void expireScanCallback(void *privdata, void *entry, int didx) {
     robj *val = entry;
     expireScanData *data = privdata;
-    long long ttl = objectGetExpire(val) - data->now;
+    mstime_t ttl = objectGetExpire(val) - data->now;
     if (activeExpireCycleTryExpire(data->db, val, data->now, didx)) {
         data->expired++;
         /* Propagate the DEL command */
@@ -166,13 +169,18 @@ void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
     robj *o = volaKey;
     serverAssert(o);
     serverAssert(hashTypeHasVolatileFields(o));
+
+    data->has_more_expired_entries = false;
+    data->sampled++;
+
+    if (bgIteration_isEntryInuse(o)) return;
+
     mstime_t now = server.mstime;
     size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries, didx);
     if (expired_fields) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
     }
-    data->sampled++;
 }
 
 static int expireShouldSkipTableForSamplingCb(hashtable *ht) {
@@ -195,7 +203,7 @@ static int activeExpireEffort(void) {
     return server.active_expire_effort - 1;
 }
 
-static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, long long timelimit_us) {
+static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleType, ustime_t timelimit_us) {
     if (timelimit_us <= 0) return 0;
 
     unsigned long config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE - activeExpireEffort();
@@ -218,6 +226,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
     int dbs_performed = 0;
+    int time_check_mask; /* Check time limit when (i & mask) == 0, i.e. every (X+1)th of the loop. */
     monotime start = getMonotonicUs();
 
     if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) {
@@ -275,10 +284,16 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
             case KEYS:
                 kvs = db->expires;
                 scan_cb = expireScanCallback;
+                time_check_mask = 0xf; /* For regular keys we can check the time condition every 16 loop iterations */
                 break;
             case FIELDS:
                 kvs = db->keys_with_volatile_items;
                 scan_cb = fieldExpireScanCallback;
+                /* For field-level keys we check the time condition every loop iteration.
+                 * This is required since we might perform much more operation per single key with many fields.
+                 * Limiting the number of fields we scan in each field makes the overall process less efficient.
+                 * So we just perform more clock checks after each iteration. */
+                time_check_mask = 0x0;
                 break;
             default:
                 serverPanic("Unknown active expiry job type %d.", jobType);
@@ -330,7 +345,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
 
             while (data.sampled < num && checked_buckets < max_buckets) {
                 unsigned long cursor = db->expiry[jobType].cursor;
-                cursor = kvstoreScan(kvs, cursor, -1, scan_cb,
+                cursor = kvstoreScan(kvs, cursor, -1, -1, scan_cb,
                                      expireShouldSkipTableForSamplingCb, &data);
                 if (!data.has_more_expired_entries) db->expiry[jobType].cursor = cursor;
                 if (db->expiry[jobType].cursor == 0 && !data.has_more_expired_entries) {
@@ -363,7 +378,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
                     /* Average TTL is calculated only for keys, as there's currently
                      * no reliable way to compute it for fields. */
 
-                    long long avg_ttl = data.ttl_sum / data.ttl_samples;
+                    mstime_t avg_ttl = data.ttl_sum / data.ttl_samples;
 
                     /* Do a simple running average with a few samples.
                      * We just use the current estimate with a weight of 2%
@@ -389,18 +404,19 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
                     data.ttl_sum = 0;
                     data.ttl_samples = 0;
                 }
-                if ((iteration & 0xf) == 0) { /* check time limit every 16 iterations. */
-                    if (elapsedUs(start) > (uint64_t)timelimit_us) {
-                        state->timelimit_exit = 1;
-                        server.stat_expired_time_cap_reached_count++;
-                        break;
-                    }
+            }
+            /* check time limit for every FIELDS job iteration or every 16 iterations for KEYS. */
+            if ((iteration & time_check_mask) == 0) {
+                if (elapsedUs(start) > (uint64_t)timelimit_us) {
+                    state->timelimit_exit = 1;
+                    server.stat_expired_time_cap_reached_count++;
+                    break;
                 }
             }
         } while (repeat);
     }
 
-    long long elapsed = (long long)elapsedUs(start);
+    ustime_t elapsed = (ustime_t)elapsedUs(start);
     if (jobType == KEYS) {
         latencyTraceIfNeeded(db, expire_cycle_keys, elapsed);
     } else if (jobType == FIELDS) {
@@ -444,25 +460,27 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
  * starvation of either mechanism. Since the memory reclaim pace and iteration
  * model of keys versus hash fields are different and unpredictable,
  * alternating naturally balances the overall expiry effort when both are
- * fully consuming their available time budget. */
-void activeExpireCycle(int type) {
+ * fully consuming their available time budget.
+ *
+ * Returns the time spend on active expiration in microseconds. */
+ustime_t activeExpireCycle(int type) {
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
      * Typically, at the end of the pause we will properly expire the key OR we
      * will have failed over and the new primary will send us the expire. */
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return;
+    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return 0;
 
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. Also make sure not to run fast cycles back to back. */
-    long long timelimit_us;
+    ustime_t timelimit_us;
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
-        long long config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * activeExpireEffort();
+        ustime_t config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION + ACTIVE_EXPIRE_CYCLE_FAST_DURATION / 4 * activeExpireEffort();
 
         /* Never repeat a fast cycle for the same period
          * as the fast cycle total duration itself. */
         static monotime last_fast_cycle_start_time; /* When last fast cycle ran. */
         monotime start = getMonotonicUs();
-        if (start < last_fast_cycle_start_time + config_cycle_fast_duration * 2) return;
+        if (start < last_fast_cycle_start_time + config_cycle_fast_duration * 2) return 0;
 
         last_fast_cycle_start_time = start;
         timelimit_us = config_cycle_fast_duration;
@@ -476,7 +494,7 @@ void activeExpireCycle(int type) {
     }
 
     static bool expireCycleStartWithFields = 0;
-    long long elapsed = 0;
+    ustime_t elapsed = 0;
 
     /* Try to smoke-out bugs (server.also_propagate should be empty here) */
     serverAssert(server.also_propagate.numops == 0);
@@ -492,6 +510,7 @@ void activeExpireCycle(int type) {
     latencyAddSampleIfNeeded("expire-cycle", elapsed);
     latencyTraceIfNeeded(db, expire_cycle, elapsed);
     expireCycleStartWithFields = !expireCycleStartWithFields;
+    return elapsed;
 }
 
 /*-----------------------------------------------------------------------------
@@ -593,27 +612,26 @@ void expireReplicaKeys(void) {
 
 /* Track keys that received an EXPIRE or similar command in the context
  * of a writable replica. */
+
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     if (replicaKeysWithExpire == NULL) {
         static dictType dt = {
-            dictSdsHash,       /* hash function */
-            NULL,              /* key dup */
-            dictSdsKeyCompare, /* key compare */
-            dictSdsDestructor, /* key destructor */
-            NULL,              /* val destructor */
-            NULL               /* allow to expand */
+            .entryGetKey = dictEntryGetKey,
+            .hashFunction = dictSdsHash,
+            .keyCompare = dictSdsKeyCompare,
+            .entryDestructor = dictEntryDestructorSdsKey,
         };
         replicaKeysWithExpire = dictCreate(&dt);
     }
     if (db->id > 63) return;
 
-    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, key->ptr);
+    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, objectGetVal(key));
     /* If the entry was just created, set it to a copy of the SDS string
      * representing the key: we don't want to need to take those keys
      * in sync with the main DB. The keys will be removed by expireReplicaKeys()
      * as it scans to find keys to remove. */
-    if (dictGetKey(de) == key->ptr) {
-        dictSetKey(replicaKeysWithExpire, de, sdsdup(key->ptr));
+    if (dictGetKey(de) == objectGetVal(key)) {
+        dictSetKey(replicaKeysWithExpire, de, sdsdup(objectGetVal(key)));
         dictSetUnsignedIntegerVal(de, 0);
     }
 
@@ -636,14 +654,18 @@ size_t getReplicaKeyWithExpireCount(void) {
  * but it is not worth it since anyway race conditions using the same set
  * of key names in a writable replica and in its primary will lead to
  * inconsistencies. This is just a best-effort thing we do. */
-void flushReplicaKeysWithExpireList(void) {
+void flushReplicaKeysWithExpireList(int async) {
     if (replicaKeysWithExpire) {
-        dictRelease(replicaKeysWithExpire);
+        if (async) {
+            freeReplicaKeysWithExpireAsync(replicaKeysWithExpire);
+        } else {
+            dictRelease(replicaKeysWithExpire);
+        }
         replicaKeysWithExpire = NULL;
     }
 }
 
-int checkAlreadyExpired(long long when) {
+int checkAlreadyExpired(mstime_t when) {
     /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
      * should never be executed as a DEL when load the AOF or in the context
      * of a replica instance.
@@ -673,7 +695,7 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args) {
 
     int j = 3;
     while (j < max_args) {
-        char *opt = c->argv[j]->ptr;
+        char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "nx")) {
             *flags |= EXPIRE_NX;
             nx = 1;
@@ -706,8 +728,8 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args) {
     return C_OK;
 }
 
-int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime) {
-    long long when;
+int convertExpireArgumentToUnixTime(client *c, robj *arg, mstime_t basetime, int unit, mstime_t *unixtime) {
+    mstime_t when;
     if (getLongLongFromObjectOrReply(c, arg, &when, NULL) != C_OK) return C_ERR;
 
     if (when < 0) {
@@ -745,10 +767,10 @@ int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, in
  * the argv[2] parameter. The basetime is always specified in milliseconds.
  *
  * Additional flags are supported and parsed via parseExtendedExpireArguments */
-void expireGenericCommand(client *c, long long basetime, int unit) {
+void expireGenericCommand(client *c, mstime_t basetime, int unit) {
     robj *key = c->argv[1], *param = c->argv[2];
-    long long when; /* unix time in milliseconds when the key will expire. */
-    long long current_expire = -1;
+    mstime_t when; /* unix time in milliseconds when the key will expire. */
+    mstime_t current_expire = -1;
     int flag = 0;
 
     /* checking optional flags */
@@ -773,6 +795,13 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
     when += basetime;
+    /* A negative expiration time should cause a key to expire and be deleted immediately.
+     * However, in some cases (such as import-mode), we might need to pause expiration,
+     * and we don't want keys with negative expiration times (could cause a crash during active expiration).
+     * Therefore, we simply change the expiration time to 0 to mark the key as expired. */
+    if (when < 0) {
+        when = 0;
+    }
 
     robj *obj = lookupKeyWrite(c->db, key);
 
@@ -875,7 +904,7 @@ void pexpireatCommand(client *c) {
 /* Implements TTL, PTTL, EXPIRETIME and PEXPIRETIME */
 void ttlGenericCommand(client *c, int output_ms, int output_abs) {
     robj *o;
-    long long expire, ttl = -1;
+    mstime_t expire, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
     if ((o = lookupKeyReadWithFlags(c->db, c->argv[1], LOOKUP_NOTOUCH)) == NULL) {

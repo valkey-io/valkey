@@ -59,6 +59,7 @@
  *
  * Utilities:
  *     bool vsetIsEmpty(vset *set) - used in order to check if a given set has any entries.
+ *     size_t vsetSize(vset *set) - returns the number of entries in the set. O(1).
  *
  * Iteration:
  *     void vsetInitIterator(vset *set, vsetIterator *it) - used to initialize a new vset iterator.
@@ -72,15 +73,21 @@
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
 /* Callback to be optionally provided to vsetRemoveExpired. when item is removed from the vset this callback will also be applied. */
 typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
-// vset is just a pointer to a bucket
-typedef void *vset;
+/* A vset is a tagged pointer to its root bucket plus the number of tracked entries.
+ * A NULL bucket means the set is not initialized (see vsetIsValid) and vsetInit must
+ * be called before using it. A zeroed vset is therefore a valid "not initialized" vset. */
+typedef struct vset {
+    void *bucket;
+    size_t size;
+} vset;
 
-typedef uint8_t vsetIterator[560];
+typedef uint8_t vsetIterator[600];
 
 bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 bool vsetIsEmpty(vset *set);
+size_t vsetSize(vset *set);
 void vsetInitIterator(vset *set, vsetIterator *it);
 bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetResetIterator(vsetIterator *it);

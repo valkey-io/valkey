@@ -30,14 +30,18 @@
 #include "server.h"
 #include "sha256.h"
 #include "module.h"
+#include "intset.h"
 #include <fcntl.h>
 #include <ctype.h>
+
+#include "script.h"
 
 /* =============================================================================
  * Global state for ACLs
  * ==========================================================================*/
 
 rax *Users; /* Table mapping usernames to user structures. */
+rax *Roles; /* Table mapping role names to user structures (with USER_FLAG_ROLE). */
 
 user *DefaultUser; /* Global reference to the default user.
                       Every new connection is associated to it, if no
@@ -51,10 +55,20 @@ list *UsersToLoad; /* This is a list of users found in the configuration file
                       array of SDS pointers: the first is the user name,
                       all the remaining pointers are ACL rules in the same
                       format as ACLSetUser(). */
+list *RolesToLoad; /* Similar to UsersToLoad, but for ACL roles. Every list
+                       element is a NULL terminated array of SDS pointers:
+                       the first is the role name, all the remaining pointers
+                       are ACL rules. Unlike a user, a role carries no
+                       password and cannot be turned on or off. */
 list *ACLLog;      /* Our security log, the user is able to inspect that
                       using the ACL LOG command .*/
 
 long long ACLLogEntryCount = 0; /* Number of ACL log entries created */
+
+static dictType aclMembershipDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = zfree,
+};
 
 static rax *commandId = NULL; /* Command name to id mapping */
 
@@ -88,6 +102,7 @@ struct ACLCategoryItem {
     {"connection", ACL_CATEGORY_CONNECTION},
     {"transaction", ACL_CATEGORY_TRANSACTION},
     {"scripting", ACL_CATEGORY_SCRIPTING},
+    {"pathhash", ACL_CATEGORY_PATHHASH},
     {NULL, 0} /* Terminator. */
 };
 
@@ -147,8 +162,6 @@ struct ACLUserFlag {
     {"on", USER_FLAG_ENABLED},
     {"off", USER_FLAG_DISABLED},
     {"nopass", USER_FLAG_NOPASS},
-    {"skip-sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD_SKIP},
-    {"sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD},
     {NULL, 0} /* Terminator. */
 };
 
@@ -180,6 +193,8 @@ typedef struct {
                           ALLCHANNELS is set in the user. */
     sds command_rules; /* A string representation of the ordered categories and commands, this
                         * is used to regenerate the original ACL string for display. */
+    intset *dbs;       /* Set of allowed database ids. If set is NULL or empty the user
+                        * cannot access any database, unless the flag ALLDBS is set. */
 } aclSelector;
 
 static void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id);
@@ -187,6 +202,14 @@ static void ACLResetFirstArgs(aclSelector *selector);
 static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub);
 static void ACLFreeLogEntry(void *le);
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
+static struct serverCommand *ACLLookupCommand(const char *name);
+static sds ACLDescribeSelector(aclSelector *selector);
+static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetlen);
+static sds *ACLMergeSelectorArguments(sds *argv, int argc, int *merged_argc, int *invalid_idx);
+static int ACLStringHasSpaces(const char *s, size_t len);
+static int ACLUserHasAllChannels(user *u);
+static list *ACLUserGetChannels(user *u);
+static int ACLShouldKillPubsubClient(client *c, list *upcoming);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN (SHA256_BLOCK_SIZE * 2)
@@ -208,23 +231,30 @@ static int time_independent_strcmp(char *a, char *b, int len) {
     return diff; /* If zero strings are the same. */
 }
 
+/* Given a binary digest of 'len' bytes, returns its lowercase hexadecimal
+ * representation as a new SDS string. */
+static sds ACLHexDigest(const unsigned char *digest, size_t len) {
+    const char *cset = "0123456789abcdef";
+    sds hex = sdsnewlen(SDS_NOINIT, len * 2);
+
+    for (size_t j = 0; j < len; j++) {
+        hex[j * 2] = cset[((digest[j] & 0xF0) >> 4)];
+        hex[j * 2 + 1] = cset[(digest[j] & 0xF)];
+    }
+    return hex;
+}
+
 /* Given an SDS string, returns the SHA256 hex representation as a
  * new SDS string. */
 static sds ACLHashPassword(unsigned char *cleartext, size_t len) {
     SHA256_CTX ctx;
     unsigned char hash[SHA256_BLOCK_SIZE];
-    char hex[HASH_PASSWORD_LEN];
-    char *cset = "0123456789abcdef";
 
     sha256_init(&ctx);
     sha256_update(&ctx, (unsigned char *)cleartext, len);
     sha256_final(&ctx, hash);
 
-    for (int j = 0; j < SHA256_BLOCK_SIZE; j++) {
-        hex[j * 2] = cset[((hash[j] & 0xF0) >> 4)];
-        hex[j * 2 + 1] = cset[(hash[j] & 0xF)];
-    }
-    return sdsnewlen(hex, HASH_PASSWORD_LEN);
+    return ACLHexDigest(hash, SHA256_BLOCK_SIZE);
 }
 
 /* Given a hash and the hash length, returns C_OK if it is a valid password
@@ -260,6 +290,29 @@ static int ACLStringHasSpaces(const char *s, size_t len) {
         if (isspace(s[i]) || s[i] == 0) return 1;
     }
     return 0;
+}
+
+/* Return an error string if the role name is not valid, or NULL if it is fine.
+ *
+ * A role name is any run of printable ASCII characters, except for the four
+ * that the name could not be read back through:
+ *
+ *  ','                 separates the names in the `role=` list of a user.
+ *  '"', '\'' and '\\'  are special to sdssplitargs(), which parses the ACL
+ *                      file and valkey.conf, and the writers emit the name
+ *                      unquoted.
+ *
+ * Space and the other control characters are excluded by the printable range,
+ * since they end a token in the same parser. */
+static const char *ACLRoleNameError(const char *name, size_t len) {
+    if (len == 0) return "Role names can't be empty";
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = name[i];
+        if (c <= ' ' || c >= 0x7f) return "Role names can only contain printable ASCII characters";
+        if (c == ',') return "Role names can't contain commas";
+        if (c == '"' || c == '\'' || c == '\\') return "Role names can't contain quotes or backslashes";
+    }
+    return NULL;
 }
 
 /* Given the category name the command returns the corresponding flag, or
@@ -350,8 +403,10 @@ static sds sdsCatPatternString(sds base, keyPattern *pat) {
 static aclSelector *ACLCreateSelector(int flags) {
     aclSelector *selector = zmalloc(sizeof(aclSelector));
     selector->flags = flags | server.acl_pubsub_default;
+    selector->flags |= SELECTOR_FLAG_ALLDBS;
     selector->patterns = listCreate();
     selector->channels = listCreate();
+    selector->dbs = intsetNew();
     selector->allowed_firstargs = NULL;
     selector->command_rules = sdsempty();
 
@@ -370,6 +425,7 @@ static aclSelector *ACLCreateSelector(int flags) {
 static void ACLFreeSelector(aclSelector *selector) {
     listRelease(selector->patterns);
     listRelease(selector->channels);
+    intsetFree(selector->dbs);
     sdsfree(selector->command_rules);
     ACLResetFirstArgs(selector);
     zfree(selector);
@@ -381,6 +437,7 @@ static aclSelector *ACLCopySelector(aclSelector *src) {
     dst->flags = src->flags;
     dst->patterns = listDup(src->patterns);
     dst->channels = listDup(src->channels);
+    dst->dbs = intsetDup(src->dbs);
     dst->command_rules = sdsdup(src->command_rules);
     memcpy(dst->allowed_commands, src->allowed_commands, sizeof(dst->allowed_commands));
     dst->allowed_firstargs = NULL;
@@ -426,7 +483,6 @@ static user *ACLCreateUser(const char *name, size_t namelen) {
     user *u = zmalloc(sizeof(*u));
     u->name = sdsnewlen(name, namelen);
     u->flags = USER_FLAG_DISABLED;
-    u->flags |= USER_FLAG_SANITIZE_PAYLOAD;
     u->passwords = listCreate();
     u->acl_string = NULL;
     listSetMatchMethod(u->passwords, ACLListMatchSds);
@@ -440,6 +496,9 @@ static user *ACLCreateUser(const char *name, size_t namelen) {
     /* Add the initial root selector */
     aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
     listAddNodeHead(u->selectors, s);
+
+    u->roles = listCreate();
+    u->members = NULL;
 
     raxInsert(Users, (unsigned char *)name, namelen, u, NULL);
     return u;
@@ -461,16 +520,49 @@ user *ACLCreateUnlinkedUser(void) {
     }
 }
 
+/* Remove user from all roles' member lists and release the roles list. */
+static void ACLUserClearRoles(user *u) {
+    if (!u->roles) return;
+    listIter li;
+    listNode *ln;
+    listRewind(u->roles, &li);
+    while ((ln = listNext(&li))) {
+        user *r = listNodeValue(ln);
+        dictDelete(r->members, u);
+    }
+    listRelease(u->roles);
+    u->roles = NULL;
+}
+
+/* Copy role assignments from src to dst, registering dst as a member of each
+ * role. The order src holds the roles in is preserved. */
+static void ACLCopyRoles(user *dst, user *src) {
+    if (!src->roles) return;
+    listIter li;
+    listNode *ln;
+    listRewind(src->roles, &li);
+    while ((ln = listNext(&li))) {
+        user *r = listNodeValue(ln);
+        listAddNodeTail(dst->roles, r);
+        serverAssert(dictAdd(r->members, dst, dst) == DICT_OK);
+    }
+}
+
 /* Release the memory used by the user structure. Note that this function
  * will not remove the user from the Users global radix tree. */
 void ACLFreeUser(user *u) {
+    ACLUserClearRoles(u);
     sdsfree(u->name);
     if (u->acl_string) {
         decrRefCount(u->acl_string);
         u->acl_string = NULL;
     }
-    listRelease(u->passwords);
+    if (u->passwords) listRelease(u->passwords);
     listRelease(u->selectors);
+    if (u->members) {
+        serverAssert(dictSize(u->members) == 0);
+        dictRelease(u->members);
+    }
     zfree(u);
 }
 
@@ -498,11 +590,7 @@ void ACLFreeUserAndKillClients(user *u) {
             clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
-            if (c == server.current_client) {
-                c->flag.close_after_command = 1;
-            } else {
-                freeClientAsync(c);
-            }
+            freeClientOrCloseLater(c, 1);
         }
     }
     ACLFreeUser(u);
@@ -512,9 +600,9 @@ void ACLFreeUserAndKillClients(user *u) {
  * user 'dst' so that at the end of the process they'll have exactly the
  * same rules (but the names will continue to be the original ones). */
 static void ACLCopyUser(user *dst, user *src) {
-    listRelease(dst->passwords);
+    if (dst->passwords) listRelease(dst->passwords);
     listRelease(dst->selectors);
-    dst->passwords = listDup(src->passwords);
+    dst->passwords = src->passwords ? listDup(src->passwords) : NULL;
     dst->selectors = listDup(src->selectors);
     dst->flags = src->flags;
     if (dst->acl_string) {
@@ -525,6 +613,207 @@ static void ACLCopyUser(user *dst, user *src) {
         /* if src is NULL, we set it to NULL, if not, need to increment reference count */
         incrRefCount(dst->acl_string);
     }
+    /* Clean up dst's existing role memberships, then copy from src. */
+    ACLUserClearRoles(dst);
+    if (src->roles) {
+        dst->roles = listCreate();
+        ACLCopyRoles(dst, src);
+    } else {
+        dst->roles = NULL;
+    }
+}
+
+/* =============================================================================
+ * ACL Role functions
+ * ==========================================================================*/
+
+/* Create a new ACL role with the given name and register it in the Roles
+ * radix tree. A role is a user with USER_FLAG_ROLE set, no passwords, and
+ * a members list. Returns NULL if a role with the same name already exists. */
+static user *ACLCreateRole(const char *name, size_t namelen) {
+    if (raxFind(Roles, (unsigned char *)name, namelen, NULL)) return NULL;
+
+    user *r = zmalloc(sizeof(*r));
+    r->name = sdsnewlen(name, namelen);
+    r->flags = USER_FLAG_ROLE;
+    r->passwords = NULL;
+    r->members = dictCreate(&aclMembershipDictType);
+    r->roles = NULL;
+    r->acl_string = NULL;
+    r->selectors = listCreate();
+
+    listSetFreeMethod(r->selectors, ACLListFreeSelector);
+    listSetDupMethod(r->selectors, ACLListDuplicateSelector);
+    aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
+    listAddNodeHead(r->selectors, s);
+
+    raxInsert(Roles, (unsigned char *)name, namelen, r, NULL);
+    return r;
+}
+
+/* Lookup a role by name. Returns NULL if not found. */
+user *ACLGetRoleByName(const char *name, size_t namelen) {
+    void *myrole = NULL;
+    raxFind(Roles, (unsigned char *)name, namelen, &myrole);
+    return myrole;
+}
+
+/* Replace the set of roles held by the user with the comma separated list of
+ * role names in `spec`, which is the part of the `role=` rule following the
+ * equal sign. The list has to name at least one role; use `resetroles` to
+ * leave the user with no role at all.
+ *
+ * Every name is resolved before the user is touched, so on error the user
+ * keeps the roles it had. Returns C_OK, or C_ERR with errno set to ESRCH if a
+ * role does not exist and EINVAL if the list is malformed. */
+static int ACLSetUserRoles(user *u, const char *spec, size_t speclen) {
+    /* An empty list, or a trailing comma leaving an empty last name, which the
+     * loop below cannot see. Leading and repeated commas are caught by the
+     * zero length check. */
+    if (speclen == 0 || spec[speclen - 1] == ',') {
+        errno = EINVAL;
+        return C_ERR;
+    }
+
+    list *resolved = listCreate();
+    const char *end = spec + speclen;
+    for (const char *p = spec; p < end;) {
+        const char *comma = memchr(p, ',', end - p);
+        size_t namelen = comma ? (size_t)(comma - p) : (size_t)(end - p);
+        user *r = namelen ? ACLGetRoleByName(p, namelen) : NULL;
+        if (!r) {
+            errno = namelen ? ESRCH : EINVAL;
+            listRelease(resolved);
+            return C_ERR;
+        }
+        listAddNodeTail(resolved, r);
+        p = comma ? comma + 1 : end;
+    }
+
+    ACLUserClearRoles(u);
+    u->roles = listCreate();
+
+    listIter li;
+    listNode *ln;
+    listRewind(resolved, &li);
+    while ((ln = listNext(&li))) {
+        user *r = listNodeValue(ln);
+        /* The same role may be named twice in the list, keep the first. */
+        if (listSearchKey(u->roles, r)) continue;
+        listAddNodeTail(u->roles, r);
+        serverAssert(dictAdd(r->members, u, u) == DICT_OK);
+    }
+    listRelease(resolved);
+    return C_OK;
+}
+
+/* High-level function to set multiple ACL rules on a role atomically.
+ * Uses a temporary role-flagged user + ACLSetUser() for validation.
+ * Returns NULL on success, or an SDS error string on failure. */
+static sds ACLStringSetRole(user *r, sds rolename, sds *argv, int argc) {
+    sds error = NULL;
+
+    /* Create a temporary role-flagged user to validate all changes */
+    user *tempr = zmalloc(sizeof(*tempr));
+    tempr->name = sdsdup(rolename);
+    tempr->flags = USER_FLAG_ROLE;
+    tempr->passwords = NULL;
+    tempr->roles = NULL;
+    tempr->members = NULL;
+    tempr->acl_string = NULL;
+    tempr->selectors = listCreate();
+    listSetFreeMethod(tempr->selectors, ACLListFreeSelector);
+    listSetDupMethod(tempr->selectors, ACLListDuplicateSelector);
+
+    /* If role already exists, copy its selectors */
+    if (r) {
+        listRelease(tempr->selectors);
+        tempr->selectors = listDup(r->selectors);
+    } else {
+        aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
+        listAddNodeHead(tempr->selectors, s);
+    }
+
+    int merged_argc = 0, invalid_idx = 0;
+    sds *acl_args = ACLMergeSelectorArguments(argv, argc, &merged_argc, &invalid_idx);
+    if (!acl_args) {
+        error = sdscatfmt(sdsempty(), "Unmatched parenthesis in selector definition starting at '%s'.",
+                          (char *)argv[invalid_idx]);
+        ACLFreeUser(tempr);
+        return error;
+    }
+
+    for (int j = 0; j < merged_argc; j++) {
+        if (ACLSetUser(tempr, acl_args[j], (ssize_t)sdslen(acl_args[j])) != C_OK) {
+            const char *errmsg = ACLSetStringError();
+            error = sdscatfmt(sdsempty(), "Error in ACL SETROLE modifier '%s': %s", (char *)acl_args[j], errmsg);
+            goto cleanup;
+        }
+    }
+
+    /* Apply changes: if role doesn't exist, create it; otherwise update it */
+    if (!r) {
+        r = ACLCreateRole(rolename, sdslen(rolename));
+        serverAssert(r != NULL);
+    }
+
+    /* Save old selectors before updating. */
+    list *old_selectors = r->selectors;
+    r->selectors = listDup(tempr->selectors);
+
+    /* Kill pubsub clients of member users whose channel access was revoked.
+     * Since the role's selectors are already updated, the member's effective
+     * permissions reflect the new state. We build the new channel list from
+     * the member's effective permissions and check each client against it. */
+    if (pubsubTotalSubscriptions() > 0 && dictSize(r->members) > 0) {
+        dictIterator *mdi = dictGetIterator(r->members);
+        dictEntry *mde;
+        while ((mde = dictNext(mdi))) {
+            user *member = dictGetVal(mde);
+            if (ACLUserHasAllChannels(member)) continue;
+
+            list *upcoming = ACLUserGetChannels(member);
+            listIter cli;
+            listNode *cln;
+            listRewind(server.clients, &cli);
+            while ((cln = listNext(&cli))) {
+                client *c = listNodeValue(cln);
+                if (c->user != member) continue;
+                if (ACLShouldKillPubsubClient(c, upcoming)) {
+                    freeClientOrCloseLater(c, 0);
+                }
+            }
+            listRelease(upcoming);
+        }
+        dictReleaseIterator(mdi);
+    }
+
+    listRelease(old_selectors);
+
+    if (r->acl_string) {
+        decrRefCount(r->acl_string);
+        r->acl_string = NULL;
+    }
+
+    /* Invalidate acl_string cache for all member users */
+    {
+        dictIterator *di = dictGetIterator(r->members);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            user *u = dictGetVal(de);
+            if (u->acl_string) {
+                decrRefCount(u->acl_string);
+                u->acl_string = NULL;
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
+cleanup:
+    for (int i = 0; i < merged_argc; i++) sdsfree(acl_args[i]);
+    zfree(acl_args);
+    ACLFreeUser(tempr);
+    return error;
 }
 
 /* Given a command ID, this function set by reference 'word' and 'bit'
@@ -649,14 +938,14 @@ static void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *c
             struct serverCommand *sub = next;
             ACLSetSelectorCommandBit(selector, sub->id, allow);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     }
 }
 
 /* This is like ACLSetSelectorCommandBit(), but instead of setting the specified
  * ID, it will check all the commands in the category specified as argument,
  * and will set all the bits corresponding to such commands to the specified
- * value. Since the category passed by the user may be non existing, the
+ * value. Since the category passed by the user may be nonexistent, the
  * function returns C_ERR if the category was not found, or C_OK if it was
  * found and the operation was performed. */
 static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelector *selector, uint64_t cflag, int value) {
@@ -672,15 +961,14 @@ static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelecto
             ACLSetSelectorCommandBitsForCategory(cmd->subcommands_ht, selector, cflag, value);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
-/* This function is responsible for recomputing the command bits for all selectors of the existing users.
- * It uses the 'command_rules', a string representation of the ordered categories and commands,
- * to recompute the command bits. */
-void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
+/* Recompute the command bits for all selectors of every entry in table, which
+ * is either the Users or the Roles radix tree. */
+static void ACLRecomputeCommandBitsFromCommandRulesInTable(rax *table) {
     raxIterator ri;
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
@@ -712,6 +1000,14 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
     raxStop(&ri);
 }
 
+/* This function is responsible for recomputing the command bits for all selectors of the existing users.
+ * It uses the 'command_rules', a string representation of the ordered categories and commands,
+ * to recompute the command bits. */
+void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
+    ACLRecomputeCommandBitsFromCommandRulesInTable(Users);
+    ACLRecomputeCommandBitsFromCommandRulesInTable(Roles);
+}
+
 static int ACLSetSelectorCategory(aclSelector *selector, const char *category, int allow) {
     uint64_t cflag = ACLGetCommandCategoryFlagByName(category + 1);
     if (!cflag) return C_ERR;
@@ -721,6 +1017,64 @@ static int ACLSetSelectorCategory(aclSelector *selector, const char *category, i
     /* Set the actual command bits on the selector. */
     ACLSetSelectorCommandBitsForCategory(server.orig_commands, selector, cflag, allow);
     return C_OK;
+}
+
+/* Check if any entry in table, which is either the Users or the Roles radix
+ * tree, has command rules referencing the specified module. */
+static int ACLTableHasModuleCommandRules(rax *table, const struct ValkeyModule *module, sds *rule_out) {
+    raxIterator ri;
+    raxStart(&ri, table);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        listIter li;
+        listNode *ln;
+        listRewind(u->selectors, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            aclSelector *selector = listNodeValue(ln);
+            if (sdslen(selector->command_rules) == 0) continue;
+
+            int argc = 0;
+            sds *argv = sdssplitargs(selector->command_rules, &argc);
+            if (!argv) continue;
+
+            for (int i = 0; i < argc; i++) {
+                sds rule = argv[i];
+                if (rule[0] != '+' && rule[0] != '-') continue;
+                if (rule[1] == '@') continue;
+
+                struct serverCommand *cmd = ACLLookupCommand(rule + 1);
+                if (!cmd) {
+                    const char *subsep = strchr(rule + 1, '|');
+                    if (subsep) {
+                        size_t base_len = (size_t)(subsep - (rule + 1));
+                        sds base = sdsnewlen(rule + 1, base_len);
+                        cmd = ACLLookupCommand(base);
+                        sdsfree(base);
+                    }
+                }
+                if (!cmd || !(cmd->flags & CMD_MODULE)) continue;
+                if (moduleFromCommand(cmd) != module) continue;
+
+                if (rule_out) *rule_out = sdsdup(rule);
+                sdsfreesplitres(argv, argc);
+                raxStop(&ri);
+                return 1;
+            }
+            sdsfreesplitres(argv, argc);
+        }
+    }
+    raxStop(&ri);
+    return 0;
+}
+
+/* Check if any ACL user has command rules referencing the specified module.
+ * If rule_out is not NULL, it will be set to a duplicate of the first matching
+ * rule.
+ * Returns 1 if any rules are found, 0 otherwise. */
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
+    if (ACLTableHasModuleCommandRules(Users, module, rule_out)) return 1;
+    return ACLTableHasModuleCommandRules(Roles, module, rule_out);
 }
 
 /* This function returns an SDS string representing the specified selector ACL
@@ -810,6 +1164,25 @@ static sds ACLDescribeSelector(aclSelector *selector) {
         }
     }
 
+    /* Database permissions. */
+    if (selector->flags & SELECTOR_FLAG_ALLDBS) {
+        /* alldbs is default, avoid emitting it in ACL strings for compatibility. */
+    } else if (intsetLen(selector->dbs) == 0) {
+        res = sdscatlen(res, "resetdbs ", 9);
+    } else {
+        res = sdscatlen(res, "db=", 3);
+        uint32_t len = intsetLen(selector->dbs);
+        for (uint32_t i = 0; i < len; i++) {
+            int64_t dbid;
+            if (intsetGet(selector->dbs, i, &dbid)) {
+                if (i > 0) res = sdscatlen(res, ",", 1);
+                res = sdscatfmt(res, "%I", dbid);
+            }
+        }
+
+        res = sdscatlen(res, " ", 1);
+    }
+
     /* Command rules. */
     sds rules = ACLDescribeSelectorCommandRules(selector);
     res = sdscatsds(res, rules);
@@ -831,26 +1204,31 @@ robj *ACLDescribeUser(user *u) {
 
     sds res = sdsempty();
 
-    /* Flags. */
-    for (int j = 0; ACLUserFlags[j].flag; j++) {
-        if (u->flags & ACLUserFlags[j].flag) {
-            res = sdscat(res, ACLUserFlags[j].name);
+    /* For roles, skip flags and passwords. */
+    if (!(u->flags & USER_FLAG_ROLE)) {
+        /* Flags. */
+        for (int j = 0; ACLUserFlags[j].flag; j++) {
+            if (u->flags & ACLUserFlags[j].flag) {
+                res = sdscat(res, ACLUserFlags[j].name);
+                res = sdscatlen(res, " ", 1);
+            }
+        }
+
+        /* Passwords. */
+        listIter li;
+        listNode *ln;
+        listRewind(u->passwords, &li);
+        while ((ln = listNext(&li))) {
+            sds thispass = listNodeValue(ln);
+            res = sdscatlen(res, "#", 1);
+            res = sdscatsds(res, thispass);
             res = sdscatlen(res, " ", 1);
         }
     }
 
-    /* Passwords. */
+    /* Selectors (Commands and keys) */
     listIter li;
     listNode *ln;
-    listRewind(u->passwords, &li);
-    while ((ln = listNext(&li))) {
-        sds thispass = listNodeValue(ln);
-        res = sdscatlen(res, "#", 1);
-        res = sdscatsds(res, thispass);
-        res = sdscatlen(res, " ", 1);
-    }
-
-    /* Selectors (Commands and keys) */
     listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
         aclSelector *selector = (aclSelector *)listNodeValue(ln);
@@ -863,11 +1241,66 @@ robj *ACLDescribeUser(user *u) {
         sdsfree(default_perm);
     }
 
+    /* Role memberships (only for users, not roles), in assignment order. */
+    if (u->roles && listLength(u->roles) > 0) {
+        listIter li;
+        listNode *ln;
+        listRewind(u->roles, &li);
+        const char *sep = " role=";
+        while ((ln = listNext(&li))) {
+            user *r = listNodeValue(ln);
+            res = sdscatfmt(res, "%s%S", sep, r->name);
+            sep = ",";
+        }
+    }
+
     u->acl_string = createObject(OBJ_STRING, res);
     /* because we are returning it, have to increase count */
     incrRefCount(u->acl_string);
 
     return u->acl_string;
+}
+
+/* XOR the digest of every entry of 'table' into 'digest'. An entry is hashed as
+ * the line ACL LIST reports for it, so the keyword keeps a role and a user of
+ * the same name from cancelling each other out. */
+static void ACLDigestAddTable(rax *table, const char *keyword, unsigned char *digest) {
+    raxIterator ri;
+
+    raxStart(&ri, table);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        robj *rules = ACLDescribeUser(u);
+        sds rulestr = objectGetVal(rules);
+        unsigned char entry[SHA256_BLOCK_SIZE];
+        SHA256_CTX ctx;
+
+        sha256_init(&ctx);
+        sha256_update(&ctx, (unsigned char *)keyword, strlen(keyword));
+        sha256_update(&ctx, (unsigned char *)u->name, sdslen(u->name));
+        sha256_update(&ctx, (unsigned char *)" ", 1);
+        sha256_update(&ctx, (unsigned char *)rulestr, sdslen(rulestr));
+        sha256_final(&ctx, entry);
+        decrRefCount(rules);
+
+        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= entry[j];
+    }
+    raxStop(&ri);
+}
+
+/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
+ * string holding the hex representation of the digest.
+ *
+ * The digest is the XOR-combined SHA256 of every line ACL LIST reports, roles
+ * included. A user only names the roles it holds, so the role rules have to be
+ * hashed on their own for an edit to one to reach the digest. */
+static sds ACLDigest(void) {
+    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+
+    ACLDigestAddTable(Roles, "role ", digest);
+    ACLDigestAddTable(Users, "user ", digest);
+    return ACLHexDigest(digest, SHA256_BLOCK_SIZE);
 }
 
 /* Get a command from the original command table, that is not affected
@@ -935,6 +1368,71 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
     selector->allowed_firstargs[id][items - 1] = NULL;
 }
 
+/* Clean up and return error from database permission operations. */
+static int ACLDatabasePermissionError(intset *new_dbs, sds dblist, sds *tokens, int count, int error_code) {
+    if (tokens) sdsfreesplitres(tokens, count);
+    if (new_dbs) intsetFree(new_dbs);
+    if (dblist) sdsfree(dblist);
+    errno = error_code;
+    return C_ERR;
+}
+
+/* Helper function to add database permissions to a selector. */
+static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str) {
+    /* Initialize the database intset */
+    intset *new_dbs = intsetNew();
+
+    if (selector->flags & SELECTOR_FLAG_ALLDBS) {
+        selector->flags &= ~SELECTOR_FLAG_ALLDBS;
+    }
+
+    sds dblist = sdsnew(dbs_str);
+    size_t len = sdslen(dblist);
+
+    /* Reject empty list, leading or trailing commas */
+    if (len == 0 || dblist[0] == ',' || dblist[len - 1] == ',') {
+        return ACLDatabasePermissionError(new_dbs, dblist, NULL, 0, EINVAL);
+    }
+
+    int count;
+    sds *tokens = sdssplitlen(dblist, len, ",", 1, &count);
+
+    for (int i = 0; i < count; i++) {
+        /* Reject empty tokens */
+        if (sdslen(tokens[i]) == 0) {
+            return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, EINVAL);
+        }
+
+        char *endptr = NULL;
+        errno = 0;
+        int64_t dbid = strtoll(tokens[i], &endptr, 10);
+
+        /* Reject invalid input format */
+        if (*endptr != '\0') {
+            return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, EINVAL);
+        }
+
+        /* Reject out of range values */
+        if (errno == ERANGE || dbid < 0 || dbid > INT32_MAX) {
+            return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, ERANGE);
+        }
+
+        /* No error check needed - duplicates will not be added */
+        intset *result = intsetAdd(new_dbs, dbid, NULL);
+        new_dbs = result;
+    }
+
+    sdsfreesplitres(tokens, count);
+
+    if (selector->dbs) {
+        intsetFree(selector->dbs);
+    }
+    selector->dbs = new_dbs;
+
+    sdsfree(dblist);
+    return C_OK;
+}
+
 /* Create an ACL selector from the given ACL operations, which should be
  * a list of space separate ACL operations that starts and ends
  * with parentheses.
@@ -946,8 +1444,7 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
     aclSelector *s = ACLCreateSelector(0);
 
     int argc = 0;
-    sds trimmed = sdsnewlen(opset + 1, opsetlen - 2);
-    sds *argv = sdssplitargs(trimmed, &argc);
+    sds *argv = sdsnsplitargs(opset + 1, opsetlen - 2, &argc);
     for (int i = 0; i < argc; i++) {
         if (ACLSetSelector(s, argv[i], sdslen(argv[i])) == C_ERR) {
             ACLFreeSelector(s);
@@ -957,7 +1454,6 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
     }
 
     sdsfreesplitres(argv, argc);
-    sdsfree(trimmed);
     return s;
 }
 
@@ -997,6 +1493,10 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  *              It is possible to specify multiple patterns.
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
+ * db=<dbid>    Sets the specified database id(s) as the databases the selector is allowed to access.
+ *              May be used with `,` for adding multiple IDs (e.g "db=1,2,3").
+ * alldbs       Allow access to all databases.
+ * resetdbs     Flush the set of allowed database IDs.
  */
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
     if (!strcasecmp(op, "allkeys") || !strcasecmp(op, "~*")) {
@@ -1011,6 +1511,21 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
     } else if (!strcasecmp(op, "resetchannels")) {
         selector->flags &= ~SELECTOR_FLAG_ALLCHANNELS;
         listEmpty(selector->channels);
+    } else if (!strcasecmp(op, "alldbs")) {
+        selector->flags |= SELECTOR_FLAG_ALLDBS;
+        if (selector->dbs) {
+            intsetFree(selector->dbs);
+            selector->dbs = intsetNew();
+        }
+    } else if (!strcasecmp(op, "resetdbs")) {
+        selector->flags &= ~SELECTOR_FLAG_ALLDBS;
+        if (selector->dbs) {
+            intsetFree(selector->dbs);
+            selector->dbs = intsetNew();
+        }
+    } else if (strncasecmp(op, "db=", 3) == 0) {
+        int result = ACLSetSelectorDatabasePermissions(selector, op + 3);
+        if (result != C_OK) return result;
     } else if (!strcasecmp(op, "allcommands") || !strcasecmp(op, "+@all")) {
         memset(selector->allowed_commands, 255, sizeof(selector->allowed_commands));
         selector->flags |= SELECTOR_FLAG_ALLCOMMANDS;
@@ -1176,8 +1691,6 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * off          Disable the user: it's no longer possible to authenticate
  *              with this user, however the already authenticated connections
  *              will still work.
- * skip-sanitize-payload    RESTORE dump-payload sanitization is skipped.
- * sanitize-payload         RESTORE dump-payload is sanitized (default).
  * ><password>  Add this password to the list of valid password for the user.
  *              For example >mypass will add "mypass" to the list.
  *              This directive clears the "nopass" flag (see later).
@@ -1201,8 +1714,13 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  *              passwords and there is no way to authenticate without adding
  *              some password (or setting it as "nopass" later).
  * reset        Performs the following actions: resetpass, resetkeys, resetchannels,
- *              allchannels (if acl-pubsub-default is set), off, clearselectors, -@all.
+ *              allchannels (if acl-pubsub-default is set), alldbs (for backwards compatibility),
+ *              off, sanitize-payload, clearselectors, -@all, resetroles.
  *              The user returns to the same state it has immediately after its creation.
+ * role=<name>  Replace the set of roles held by the user with the named ones.
+ *              May be used with `,` for naming several roles (e.g "role=a,b").
+ *              At least one role has to be named.
+ * resetroles   Remove every role from the user.
  * (<options>)  Create a new selector with the options specified within the
  *              parentheses and attach it to the user. Each option should be
  *              space separated. The first character must be ( and the last
@@ -1218,16 +1736,16 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * The 'op' string must be null terminated. The 'oplen' argument should
  * specify the length of the 'op' string in case the caller requires to pass
  * binary data (for instance the >password form may use a binary password).
- * Otherwise the field can be set to -1 and the function will use strlen()
+ * Otherwise, the field can be set to -1 and the function will use strlen()
  * to determine the length.
  *
  * The function returns C_OK if the action to perform was understood because
- * the 'op' string made sense. Otherwise C_ERR is returned if the operation
+ * the 'op' string made sense. Otherwise, C_ERR is returned if the operation
  * is unknown or has some syntax error.
  *
  * When an error is returned, errno is set to the following values:
  *
- * EINVAL: The specified opcode is not understood or the key/channel pattern is
+ * EINVAL: The specified opcode is not understood or the key/channel/db pattern is
  *         invalid (contains non allowed characters).
  * ENOENT: The command name or command category provided with + or - is not
  *         known.
@@ -1238,6 +1756,7 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * ENODEV: The password you are trying to remove from the user does not exist.
  * EBADMSG: The hash you are trying to add is not a valid hash.
  * ECHILD: Attempt to allow a specific first argument of a subcommand
+ * ERANGE: A database ID provided with the db= rule is out of the supported range.
  */
 int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     /* as we are changing the ACL, the old generated string is now invalid */
@@ -1248,18 +1767,34 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
 
     if (oplen == -1) oplen = strlen(op);
     if (oplen == 0) return C_OK; /* Empty string is a no-operation. */
+
+    /* Roles cannot use user-only operations. */
+    if (u->flags & USER_FLAG_ROLE) {
+        if (!strcasecmp(op, "on") || !strcasecmp(op, "off") ||
+            !strcasecmp(op, "nopass") || !strcasecmp(op, "resetpass") ||
+            !strcasecmp(op, "reset") ||
+            !strcasecmp(op, "skip-sanitize-payload") ||
+            !strcasecmp(op, "sanitize-payload") ||
+            op[0] == '>' || op[0] == '#' || op[0] == '<' || op[0] == '!') {
+            errno = EINVAL;
+            return C_ERR;
+        }
+        /* Roles cannot have roles */
+        if (!strcasecmp(op, "resetroles") || (oplen >= 5 && !strncasecmp(op, "role=", 5))) {
+            errno = EINVAL;
+            return C_ERR;
+        }
+    }
+
     if (!strcasecmp(op, "on")) {
         u->flags |= USER_FLAG_ENABLED;
         u->flags &= ~USER_FLAG_DISABLED;
     } else if (!strcasecmp(op, "off")) {
         u->flags |= USER_FLAG_DISABLED;
         u->flags &= ~USER_FLAG_ENABLED;
-    } else if (!strcasecmp(op, "skip-sanitize-payload")) {
-        u->flags |= USER_FLAG_SANITIZE_PAYLOAD_SKIP;
-        u->flags &= ~USER_FLAG_SANITIZE_PAYLOAD;
-    } else if (!strcasecmp(op, "sanitize-payload")) {
-        u->flags &= ~USER_FLAG_SANITIZE_PAYLOAD_SKIP;
-        u->flags |= USER_FLAG_SANITIZE_PAYLOAD;
+    } else if (!strcasecmp(op, "skip-sanitize-payload") || !strcasecmp(op, "sanitize-payload")) {
+        /* These flags are deprecated and have no effect. Accept them silently
+         * for backwards compatibility with old ACL files. */
     } else if (!strcasecmp(op, "nopass")) {
         u->flags |= USER_FLAG_NOPASS;
         listEmpty(u->passwords);
@@ -1328,10 +1863,17 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "resetchannels", -1) == C_OK);
         if (server.acl_pubsub_default & SELECTOR_FLAG_ALLCHANNELS)
             serverAssert(ACLSetUser(u, "allchannels", -1) == C_OK);
+        /* Reset to `alldbs` for backwards compatibility */
+        serverAssert(ACLSetUser(u, "alldbs", -1) == C_OK);
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
-        serverAssert(ACLSetUser(u, "sanitize-payload", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
+        serverAssert(ACLSetUser(u, "resetroles", -1) == C_OK);
+    } else if (!strcasecmp(op, "resetroles")) {
+        ACLUserClearRoles(u);
+        u->roles = listCreate();
+    } else if (oplen >= 5 && !strncasecmp(op, "role=", 5)) {
+        if (ACLSetUserRoles(u, op + 5, oplen - 5) == C_ERR) return C_ERR;
     } else {
         aclSelector *selector = ACLUserGetRootSelector(u);
         if (ACLSetSelector(selector, op, oplen) == C_ERR) {
@@ -1341,9 +1883,9 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     return C_OK;
 }
 
-/* Return a description of the error that occurred in ACLSetUser() according to
- * the errno value set by the function on error. */
-const char *ACLSetUserStringError(void) {
+/* Return a description of the error that occurred in ACLSetUser()
+ * according to the errno value set on error. */
+const char *ACLSetStringError(void) {
     const char *errmsg = "Wrong format";
     if (errno == ENOENT)
         errmsg = "Unknown command or category name in ACL";
@@ -1368,8 +1910,18 @@ const char *ACLSetUserStringError(void) {
     else if (errno == EALREADY)
         errmsg = "Duplicate user found. A user can only be defined once in "
                  "config files";
+    else if (errno == EBUSY)
+        errmsg = "Duplicate role found. A role can only be defined once in "
+                 "config files";
+    else if (errno == EILSEQ)
+        errmsg = "Role names can't be empty and can only contain printable "
+                 "ASCII characters, excluding commas, quotes and backslashes";
     else if (errno == ECHILD)
         errmsg = "Allowing first-arg of a subcommand is not supported";
+    else if (errno == ERANGE)
+        errmsg = "The provided database ID is out of range";
+    else if (errno == ESRCH)
+        errmsg = "The specified ACL role does not exist";
     return errmsg;
 }
 
@@ -1381,15 +1933,19 @@ static user *ACLCreateDefaultUser(void) {
     ACLSetUser(new, "&*", -1);
     ACLSetUser(new, "on", -1);
     ACLSetUser(new, "nopass", -1);
+    ACLSetUser(new, "alldbs", -1);
     return new;
 }
 
 /* Initialization of the ACL subsystem. */
 void ACLInit(void) {
     Users = raxNew();
+    Roles = raxNew();
     UsersToLoad = listCreate();
+    RolesToLoad = listCreate();
     ACLInitCommandCategories();
     listSetMatchMethod(UsersToLoad, ACLListMatchLoadedUser);
+    listSetMatchMethod(RolesToLoad, ACLListMatchLoadedUser);
     ACLLog = listCreate();
     DefaultUser = ACLCreateDefaultUser();
 }
@@ -1401,7 +1957,7 @@ void ACLInit(void) {
  *  ENOENT: if the specified user does not exist at all.
  */
 int ACLCheckUserCredentials(robj *username, robj *password) {
-    user *u = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+    user *u = ACLGetUserByName(objectGetVal(username), sdslen(objectGetVal(username)));
     if (u == NULL) {
         errno = ENOENT;
         return C_ERR;
@@ -1421,7 +1977,7 @@ int ACLCheckUserCredentials(robj *username, robj *password) {
     listIter li;
     listNode *ln;
     listRewind(u->passwords, &li);
-    sds hashed = ACLHashPassword(password->ptr, sdslen(password->ptr));
+    sds hashed = ACLHashPassword(objectGetVal(password), sdslen(objectGetVal(password)));
     while ((ln = listNext(&li))) {
         sds thispass = listNodeValue(ln);
         if (!time_independent_strcmp(hashed, thispass, HASH_PASSWORD_LEN)) {
@@ -1449,7 +2005,7 @@ void addAuthErrReply(client *c, robj *err) {
         addReplyError(c, "-WRONGPASS invalid username-password pair or user is disabled.");
         return;
     }
-    addReplyError(c, err->ptr);
+    addReplyError(c, objectGetVal(err));
 }
 
 /* This is like ACLCheckUserCredentials(), however if the user/pass
@@ -1458,16 +2014,25 @@ void addAuthErrReply(client *c, robj *err) {
  *
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
+    int result;
+
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        user *user = ACLGetUserByName(objectGetVal(username), sdslen(objectGetVal(username)));
         clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
-        return AUTH_OK;
+        result = AUTH_OK;
     } else {
-        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
+        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, objectGetVal(username),
                        NULL);
-        return AUTH_ERR;
+        result = AUTH_ERR;
     }
+
+    moduleFireAuthenticationEvent(c->id,
+                                  objectGetVal(username),
+                                  NULL,
+                                  result == AUTH_OK);
+
+    return result;
 }
 
 /* Attempt authenticating the user - first through module based authentication,
@@ -1532,13 +2097,31 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  * ACL permission checks
  * ==========================================================================*/
 
-/* Check if the key can be accessed by the selector.
+/* Checks whether a given key is allowed for the specified ACL selector.
  *
- * If the selector can access the key, ACL_OK is returned, otherwise
- * ACL_DENIED_KEY is returned. */
-static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags) {
+ * The function evaluates the key against the selector's patterns, taking into account
+ * the requested key access flags (read/write) and whether the key should be
+ * treated as a prefix. If the selector has the SELECTOR_FLAG_ALLKEYS flag set,
+ * the check always succeeds.
+ *
+ * - selector The ACL selector containing the allowed key patterns.
+ * - key           Pointer to the key string to check.
+ * - keylen        Length of the key in bytes.
+ * - keyspec_flags Bitmask of requested key operations (e.g., CMD_KEY_ACCESS,
+ *                 CMD_KEY_INSERT, CMD_KEY_DELETE, CMD_KEY_UPDATE).
+ * - is_prefix     If true, the key is compared as a prefix against the selector's
+ *                 patterns using prefixmatchlen rather than a full string match.
+ *
+ * This function returns ACL_OK if the key matches at least one pattern that allows the requested
+ * operations; otherwise, ACL_DENIED_KEY.
+ */
+static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags, bool is_prefix) {
     /* The selector can access any key */
     if (selector->flags & SELECTOR_FLAG_ALLKEYS) return ACL_OK;
+
+    /* NOT_KEY entries are routing-only tokens, not real user keys.
+     * Bypass key-pattern ACL checks, consistent with how keyspecs skip them. */
+    if (keyspec_flags & CMD_KEY_NOT_KEY) return ACL_OK;
 
     listIter li;
     listNode *ln;
@@ -1555,12 +2138,18 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
         keyPattern *pattern = listNodeValue(ln);
         if ((pattern->flags & key_flags) != key_flags) continue;
         size_t plen = sdslen(pattern->pattern);
+        if (is_prefix) {
+            if (prefixmatchlen(pattern->pattern, plen, key, keylen, 0))
+                return ACL_OK;
+            else
+                continue;
+        }
         if (stringmatchlen(pattern->pattern, plen, key, keylen, 0)) return ACL_OK;
     }
     return ACL_DENIED_KEY;
 }
 
-/* Checks if the provided selector selector has access specified in flags
+/* Checks if the provided selector has access specified in flags
  * to all keys in the keyspace. For example, CMD_KEY_READ access requires either
  * '%R~*', '~*', or allkeys to be granted to the selector. Returns 1 if all
  * the access flags are satisfied with this selector or 0 otherwise.
@@ -1616,6 +2205,17 @@ static int ACLCheckChannelAgainstList(list *reference, const char *channel, int 
     return ACL_DENIED_CHANNEL;
 }
 
+/* Check if selector allows access to the specified database */
+static inline int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) {
+    if (selector->flags & SELECTOR_FLAG_ALLDBS)
+        return 1;
+
+    if (dbid < 0 || dbid >= server.dbnum || !selector->dbs)
+        return 0;
+
+    return intsetFind(selector->dbs, dbid);
+}
+
 /* To prevent duplicate calls to getKeysResult, a cache is maintained
  * in between calls to the various selectors. */
 typedef struct {
@@ -1631,22 +2231,73 @@ static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
     if (cache->keys_init) getKeysFreeResult(&(cache->keys));
 }
 
+/* Inline func to check if command should be restricted */
+static inline int shouldRestrictCmd(struct serverCommand *cmd) {
+    return (cmd->acl_categories & ACL_CATEGORY_KEYSPACE) ||
+           (cmd->acl_categories & ACL_CATEGORY_READ) ||
+           (cmd->acl_categories & ACL_CATEGORY_WRITE) ||
+           doesCommandHaveKeys(cmd);
+}
+
 /* Check if the command is ready to be executed according to the
  * ACLs associated with the specified selector.
  *
- * If the selector can execute the command ACL_OK is returned, otherwise
- * ACL_DENIED_CMD, ACL_DENIED_KEY, or ACL_DENIED_CHANNEL is returned: the first in case the
+ * If the selector can execute the command ACL_OK is returned; otherwise,
+ * ACL_DENIED_CMD, ACL_DENIED_KEY, ACL_DENIED_CHANNEL or ACL_DENIED_DB is returned: the first in case the
  * command cannot be executed because the selector is not allowed to run such
- * command, the second and third if the command is denied because the selector is trying
- * to access a key or channel that are not among the specified patterns. */
+ * command, the second, third and fourth if the command is denied because the selector is trying
+ * to access a key, channel or database that are not among the specified patterns. */
 static int ACLSelectorCheckCmd(aclSelector *selector,
                                struct serverCommand *cmd,
                                robj **argv,
                                int argc,
                                int *keyidxptr,
-                               aclKeyResultCache *cache) {
+                               aclKeyResultCache *cache,
+                               int dbid) {
     uint64_t id = cmd->id;
     int ret;
+
+    /* Check database level permissions based on cmd->get_dbid_args implementation. */
+    if (cmd->get_dbid_args) {
+        int count = 0;
+        int *positions = cmd->get_dbid_args(argv, argc, &count);
+        if (positions) {
+            for (int i = 0; i < count; i++) {
+                long long argdbid;
+                /* The helper has already validated argv[positions[i]] as a
+                 * valid in-range dbid, so this should never fail. */
+                serverAssert(getLongLongFromObject(argv[positions[i]], &argdbid) == C_OK);
+                if (!ACLSelectorCanAccessDb(selector, (int)argdbid)) {
+                    if (keyidxptr) *keyidxptr = positions[i];
+                    zfree(positions);
+                    return ACL_DENIED_DB;
+                }
+            }
+            zfree(positions);
+        }
+        /* Commands such as MOVE and COPY also read from / operate on the keys
+         * in the current database, not just the destination database named in
+         * their arguments. The current database must therefore be authorized
+         * as well, otherwise a user without access to the current DB could use
+         * MOVE/COPY to exfiltrate its keys into a database it can access.
+         * This only applies to commands that carry real keys: SELECT and SWAPDB
+         * also declare dbid args but do not touch the current DB's keys. */
+        if (doesCommandHaveKeys(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+            if (keyidxptr) *keyidxptr = 0;
+            return ACL_DENIED_DB;
+        }
+    } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
+        for (int i = 0; i < server.dbnum; i++) {
+            if (!ACLSelectorCanAccessDb(selector, i)) {
+                if (keyidxptr) *keyidxptr = 0;
+                return ACL_DENIED_DB;
+            }
+        }
+    } else if (shouldRestrictCmd(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+        if (keyidxptr) *keyidxptr = 0;
+        return ACL_DENIED_DB;
+    }
+
     if (!(selector->flags & SELECTOR_FLAG_ALLCOMMANDS) && !(cmd->flags & CMD_NO_AUTH)) {
         /* If the bit is not set we have to check further, in case the
          * command is allowed just with that specific first argument. */
@@ -1660,7 +2311,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             while (1) {
                 if (selector->allowed_firstargs[id][subid] == NULL) return ACL_DENIED_CMD;
                 int idx = cmd->parent ? 2 : 1;
-                if (!strcasecmp(argv[idx]->ptr, selector->allowed_firstargs[id][subid]))
+                if (!strcasecmp(objectGetVal(argv[idx]), selector->allowed_firstargs[id][subid]))
                     break; /* First argument match found. Stop here. */
                 subid++;
             }
@@ -1679,7 +2330,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         keyReference *resultidx = result->keys;
         for (int j = 0; j < result->numkeys; j++) {
             int idx = resultidx[j].pos;
-            ret = ACLSelectorCheckKey(selector, argv[idx]->ptr, sdslen(argv[idx]->ptr), resultidx[j].flags);
+            ret = ACLSelectorCheckKey(selector, objectGetVal(argv[idx]), sdslen(objectGetVal(argv[idx])), resultidx[j].flags, false);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = resultidx[j].pos;
                 return ret;
@@ -1700,7 +2351,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             if (!(channelref[j].flags & channel_flags)) continue;
             int is_pattern = channelref[j].flags & CMD_CHANNEL_PATTERN;
             int ret =
-                ACLCheckChannelAgainstList(selector->channels, argv[idx]->ptr, sdslen(argv[idx]->ptr), is_pattern);
+                ACLCheckChannelAgainstList(selector->channels, objectGetVal(argv[idx]), sdslen(objectGetVal(argv[idx])), is_pattern);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = channelref[j].pos;
                 getKeysFreeResult(&channels);
@@ -1712,24 +2363,79 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     return ACL_OK;
 }
 
-/* Check if the key can be accessed by the client according to
- * the ACLs associated with the specified user according to the
- * keyspec access flags.
- *
- * If the user can access the key, ACL_OK is returned, otherwise
- * ACL_DENIED_KEY is returned. */
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
-    listIter li;
-    listNode *ln;
+/* Iterates the selectors that apply to a user: its own first, then those of every
+ * role it belongs to, in the order the roles were assigned. Roles carry no roles
+ * of their own, so iterating one just walks its selectors. The iterator holds no
+ * resources, so it can be abandoned at any point. */
+typedef struct {
+    user *u;
+    listIter li;  /* Position within the selector list being walked. */
+    listIter rli; /* Position within u->roles, valid once in_roles is set. */
+    int in_roles; /* True once the walk moved on to the user's roles. */
+    int done;
+} aclSelectorIterator;
 
+static void ACLSelectorIteratorInit(aclSelectorIterator *it, user *u) {
+    it->u = u;
+    it->in_roles = 0;
+    it->done = 0;
+    listRewind(u->selectors, &it->li);
+}
+
+static aclSelector *ACLSelectorIteratorNext(aclSelectorIterator *it) {
+    if (it->done) return NULL;
+    while (1) {
+        listNode *ln = listNext(&it->li);
+        if (ln) return (aclSelector *)listNodeValue(ln);
+        if (!it->u->roles) {
+            it->done = 1;
+            return NULL;
+        }
+        if (!it->in_roles) {
+            listRewind(it->u->roles, &it->rli);
+            it->in_roles = 1;
+        }
+        listNode *rln = listNext(&it->rli);
+        if (!rln) {
+            it->done = 1;
+            return NULL;
+        }
+        listRewind(((user *)listNodeValue(rln))->selectors, &it->li);
+    }
+}
+
+/* Checks whether the given user has permission to access a specified key.
+ *
+ * This function verifies the access control list (ACL) permissions for a user on a key.
+ * If the user pointer is  NULL, the connection is considered authorized to run any
+ * command and the function returns  ACL_OK.  Otherwise, the function iterates
+ * through the user's ACL selectors and returns  ACL_OK as soon as any selector
+ * grants permission.  If no selector grants permission,  ACL_DENIED_KEY is returned.
+ *
+ * Input parameters:
+ *
+ * - u Pointer to a user structure. If  NULL, the user is treated as
+ *    having unrestricted access.
+ * - key Pointer to the key string to check.
+ * - keylen Length of the key string in bytes.
+ * - flags Flags that may influence selector checks (implementation-specific).
+ * - is_prefix true if key should be treated as a prefix in selector
+ *    evaluation; false otherwise.
+ *
+ * Returns ACL_OK if access is granted, ACL_DENIED_KEY if access is denied.
+ *
+ * NOTE: The function performs no modification of the  user structure or the key;
+ *       it only evaluates read-only selectors.
+ */
+int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix) {
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
-    /* Check all of the selectors */
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        if (ACLSelectorCheckKey(s, key, keylen, flags) == ACL_OK) {
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        if (ACLSelectorCheckKey(s, key, keylen, flags, is_prefix) == ACL_OK) {
             return ACL_OK;
         }
     }
@@ -1742,9 +2448,7 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
  * granted in addition to the access required by the command. Returns 1
  * if the user has access or 0 otherwise.
  */
-int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags) {
-    listIter li;
-    listNode *ln;
+int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags) {
     int local_idxptr;
 
     /* If there is no associated user, the connection can run anything. */
@@ -1755,11 +2459,11 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
     aclKeyResultCache cache;
     initACLKeyResultCache(&cache);
 
-    /* Check each selector sequentially */
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache);
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
         if (acl_retval == ACL_OK && ACLSelectorHasUnrestrictedKeyAccess(s, flags)) {
             cleanupACLKeyResultCache(&cache);
             return 1;
@@ -1772,24 +2476,19 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
 /* Check if the channel can be accessed by the client according to
  * the ACLs associated with the specified user.
  *
- * If the user can access the key, ACL_OK is returned, otherwise
+ * If the user can access the key, ACL_OK is returned; otherwise,
  * ACL_DENIED_CHANNEL is returned. */
 int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
-    listIter li;
-    listNode *ln;
-
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
-    /* Check all of the selectors */
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        /* The selector can run any keys */
-        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return ACL_OK;
-
-        /* Otherwise, loop over the selectors list and check each channel */
-        if (ACLCheckChannelAgainstList(s->channels, channel, sdslen(channel), is_pattern) == ACL_OK) {
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        /* The selector can run any channel, or names this one. */
+        if ((s->flags & SELECTOR_FLAG_ALLCHANNELS) ||
+            ACLCheckChannelAgainstList(s->channels, channel, sdslen(channel), is_pattern) == ACL_OK) {
             return ACL_OK;
         }
     }
@@ -1801,17 +2500,14 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
  * If the command fails an ACL check, idxptr will be to set to the first argv entry that
  * causes the failure, either 0 if the command itself fails or the idx of the key/channel
  * that causes the failure */
-int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr) {
-    listIter li;
-    listNode *ln;
-
+int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr) {
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
     /* We have to pick a single error to log, the logic for picking is as follows:
-     * 1) If no selector can execute the command, return the command.
-     * 2) Return the last key or channel that no selector could match. */
-    int relevant_error = ACL_DENIED_CMD;
+     * 1) Prefer higher priority errors: DB < CMD < KEY < CHANNEL
+     * 2) For errors of the same type, return the last (highest index) argument that failed. */
+    int relevant_error = ACL_DENIED_DB;
     int local_idxptr = 0, last_idx = 0;
 
     /* For multiple selectors, we cache the key result in between selector
@@ -1820,10 +2516,11 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
     initACLKeyResultCache(&cache);
 
     /* Check each selector sequentially */
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache);
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
         if (acl_retval == ACL_OK) {
             cleanupACLKeyResultCache(&cache);
             return ACL_OK;
@@ -1841,41 +2538,59 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
 
 /* High level API for checking if a client can execute the queued up command */
 int ACLCheckAllPerm(client *c, int *idxptr) {
-    return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, idxptr);
+    int dbid = (c->flag.multi && c->cmd->proc != execCommand) ? c->mstate->transaction_db_id : c->db->id;
+    return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, dbid, idxptr);
 }
 
-/* If 'new' can access all channels 'original' could then return NULL;
-   Otherwise return a list of channels that the new user can access */
-static list *getUpcomingChannelList(user *new, user *original) {
-    listIter li, lpi;
-    listNode *ln, *lpn;
-
-    /* Optimization: we check if any selector has all channel permissions. */
-    listRewind(new->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return NULL;
-    }
-
-    /* Next, check if the new list of channels
-     * is a strict superset of the original. This is done by
-     * created an "upcoming" list of all channels that are in
-     * the new user and checking each of the existing channels
-     * against it.  */
-    list *upcoming = listCreate();
-    listRewind(new->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        listRewind(s->channels, &lpi);
-        while ((lpn = listNext(&lpi))) {
-            listAddNodeTail(upcoming, listNodeValue(lpn));
+/* Check if user has allchannels permission from own or role selectors. */
+static int ACLUserHasAllChannels(user *u) {
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) {
+            return 1;
         }
     }
+    return 0;
+}
 
+/* Build a list of all channel patterns accessible by user (own + role selectors).
+ * Caller must listRelease() the returned list. */
+static list *ACLUserGetChannels(user *u) {
+    list *channels = listCreate();
+    listIter lpi;
+    listNode *lpn;
+
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        listRewind(s->channels, &lpi);
+        while ((lpn = listNext(&lpi))) {
+            listAddNodeTail(channels, listNodeValue(lpn));
+        }
+    }
+    return channels;
+}
+
+static list *getUpcomingChannelList(user *new, user *original) {
+    listIter lpi;
+    listNode *lpn;
+
+    /* Optimization: if new user has allchannels, no kill needed. */
+    if (ACLUserHasAllChannels(new)) return NULL;
+
+    /* Build the list of channels the new user can access. */
+    list *upcoming = ACLUserGetChannels(new);
+
+    /* Walk the original user's own selectors and then those of each of its
+     * roles, since both grant channels to the user. */
     int match = 1;
-    listRewind(original->selectors, &li);
-    while ((ln = listNext(&li)) && match) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, original);
+    while (match && (s = ACLSelectorIteratorNext(&it))) {
         /* If any of the original selectors has the all-channels permission, but
          * the new ones don't (this is checked earlier in this function), then the
          * new list is not a strict superset of the original.  */
@@ -1884,7 +2599,7 @@ static list *getUpcomingChannelList(user *new, user *original) {
             break;
         }
         listRewind(s->channels, &lpi);
-        while ((lpn = listNext(&lpi)) && match) {
+        while ((lpn = listNext(&lpi))) {
             if (!listSearchKey(upcoming, listNodeValue(lpn))) {
                 match = 0;
                 break;
@@ -1913,10 +2628,10 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
         void *next;
         while (!kill && hashtableNext(&iter, &next)) {
             robj *o = next;
-            int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 1);
+            int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 1);
             kill = (res == ACL_DENIED_CHANNEL);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
 
         /* Check for channel violations. */
         if (!kill) {
@@ -1926,10 +2641,10 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
             void *next;
             while (!kill && hashtableNext(&iter, &next)) {
                 robj *o = next;
-                int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
+                int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
         if (!kill) {
             /* Check for shard channels violation. */
@@ -1938,10 +2653,10 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
             void *next;
             while (!kill && hashtableNext(&iter, &next)) {
                 robj *o = next;
-                int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
+                int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
 
         if (kill) {
@@ -1971,7 +2686,9 @@ static void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (c->user != original) continue;
-        if (ACLShouldKillPubsubClient(c, channels)) freeClient(c);
+        if (ACLShouldKillPubsubClient(c, channels)) {
+            freeClientOrCloseLater(c, 0);
+        }
     }
 
     listRelease(channels);
@@ -2065,7 +2782,7 @@ sds ACLStringSetUser(user *u, sds username, sds *argv, int argc) {
 
     for (int j = 0; j < merged_argc; j++) {
         if (ACLSetUser(tempu, acl_args[j], (ssize_t)sdslen(acl_args[j])) != C_OK) {
-            const char *errmsg = ACLSetUserStringError();
+            const char *errmsg = ACLSetStringError();
             error = sdscatfmt(sdsempty(), "Error in ACL SETUSER modifier '%s': %s", (char *)acl_args[j], errmsg);
             goto cleanup;
         }
@@ -2103,7 +2820,7 @@ cleanup:
  * the user definition to a list for later loading.
  *
  * The rules are tested for validity and if there obvious syntax errors
- * the function returns C_ERR and does nothing, otherwise C_OK is returned
+ * the function returns C_ERR and does nothing; otherwise, C_OK is returned
  * and the user is appended to the list.
  *
  * Note that this function cannot stop in case of commands that are not found
@@ -2139,7 +2856,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 
     for (int j = 0; j < merged_argc; j++) {
         if (ACLSetUser(fakeuser, acl_args[j], sdslen(acl_args[j])) == C_ERR) {
-            if (errno != ENOENT) {
+            if (errno != ENOENT && errno != ESRCH) {
                 ACLFreeUser(fakeuser);
                 if (argc_err) *argc_err = j;
                 for (int i = 0; i < merged_argc; i++) sdsfree(acl_args[i]);
@@ -2163,7 +2880,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 
 /* This function will load the configured users appended to the server
  * configuration via ACLAppendUserForLoading(). On loading errors it will
- * log an error and return C_ERR, otherwise C_OK will be returned. */
+ * log an error and return C_ERR; otherwise, C_OK will be returned. */
 static int ACLLoadConfiguredUsers(void) {
     listIter li;
     listNode *ln;
@@ -2188,7 +2905,7 @@ static int ACLLoadConfiguredUsers(void) {
         /* Load every rule defined for this user. */
         for (int j = 1; aclrules[j]; j++) {
             if (ACLSetUser(u, aclrules[j], sdslen(aclrules[j])) != C_OK) {
-                const char *errmsg = ACLSetUserStringError();
+                const char *errmsg = ACLSetStringError();
                 serverLog(LL_WARNING,
                           "Error loading ACL rule '%s' for "
                           "the user named '%s': %s",
@@ -2208,6 +2925,144 @@ static int ACLLoadConfiguredUsers(void) {
         }
     }
     return C_OK;
+}
+
+/* Append a role definition for deferred loading (from valkey.conf). */
+int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err) {
+    if (argc < 2 || strcasecmp(argv[0], "role")) {
+        if (argc_err) *argc_err = 0;
+        return C_ERR;
+    }
+
+    if (listSearchKey(RolesToLoad, argv[1])) {
+        if (argc_err) *argc_err = 1;
+        errno = EBUSY;
+        return C_ERR;
+    }
+
+    if (ACLRoleNameError(argv[1], sdslen(argv[1]))) {
+        if (argc_err) *argc_err = 1;
+        errno = EILSEQ;
+        return C_ERR;
+    }
+
+    /* Store the role definition for later loading. */
+    int merged_argc = 0, invalid_idx = 0;
+    sds *acl_args = ACLMergeSelectorArguments(argv + 2, argc - 2, &merged_argc, &invalid_idx);
+    if (!acl_args) {
+        if (argc_err) *argc_err = invalid_idx + 2;
+        return C_ERR;
+    }
+
+    /* Try to apply the role rules in a fake role-flagged user to validate them. */
+    user fakeRole = {0};
+    fakeRole.flags = USER_FLAG_ROLE;
+    fakeRole.passwords = NULL;
+    fakeRole.roles = NULL;
+    fakeRole.members = NULL;
+    fakeRole.selectors = listCreate();
+    listSetFreeMethod(fakeRole.selectors, ACLListFreeSelector);
+    aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
+    listAddNodeHead(fakeRole.selectors, s);
+
+    for (int j = 0; j < merged_argc; j++) {
+        if (ACLSetUser(&fakeRole, acl_args[j], sdslen(acl_args[j])) == C_ERR) {
+            if (errno != ENOENT && errno != ESRCH) {
+                listRelease(fakeRole.selectors);
+                if (argc_err) *argc_err = j + 2;
+                for (int i = 0; i < merged_argc; i++) sdsfree(acl_args[i]);
+                zfree(acl_args);
+                return C_ERR;
+            }
+        }
+    }
+    listRelease(fakeRole.selectors);
+
+    /* Rules look valid, store for deferred loading. */
+    sds *copy = zmalloc(sizeof(sds) * (merged_argc + 2));
+    copy[0] = sdsdup(argv[1]);
+    for (int j = 0; j < merged_argc; j++) copy[j + 1] = sdsdup(acl_args[j]);
+    copy[merged_argc + 1] = NULL;
+    listAddNodeTail(RolesToLoad, copy);
+    for (int i = 0; i < merged_argc; i++) sdsfree(acl_args[i]);
+    zfree(acl_args);
+    return C_OK;
+}
+
+/* Load configured roles from RolesToLoad. Must be called before
+ * ACLLoadConfiguredUsers so that users can reference roles. */
+static int ACLLoadConfiguredRoles(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(RolesToLoad, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        sds *aclrules = listNodeValue(ln);
+        sds rolename = aclrules[0];
+
+        if (ACLStringHasSpaces(rolename, sdslen(rolename))) {
+            serverLog(LL_WARNING, "Spaces not allowed in ACL role names");
+            return C_ERR;
+        }
+
+        user *r = ACLGetRoleByName(rolename, sdslen(rolename));
+        /* Count number of rules */
+        int argc = 0;
+        while (aclrules[argc + 1]) argc++;
+
+        sds error = ACLStringSetRole(r, rolename, aclrules + 1, argc);
+        if (error) {
+            serverLog(LL_WARNING, "Error loading ACL role '%s': %s", rolename, error);
+            sdsfree(error);
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+/* Move role memberships of users not replaced by ACL LOAD, i.e. module users, to
+ * the new role of the same name, or drop them if it is gone. Called after the old
+ * users are freed, so only such survivors are left on the old member lists. */
+static void ACLRemapSurvivingRoleMembers(rax *old_roles) {
+    raxIterator ri;
+    raxStart(&ri, old_roles);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *old_role = ri.data;
+        if (!old_role->members || dictSize(old_role->members) == 0) continue;
+
+        /* Snapshot the members before mutating the dict. */
+        int count = 0, numsurvivors = dictSize(old_role->members);
+        user **survivors = zmalloc(sizeof(user *) * numsurvivors);
+        dictIterator *di = dictGetIterator(old_role->members);
+        dictEntry *de;
+        while ((de = dictNext(di))) survivors[count++] = dictGetVal(de);
+        dictReleaseIterator(di);
+
+        user *new_role = ACLGetRoleByName(old_role->name, sdslen(old_role->name));
+        for (int j = 0; j < numsurvivors; j++) {
+            user *u = survivors[j];
+            listNode *ln = listSearchKey(u->roles, old_role);
+            serverAssert(ln != NULL);
+            dictDelete(old_role->members, u);
+            if (new_role) {
+                /* Swap the role in place so the user keeps its role order. */
+                listNodeValue(ln) = new_role;
+                serverAssert(dictAdd(new_role->members, u, u) == DICT_OK);
+            } else {
+                listDelNode(u->roles, ln);
+                serverLog(LL_NOTICE,
+                          "The ACL role '%s' held by the user '%s' no longer exists after reloading the ACLs, "
+                          "the membership was dropped.",
+                          old_role->name, u->name);
+            }
+            if (u->acl_string) {
+                decrRefCount(u->acl_string);
+                u->acl_string = NULL;
+            }
+        }
+        zfree(survivors);
+    }
+    raxStop(&ri);
 }
 
 /* This function loads the ACL from the specified filename: every line
@@ -2231,7 +3086,7 @@ static int ACLLoadConfiguredUsers(void) {
  * and the rules will remain exactly as they were.
  *
  * At the end of the process, if no errors were found in the whole file then
- * NULL is returned. Otherwise an SDS string describing in a single line
+ * NULL is returned. Otherwise, an SDS string describing in a single line
  * a description of all the issues found is returned. */
 static sds ACLLoadFromFile(const char *filename) {
     FILE *fp;
@@ -2258,9 +3113,12 @@ static sds ACLLoadFromFile(const char *filename) {
      * so if there are errors loading the ACL file we can rollback to the
      * old version. */
     rax *old_users = Users;
+    rax *old_roles = Roles;
     Users = raxNew();
+    Roles = raxNew();
 
     /* Load each line of the file. */
+    /* First pass: load role definitions */
     for (int i = 0; i < totlines; i++) {
         sds *argv;
         int argc;
@@ -2284,8 +3142,74 @@ static sds ACLLoadFromFile(const char *filename) {
             continue;
         }
 
-        /* The line should start with the "user" keyword. */
-        if (strcmp(argv[0], "user") || argc < 2) {
+        /* Only process role lines in first pass */
+        if (strcmp(argv[0], "role") != 0) {
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
+        if (argc < 2) {
+            errors = sdscatprintf(errors,
+                                  "%s:%d: role line requires a role name. ",
+                                  server.acl_filename, linenum);
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
+        const char *nameerr = ACLRoleNameError(argv[1], sdslen(argv[1]));
+        if (nameerr) {
+            errors = sdscatprintf(errors, "%s:%d: invalid role name '%s': %s. ",
+                                  server.acl_filename, linenum, argv[1], nameerr);
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
+        user *r = ACLGetRoleByName(argv[1], sdslen(argv[1]));
+        if (r) {
+            errors = sdscatprintf(errors, "WARNING: Duplicate role '%s' found on line %d. ", argv[1], linenum);
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
+        sds error = ACLStringSetRole(r, argv[1], argv + 2, argc - 2);
+        if (error) {
+            errors = sdscatprintf(errors, "%s:%d: %s. ", server.acl_filename, linenum, error);
+            sdsfree(error);
+        }
+
+        sdsfreesplitres(argv, argc);
+    }
+
+    /* Second pass: load user definitions */
+    for (int i = 0; i < totlines; i++) {
+        sds *argv;
+        int argc;
+        int linenum = i + 1;
+
+        /* Re-trim is safe since lines were already trimmed */
+        if (lines[i][0] == '\0') continue;
+
+        /* Split into arguments */
+        argv = sdssplitlen(lines[i], sdslen(lines[i]), " ", 1, &argc);
+        if (argv == NULL) continue; /* Error already reported in first pass */
+        if (argc == 0) {
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
+        /* Only process user lines in second pass */
+        if (strcmp(argv[0], "user") != 0) {
+            /* If it's not 'user' or 'role', report error */
+            if (strcmp(argv[0], "role") != 0) {
+                errors = sdscatprintf(errors,
+                                      "%s:%d should start with user or role keyword. ",
+                                      server.acl_filename, linenum);
+            }
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
+        if (argc < 2) {
             errors = sdscatprintf(errors,
                                   "%s:%d should start with user keyword followed "
                                   "by the username. ",
@@ -2320,13 +3244,15 @@ static sds ACLLoadFromFile(const char *filename) {
         if (!acl_args) {
             errors = sdscatprintf(errors, "%s:%d: Unmatched parenthesis in selector definition.", server.acl_filename,
                                   linenum);
+            sdsfreesplitres(argv, argc);
+            continue;
         }
 
         int syntax_error = 0;
         for (int j = 0; j < merged_argc; j++) {
             acl_args[j] = sdstrim(acl_args[j], "\t\r\n");
             if (ACLSetUser(u, acl_args[j], sdslen(acl_args[j])) != C_OK) {
-                const char *errmsg = ACLSetUserStringError();
+                const char *errmsg = ACLSetStringError();
                 if (errno == ENOENT) {
                     /* For missing commands, we print out more information since
                      * it shouldn't contain any sensitive information. */
@@ -2345,7 +3271,7 @@ static sds ACLLoadFromFile(const char *filename) {
         zfree(acl_args);
 
         /* Apply the rule to the new users set only if so far there
-         * are no errors, otherwise it's useless since we are going
+         * are no errors; otherwise, it's useless since we are going
          * to discard the new users set anyway. */
         if (sdslen(errors) != 0) {
             sdsfreesplitres(argv, argc);
@@ -2400,7 +3326,8 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
-                freeClient(c);
+                clientSetUser(c, DefaultUser, 0);
+                freeClientOrCloseLater(c, 0);
                 continue;
             }
             c->user = new_user;
@@ -2408,11 +3335,15 @@ static sds ACLLoadFromFile(const char *filename) {
 
         if (user_channels) raxFreeWithCallback(user_channels, listReleaseVoid);
         raxFreeWithCallback(old_users, ACLFreeUserVoid);
+        ACLRemapSurvivingRoleMembers(old_roles);
+        raxFreeWithCallback(old_roles, ACLFreeUserVoid);
         sdsfree(errors);
         return NULL;
     } else {
         raxFreeWithCallback(Users, ACLFreeUserVoid);
+        raxFreeWithCallback(Roles, ACLFreeUserVoid);
         Users = old_users;
+        Roles = old_roles;
         errors =
             sdscat(errors, "WARNING: ACL errors detected, no change to the previously active ACL rules was performed");
         return errors;
@@ -2431,6 +3362,25 @@ static int ACLSaveToFile(const char *filename) {
     /* Let's generate an SDS string containing the new version of the
      * ACL file. */
     raxIterator ri;
+
+    /* Write roles first */
+    raxStart(&ri, Roles);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *r = ri.data;
+        sds role = sdsnew("role ");
+        role = sdscatsds(role, r->name);
+        role = sdscatlen(role, " ", 1);
+        robj *descr = ACLDescribeUser(r);
+        role = sdscatsds(role, objectGetVal(descr));
+        decrRefCount(descr);
+        acl = sdscatsds(acl, role);
+        acl = sdscatlen(acl, "\n", 1);
+        sdsfree(role);
+    }
+    raxStop(&ri);
+
+    /* Write users */
     raxStart(&ri, Users);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
@@ -2440,7 +3390,7 @@ static int ACLSaveToFile(const char *filename) {
         user = sdscatsds(user, u->name);
         user = sdscatlen(user, " ", 1);
         robj *descr = ACLDescribeUser(u);
-        user = sdscatsds(user, descr->ptr);
+        user = sdscatsds(user, objectGetVal(descr));
         decrRefCount(descr);
         acl = sdscatsds(acl, user);
         acl = sdscatlen(acl, "\n", 1);
@@ -2512,6 +3462,23 @@ void ACLLoadUsersAtStartup(void) {
         exit(1);
     }
 
+    if (server.acl_filename[0] != '\0' && listLength(RolesToLoad) != 0) {
+        serverLog(LL_WARNING,
+                  "Configuring %s with roles defined in valkey.conf and at "
+                  "the same setting an ACL file path is invalid. This setup "
+                  "is very likely to lead to configuration errors and security "
+                  "holes, please define either an ACL file or declare roles "
+                  "directly in your valkey.conf, but not both.",
+                  SERVER_TITLE);
+        exit(1);
+    }
+
+    /* Load roles before users so that users can reference them */
+    if (ACLLoadConfiguredRoles() == C_ERR) {
+        serverLog(LL_WARNING, "Critical error while loading ACL roles. Exiting.");
+        exit(1);
+    }
+
     if (ACLLoadConfiguredUsers() == C_ERR) {
         serverLog(LL_WARNING, "Critical error while loading ACLs. Exiting.");
         exit(1);
@@ -2527,6 +3494,7 @@ void ACLLoadUsersAtStartup(void) {
     }
 }
 
+/* Also provide a function to load roles at startup from config */
 /* =============================================================================
  * ACL log
  * ==========================================================================*/
@@ -2537,7 +3505,7 @@ void ACLLoadUsersAtStartup(void) {
 typedef struct ACLLogEntry {
     uint64_t count;             /* Number of times this happened recently. */
     int reason;                 /* Reason for denying the command. ACL_DENIED_*. */
-    int context;                /* Toplevel, Lua or MULTI/EXEC? ACL_LOG_CTX_*. */
+    int context;                /* Toplevel, Lua, Script or MULTI/EXEC? ACL_LOG_CTX_*. */
     sds object;                 /* The key name or command name. */
     sds username;               /* User the client is authenticated with. */
     mstime_t ctime;             /* Milliseconds time of last update to this entry. */
@@ -2582,6 +3550,8 @@ static void ACLUpdateInfoMetrics(int reason) {
         server.acl_info.invalid_channel_accesses++;
     } else if (reason == ACL_INVALID_TLS_CERT_AUTH) {
         server.acl_info.acl_access_denied_tls_cert++;
+    } else if (reason == ACL_DENIED_DB) {
+        server.acl_info.invalid_db_accesses++;
     } else {
         serverPanic("Unknown ACL_DENIED encoding");
     }
@@ -2602,8 +3572,8 @@ static void trimACLLogEntriesToMaxLen(void) {
  * the log entry instead of creating many entries for very similar ACL
  * rules issues.
  *
- * The argpos argument is used when the reason is ACL_DENIED_KEY or
- * ACL_DENIED_CHANNEL, since it allows the function to log the key or channel
+ * The argpos argument is used when the reason is ACL_DENIED_KEY, ACL_DENIED_DB or
+ * ACL_DENIED_CHANNEL, since it allows the function to log the key, dbid or channel
  * name that caused the problem.
  *
  * The last 2 arguments are a manual override to be used, instead of any of the automatic
@@ -2634,9 +3604,10 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     } else {
         switch (reason) {
         case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
-        case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
-        case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
-        case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
+        case ACL_DENIED_KEY: le->object = sdsdup(objectGetVal(c->argv[argpos])); break;
+        case ACL_DENIED_CHANNEL: le->object = sdsdup(objectGetVal(c->argv[argpos])); break;
+        case ACL_DENIED_DB: le->object = argpos ? sdsdup(objectGetVal(c->argv[argpos])) : sdsdup(c->cmd->fullname); break;
+        case ACL_DENIED_AUTH: le->object = sdsdup(objectGetVal(c->argv[0])); break;
         default: le->object = sdsempty();
         }
     }
@@ -2645,6 +3616,15 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     client *realclient = server.current_client ? server.current_client : c;
 
     le->cinfo = catClientInfoString(sdsempty(), realclient, 0);
+
+    if (context == ACL_LOG_CTX_SCRIPT &&
+        strcmp(scriptGetRunningEngineName(), "LUA") == 0) {
+        /* For backward compatibility, we track that it's Lua using a special
+         * lua ACL log context. Any other scripting language is just "script" in
+         * the ACL log. */
+        context = ACL_LOG_CTX_LUA;
+    }
+
     le->context = context;
 
     /* Try to match this entry with past ones, to see if we can just
@@ -2664,7 +3644,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
         }
     }
 
-    /* If there is a match update the entry, otherwise add it as a
+    /* If there is a match update the entry; otherwise, add it as a
      * new one. */
     if (match) {
         /* We update a few fields of the existing entry and bump the
@@ -2711,6 +3691,15 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
         } else {
             return sdsnew("No permissions to access a channel");
         }
+    case ACL_DENIED_DB:
+        if (verbose) {
+            return sdscatfmt(sdsempty(),
+                             "User %s has no permissions to access "
+                             "database %s",
+                             user->name, errored_val);
+        } else {
+            return sdsnew("No permissions to access database");
+        }
     }
     serverPanic("Reached deadcode on getAclErrorMessage");
 }
@@ -2735,7 +3724,7 @@ static void aclCatWithFlags(client *c, hashtable *commands, uint64_t cflag, int 
             aclCatWithFlags(c, cmd->subcommands_ht, cflag, arraylen);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* Add the formatted response from a single selector to the ACL GETUSER
@@ -2782,7 +3771,28 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
         }
         addReplyBulkSds(c, dsl);
     }
-    return 3;
+
+    /* Database permissions. */
+    addReplyBulkCString(c, "databases");
+    if (s->flags & SELECTOR_FLAG_ALLDBS) {
+        addReplyBulkCBuffer(c, "alldbs", 6);
+    } else {
+        sds dsl = sdsempty();
+        uint32_t len = intsetLen(s->dbs);
+        if (len > 0) {
+            dsl = sdscatlen(dsl, "db=", 3);
+            for (uint32_t i = 0; i < len; i++) {
+                int64_t dbid;
+                if (intsetGet(s->dbs, i, &dbid)) {
+                    if (i > 0) dsl = sdscatlen(dsl, ",", 1);
+                    dsl = sdscatfmt(dsl, "%I", dbid);
+                }
+            }
+        }
+        addReplyBulkSds(c, dsl);
+    }
+
+    return 4;
 }
 
 /* ACL -- show and modify the configuration of ACL users.
@@ -2791,6 +3801,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL SAVE
  * ACL LIST
  * ACL USERS
+ * ACL DIGEST
  * ACL CAT [<category>]
  * ACL SETUSER <username> ... acl rules ...
  * ACL DELUSER <username> [...]
@@ -2800,7 +3811,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL LOG [<count> | RESET]
  */
 void aclCommand(client *c) {
-    char *sub = c->argv[1]->ptr;
+    char *sub = objectGetVal(c->argv[1]);
     if (!strcasecmp(sub, "setuser") && c->argc >= 3) {
         /* Initially redact all of the arguments to not leak any information
          * about the user. */
@@ -2808,7 +3819,7 @@ void aclCommand(client *c) {
             redactClientCommandArgument(c, j);
         }
 
-        sds username = c->argv[2]->ptr;
+        sds username = objectGetVal(c->argv[2]);
         /* Check username validity. */
         if (ACLStringHasSpaces(username, sdslen(username))) {
             addReplyError(c, "Usernames can't contain spaces or null characters");
@@ -2818,7 +3829,7 @@ void aclCommand(client *c) {
         user *u = ACLGetUserByName(username, sdslen(username));
 
         sds *temp_argv = zmalloc(c->argc * sizeof(sds));
-        for (int i = 3; i < c->argc; i++) temp_argv[i - 3] = c->argv[i]->ptr;
+        for (int i = 3; i < c->argc; i++) temp_argv[i - 3] = objectGetVal(c->argv[i]);
 
         sds error = ACLStringSetUser(u, username, temp_argv, c->argc - 3);
         zfree(temp_argv);
@@ -2835,7 +3846,7 @@ void aclCommand(client *c) {
 
         int deleted = 0;
         for (int j = 2; j < c->argc; j++) {
-            sds username = c->argv[j]->ptr;
+            sds username = objectGetVal(c->argv[j]);
             if (!strcmp(username, "default")) {
                 addReplyError(c, "The 'default' user cannot be removed");
                 return;
@@ -2843,7 +3854,7 @@ void aclCommand(client *c) {
         }
 
         for (int j = 2; j < c->argc; j++) {
-            sds username = c->argv[j]->ptr;
+            sds username = objectGetVal(c->argv[j]);
             user *u;
             if (raxRemove(Users, (unsigned char *)username, sdslen(username), (void **)&u)) {
                 ACLFreeUserAndKillClients(u);
@@ -2855,7 +3866,7 @@ void aclCommand(client *c) {
         /* Redact the username to not leak any information about the user. */
         redactClientCommandArgument(c, 2);
 
-        user *u = ACLGetUserByName(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+        user *u = ACLGetUserByName(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
         if (u == NULL) {
             addReplyNull(c);
             return;
@@ -2899,11 +3910,47 @@ void aclCommand(client *c) {
             int sfields = aclAddReplySelectorDescription(c, (aclSelector *)listNodeValue(ln));
             setDeferredMapLen(c, slen, sfields);
         }
+
+        /* Roles */
+        addReplyBulkCString(c, "roles");
+        addReplyArrayLen(c, u->roles ? listLength(u->roles) : 0);
+        fields++;
+        if (u->roles) {
+            listIter rli;
+            listNode *rln;
+            listRewind(u->roles, &rli);
+            while ((rln = listNext(&rli))) {
+                user *r = listNodeValue(rln);
+                addReplyBulkCBuffer(c, r->name, sdslen(r->name));
+            }
+        }
+
         setDeferredMapLen(c, ufields, fields);
     } else if ((!strcasecmp(sub, "list") || !strcasecmp(sub, "users")) && c->argc == 2) {
         int justnames = !strcasecmp(sub, "users");
-        addReplyArrayLen(c, raxSize(Users));
+        if (justnames) {
+            addReplyArrayLen(c, raxSize(Users));
+        } else {
+            addReplyArrayLen(c, raxSize(Roles) + raxSize(Users));
+        }
         raxIterator ri;
+        if (!justnames) {
+            /* List roles first in ACL LIST */
+            raxStart(&ri, Roles);
+            raxSeek(&ri, "^", NULL, 0);
+            while (raxNext(&ri)) {
+                user *r = ri.data;
+                sds config = sdsnew("role ");
+                config = sdscatsds(config, r->name);
+                config = sdscatlen(config, " ", 1);
+                robj *descr = ACLDescribeUser(r);
+                config = sdscatsds(config, objectGetVal(descr));
+                decrRefCount(descr);
+                addReplyBulkSds(c, config);
+            }
+            raxStop(&ri);
+        }
+        /* List users */
         raxStart(&ri, Users);
         raxSeek(&ri, "^", NULL, 0);
         while (raxNext(&ri)) {
@@ -2911,17 +3958,18 @@ void aclCommand(client *c) {
             if (justnames) {
                 addReplyBulkCBuffer(c, u->name, sdslen(u->name));
             } else {
-                /* Return information in the configuration file format. */
                 sds config = sdsnew("user ");
                 config = sdscatsds(config, u->name);
                 config = sdscatlen(config, " ", 1);
                 robj *descr = ACLDescribeUser(u);
-                config = sdscatsds(config, descr->ptr);
+                config = sdscatsds(config, objectGetVal(descr));
                 decrRefCount(descr);
                 addReplyBulkSds(c, config);
             }
         }
         raxStop(&ri);
+    } else if (!strcasecmp(sub, "digest") && c->argc == 2) {
+        addReplyBulkSds(c, ACLDigest());
     } else if (!strcasecmp(sub, "whoami") && c->argc == 2) {
         if (c->user != NULL) {
             addReplyBulkCBuffer(c, c->user->name, sdslen(c->user->name));
@@ -2955,9 +4003,9 @@ void aclCommand(client *c) {
         for (j = 0; ACLCommandCategories[j].flag != 0; j++) addReplyBulkCString(c, ACLCommandCategories[j].name);
         setDeferredArrayLen(c, dl, j);
     } else if (!strcasecmp(sub, "cat") && c->argc == 3) {
-        uint64_t cflag = ACLGetCommandCategoryFlagByName(c->argv[2]->ptr);
+        uint64_t cflag = ACLGetCommandCategoryFlagByName(objectGetVal(c->argv[2]));
         if (cflag == 0) {
-            addReplyErrorFormat(c, "Unknown category '%.128s'", (char *)c->argv[2]->ptr);
+            addReplyErrorFormat(c, "Unknown category '%.128s'", (char *)objectGetVal(c->argv[2]));
             return;
         }
         int arraylen = 0;
@@ -2981,7 +4029,10 @@ void aclCommand(client *c) {
         }
 
         long chars = (bits + 3) / 4; /* Round to number of characters to emit. */
-        getRandomHexChars(pass, chars);
+        if (!getSecureRandomHexChars(pass, chars)) {
+            addReplyError(c, "The crypto provider could not supply random bytes");
+            return;
+        }
         addReplyBulkCBuffer(c, pass, chars);
     } else if (!strcasecmp(sub, "log") && (c->argc == 2 || c->argc == 3)) {
         long count = 10; /* Number of entries to emit by default. */
@@ -2990,7 +4041,7 @@ void aclCommand(client *c) {
          * the number of entries the user wants to display, or alternatively
          * the "RESET" command in order to flush the old entries. */
         if (c->argc == 3) {
-            if (!strcasecmp(c->argv[2]->ptr, "reset")) {
+            if (!strcasecmp(objectGetVal(c->argv[2]), "reset")) {
                 listSetFreeMethod(ACLLog, ACLFreeLogEntry);
                 listEmpty(ACLLog);
                 listSetFreeMethod(ACLLog, NULL);
@@ -3024,6 +4075,7 @@ void aclCommand(client *c) {
             case ACL_DENIED_CHANNEL: reasonstr = "channel"; break;
             case ACL_DENIED_AUTH: reasonstr = "auth"; break;
             case ACL_INVALID_TLS_CERT_AUTH: reasonstr = "tls-cert"; break;
+            case ACL_DENIED_DB: reasonstr = "database"; break;
             default: reasonstr = "unknown";
             }
             addReplyBulkCString(c, reasonstr);
@@ -3035,6 +4087,7 @@ void aclCommand(client *c) {
             case ACL_LOG_CTX_MULTI: ctxstr = "multi"; break;
             case ACL_LOG_CTX_LUA: ctxstr = "lua"; break;
             case ACL_LOG_CTX_MODULE: ctxstr = "module"; break;
+            case ACL_LOG_CTX_SCRIPT: ctxstr = "script"; break;
             default: ctxstr = "unknown";
             }
             addReplyBulkCString(c, ctxstr);
@@ -3055,16 +4108,113 @@ void aclCommand(client *c) {
             addReplyBulkCString(c, "timestamp-last-updated");
             addReplyLongLong(c, le->ctime);
         }
+    } else if (!strcasecmp(sub, "setrole") && c->argc >= 3) {
+        sds rolename = objectGetVal(c->argv[2]);
+        /* Check role name validity. */
+        const char *nameerr = ACLRoleNameError(rolename, sdslen(rolename));
+        if (nameerr) {
+            addReplyError(c, nameerr);
+            return;
+        }
+
+        user *r = ACLGetRoleByName(rolename, sdslen(rolename));
+
+        sds *temp_argv = zmalloc(c->argc * sizeof(sds));
+        for (int i = 3; i < c->argc; i++) temp_argv[i - 3] = objectGetVal(c->argv[i]);
+
+        sds error = ACLStringSetRole(r, rolename, temp_argv, c->argc - 3);
+        zfree(temp_argv);
+        if (error == NULL) {
+            addReply(c, shared.ok);
+        } else {
+            addReplyErrorSdsSafe(c, error);
+        }
+        return;
+    } else if (!strcasecmp(sub, "delrole") && c->argc >= 3) {
+        for (int j = 2; j < c->argc; j++) {
+            sds rolename = objectGetVal(c->argv[j]);
+            user *r = ACLGetRoleByName(rolename, sdslen(rolename));
+            if (r && dictSize(r->members) > 0) {
+                addReplyErrorFormat(c, "Role '%s' is assigned to one or more users. Remove it from them first.",
+                                    rolename);
+                return;
+            }
+        }
+
+        int deleted = 0;
+        for (int j = 2; j < c->argc; j++) {
+            sds rolename = objectGetVal(c->argv[j]);
+            user *r;
+            if (raxRemove(Roles, (unsigned char *)rolename, sdslen(rolename), (void **)&r)) {
+                ACLFreeUser(r);
+                deleted++;
+            }
+        }
+        addReplyLongLong(c, deleted);
+    } else if (!strcasecmp(sub, "getrole") && c->argc == 3) {
+        sds rolename = objectGetVal(c->argv[2]);
+        user *r = ACLGetRoleByName(rolename, sdslen(rolename));
+        if (!r) {
+            addReplyNull(c);
+            return;
+        }
+
+        void *gfields = addReplyDeferredLen(c);
+        int fields = 0;
+
+        /* Commands/keys/channels from root selector */
+        aclSelector *root = listNodeValue(listFirst(r->selectors));
+        fields += aclAddReplySelectorDescription(c, root);
+
+        /* Additional selectors */
+        addReplyBulkCString(c, "selectors");
+        addReplyArrayLen(c, listLength(r->selectors) - 1);
+        fields++;
+        listIter li;
+        listNode *ln;
+        listRewind(r->selectors, &li);
+        listNext(&li); /* skip root */
+        while ((ln = listNext(&li))) {
+            void *slen = addReplyDeferredLen(c);
+            int sfields = aclAddReplySelectorDescription(c, (aclSelector *)listNodeValue(ln));
+            setDeferredMapLen(c, slen, sfields);
+        }
+
+        /* Users holding this role */
+        addReplyBulkCString(c, "users");
+        addReplyArrayLen(c, dictSize(r->members));
+        fields++;
+        {
+            dictIterator *di = dictGetIterator(r->members);
+            dictEntry *de;
+            while ((de = dictNext(di))) {
+                user *u = dictGetVal(de);
+                addReplyBulkCBuffer(c, u->name, sdslen(u->name));
+            }
+            dictReleaseIterator(di);
+        }
+
+        setDeferredMapLen(c, gfields, fields);
+    } else if (!strcasecmp(sub, "roles") && c->argc == 2) {
+        addReplyArrayLen(c, raxSize(Roles));
+        raxIterator ri;
+        raxStart(&ri, Roles);
+        raxSeek(&ri, "^", NULL, 0);
+        while (raxNext(&ri)) {
+            user *r = ri.data;
+            addReplyBulkCBuffer(c, r->name, sdslen(r->name));
+        }
+        raxStop(&ri);
     } else if (!strcasecmp(sub, "dryrun") && c->argc >= 4) {
         struct serverCommand *cmd;
-        user *u = ACLGetUserByName(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+        user *u = ACLGetUserByName(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
         if (u == NULL) {
-            addReplyErrorFormat(c, "User '%s' not found", (char *)c->argv[2]->ptr);
+            addReplyErrorFormat(c, "User '%s' not found", (char *)objectGetVal(c->argv[2]));
             return;
         }
 
         if ((cmd = lookupCommand(c->argv + 3, c->argc - 3)) == NULL) {
-            addReplyErrorFormat(c, "Command '%s' not found", (char *)c->argv[3]->ptr);
+            addReplyErrorFormat(c, "Command '%s' not found", (char *)objectGetVal(c->argv[3]));
             return;
         }
 
@@ -3074,9 +4224,10 @@ void aclCommand(client *c) {
         }
 
         int idx;
-        int result = ACLCheckAllUserCommandPerm(u, cmd, c->argv + 3, c->argc - 3, &idx);
+        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
+        int result = ACLCheckAllUserCommandPerm(u, cmd, c->argv + 3, c->argc - 3, dbid, &idx);
         if (result != ACL_OK) {
-            sds err = getAclErrorMessage(result, u, cmd, c->argv[idx + 3]->ptr, 1);
+            sds err = getAclErrorMessage(result, u, cmd, objectGetVal(c->argv[idx + 3]), 1);
             addReplyBulkSds(c, err);
             return;
         }
@@ -3089,6 +4240,8 @@ void aclCommand(client *c) {
             "    when no category is specified.",
             "DELUSER <username> [<username> ...]",
             "    Delete a list of users.",
+            "DIGEST",
+            "    Return a fingerprint of the rules currently in effect.",
             "DRYRUN <username> <command> [<arg> ...]",
             "    Returns whether the user can execute the given command without executing the command.",
             "GETUSER <username>",
@@ -3096,6 +4249,14 @@ void aclCommand(client *c) {
             "GENPASS [<bits>]",
             "    Generate a secure 256-bit user password. The optional `bits` argument can",
             "    be used to specify a different size.",
+            "SETROLE <rolename> <rule> [<rule> ...]",
+            "    Create or modify a role with the specified rules.",
+            "DELROLE <rolename> [<rolename> ...]",
+            "    Delete one or more roles (each must not be assigned to any user).",
+            "GETROLE <rolename>",
+            "    Get the role's details.",
+            "ROLES",
+            "    List all the registered role names.",
             "LIST",
             "    Show users details in config file format.",
             "LOAD",

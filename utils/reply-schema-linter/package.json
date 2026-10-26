@@ -1,0 +1,8 @@
+{
+  "name": "reply-schema-linter",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "ajv": "^8.17.1"
+  }
+}

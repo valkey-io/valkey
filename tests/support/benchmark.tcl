@@ -12,21 +12,21 @@ proc valkeybenchmark_tls_config {testsdir} {
 }
 
 proc valkeybenchmark {host port {opts {}}} {
-    set cmd [list src/valkey-benchmark -h $host -p $port]
+    set cmd [list $::VALKEY_BENCHMARK_BIN -h $host -p $port]
     lappend cmd {*}[valkeybenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
 }
 
 proc valkeybenchmarkuri {host port {opts {}}} {
-    set cmd [list src/valkey-benchmark -u valkey://$host:$port]
+    set cmd [list $::VALKEY_BENCHMARK_BIN -u valkey://$host:$port]
     lappend cmd {*}[valkeybenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
 }
 
 proc valkeybenchmarkuriuserpass {host port user pass {opts {}}} {
-    set cmd [list src/valkey-benchmark -u valkey://$user:$pass@$host:$port]
+    set cmd [list $::VALKEY_BENCHMARK_BIN -u valkey://$user:$pass@$host:$port]
     lappend cmd {*}[valkeybenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd

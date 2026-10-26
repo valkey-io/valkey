@@ -50,6 +50,11 @@
 
 #define UNUSED(V) ((void)V)
 
+/* The main kvstore uses up to 16k hashtables (corresponding to slots).  This
+ * requires 14 bits.  We can't increase past 16 as we reserve 48 bits in the
+ * 64-bit kvstore cursor to be used for the hashtable cursor. */
+#define MAX_HASHTABLES_BITS 16
+
 static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it);
 
 struct _kvstore {
@@ -101,7 +106,8 @@ hashtableType intHashtableType = {.instant_rehashing = 1};
 /*** Helpers **********************/
 /**********************************/
 
-/* Get the hash table pointer based on hashtable-index. */
+/* Get the hash table pointer based on hashtable-index.
+ * May be NULL if no keys have been added. */
 hashtable *kvstoreGetHashtable(kvstore *kvs, int didx) {
     return kvs->hashtables[didx];
 }
@@ -131,22 +137,19 @@ static unsigned long long cumulativeKeyCountRead(kvstore *kvs, int didx) {
     return sum;
 }
 
-static void addHashtableIndexToCursor(kvstore *kvs, int didx, unsigned long long *cursor) {
-    if (kvs->num_hashtables == 1) return;
-    /* didx can be KVSTORE_INDEX_NOT_FOUND when iteration is over and there are no more hashtables to visit. */
-    if (didx == KVSTORE_INDEX_NOT_FOUND) return;
-    *cursor = (*cursor << kvs->num_hashtables_bits) | didx;
+/* Build a kvstore cursor from a hashtable cursor and didx. */
+static unsigned long long hashtableCursorToKvstoreCursor(kvstore *kvs, unsigned long long ht_cursor, int didx) {
+    return (ht_cursor << kvs->num_hashtables_bits) | didx;
 }
 
-static int getAndClearHashtableIndexFromCursor(kvstore *kvs, unsigned long long *cursor) {
-    if (kvs->num_hashtables == 1) return 0;
-    int didx = (int)(*cursor & (kvs->num_hashtables - 1));
-    *cursor = *cursor >> kvs->num_hashtables_bits;
-    return didx;
+/* Extract a hashtable cursor from a kvstore cursor (optionally returning the didx). */
+static unsigned long long kvstoreCursorToHashtableCursor(kvstore *kvs, unsigned long long kvs_cursor, int *didx) {
+    if (didx) *didx = kvs_cursor & ((1uLL << kvs->num_hashtables_bits) - 1);
+    return (kvs_cursor >> kvs->num_hashtables_bits);
 }
 
 int kvstoreIsImporting(kvstore *kvs, int didx) {
-    assert(didx < kvs->num_hashtables);
+    assert(didx >= 0 && didx < kvs->num_hashtables);
     return hashtableFind(kvs->importing, (void *)(intptr_t)didx, NULL);
 }
 
@@ -283,9 +286,7 @@ size_t kvstoreHashtableMetadataSize(void) {
  * 3 for 8 hashtables, etc.)
  */
 kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags) {
-    /* We can't support more than 2^16 hashtables because we want to save 48 bits
-     * for the hashtable cursor, see kvstoreScan */
-    assert(num_hashtables_bits <= 16);
+    assert(num_hashtables_bits <= MAX_HASHTABLES_BITS);
 
     /* The hashtableType of kvstore needs to use the specific callbacks.
      * If there are any changes in the future, it will need to be modified. */
@@ -407,29 +408,31 @@ void hashtableScanToKvstoreScanCallback(void *privdata, void *entry) {
  * 3. If the hashtable is entirely scanned i.e. the cursor has reached 0, the next non empty hashtable is discovered.
  *    The hashtable information is embedded into the cursor and returned.
  *
- * To restrict the scan to a single hashtable, pass a valid hashtable index as
- * 'onlydidx', otherwise pass -1.
+ * Scanning modes controlled by first_idx and last_idx:
+ * 1. first_idx == -1 and last_idx == -1: scan all hashtables.
+ * 2. first_idx >= 0 and last_idx >= 0: scan range [first_idx, last_idx].
  */
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
-                               int onlydidx,
+                               int first_idx,
+                               int last_idx,
                                kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata) {
-    unsigned long long next_cursor = 0;
-    /* During hash table traversal, 48 upper bits in the cursor are used for positioning in the HT.
-     * Following lower bits are used for the hashtable index number, ranging from 0 to 2^num_hashtables_bits-1.
-     * Hashtable index is always 0 at the start of iteration and can be incremented only if there are
-     * multiple hashtables. */
-    int didx = getAndClearHashtableIndexFromCursor(kvs, &cursor);
-    if (onlydidx >= 0) {
-        if (didx < onlydidx) {
-            /* Fast-forward to onlydidx. */
-            assert(onlydidx < kvs->num_hashtables);
-            didx = onlydidx;
-            cursor = 0;
-        } else if (didx > onlydidx) {
-            /* The cursor is already past onlydidx. */
+    /* Split the kvs cursor into the ht_cursor and the hashtable index.  Hashtable index is always
+     * 0 at the start of iteration and can be incremented only if there are multiple hashtables. */
+    int didx;
+    unsigned long long ht_cursor = kvstoreCursorToHashtableCursor(kvs, cursor, &didx);
+
+    if (first_idx >= 0) {
+        assert(last_idx >= first_idx);
+        assert(last_idx < kvs->num_hashtables);
+        if (didx < first_idx) {
+            /* Fast-forward to first_idx. */
+            didx = first_idx;
+            ht_cursor = 0;
+        } else if (didx > last_idx) {
+            /* The cursor is already past last_idx. */
             return 0;
         }
     }
@@ -438,25 +441,31 @@ unsigned long long kvstoreScan(kvstore *kvs,
     kvstoreScanCallbackData cb_data = {.scan_cb = scan_cb, .privdata = privdata, .didx = didx};
 
     int skip = !ht || (skip_cb && skip_cb(ht)) || kvstoreIsImporting(kvs, didx);
-    if (!skip) {
-        next_cursor = hashtableScan(ht, cursor, hashtableScanToKvstoreScanCallback, &cb_data);
+    if (skip) {
+        ht_cursor = 0;
+    } else {
+        ht_cursor = hashtableScan(ht, ht_cursor, hashtableScanToKvstoreScanCallback, &cb_data);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
         freeHashtableIfNeeded(kvs, didx);
     }
     /* scanning done for the current hash table or if the scanning wasn't possible, move to the next hashtable index. */
-    if (next_cursor == 0 || skip) {
-        if (onlydidx >= 0) return 0;
+    if (ht_cursor == 0) {
+        if (first_idx >= 0 && didx >= last_idx) {
+            /* Range exhausted; no need to look up the next hashtable. */
+            return 0;
+        }
         didx = kvstoreGetNextNonEmptyHashtableIndex(kvs, didx);
+        if (didx == KVSTORE_INDEX_NOT_FOUND) return 0;
+        if (first_idx >= 0 && didx > last_idx) {
+            /* Range exhausted. */
+            return 0;
+        }
     }
-    if (didx == KVSTORE_INDEX_NOT_FOUND) {
-        return 0;
-    }
-    addHashtableIndexToCursor(kvs, didx, &next_cursor);
-    return next_cursor;
+    return hashtableCursorToKvstoreCursor(kvs, ht_cursor, didx);
 }
 
 /*
- * This functions increases size of kvstore to match desired number.
+ * This function increases size of kvstore to match desired number.
  * It resizes all individual hash tables, unless predicate indicates otherwise.
  *
  * Based on the parameter `try_expand`, appropriate hashtable expand API is invoked.
@@ -469,12 +478,10 @@ bool kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpand
     if (newsize == 0) return true;
     for (int i = 0; i < kvs->num_hashtables; i++) {
         if (skip_cb && skip_cb(i)) continue;
-        /* If the hash table doesn't exist, create it. */
-        hashtable *ht = createHashtableIfNeeded(kvs, i);
         if (try_expand) {
-            if (!hashtableTryExpand(ht, newsize)) return false;
+            if (!kvstoreHashtableTryExpand(kvs, i, newsize)) return false;
         } else {
-            hashtableExpand(ht, newsize);
+            kvstoreHashtableExpand(kvs, i, newsize);
         }
     }
 
@@ -629,7 +636,7 @@ kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags) {
 /* Free the kvs_it returned by kvstoreIteratorInit. */
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it) {
     hashtableIterator *iter = &kvs_it->di;
-    hashtableResetIterator(iter);
+    hashtableCleanupIterator(iter);
     /* In the safe iterator context, we may delete entries. */
     if (kvs_it->didx != KVSTORE_INDEX_NOT_FOUND) {
         freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
@@ -673,7 +680,7 @@ static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
     if (kvs_it->didx != KVSTORE_INDEX_NOT_FOUND && kvstoreGetHashtable(kvs_it->kvs, kvs_it->didx)) {
         /* Before we move to the next hashtable, reset the iter of the previous hashtable. */
         hashtableIterator *iter = &kvs_it->di;
-        hashtableResetIterator(iter);
+        hashtableCleanupIterator(iter);
         /* In the safe iterator context, we may delete entries. */
         freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
     }
@@ -698,7 +705,7 @@ bool kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
         /* No current hashtable or reached the end of the hash table. */
         hashtable *ht = kvstoreIteratorNextHashtable(kvs_it);
         if (!ht) return false;
-        hashtableReinitIterator(&kvs_it->di, ht);
+        hashtableRetargetIterator(&kvs_it->di, ht);
         return hashtableNext(&kvs_it->di, next);
     }
 }
@@ -722,7 +729,7 @@ void kvstoreTryResizeHashtables(kvstore *kvs, int limit) {
  * of CPU time at every call of this function to perform some rehashing.
  *
  * The function returns the amount of microsecs spent if some rehashing was
- * performed, otherwise 0 is returned. */
+ * performed; otherwise, 0 is returned. */
 uint64_t kvstoreIncrementallyRehash(kvstore *kvs, uint64_t threshold_us) {
     if (listLength(kvs->rehashing) == 0) return 0;
 
@@ -762,6 +769,12 @@ unsigned long kvstoreHashtableSize(kvstore *kvs, int didx) {
     return hashtableSize(ht);
 }
 
+unsigned long kvstoreHashtableBuckets(kvstore *kvs, int didx) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (!ht) return 0;
+    return hashtableBuckets(ht);
+}
+
 kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, uint8_t flags) {
     kvstoreHashtableIterator *kvs_di = zmalloc(sizeof(*kvs_di));
     kvs_di->kvs = kvs;
@@ -774,7 +787,7 @@ kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, ui
 void kvstoreReleaseHashtableIterator(kvstoreHashtableIterator *kvs_di) {
     /* The hashtable may be deleted during the iteration process, so here need to check for NULL. */
     if (kvstoreGetHashtable(kvs_di->kvs, kvs_di->didx)) {
-        hashtableResetIterator(&kvs_di->di);
+        hashtableCleanupIterator(&kvs_di->di);
         /* In the safe iterator context, we may delete entries. */
         freeHashtableIfNeeded(kvs_di->kvs, kvs_di->didx);
     }
@@ -809,9 +822,15 @@ unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, u
 }
 
 bool kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size) {
-    hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return false;
+    if (size == 0) return false;
+    hashtable *ht = createHashtableIfNeeded(kvs, didx);
     return hashtableExpand(ht, size);
+}
+
+bool kvstoreHashtableTryExpand(kvstore *kvs, int didx, unsigned long size) {
+    if (size == 0) return false;
+    hashtable *ht = createHashtableIfNeeded(kvs, didx);
+    return hashtableTryExpand(ht, size);
 }
 
 unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
@@ -927,7 +946,7 @@ bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
  * are not included in hashtable metrics and are excluded from scanning and
  * random key lookup. */
 void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
-    assert(didx < kvs->num_hashtables);
+    assert(didx >= 0 && didx < kvs->num_hashtables);
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
 
@@ -938,10 +957,10 @@ void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
         return;
     }
 
-    hashtableDelete(kvs->importing, (void *)(intptr_t)didx);
     /* Once we mark a hashtable as not importing, we need to begin tracking in
      * the kvstore metadata */
-    if (ht && hashtableSize(ht) != 0) {
+    if (hashtableDelete(kvs->importing, (void *)(intptr_t)didx) && ht && hashtableSize(ht) != 0) {
         cumulativeKeyCountAdd(kvs, didx, hashtableSize(ht));
+        kvs->importing_key_count -= hashtableSize(ht);
     }
 }

@@ -15,7 +15,8 @@
         ],
         "acl_categories": [
             "ADMIN",
-            "DANGEROUS"
+            "DANGEROUS",
+            "FAST"
         ],
         "reply_schema": {
             "oneOf": [

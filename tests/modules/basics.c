@@ -34,6 +34,12 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* Forward declarations of module API functions not publicly exposed */
+extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
+extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
+#define ValkeyModule_CallArgv VM_CallArgv
+#define ValkeyModule_ReplyRaw VM_ReplyRaw
+
 /* --------------------------------- Helpers -------------------------------- */
 
 /* Return true if the reply and the C null term string matches. */
@@ -77,6 +83,117 @@ fail:
     return VALKEYMODULE_OK;
 }
 
+#define UNUSED(V) ((void)V)
+
+void handleSimpleString(void *ctx, const char *str, size_t len) {
+    ((char *)str)[len] = '\0'; /* temporarily null terminate */
+    ValkeyModule_ReplyWithSimpleString((ValkeyModuleCtx *)ctx, str);
+}
+
+void handleBulkString(void *ctx, const char *str, size_t len) {
+    ValkeyModule_ReplyWithStringBuffer((ValkeyModuleCtx *)ctx, str, len);
+}
+
+void handleArray(void *ctx, size_t len) {
+    ValkeyModule_ReplyWithArray((ValkeyModuleCtx *)ctx, len);
+}
+
+void handleError(void *ctx, const char *str, size_t len) {
+    ((char *)str)[len] = '\0'; /* temporarily null terminate */
+    ValkeyModule_ReplyWithError((ValkeyModuleCtx *)ctx, str);
+}
+
+ValkeyModuleReplyHandlers resp_handlers = {
+    .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+    .simpleString = handleSimpleString,
+    .bulkString = handleBulkString,
+    .arrayStart = handleArray,
+    .error = handleError,
+    .onRespAvailable = NULL,
+};
+
+/* TEST.CALL_ARGV -- Test CallArgv() API. */
+int TestCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    ValkeyModule_AutoMemory(ctx);
+
+    int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, (void *)ctx);
+
+    return VALKEYMODULE_OK;
+}
+
+int replyWithRawRespString(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+    UNUSED(ctx);
+    UNUSED(proto_len);
+    ValkeyModule_ReplyWithCString(mctx, proto);
+    return 0; /* continue parsing */
+}
+
+/* TEST.CALL_ARGV_RAW -- Test CallArgv() API. */
+int TestCallArgvRaw(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+
+    ValkeyModule_AutoMemory(ctx);
+
+    int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+
+    resp_handlers.onRespAvailable = replyWithRawRespString;
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, NULL);
+    resp_handlers.onRespAvailable = NULL;
+    return VALKEYMODULE_OK;
+}
+
+/* TEST.CALL_ARGV_S -- Test CallArgv() API with SCRIPT_MODE flag. */
+int TestCallArgvScriptMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    ValkeyModule_AutoMemory(ctx);
+
+    int flags = VALKEYMODULE_CALL_ARGV_SCRIPT_MODE | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, ctx);
+
+    return VALKEYMODULE_OK;
+}
+
+/* Increment an int counter passed as ctx. Used to verify that typed callbacks
+ * are invoked even when the collection start/end callbacks are NULL. */
+static void countBulkString(void *ctx, const char *str, size_t len) {
+    UNUSED(str);
+    UNUSED(len);
+    (*(int *)(void *)ctx)++;
+}
+
+/* TEST.CALL_ARGV_NULL_ARRAY_START key1 key2
+ *
+ * Calls MGET key1 key2 via VM_CallArgv with a handler table that has
+ * arrayStart=NULL (and arrayEnd=NULL). Returns the number of bulkString
+ * callbacks that fired.
+ *
+ * Before the parser-desync fix, callRawReplyArray() returned early on a NULL
+ * arrayStart, skipping the child-element loop entirely — bulkString never
+ * fired and the result was 0. After the fix the children are always consumed,
+ * bulkString fires once per element, and the result is 2. */
+int TestCallArgvNullArrayStart(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 3) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+
+    int count = 0;
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        /* arrayStart intentionally NULL — the parser must still consume
+         * the array children to stay in sync. */
+        .bulkString = countBulkString,
+    };
+
+    ValkeyModuleString *mget_argv[3];
+    mget_argv[0] = ValkeyModule_CreateString(ctx, "MGET", 4);
+    mget_argv[1] = argv[1];
+    mget_argv[2] = argv[2];
+
+    int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    ValkeyModule_CallArgv(ctx, mget_argv, 3, flags, &handlers, &count);
+
+    ValkeyModule_ReplyWithLongLong(ctx, count);
+    return VALKEYMODULE_OK;
+}
+
 int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -87,14 +204,14 @@ int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "attrib"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_STRING) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 (it might be a string but it contains attribute) */
+    /* make sure we cannot reply to resp2 client with resp3 (it might be a string but it contains attribute) */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     if (!TestMatchReply(reply,"Some real reply following the attribute")) goto fail;
 
     reply = ValkeyModule_CallReplyAttribute(reply);
     if (!reply || ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_ATTRIBUTE) goto fail;
-    /* make sure we can not reply to resp2 client with resp3 attribute */
+    /* make sure we cannot reply to resp2 client with resp3 attribute */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
     if (ValkeyModule_CallReplyLength(reply) != 1) goto fail;
 
@@ -156,7 +273,7 @@ int TestCallResp3Map(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     reply = ValkeyModule_Call(ctx,"HGETALL","3c" ,"myhash"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_MAP) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 map */
+    /* make sure we cannot reply to resp2 client with resp3 map */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     long long items = ValkeyModule_CallReplyLength(reply);
@@ -188,7 +305,7 @@ int TestCallResp3Bool(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "true"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_BOOL) goto fail;
-    /* make sure we can not reply to resp2 client with resp3 bool */
+    /* make sure we cannot reply to resp2 client with resp3 bool */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     if (!ValkeyModule_CallReplyBool(reply)) goto fail;
@@ -214,7 +331,7 @@ int TestCallResp3Null(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "null"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_NULL) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 null */
+    /* make sure we cannot reply to resp2 client with resp3 null */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     ValkeyModule_ReplyWithSimpleString(ctx,"OK");
@@ -277,7 +394,7 @@ int TestCallResp3Double(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "double"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_DOUBLE) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 double*/
+    /* make sure we cannot reply to resp2 client with resp3 double*/
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     double d = ValkeyModule_CallReplyDouble(reply);
@@ -304,7 +421,7 @@ int TestCallResp3BigNumber(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "bignum"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_BIG_NUMBER) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 big number */
+    /* make sure we cannot reply to resp2 client with resp3 big number */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     size_t len;
@@ -327,7 +444,7 @@ int TestCallResp3Verbatim(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "verbatim"); /* 3 stands for resp 3 reply */
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_VERBATIM_STRING) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 verbatim string */
+    /* make sure we cannot reply to resp2 client with resp3 verbatim string */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     const char* format;
@@ -354,7 +471,7 @@ int TestCallResp3Set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     reply = ValkeyModule_Call(ctx,"smembers","3c" ,"myset"); // N stands for resp 3 reply
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_SET) goto fail;
 
-    /* make sure we can not reply to resp2 client with resp3 set */
+    /* make sure we cannot reply to resp2 client with resp3 set */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
 
     long long items = ValkeyModule_CallReplyLength(reply);
@@ -367,7 +484,7 @@ int TestCallResp3Set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
 
     /*
      * The order of elements on sets are not promised so we just
-     * veridy that the reply matches one of the elements.
+     * verify that the reply matches one of the elements.
      */
     if (!TestMatchReply(val0,"v1") && !TestMatchReply(val0,"v2")) goto fail;
     if (!TestMatchReply(val1,"v1") && !TestMatchReply(val1,"v2")) goto fail;
@@ -511,7 +628,7 @@ int TestNestedCallReplyArrayElement(ValkeyModuleCtx *ctx, ValkeyModuleString **a
     ValkeyModuleCallReply *keys_reply = ValkeyModule_CallReplyArrayElement(scan_reply, 1);
     ValkeyModule_Assert(ValkeyModule_CallReplyType(keys_reply) == VALKEYMODULE_REPLY_ARRAY);
     ValkeyModule_Assert( ValkeyModule_CallReplyLength(keys_reply) == 1);
- 
+
     ValkeyModuleCallReply *key_reply = ValkeyModule_CallReplyArrayElement(keys_reply, 0);
     ValkeyModule_Assert(ValkeyModule_CallReplyType(key_reply) == VALKEYMODULE_REPLY_STRING);
     ValkeyModuleString *key = ValkeyModule_CreateStringFromCallReply(key_reply);
@@ -765,7 +882,7 @@ end:
 
 /* ----------------------------- Test framework ----------------------------- */
 
-/* Return 1 if the reply matches the specified string, otherwise log errors
+/* Return 1 if the reply matches the specified string; otherwise, log errors
  * in the server log and return 0. */
 int TestAssertErrorReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply, char *str, size_t len) {
     ValkeyModuleString *mystr, *expected;
@@ -811,7 +928,7 @@ int TestAssertStringReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply, ch
     return 1;
 }
 
-/* Return 1 if the reply matches the specified integer, otherwise log errors
+/* Return 1 if the reply matches the specified integer; otherwise, log errors
  * in the server log and return 0. */
 int TestAssertIntegerReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply, long long expected) {
     if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
@@ -901,7 +1018,7 @@ int TestBasics(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     T("test.string.append.am","");
     if (!TestAssertStringReply(ctx,reply,"foobar",6)) goto fail;
-    
+
     T("test.string.trim","");
     if (!TestAssertStringReply(ctx,reply,"OK",2)) goto fail;
 
@@ -969,6 +1086,22 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx,"test.call",
         TestCall,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv",
+        TestCallArgv,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_raw",
+        TestCallArgvRaw,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_s",
+        TestCallArgvScriptMode,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_null_array_start",
+        TestCallArgvNullArrayStart,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"test.callresp3map",

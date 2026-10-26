@@ -12,7 +12,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "HASH"
+            "FAST",
+            "HASH",
+            "WRITE"
         ],
         "key_specs": [
             {
@@ -47,7 +49,7 @@
             },
             {
                 "name": "field",
-                "type": "string"
+                "type": "field"
             },
             {
                 "name": "increment",

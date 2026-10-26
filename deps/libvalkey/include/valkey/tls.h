@@ -31,6 +31,8 @@
 #ifndef VALKEY_TLS_H
 #define VALKEY_TLS_H
 
+#include "visibility.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -87,7 +89,7 @@ typedef struct {
 /**
  * Return the error message corresponding with the specified error code.
  */
-const char *valkeyTLSContextGetError(valkeyTLSContextError error);
+LIBVALKEY_API const char *valkeyTLSContextGetError(valkeyTLSContextError error);
 
 /**
  * Helper function to initialize the OpenSSL library.
@@ -96,7 +98,7 @@ const char *valkeyTLSContextGetError(valkeyTLSContextError error);
  * call this function only once, and only if OpenSSL is not directly initialized
  * elsewhere.
  */
-int valkeyInitOpenSSL(void);
+LIBVALKEY_API int valkeyInitOpenSSL(void);
 
 /**
  * Helper function to initialize an OpenSSL context that can be used
@@ -118,9 +120,9 @@ int valkeyInitOpenSSL(void);
  * If error is non-null, it will be populated in case the context creation fails
  * (returning a NULL).
  */
-valkeyTLSContext *valkeyCreateTLSContext(const char *cacert_filename, const char *capath,
-                                         const char *cert_filename, const char *private_key_filename,
-                                         const char *server_name, valkeyTLSContextError *error);
+LIBVALKEY_API valkeyTLSContext *valkeyCreateTLSContext(const char *cacert_filename, const char *capath,
+                                                       const char *cert_filename, const char *private_key_filename,
+                                                       const char *server_name, valkeyTLSContextError *error);
 
 /**
   * Helper function to initialize an OpenSSL context that can be used
@@ -131,13 +133,13 @@ valkeyTLSContext *valkeyCreateTLSContext(const char *cacert_filename, const char
   * If error is non-null, it will be populated in case the context creation fails
   * (returning a NULL).
 */
-valkeyTLSContext *valkeyCreateTLSContextWithOptions(valkeyTLSOptions *options,
-                                                    valkeyTLSContextError *error);
+LIBVALKEY_API valkeyTLSContext *valkeyCreateTLSContextWithOptions(valkeyTLSOptions *options,
+                                                                  valkeyTLSContextError *error);
 
 /**
  * Free a previously created OpenSSL context.
  */
-void valkeyFreeTLSContext(valkeyTLSContext *valkey_tls_ctx);
+LIBVALKEY_API void valkeyFreeTLSContext(valkeyTLSContext *valkey_tls_ctx);
 
 /**
  * Initiate TLS on an existing valkeyContext.
@@ -146,12 +148,12 @@ void valkeyFreeTLSContext(valkeyTLSContext *valkey_tls_ctx);
  * to directly interact with OpenSSL, and instead uses a valkeyTLSContext
  * previously created using valkeyCreateTLSContext().
  */
-int valkeyInitiateTLSWithContext(struct valkeyContext *c, valkeyTLSContext *valkey_tls_ctx);
+LIBVALKEY_API int valkeyInitiateTLSWithContext(struct valkeyContext *c, valkeyTLSContext *valkey_tls_ctx);
 
 /**
  * Initiate TLS negotiation on a provided OpenSSL SSL object.
  */
-int valkeyInitiateTLS(struct valkeyContext *c, struct ssl_st *ssl);
+LIBVALKEY_API int valkeyInitiateTLS(struct valkeyContext *c, struct ssl_st *ssl);
 
 #ifdef __cplusplus
 }

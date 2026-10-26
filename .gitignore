@@ -4,6 +4,8 @@
 *.xo
 *.so
 *.d
+*.lo
+*.la
 *.log
 dump*.rdb
 *-benchmark
@@ -13,7 +15,7 @@ dump*.rdb
 *-cli
 *-sentinel
 *-server
-*-unit-tests
+*-unit-gtests
 doc-tools
 release
 misc/*
@@ -46,6 +48,7 @@ redis.code-workspace
 .cscope*
 .swp
 nodes*.conf
+nodes*.conf.lock
 tests/cluster/tmp/*
 tests/rdma/rdma-test
 tags
@@ -54,3 +57,7 @@ build-debug/
 build-release/
 cmake-build-debug/
 cmake-build-release/
+__pycache__
+src/unit/.flags
+valkey-unit-tests
+src/.idea/*

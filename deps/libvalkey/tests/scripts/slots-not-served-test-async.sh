@@ -32,7 +32,7 @@ server1=$!
 wait $syncpid1;
 
 # Run client
-timeout 3s "$clientprog" --events 127.0.0.1:7401 > "$testname.out" <<'EOF'
+timeout 3s "$clientprog" --blocking-initial-update --events 127.0.0.1:7401 > "$testname.out" <<'EOF'
 GET foo
 # Allow slotmap update to finish.
 !sleep

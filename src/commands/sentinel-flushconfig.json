@@ -15,6 +15,11 @@
         "reply_schema": {
             "const": "OK",
             "description": "Force Sentinel to rewrite its configuration on disk, including the current Sentinel state."
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

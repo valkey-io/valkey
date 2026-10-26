@@ -10,7 +10,9 @@
             "WRITE"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "KEYSPACE",
+            "SLOW",
+            "WRITE"
         ],
         "command_tips": [
             "REQUEST_POLICY:MULTI_SHARD",

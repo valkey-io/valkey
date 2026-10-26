@@ -37,6 +37,10 @@
                     }
                 }
             }
+        ],
+        "acl_categories": [
+            "PUBSUB",
+            "SLOW"
         ]
     }
 }

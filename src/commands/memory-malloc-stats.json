@@ -18,6 +18,9 @@
         "reply_schema": {
             "type": "string",
             "description": "The memory allocator's internal statistics report."
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

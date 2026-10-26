@@ -10,7 +10,9 @@
             "READONLY"
         ],
         "acl_categories": [
-            "GEO"
+            "GEO",
+            "READ",
+            "SLOW"
         ],
         "key_specs": [
             {
@@ -40,7 +42,7 @@
             },
             {
                 "name": "member",
-                "type": "string",
+                "type": "member",
                 "multiple": true,
                 "optional": true
             }

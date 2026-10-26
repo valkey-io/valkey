@@ -101,7 +101,7 @@
  *      Integer encoded as 8 bit signed (1 byte).
  * |1111xxxx| - (with xxxx between 0001 and 1101) immediate 4 bit integer.
  *      Unsigned integer from 0 to 12. The encoded value is actually from
- *      1 to 13 because 0000 and 1111 can not be used, so 1 should be
+ *      1 to 13 because 0000 and 1111 cannot be used, so 1 should be
  *      subtracted from the encoded 4 bit value to obtain the right value.
  * |11111111| - End of ziplist special entry.
  *
@@ -195,7 +195,7 @@
 #define ZIP_BIG_PREVLEN 254 /* ZIP_BIG_PREVLEN - 1 is the max number of bytes of      \
                                the previous entry, for the "prevlen" field prefixing  \
                                each entry, to be represented with just a single byte. \
-                               Otherwise it is represented as FE AA BB CC DD, where   \
+                               Otherwise, it is represented as FE AA BB CC DD, where  \
                                AA BB CC DD are a 4 bytes unsigned integer             \
                                representing the previous entry len. */
 
@@ -740,11 +740,11 @@ unsigned char *ziplistResize(unsigned char *zl, size_t len) {
  * updated, i.e. consecutive fields MAY need an update. */
 unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p) {
     zlentry cur;
-    size_t prevlen, prevlensize, prevoffset; /* Informat of the last changed entry. */
+    size_t prevlen, prevlensize, prevoffset; /* Information of the last changed entry. */
     size_t firstentrylen;                    /* Used to handle insert at head. */
     size_t rawlen, curlen = intrev32ifbe(ZIPLIST_BYTES(zl));
     size_t extra = 0, cnt = 0, offset;
-    size_t delta = 4; /* Extra bytes needed to update a entry's prevlen (5-1). */
+    size_t delta = 4; /* Extra bytes needed to update an entry's prevlen (5-1). */
     unsigned char *tail = zl + intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl));
 
     /* Empty ziplist */
@@ -1169,7 +1169,7 @@ unsigned char *ziplistIndex(unsigned char *zl, int index) {
  * zl is the pointer to the ziplist
  * p is the pointer to the current element
  *
- * The element after 'p' is returned, otherwise NULL if we are at the end. */
+ * The element after 'p' is returned; otherwise, NULL if we are at the end. */
 unsigned char *ziplistNext(unsigned char *zl, unsigned char *p) {
     ((void)zl);
     size_t zlbytes = intrev32ifbe(ZIPLIST_BYTES(zl));
@@ -1643,4 +1643,9 @@ unsigned int ziplistRandomPairsUnique(unsigned char *zl, unsigned int count, zip
         index++;
     }
     return picked;
+}
+
+/* Wrapper function for gtest to access static zipEntry function. */
+void testOnlyZipEntry(unsigned char *p, zlentry *e) {
+    zipEntry(p, e);
 }

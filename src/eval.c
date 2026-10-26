@@ -49,12 +49,12 @@
 #include "monotonic.h"
 #include "resp_parser.h"
 #include "script.h"
-#include "lua/debug_lua.h"
 #include "scripting_engine.h"
 #include "sds.h"
 
 
 void evalGenericCommandWithDebugging(client *c, int evalsha);
+static void evalCtxDeleteScript(sds sha);
 
 typedef struct evalScript {
     compiledFunction *script;
@@ -72,25 +72,28 @@ static void dictScriptDestructor(void *val) {
     zfree(es);
 }
 
-static uint64_t dictStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
+/* Helper functions for eval.c */
+static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictScriptDestructor(dictGetVal(de));
+    zfree(de);
 }
 
 /* evalCtx.scripts sha (as sds string) -> scripts (as evalScript) cache. */
 dictType shaScriptObjectDictType = {
-    dictStrCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictScriptDestructor,  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyScriptValue,
 };
 
 /* Eval context */
 struct evalCtx {
-    dict *scripts;                  /* A dictionary of SHA1 -> evalScript */
-    list *scripts_lru_list;         /* A list of SHA1, first in first out LRU eviction. */
-    unsigned long long scripts_mem; /* Cached scripts' memory + oh */
+    dict *scripts;                       /* A dictionary of SHA1 -> evalScript */
+    list *scripts_lru_list;              /* A list of SHA1, first in first out LRU eviction. */
+    unsigned long long scripts_mem;      /* Cached scripts' memory + oh */
+    unsigned long long eval_scripts_mem; /* Cached eval scripts' memory + oh */
 } evalCtx;
 
 /* Initialize the scripting environment.
@@ -101,13 +104,14 @@ struct evalCtx {
 void evalInit(void) {
     /* Initialize a dictionary we use to map SHAs to scripts.
      *
-     * Initialize a list we use for script evictions.
+     * Initialize a list we use for script LRU evictions.
      * Note that we duplicate the sha when adding to the lru list due to defrag,
      * and we need to free them respectively. */
     evalCtx.scripts = dictCreate(&shaScriptObjectDictType);
     evalCtx.scripts_lru_list = listCreate();
     listSetFreeMethod(evalCtx.scripts_lru_list, sdsfreeVoid);
     evalCtx.scripts_mem = 0;
+    evalCtx.eval_scripts_mem = 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -146,9 +150,9 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
         listIter *iter = listGetIterator(engine_callbacks, 0);
         listNode *node = NULL;
         while ((node = listNext(iter)) != NULL) {
-            callableLazyEvalReset *callback = listNodeValue(node);
+            callableLazyEnvReset *callback = listNodeValue(node);
             if (callback != NULL) {
-                callback->engineLazyEvalResetCallback(callback->context);
+                callback->engineLazyEnvResetCallback(callback->context);
                 zfree(callback);
             }
         }
@@ -157,9 +161,27 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
     }
 }
 
+static void scriptsMemoryAdd(size_t memory, int is_eval) {
+    evalCtx.scripts_mem += memory;
+    if (is_eval) evalCtx.eval_scripts_mem += memory;
+}
+
+static void scriptsMemorySubtract(size_t memory, int is_eval) {
+    evalCtx.scripts_mem -= memory;
+    if (is_eval) evalCtx.eval_scripts_mem -= memory;
+}
+
+/* Remove an LRU node and account for its duplicated SHA. Both counters include
+ * this list-owned allocation; dictionary-owned memory is handled separately. */
+static void scriptsLRUDeleteNode(listNode *node) {
+    sds sha = listNodeValue(node);
+    scriptsMemorySubtract(sdsAllocSize(sha), 1);
+    listDelNode(evalCtx.scripts_lru_list, node);
+}
+
 static void resetEngineEvalEnvCallback(scriptingEngine *engine, void *context) {
     int async = context != NULL;
-    callableLazyEvalReset *callback = scriptingEngineCallResetEvalEnvFunc(engine, async);
+    callableLazyEnvReset *callback = scriptingEngineCallResetEnvFunc(engine, VMSE_EVAL, async);
 
     if (async) {
         list *callbacks = context;
@@ -174,13 +196,24 @@ void evalRelease(int async) {
         list *engine_callbacks = listCreate();
         scriptingEngineManagerForEachEngine(resetEngineEvalEnvCallback, engine_callbacks);
         freeEvalScriptsAsync(evalCtx.scripts, evalCtx.scripts_lru_list, engine_callbacks);
-
     } else {
         freeEvalScripts(evalCtx.scripts, evalCtx.scripts_lru_list, NULL);
         scriptingEngineManagerForEachEngine(resetEngineEvalEnvCallback, NULL);
     }
 }
 
+/* Remove all cached scripts associated with the given scripting engine.
+ * Called when a scripting engine is unregistered to avoid dangling engine
+ * pointers in the eval script cache. */
+void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
+    dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
+    dictEntry *entry;
+    while ((entry = dictNext(iter))) {
+        evalScript *es = dictGetVal(entry);
+        if (es->engine == engine) evalCtxDeleteScript(dictGetKey(entry));
+    }
+    dictReleaseIterator(iter);
+}
 
 void evalReset(int async) {
     evalRelease(async);
@@ -232,17 +265,17 @@ int evalExtractShebangFlags(sds body,
             return C_ERR;
         }
         shebang_len = shebang_end - body;
-        sds shebang = sdsnewlen(body, shebang_len);
-        sds *parts = sdssplitargs(shebang, &numparts);
-        sdsfree(shebang);
-        if (!parts || numparts == 0) {
+        sds *parts = sdsnsplitargs(body, shebang_len, &numparts);
+        if (!parts || numparts == 0 || sdslen(parts[0]) < 2) {
             if (err) *err = sdsnew("Invalid engine in script shebang");
             sdsfreesplitres(parts, numparts);
             return C_ERR;
         }
 
         if (out_engine) {
-            uint32_t engine_name_len = sdslen(parts[0]) - 2;
+            size_t part0_len = sdslen(parts[0]);
+            serverAssert(part0_len >= 2);
+            size_t engine_name_len = part0_len - 2;
             *out_engine = zcalloc(engine_name_len + 1);
             valkey_strlcpy(*out_engine, parts[0] + 2, engine_name_len + 1);
         }
@@ -291,13 +324,13 @@ int evalExtractShebangFlags(sds body,
 uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
     char sha[41];
     int evalsha = c->cmd->proc == evalShaCommand || c->cmd->proc == evalShaRoCommand;
-    if (evalsha && sdslen(c->argv[1]->ptr) != 40) return cmd_flags;
+    if (evalsha && sdslen(objectGetVal(c->argv[1])) != 40) return cmd_flags;
     uint64_t script_flags;
-    evalCalcScriptHash(evalsha, c->argv[1]->ptr, sha);
+    evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
     c->cur_script = dictFind(evalCtx.scripts, sha);
     if (!c->cur_script) {
         if (evalsha) return cmd_flags;
-        if (evalExtractShebangFlags(c->argv[1]->ptr, NULL, &script_flags, NULL, NULL) == C_ERR) return cmd_flags;
+        if (evalExtractShebangFlags(objectGetVal(c->argv[1]), NULL, &script_flags, NULL, NULL) == C_ERR) return cmd_flags;
     } else {
         evalScript *es = dictGetVal(c->cur_script);
         script_flags = es->flags;
@@ -306,44 +339,171 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
     return scriptFlagsToCmdFlags(cmd_flags, script_flags);
 }
 
-/* Delete an eval script with the specified sha.
+/* Delete a cached script with the specified sha.
  *
- * This will delete the script from the scripting engine and delete the script
- * from server. */
-static void evalDeleteScript(client *c, sds sha) {
-    /* Delete the script from server. */
+ * This removes the script from the scripting engine, the script dictionary, and
+ * the EVAL LRU list when it has one. */
+static void evalCtxDeleteScript(sds sha) {
     dictEntry *de = dictUnlink(evalCtx.scripts, sha);
-    serverAssertWithInfo(c, NULL, de);
+    serverAssert(de);
+    sds dict_sha = dictGetKey(de);
     evalScript *es = dictGetVal(de);
-    evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
+    scriptsMemorySubtract(sdsAllocSize(dict_sha) + getStringObjectSdsUsedMemory(es->body), es->node != NULL);
+    if (es->node) {
+        scriptsLRUDeleteNode(es->node);
+        es->node = NULL;
+    }
     dictFreeUnlinkedEntry(evalCtx.scripts, de);
 }
 
-/* Users who abuse EVAL will generate a new lua script on each call, which can
+/* Add a script to the LRU eviction list, evicting oldest scripts if necessary.
+ *
+ * Users who abuse EVAL will generate a new lua script on each call, which can
  * consume large amounts of memory over time. Since EVAL is mostly the one that
  * abuses the lua cache, and these won't have pipeline issues (scripts won't
- * disappear when EVALSHA needs it and cause failure), we implement script eviction
+ * disappear when EVALSHA needs it and cause failure), we implement script LRU eviction
  * only for these (not for one loaded with SCRIPT LOAD). Considering that we don't
  * have many scripts, then unlike keys, we don't need to worry about the memory
  * usage of keeping a true sorted LRU linked list.
  *
- * Returns the corresponding node added, which is used to save it in scriptHolder
+ * This function enforces a maximum count limit (LRU_LIST_LENGTH = 500) on cached
+ * scripts loaded via EVAL. When the limit is reached, the oldest (least recently
+ * used) scripts are evicted to make room for new ones.
+ *
+ * Note: Scripts loaded via SCRIPT LOAD are not added to this LRU list and are
+ * exempt from count-based eviction. maxmemory-scripts only applies to scripts
+ * loaded via EVAL.
+ *
+ * Returns the corresponding node added, which is used to save it in evalScript
  * and use it for quick removal and re-insertion into an LRU list each time the
  * script is used. */
 #define LRU_LIST_LENGTH 500
-static listNode *scriptsLRUAdd(client *c, sds sha) {
+static listNode *scriptsLRUAdd(sds sha) {
     /* Evict oldest. */
     while (listLength(evalCtx.scripts_lru_list) >= LRU_LIST_LENGTH) {
-        listNode *ln = listFirst(evalCtx.scripts_lru_list);
-        sds oldest = listNodeValue(ln);
-        evalDeleteScript(c, oldest);
-        listDelNode(evalCtx.scripts_lru_list, ln);
+        sds oldest = listNodeValue(listFirst(evalCtx.scripts_lru_list));
+        evalCtxDeleteScript(oldest);
         server.stat_evictedscripts++;
     }
 
     /* Add current. */
-    listAddNodeTail(evalCtx.scripts_lru_list, sdsdup(sha));
+    sds lru_sha = sdsdup(sha);
+    listAddNodeTail(evalCtx.scripts_lru_list, lru_sha);
+    scriptsMemoryAdd(sdsAllocSize(lru_sha), 1);
     return listLast(evalCtx.scripts_lru_list);
+}
+
+/* Returns the actual scripts eviction limit based on current configuration or
+ * 0 if no limit. */
+size_t getScriptsMemoryLimit(void) {
+    size_t maxmemory_scripts_actual = SIZE_MAX;
+
+    if (server.maxmemory_scripts < 0 && server.maxmemory > 0) {
+        /* Handle percentage of maxmemory (negative value represents percentage). */
+        unsigned long long maxmemory_scripts_bytes =
+            (unsigned long long)((double)server.maxmemory * -(double)server.maxmemory_scripts / 100);
+        if (maxmemory_scripts_bytes <= SIZE_MAX) maxmemory_scripts_actual = maxmemory_scripts_bytes;
+    } else if (server.maxmemory_scripts > 0) {
+        /* Absolute value specified. */
+        maxmemory_scripts_actual = server.maxmemory_scripts;
+    } else {
+        /* maxmemory-scripts is 0, no memory limit enforced. */
+        return 0;
+    }
+
+    /* Don't allow a too small maxmemory-scripts to avoid cases where we can't
+     * cache any scripts at all due to bad configuration. Minimum is 128KB. */
+    if (maxmemory_scripts_actual < 1024 * 128) maxmemory_scripts_actual = 1024 * 128;
+
+    return maxmemory_scripts_actual;
+}
+
+static int isScriptsEvictionProcRunning = 0;
+
+/* Script eviction return codes. */
+#define SCRIPTS_EVICT_OK 0      /* Memory is OK or eviction completed successfully. */
+#define SCRIPTS_EVICT_RUNNING 1 /* Memory still over limit, time limit reached, need async continuation. */
+
+/* Perform memory-based EVAL script evictions when maxmemory-scripts limit is exceeded.
+ *
+ * SCRIPT LOAD scripts are not considered by this limit or eviction mechanism.
+ * Their memory is accounted for by the global maxmemory limit instead. Since
+ * SCRIPT LOAD has CMD_DENYOOM, processCommand() may evict keys or reject the
+ * command with OOM when the instance cannot accept it.
+ *
+ * Eviction strategy:
+ * - EVAL scripts are selected from their LRU list.
+ * - Eviction is skipped while a long-running command has yielded to the event
+ *   loop, so the currently executing script cannot be freed underneath it.
+ * - To avoid blocking the server, eviction is time-limited. If the time limit is
+ *   reached while memory is still over the limit, a time proc continues eviction.
+ *
+ * Returns:
+ * - SCRIPTS_EVICT_OK: Memory is within limits or no limit configured.
+ * - SCRIPTS_EVICT_RUNNING: Eviction still needed, async proc scheduled. */
+static int performScriptsEvictions(void) {
+    /* Do not evict while a long-running command has yielded to the event loop;
+     * the next eligible trigger will retry the eviction. */
+    if (isInsideYieldingLongCommand()) return SCRIPTS_EVICT_OK;
+
+    /* Nothing to evict if no scripts cached. */
+    if (dictSize(evalCtx.scripts) == 0) return SCRIPTS_EVICT_OK;
+
+    /* Check if memory-based eviction is enabled. */
+    size_t script_eviction_limit = getScriptsMemoryLimit();
+    if (script_eviction_limit == 0) return SCRIPTS_EVICT_OK;
+
+    int scripts_evicted = 0;
+    unsigned long scripts_eviction_time_limit_us = 500; /* 500 microseconds max per call */
+    monotime scripts_eviction_timer;
+    elapsedStart(&scripts_eviction_timer);
+
+    /* Evict EVAL scripts until their memory usage is under the limit. */
+    while (evalScriptsMemoryOverhead() > script_eviction_limit) {
+        listNode *node = listFirst(evalCtx.scripts_lru_list);
+        if (node == NULL) return SCRIPTS_EVICT_OK;
+
+        sds sha = listNodeValue(node);
+        evalCtxDeleteScript(sha);
+        server.stat_evictedscripts++;
+        scripts_evicted++;
+
+        if (scripts_evicted % 16 == 0) {
+            /* After some time, exit the loop early. We don't want to spend too much
+             * time here and block the server. */
+            if (elapsedUs(scripts_eviction_timer) > scripts_eviction_time_limit_us) {
+                if (evalScriptsMemoryOverhead() > script_eviction_limit) {
+                    /* Still need to evict scripts, start the eviction timer proc. */
+                    startScriptsEvictionTimeProc();
+                    return SCRIPTS_EVICT_RUNNING;
+                } else {
+                    return SCRIPTS_EVICT_OK;
+                }
+            }
+        }
+    }
+
+    return SCRIPTS_EVICT_OK;
+}
+
+/* Time event proc for script eviction. */
+static long long scriptsEvictionTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(eventLoop);
+    UNUSED(id);
+    UNUSED(clientData);
+
+    if (performScriptsEvictions() == SCRIPTS_EVICT_RUNNING) return 0; /* Keep evicting */
+
+    isScriptsEvictionProcRunning = 0;
+    return AE_NOMORE;
+}
+
+/* Start the scripts eviction time proc if not already running. */
+void startScriptsEvictionTimeProc(void) {
+    if (!isScriptsEvictionProcRunning) {
+        isScriptsEvictionProcRunning = 1;
+        aeCreateTimeEvent(server.el, 0, scriptsEvictionTimeProc, NULL, NULL);
+    }
 }
 
 static int evalRegisterNewScript(client *c, robj *body, char **sha) {
@@ -355,7 +515,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
 
     if (is_script_load) {
         *sha = (char *)zcalloc(41);
-        evalCalcScriptHash(0, body->ptr, *sha);
+        evalCalcScriptHash(0, objectGetVal(body), *sha);
 
         /* If the script was previously added via EVAL, we promote it to
          * SCRIPT LOAD, prevent it from being evicted later. */
@@ -363,7 +523,14 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
         if (entry != NULL) {
             evalScript *es = dictGetVal(entry);
             if (es->node) {
-                listDelNode(evalCtx.scripts_lru_list, es->node);
+                sds dict_sha = dictGetKey(entry);
+                size_t sha_mem = sdsAllocSize(dict_sha);
+                size_t body_mem = getStringObjectSdsUsedMemory(es->body);
+                /* The dictionary entry and body remain cached, but no longer
+                 * belong to the EVAL-only accounting. */
+                scriptsMemorySubtract(sha_mem + body_mem, 1);
+                scriptsMemoryAdd(sha_mem + body_mem, 0);
+                scriptsLRUDeleteNode(es->node);
                 es->node = NULL;
             }
 
@@ -376,7 +543,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     uint64_t script_flags;
     sds err = NULL;
     char *engine_name = NULL;
-    if (evalExtractShebangFlags(body->ptr, &engine_name, &script_flags, &shebang_len, &err) == C_ERR) {
+    if (evalExtractShebangFlags(objectGetVal(body), &engine_name, &script_flags, &shebang_len, &err) == C_ERR) {
         if (c != NULL) {
             addReplyErrorSds(c, err);
         }
@@ -410,15 +577,15 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     compiledFunction **functions =
         scriptingEngineCallCompileCode(engine,
                                        VMSE_EVAL,
-                                       (sds)body->ptr + shebang_len,
-                                       sdslen(body->ptr) - shebang_len,
+                                       (sds)objectGetVal(body) + shebang_len,
+                                       sdslen(objectGetVal(body)) - shebang_len,
                                        0,
                                        &num_compiled_functions,
                                        &_err);
     if (functions == NULL) {
         serverAssert(_err != NULL);
         if (c != NULL) {
-            addReplyErrorFormat(c, "%s", (char *)_err->ptr);
+            addReplyErrorFormat(c, "%s", (char *)objectGetVal(_err));
         }
         decrRefCount(_err);
         if (is_script_load) {
@@ -430,6 +597,9 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
 
     serverAssert(num_compiled_functions == 1);
 
+    /* Try evict EVAL scripts before actually adding the script. */
+    if (!is_script_load) performScriptsEvictions();
+
     /* We also save a SHA1 -> Original script map in a dictionary
      * so that we can replicate / write in the AOF all the
      * EVALSHA commands as EVAL using the original script. */
@@ -439,13 +609,14 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     es->flags = script_flags;
     sds _sha = sdsnew(*sha);
     if (!is_script_load) {
-        /* Script eviction only applies to EVAL, not SCRIPT LOAD. */
-        es->node = scriptsLRUAdd(c, _sha);
+        /* Script LRU eviction only applies to EVAL, not SCRIPT LOAD. */
+        es->node = scriptsLRUAdd(_sha);
     }
     es->body = body;
+
     int retval = dictAdd(evalCtx.scripts, _sha, es);
-    serverAssertWithInfo(c ? c : scriptingEngineGetClient(engine), NULL, retval == DICT_OK);
-    evalCtx.scripts_mem += sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body);
+    serverAssert(retval == DICT_OK);
+    scriptsMemoryAdd(sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body), !is_script_load);
     incrRefCount(body);
     zfree(functions);
 
@@ -470,13 +641,13 @@ static void evalGenericCommand(client *c, int evalsha) {
         memcpy(sha, dictGetKey(c->cur_script), 40);
         sha[40] = '\0';
     } else {
-        evalCalcScriptHash(evalsha, c->argv[1]->ptr, sha);
+        evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
     }
 
     dictEntry *entry = dictFind(evalCtx.scripts, sha);
 
     if (evalsha && entry == NULL) {
-        /* Calling EVALSHA using an hash that was never added to the scripts
+        /* Calling EVALSHA using a hash that was never added to the scripts
          * cache. */
         addReplyErrorObject(c, shared.noscripterr);
         return;
@@ -496,7 +667,7 @@ static void evalGenericCommand(client *c, int evalsha) {
     int ro = c->cmd->proc == evalRoCommand || c->cmd->proc == evalShaRoCommand;
 
     scriptRunCtx rctx;
-    if (scriptPrepareForRun(&rctx, scriptingEngineGetClient(es->engine), c, sha, es->flags, ro) != C_OK) {
+    if (scriptPrepareForRun(&rctx, es->engine, c, sha, es->flags, ro) != C_OK) {
         return;
     }
     rctx.flags |= SCRIPT_EVAL_MODE; /* mark the current run as EVAL (as opposed to FCALL) so we'll
@@ -539,7 +710,7 @@ void evalShaCommand(client *c) {
     /* Explicitly feed monitor here so that lua commands appear after their
      * script command. */
     replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
-    if (sdslen(c->argv[1]->ptr) != 40) {
+    if (sdslen(objectGetVal(c->argv[1])) != 40) {
         /* We know that a match is not possible if the provided SHA is
          * not the right length. So we return an error ASAP, this way
          * evalGenericCommand() can be implemented without string length
@@ -560,10 +731,11 @@ void evalShaRoCommand(client *c) {
 }
 
 void scriptCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         const char *help[] = {
-            "DEBUG (YES|SYNC|NO)",
-            "    Set the debug mode for subsequent scripts executed.",
+            "DEBUG (YES|SYNC|NO) [<engine_name>]",
+            "    Set the debug mode for subsequent scripts executed of the specified engine.",
+            "    Default engine name: 'lua'",
             "EXISTS <sha1> [<sha1> ...]",
             "    Return information about the existence of the scripts in the script cache.",
             "FLUSH [ASYNC|SYNC]",
@@ -581,11 +753,11 @@ void scriptCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (c->argc >= 2 && !strcasecmp(c->argv[1]->ptr, "flush")) {
+    } else if (c->argc >= 2 && !strcasecmp(objectGetVal(c->argv[1]), "flush")) {
         int async = 0;
-        if (c->argc == 3 && !strcasecmp(c->argv[2]->ptr, "sync")) {
+        if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[2]), "sync")) {
             async = 0;
-        } else if (c->argc == 3 && !strcasecmp(c->argv[2]->ptr, "async")) {
+        } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[2]), "async")) {
             async = 1;
         } else if (c->argc == 2) {
             async = server.lazyfree_lazy_user_flush ? 1 : 0;
@@ -595,17 +767,17 @@ void scriptCommand(client *c) {
         }
         evalReset(async);
         addReply(c, shared.ok);
-    } else if (c->argc >= 2 && !strcasecmp(c->argv[1]->ptr, "exists")) {
+    } else if (c->argc >= 2 && !strcasecmp(objectGetVal(c->argv[1]), "exists")) {
         int j;
 
         addReplyArrayLen(c, c->argc - 2);
         for (j = 2; j < c->argc; j++) {
-            if (dictFind(evalCtx.scripts, c->argv[j]->ptr))
+            if (dictFind(evalCtx.scripts, objectGetVal(c->argv[j])))
                 addReply(c, shared.cone);
             else
                 addReply(c, shared.czero);
         }
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "load")) {
+    } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "load")) {
         char *sha = NULL;
         if (evalRegisterNewScript(c, c->argv[2], &sha) != C_OK) {
             serverAssert(sha == NULL);
@@ -613,32 +785,48 @@ void scriptCommand(client *c) {
         }
         addReplyBulkCBuffer(c, sha, 40);
         zfree(sha);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "kill")) {
+    } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "kill")) {
         scriptKill(c, 1);
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "debug")) {
+    } else if ((c->argc == 3 || c->argc == 4) && !strcasecmp(objectGetVal(c->argv[1]), "debug")) {
         if (clientHasPendingReplies(c)) {
             addReplyError(c, "SCRIPT DEBUG must be called outside a pipeline");
             return;
         }
-        if (!strcasecmp(c->argv[2]->ptr, "no")) {
-            ldbDisable(c);
+
+        const char *engine_name = c->argc == 4 ? objectGetVal(c->argv[3]) : "lua";
+        scriptingEngine *en = scriptingEngineManagerFind(engine_name);
+        if (en == NULL) {
+            addReplyErrorFormat(c, "No scripting engine found with name '%s' to enable debug", engine_name);
+            return;
+        }
+        serverAssert(en != NULL);
+
+        sds err;
+        if (!strcasecmp(objectGetVal(c->argv[2]), "no")) {
+            scriptingEngineDebuggerDisable(c);
             addReply(c, shared.ok);
-        } else if (!strcasecmp(c->argv[2]->ptr, "yes")) {
-            ldbEnable(c);
+        } else if (!strcasecmp(objectGetVal(c->argv[2]), "yes")) {
+            if (scriptingEngineDebuggerEnable(c, en, &err) != C_OK) {
+                addReplyErrorSds(c, err);
+                return;
+            }
             addReply(c, shared.ok);
-        } else if (!strcasecmp(c->argv[2]->ptr, "sync")) {
-            ldbEnable(c);
+        } else if (!strcasecmp(objectGetVal(c->argv[2]), "sync")) {
+            if (scriptingEngineDebuggerEnable(c, en, &err) != C_OK) {
+                addReplyErrorSds(c, err);
+                return;
+            }
             addReply(c, shared.ok);
             c->flag.lua_debug_sync = 1;
         } else {
             addReplyError(c, "Use SCRIPT DEBUG YES/SYNC/NO");
             return;
         }
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "show")) {
+    } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "show")) {
         dictEntry *de;
         evalScript *es;
 
-        if (sdslen(c->argv[2]->ptr) == 40 && (de = dictFind(evalCtx.scripts, c->argv[2]->ptr))) {
+        if (sdslen(objectGetVal(c->argv[2])) == 40 && (de = dictFind(evalCtx.scripts, objectGetVal(c->argv[2])))) {
             es = dictGetVal(de);
             addReplyBulk(c, es->body);
         } else {
@@ -661,25 +849,32 @@ unsigned long evalMemory(void) {
     return memory;
 }
 
-dict *evalScriptsDict(void) {
+dict *evalCtxScriptsDict(void) {
     return evalCtx.scripts;
 }
 
-unsigned long evalScriptsMemory(void) {
+/* Return the memory overhead used by cached scripts. */
+unsigned long scriptsMemoryOverhead(void) {
     return evalCtx.scripts_mem +
            dictMemUsage(evalCtx.scripts) +
            dictSize(evalCtx.scripts) * sizeof(evalScript) +
            listLength(evalCtx.scripts_lru_list) * sizeof(listNode);
 }
 
+/* Return the memory overhead used by EVAL scripts. */
+unsigned long evalScriptsMemoryOverhead(void) {
+    return evalCtx.eval_scripts_mem +
+           listLength(evalCtx.scripts_lru_list) * (sizeof(evalScript) + sizeof(listNode));
+}
+
 /* Wrapper for EVAL / EVALSHA that enables debugging, and makes sure
  * that when EVAL returns, whatever happened, the session is ended. */
 void evalGenericCommandWithDebugging(client *c, int evalsha) {
-    if (ldbStartSession(c)) {
+    if (scriptingEngineDebuggerStartSession(c)) {
         evalGenericCommand(c, evalsha);
-        ldbEndSession(c);
+        scriptingEngineDebuggerEndSession(c);
     } else {
-        ldbDisable(c);
+        scriptingEngineDebuggerDisable(c);
     }
 }
 

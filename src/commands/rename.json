@@ -10,7 +10,9 @@
             "WRITE"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "KEYSPACE",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {
@@ -36,7 +38,6 @@
                 "flags": [
                     "OW",
                     "UPDATE"
-
                 ],
                 "begin_search": {
                     "index": {

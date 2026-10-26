@@ -11,7 +11,9 @@
             "READONLY"
         ],
         "acl_categories": [
-            "SET"
+            "READ",
+            "SET",
+            "SLOW"
         ],
         "key_specs": [
             {

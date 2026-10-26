@@ -32,21 +32,21 @@ start_server {tags {"modules"}} {
         wait_for_blocked_clients_count 0
         assert_equal "1" [$rd1 read]
         pause_process [srv 0 pid]
-        # Queue up three commands
+        # Queue up three commands: hget (non-blocking), hset (blocking), hget (non-blocking)
         $rd1 hget key_10 field_10
         $rd1 hset key_10 value_10 ss
         $rd1 hget key_10 field_10
-        set start [clock milliseconds]; # Record time before unblocking
         resume_process [srv 0 pid]
+        # First hget should return immediately (non-blocking)
         assert_equal "value_10" [$rd1 read]
-        set first_hget [expr [clock milliseconds] - $start];
-        assert_equal "1" [$rd1 read]
-        set first_hset [expr [clock milliseconds] - $start];
-        assert_equal "value_10" [$rd1 read]
-        set second_hget [expr [clock milliseconds] - $start];
-        assert {[expr {$first_hget * 10 < $first_hset}]}
-        assert {[expr {$second_hget - $first_hset <= 50}]}
+        # hset triggers blocking keyspace notification - wait for it to block
+        wait_for_blocked_clients_count 1
+        # Now wait for hset to complete
         wait_for_blocked_clients_count 0
+        assert_equal "1" [$rd1 read]
+        # Second hget returns after hset completes
+        assert_equal "value_10" [$rd1 read]
+        $rd1 close
     }
     test {Blocking keyspace notification with pipelining hget after hset} {
         wait_for_blocked_clients_count 0
@@ -119,6 +119,48 @@ start_server {tags {"modules"}} {
             fail "Expired event not propagated within 5 seconds"
         }
     }
+
+    test {HFE commands with blocking keyspace notify} {
+        r del h1
+
+        wait_for_blocked_clients_count 0
+        r b_keyspace.clear
+        r hset h1 f1 v1 f2 v2
+        wait_for_blocked_clients_count 0
+
+        # HEXPIRE: updated + expired(del)
+        r b_keyspace.clear
+        assert_equal "1" [r hexpire h1 100 FIELDS 1 f1]
+        assert_equal {{event hexpire key h1}} [r b_keyspace.events]
+        r b_keyspace.clear
+        assert_equal "2" [r hexpire h1 0 FIELDS 1 f1]
+        assert_equal {{event hexpired key h1}} [r b_keyspace.events]
+
+        # HGETDEL
+        r b_keyspace.clear
+        assert_equal "v2" [r hgetdel h1 FIELDS 1 f2]
+        # "hdel" and "del" notifications run on independent background threads.
+        # The client is unblocked by the "hdel" thread, so by the time HGETDEL
+        # returns the "del" thread may not have logged yet — wait for both.
+        wait_for_condition 50 100 {
+            [llength [r b_keyspace.events]] >= 2
+        } else {
+            fail "Did not see both hdel and del events: [r b_keyspace.events]"
+        }
+        assert_equal [lsort {{event hdel key h1} {event del key h1}}] [lsort [r b_keyspace.events]]
+        assert_equal "0" [r exists h1]
+
+        # HPERSIST
+        r hset h1 f1 v1
+        r hexpire h1 100 FIELDS 1 f1
+        wait_for_blocked_clients_count 0
+        r b_keyspace.clear
+        assert_equal "1" [r hpersist h1 FIELDS 1 f1]
+        assert_equal {{event hpersist key h1}} [r b_keyspace.events]
+
+        r del h1
+    }
+
     test "Unload the module - testblockingkeyspacenotif" {
         assert_equal {OK} [r module unload testblockingkeyspacenotif]
     }

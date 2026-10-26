@@ -291,7 +291,9 @@ catch {
 }
 if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 
-    set str_length 5000000000
+    # Reduced from 5GB to fit in 16GB CI runners with ASAN overhead
+    # Must exceed 2^32 (4294967296) to test >4GiB (32-bit boundary) behavior
+    set str_length 4300000000
 
     # repeating all the plain nodes basic checks with 5gb values
     test {Test LPUSH and LPOP on plain nodes over 4GB} {
@@ -308,7 +310,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         assert_equal [read_big_bulk {r rpop lst}] $str_length
         assert {[r llen lst] == 1}
         assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LINDEX and LINSERT on plain nodes over 4GB} {
        r flushdb
@@ -323,7 +325,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        r write "*5\r\n\$7\r\nLINSERT\r\n\$3\r\nlst\r\n\$6\r\nBEFORE\r\n\$3\r\n\"9\"\r\n"
        write_big_bulk 10;
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LTRIM on plain nodes over 4GB} {
        r flushdb
@@ -335,7 +337,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r llen lst] 2
        assert_equal [r rpop lst] 9
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LREM on plain nodes over 4GB} {
        r flushdb
@@ -346,7 +348,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        r LREM lst -2 "one"
        assert_equal [read_big_bulk {r rpop lst}] $str_length
        r llen lst
-   } {1} {large-memory}
+   } {1}
 
    test {Test LSET on plain nodes over 4GB} {
        r flushdb
@@ -358,7 +360,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r rpop lst] "cc"
        assert_equal [r rpop lst] "bb"
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
     test {Test LSET on plain nodes with large elements under packed_threshold over 4GB} {
         r flushdb
@@ -368,7 +370,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
             write_big_bulk 1000000000
         }
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LSET splits a quicklist node, and then merge} {
         # Test when a quicklist node can't be inserted and is split, the split
@@ -389,7 +391,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         }
         assert_equal "g" [r lindex lst 1]
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LSET splits a LZF compressed quicklist node, and then merge} {
         # Test when a LZF compressed quicklist node can't be inserted and is split,
@@ -414,7 +416,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         assert_equal "h" [r lindex lst 0]
         r config set list-compress-depth 0
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LMOVE on plain nodes over 4GB} {
        r flushdb
@@ -432,7 +434,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r lpop lst2{t}] "cc"
        assert_equal [r lpop lst{t}] "dd"
        assert_equal [read_big_bulk {r rpop lst{t}}] $str_length
-   } {} {large-memory}
+   }
 
     # restore defaults
     r config set proto-max-bulk-len 536870912
@@ -514,7 +516,7 @@ foreach {type large} [array get largevalue] {
         assert {[r LPOS mylist c COUNT 2 RANK -1] == {7 6}}
     }
 
-    test {LPOS non existing key} {
+    test {LPOS nonexistent key} {
         assert {[r LPOS mylistxxx c COUNT 0 RANK 2] eq {}}
     }
 
@@ -608,14 +610,14 @@ foreach {type large} [array get largevalue] {
             assert_equal {*0} [r rpop listcount 0]
         }
 
-        test "LPOP/RPOP against non existing key in RESP$resp" {
+        test "LPOP/RPOP against nonexistent key in RESP$resp" {
             r del non_existing_key
 
             verify_resp_response $resp [r lpop non_existing_key] {$-1} {_}
             verify_resp_response $resp [r rpop non_existing_key] {$-1} {_}
         }
 
-        test "LPOP/RPOP with <count> against non existing key in RESP$resp" {
+        test "LPOP/RPOP with <count> against nonexistent key in RESP$resp" {
             r del non_existing_key
 
             verify_resp_response $resp [r lpop non_existing_key 0] {*-1} {_}
@@ -1492,7 +1494,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r linsert k1 after 0 0}
     }
 
-    test {LINSERT against non existing key} {
+    test {LINSERT against nonexistent key} {
         assert_equal 0 [r linsert not-a-key before 0 0]
     }
 
@@ -1552,7 +1554,7 @@ foreach type {listpack quicklist} {
         assert_error WRONGTYPE* {r llen mylist}
     }
 
-    test {LLEN against non existing key} {
+    test {LLEN against nonexistent key} {
         assert_equal 0 [r llen not-a-key]
     }
 
@@ -1560,7 +1562,7 @@ foreach type {listpack quicklist} {
         assert_error WRONGTYPE* {r lindex mylist 0}
     }
 
-    test {LINDEX against non existing key} {
+    test {LINDEX against nonexistent key} {
         assert_equal "" [r lindex not-a-key 10]
     }
 
@@ -1682,7 +1684,7 @@ foreach type {listpack quicklist} {
         }
     }
 
-    test {RPOPLPUSH against non existing key} {
+    test {RPOPLPUSH against nonexistent key} {
         r del srclist{t} dstlist{t}
         assert_equal {} [r rpoplpush srclist{t} dstlist{t}]
         assert_equal 0 [r exists srclist{t}]
@@ -1707,7 +1709,7 @@ foreach {type large} [array get largevalue] {
     }
 }
 
-    test {RPOPLPUSH against non existing src key} {
+    test {RPOPLPUSH against nonexistent src key} {
         r del srclist{t} dstlist{t}
         assert_equal {} [r rpoplpush srclist{t} dstlist{t}]
     } {}
@@ -1920,7 +1922,7 @@ foreach {type large} [array get largevalue] {
         }
     }
 
-    test {LRANGE against non existing key} {
+    test {LRANGE against nonexistent key} {
         assert_equal {} [r lrange nosuchkey 0 1]
     }
 
@@ -1971,7 +1973,7 @@ foreach {type large} [array get largevalue] {
         }
     }
 
-    test {LSET against non existing key} {
+    test {LSET against nonexistent key} {
         assert_error ERR*key* {r lset nosuchkey 10 foo}
     }
 
@@ -1992,7 +1994,7 @@ foreach {type large} [array get largevalue] {
             assert_equal "$e foobar foobared zap test foo" [r lrange mylist 0 -1]
         }
 
-        test "LREM remove non existing element - $type" {
+        test "LREM remove nonexistent element - $type" {
             assert_equal 0 [r lrem mylist 1 nosuchelement]
             assert_equal "$e foobar foobared zap test foo" [r lrange mylist 0 -1]
         }

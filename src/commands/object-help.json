@@ -12,7 +12,8 @@
             "STALE"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "KEYSPACE",
+            "SLOW"
         ],
         "reply_schema": {
             "type": "array",

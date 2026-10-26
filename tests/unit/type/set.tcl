@@ -55,6 +55,26 @@ start_server {
         r memory usage myset
     }
 
+    test {SISMEMBER with XX parameter} {
+        r sadd myset foo bar baz
+
+        assert_equal 1 [r sismember myset foo]
+        assert_equal 1 [r sismember myset foo XX]
+        assert_equal 0 [r sismember myset nonexist]
+        assert_equal 0 [r sismember myset nonexist XX]
+
+        r del nonexistkey
+        assert_equal 0 [r sismember nonexistkey foo]
+        assert_equal -1 [r sismember nonexistkey foo XX]
+        
+        r set wrongtype "not a set"
+        assert_error WRONGTYPE* {r sismember wrongtype foo}
+        assert_error WRONGTYPE* {r sismember wrongtype foo XX}
+        
+        assert_error "ERR*syntax error*" {r sismember myset foo invalidparam}
+        assert_error "ERR*syntax error*" {r sismember myset foo XX invalidparam}
+    }
+
     test {SMISMEMBER SMEMBERS SCARD against non set} {
         r lpush mylist foo
         assert_error WRONGTYPE* {r smismember mylist bar}
@@ -62,7 +82,7 @@ start_server {
         assert_error WRONGTYPE* {r scard mylist}
     }
 
-    test {SMISMEMBER SMEMBERS SCARD against non existing key} {
+    test {SMISMEMBER SMEMBERS SCARD against nonexistent key} {
         assert_equal {0} [r smismember myset1 foo]
         assert_equal {0 0} [r smismember myset1 foo bar]
         assert_equal {} [r smembers myset1]
@@ -77,6 +97,28 @@ start_server {
         catch {r smismember zmscoretest} e
         assert_match {*ERR*wrong*number*arg*} $e
     }
+
+    set original_max [lindex [r config get set-max-listpack-entries] 1]
+    r config set set-max-listpack-entries 0
+    test {SMISMEMBER uses hashtable batch lookup} {
+        r del smismembertest
+        for {set i 1} {$i <= 128} {incr i} {
+            r sadd smismembertest [format "m%02d" $i]
+        }
+
+        assert_encoding hashtable smismembertest
+        assert_equal {1} [r smismember smismembertest m01]
+        assert_equal {1 0 1 1} [r smismember smismembertest m01 missing m01 m04]
+
+        set members {missing}
+        set expected {0}
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend members [format "m%02d" $i]
+            lappend expected 1
+        }
+        assert_equal $expected [r smismember smismembertest {*}$members]
+    }
+    r config set set-max-listpack-entries $original_max
 
     test {SADD against non set} {
         r lpush mylist foo
@@ -363,7 +405,7 @@ foreach type {single multiple single_multiple} {
             assert_equal [list 195 199 $large] [lsort [r smembers setres{t}]]
         }
 
-        test "SUNION with non existing keys - $type" {
+        test "SUNION with nonexistent keys - $type" {
             set expected [lsort -uniq "[r smembers set1{t}] [r smembers set2{t}]"]
             assert_equal $expected [lsort [r sunion nokey1{t} set1{t} set2{t} nokey2{t}]]
         }
@@ -487,7 +529,7 @@ foreach type {single multiple single_multiple} {
         assert_error "WRONGTYPE*" {r sdiff set1{t} key1{t}}
     }
 
-    test "SDIFF should handle non existing key as empty" {
+    test "SDIFF should handle nonexistent key as empty" {
         r del set1{t} set2{t} set3{t}
 
         r sadd set1{t} a b c
@@ -519,7 +561,7 @@ foreach type {single multiple single_multiple} {
         assert_equal {e} [lsort [r smembers set3{t}]]
     }
 
-    test "SDIFFSTORE should handle non existing key as empty" {
+    test "SDIFFSTORE should handle nonexistent key as empty" {
         r del set1{t} set2{t} set3{t}
 
         r set setres{t} xxx
@@ -554,7 +596,7 @@ foreach type {single multiple single_multiple} {
         assert_error "WRONGTYPE*" {r sinter set1{t} key1{t}}
     }
 
-    test "SINTER should handle non existing key as empty" {
+    test "SINTER should handle nonexistent key as empty" {
         r del set1{t} set2{t} set3{t}
         r sadd set1{t} a b c
         r sadd set2{t} b c d
@@ -594,7 +636,7 @@ foreach type {single multiple single_multiple} {
         assert_equal {e} [lsort [r smembers set3{t}]]
     }
 
-    test "SINTERSTORE against non existing keys should delete dstkey" {
+    test "SINTERSTORE against nonexistent keys should delete dstkey" {
         r del set1{t} set2{t} set3{t}
 
         r set setres{t} xxx
@@ -627,7 +669,7 @@ foreach type {single multiple single_multiple} {
         assert_error "WRONGTYPE*" {r sunion set1{t} key1{t}}
     }
 
-    test "SUNION should handle non existing key as empty" {
+    test "SUNION should handle nonexistent key as empty" {
         r del set1{t} set2{t} set3{t}
 
         r sadd set1{t} a b c
@@ -658,7 +700,7 @@ foreach type {single multiple single_multiple} {
         assert_equal {e} [lsort [r smembers set3{t}]]
     }
 
-    test "SUNIONSTORE should handle non existing key as empty" {
+    test "SUNIONSTORE should handle nonexistent key as empty" {
         r del set1{t} set2{t} set3{t}
 
         r set setres{t} xxx
@@ -682,7 +724,7 @@ foreach type {single multiple single_multiple} {
         assert_equal {a b c} [lsort [r smembers set3{t}]]
     }
 
-    test "SUNIONSTORE against non existing keys should delete dstkey" {
+    test "SUNIONSTORE against nonexistent keys should delete dstkey" {
         r set setres{t} xxx
         assert_equal 0 [r sunionstore setres{t} foo111{t} bar222{t}]
         assert_equal 0 [r exists setres{t}]
@@ -818,7 +860,7 @@ foreach type {single multiple single_multiple} {
         r srandmember myset 0
     } {}
 
-    test "SRANDMEMBER with <count> against non existing key" {
+    test "SRANDMEMBER with <count> against nonexistent key" {
         r srandmember nonexisting_key 100
     } {}
 
@@ -834,7 +876,7 @@ foreach type {single multiple single_multiple} {
         r srandmember myset 0
     } {*0}
 
-    test "SRANDMEMBER with <count> against non existing key - emptyarray" {
+    test "SRANDMEMBER with <count> against nonexistent key - emptyarray" {
         r srandmember nonexisting_key 100
     } {*0}
 
@@ -1062,7 +1104,7 @@ foreach type {single multiple single_multiple} {
         assert_equal {3 4} [lsort [r smembers myset2{t}]]
     }
 
-    test "SMOVE non existing key" {
+    test "SMOVE nonexistent key" {
         setup_move
         assert_equal 0 [r smove myset1{t} myset2{t} foo]
         assert_equal 0 [r smove myset1{t} myset1{t} foo]
@@ -1070,13 +1112,13 @@ foreach type {single multiple single_multiple} {
         assert_equal {2 3 4} [lsort [r smembers myset2{t}]]
     }
 
-    test "SMOVE non existing src set" {
+    test "SMOVE nonexistent src set" {
         setup_move
         assert_equal 0 [r smove noset{t} myset2{t} foo]
         assert_equal {2 3 4} [lsort [r smembers myset2{t}]]
     }
 
-    test "SMOVE from regular set to non existing destination set" {
+    test "SMOVE from regular set to nonexistent destination set" {
         setup_move
         assert_equal 1 [r smove myset1{t} myset3{t} a]
         assert_equal {1 b} [lsort [r smembers myset1{t}]]
@@ -1084,7 +1126,7 @@ foreach type {single multiple single_multiple} {
         assert_encoding listpack myset3{t}
     }
 
-    test "SMOVE from intset to non existing destination set" {
+    test "SMOVE from intset to nonexistent destination set" {
         setup_move
         assert_equal 1 [r smove myset2{t} myset3{t} 2]
         assert_equal {3 4} [lsort [r smembers myset2{t}]]
@@ -1178,7 +1220,9 @@ catch {
 }
 if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 
-    set str_length 4400000000 ;#~4.4GB
+    # Reduced from 4.4GB to fit in 16GB CI runners with ASAN overhead
+    # Must exceed 2^32 (4294967296) to test >4GiB (32-bit boundary) behavior
+    set str_length 4300000000 ;#~4GiB, >2^32
 
     test {SADD, SCARD, SISMEMBER - large data} {
         r flushdb
@@ -1200,7 +1244,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         r write "*3\r\n\$4\r\nSREM\r\n\$5\r\nmyset\r\n"
         assert_equal 1 [write_big_bulk $str_length "bbb"]
         assert_equal [read_big_bulk {r spop myset} yes "aaa"] $str_length
-    } {} {large-memory}
+    }
 
     # restore defaults
     r config set proto-max-bulk-len 536870912
@@ -1209,3 +1253,24 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 } ;# skip 32bit builds
 }
 } ;# run_solo
+
+start_server {config "minimal.conf" tags {"set" "external:skip"} overrides {io-threads 4 io-threads-always-active yes set-max-listpack-entries 0}} {
+    test "Set nested prefetch - SISMEMBER correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r sadd myset "member:$i"
+        }
+        assert_encoding hashtable myset
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd sismember myset "member:$i"
+        }
+        $rd sismember myset "absent"
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal 1 [$rd read]
+        }
+        assert_equal 0 [$rd read]
+        $rd close
+    }
+}

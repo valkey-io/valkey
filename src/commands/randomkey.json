@@ -11,7 +11,9 @@
             "TOUCHES_ARBITRARY_KEYS"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "KEYSPACE",
+            "READ",
+            "SLOW"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

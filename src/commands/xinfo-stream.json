@@ -25,6 +25,8 @@
             "READONLY"
         ],
         "acl_categories": [
+            "READ",
+            "SLOW",
             "STREAM"
         ],
         "key_specs": [

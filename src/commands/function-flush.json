@@ -12,7 +12,9 @@
             "WRITE"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW",
+            "WRITE"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

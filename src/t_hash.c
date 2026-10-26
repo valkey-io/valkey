@@ -32,9 +32,12 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "expire.h"
 #include "hashtable.h"
+#include "listpack.h"
 #include "rax.h"
 #include "sds.h"
+#include "util.h"
 #include "vset.h"
 #include "server.h"
 #include "zmalloc.h"
@@ -52,20 +55,82 @@ typedef enum {
     EXPIRATION_MODIFICATION_EXPIRE_ASAP = 2,      /* if apply of the expiration modification was set to a time in the past (i.e field is immediately expired) */
 } expiryModificationResult;
 
+// A vsetGetExpiryFunc
+static mstime_t entryGetExpiryVsetFunc(const void *e) {
+    return entryGetExpiry((const entry *)e);
+}
+
 /*-----------------------------------------------------------------------------
  * Hash type Expiry API
  *----------------------------------------------------------------------------*/
 
 static vset *hashTypeGetVolatileSet(robj *o) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    vset *set = (vset *)hashtableMetadata(o->ptr);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
+    vset *set = (vset *)hashtableMetadata(objectGetVal(o));
     return vsetIsValid(set) ? set : NULL;
+}
+
+/* Maintain the aggregate volatile-count header of a listpack-encoded hash.
+ *
+ * The header is a single tagged entry leading the listpack whose integer payload
+ * is the number of fields carrying an expiry. It exists only while that
+ * count is > 0: created on the 0->1 transition, updated in place, and deleted
+ * on the 1->0 transition, so hashes without field TTLs pay nothing. All semantics
+ * live here; the listpack layer only provides the positional primitive.
+ *
+ * Must be called after the mutation it accounts for; it may reallocate the
+ * listpack, so callers must not reuse element pointers taken before it. */
+void hashTypeUpdateVolatileCount(robj *o, long delta) {
+    if (delta == 0) return;
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
+    unsigned char *zl = objectGetVal(o);
+    unsigned char *head = lpStart(zl);
+    int has_head = lpIsMetadata(head);
+    long long count = (has_head ? lpGetMetadataValue(head) : 0) + delta;
+    serverAssert(count >= 0);
+    if (count == 0) {
+        if (has_head) zl = lpRemoveMetadata(zl, head);
+    } else {
+        unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+        uint64_t enclen;
+        lpEncodeIntegerGetType(count, intenc, &enclen);
+        /* head == lpStart(zl): replace the existing header in place, or insert
+         * a new one before the first physical entry / EOF. */
+        zl = lpInsertMetadata(zl, intenc, enclen, head, has_head ? LP_REPLACE : LP_BEFORE, NULL);
+    }
+    objectSetVal(o, zl);
+}
+
+/* Return the number of fields carrying an expiry, INCLUDING expired fields
+ * that have not been reaped yet. O(1) for both encodings: the listpack keeps
+ * an aggregate header and the vset tracks its size. Returns 0 when none. */
+long long hashTypeVolatileCount(robj *o) {
+    serverAssert(objectGetType(o) == OBJ_HASH);
+
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *p = lpStart(objectGetVal(o));
+        unsigned char *header = lpIsMetadata(p) ? p : NULL;
+        return header ? lpGetMetadataValue(header) : 0;
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        vset *set = hashTypeGetVolatileSet(o);
+        return set ? (long long)vsetSize(set) : 0;
+    }
+    serverPanic("Unknown hash encoding");
 }
 
 bool hashTypeHasVolatileFields(robj *o) {
     if (o == NULL) return false;
-    serverAssert(o->type == OBJ_HASH);
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    serverAssert(objectGetType(o) == OBJ_HASH);
+
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        /* O(1): the aggregate header exists iff at least one field carries
+         * an expiry. The one exception is the RDB_TYPE_HASH_2 loader, which
+         * appends field expiries inside its loop and installs the header only
+         * after it, so do not reach this from inside that loop. */
+        return lpIsMetadata(lpStart(objectGetVal(o)));
+    }
+
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         vset *set = hashTypeGetVolatileSet(o);
         if (set && !vsetIsEmpty(set))
             return true;
@@ -73,58 +138,87 @@ bool hashTypeHasVolatileFields(robj *o) {
     return false;
 }
 
-/* make any access to the hash object elements ignore the specific elements expiration.
- * This is mainly in order to be able to access hash elements which are already expired. */
-static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+/* Transient "ignore TTL" state for the listpack encoding. The hashtable
+ * encoding hangs this state on the object itself (by swapping the hashtable
+ * type, see below); a listpack has nowhere to put it, so we use a file-scope
+ * flag consulted by hashTypeListpackFieldIsValid(). This is safe because
+ * command execution is single threaded and every ignore-bracket is tight and
+ * does not span commands. A bracket that can run with another already open
+ * closes by restoring the state it found rather than clearing unconditionally
+ * (see hashTypeConvertListpack). */
+static bool listpack_ttl_ignored = false;
+
+
+/* Make any access to the hash object elements ignore the specific elements expiration.
+ * This is mainly in order to be able to access hash elements which are already expired.
+ * When 'oldstate' is non-NULL it receives the ignore state in effect before this
+ * call, so the caller can restore it; pass NULL when you don't need it. That state
+ * lives in the file-scope flag for a listpack and in the hashtable type for a
+ * hashtable; since the type doubles as a steady-state optimization for hashes with
+ * no volatile fields, the reported value is meant for restoring, not for asking
+ * whether a bracket was open. */
+static inline void hashTypeIgnoreTTL(robj *o, bool ignore, bool *oldstate) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        if (oldstate) *oldstate = listpack_ttl_ignored;
+        listpack_ttl_ignored = ignore;
+        return;
+    }
+    /* Clearing is done regardless of encoding so that a bracket whose object
+     * was converted listpack->hashtable in between cannot leak the flag.
+     * Setting, however, must NOT touch the flag for hashtable objects:
+     * hashTypeFreeVolatileSet() uses ignore=true as steady-state (not
+     * bracketed) configuration for hashes without volatile fields. */
+    if (!ignore) listpack_ttl_ignored = false;
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
         if (!ignore && hashTypeGetVolatileSet(o) == NULL) {
             ignore = true;
         }
-        hashtableSetType(o->ptr, ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
+        hashtableType *old = hashtableSetType(objectGetVal(o), ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
+        if (oldstate) *oldstate = (old == &hashHashtableType);
     }
 }
 
 static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    vset *set = (vset *)hashtableMetadata(o->ptr);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
+    vset *set = (vset *)hashtableMetadata(objectGetVal(o));
     if (!vsetIsValid(set)) {
         vsetInit(set);
         /* serves mainly for optimization. Use type which supports access function only when needed. */
-        hashTypeIgnoreTTL(o, false);
+        hashTypeIgnoreTTL(o, false, NULL);
     }
     return set;
 }
 
 void hashTypeFreeVolatileSet(robj *o) {
-    vset *set = (vset *)hashtableMetadata(o->ptr);
+    vset *set = (vset *)hashtableMetadata(objectGetVal(o));
     if (vsetIsValid(set)) vsetRelease(set);
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
-    hashTypeIgnoreTTL(o, true);
+    hashTypeIgnoreTTL(o, true, NULL);
 }
 
-void hashTypeTrackEntry(robj *o, void *entry) {
+void hashTypeTrackEntry(robj *o, entry *entry) {
     vset *set;
     if (hashTypeHasVolatileFields(o)) {
         set = hashTypeGetVolatileSet(o);
     } else {
         set = hashTypeGetOrcreateVolatileSet(o);
     }
-    bool added = vsetAddEntry(set, entryGetExpiry, entry);
+    bool added = vsetAddEntry(set, entryGetExpiryVsetFunc, entry);
     serverAssert(added);
 }
 
-static void hashTypeUntrackEntry(robj *o, void *entry) {
+static void hashTypeUntrackEntry(robj *o, entry *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
+    serverAssert(vsetRemoveEntry(set, entryGetExpiryVsetFunc, entry));
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
     }
 }
 
-static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static void hashTypeTrackUpdateEntry(robj *o, entry *old_entry, entry *new_entry, mstime_t old_expiry, mstime_t new_expiry) {
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
@@ -134,21 +228,39 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     vset *set = hashTypeGetOrcreateVolatileSet(o);
     debugServerAssert(!old_tracked || !vsetIsEmpty(set));
 
-    serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
+    serverAssert(vsetUpdateEntry(set, entryGetExpiryVsetFunc, old_entry, new_entry, old_expiry, new_expiry) == 1);
 
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
     }
 }
 
-bool hashHashtableTypeValidate(hashtable *ht, void *entry) {
+// This is a hashtableType validateEntry callback
+bool hashHashtableTypeValidate(hashtable *ht, void *entryptr) {
     UNUSED(ht);
+    entry *entry = entryptr;
     expirationPolicy policy = getExpirationPolicyWithFlags(0);
     if (policy == POLICY_IGNORE_EXPIRE) return true;
 
     if (!entryIsExpired(entry)) return true;
 
     return false;
+}
+
+/* Listpack mirror of hashHashtableTypeValidate: whether a field whose stored
+ * expiry is 'expiry' is visible in the current execution context. The
+ * hashtable encoding applies this filter inside hashtableFind/Scan/Next via
+ * the validateEntry callback; listpack read paths must apply it explicitly
+ * so both encodings answer identically (notably under POLICY_IGNORE_EXPIRE:
+ * loading, replication stream, slot migration, import mode). */
+bool hashTypeListpackFieldIsValid(long long expiry) {
+    if (expiry == EXPIRY_NONE) return true;
+    /* Inside an ignore-TTL bracket (e.g. HSETEX force-deleting an already
+     * expired field) every field is visible, mirroring the hashtable
+     * encoding's type swap to the non-validating hashHashtableType. */
+    if (listpack_ttl_ignored) return true;
+    if (getExpirationPolicyWithFlags(0) == POLICY_IGNORE_EXPIRE) return true;
+    return !timestampIsExpired(expiry);
 }
 
 /*-----------------------------------------------------------------------------
@@ -170,51 +282,84 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
     size_t new_fields = (end - start + 1) / 2;
     if (new_fields > server.hash_max_listpack_entries) {
         hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-        hashtableExpand(o->ptr, new_fields);
+        hashtableExpand(objectGetVal(o), new_fields);
         return;
     }
 
     for (i = start; i <= end; i++) {
         if (!sdsEncodedObject(argv[i])) continue;
-        size_t len = sdslen(argv[i]->ptr);
+        size_t len = sdslen(objectGetVal(argv[i]));
         if (len > server.hash_max_listpack_value) {
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             return;
         }
         sum += len;
     }
-    if (!lpSafeToAdd(o->ptr, sum)) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+    if (!lpSafeToAdd(objectGetVal(o), sum)) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
 }
 
 /* Get the value from a listpack encoded hash, identified by field.
- * Returns -1 when the field cannot be found. */
-int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
-    unsigned char *zl, *fptr = NULL, *vptr = NULL;
+ * Returns -1 when the field cannot be found (or is not visible in the
+ * current execution context, see hashTypeListpackFieldIsValid).
+ * If 'expiry' is not NULL it is set to the field's expiration time, or
+ * EXPIRY_NONE when the field has none, saving callers a second scan. */
+int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, mstime_t *expiry) {
+    unsigned char *zl, *fptr;
 
-    serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
 
-    zl = o->ptr;
+    zl = objectGetVal(o);
     fptr = lpFirst(zl);
-    if (fptr != NULL) {
-        fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
-        if (fptr != NULL) {
-            /* Grab pointer to the value (fptr points to the field) */
-            vptr = lpNext(zl, fptr);
-            serverAssert(vptr != NULL);
+    if (fptr == NULL) return -1;
+    fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
+    if (fptr == NULL) return -1;
+
+    /* Grab pointer to the value (fptr points to the field) */
+    unsigned char *vptr = lpNext(zl, fptr);
+    serverAssert(vptr != NULL);
+    long long entry_expiry = hashTypeListpackGetExpiry(zl, vptr);
+    if (!hashTypeListpackFieldIsValid(entry_expiry)) return -1;
+
+    *vstr = lpGetValue(vptr, vlen, vll);
+    if (expiry) *expiry = entry_expiry;
+    return 0;
+}
+
+/* Expiry of the listpack field whose value entry is 'vptr': the integer
+ * payload of the pair's trailing metadata entry, or EXPIRY_NONE when the
+ * pair carries none. Purely a read of what is stored; callers decide how
+ * to treat expired-but-unreaped fields (and against which clock). */
+long long hashTypeListpackGetExpiry(unsigned char *zl, unsigned char *vptr) {
+    unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+    return metadata_ptr ? lpGetMetadataValue(metadata_ptr) : EXPIRY_NONE;
+}
+
+/* Returns the expiration time associated with the specified field.
+ * If the field is found C_OK is returned, otherwise C_ERR.
+ * The matching item expiration time is assigned to `expiry` memory location, if specified.
+ * In case the item has no assigned expiration time, -1 is returned. */
+int hashTypeGetExpiry(robj *o, sds field, mstime_t *expiry) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *vstr;
+        unsigned int vlen;
+        long long vll;
+        if (hashTypeGetFromListpack(o, field, &vstr, &vlen, &vll, expiry) < 0) return C_ERR;
+        return C_OK;
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        void *found_element = NULL;
+        if (hashtableFind(objectGetVal(o), field, &found_element)) {
+            if (expiry) *expiry = entryGetExpiry(found_element);
+            return C_OK;
         }
+    } else {
+        serverPanic("Unknown hash encoding");
     }
-
-    if (vptr != NULL) {
-        *vstr = lpGetValue(vptr, vlen, vll);
-        return 0;
-    }
-
-    return -1;
+    return C_ERR;
 }
 
 /* Higher level function of hashTypeGet*() that returns the hash value
  * associated with the specified field. If the field is found C_OK
- * is returned, otherwise C_ERR. The returned object is returned by
+ * is returned; otherwise, C_ERR. The returned object is returned by
  * reference in either *vstr and *vlen if it's returned in string form,
  * or stored in *vll if it's returned as a number.
  *
@@ -224,21 +369,21 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
  *
  * If *expiry is populated than the function will also provide the current field expiration time
  * or EXPIRY_NONE in case the field has no expiration time defined. */
-int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, long long *expiry) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, mstime_t *expiry) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
-        if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) {
-            if (expiry) *expiry = EXPIRY_NONE;
+        if (hashTypeGetFromListpack(o, field, vstr, vlen, vll, expiry) == 0) {
             return C_OK;
         }
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         void *entry = NULL;
-        hashtableFind(o->ptr, field, &entry);
+        hashtableFind(objectGetVal(o), field, &entry);
         if (entry) {
-            sds value = entryGetValue(entry);
+            size_t len = 0;
+            char *value = entryGetValue(entry, &len);
             serverAssert(value != NULL);
             *vstr = (unsigned char *)value;
-            *vlen = sdslen(value);
+            *vlen = len;
             if (expiry) *expiry = entryGetExpiry(entry);
             return C_OK;
         }
@@ -248,27 +393,6 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
     return C_ERR;
 }
 
-/* Returns the expiration time associated with the specified field.
- * If the field is found C_OK is returned, otherwise C_ERR.
- * The matching item expiration time is assigned to `expiry` memory location, if specified.
- * In case the item has no assigned expiration time, -1 is returned. */
-int hashTypeGetExpiry(robj *o, sds field, long long *expiry) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        if (hashTypeExists(o, field)) {
-            if (expiry) *expiry = EXPIRY_NONE;
-            return C_OK;
-        }
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        void *found_element = NULL;
-        if (hashtableFind(o->ptr, field, &found_element)) {
-            if (expiry) *expiry = entryGetExpiry(found_element);
-            return C_OK;
-        }
-    } else {
-        serverPanic("Unknown hash encoding");
-    }
-    return C_ERR;
-}
 
 /* Like hashTypeGetValue() but returns an Object, which is useful for
  * interaction with the hash type outside t_hash.c.
@@ -310,6 +434,38 @@ int hashTypeExists(robj *o, sds field) {
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
 }
 
+/* Test if the value of the specified field is a string reference (stringRef).
+ * Returns false if the field doesn't exist, is already expired or its value is
+ * not a string reference. Listpack encoded hashes can't hold string references. */
+bool hashTypeHasStringRef(robj *o, sds field) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return false;
+    void *entry = NULL;
+    if (!hashtableFind(objectGetVal(o), field, &entry)) return false;
+    return entryHasStringRef(entry);
+}
+
+/* Update a hash field value with a string reference value.
+ * Returns C_ERR if the hash field value not found. Otherwise, returns C_OK. */
+int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
+    unsigned char *vstr = NULL;
+    unsigned int vlen = UINT_MAX;
+    long long vll = LLONG_MAX;
+
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) != C_OK) return C_ERR;
+    // require HASHTABLE encoding due to aux bits and pointer storage.
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+
+    hashtable *ht = objectGetVal(o);
+    void **entry_ref = hashtableFindRef(ht, field);
+    entry *entry = *entry_ref;
+    mstime_t expiry = entryGetExpiry(entry);
+    void *new_entry = entryUpdateAsStringRef(entry, buf, len, expiry);
+    bool replaced = hashtableReplaceReallocatedEntry(ht, entry, new_entry);
+    serverAssert(replaced);
+    hashTypeTrackUpdateEntry(o, entry, new_entry, expiry, expiry);
+    return C_OK;
+}
+
 /* Add a new field, overwrite the old with the new value if it already exists.
  * Return 0 on insert and 1 on update.
  *
@@ -326,48 +482,93 @@ int hashTypeExists(robj *o, sds field) {
  *
  * HASH_SET_COPY corresponds to no flags passed, and means the default
  * semantics of copying the values if needed.
- *
  */
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
+int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten) {
     int update = 0;
-
+    bool is_expired = false;
     /* Check if the field is too long for listpack, and convert before adding the item.
      * This is needed for HINCRBY* case since in other commands this is handled early by
      * hashTypeTryConversion, so this check will be a NOP. */
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        if (expiry > 0 || sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value)
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        if (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
     }
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr, *vptr;
+        bool has_expiry = false;
+        int volatile_delta = 0;
 
-        zl = o->ptr;
+        zl = objectGetVal(o);
         fptr = lpFirst(zl);
         if (fptr != NULL) {
             fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
-            if (fptr != NULL) {
-                /* Grab pointer to the value (fptr points to the field) */
-                vptr = lpNext(zl, fptr);
-                serverAssert(vptr != NULL);
-                update = 1;
-
-                /* Replace value */
-                zl = lpReplace(zl, &vptr, (unsigned char *)value, sdslen(value));
-            }
         }
 
-        if (!update) {
+        /* If the field exists we update its metadata expiry */
+        if (fptr != NULL) {
+            /* Grab pointer to the value (fptr points to the field) */
+            vptr = lpNext(zl, fptr);
+            serverAssert(vptr != NULL);
+            /* Get pointer to the metadata field */
+            unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+            has_expiry = (metadata_ptr != NULL);
+            /* if we have a metadata expiry attached */
+            if (has_expiry) {
+                long long entry_expiry = lpGetMetadataValue(metadata_ptr);
+                is_expired = checkAlreadyExpired(entry_expiry);
+                if (!is_expired && flags & HASH_SET_KEEP_EXPIRY) {
+                    /* If HASH_SET_KEEP_EXPIRY is true keep the original expiry */
+                    expiry = entry_expiry;
+                }
+            }
+
+            /* Replace value. lpReplace keeps vptr valid, so the trailing
+             * metadata stays reachable without re-finding the field. */
+            zl = lpReplace(zl, &vptr, (unsigned char *)value, sdslen(value));
+            metadata_ptr = lpGetMetadata(zl, vptr); /* relocated by the replace */
+            serverAssert(has_expiry == (metadata_ptr != NULL));
+
+            /* Metadata transition table (had expiry -> has expiry):
+             *   had & has:   refresh in place (LP_REPLACE re-encodes widths)
+             *   !had & has:  attach after the value
+             *   had & !has:  drop
+             *   !had & !has: nothing to do */
+            if (expiry != EXPIRY_NONE) {
+                unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+                uint64_t enclen;
+                lpEncodeIntegerGetType(expiry, intenc, &enclen);
+                if (has_expiry) {
+                    zl = lpInsertMetadata(zl, intenc, enclen, metadata_ptr, LP_REPLACE, NULL);
+                } else {
+                    zl = lpInsertMetadata(zl, intenc, enclen, vptr, LP_AFTER, NULL);
+                }
+            } else if (has_expiry) {
+                zl = lpRemoveMetadata(zl, metadata_ptr);
+            }
+            volatile_delta = (expiry != EXPIRY_NONE ? 1 : 0) - (has_expiry ? 1 : 0);
+            update = is_expired ? 0 : 1;
+        } else {
             /* Push new field/value pair onto the tail of the listpack */
             zl = lpAppend(zl, (unsigned char *)field, sdslen(field));
             zl = lpAppend(zl, (unsigned char *)value, sdslen(value));
+            if (expiry != EXPIRY_NONE) {
+                unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+                uint64_t enclen;
+                lpEncodeIntegerGetType(expiry, intenc, &enclen);
+                unsigned char *eofptr = zl + lpGetTotalBytes(zl) - 1;
+                zl = lpInsertMetadata(zl, intenc, enclen, eofptr, LP_BEFORE, NULL);
+                volatile_delta = 1;
+            }
         }
-        o->ptr = zl;
+
+        objectSetVal(o, zl);
+        hashTypeUpdateVolatileCount(o, volatile_delta);
 
         /* Check if the listpack needs to be converted to a hash table */
         if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtable *ht = o->ptr;
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(o);
 
         sds v;
         if (flags & HASH_SET_TAKE_VALUE) {
@@ -379,7 +580,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
 
         /* We have to ignore the TTL when setting an element. this is mainly in order to be able to update an existing expired
          * entry and not have it remain in the hashtable with the same field/value. */
-        hashTypeIgnoreTTL(o, true);
+        hashTypeIgnoreTTL(o, true, NULL);
         hashtablePosition position;
         void *existing;
         if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
@@ -392,10 +593,10 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
             }
         } else {
             /* exists: replace value */
-            long long entry_expiry = entryGetExpiry(existing);
+            mstime_t entry_expiry = entryGetExpiry(existing);
             /* It is possible that the entry is already expired. In this case we can override it, but we need to make sure to expire it first
              * and treat it like it did not exist. */
-            bool is_expired = timestampIsExpired(entry_expiry);
+            is_expired = entry_expiry != EXPIRY_NONE && checkAlreadyExpired(entry_expiry);
             if (!is_expired && flags & HASH_SET_KEEP_EXPIRY) {
                 /* In case the HASH_SET_KEEP_EXPIRY will force keeping the existing entry expiry. */
                 expiry = entry_expiry;
@@ -412,7 +613,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
             /* since we are exposed to expired entries, we must NOT reflect them as being "updated" */
             update = is_expired ? 0 : 1;
         }
-        hashTypeIgnoreTTL(o, false);
+        hashTypeIgnoreTTL(o, false, NULL);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -421,6 +622,8 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
      * want this function to be responsible. */
     if (flags & HASH_SET_TAKE_FIELD && field) sdsfree(field);
     if (flags & HASH_SET_TAKE_VALUE && value) sdsfree(value);
+    /* Update that we lazy expired the old entry */
+    if (expired_overwritten) *expired_overwritten = is_expired;
     return update;
 }
 
@@ -429,98 +632,114 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
  * returns 0 if the specified flag conditions has not been met.
  * returns 1 if the expiration time was applied.
  * returns 2 when 'expire' indicate a past Unix time. In this case, if the item exists in the HASH, it will also be expired. */
-static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
+static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t expiry, int flag) {
     /* If no object we will return -2 */
     if (o == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    /* 1. Locate the field and read its current expiry (per encoding). A
+     *    missing or lazily-expired field is reported as NOT_EXIST: both the
+     *    listpack lookup (via hashTypeListpackFieldIsValid) and the hashtable
+     *    lookup (via the validateEntry callback inside hashtableFindRef)
+     *    apply the same visibility rules. */
+    mstime_t current_expire = EXPIRY_NONE;
+    void **entry_ref = NULL; /* hashtable only */
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr;
         unsigned int vlen;
         long long vll;
-        /* We do not want to convert to listpack for no good reason.
-         * So we first check if the item exists.*/
-        if (hashTypeGetFromListpack(o, field, &vstr, &vlen, &vll) < 0) {
+        if (hashTypeGetFromListpack(o, field, &vstr, &vlen, &vll, &current_expire) < 0)
             return EXPIRATION_MODIFICATION_NOT_EXIST;
-        }
-        /* When listpack representation is used, we consider it as infinite TTL,
-         * so expire command with gt always fail the GT as well as existence(XX).
-         * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
-        if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
-            return EXPIRATION_MODIFICATION_FAILED_CONDITION;
-        } else {
-            hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-        }
+    } else {
+        serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
+        entry_ref = hashtableFindRef(objectGetVal(o), field);
+        if (entry_ref == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
+        current_expire = entryGetExpiry(*entry_ref);
     }
 
-    /* we must be hashtable encoded */
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    /* 2. Shared condition checks. EXPIRY_NONE is treated as +inf: GT can
+     *    never beat it, LT always does. */
+    if ((flag & EXPIRE_NX) && current_expire != EXPIRY_NONE) return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+    if ((flag & EXPIRE_XX) && current_expire == EXPIRY_NONE) return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+    if ((flag & EXPIRE_GT) && (current_expire == EXPIRY_NONE || expiry <= current_expire))
+        return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+    if ((flag & EXPIRE_LT) && current_expire != EXPIRY_NONE && expiry >= current_expire)
+        return EXPIRATION_MODIFICATION_FAILED_CONDITION;
 
-    hashtable *ht = o->ptr;
-    void **entry_ref = NULL;
-    if ((entry_ref = hashtableFindRef(ht, field))) {
-        entry *current_entry = *entry_ref;
-        long long current_expire = entryGetExpiry(current_entry);
-        if (flag) {
-            /* NX option is set, check no current expiry */
-            if (flag & EXPIRE_NX) {
-                if (current_expire != EXPIRY_NONE) {
-                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
-                }
-            }
+    /* If the ttl is set in the past, just delete the entry (we know it exists) */
+    if (checkAlreadyExpired(expiry)) {
+        serverAssert(hashTypeDelete(o, field));
+        return EXPIRATION_MODIFICATION_EXPIRE_ASAP;
+    }
 
-            /* XX option is set, check current expiry */
-            if (flag & EXPIRE_XX) {
-                if (current_expire == EXPIRY_NONE) {
-                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
-                }
-            }
-
-            /* GT option is set, check current expiry */
-            if (flag & EXPIRE_GT) {
-                /* When current_expire is -1, we consider it as infinite TTL,
-                 * so expire command with gt always fail the GT. */
-                if (expiry <= current_expire || current_expire == EXPIRY_NONE) {
-                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
-                }
-            }
-
-            /* LT option is set, check current expiry */
-            if (flag & EXPIRE_LT) {
-                /* When current_expire -1, we consider it as infinite TTL,
-                 * so if there is an expiry on the key and it's not less than current, we fail the LT. */
-                if (current_expire != EXPIRY_NONE && expiry >= current_expire) {
-                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
-                }
-            }
+    /* 3. Apply (per encoding). Nothing mutated the object since step 1 on
+     *    this path, so the handles located there are still valid. */
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *fptr = lpFind(zl, lpFirst(zl), (unsigned char *)field, sdslen(field), 1);
+        serverAssert(fptr != NULL);
+        unsigned char *value_ptr = lpNext(zl, fptr);
+        unsigned char *metadata_ptr = lpGetMetadata(zl, value_ptr);
+        unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+        uint64_t enclen;
+        lpEncodeIntegerGetType(expiry, intenc, &enclen);
+        if (metadata_ptr) { /* refresh in place (LP_REPLACE re-encodes widths) */
+            zl = lpInsertMetadata(zl, intenc, enclen, metadata_ptr, LP_REPLACE, NULL);
+        } else { /* attach after the value */
+            zl = lpInsertMetadata(zl, intenc, enclen, value_ptr, LP_AFTER, NULL);
         }
+        objectSetVal(o, zl);
+        if (!metadata_ptr) hashTypeUpdateVolatileCount(o, 1);
+    } else {
+        entry *current_entry = *entry_ref;
         *entry_ref = entrySetExpiry(current_entry, expiry);
         hashTypeTrackUpdateEntry(o, current_entry, *entry_ref, current_expire, expiry);
-        return EXPIRATION_MODIFICATION_SUCCESSFUL;
     }
-    return EXPIRATION_MODIFICATION_NOT_EXIST; // we did not find anything to do. return -2
+    return EXPIRATION_MODIFICATION_SUCCESSFUL;
 }
 
 
 static expiryModificationResult hashTypePersist(robj *o, sds field) {
     /* NULL object returns -2 */
-    if (o == NULL || o->type != OBJ_HASH) return EXPIRATION_MODIFICATION_NOT_EXIST;
+    if (o == NULL || objectGetType(o) != OBJ_HASH) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        if (hashTypeExists(o, field))
-            /* When listpack representation is used, All items are without expiry */
-            return EXPIRATION_MODIFICATION_FAILED;
-        else
-            return EXPIRATION_MODIFICATION_NOT_EXIST; // Did not find any element return -2
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        /* Unlike hashTypeSetExpire there are no flag conditions to evaluate,
+         * so locate/inspect/clear happens in a single pass over the listpack
+         * (routing through hashTypeGetFromListpack would add a second walk). */
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *fptr = lpFirst(zl);
+        if (fptr != NULL) fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
+        if (fptr == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
+
+        unsigned char *vptr = lpNext(zl, fptr);
+        serverAssert(vptr != NULL);
+        /* Check if the field has an expiration set, if not we fail */
+        unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+        if (metadata_ptr == NULL) return EXPIRATION_MODIFICATION_FAILED;
+
+        /* A lazily-expired field is logically gone: report it as missing
+         * instead of resurrecting it, and leave the reaping (and its HDEL
+         * propagation) to the active-expiry cycle. The shared visibility
+         * predicate keeps the boundary and the expiration policy in sync
+         * with the hashtable encoding. */
+        long long entry_expiry = lpGetMetadataValue(metadata_ptr);
+        if (!hashTypeListpackFieldIsValid(entry_expiry)) return EXPIRATION_MODIFICATION_NOT_EXIST;
+
+        /* Remove the metadata entry; its presence implies the value exists. */
+        zl = lpRemoveMetadata(zl, metadata_ptr);
+        objectSetVal(o, zl);
+        hashTypeUpdateVolatileCount(o, -1);
+        return EXPIRATION_MODIFICATION_SUCCESSFUL;
     }
 
-    hashtable *ht = o->ptr;
+    hashtable *ht = objectGetVal(o);
     void **entry_ref = NULL;
     if ((entry_ref = hashtableFindRef(ht, field))) {
         entry *current_entry = *entry_ref;
-        long long current_expire = entryGetExpiry(current_entry);
+        mstime_t current_expire = entryGetExpiry(current_entry);
         if (current_expire != EXPIRY_NONE) {
             hashTypeUntrackEntry(o, current_entry);
-            *entry_ref = entryUpdate(current_entry, NULL, EXPIRY_NONE);
+            *entry_ref = entrySetExpiry(current_entry, EXPIRY_NONE);
             return EXPIRATION_MODIFICATION_SUCCESSFUL;
         }
         return EXPIRATION_MODIFICATION_FAILED; // If the found element has no expiration set, return -1
@@ -532,23 +751,33 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
  * Return true on deleted and false on not found. */
 bool hashTypeDelete(robj *o, sds field) {
     bool deleted = false;
-    serverAssert(o && o->type == OBJ_HASH);
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    serverAssert(o && objectGetType(o) == OBJ_HASH);
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr;
 
-        zl = o->ptr;
+        zl = objectGetVal(o);
         fptr = lpFirst(zl);
         if (fptr != NULL) {
             fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
             if (fptr != NULL) {
-                /* Delete both field and value. */
+                unsigned char *value_ptr = lpNext(zl, fptr);
+                serverAssert(value_ptr != NULL);
+
+                long long entry_expiry = hashTypeListpackGetExpiry(zl, value_ptr);
+                bool was_volatile = lpGetMetadata(zl, value_ptr) != NULL;
+                if (!hashTypeListpackFieldIsValid(entry_expiry)) return false;
+
+                /* Delete field and value; metadata entries trailing the pair
+                 * are deleted along with it. */
                 zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
-                o->ptr = zl;
+
+                objectSetVal(o, zl);
+                if (was_volatile) hashTypeUpdateVolatileCount(o, -1);
                 deleted = true;
             }
         }
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtable *ht = o->ptr;
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(o);
         void *entry = NULL;
         deleted = hashtablePop(ht, field, &entry);
         if (deleted) {
@@ -563,11 +792,11 @@ bool hashTypeDelete(robj *o, sds field) {
 
 /* Return the number of elements in a hash. */
 unsigned long hashTypeLength(const robj *o) {
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_LISTPACK:
-        return lpLength(o->ptr) / 2;
+        return lpLength(objectGetVal(o)) / 2;
     case OBJ_ENCODING_HASHTABLE:
-        return hashtableSize((const hashtable *)o->ptr);
+        return hashtableSize((const hashtable *)objectGetVal(o));
     default:
         serverPanic("Unknown hash encoding");
         return ULONG_MAX;
@@ -577,13 +806,13 @@ unsigned long hashTypeLength(const robj *o) {
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
-    hi->volatile_items_iter = false;
+    hi->iterator_type = HASH_ITER_ALL;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         hi->fptr = NULL;
         hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtableInitIterator(&hi->iter, subject->ptr, 0);
+        hashtableInitIterator(&hi->iter, objectGetVal(subject), 0);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -592,10 +821,11 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
-    hi->volatile_items_iter = true;
+    hi->iterator_type = HASH_ITER_VOLATILE;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
-        return;
+        hi->fptr = NULL;
+        hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
         vsetInitIterator(hashTypeGetVolatileSet(subject), &hi->viter);
     } else {
@@ -603,12 +833,28 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     }
 }
 
+void hashTypeInitPersistentIterator(robj *subject, hashTypeIterator *hi) {
+    hi->subject = subject;
+    hi->encoding = subject->encoding;
+    hi->iterator_type = HASH_ITER_PERSISTENT;
+
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        hi->fptr = NULL;
+        hi->vptr = NULL;
+    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
+        hashtableInitIterator(&hi->iter, objectGetVal(subject), 0);
+    } else {
+        serverPanic("Unknown hash encoding");
+    }
+}
+
 void hashTypeResetIterator(hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        if (!hi->volatile_items_iter)
-            hashtableResetIterator(&hi->iter);
-        else
+        if (hi->iterator_type == HASH_ITER_ALL || hi->iterator_type == HASH_ITER_PERSISTENT) {
+            hashtableCleanupIterator(&hi->iter);
+        } else {
             vsetResetIterator(&hi->viter);
+        }
     }
 }
 
@@ -616,39 +862,70 @@ void hashTypeResetIterator(hashTypeIterator *hi) {
  * could be found and C_ERR when the iterator reaches the end. */
 int hashTypeNext(hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl;
-        unsigned char *fptr, *vptr;
+        while (1) {
+            unsigned char *zl;
+            unsigned char *fptr, *vptr;
 
-        /* listpack encoding does not have volatile items, so return as iteration end */
-        if (hi->volatile_items_iter) return C_ERR;
+            zl = objectGetVal(hi->subject);
+            fptr = hi->fptr;
+            vptr = hi->vptr;
 
-        zl = hi->subject->ptr;
-        fptr = hi->fptr;
-        vptr = hi->vptr;
+            if (fptr == NULL) {
+                /* Initialize cursor */
+                serverAssert(vptr == NULL);
+                fptr = lpFirst(zl);
+            } else {
+                /* Advance cursor (lpNext transparently skips metadata) */
+                serverAssert(vptr != NULL);
+                fptr = lpNext(zl, vptr);
+            }
+            if (fptr == NULL) return C_ERR;
 
-        if (fptr == NULL) {
-            /* Initialize cursor */
-            serverAssert(vptr == NULL);
-            fptr = lpFirst(zl);
-        } else {
-            /* Advance cursor */
+            /* Grab pointer to the value (fptr points to the field) */
+            vptr = lpNext(zl, fptr);
             serverAssert(vptr != NULL);
-            fptr = lpNext(zl, vptr);
+
+            unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+            /* Advance the cursor now, before any skip decision, so the next
+             * iteration resumes from this pair (the loop re-reads hi->vptr
+             * at the top to advance). */
+            hi->fptr = fptr;
+            hi->vptr = vptr;
+
+            if (hi->iterator_type == HASH_ITER_VOLATILE) {
+                /* VOLATILE skips pairs with no metadata */
+                if (metadata_ptr == NULL) continue;
+            } else if (hi->iterator_type == HASH_ITER_PERSISTENT) {
+                /* PERSISTENT skips pairs with metadata */
+                if (metadata_ptr != NULL) continue;
+            }
+
+            /* Skip fields not visible in the current context (matches the
+             * hashtable iterator, which filters expired entries via
+             * validateEntry semantics). */
+            if (metadata_ptr != NULL) {
+                int64_t expiry = lpGetMetadataValue(metadata_ptr);
+                if (!hashTypeListpackFieldIsValid(expiry)) continue;
+            }
+            break;
         }
-        if (fptr == NULL) return C_ERR;
-
-        /* Grab pointer to the value (fptr points to the field) */
-        vptr = lpNext(zl, fptr);
-        serverAssert(vptr != NULL);
-
-        /* fptr, vptr now point to the first or next pair */
-        hi->fptr = fptr;
-        hi->vptr = vptr;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        if (!hi->volatile_items_iter) {
-            if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+        if (hi->iterator_type == HASH_ITER_ALL || hi->iterator_type == HASH_ITER_PERSISTENT) {
+            /* on a persistent iterator skip entries with expiry */
+            if (hi->iterator_type == HASH_ITER_PERSISTENT) {
+                do {
+                    if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+                } while (entryHasExpiry(hi->next));
+            } else {
+                if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+            }
         } else {
-            if (!vsetNext(&hi->viter, &hi->next)) return C_ERR;
+            do {
+                /* vsetNext can return ghost entries if not reaped. Use the
+                 * validateEntry callback (not raw entryIsExpired) so the skip
+                 * honors the expiration policy, like hashtableNext does. */
+                if (!vsetNext(&hi->viter, &hi->next)) return C_ERR;
+            } while (!hashHashtableTypeValidate(NULL, hi->next));
         }
     } else {
         serverPanic("Unknown hash encoding");
@@ -675,49 +952,34 @@ void hashTypeCurrentFromListpack(hashTypeIterator *hi,
 /* Get the field or value at iterator cursor, for an iterator on a hash value
  * encoded as a hash table. Prototype is similar to
  * `hashTypeGetFromHashTable`. */
-sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what) {
+char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len) {
     serverAssert(hi->encoding == OBJ_ENCODING_HASHTABLE);
 
     if (what & OBJ_HASH_FIELD) {
-        return entryGetField(hi->next);
-    } else {
-        return entryGetValue(hi->next);
+        sds key = entryGetField(hi->next);
+        *len = sdslen(key);
+        return key;
     }
-}
-
-/* Higher level function of hashTypeCurrent*() that returns the hash value
- * at current iterator position.
- *
- * The returned element is returned by reference in either *vstr and *vlen if
- * it's returned in string form, or stored in *vll if it's returned as
- * a number.
- *
- * If *vll is populated *vstr is set to NULL, so the caller
- * can always check the function return by checking the return value
- * type checking if vstr == NULL. */
-static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, unsigned int *vlen, long long *vll) {
-    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
-        *vstr = NULL;
-        hashTypeCurrentFromListpack(hi, what, vstr, vlen, vll);
-    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds ele = hashTypeCurrentFromHashTable(hi, what);
-        *vstr = (unsigned char *)ele;
-        *vlen = sdslen(ele);
-    } else {
-        serverPanic("Unknown hash encoding");
-    }
+    return entryGetValue(hi->next, len);
 }
 
 /* Return the field or value at the current iterator position as a new
  * SDS string. */
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
-    unsigned char *vstr;
-    unsigned int vlen;
-    long long vll;
-
-    hashTypeCurrentObject(hi, what, &vstr, &vlen, &vll);
-    if (vstr) return sdsnewlen(vstr, vlen);
-    return sdsfromlonglong(vll);
+    unsigned char *vstr = NULL;
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        long long vll;
+        unsigned int vlen;
+        hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);
+        if (vstr) return sdsnewlen(vstr, vlen);
+        return sdsfromlonglong(vll);
+    }
+    if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
+        size_t vlen;
+        vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &vlen);
+        return sdsnewlen(vstr, vlen);
+    }
+    serverPanic("Unknown hash encoding");
 }
 
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
@@ -731,47 +993,96 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
     return o;
 }
 
+long long hashTypeCurrentExpiry(robj *o, hashTypeIterator *hi) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        return hashTypeListpackGetExpiry(objectGetVal(o), hi->vptr);
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        return entryGetExpiry(hi->next);
+    }
+
+    serverPanic("Unknown encoding type");
+}
 
 void hashTypeConvertListpack(robj *o, int enc) {
-    serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
 
     if (enc == OBJ_ENCODING_LISTPACK) {
         /* Nothing to do... */
 
     } else if (enc == OBJ_ENCODING_HASHTABLE) {
         hashTypeIterator hi;
+        /* Whether any entry we actually carried over has an expiry. Derived
+         * from the entries themselves rather than from the aggregate header,
+         * which a half-built listpack does not have yet: the RDB loader
+         * installs it only after its listpack loop. */
+        bool has_volatile = false;
 
         hashtable *ht = hashtableCreate(&hashHashtableType);
 
         /* Presize the hashtable to avoid rehashing */
         hashtableExpand(ht, hashTypeLength(o));
 
+        /* Iterate with TTLs ignored so logically-expired fields survive the
+         * conversion and are reaped normally. */
+        bool prev_state = false;
+        hashTypeIgnoreTTL(o, true, &prev_state);
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
             sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            entry *entry = entryCreate(field, value, EXPIRY_NONE);
+            /* Get expiry for this field from the metadata value */
+            long long expiry = hashTypeCurrentExpiry(o, &hi);
+            if (expiry != EXPIRY_NONE) has_volatile = true;
+            entry *entry = entryCreate(field, value, expiry);
             sdsfree(field);
             if (!hashtableAdd(ht, entry)) {
                 entryFree(entry);
                 hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
-                serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
+                if (!server.hide_user_data_from_log) {
+                    serverLogHexDump(LL_WARNING, "listpack with dup elements dump", objectGetVal(o),
+                                     lpBytes(objectGetVal(o)));
+                }
                 serverPanic("Listpack corruption detected");
             }
         }
         hashTypeResetIterator(&hi);
-        zfree(o->ptr);
-        o->encoding = OBJ_ENCODING_HASHTABLE;
-        o->ptr = ht;
+        zfree(objectGetVal(o));
+        objectSetEncoding(o, OBJ_ENCODING_HASHTABLE);
+        objectSetVal(o, ht);
+
+        /* Register entries carrying an expiry in the volatile set. This must
+         * happen after the object points at the new hashtable (the set lives
+         * in the hashtable metadata). Without it the fields would neither be
+         * actively reaped nor lazily hidden after conversion, and the
+         * db-level volatile-keys tracking would go stale, leaving a dangling
+         * object pointer for the active-expire cron. Skip validation: the
+         * first tracked entry creates the volatile set and switches the
+         * hashtable to the TTL-validating type, which would otherwise make
+         * the iterator skip every later already-expired entry, leaving it
+         * untracked. */
+        if (has_volatile) {
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                if (entryGetExpiry(next) != EXPIRY_NONE) hashTypeTrackEntry(o, next);
+            }
+            hashtableCleanupIterator(&iter);
+        }
+
+        /* Restore the scope we were called in. By now the object is hashtable
+         * encoded, so this sets the hashtable type rather than the listpack
+         * flag, which is what an enclosing ignore bracket needs. */
+        hashTypeIgnoreTTL(o, prev_state, NULL);
     } else {
         serverPanic("Unknown hash encoding");
     }
 }
 
 void hashTypeConvert(robj *o, int enc) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         hashTypeConvertListpack(o, enc);
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         serverPanic("Not implemented");
     } else {
         serverPanic("Unknown hash encoding");
@@ -787,34 +1098,43 @@ robj *hashTypeDup(robj *o) {
     robj *hobj;
     hashTypeIterator hi;
 
-    serverAssert(o->type == OBJ_HASH);
+    serverAssert(objectGetType(o) == OBJ_HASH);
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = o->ptr;
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(o);
         size_t sz = lpBytes(zl);
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         hobj = createObject(OBJ_HASH, new_zl);
         hobj->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = hashtableCreate(&hashHashtableType);
-        hashtableExpand(ht, hashtableSize((const hashtable *)o->ptr));
+        hashtableExpand(ht, hashtableSize((const hashtable *)objectGetVal(o)));
         hobj = createObject(OBJ_HASH, ht);
         hobj->encoding = OBJ_ENCODING_HASHTABLE;
 
+        /* Copy logically-expired fields too, like the listpack branch does. A
+         * replica applying the same COPY ignores field expiry and keeps them,
+         * so dropping them here means their deletion is never propagated. The
+         * reaper deletes them from the copy and propagates it. */
+        bool prev_state = false;
+        hashTypeIgnoreTTL(o, true, &prev_state);
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             /* Extract a field-value pair from an original hash object.*/
-            sds field = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_FIELD);
-            sds value = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE);
-            long long expiry = entryGetExpiry(hi.next);
+            size_t len;
+            sds field = entryGetField(hi.next);
+            char *value_str = entryGetValue(hi.next, &len);
+            mstime_t expiry = entryGetExpiry(hi.next);
             /* Add a field-value pair to a new hash object. */
-            entry *entry = entryCreate(field, sdsdup(value), expiry);
+            sds value = sdsnewlen(value_str, len);
+            entry *entry = entryCreate(field, value, expiry);
             hashtableAdd(ht, entry);
             if (expiry != EXPIRY_NONE)
                 hashTypeTrackEntry(hobj, entry);
         }
         hashTypeResetIterator(&hi);
+        hashTypeIgnoreTTL(o, prev_state, NULL);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -834,46 +1154,76 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
         addReplyBulkLongLong(c, e->lval);
 }
 
+/* Forward declaration; hashTypeCurrentToEntry is defined with the hash
+ * iterator helpers further below. */
+static inline void hashTypeCurrentToEntry(hashTypeIterator *hi, int withvalues, listpackEntry *f, listpackEntry *v);
+
 /* Return random element from a non empty hash.
  * 'field' and 'val' will be set to hold the element.
  * The memory in them is not to be freed or modified by the caller.
- * 'val' can be NULL in which case it's not extracted. */
-static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
+ * 'val' can be NULL in which case it's not extracted.
+ * Return C_ERR in case no random element was found (when all existing elements are expired).
+ * Return C_OK otherwise. */
+static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
+    if (hashsize == 0) return C_ERR;
+
+    bool has_volatile = hashTypeHasVolatileFields(hashobj);
+
     if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
+        /* Fast path: O(1)-expected fair-random probe, rejecting expired
+         * ("ghost") entries. Also serves the non-volatile case, where the
+         * first probe is always live. */
         void *e = NULL;
         int maxtries = 100;
-        hashTypeIgnoreTTL(hashobj, true);
-        while (!e) {
-            hashtableFairRandomEntry(hashobj->ptr, &e);
-            if (entryIsExpired(e) && --maxtries) {
-                e = NULL;
-                continue;
-            } else if (maxtries == 0) {
-                /* in case we will not be able to locate an entry which is not expired, we will just not return any
-                 * result. An alternative would have been that we end up returning an expired entry. */
-                field->sval = NULL;
-                if (val) val->sval = NULL;
-                break;
-            }
+        hashTypeIgnoreTTL(hashobj, true, NULL);
+        while (maxtries--) {
+            hashtableFairRandomEntry(objectGetVal(hashobj), &e);
+            if (!entryIsExpired(e)) break; /* found a live entry */
+            e = NULL;
+        }
+        hashTypeIgnoreTTL(hashobj, false, NULL);
+        if (e != NULL) {
             sds sds_field = entryGetField(e);
             field->sval = (unsigned char *)sds_field;
             field->slen = sdslen(sds_field);
-            if (val) {
-                entry *hash_entry = e;
-                sds sds_val = entryGetValue(hash_entry);
-                val->sval = (unsigned char *)sds_val;
-                val->slen =
-                    sdslen(sds_val);
-            }
+            if (val) val->sval = (unsigned char *)entryGetValue(e, (size_t *)&val->slen);
+            return C_OK;
         }
-        hashTypeIgnoreTTL(hashobj, false);
+        /* Probe defeated by dense ghosts: fall through to the reservoir. */
     } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
-        lpRandomPair(hashobj->ptr, hashsize, field, val);
+        if (!has_volatile) {
+            /* No volatile fields: every pair is live, fetch directly. */
+            lpRandomPair(objectGetVal(hashobj), hashsize, field, val);
+            return C_OK;
+        }
+        /* Volatile listpack: fall through to the reservoir. */
     } else {
         serverPanic("Unknown hash encoding");
     }
-}
 
+    /* Only a hash with volatile fields can reach here; every non-volatile
+     * hash is served by the fast paths above. */
+    serverAssert(has_volatile);
+
+    /* Reservoir (k=1): we failed to locate a random non-expired element, so
+     * pick one uniformly in a single read-only pass over the live fields. */
+    hashTypeIterator hi;
+    unsigned long seen = 0;
+    int found = 0;
+    listpackEntry cf, cv;
+    hashTypeInitIterator(hashobj, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
+        if (rand() % ++seen == 0) {
+            hashTypeCurrentToEntry(&hi, val != NULL, &cf, val ? &cv : NULL);
+            found = 1;
+        }
+    }
+    hashTypeResetIterator(&hi);
+    if (!found) return C_ERR; /* all fields expired */
+    *field = cf;
+    if (val) *val = cv;
+    return C_OK;
+}
 
 /*-----------------------------------------------------------------------------
  * Hash type commands
@@ -885,10 +1235,11 @@ void hincrbyCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
-    long long expiry = EXPIRY_NONE;
+    mstime_t expiry = EXPIRY_NONE;
+
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &value, &expiry) == C_OK) {
+    if (hashTypeGetValue(o, objectGetVal(c->argv[2]), &vstr, &vlen, &value, &expiry) == C_OK) {
         if (vstr) {
             if (string2ll((char *)vstr, vlen, &value) == 0) {
                 addReplyError(c, "hash value is not an integer");
@@ -907,11 +1258,50 @@ void hincrbyCommand(client *c) {
     }
     value += incr;
     new = sdsfromlonglong(value);
-    hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
+    bool expired_overwritten = false;
+    hashTypeSet(o, objectGetVal(c->argv[2]), new, expiry, HASH_SET_TAKE_VALUE, &expired_overwritten);
+    if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+        dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+    }
     signalModifiedKey(c, c->db, c->argv[1]);
+    /* In case we overitten an expired field, we need to act as if it was just expired */
+    if (expired_overwritten) {
+        server.stat_expiredfields++;
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+    }
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
     addReplyLongLong(c, value);
+
+    /* Always replicate HINCRBY as an HSET or HSETEX command with the final value
+     * when hash has volatile item, since we do not know what will the field state be when the command reach the replica.
+     * HSET is used to override the resulting value and HSETEX is used in order to maintain the expiration time on the target. */
+    if (has_volatile_fields) {
+        char buf[MAX_LONG_DOUBLE_CHARS];
+        int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
+        robj *newobj = createRawStringObject(buf, len);
+        if (expiry == EXPIRY_NONE) {
+            rewriteClientCommandArgument(c, 0, shared.hset);
+            rewriteClientCommandArgument(c, 3, newobj);
+            decrRefCount(newobj);
+        } else {
+            int new_argc = 8; /* HSETEX(1) + key(2) + PXAT(3) + unix-time-milliseconds(4) + FIELDS(5) + numfields(6) + field(7) + value(8) */
+            robj **new_argv = zmalloc(sizeof(robj *) * (8));
+            robj *milliseconds_obj = createStringObjectFromLongLong(expiry);
+            new_argv[0] = shared.hsetex;
+            new_argv[1] = c->argv[1];
+            incrRefCount(c->argv[1]);
+            new_argv[2] = shared.pxat;
+            new_argv[3] = milliseconds_obj;
+            new_argv[4] = shared.fields;
+            new_argv[5] = shared.integers[1];
+            new_argv[6] = c->argv[2];
+            incrRefCount(c->argv[2]);
+            new_argv[7] = newobj;
+            replaceClientCommandVector(c, new_argc, new_argv);
+        }
+    }
 }
 
 void hincrbyfloatCommand(client *c) {
@@ -921,16 +1311,16 @@ void hincrbyfloatCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
-    long long expiry = EXPIRY_NONE;
+    mstime_t expiry = EXPIRY_NONE;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
-    if (isnan(incr) || isinf(incr)) {
+    if (isinf(incr)) {
         addReplyError(c, "value is NaN or Infinity");
         return;
     }
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
 
-    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &ll, &expiry) == C_OK) {
+    if (hashTypeGetValue(o, objectGetVal(c->argv[2]), &vstr, &vlen, &ll, &expiry) == C_OK) {
         if (vstr) {
             if (string2ld((char *)vstr, vlen, &value) == 0) {
                 addReplyError(c, "hash value is not a float");
@@ -944,7 +1334,7 @@ void hincrbyfloatCommand(client *c) {
     }
 
     value += incr;
-    if (isnan(value) || isinf(value)) {
+    if (isinf(value)) {
         addReplyError(c, "increment would produce NaN or Infinity");
         return;
     }
@@ -952,20 +1342,48 @@ void hincrbyfloatCommand(client *c) {
     char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
     new = sdsnewlen(buf, len);
-    hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
+    bool expired_overwritten = false;
+    hashTypeSet(o, objectGetVal(c->argv[2]), new, expiry, HASH_SET_TAKE_VALUE, &expired_overwritten);
+    if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+        dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+    }
     signalModifiedKey(c, c->db, c->argv[1]);
+    /* In case we overitten an expired field, we need to act as if it was just expired */
+    if (expired_overwritten) {
+        server.stat_expiredfields++;
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+    }
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
     addReplyBulkCBuffer(c, buf, len);
 
-    /* Always replicate HINCRBYFLOAT as an HSET command with the final value
+    /* Always replicate HINCRBYFLOAT as an HSET or HSETEX command with the final value
      * in order to make sure that differences in float precision or formatting
-     * will not create differences in replicas or after an AOF restart. */
+     * will not create differences in replicas or after an AOF restart.
+     * HSETEX is used in order to maintain the expiration time on the target. */
     robj *newobj;
     newobj = createRawStringObject(buf, len);
-    rewriteClientCommandArgument(c, 0, shared.hset);
-    rewriteClientCommandArgument(c, 3, newobj);
-    decrRefCount(newobj);
+    if (expiry == EXPIRY_NONE) {
+        rewriteClientCommandArgument(c, 0, shared.hset);
+        rewriteClientCommandArgument(c, 3, newobj);
+        decrRefCount(newobj);
+    } else {
+        int new_argc = 8; /* HSETEX(1) + key(2) + PXAT(3) + unix-time-milliseconds(4) + FIELDS(5) + numfields(6) + field(7) + value(8) */
+        robj **new_argv = zmalloc(sizeof(robj *) * (8));
+        robj *milliseconds_obj = createStringObjectFromLongLong(expiry);
+        new_argv[0] = shared.hsetex;
+        new_argv[1] = c->argv[1];
+        incrRefCount(c->argv[1]);
+        new_argv[2] = shared.pxat;
+        new_argv[3] = milliseconds_obj;
+        new_argv[4] = shared.fields;
+        new_argv[5] = shared.integers[1];
+        new_argv[6] = c->argv[2];
+        incrRefCount(c->argv[2]);
+        new_argv[7] = newobj;
+        replaceClientCommandVector(c, new_argc, new_argv);
+    }
 }
 
 static void addHashFieldToReply(client *c, robj *o, sds field) {
@@ -989,16 +1407,53 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     }
 }
 
+#define HMGET_FIND_BATCH_SIZE 16
+static_assert(HMGET_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "HMGET batch size exceeds hashtable batch lookup limit");
+
+static void addHashEntryToReply(client *c, const entry *hash_entry) {
+    if (hash_entry == NULL) {
+        addReplyNull(c);
+        return;
+    }
+
+    size_t len = 0;
+    char *value = entryGetValue(hash_entry, &len);
+    serverAssert(value != NULL);
+    addReplyBulkCBuffer(c, value, len);
+}
+
+static void hmgetReplyWithHashtable(client *c, hashtable *ht, robj **fields, size_t count) {
+    const void *keys[HMGET_FIND_BATCH_SIZE];
+    void *found_entries[HMGET_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > HMGET_FIND_BATCH_SIZE ? HMGET_FIND_BATCH_SIZE : count;
+
+        for (size_t i = 0; i < batch; i++) {
+            keys[i] = objectGetVal(fields[i]);
+        }
+
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        for (size_t i = 0; i < batch; i++) {
+            addHashEntryToReply(c, (result >> i) & 1 ? found_entries[i] : NULL);
+        }
+
+        fields += batch;
+        count -= batch;
+    }
+}
+
 void hgetCommand(client *c) {
     robj *o;
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
-    addHashFieldToReply(c, o, c->argv[2]->ptr);
+    addHashFieldToReply(c, o, objectGetVal(c->argv[2]));
 }
 
 void hmgetCommand(client *c) {
     robj *o;
-    int i;
+    size_t count = c->argc - 2;
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HMGET should respond with a series of null bulks. */
@@ -1006,25 +1461,57 @@ void hmgetCommand(client *c) {
 
     if (checkType(c, o, OBJ_HASH)) return;
 
-    addReplyArrayLen(c, c->argc - 2);
-    for (i = 2; i < c->argc; i++) {
-        addHashFieldToReply(c, o, c->argv[i]->ptr);
+    addReplyArrayLen(c, count);
+
+    if (o == NULL) {
+        for (size_t i = 0; i < count; i++) {
+            addReplyNull(c);
+        }
+        return;
     }
-    if (o && hashTypeLength(o) == 0) {
-        dbDelete(c->db, c->argv[1]);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (o->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
+        hmgetReplyWithHashtable(c, objectGetVal(o), c->argv + 2, count);
+        return;
     }
+
+    for (size_t i = 0; i < count; i++) {
+        addHashFieldToReply(c, o, objectGetVal(c->argv[i + 2]));
+    }
+}
+
+/* Loading and the replication stream ignore field expiry, so the propagated command must omit the expired fields.
+ * The command cannot tell expired fields from missing fields, so it skips both. Allocate the new argv and copy the
+ * fields before the first skipped one into it, at 'dst'. */
+static robj **createChangedFieldsArgv(client *c, size_t size, int dst, int fields_index, int first_skipped, int *argc) {
+    robj **new_argv = zcalloc(sizeof(robj *) * size);
+    for (int i = fields_index; i < first_skipped; i++) {
+        new_argv[dst++] = c->argv[i];
+        incrRefCount(c->argv[i]);
+    }
+    *argc = dst;
+    return new_argv;
 }
 
 void hdelCommand(client *c) {
     robj *o;
     int j, deleted = 0;
     bool keyremoved = false;
+    robj **new_argv = NULL;
+    int new_argc = 0, skipped = 0;
 
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    if (o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
     for (j = 2; j < c->argc; j++) {
-        if (hashTypeDelete(o, c->argv[j]->ptr)) {
+        if (hashTypeDelete(o, objectGetVal(c->argv[j]))) {
+            if (skipped) {
+                if (!new_argv) new_argv = createChangedFieldsArgv(c, c->argc, 2, 2, skipped, &new_argc);
+                new_argv[new_argc++] = c->argv[j];
+                incrRefCount(c->argv[j]);
+            }
             deleted++;
             if (hashTypeLength(o) == 0) {
                 if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
@@ -1032,11 +1519,21 @@ void hdelCommand(client *c) {
                 keyremoved = true;
                 break;
             }
+        } else if (hash_volatile_items && !skipped) {
+            skipped = j;
         }
     }
+    if (!keyremoved && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
+        if (skipped) {
+            if (!new_argv) new_argv = createChangedFieldsArgv(c, c->argc, 2, 2, skipped, &new_argc);
+            new_argv[0] = shared.hdel;
+            new_argv[1] = c->argv[1];
+            incrRefCount(c->argv[1]);
+            replaceClientCommandVector(c, new_argc, new_argv);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
@@ -1044,6 +1541,84 @@ void hdelCommand(client *c) {
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
+}
+
+void hgetdelCommand(client *c) {
+    /* argv: [0]=HGETDEL, [1]=key, [2]=FIELDS, [3]=numfields, [4...]=fields */
+    int fields_index = 4;
+    int i, deleted = 0;
+    long long num_fields = 0;
+    bool keyremoved = false;
+
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
+        return;
+    }
+
+    /* Don't abort when the key cannot be found. Non-existing keys are empty
+     * hashes, where HGETDEL should respond with a series of null bulks. */
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+
+    bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    robj **new_argv = NULL;
+    int new_argc = 0, skipped = 0;
+    if (o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
+
+    initDeferredReplyBuffer(c);
+
+    /* Reply with array of values and delete at the same time */
+    addReplyArrayLen(c, num_fields);
+    for (i = fields_index; i < c->argc; i++) {
+        addHashFieldToReply(c, o, objectGetVal(c->argv[i]));
+
+        /* If hash doesn't exist, continue as already replied with NULL */
+        if (o == NULL) continue;
+        if (hashTypeDelete(o, objectGetVal(c->argv[i]))) {
+            if (skipped) {
+                if (!new_argv) new_argv = createChangedFieldsArgv(c, 2 + num_fields, 2, fields_index, skipped, &new_argc);
+                new_argv[new_argc++] = c->argv[i];
+                incrRefCount(c->argv[i]);
+            }
+            deleted++;
+            if (hashTypeLength(o) == 0) {
+                if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
+                dbDelete(c->db, c->argv[1]);
+                keyremoved = true;
+                o = NULL;
+            }
+        } else if (hash_volatile_items && !skipped) {
+            skipped = i;
+        }
+    }
+    if (!keyremoved && o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
+
+    if (deleted) {
+        if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
+        if (skipped) {
+            if (!new_argv) new_argv = createChangedFieldsArgv(c, 2 + num_fields, 2, fields_index, skipped, &new_argc);
+            new_argv[0] = shared.hdel;
+            new_argv[1] = c->argv[1];
+            incrRefCount(c->argv[1]);
+            replaceClientCommandVector(c, new_argc, new_argv);
+        }
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void hlenCommand(client *c) {
@@ -1058,7 +1633,7 @@ void hstrlenCommand(client *c) {
     robj *o;
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
-    addReplyLongLong(c, hashTypeGetValueLength(o, c->argv[2]->ptr));
+    addReplyLongLong(c, hashTypeGetValueLength(o, objectGetVal(c->argv[2])));
 }
 
 static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeIterator *hi, int what) {
@@ -1073,8 +1648,9 @@ static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeItera
         else
             addWritePreparedReplyBulkLongLong(wpc, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeCurrentFromHashTable(hi, what);
-        addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+        size_t len;
+        char *value = hashTypeCurrentFromHashTable(hi, what, &len);
+        addWritePreparedReplyBulkCBuffer(wpc, value, len);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -1083,18 +1659,28 @@ static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeItera
 void hsetnxCommand(client *c) {
     robj *o;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    if (hashTypeExists(o, c->argv[2]->ptr)) {
+    if (hashTypeExists(o, objectGetVal(c->argv[2]))) {
         addReply(c, shared.czero);
     } else {
         hashTypeTryConversion(o, c->argv, 2, 3);
-        bool has_volatile_fields = hashTypeHasVolatileFields(o);
-        hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
+        bool has_volatile_fields = hashTypeHasVolatileFields(o), expired_overwritten = false;
+        hashTypeSet(o, objectGetVal(c->argv[2]), objectGetVal(c->argv[3]), EXPIRY_NONE, HASH_SET_COPY, &expired_overwritten);
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
+        /* In case we overitten an expired field, we need to act as if it was just expired */
+        if (expired_overwritten) {
+            server.stat_expiredfields++;
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        }
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         server.dirty++;
+        /* we always have to propagate the effect of the command when we have volatile items,
+         * since on the replica side it might find that the fields was expired */
+        if (has_volatile_fields) {
+            rewriteClientCommandArgument(c, 0, shared.hset);
+        }
         addReply(c, shared.cone);
     }
 }
@@ -1111,18 +1697,28 @@ void hsetCommand(client *c) {
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
     hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
+    int expired_overwritten = 0;
     for (i = 2; i < c->argc; i += 2) {
-        created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY);
+        bool expired = false;
+        created += !hashTypeSet(o, objectGetVal(c->argv[i]), objectGetVal(c->argv[i + 1]), EXPIRY_NONE, HASH_SET_COPY, &expired);
+        /* NOTE - We do not need to track all expired items which are overitten in order to propagate them, since the replica will surely just override them
+         * we just need to remember that we had such items to report the keyspace notification and update the stats */
+        if (expired) expired_overwritten++;
     }
     if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
         dbUpdateObjectWithVolatileItemsTracking(c->db, o);
     }
     signalModifiedKey(c, c->db, c->argv[1]);
+    /* In case we overitten an expired field, we need to act as if it was just expired */
+    if (expired_overwritten) {
+        server.stat_expiredfields += expired_overwritten;
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+    }
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     server.dirty += (c->argc - 2) / 2;
 
     /* HMSET (deprecated) and HSET return value is different. */
-    char *cmdname = c->argv[0]->ptr;
+    char *cmdname = objectGetVal(c->argv[0]);
     if (cmdname[1] == 's' || cmdname[1] == 'S') {
         /* HSET */
         addReplyLongLong(c, created);
@@ -1182,25 +1778,28 @@ void hsetexCommand(client *c) {
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
-    int fields_index = 0;
+    int fields_index = 2; /* Skip the command name and the key. */
     long long num_fields = 0;
-    long long when = EXPIRY_NONE;
+    mstime_t when = EXPIRY_NONE;
     int i = 0;
     int set_flags = HASH_SET_COPY, set_expired = 0;
     int changes = 0;
     robj **new_argv = NULL;
     int new_argc = 0;
+    int need_rewrite_argv = 0;
+    robj **keepttl_fields = NULL;
+    int expired_overwritten = 0;
 
     for (; fields_index < c->argc - 1; fields_index++) {
-        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+        if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
     }
     /* Check that the parsed fields number matches the real provided number of fields */
-    if (!num_fields || num_fields != (c->argc - fields_index) / 2) {
+    if (!num_fields || num_fields > LLONG_MAX / 2 || (num_fields * 2) != (c->argc - fields_index)) {
         addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
@@ -1209,6 +1808,54 @@ void hsetexCommand(client *c) {
     if (checkType(c, o, OBJ_HASH))
         return;
 
+    if (flags & (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_FNX | ARGS_SET_FXX | ARGS_EX | ARGS_PX | ARGS_EXAT)) {
+        need_rewrite_argv = 1;
+    }
+
+    /* Check NX/XX key-level conditions before creating a new object */
+    if (((flags & ARGS_SET_NX) && o != NULL) ||
+        ((flags & ARGS_SET_XX) && o == NULL)) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    /* Handle parsing and calculating the expiration time. */
+    if (flags & ARGS_KEEPTTL)
+        set_flags |= HASH_SET_KEEP_EXPIRY;
+    else if (expire) {
+        mstime_t basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
+
+        if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
+            return;
+
+        if (checkAlreadyExpired(when)) {
+            need_rewrite_argv = 1;
+            set_expired = 1;
+        }
+    }
+
+    /* Check FNX/FXX field-level conditions */
+    if (flags & (ARGS_SET_FNX | ARGS_SET_FXX)) {
+        if (o) {
+            /* Key exists: check fields normally */
+            for (i = fields_index; i < c->argc; i += 2) {
+                if (((flags & ARGS_SET_FNX) && hashTypeExists(o, objectGetVal(c->argv[i]))) ||
+                    ((flags & ARGS_SET_FXX) && !hashTypeExists(o, objectGetVal(c->argv[i])))) {
+                    addReply(c, shared.czero);
+                    return;
+                }
+            }
+        } else {
+            /* Key does not exist */
+            if (flags & ARGS_SET_FXX) {
+                /* Any FXX fails because no fields exist */
+                addReply(c, shared.czero);
+                return;
+            }
+            /* FNX automatically passes if key doesn't exist, nothing to check */
+        }
+    }
+
     if (o == NULL) {
         o = createHashObject();
         dbAdd(c->db, c->argv[1], &o);
@@ -1216,89 +1863,107 @@ void hsetexCommand(client *c) {
 
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
 
-    /* Handle parsing and calculating the expiration time. */
-    if (flags & ARGS_KEEPTTL)
-        set_flags |= HASH_SET_KEEP_EXPIRY;
-    else if (expire) {
-        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
-
-        if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
-            return;
-
-        if (checkAlreadyExpired(when)) {
-            set_expired = 1;
-        }
-    }
-
-    /* Check for all fields condition */
-    if (flags & (ARGS_SET_FNX | ARGS_SET_FXX)) {
-        for (i = fields_index; i < c->argc; i += 2) {
-            if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
-                ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
-                addReply(c, shared.czero);
-                return;
-            }
-        }
-    }
-
-    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+    /* Prepare a new argv when rewriting the command. If set_expired is true,
+     * all expired fields will be deleted. Otherwise, if rewriting is needed due to NX/XX/FNX/FXX flags,
+     * copy the command, key, and optional arguments, skipping the NX/XX/FNX/FXX flags. */
     if (set_expired) {
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
         new_argv[new_argc++] = shared.hdel;
-        incrRefCount(shared.hdel);
         new_argv[new_argc++] = c->argv[1];
         incrRefCount(c->argv[1]);
+    } else if (need_rewrite_argv) {
+        /* We use new_argv for rewrite */
+        new_argv = zmalloc(sizeof(robj *) * c->argc);
+        // Copy optional args (skip NX/XX/FNX/FXX)
+        for (int i = 0; i < fields_index; i++) {
+            if (strcasecmp(objectGetVal(c->argv[i]), "NX") &&
+                strcasecmp(objectGetVal(c->argv[i]), "XX") &&
+                strcasecmp(objectGetVal(c->argv[i]), "FNX") &&
+                strcasecmp(objectGetVal(c->argv[i]), "FXX")) {
+                /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
+                 * EX/PX/EXAT flag. */
+                if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {
+                    robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                    new_argv[new_argc++] = shared.pxat;
+                    new_argv[new_argc++] = milliseconds_obj;
+                    i++; // skip the original expire argument
+                } else {
+                    new_argv[new_argc++] = c->argv[i];
+                    incrRefCount(c->argv[i]);
+                }
+            }
+        }
     }
 
     for (i = fields_index; i < c->argc; i += 2) {
         if (set_expired) {
-            if (hashTypeDelete(o, c->argv[i]->ptr)) {
+            hashTypeIgnoreTTL(o, true, NULL);
+            if (hashTypeDelete(o, objectGetVal(c->argv[i]))) {
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
-                /* we treat this case exactly as active expiration. */
-                server.stat_expiredfields++;
                 changes++;
             }
+            /* we treat this case exactly as active expiration. */
+            server.stat_expiredfields++;
+            hashTypeIgnoreTTL(o, false, NULL);
         } else {
-            hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, when, set_flags);
+            bool expired;
+            hashTypeSet(o, objectGetVal(c->argv[i]), objectGetVal(c->argv[i + 1]), when, set_flags, &expired);
             changes++;
+
+            if (expired) {
+                /* When KEEPTTL is used, we need to track all fields to propagate hdel per each of them
+                 * Replicas will not ignore expired fields on the replication stream. This is why we have to explicitly delete them,
+                 * so the replica will take the new field expiration time. */
+                if ((flags & ARGS_KEEPTTL)) {
+                    if (keepttl_fields == NULL) {
+                        keepttl_fields = zmalloc(sizeof(robj *) * num_fields);
+                    }
+                    keepttl_fields[expired_overwritten] = c->argv[i];
+                    incrRefCount(c->argv[i]);
+                }
+                expired_overwritten++;
+            }
+
+            if (need_rewrite_argv) {
+                new_argv[new_argc++] = c->argv[i];
+                incrRefCount(c->argv[i]);
+                new_argv[new_argc++] = c->argv[i + 1];
+                incrRefCount(c->argv[i + 1]);
+            }
         }
     }
-
 
     if (changes) {
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
-        if (set_expired) {
-            replaceClientCommandVector(c, new_argc, new_argv);
-            /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+
+        /* In case we overwritten fields which were expired we need to act as if we actively expired them */
+        if (expired_overwritten > 0) {
+            server.stat_expiredfields += expired_overwritten;
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-        } else {
-            notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-            if (expire) {
-                /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-                 * EX/PX/EXAT flag. */
-                if (!(flags & ARGS_PXAT)) {
-                    for (int i = 2; i < fields_index; i++) {
-                        if (c->argv[i + 1] == expire) {
-                            robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                            rewriteClientCommandArgument(c, i, shared.pxat);
-                            rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
-                            decrRefCount(milliseconds_obj);
-                            break;
-                        }
-                    }
+            /* Propagate deletions for expired/non-existent fields in batches.
+             * When KEEPTTL is used the replica has noway telling if, at the time the primary was executing the command,
+             * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field, so
+             * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side. */
+            if (keepttl_fields != NULL) {
+                /* Propagate individual fields deletions */
+                int idx = 0;
+                while (idx < expired_overwritten) {
+                    idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
+                                                   &keepttl_fields[idx], c->slot);
                 }
-                notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+                zfree(keepttl_fields);
+                keepttl_fields = NULL;
             }
         }
-        signalModifiedKey(c, c->db, c->argv[1]);
-        /* Delete the object in case it was left empty */
-        if (hashTypeLength(o) == 0) {
-            dbDelete(c->db, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+
+        if (need_rewrite_argv) {
+            replaceClientCommandVector(c, new_argc, new_argv);
         }
+
+        signalModifiedKey(c, c->db, c->argv[1]);
         server.dirty += changes;
     } else {
         /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
@@ -1306,7 +1971,28 @@ void hsetexCommand(client *c) {
             decrRefCount(c->argv[1]);
         if (new_argv) zfree(new_argv);
     }
-    addReplyLongLong(c, changes == num_fields ? 1 : 0);
+
+    /* Handle keyspace notifications and object delete if needed.
+     * since setting fields in hash object should always work in case all validations pass,
+     * it is safe to assume that in case we reach this point events should be issues */
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    if (expire) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+    }
+    if (set_expired) {
+        /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+    }
+    /* Delete the object in case it was left empty or created with all expired items. */
+    if (hashTypeLength(o) == 0) {
+        dbDelete(c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+    }
+    /* make sure that if we ever allocated this it was freed */
+    serverAssert(keepttl_fields == NULL);
+    /* In case we reached here we know that we operated on ALL the fields,
+     * even in case we end up in the same original state, we still need to reflect as the operation was done on all the fields. */
+    addReply(c, shared.cone);
 }
 
 /* High-Level Algorithm of HGETEX Command:
@@ -1351,9 +2037,9 @@ void hgetexCommand(client *c) {
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
-    int fields_index = 0;
+    int fields_index = 2; /* Skip the command name and the key. */
     long long num_fields = -1;
-    long long when = EXPIRY_NONE;
+    mstime_t when = EXPIRY_NONE;
     int i = 0;
     int set_expiry = 0, set_expired = 0, persist = 0;
     int changes = 0;
@@ -1363,9 +2049,9 @@ void hgetexCommand(client *c) {
     int milliseconds_index = -1, numitems_index = -1;
 
     for (; fields_index < c->argc - 1; fields_index++) {
-        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+        if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HGET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1388,7 +2074,7 @@ void hgetexCommand(client *c) {
     if (flags & ARGS_PERSIST) {
         persist = 1;
     } else if (expire) {
-        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
+        mstime_t basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
 
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
@@ -1432,15 +2118,15 @@ void hgetexCommand(client *c) {
     }
     for (i = fields_index; i < c->argc; i++) {
         bool changed = false;
-        addHashFieldToReply(c, o, c->argv[i]->ptr);
+        addHashFieldToReply(c, o, objectGetVal(c->argv[i]));
         if (o && set_expired) {
-            changed = hashTypeDelete(o, c->argv[i]->ptr);
+            changed = hashTypeDelete(o, objectGetVal(c->argv[i]));
             /* we treat this case exactly as active expiration. */
             if (changed) server.stat_expiredfields++;
         } else if (set_expiry) {
-            changed = hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL;
+            changed = hashTypeSetExpire(o, objectGetVal(c->argv[i]), when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         } else if (persist) {
-            changed = hashTypePersist(o, c->argv[i]->ptr) == EXPIRATION_MODIFICATION_SUCCESSFUL;
+            changed = hashTypePersist(o, objectGetVal(c->argv[i])) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         }
         if (changed) {
             changes++;
@@ -1493,19 +2179,110 @@ void hgetexCommand(client *c) {
     commitDeferredReplyBuffer(c, 1);
 }
 
+/* Number of hash entries prefetched at a time by the HGETALL fast path. */
+#define HGETALL_PREFETCH_BATCH 16
+
+/* Iterate a hashtable-encoded hash with no volatile fields, emitting fields
+ * and/or values as requested by 'flags'. Returns the number of bulk strings
+ * emitted.
+ *
+ * Walking the hash chases pointers into scattered heap allocations
+ * (bucket -> entry -> field/value sds). Emitting each reply as we reach the
+ * entry serializes those cache misses; collecting a batch of entries and
+ * prefetching them first lets the misses overlap. */
+static long hashTypeReplyNonVolatileHashtable(writePreparedClient *wpc, robj *o, int flags) {
+    hashtableIterator iter;
+    void *batch[HGETALL_PREFETCH_BATCH];
+    long count = 0;
+
+    hashtableInitIterator(&iter, objectGetVal(o), 0);
+    while (1) {
+        /* Phase 1: collect a batch of entry pointers and prefetch the entry
+         * structs themselves. We deliberately do not dereference them here,
+         * so the prefetches have time to land. */
+        int batch_count = 0;
+        while (batch_count < HGETALL_PREFETCH_BATCH) {
+            void *next;
+            if (!hashtableNext(&iter, &next)) break;
+            batch[batch_count++] = next;
+            valkey_prefetch(next);
+        }
+        if (batch_count == 0) break;
+
+        /* Phase 2: the entries are warm now, so prefetch the separately
+         * allocated value buffers. The field needs no prefetch - it is the
+         * entry pointer itself, already prefetched in phase 1. */
+        if (flags & OBJ_HASH_VALUE) {
+            for (int i = 0; i < batch_count; i++) {
+                /* Only the value pointer is prefetched here; its length is
+                 * read in phase 3, so pass NULL for the out-param. */
+                valkey_prefetch(entryGetValue(batch[i], NULL));
+            }
+        }
+
+        /* Phase 3: emit the replies against cache-warm data. */
+        for (int i = 0; i < batch_count; i++) {
+            if (flags & OBJ_HASH_FIELD) {
+                sds field = entryGetField(batch[i]);
+                addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
+                count++;
+            }
+            if (flags & OBJ_HASH_VALUE) {
+                size_t vlen;
+                char *val = entryGetValue(batch[i], &vlen);
+                addWritePreparedReplyBulkCBuffer(wpc, val, vlen);
+                count++;
+            }
+        }
+    }
+    hashtableCleanupIterator(&iter);
+    return count;
+}
+
 void genericHgetallCommand(client *c, int flags) {
     robj *o;
     hashTypeIterator hi;
-    int count = 0;
+    long count = 0;
 
     robj *emptyResp = (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? shared.emptymap[c->resp] : shared.emptyarray;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], emptyResp)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
-    /* We return a map if the user requested fields and values, like in the
-     * HGETALL case. Otherwise to use a flat array makes more sense. */
-    void *replylen = addReplyDeferredLen(c);
+
+    /* Without volatile fields, hashTypeLength() is exact. Emit the header now so
+     * subsequent replies can use the static buffer; a deferred header would place
+     * a placeholder on the reply list and force them into reply blocks. */
+    unsigned long length = 0;
+    void *replylen = NULL;
+    bool exact_len = !hashTypeHasVolatileFields(o);
+    if (exact_len) {
+        length = hashTypeLength(o);
+        /* We return a map if the user requested fields and values, like in
+         * the HGETALL case. Otherwise, to use a flat array makes more sense. */
+        if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+            addWritePreparedReplyMapLen(wpc, length);
+        } else {
+            addWritePreparedReplyArrayLen(wpc, length);
+        }
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+            /* Batched iteration with prefetching; see the helper above. */
+            count = hashTypeReplyNonVolatileHashtable(wpc, o, flags);
+            /* The header was written up front, so the element count must
+             * match it exactly or we have emitted a malformed reply. */
+            serverAssert((unsigned long)count ==
+                         ((flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? length * 2 : length));
+            return;
+        }
+        /* Listpack entries live in one contiguous allocation, so plain
+         * iteration below is already cache-friendly. */
+    } else {
+        /* The hash has volatile fields, so its length may shrink
+         * mid-iteration as fields expire and isn't known until we've walked
+         * it: the aggregate header has to be deferred. */
+        replylen = addReplyDeferredLen(c);
+    }
+
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
         if (flags & OBJ_HASH_FIELD) {
@@ -1520,9 +2297,11 @@ void genericHgetallCommand(client *c, int flags) {
 
     hashTypeResetIterator(&hi);
     /* Make sure we returned the right number of elements. */
-    if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
-        setDeferredMapLen(c, replylen, count /= 2);
-        count /= 2;
+    if (exact_len) {
+        serverAssert((unsigned long)count ==
+                     ((flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? length * 2 : length));
+    } else if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+        setDeferredMapLen(c, replylen, count / 2);
     } else {
         setDeferredArrayLen(c, replylen, count);
     }
@@ -1543,14 +2322,14 @@ void hgetallCommand(client *c) {
 void hexistsCommand(client *c) {
     robj *o;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
-    addReply(c, hashTypeExists(o, c->argv[2]->ptr) ? shared.cone : shared.czero);
+    addReply(c, hashTypeExists(o, objectGetVal(c->argv[2])) ? shared.cone : shared.czero);
 }
 
 void hscanCommand(client *c) {
     robj *o;
     unsigned long long cursor;
 
-    if (parseScanCursorOrReply(c, c->argv[2]->ptr, &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_HASH)) return;
     scanGenericCommand(c, o, cursor);
 }
@@ -1608,19 +2387,18 @@ static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int c
  * - "hexpired" — when fields are immediately expired and deleted.
  * - "hexpire"  — when fields receive new expiration timestamps.
  * - "del"      — when the hash key becomes empty and is removed. */
-void hexpireGenericCommand(client *c, long long basetime, int unit) {
+void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
     robj *key = c->argv[1], *param = c->argv[2];
-    long long when; /* unix time in milliseconds when the key will expire. */
+    mstime_t when; /* unix time in milliseconds when the key will expire. */
     int flag = 0;
     int fields_index = 3;
     long long num_fields = 0;
     int i, expired = 0, updated = 0;
-    int set_expired = 0;
     robj **new_argv = NULL;
-    int new_argc = 0;
+    int new_argc = 0, skipped = 0;
 
     for (; fields_index < c->argc - 1; fields_index++) {
-        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+        if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
             if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
@@ -1637,9 +2415,6 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     if (convertExpireArgumentToUnixTime(c, param, basetime, unit, &when) == C_ERR)
         return;
 
-    if (checkAlreadyExpired(when))
-        set_expired = 1;
-
     robj *obj = lookupKeyWrite(c->db, key);
 
     /* Non HASH type return simple error */
@@ -1649,33 +2424,37 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     bool has_volatile_fields = hashTypeHasVolatileFields(obj);
 
+    initDeferredReplyBuffer(c);
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
-    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
-    if (set_expired) {
-        new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
-        new_argv[new_argc++] = shared.hdel;
-        incrRefCount(shared.hdel);
-        new_argv[new_argc++] = c->argv[1];
-        incrRefCount(c->argv[1]);
-    }
-
     for (i = 0; i < num_fields; i++) {
-        expiryModificationResult result = EXPIRATION_MODIFICATION_NOT_EXIST;
-        if (set_expired) {
-            if (obj && hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
-                /* In case we deleted the field, add it to the new hdel command vector. */
+        expiryModificationResult result = hashTypeSetExpire(obj, objectGetVal(c->argv[fields_index + i]), when, flag);
+        if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) {
+            if (skipped) {
+                if (!new_argv)
+                    new_argv = createChangedFieldsArgv(c, c->argc, fields_index, fields_index, skipped, &new_argc);
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);
-                result = EXPIRATION_MODIFICATION_EXPIRE_ASAP;
-                /* we treat this case exactly as active expiration. */
-                server.stat_expiredfields++;
-                expired++;
             }
-        } else {
-            result = hashTypeSetExpire(obj, c->argv[fields_index + i]->ptr, when, flag);
-            if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) updated++;
+            updated++;
+        } else if (result == EXPIRATION_MODIFICATION_EXPIRE_ASAP) {
+            /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+            if (new_argv == NULL) {
+                new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
+                new_argv[new_argc++] = shared.hdel;
+                new_argv[new_argc++] = c->argv[1];
+                incrRefCount(c->argv[1]);
+            }
+            /* In case we deleted the field, add it to the new hdel command vector. */
+            new_argv[new_argc++] = c->argv[fields_index + i];
+            incrRefCount(c->argv[fields_index + i]);
+            /* we treat this case exactly as active expiration. */
+            server.stat_expiredfields++;
+            expired++;
+        } else if (has_volatile_fields && result == EXPIRATION_MODIFICATION_NOT_EXIST && !skipped) {
+            skipped = fields_index + i;
         }
         addReplyLongLong(c, result);
     }
@@ -1689,6 +2468,16 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
         } else if (updated) {
+            if (skipped) {
+                if (!new_argv)
+                    new_argv = createChangedFieldsArgv(c, c->argc, fields_index, fields_index, skipped, &new_argc);
+                for (i = 0; i < fields_index - 1; i++) {
+                    new_argv[i] = c->argv[i];
+                    incrRefCount(c->argv[i]);
+                }
+                new_argv[fields_index - 1] = createStringObjectFromLongLong(new_argc - fields_index);
+                replaceClientCommandVector(c, new_argc, new_argv);
+            }
             /* Propagate as HPEXPIREAT millisecond-timestamp
              * Only rewrite the command arg if not already HPEXPIREAT */
             if (c->cmd->proc != hpexpireatCommand) {
@@ -1711,6 +2500,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         }
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void hexpireCommand(client *c) {
@@ -1750,6 +2541,11 @@ void hpersistCommand(client *c) {
     int fields_index = 4, result = 0, changes = 0;
     long long num_fields = 0;
 
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
     /* Check that the parsed fields number matches the real provided number of fields */
@@ -1758,20 +2554,33 @@ void hpersistCommand(client *c) {
         return;
     }
 
-    /* From this point we would return array reply */
-    addReplyArrayLen(c, num_fields);
-
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, hash, OBJ_HASH))
         return;
 
+    initDeferredReplyBuffer(c);
+
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
+
     bool has_volatile_fields = hashTypeHasVolatileFields(hash);
+    robj **new_argv = NULL;
+    int new_argc = 0, skipped = 0;
+    int first_field = fields_index;
 
     for (int i = 0; i < num_fields; i++, fields_index++) {
-        result = hashTypePersist(hash, c->argv[fields_index]->ptr);
+        result = hashTypePersist(hash, objectGetVal(c->argv[fields_index]));
         if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) {
+            if (skipped) {
+                if (!new_argv)
+                    new_argv = createChangedFieldsArgv(c, c->argc, first_field, first_field, skipped, &new_argc);
+                new_argv[new_argc++] = c->argv[fields_index];
+                incrRefCount(c->argv[fields_index]);
+            }
             server.dirty++;
             changes++;
+        } else if (has_volatile_fields && result == EXPIRATION_MODIFICATION_NOT_EXIST && !skipped) {
+            skipped = fields_index;
         }
         addReplyLongLong(c, result);
     }
@@ -1779,9 +2588,20 @@ void hpersistCommand(client *c) {
         if (has_volatile_fields != hashTypeHasVolatileFields(hash)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, hash);
         }
+        if (skipped) {
+            if (!new_argv) new_argv = createChangedFieldsArgv(c, c->argc, first_field, first_field, skipped, &new_argc);
+            for (int i = 0; i < first_field - 1; i++) {
+                new_argv[i] = c->argv[i];
+                incrRefCount(c->argv[i]);
+            }
+            new_argv[first_field - 1] = createStringObjectFromLongLong(new_argc - first_field);
+            replaceClientCommandVector(c, new_argc, new_argv);
+        }
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, c->argv[1]);
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /* High-Level Algorithm of HTTL / HPTTL / HEXPIRETIME / HPEXPIRETIME Commands:
@@ -1812,9 +2632,14 @@ void hpersistCommand(client *c) {
  *
  * Keyspace Notifications:
  * - None emitted; this command is read-only. */
-void httlGenericCommand(client *c, long long basetime, int unit) {
+void httlGenericCommand(client *c, mstime_t basetime, int unit) {
     int fields_index = 4;
     long long num_fields = 0, result = -2;
+
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
 
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
@@ -1832,7 +2657,7 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
     addReplyArrayLen(c, num_fields);
 
     for (int i = 0; i < num_fields; i++) {
-        if (!hash || hashTypeGetExpiry(hash, c->argv[fields_index + i]->ptr, &result) == C_ERR) {
+        if (!hash || hashTypeGetExpiry(hash, objectGetVal(c->argv[fields_index + i]), &result) == C_ERR) {
             addReplyLongLong(c, -2);
         } else if (result == EXPIRY_NONE) {
             addReplyLongLong(c, -1);
@@ -1870,6 +2695,41 @@ void hpexpiretimeCommand(client *c) {
  * the number of randoms per time. */
 #define HRANDFIELD_RANDOM_SAMPLE_LIMIT 1000
 
+/* Store the field (and optionally value) at the iterator cursor into
+ * listpackEntry structs, for either encoding. The entries alias the hash
+ * object's memory and stay valid as long as it isn't mutated. */
+static inline void hashTypeCurrentToEntry(hashTypeIterator *hi, int withvalues, listpackEntry *f, listpackEntry *v) {
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        f->sval = lpGetValue(hi->fptr, &f->slen, &f->lval);
+        if (withvalues) v->sval = lpGetValue(hi->vptr, &v->slen, &v->lval);
+    } else {
+        size_t len;
+        f->sval = (unsigned char *)hashTypeCurrentFromHashTable(hi, OBJ_HASH_FIELD, &len);
+        f->slen = len;
+        f->lval = 0;
+        if (withvalues) {
+            v->sval = (unsigned char *)hashTypeCurrentFromHashTable(hi, OBJ_HASH_VALUE, &len);
+            v->slen = len;
+            v->lval = 0;
+        }
+    }
+}
+
+/* Collect every live (non-expired) field into the caller-provided arrays,
+ * which must have room for hashTypeLength(o) entries. Returns the number of
+ * live fields collected. */
+static unsigned long hashTypeCollectLive(robj *o, int withvalues, listpackEntry *fields, listpackEntry *values) {
+    hashTypeIterator hi;
+    unsigned long n = 0;
+    hashTypeInitIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
+        hashTypeCurrentToEntry(&hi, withvalues, &fields[n], withvalues ? &values[n] : NULL);
+        n++;
+    }
+    hashTypeResetIterator(&hi);
+    return n;
+}
+
 void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     unsigned long count, size;
     int uniq = 1;
@@ -1877,6 +2737,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
 
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.emptyarray)) == NULL || checkType(c, hash, OBJ_HASH)) return;
     size = hashTypeLength(hash);
+    bool has_volatile = hashTypeHasVolatileFields(hash);
 
     if (l >= 0) {
         count = (unsigned long)l;
@@ -1897,6 +2758,83 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     void *replylen = addReplyDeferredLen(c);
     unsigned long reply_size = 0;
 
+    /* Hashes with volatile fields take one generic, ghost-aware path over
+     * hashTypeIterator (both encodings): expired-unreaped fields are skipped
+     * and the expiration policy is honored. Hashes without field TTLs (the
+     * common case) fall through to the original CASE 1-4 samplers, which are
+     * only valid when every field is live. */
+    if (has_volatile) {
+        if (count == 1) {
+            /* Single random field (HRANDFIELD key 1 and HRANDFIELD key -1):
+             * delegate to hashTypeRandomElement so all single-pick forms
+             * (including the no-count `HRANDFIELD key`) share identical
+             * behavior and its O(1)-expected fast path. Read-only. */
+            listpackEntry field, value;
+            if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) == C_OK) {
+                hrandfieldReplyWithListpack(wpc, 1, &field, withvalues ? &value : NULL);
+                reply_size = 1;
+            }
+            goto set_deferred_response;
+        }
+        if (!uniq) {
+            /* With replacement: collect the live fields once, then draw. */
+            listpackEntry *fields = zmalloc(sizeof(listpackEntry) * size);
+            listpackEntry *values = withvalues ? zmalloc(sizeof(listpackEntry) * size) : NULL;
+            unsigned long live = hashTypeCollectLive(hash, withvalues, fields, values);
+            while (live > 0 && count--) {
+                unsigned long idx = rand() % live;
+                hrandfieldReplyWithListpack(wpc, 1, &fields[idx], values ? &values[idx] : NULL);
+                if (c->flag.close_asap) break;
+                reply_size++;
+            }
+            zfree(fields);
+            if (values) zfree(values);
+        } else if (count >= size) {
+            /* CASE 2 (volatile): the request is at least the physical size,
+             * hence at least every live field -- return them all in a single
+             * pass, no sampling or buffering. hashTypeNext skips expired
+             * fields, so only live fields are emitted. */
+            hashTypeIterator hi;
+            hashTypeInitIterator(hash, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
+                addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_FIELD);
+                if (withvalues) addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_VALUE);
+                reply_size++;
+                if (c->flag.close_asap) break;
+            }
+            hashTypeResetIterator(&hi);
+        } else {
+            /* Distinct sample (count < size): reservoir sampling (Algorithm R)
+             * in one pass. */
+            listpackEntry *rf = zmalloc(sizeof(listpackEntry) * count);
+            listpackEntry *rv = withvalues ? zmalloc(sizeof(listpackEntry) * count) : NULL;
+            unsigned long seen = 0, filled = 0;
+            hashTypeIterator hi;
+            hashTypeInitIterator(hash, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                seen++;
+                if (filled < count) {
+                    hashTypeCurrentToEntry(&hi, withvalues, &rf[filled], withvalues ? &rv[filled] : NULL);
+                    filled++;
+                } else {
+                    unsigned long j = rand() % seen;
+                    if (j < count) hashTypeCurrentToEntry(&hi, withvalues, &rf[j], withvalues ? &rv[j] : NULL);
+                }
+            }
+            hashTypeResetIterator(&hi);
+            reply_size = filled;
+            hrandfieldReplyWithListpack(wpc, filled, rf, rv);
+            zfree(rf);
+            if (rv) zfree(rv);
+        }
+        goto set_deferred_response;
+    }
+
+    /* Past this point every field is live: any hash with volatile fields was
+     * handled (and returned) by the generic path above. */
+    serverAssert(!has_volatile);
+
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
@@ -1906,11 +2844,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
             while (count--) {
                 listpackEntry field, value;
-                hashTypeRandomElement(hash, size, &field, &value);
 
                 /* In case we were unable to locate random element, it is probably because there is no such element
                  * since all elements are expired. */
-                if (!field.sval) break;
+                if (hashTypeRandomElement(hash, size, &field, &value) != C_OK)
+                    break;
 
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
                 addWritePreparedReplyBulkCBuffer(wpc, field.sval, field.slen);
@@ -1929,7 +2867,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 sample_count = count > limit ? limit : count;
                 count -= sample_count;
                 reply_size += sample_count;
-                lpRandomPairs(hash->ptr, sample_count, fields, vals);
+                lpRandomPairs(objectGetVal(hash), sample_count, fields, vals);
                 hrandfieldReplyWithListpack(wpc, sample_count, fields, vals);
                 if (c->flag.close_asap) break;
             }
@@ -1970,7 +2908,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         listpackEntry *fields, *vals = NULL;
         fields = zmalloc(sizeof(listpackEntry) * count);
         if (withvalues) vals = zmalloc(sizeof(listpackEntry) * count);
-        serverAssert(lpRandomPairsUnique(hash->ptr, count, fields, vals) == count);
+        serverAssert(lpRandomPairsUnique(objectGetVal(hash), count, fields, vals) == count);
         hrandfieldReplyWithListpack(wpc, count, fields, vals);
         zfree(fields);
         zfree(vals);
@@ -1991,7 +2929,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         hashtable *ht = hashtableCreate(&sdsReplyHashtableType);
         hashtableExpand(ht, size);
         hashtableIterator iter;
-        hashtableInitIterator(&iter, hash->ptr, 0);
+        hashtableInitIterator(&iter, objectGetVal(hash), 0);
         void *entry;
 
         /* Add all the elements into the temporary hashtable. */
@@ -2001,7 +2939,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             reply_size++;
         }
         serverAssert(hashtableSize(ht) == reply_size);
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
 
         /* Remove random elements to reach the right count. */
         while (reply_size > count) {
@@ -2016,13 +2954,14 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         void *next;
         while (hashtableNext(&iter, &next)) {
             sds field = entryGetField(next);
-            sds value = entryGetValue(next);
+            size_t value_len;
+            char *value = entryGetValue(next, &value_len);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
-            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, value_len);
         }
 
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
         hashtableRelease(ht);
     }
 
@@ -2033,18 +2972,18 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
+        unsigned long maxtries = (count > ULONG_MAX / 10) ? ULONG_MAX : count * 10;
         listpackEntry field, value;
         hashtable *ht = hashtableCreate(&setHashtableType);
         hashtableExpand(ht, count);
-        while (added < count) {
-            hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
-
+        while (added < count && maxtries--) {
             /* In case we were unable to locate random element, it is probably because there is no such element
              * since all elements are expired. */
-            if (!field.sval) break;
+            if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK)
+                break;
 
             /* Try to add the object to the hashtable. If expired, stop adding (there are probably non left).
-             * If it already exists free it, otherwise increment the number of objects we have
+             * If it already exists free it; otherwise, increment the number of objects we have
              * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
             if (!hashtableAdd(ht, sfield)) {
@@ -2081,7 +3020,7 @@ void hrandfieldCommand(client *c) {
 
     if (c->argc >= 3) {
         if (getRangeLongFromObjectOrReply(c, c->argv[2], -LONG_MAX, LONG_MAX, &l, NULL) != C_OK) return;
-        if (c->argc > 4 || (c->argc == 4 && strcasecmp(c->argv[3]->ptr, "withvalues"))) {
+        if (c->argc > 4 || (c->argc == 4 && strcasecmp(objectGetVal(c->argv[3]), "withvalues"))) {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
         } else if (c->argc == 4) {
@@ -2100,8 +3039,10 @@ void hrandfieldCommand(client *c) {
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, hash, OBJ_HASH)) {
         return;
     }
-    hashTypeRandomElement(hash, hashTypeLength(hash), &ele, NULL);
-    hashReplyFromListpackEntry(c, &ele);
+    if (hashTypeRandomElement(hash, hashTypeLength(hash), &ele, NULL) == C_OK)
+        hashReplyFromListpackEntry(c, &ele);
+    else
+        addReplyNull(c);
 }
 
 /* Context structure for tracking expiry operations on hash fields. */
@@ -2113,16 +3054,18 @@ typedef struct {
 
 /* Callback for popping expired entries from the volatile set.
  * Deletes the entry from the hash table and tracks it in the expiry context.
+ *
+ * This function does not incr the dirty counter. Caller needs to increment
+ * it themselves if necessary.
+ *
  * Returns 1 if deleted, 0 if nothing to do. */
 static int hashTypeExpireEntry(void *entry, void *c) {
     expiryContext *ctx = c;
     robj *o = ctx->key;
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-
-    hashtable *ht = o->ptr;
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE && hashtableSize(objectGetVal(o)) > 0);
+    hashtable *ht = objectGetVal(o);
     void *entry_ptr = NULL;
     bool deleted = hashtablePop(ht, entry, &entry_ptr);
-
     if (deleted) {
         if (ctx->fields)
             ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(entry));
@@ -2136,23 +3079,62 @@ static int hashTypeExpireEntry(void *entry, void *c) {
 /* Extract expired entries from a hash object's volatile set.
  * Returns number of expired entries, populates `out_entries`. */
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_entries) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
+        size_t expired_count = 0;
+        unsigned char field_intbuf[LP_INTBUF_SIZE];
 
-    /* skip TTL checks temporarily (to allow hashtable lookup) */
-    hashTypeIgnoreTTL(o, 1);
+        while (p && expired_count < max_fields) {
+            unsigned char *fptr = p;
+            int64_t flen;
+            unsigned char *field = lpGet(fptr, &flen, field_intbuf);
+            unsigned char *vptr = lpNext(zl, fptr);
+            if (!vptr) break;
 
+            mstime_t expiry = hashTypeListpackGetExpiry(zl, vptr);
+            if (expiry != EXPIRY_NONE && expiry <= now) {
+                if (out_entries) {
+                    out_entries[expired_count] = createStringObject((char *)field, flen);
+                }
+                /* Delete the field/value pair (trailing metadata goes with
+                 * it). fptr is updated to the entry following the deleted
+                 * range (NULL at EOF), so we resume the scan from there
+                 * instead of restarting, keeping the reap linear. */
+                zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
+                objectSetVal(o, zl);
+                server.stat_expiredfields++;
+                expired_count++;
+                p = fptr;
+                continue;
+            }
+
+            p = lpNext(zl, vptr);
+        }
+
+        /* Bulk-update the aggregate header once: doing it per deletion would
+         * reallocate the listpack under the scan cursor. */
+        hashTypeUpdateVolatileCount(o, -(long)expired_count);
+
+        return expired_count;
+    }
+
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
     vset *vset = hashTypeGetVolatileSet(o);
-    if (!vset || vsetIsEmpty(vset)) {
-        hashTypeIgnoreTTL(o, 0);
+    if (!vset) {
         return 0;
     }
 
+    serverAssert(!vsetIsEmpty(vset));
+    /* skip TTL checks temporarily (to allow hashtable pops) */
+    hashTypeIgnoreTTL(o, true, NULL);
     expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
-    size_t expired = vsetRemoveExpired(vset, entryGetExpiry, hashTypeExpireEntry, now, max_fields, &ctx);
+    size_t expired = vsetRemoveExpired(vset, entryGetExpiryVsetFunc, hashTypeExpireEntry, now, max_fields, &ctx);
     serverAssert(ctx.n_fields <= max_fields);
-    hashTypeIgnoreTTL(o, 0);
-    if (!hashTypeHasVolatileFields(o)) {
+    if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);
+    } else {
+        hashTypeIgnoreTTL(o, false, NULL);
     }
     return expired;
 }
@@ -2164,7 +3146,7 @@ static void defragHashTypeEntry(void *privdata, void *element_ref) {
 
     entry *new_entry = entryDefrag(old_entry, activeDefragAlloc, activeDefragSds);
     if (new_entry) {
-        long long expiry = entryGetExpiry(new_entry);
+        mstime_t expiry = entryGetExpiry(new_entry);
         /* In case the entry is tracked we need to update it in the volatile set */
         if (expiry != EXPIRY_NONE) {
             // We don't need to pass the db because db-level tracking isn't going to change for this update.
@@ -2177,7 +3159,7 @@ static void defragHashTypeEntry(void *privdata, void *element_ref) {
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *)) {
     if (ob->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *newzl;
-        if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
+        if ((newzl = activeDefragAlloc(objectGetVal(ob)))) objectSetVal(ob, newzl);
         return 0;
     }
     serverAssert(ob->encoding == OBJ_ENCODING_HASHTABLE);
@@ -2191,17 +3173,17 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
 
     if (!vset_cursor) {
         /* New object scan */
-        hashtable *ht = ob->ptr;
+        hashtable *ht = objectGetVal(ob);
         /* defrag the hashtable struct and tables */
         hashtable *new_hashtable = hashtableDefragTables(ht, defragAllocfn);
-        if (new_hashtable) ob->ptr = new_hashtable;
+        if (new_hashtable) objectSetVal(ob, new_hashtable);
         vset_cursor = &volaSetIter;
         vset_cursor->cursor = 0;
         vset_cursor->is_vsetDefrag = false;
     }
 
     if (!vset_cursor->is_vsetDefrag) {
-        hashtable *ht = ob->ptr;
+        hashtable *ht = objectGetVal(ob);
         vset_cursor->cursor = hashtableScanDefrag(ht, vset_cursor->cursor, defragHashTypeEntry, ob,
                                                   defragAllocfn,
                                                   HASHTABLE_SCAN_EMIT_REF);

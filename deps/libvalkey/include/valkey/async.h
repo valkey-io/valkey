@@ -32,6 +32,7 @@
 #ifndef VALKEY_ASYNC_H
 #define VALKEY_ASYNC_H
 #include "valkey.h"
+#include "visibility.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -122,34 +123,33 @@ typedef struct valkeyAsyncContext {
     valkeyAsyncPushFn *push_cb;
 } valkeyAsyncContext;
 
-/* Functions that proxy to libvalkey */
-valkeyAsyncContext *valkeyAsyncConnectWithOptions(const valkeyOptions *options);
-valkeyAsyncContext *valkeyAsyncConnect(const char *ip, int port);
-valkeyAsyncContext *valkeyAsyncConnectBind(const char *ip, int port, const char *source_addr);
-valkeyAsyncContext *valkeyAsyncConnectBindWithReuse(const char *ip, int port,
-                                                    const char *source_addr);
-valkeyAsyncContext *valkeyAsyncConnectUnix(const char *path);
-int valkeyAsyncSetConnectCallback(valkeyAsyncContext *ac, valkeyConnectCallback *fn);
-int valkeyAsyncSetDisconnectCallback(valkeyAsyncContext *ac, valkeyDisconnectCallback *fn);
+LIBVALKEY_API valkeyAsyncContext *valkeyAsyncConnectWithOptions(const valkeyOptions *options);
+LIBVALKEY_API valkeyAsyncContext *valkeyAsyncConnect(const char *ip, int port);
+LIBVALKEY_API valkeyAsyncContext *valkeyAsyncConnectBind(const char *ip, int port, const char *source_addr);
+LIBVALKEY_API valkeyAsyncContext *valkeyAsyncConnectBindWithReuse(const char *ip, int port,
+                                                                  const char *source_addr);
+LIBVALKEY_API valkeyAsyncContext *valkeyAsyncConnectUnix(const char *path);
+LIBVALKEY_API int valkeyAsyncSetConnectCallback(valkeyAsyncContext *ac, valkeyConnectCallback *fn);
+LIBVALKEY_API int valkeyAsyncSetDisconnectCallback(valkeyAsyncContext *ac, valkeyDisconnectCallback *fn);
 
-valkeyAsyncPushFn *valkeyAsyncSetPushCallback(valkeyAsyncContext *ac, valkeyAsyncPushFn *fn);
-int valkeyAsyncSetTimeout(valkeyAsyncContext *ac, struct timeval tv);
-void valkeyAsyncDisconnect(valkeyAsyncContext *ac);
-void valkeyAsyncFree(valkeyAsyncContext *ac);
+LIBVALKEY_API valkeyAsyncPushFn *valkeyAsyncSetPushCallback(valkeyAsyncContext *ac, valkeyAsyncPushFn *fn);
+LIBVALKEY_API int valkeyAsyncSetTimeout(valkeyAsyncContext *ac, struct timeval tv);
+LIBVALKEY_API void valkeyAsyncDisconnect(valkeyAsyncContext *ac);
+LIBVALKEY_API void valkeyAsyncFree(valkeyAsyncContext *ac);
 
 /* Handle read/write events */
-void valkeyAsyncHandleRead(valkeyAsyncContext *ac);
-void valkeyAsyncHandleWrite(valkeyAsyncContext *ac);
-void valkeyAsyncHandleTimeout(valkeyAsyncContext *ac);
-void valkeyAsyncRead(valkeyAsyncContext *ac);
-void valkeyAsyncWrite(valkeyAsyncContext *ac);
+LIBVALKEY_API void valkeyAsyncHandleRead(valkeyAsyncContext *ac);
+LIBVALKEY_API void valkeyAsyncHandleWrite(valkeyAsyncContext *ac);
+LIBVALKEY_API void valkeyAsyncHandleTimeout(valkeyAsyncContext *ac);
+LIBVALKEY_API void valkeyAsyncRead(valkeyAsyncContext *ac);
+LIBVALKEY_API void valkeyAsyncWrite(valkeyAsyncContext *ac);
 
 /* Command functions for an async context. Write the command to the
  * output buffer and register the provided callback. */
-int valkeyvAsyncCommand(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, const char *format, va_list ap);
-int valkeyAsyncCommand(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, const char *format, ...);
-int valkeyAsyncCommandArgv(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, int argc, const char **argv, const size_t *argvlen);
-int valkeyAsyncFormattedCommand(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, const char *cmd, size_t len);
+LIBVALKEY_API int valkeyvAsyncCommand(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, const char *format, va_list ap);
+LIBVALKEY_API int valkeyAsyncCommand(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, const char *format, ...);
+LIBVALKEY_API int valkeyAsyncCommandArgv(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, int argc, const char **argv, const size_t *argvlen);
+LIBVALKEY_API int valkeyAsyncFormattedCommand(valkeyAsyncContext *ac, valkeyCallbackFn *fn, void *privdata, const char *cmd, size_t len);
 
 #ifdef __cplusplus
 }

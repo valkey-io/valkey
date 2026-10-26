@@ -16,6 +16,8 @@
             "READONLY"
         ],
         "acl_categories": [
+            "READ",
+            "SLOW",
             "STREAM"
         ],
         "command_tips": [
@@ -109,6 +111,30 @@
                                     }
                                 ]
                             }
+                        }
+                    ]
+                },
+                {
+                    "description": "Summary form when there are no pending messages.",
+                    "type": "array",
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "items": [
+                        {
+                            "description": "Total number of pending messages",
+                            "const": 0
+                        },
+                        {
+                            "description": "Minimal pending entry ID",
+                            "type": "null"
+                        },
+                        {
+                            "description": "Maximal pending entry ID",
+                            "type": "null"
+                        },
+                        {
+                            "description": "Consumers with pending messages",
+                            "type": "null"
                         }
                     ]
                 }

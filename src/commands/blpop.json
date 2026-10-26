@@ -17,7 +17,10 @@
             "BLOCKING"
         ],
         "acl_categories": [
-            "LIST"
+            "BLOCKING",
+            "LIST",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {

@@ -142,7 +142,7 @@ static void valkeyLibuvTimeout(uv_timer_t *timer) {
 static void valkeyLibuvSetTimeout(void *privdata, struct timeval tv) {
     valkeyLibuvEvents *p = (valkeyLibuvEvents *)privdata;
 
-    uint64_t millsec = tv.tv_sec * 1000 + tv.tv_usec / 1000.0;
+    uint64_t millisec = tv.tv_sec * 1000 + tv.tv_usec / 1000.0;
     if (!p->timer.data) {
         // timer is uninitialized
         if (uv_timer_init(p->handle.loop, &p->timer) != 0) {
@@ -152,7 +152,7 @@ static void valkeyLibuvSetTimeout(void *privdata, struct timeval tv) {
     }
     // updates the timeout if the timer has already started
     // or start the timer
-    uv_timer_start(&p->timer, valkeyLibuvTimeout, millsec, 0);
+    uv_timer_start(&p->timer, valkeyLibuvTimeout, millisec, 0);
 }
 
 static void valkeyLibuvCleanup(void *privdata) {

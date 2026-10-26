@@ -118,10 +118,11 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex $e 3] {set testkey {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (896 more bytes)}}
         assert_equal {foobar} [lindex $e 5]
 
-        # for large-reply
-        set copy_avoid [lindex [r config get min-io-threads-avoid-copy-reply] 1]
-        r config set min-io-threads-avoid-copy-reply 0
-
+        # for large-reply - without reply copy avoidance
+        set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        if {!$::external} {
+            assert_morethan $copy_avoid 1024
+        }
         r get testkey
         set e [lindex [r commandlog get -1 large-reply] 0]
         assert_equal [llength $e] 6
@@ -132,8 +133,20 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex $e 3] {get testkey}
         assert_equal {foobar} [lindex $e 5]
 
-        # Restore min-io-threads-avoid-copy-reply value
-        r config set min-io-threads-avoid-copy-reply $copy_avoid
+        # for large-reply - with reply copy avoidance
+        # set min-string-size-avoid-copy-reply to 1 so wo will use reply copy avoidance
+        r config set min-string-size-avoid-copy-reply 1
+        r get testkey
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        assert_equal [llength $e] 6
+        if {!$::external} {
+            assert_equal [lindex $e 0] 118
+        }
+        assert_equal [expr {[lindex $e 2] > 1024}] 1
+        assert_equal [lindex $e 3] {get testkey}
+        assert_equal {foobar} [lindex $e 5]
+        # Restore min-string-size-avoid-copy-reply value
+        r config set min-string-size-avoid-copy-reply $copy_avoid
     } {OK} {needs:debug}
 
     test {COMMANDLOG slow - Certain commands are omitted that contain sensitive information} {
@@ -184,6 +197,38 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_match {* key 9 5000 AUTH (redacted)} [lindex [lindex $slowlog_resp 1] 3]
         assert_match {* key 9 5000 AUTH2 (redacted) (redacted)} [lindex [lindex $slowlog_resp 0] 3]
     } {} {needs:repl}
+
+    test {COMMANDLOG slow - Redaction does not leak to later commands in a MULTI} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        r multi
+        r acl setuser commandlog-test-user +get
+        r set foo bar
+        r exec
+        r config set commandlog-execution-slower-than -1
+        set slowlog_resp [r commandlog get -1 slow]
+
+        # Entry 0 is the EXEC itself, entry 1 is the SET and entry 2 is the ACL SETUSER.
+        # The ACL SETUSER redaction must not carry over to the following SET.
+        assert_equal {exec} [lindex [lindex $slowlog_resp 0] 3]
+        assert_equal {set foo bar} [lindex [lindex $slowlog_resp 1] 3]
+        assert_equal {acl setuser (redacted) (redacted)} [lindex [lindex $slowlog_resp 2] 3]
+        r acl deluser commandlog-test-user
+    }
+
+    test {COMMANDLOG slow - Redaction is applied to commands executed from scripts} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        # MIGRATE on a missing key returns NOKEY before connecting anywhere,
+        # but redacts its AUTH2 arguments while parsing them.
+        r eval {server.call('migrate', '127.0.0.1', '9999', 'missingkey', '9', '100', 'AUTH2', 'user', 'password')} 0
+        r config set commandlog-execution-slower-than -1
+        set slowlog_resp [r commandlog get -1 slow]
+
+        # Entry 0 is the EVAL itself, entry 1 is the MIGRATE the script executed
+        assert_equal {migrate 127.0.0.1 9999 missingkey 9 100 AUTH2 (redacted) (redacted)} \
+            [lindex [lindex $slowlog_resp 1] 3]
+    }
 
     test {COMMANDLOG slow - Rewritten commands are logged as their original command} {
         r config set commandlog-execution-slower-than 0
@@ -249,17 +294,41 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         lindex $e 3
     } {sadd set foo {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (1 more bytes)}}
 
-    test {COMMANDLOG slow - EXEC is not logged, just executed commands} {
+    test {COMMANDLOG slow - EXEC is logged alongside slow inner commands} {
         r config set commandlog-execution-slower-than 100000
         r commandlog reset slow
         assert_equal [r commandlog len slow] 0
         r multi
         r debug sleep 0.2
         r exec
-        assert_equal [r commandlog len slow] 1
-        set e [lindex [r commandlog get -1 slow] 0]
-        assert_equal [lindex $e 3] {debug sleep 0.2}
+        assert_equal [r commandlog len slow] 2
+        set entries [r commandlog get -1 slow]
+        assert_equal [lindex [lindex $entries 0] 3] {exec}
+        assert_equal [lindex [lindex $entries 1] 3] {debug sleep 0.2}
     } {} {needs:debug}
+
+    test {COMMANDLOG slow - EXEC records total transaction time when inner commands are individually fast} {
+        r config set commandlog-execution-slower-than 100000
+        r commandlog reset slow
+        r multi
+        for {set i 0} {$i < 10} {incr i} {
+            r debug sleep 0.03
+        }
+        r exec
+        set e [lindex [r commandlog get 1 slow] 0]
+        assert_equal [lindex $e 3] {exec}
+        assert {[lindex $e 2] >= 100000}
+    } {} {needs:debug}
+
+    test {COMMANDLOG slow - EXEC is not logged when transaction is below threshold} {
+        r config set commandlog-execution-slower-than 100000
+        r commandlog reset slow
+        r multi
+        r set foo bar
+        r get foo
+        r exec
+        assert_equal [r commandlog len slow] 0
+    }
 
     test {COMMANDLOG slow - can clean older entries} {
         r client setname lastentry_client
@@ -363,4 +432,72 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
             assert_equal {test-client} [lindex $ping_cmd 5]
         }
     }
+
+    test {COMMANDLOG large-reply - byte tracking with copy avoidance} {
+        set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        r config set min-string-size-avoid-copy-reply 1
+        
+        # Disable reply tracking
+        r config set commandlog-reply-larger-than -1
+        r commandlog reset large-reply
+        
+        set value [string repeat A 2048]
+        r set testkey $value
+        
+        # Should not be logged
+        r get testkey
+        assert_equal [r commandlog len large-reply] 0
+        
+        # Enable tracking
+        r config set commandlog-reply-larger-than 1024
+        r commandlog reset large-reply
+        
+        # Get the value again, should be tracked
+        r get testkey
+        assert_equal [r commandlog len large-reply] 1
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        assert_equal [lindex $e 3] {get testkey}
+        # For 2048 bytes: $2048\r\n<data>\r\n = 2057
+        assert_equal [lindex $e 2] 2057
+        
+        # Cleanup
+        r config set min-string-size-avoid-copy-reply $copy_avoid
+        r del testkey
+    }
+
+    test {COMMANDLOG - memory config with set / get / rewrite} {
+        r config set commandlog-request-larger-than 10mb
+        r config set commandlog-reply-larger-than 10mb
+        assert_equal [r config get commandlog-request-larger-than] {commandlog-request-larger-than 10485760}
+        assert_equal [r config get commandlog-reply-larger-than] {commandlog-reply-larger-than 10485760}
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get commandlog-request-larger-than] 1] 10485760
+        assert_equal [lindex [r config get commandlog-reply-larger-than] 1] 10485760
+    } {} {external:skip}
+
+    test {COMMANDLOG - special number -1 disables the command logging} {
+        r config set commandlog-execution-slower-than -1
+        r config set commandlog-request-larger-than -1
+        r config set commandlog-reply-larger-than -1
+        assert_error {*argument must be between -1 and *} {r config set commandlog-execution-slower-than -2}
+        assert_error {*argument must be between -1 and *} {r config set commandlog-request-larger-than -2}
+        assert_error {*argument must be between -1 and *} {r config set commandlog-reply-larger-than -2}
+
+        r commandlog reset slow
+        r commandlog reset large-request
+        r commandlog reset large-reply
+
+        r ping
+        assert_equal [r commandlog len slow] 0
+        assert_equal [r commandlog len large-request] 0
+        assert_equal [r commandlog len large-reply] 0
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get commandlog-execution-slower-than] 1] -1
+        assert_equal [lindex [r config get commandlog-request-larger-than] 1] -1
+        assert_equal [lindex [r config get commandlog-reply-larger-than] 1] -1
+    } {} {external:skip}
 }

@@ -16,6 +16,10 @@
             "description": "The number of patterns all the clients are subscribed to.",
             "type": "integer",
             "minimum": 0
-        }
+        },
+        "acl_categories": [
+            "PUBSUB",
+            "SLOW"
+        ]
     }
 }

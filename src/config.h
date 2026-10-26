@@ -76,10 +76,18 @@
 #define HAVE_SYSCTL_KERN_SOMAXCONN 1
 #endif
 
-/* Test for backtrace() */
+/* Test for backtrace() via execinfo.h */
 #if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || defined(__FreeBSD__) ||    \
     ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE)) || \
     defined(__DragonFly__) || (defined(__UCLIBC__) && defined(__UCLIBC_HAS_BACKTRACE__))
+#define HAVE_BACKTRACE 1
+#define HAVE_EXECINFO 1
+#endif
+
+/* When libbacktrace is available (e.g. on musl/Alpine), enable backtrace
+ * support even without execinfo.h. libbacktrace provides its own frame
+ * collection via backtrace_simple(). */
+#if defined(USE_LIBBACKTRACE) && !defined(HAVE_BACKTRACE)
 #define HAVE_BACKTRACE 1
 #endif
 
@@ -182,7 +190,17 @@
 #endif
 #endif
 
-/* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
+#if defined(__SANITIZE_THREAD__)
+/* GCC */
+#define VALKEY_THREAD_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+/* Clang */
+#define VALKEY_THREAD_SANITIZER 1
+#endif
+#endif
+
+/* Define rdb_fsync_range to sync_file_range() on Linux; otherwise, we use
  * the plain fsync() call. */
 #if (defined(__linux__) && defined(SYNC_FILE_RANGE_WAIT_BEFORE))
 #define HAVE_SYNC_FILE_RANGE 1
@@ -348,6 +366,20 @@ void setcpuaffinity(const char *cpulist);
 #define HAVE_FADVISE
 #endif
 
+/* Drawing secret material from a configured provider needs the OpenSSL 3
+ * provider APIs and config-driven provider selection. Older OpenSSL and
+ * LibreSSL have neither, so those builds keep the bundled generator.
+ *
+ * USE_OPENSSL == 1 means BUILD_TLS=yes. BUILD_TLS=module compiles the server
+ * with USE_OPENSSL == 2 but does not link libcrypto into it (src/Makefile),
+ * so a module build keeps the bundled generator as well. */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L && !defined(LIBRESSL_VERSION_NUMBER)
+#define HAVE_OPENSSL_PROVIDERS
+#endif
+#endif
+
 #define IO_THREADS_MAX_NUM 256
 
 #ifndef CACHE_LINE_SIZE
@@ -374,7 +406,7 @@ void setcpuaffinity(const char *cpulist);
 #define valkey_prefetch(addr) ((void)(addr))
 #endif
 
-/* Check if we can compile SIMD code */
+/* Check if we can compile x86 SIMD code */
 #if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4)) && defined(__has_attribute) && __has_attribute(target)
 #define HAVE_X86_SIMD 1
 #else
@@ -389,6 +421,13 @@ void setcpuaffinity(const char *cpulist);
 #define ATTRIBUTE_TARGET_SSE2
 #define ATTRIBUTE_TARGET_AVX2
 #define ATTRIBUTE_TARGET_AVX512
+#endif
+
+/* Check if we can compile ARM SIMD code */
+#if defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#define HAVE_ARM_NEON 1
+#else
+#define HAVE_ARM_NEON 0
 #endif
 
 #if defined(__linux__) && defined(__GLIBC__) && (defined(__GNUC__) && (__GNUC__ > 4) || defined(__clang__) && (__clang_major__) > 5)

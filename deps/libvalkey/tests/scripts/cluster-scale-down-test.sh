@@ -36,22 +36,17 @@ timeout 5s ./simulated-valkey.pl -p 7401 -d --sigcont $syncpid1 <<'EOF' &
 EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 5000, ["127.0.0.1", 7401, "nodeid1"]],[5001, 10000, ["127.0.0.1", 7402, "nodeid2"]],[10001, 16383, ["127.0.0.1", 7403, "nodeid3"]]]
-EXPECT CLOSE
 
 # The command "GET {foo}1" is first sent to the slot owner nodeid3, but since this
 # node does not exist the failed connection attempt will trigger a slotmap update.
-EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 8000, ["127.0.0.1", 7401, "nodeid1"]],[8001, 16383, ["127.0.0.1", 7402, "nodeid2"]]]
-EXPECT CLOSE
 
 # The send failure of "GET {foo}2" schedules a slotmap update, which is
 # performed when (and just before) the next command "GET {foo}3" is sent.
-EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 16383, ["127.0.0.1", 7401, "nodeid1"]]]
-EXPECT CLOSE
-EXPECT CONNECT
+
 EXPECT ["GET", "{foo}3"]
 SEND "bar3"
 EXPECT CLOSE

@@ -11,7 +11,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "HASH"
+            "FAST",
+            "HASH",
+            "READ"
         ],
         "key_specs": [
             {
@@ -45,7 +47,7 @@
             },
             {
                 "name": "field",
-                "type": "string"
+                "type": "field"
             }
         ]
     }

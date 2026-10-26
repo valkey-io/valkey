@@ -14,6 +14,13 @@
 static ValkeyModuleUser *global = NULL;
 static long long client_change_delta = 0;
 
+/* Track the blocking auth thread so we can join it on unload to prevent
+ * use-after-unload crashes when dlclose() unmaps the module's code while
+ * the thread is still running. Only one blocking auth thread is tracked
+ * at a time — tests must not trigger concurrent blocking auths. */
+static pthread_t blocking_auth_tid;
+static int blocking_auth_tid_valid = 0;
+
 void UserChangedCallback(uint64_t client_id, void *privdata) {
     VALKEYMODULE_NOT_USED(privdata);
     VALKEYMODULE_NOT_USED(client_id);
@@ -190,20 +197,23 @@ int blocking_auth_cb(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyM
     VALKEYMODULE_NOT_USED(err);
     /* Block the client from the Module. */
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClientOnAuth(ctx, AuthBlock_Reply, AuthBlock_FreeData);
-    if (bc == NULL) {
-        ValkeyModule_ReplyWithError(ctx, "ERR Blocking module command called from transaction");
+    int ctx_flags = ValkeyModule_GetContextFlags(ctx);
+    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_MULTI || ctx_flags & VALKEYMODULE_CTX_FLAGS_LUA) {
+        /* Clean up by using ValkeyModule_UnblockClient since we attempted blocking the client. */
+        ValkeyModule_UnblockClient(bc, NULL);
         return VALKEYMODULE_AUTH_HANDLED;
     }
     ValkeyModule_BlockedClientMeasureTimeStart(bc);
-    pthread_t tid;
     /* Allocate memory for information needed. */
     void **targ = ValkeyModule_Alloc(sizeof(void*)*3);
     targ[0] = bc;
     targ[1] = ValkeyModule_CreateStringFromString(NULL, username);
     targ[2] = ValkeyModule_CreateStringFromString(NULL, password);
     /* Create bg thread and pass the blockedclient, username and password to it. */
-    if (pthread_create(&tid, NULL, AuthBlock_ThreadMain, targ) != 0) {
+    if (pthread_create(&blocking_auth_tid, NULL, AuthBlock_ThreadMain, targ) != 0) {
         ValkeyModule_AbortBlock(bc);
+    } else {
+        blocking_auth_tid_valid = 1;
     }
     return VALKEYMODULE_AUTH_HANDLED;
 }
@@ -261,6 +271,13 @@ int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
 
     if (global)
         ValkeyModule_FreeModuleUser(global);
+
+    /* Wait for any in-flight blocking auth thread to finish before the module
+     * is dlclose'd, otherwise the thread returns into unmapped code. */
+    if (blocking_auth_tid_valid) {
+        pthread_join(blocking_auth_tid, NULL);
+        blocking_auth_tid_valid = 0;
+    }
 
     return VALKEYMODULE_OK;
 }

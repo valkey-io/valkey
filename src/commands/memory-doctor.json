@@ -15,6 +15,9 @@
         "reply_schema": {
             "description": "Memory problems report.",
             "type": "string"
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

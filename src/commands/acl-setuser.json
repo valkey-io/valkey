@@ -15,6 +15,14 @@
             [
                 "7.0.0",
                 "Added selectors and key based permissions."
+            ],
+            [
+                "9.1.0",
+                "Added database permission rules."
+            ],
+            [
+                "9.2.0",
+                "Added the `role=` rule for assigning roles to a user."
             ]
         ],
         "command_flags": [
@@ -25,9 +33,9 @@
             "SENTINEL"
         ],
         "command_tips": [
-          "REQUEST_POLICY:ALL_NODES",
-          "RESPONSE_POLICY:ALL_SUCCEEDED"
-        ],        
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+        ],
         "reply_schema": {
             "const": "OK"
         },
@@ -42,6 +50,11 @@
                 "optional": true,
                 "multiple": true
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

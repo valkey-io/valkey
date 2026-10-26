@@ -22,7 +22,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "STREAM"
+            "FAST",
+            "STREAM",
+            "WRITE"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
@@ -145,7 +147,7 @@
             }
         ],
         "reply_schema": {
-            "oneOf":[
+            "oneOf": [
                 {
                     "description": "The ID of the added entry. The ID is the one auto-generated if * is passed as ID argument, otherwise the command just returns the same ID specified by the user during insertion.",
                     "type": "string",

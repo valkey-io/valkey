@@ -1,4 +1,4 @@
-start_server {tags {"hll"}} {
+start_server {tags {"hll large-memory"}} {
     test {CVE-2025-32023: Sparse HLL XZERO overflow triggers crash} {
         # Build a valid HLL header for sparse encoding
         set hll [binary format cccc 72 89 76 76] ; # "HYLL"
@@ -23,8 +23,10 @@ start_server {tags {"hll"}} {
         # Test pfadd and pfmerge, these used to crash but now error
         assert_error {*INVALIDOBJ*} {r pfmerge fail_target hll_overflow hll_merge_source}
         assert_error {*INVALIDOBJ*} {r pfadd hll_overflow foo}
-    } {} {large-memory}
+    }
+}
 
+start_server {tags {"hll"}} {
     test {HyperLogLog self test passes} {
         catch {r pfselftest} e
         set e

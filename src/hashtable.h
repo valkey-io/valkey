@@ -39,7 +39,7 @@ typedef struct hashtable hashtable;
 typedef struct hashtableStats hashtableStats;
 
 /* Can types that can be stack allocated. */
-typedef uint64_t hashtableIterator[5];
+typedef uint64_t hashtableIterator[6];
 typedef uint64_t hashtablePosition[2];
 typedef uint64_t hashtableIncrementalFindState[5];
 
@@ -92,7 +92,8 @@ typedef enum {
 typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 
 /* Constants */
-#define HASHTABLE_BUCKET_SIZE 64 /* bytes, the most common cache line size */
+#define HASHTABLE_BUCKET_SIZE 64         /* bytes, the most common cache line size */
+#define HASHTABLE_FIND_BATCH_MAX_SIZE 32 /* Limited by the result bitmap size. */
 
 /* Scan flags */
 #define HASHTABLE_SCAN_EMIT_REF (1 << 0)
@@ -111,6 +112,9 @@ uint8_t *hashtableGetHashFunctionSeed(void);
 uint64_t hashtableGenHashFunction(const char *buf, size_t len);
 uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len);
 
+/* Hash function for pointer keys */
+uint64_t hashtablePointerHash(const void *key);
+
 /* Global resize policy */
 void hashtableSetResizePolicy(hashtableResizePolicy policy);
 
@@ -125,11 +129,14 @@ size_t hashtableSize(const hashtable *ht);
 size_t hashtableBuckets(hashtable *ht);
 size_t hashtableChainedBuckets(hashtable *ht, int table);
 unsigned hashtableEntriesPerBucket(void);
-size_t hashtableMemUsage(hashtable *ht);
+size_t hashtableMemUsage(const hashtable *ht);
 void hashtablePauseAutoShrink(hashtable *ht);
 void hashtableResumeAutoShrink(hashtable *ht);
 bool hashtableIsRehashing(hashtable *ht);
+void hashtablePauseRehashing(hashtable *ht);
+void hashtableResumeRehashing(hashtable *ht);
 bool hashtableIsRehashingPaused(hashtable *ht);
+ssize_t hashtableGetRehashingIndex(hashtable *ht);
 void hashtableRehashingInfo(hashtable *ht, size_t *from_size, size_t *to_size);
 int hashtableRehashMicroseconds(hashtable *ht, uint64_t us);
 bool hashtableExpand(hashtable *ht, size_t size);
@@ -139,9 +146,11 @@ bool hashtableShrinkIfNeeded(hashtable *ht);
 bool hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
+void hashtableSetCanAbortShrink(bool can_abort);
 
 /* Entries */
 bool hashtableFind(hashtable *ht, const void *key, void **found);
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries);
 void **hashtableFindRef(hashtable *ht, const void *key);
 bool hashtableAdd(hashtable *ht, void *entry);
 bool hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
@@ -159,9 +168,10 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
 /* Iteration & scan */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
 size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata, void *(*defragfn)(void *), int flags);
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor);
 void hashtableInitIterator(hashtableIterator *iter, hashtable *ht, uint8_t flags);
-void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht);
-void hashtableResetIterator(hashtableIterator *iter);
+void hashtableRetargetIterator(hashtableIterator *iterator, hashtable *ht);
+void hashtableCleanupIterator(hashtableIterator *iter);
 hashtableIterator *hashtableCreateIterator(hashtable *ht, uint8_t flags);
 void hashtableReleaseIterator(hashtableIterator *iter);
 bool hashtableNext(hashtableIterator *iter, void **elemptr);

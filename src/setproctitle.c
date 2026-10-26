@@ -269,7 +269,7 @@ error:
 
 
 #ifndef SPT_MAXTITLE
-#define SPT_MAXTITLE 255
+#define SPT_MAXTITLE 1024
 #endif
 
 void setproctitle(const char *fmt, ...) {

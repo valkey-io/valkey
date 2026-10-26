@@ -15,6 +15,7 @@
             "ALLOW_BUSY"
         ],
         "acl_categories": [
+            "FAST",
             "TRANSACTION"
         ],
         "reply_schema": {

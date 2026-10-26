@@ -10,7 +10,9 @@
             "BLOCKING"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "BLOCKING",
+            "CONNECTION",
+            "SLOW"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

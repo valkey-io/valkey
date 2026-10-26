@@ -1,23 +1,20 @@
 {
     "SETNX": {
-        "summary": "Set the string value of a key only when the key doesn't exist.",
+        "summary": "Sets the string value of a key only when the key doesn't exist.",
         "complexity": "O(1)",
         "group": "string",
         "since": "1.0.0",
         "arity": 3,
         "function": "setnxCommand",
-        "deprecated_since": "2.6.12",
-        "replaced_by": "`SET` with the `NX` argument",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "WRITE",
             "DENYOOM",
             "FAST"
         ],
         "acl_categories": [
-            "STRING"
+            "FAST",
+            "STRING",
+            "WRITE"
         ],
         "key_specs": [
             {

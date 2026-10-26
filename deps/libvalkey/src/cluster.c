@@ -38,9 +38,10 @@
 #include "adlist.h"
 #include "alloc.h"
 #include "command.h"
+#include "dict.h"
 #include "vkutil.h"
+#include "dict.h"
 
-#include <dict.h>
 #include <sds.h>
 
 #include <assert.h>
@@ -63,28 +64,12 @@ vk_static_assert(VALKEY_OPT_USE_CLUSTER_NODES > VALKEY_OPT_LAST_SA_OPTION);
 // standard Valkey errors
 #define VALKEY_ERR_CLUSTER_TOO_MANY_RETRIES 100
 
-#define VALKEY_ERROR_MOVED "MOVED"
-#define VALKEY_ERROR_ASK "ASK"
-#define VALKEY_ERROR_TRYAGAIN "TRYAGAIN"
-#define VALKEY_ERROR_CLUSTERDOWN "CLUSTERDOWN"
-
-#define VALKEY_STATUS_OK "OK"
-
 #define VALKEY_COMMAND_CLUSTER_NODES "CLUSTER NODES"
 #define VALKEY_COMMAND_CLUSTER_SLOTS "CLUSTER SLOTS"
 #define VALKEY_COMMAND_ASKING "ASKING"
 
-#define IP_PORT_SEPARATOR ':'
-
-#define PORT_CPORT_SEPARATOR '@'
-
-#define CLUSTER_ADDRESS_SEPARATOR ","
-
 #define CLUSTER_DEFAULT_MAX_RETRY_COUNT 5
 #define NO_RETRY -1
-
-#define CRLF "\x0d\x0a"
-#define CRLF_LEN (sizeof("\x0d\x0a") - 1)
 
 #define SLOTMAP_UPDATE_THROTTLE_USEC 1000000
 #define SLOTMAP_UPDATE_ONGOING INT64_MAX
@@ -97,14 +82,14 @@ typedef struct cluster_async_data {
     void *privdata;
 } cluster_async_data;
 
-typedef enum CLUSTER_ERR_TYPE {
-    CLUSTER_NOT_ERR = 0,
+typedef enum {
+    CLUSTER_NO_ERROR = 0,
     CLUSTER_ERR_MOVED,
     CLUSTER_ERR_ASK,
     CLUSTER_ERR_TRYAGAIN,
     CLUSTER_ERR_CLUSTERDOWN,
-    CLUSTER_ERR_SENTINEL
-} CLUSTER_ERR_TYPE;
+    CLUSTER_ERR_OTHER
+} replyErrorType;
 
 static void freeValkeyClusterNode(valkeyClusterNode *node);
 static void cluster_slot_destroy(cluster_slot *slot);
@@ -223,35 +208,20 @@ static inline void valkeyClusterClearError(valkeyClusterContext *cc) {
     cc->errstr[0] = '\0';
 }
 
-static int cluster_reply_error_type(valkeyReply *reply) {
+static replyErrorType getReplyErrorType(valkeyReply *reply) {
+    assert(reply);
 
-    if (reply == NULL) {
-        return VALKEY_ERR;
-    }
-
-    if (reply->type == VALKEY_REPLY_ERROR) {
-        if ((int)strlen(VALKEY_ERROR_MOVED) < reply->len &&
-            memcmp(reply->str, VALKEY_ERROR_MOVED,
-                   strlen(VALKEY_ERROR_MOVED)) == 0) {
-            return CLUSTER_ERR_MOVED;
-        } else if ((int)strlen(VALKEY_ERROR_ASK) < reply->len &&
-                   memcmp(reply->str, VALKEY_ERROR_ASK,
-                          strlen(VALKEY_ERROR_ASK)) == 0) {
-            return CLUSTER_ERR_ASK;
-        } else if ((int)strlen(VALKEY_ERROR_TRYAGAIN) < reply->len &&
-                   memcmp(reply->str, VALKEY_ERROR_TRYAGAIN,
-                          strlen(VALKEY_ERROR_TRYAGAIN)) == 0) {
-            return CLUSTER_ERR_TRYAGAIN;
-        } else if ((int)strlen(VALKEY_ERROR_CLUSTERDOWN) < reply->len &&
-                   memcmp(reply->str, VALKEY_ERROR_CLUSTERDOWN,
-                          strlen(VALKEY_ERROR_CLUSTERDOWN)) == 0) {
-            return CLUSTER_ERR_CLUSTERDOWN;
-        } else {
-            return CLUSTER_ERR_SENTINEL;
-        }
-    }
-
-    return CLUSTER_NOT_ERR;
+    if (reply->type != VALKEY_REPLY_ERROR)
+        return CLUSTER_NO_ERROR;
+    if (reply->len >= 5 && memcmp(reply->str, "MOVED", 5) == 0)
+        return CLUSTER_ERR_MOVED;
+    if (reply->len >= 3 && memcmp(reply->str, "ASK", 3) == 0)
+        return CLUSTER_ERR_ASK;
+    if (reply->len >= 8 && memcmp(reply->str, "TRYAGAIN", 8) == 0)
+        return CLUSTER_ERR_TRYAGAIN;
+    if (reply->len >= 11 && memcmp(reply->str, "CLUSTERDOWN", 11) == 0)
+        return CLUSTER_ERR_CLUSTERDOWN;
+    return CLUSTER_ERR_OTHER;
 }
 
 /* Create and initiate the cluster node structure */
@@ -387,6 +357,25 @@ error:
     freeReplyObject(reply);
 
     return VALKEY_ERR;
+}
+
+/* Select a logical database by sending the SELECT command. */
+static int select_db(valkeyClusterContext *cc, valkeyContext *c) {
+    if (cc->select_db == 0)
+        return VALKEY_OK;
+
+    valkeyReply *reply = valkeyCommand(c, "SELECT %d", cc->select_db);
+    if (reply == NULL) {
+        valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "Failed to select logical database");
+        return VALKEY_ERR;
+    }
+    if (reply->type == VALKEY_REPLY_ERROR) {
+        valkeyClusterSetError(cc, VALKEY_ERR_OTHER, reply->str);
+        freeReplyObject(reply);
+        return VALKEY_ERR;
+    }
+    freeReplyObject(reply);
+    return VALKEY_OK;
 }
 
 /**
@@ -561,7 +550,7 @@ static dict *parse_cluster_slots(valkeyClusterContext *cc, valkeyContext *c,
                     valkeyClusterSetError(
                         cc, VALKEY_ERR_OTHER,
                         "Command(cluster slots) reply error: "
-                        "nodes sub_reply is not an correct array.");
+                        "nodes sub_reply is not a correct array.");
                     goto error;
                 }
 
@@ -816,12 +805,12 @@ static int parse_cluster_nodes_line(valkeyClusterContext *cc, valkeyContext *c, 
 
     /* Parse the address field: <ip:port@cport[,hostname]>
      * Remove @cport.. to get <ip>:<port> which is our dict key. */
-    if ((p = strchr(addr, PORT_CPORT_SEPARATOR)) != NULL) {
+    if ((p = strchr(addr, '@')) != NULL) {
         *p = '\0';
     }
 
     /* Find the required port separator. */
-    if ((p = strrchr(addr, IP_PORT_SEPARATOR)) == NULL) {
+    if ((p = strrchr(addr, ':')) == NULL) {
         valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "Invalid node address");
         freeValkeyClusterNode(node);
         return VALKEY_ERR;
@@ -933,7 +922,7 @@ static dict *parse_cluster_nodes(valkeyClusterContext *cc, valkeyContext *c, val
     int add_replicas = cc->flags & VALKEY_FLAG_PARSE_REPLICAS;
     dict *replicas = NULL;
 
-    if (reply->type != VALKEY_REPLY_STRING) {
+    if (reply->type != VALKEY_REPLY_STRING && reply->type != VALKEY_REPLY_VERB) {
         valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "Unexpected reply type");
         goto error;
     }
@@ -1059,68 +1048,6 @@ static int clusterUpdateRouteHandleReply(valkeyClusterContext *cc,
     return updateNodesAndSlotmap(cc, nodes);
 }
 
-/**
- * Update route with the "cluster nodes" or "cluster slots" command reply.
- */
-static int cluster_update_route_by_addr(valkeyClusterContext *cc,
-                                        const char *ip, int port) {
-    valkeyContext *c = NULL;
-
-    if (cc == NULL) {
-        return VALKEY_ERR;
-    }
-
-    if (ip == NULL || port <= 0) {
-        valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "Ip or port error!");
-        goto error;
-    }
-
-    valkeyOptions options = {0};
-    VALKEY_OPTIONS_SET_TCP(&options, ip, port);
-    options.connect_timeout = cc->connect_timeout;
-    options.command_timeout = cc->command_timeout;
-    options.options = cc->options;
-
-    c = valkeyConnectWithOptions(&options);
-    if (c == NULL) {
-        valkeyClusterSetError(cc, VALKEY_ERR_OOM, "Out of memory");
-        return VALKEY_ERR;
-    }
-
-    if (cc->on_connect) {
-        cc->on_connect(c, c->err ? VALKEY_ERR : VALKEY_OK);
-    }
-
-    if (c->err) {
-        valkeyClusterSetError(cc, c->err, c->errstr);
-        goto error;
-    }
-
-    if (cc->tls && cc->tls_init_fn(c, cc->tls) != VALKEY_OK) {
-        valkeyClusterSetError(cc, c->err, c->errstr);
-        goto error;
-    }
-
-    if (authenticate(cc, c) != VALKEY_OK) {
-        goto error;
-    }
-
-    if (clusterUpdateRouteSendCommand(cc, c) != VALKEY_OK) {
-        goto error;
-    }
-
-    if (clusterUpdateRouteHandleReply(cc, c) != VALKEY_OK) {
-        goto error;
-    }
-
-    valkeyFree(c);
-    return VALKEY_OK;
-
-error:
-    valkeyFree(c);
-    return VALKEY_ERR;
-}
-
 /* Update known cluster nodes with a new collection of valkeyClusterNodes.
  * Will also update the slot-to-node lookup table for the new nodes. */
 static int updateNodesAndSlotmap(valkeyClusterContext *cc, dict *nodes) {
@@ -1214,35 +1141,31 @@ error:
 }
 
 int valkeyClusterUpdateSlotmap(valkeyClusterContext *cc) {
-    int ret;
-    int flag_err_not_set = 1;
-    valkeyClusterNode *node;
-    dictEntry *de;
-
     if (cc == NULL) {
         return VALKEY_ERR;
     }
+
+    valkeyClusterNode *node;
+    dictEntry *de;
 
     dictIterator di;
     dictInitIterator(&di, cc->nodes);
 
     while ((de = dictNext(&di)) != NULL) {
         node = dictGetVal(de);
-        if (node == NULL || node->host == NULL) {
+
+        /* Use existing connection or (re)connect to the node. */
+        valkeyContext *c = valkeyClusterGetValkeyContext(cc, node);
+        if (c == NULL)
+            continue;
+        if (clusterUpdateRouteSendCommand(cc, c) != VALKEY_OK ||
+            clusterUpdateRouteHandleReply(cc, c) != VALKEY_OK) {
+            valkeyFree(node->con);
+            node->con = NULL;
             continue;
         }
-
-        ret = cluster_update_route_by_addr(cc, node->host, node->port);
-        if (ret == VALKEY_OK) {
-            valkeyClusterClearError(cc);
-            return VALKEY_OK;
-        }
-
-        flag_err_not_set = 0;
-    }
-
-    if (flag_err_not_set) {
-        valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "no valid server address");
+        valkeyClusterClearError(cc);
+        return VALKEY_OK;
     }
 
     return VALKEY_ERR;
@@ -1285,6 +1208,9 @@ static int valkeyClusterContextInit(valkeyClusterContext *cc,
         cc->max_retry_count = options->max_retry;
     } else {
         cc->max_retry_count = CLUSTER_DEFAULT_MAX_RETRY_COUNT;
+    }
+    if (options->select_db > 0) {
+        cc->select_db = options->select_db;
     }
     if (options->initial_nodes != NULL &&
         valkeyClusterSetOptionAddNodes(cc, options->initial_nodes) != VALKEY_OK) {
@@ -1389,12 +1315,13 @@ static int valkeyClusterSetOptionAddNode(valkeyClusterContext *cc, const char *a
     node_entry = dictFind(cc->nodes, addr_sds);
     sdsfree(addr_sds);
     if (node_entry == NULL) {
-
         char *p;
-        if ((p = strrchr(addr, IP_PORT_SEPARATOR)) == NULL) {
-            valkeyClusterSetError(
-                cc, VALKEY_ERR_OTHER,
-                "server address is incorrect, port separator missing.");
+
+        /* Find the last occurrence of the port separator since
+         * IPv6 addresses can contain ':' */
+        if ((p = strrchr(addr, ':')) == NULL) {
+            valkeyClusterSetError(cc, VALKEY_ERR_OTHER,
+                                  "server address is incorrect, port separator missing.");
             return VALKEY_ERR;
         }
         // p includes separator
@@ -1476,8 +1403,8 @@ static int valkeyClusterSetOptionAddNodes(valkeyClusterContext *cc,
         return VALKEY_ERR;
     }
 
-    address = sdssplitlen(addrs, strlen(addrs), CLUSTER_ADDRESS_SEPARATOR,
-                          strlen(CLUSTER_ADDRESS_SEPARATOR), &address_count);
+    /* Split into individual addresses. */
+    address = sdssplitlen(addrs, strlen(addrs), ",", strlen(","), &address_count);
     if (address == NULL) {
         valkeyClusterSetError(cc, VALKEY_ERR_OOM, "Out of memory");
         return VALKEY_ERR;
@@ -1659,8 +1586,10 @@ valkeyContext *valkeyClusterGetValkeyContext(valkeyClusterContext *cc,
             if (cc->tls && cc->tls_init_fn(c, cc->tls) != VALKEY_OK) {
                 valkeyClusterSetError(cc, c->err, c->errstr);
             }
-
-            authenticate(cc, c); // err and errstr handled in function
+            /* Authenticate and select a logical database when configured.
+             * cc->err and cc->errstr are set when failing. */
+            authenticate(cc, c);
+            select_db(cc, c);
         }
 
         return c;
@@ -1699,6 +1628,10 @@ valkeyContext *valkeyClusterGetValkeyContext(valkeyClusterContext *cc,
     }
 
     if (authenticate(cc, c) != VALKEY_OK) {
+        valkeyFree(c);
+        return NULL;
+    }
+    if (select_db(cc, c) != VALKEY_OK) {
         valkeyFree(c);
         return NULL;
     }
@@ -1801,7 +1734,7 @@ static int valkeyClusterGetReplyFromNode(valkeyClusterContext *cc,
         return VALKEY_ERR;
     }
 
-    if (cluster_reply_error_type(*reply) == CLUSTER_ERR_MOVED)
+    if (getReplyErrorType(*reply) == CLUSTER_ERR_MOVED)
         cc->need_update_route = 1;
 
     return VALKEY_OK;
@@ -1845,7 +1778,7 @@ static valkeyClusterNode *getNodeFromRedirectReply(valkeyClusterContext *cc,
     }
     /* Find the last occurrence of the port separator since
      * IPv6 addresses can contain ':' */
-    if ((p = strrchr(addr, IP_PORT_SEPARATOR)) == NULL) {
+    if ((p = strrchr(addr, ':')) == NULL) {
         valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "Invalid address in redirect");
         return NULL;
     }
@@ -1934,7 +1867,6 @@ static void *valkey_cluster_command_execute(valkeyClusterContext *cc,
     void *reply = NULL;
     valkeyClusterNode *node;
     valkeyContext *c = NULL;
-    int error_type;
     valkeyContext *c_updating_route = NULL;
 
 retry:
@@ -1999,8 +1931,8 @@ ask_retry:
         goto error;
     }
 
-    error_type = cluster_reply_error_type(reply);
-    if (error_type > CLUSTER_NOT_ERR && error_type < CLUSTER_ERR_SENTINEL) {
+    replyErrorType error_type = getReplyErrorType(reply);
+    if (error_type > CLUSTER_NO_ERROR && error_type < CLUSTER_ERR_OTHER) {
         cc->retry_count++;
         if (cc->retry_count > cc->max_retry_count) {
             valkeyClusterSetError(cc, VALKEY_ERR_CLUSTER_TOO_MANY_RETRIES,
@@ -2048,8 +1980,6 @@ ask_retry:
             }
 
             goto moved_retry;
-
-            break;
         case CLUSTER_ERR_ASK:
             node = getNodeFromRedirectReply(cc, c, reply, NULL);
             if (node == NULL) {
@@ -2077,15 +2007,12 @@ ask_retry:
             reply = NULL;
 
             goto ask_retry;
-
-            break;
         case CLUSTER_ERR_TRYAGAIN:
         case CLUSTER_ERR_CLUSTERDOWN:
             freeReplyObject(reply);
             reply = NULL;
             goto retry;
 
-            break;
         default:
 
             break;
@@ -2679,6 +2606,18 @@ static void unlinkAsyncContextAndNode(void *data) {
     }
 }
 
+/* Reply callback function for SELECT */
+void selectReplyCallback(valkeyAsyncContext *ac, void *r, void *privdata) {
+    valkeyReply *reply = (valkeyReply *)r;
+    valkeyClusterAsyncContext *acc = (valkeyClusterAsyncContext *)privdata;
+
+    if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
+        valkeyClusterAsyncSetError(acc, VALKEY_ERR_OTHER,
+                                   "Failed to select logical database");
+        valkeyAsyncDisconnect(ac);
+    }
+}
+
 valkeyAsyncContext *
 valkeyClusterGetValkeyAsyncContext(valkeyClusterAsyncContext *acc,
                                    valkeyClusterNode *node) {
@@ -2749,6 +2688,15 @@ valkeyClusterGetValkeyAsyncContext(valkeyClusterAsyncContext *acc,
                                      acc->cc.password);
         }
 
+        if (ret != VALKEY_OK) {
+            valkeyClusterAsyncSetError(acc, ac->c.err, ac->c.errstr);
+            valkeyAsyncFree(ac);
+            return NULL;
+        }
+    }
+    // Select logical database when needed
+    if (acc->cc.select_db > 0) {
+        ret = valkeyAsyncCommand(ac, selectReplyCallback, acc, "SELECT %d", acc->cc.select_db);
         if (ret != VALKEY_OK) {
             valkeyClusterAsyncSetError(acc, ac->c.err, ac->c.errstr);
             valkeyAsyncFree(ac);
@@ -2829,6 +2777,19 @@ static int valkeyClusterAsyncConnect(valkeyClusterAsyncContext *acc) {
             valkeyClusterAsyncSetError(acc, acc->cc.err, acc->cc.errstr);
             return VALKEY_ERR;
         }
+
+        /* Disconnect any non-async context used for the initial update. */
+        dictIterator di;
+        dictInitIterator(&di, acc->cc.nodes);
+        dictEntry *de;
+        while ((de = dictNext(&di)) != NULL) {
+            valkeyClusterNode *node = dictGetVal(de);
+            if (node->con) {
+                valkeyFree(node->con);
+                node->con = NULL;
+            }
+        }
+
         return VALKEY_OK;
     }
     /* Use non-blocking initial slotmap update. */
@@ -2985,7 +2946,6 @@ static void valkeyClusterAsyncCallback(valkeyAsyncContext *ac, void *r,
     valkeyClusterAsyncContext *acc;
     valkeyClusterContext *cc;
     valkeyAsyncContext *ac_retry = NULL;
-    int error_type;
     valkeyClusterNode *node;
     struct cmd *command;
 
@@ -3025,9 +2985,8 @@ static void valkeyClusterAsyncCallback(valkeyAsyncContext *ac, void *r,
     if (cad->retry_count == NO_RETRY || cc->flags & VALKEY_FLAG_DISCONNECTING)
         goto done;
 
-    error_type = cluster_reply_error_type(reply);
-
-    if (error_type > CLUSTER_NOT_ERR && error_type < CLUSTER_ERR_SENTINEL) {
+    replyErrorType error_type = getReplyErrorType(reply);
+    if (error_type > CLUSTER_NO_ERROR && error_type < CLUSTER_ERR_OTHER) {
         cad->retry_count++;
         if (cad->retry_count > cc->max_retry_count) {
             cad->retry_count = 0;
@@ -3082,7 +3041,6 @@ static void valkeyClusterAsyncCallback(valkeyAsyncContext *ac, void *r,
         default:
 
             goto done;
-            break;
         }
 
         goto retry;

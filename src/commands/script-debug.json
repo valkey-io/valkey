@@ -4,14 +4,15 @@
         "complexity": "O(1)",
         "group": "scripting",
         "since": "3.2.0",
-        "arity": 3,
+        "arity": -3,
         "container": "SCRIPT",
         "function": "scriptCommand",
         "command_flags": [
             "NOSCRIPT"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "arguments": [
             {
@@ -34,6 +35,12 @@
                         "token": "NO"
                     }
                 ]
+            },
+            {
+                "name": "engine",
+                "type": "string",
+                "optional": true,
+                "since": "9.1.0"
             }
         ],
         "reply_schema": {

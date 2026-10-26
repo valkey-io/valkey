@@ -16,15 +16,16 @@ ifeq ($(uname_S),Linux)
     CC = gcc
 endif
 
-# OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
+# Link with the compiler driver on macOS so libSystem is resolved from the
+# active SDK; raw ld can't parse newer SDKs' libSystem.tbd stubs.
 ifeq ($(uname_S),Darwin)
-ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
-LIBS = -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lsystem
-endif
+    # CFLAGS may select a non-native architecture and must reach the driver.
+    LD = $(CC) $(CFLAGS)
 endif
 
 TEST_MODULES = \
     commandfilter.so \
+    commandresult.so \
     basics.so \
     testrdb.so \
     fork.so \
@@ -48,6 +49,7 @@ TEST_MODULES = \
     defragtest.so \
     keyspecs.so \
     hash.so \
+    hash_stringref.so \
     zset.so \
     stream.so \
     mallocsize.so \
@@ -67,7 +69,11 @@ TEST_MODULES = \
     rdbloadsave.so \
     crash.so \
     cluster.so \
-    helloscripting.so
+    hellovalkey.so \
+    helloscripting.so \
+    unsupported_features.so \
+    deferred_reply.so \
+    pausetest.so
 
 .PHONY: all
 
@@ -81,6 +87,18 @@ all: $(TEST_MODULES)
 
 %.so: %.xo
 	$(LD) -o $@ $^ $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+
+# hellovalkey is the only test module that exercises the legacy redismodule.h
+# include path (regression test for #547). The generic %.xo rule above only
+# tracks valkeymodule.h, so declare the redismodule.h dependency explicitly.
+hellovalkey.xo: ../../src/redismodule.h
+
+hellovalkey.so: hellovalkey.xo hellovalkey.version
+ifeq ($(uname_S),Linux)
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS) -Wl,--version-script=hellovalkey.version
+else
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+endif
 
 .PHONY: clean
 

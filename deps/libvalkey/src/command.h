@@ -75,7 +75,7 @@ struct cmd {
     /* Command destination */
     int slot_num;    /* Command should be sent to slot.
                       * Set to -1 if command is sent to a given node,
-                      * or if a slot can not be found or calculated. */
+                      * or if a slot cannot be found or calculated. */
     char *node_addr; /* Command sent to this node address */
 };
 

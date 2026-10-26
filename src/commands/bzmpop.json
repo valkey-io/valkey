@@ -6,13 +6,16 @@
         "since": "7.0.0",
         "arity": -5,
         "function": "bzmpopCommand",
-        "get_keys_function": "blmpopGetKeys",
+        "get_keys_function": "bzmpopGetKeys",
         "command_flags": [
             "WRITE",
             "BLOCKING"
         ],
         "acl_categories": [
-            "SORTEDSET"
+            "BLOCKING",
+            "SLOW",
+            "SORTEDSET",
+            "WRITE"
         ],
         "key_specs": [
             {

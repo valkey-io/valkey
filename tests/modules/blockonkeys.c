@@ -413,6 +413,23 @@ int fsl_getall(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* FSL.CLEAR <key> - Clear all elements from the list. */
+int fsl_clear(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2)
+        return ValkeyModule_WrongArity(ctx);
+
+    fsl_t *fsl;
+    if (!get_fsl(ctx, argv[1], VALKEYMODULE_WRITE, 0, &fsl, 1))
+        return VALKEYMODULE_OK;
+
+    if (!fsl)
+        return ValkeyModule_ReplyWithArray(ctx, 0);
+
+    fsl->length = 0;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
 /* Callback for blockonkeys_popall */
 int blockonkeys_popall_reply_callback(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argc);
@@ -583,6 +600,69 @@ int blockonkeys_blpopn(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     return VALKEYMODULE_OK;
 }
 
+/* --- Regression for ready-key iteration UAF when reply kills a successor --- */
+
+static unsigned long long blockonkeys_kill_successor_id = 0;
+
+static int blockonkeys_kill_successor_timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "TIMEOUT");
+}
+
+static void blockonkeys_kill_successor_free(ValkeyModuleCtx *ctx, void *privdata) {
+    VALKEYMODULE_NOT_USED(ctx);
+    ValkeyModule_Free(privdata);
+}
+
+static int blockonkeys_kill_successor_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    int *role = ValkeyModule_GetBlockedClientPrivateData(ctx);
+    if (role && *role == 1 && blockonkeys_kill_successor_id) {
+        ValkeyModuleCallReply *r = ValkeyModule_Call(ctx, "CLIENT", "ccl", "KILL", "ID",
+                                                     (long long)blockonkeys_kill_successor_id);
+        if (r) ValkeyModule_FreeCallReply(r);
+    }
+    return ValkeyModule_ReplyWithSimpleString(ctx, role && *role == 1 ? "FIRST" : "SECOND");
+}
+
+/* BLOCKONKEYS.BLOCK_KILL_SUCCESSOR key first|second
+ *
+ * Blocks on key. The first blocked client's reply callback kills the second
+ * blocked client via CLIENT KILL. Used to verify ready-key iteration survives
+ * reentrant teardown of a successor list node. */
+static int blockonkeys_block_kill_successor(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+
+    size_t len = 0;
+    const char *role_str = ValkeyModule_StringPtrLen(argv[2], &len);
+    int *role = ValkeyModule_Alloc(sizeof(*role));
+    if (len == 5 && !memcmp(role_str, "first", 5)) {
+        *role = 1;
+    } else if (len == 6 && !memcmp(role_str, "second", 6)) {
+        *role = 2;
+        blockonkeys_kill_successor_id = ValkeyModule_GetClientId(ctx);
+    } else {
+        ValkeyModule_Free(role);
+        return ValkeyModule_ReplyWithError(ctx, "ERR role must be first|second");
+    }
+
+    ValkeyModule_BlockClientOnKeys(ctx, blockonkeys_kill_successor_reply,
+                                  blockonkeys_kill_successor_timeout,
+                                  blockonkeys_kill_successor_free, 0, &argv[1], 1, role);
+    return VALKEYMODULE_OK;
+}
+
+/* BLOCKONKEYS.SIGNAL_READY key - SET key and signal it ready for blocked modules. */
+static int blockonkeys_signal_ready(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    ValkeyModuleCallReply *r = ValkeyModule_Call(ctx, "SET", "sc", argv[1], "x");
+    if (r) ValkeyModule_FreeCallReply(r);
+    ValkeyModule_SignalKeyAsReady(ctx, argv[1]);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -622,6 +702,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"fsl.getall",fsl_getall,"",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
+    if (ValkeyModule_CreateCommand(ctx, "fsl.clear",fsl_clear,"write",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
     if (ValkeyModule_CreateCommand(ctx, "blockonkeys.popall", blockonkeys_popall,
                                   "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
@@ -641,5 +724,14 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "blockonkeys.blpopn_or_unblock", blockonkeys_blpopn,
                                       "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "blockonkeys.block_kill_successor",
+                                  blockonkeys_block_kill_successor, "", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "blockonkeys.signal_ready",
+                                  blockonkeys_signal_ready, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
     return VALKEYMODULE_OK;
 }

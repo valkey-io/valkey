@@ -5,6 +5,8 @@
 #include <winsock2.h> /* For struct timeval */
 #endif
 
+#define UNUSED(x) (void)(x)
+
 #define ASSERT_MSG(_x, _msg)                            \
     if (!(_x)) {                                        \
         fprintf(stderr, "ERROR: %s (%s)\n", _msg, #_x); \
@@ -27,10 +29,10 @@
     }
 
 #define CHECK_REPLY_OK(_ctx, _reply) \
-    { CHECK_REPLY_STATUS(_ctx, _reply, "OK") }
+    {CHECK_REPLY_STATUS(_ctx, _reply, "OK")}
 
 #define CHECK_REPLY_QUEUED(_ctx, _reply) \
-    { CHECK_REPLY_STATUS(_ctx, _reply, "QUEUED") }
+    {CHECK_REPLY_STATUS(_ctx, _reply, "QUEUED")}
 
 #define CHECK_REPLY_INT(_ctx, _reply, _value)                  \
     {                                                          \

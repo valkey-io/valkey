@@ -24,7 +24,7 @@
  * - **zmalloc**: An abstraction layer over the memory allocator, providing
  *   a uniform allocation interface to the application code. It can delegate
  *   to various underlying allocators (e.g., libc, tcmalloc, jemalloc, or others).
- *   It is not dependant on defrag implementation logic and it's possible to use jemalloc
+ *   It is not dependent on defrag implementation logic and it's possible to use jemalloc
  *   version that does not support defrag.
  * - **allocator_defrag**: This file contains allocator-specific logic for
  *   defragmentation, invoked from `defrag.c` when memory defragmentation is needed.
@@ -157,10 +157,10 @@ void allocatorDefragFree(void *ptr, size_t size) {
 
 /* Get the bin index in bin array from the reg_size.
  *
- * these are reverse engineered mapping of reg_size -> binind. We need this information because the utilization query
+ * these are reverse engineered mapping of reg_size -> bin_index. We need this information because the utilization query
  * returns the size of the buffer and not the bin index, and we need the bin index to access it's usage information
  *
- * Note: In case future PR will return the binind (that is better API anyway) we can get rid of
+ * Note: In case future PR will return the bin_index (that is better API anyway) we can get rid of
  * these conversion functions
  */
 static inline unsigned jeSize2BinIndexLgQ3(size_t sz) {
@@ -279,9 +279,9 @@ int allocatorDefragInit(void) {
     je_res = je_mallctl("arenas.nbins", &je_cb.nbins, &sz, NULL, 0);
     assert(je_res == 0 && je_cb.nbins != 0);
 
-    je_cb.bin_info = je_calloc(je_cb.nbins, sizeof(jeBinInfo));
+    je_cb.bin_info = zcalloc_num(je_cb.nbins, sizeof(jeBinInfo));
     assert(je_cb.bin_info != NULL);
-    je_usage_info = je_calloc(je_cb.nbins, sizeof(jemallocBinUsageData));
+    je_usage_info = zcalloc_num(je_cb.nbins, sizeof(jemallocBinUsageData));
     assert(je_usage_info != NULL);
 
     for (unsigned j = 0; j < je_cb.nbins; j++) {
@@ -349,16 +349,26 @@ unsigned long allocatorDefragGetFragSmallbins(void) {
  *    defragmentation is not necessary as moving regions is guaranteed not to change the fragmentation ratio.
  * 2. If the number of non-full slabs (bin_usage->curr_nonfull_slabs) is less than 2, defragmentation is not performed
  *    because there is no other slab to move regions to.
- * 3. If slab utilization < 'avg utilization'*1.125 [code 1.125 == (1000+UTILIZATION_THRESHOLD_FACTOR_MILLI)/1000]
+ * 3. Defrag if the slab is less than 1/8 full to ensure small slabs get defragmented even when average utilization is low.
+ *    This also handles the case when there are items that aren't defragmented skewing the average utilization. The 1/8
+ *    threshold (12.5%) was chosen to align with existing utilization threshold factor.
+ * 4. If slab utilization < 'avg utilization'*1.125 [code 1.125 == (1000+UTILIZATION_THRESHOLD_FACTOR_MILLI)/1000]
  *    than we should defrag. This is aligned with previous je_defrag_hint implementation.
  */
 static inline int makeDefragDecision(jeBinInfo *bin_info, jemallocBinUsageData *bin_usage, unsigned long nalloced) {
     unsigned long curr_full_slabs = bin_usage->curr_slabs - bin_usage->curr_nonfull_slabs;
     size_t allocated_nonfull = bin_usage->curr_regs - curr_full_slabs * bin_info->nregs;
-    if (bin_info->nregs == nalloced || bin_usage->curr_nonfull_slabs < 2 ||
-        1000 * nalloced * bin_usage->curr_nonfull_slabs > (1000 + UTILIZATION_THRESHOLD_FACTOR_MILLI) * allocated_nonfull) {
-        return 0;
-    }
+
+    /* Don't defrag if the slab is full or if there's only 1 nonfull slab */
+    if (bin_info->nregs == nalloced || bin_usage->curr_nonfull_slabs < 2) return 0;
+
+    /* Defrag if the slab is less than 1/8 full */
+    if (1000 * nalloced < bin_info->nregs * UTILIZATION_THRESHOLD_FACTOR_MILLI) return 1;
+
+    /* Don't defrag if the slab usage is greater than the average usage (+ 12.5%) */
+    if (1000 * nalloced * bin_usage->curr_nonfull_slabs > (1000 + UTILIZATION_THRESHOLD_FACTOR_MILLI) * allocated_nonfull) return 0;
+
+    /* Otherwise, defrag! */
     return 1;
 }
 
@@ -391,13 +401,13 @@ int allocatorShouldDefrag(void *ptr) {
         return 0;
     }
     /* get the index based on quantum used */
-    unsigned binind = jeSize2BinIndexLgQ3(region_size);
-    /* make sure binind is in range and reverse map is correct */
-    assert(binind < je_cb.nbins && region_size == je_cb.bin_info[binind].reg_size);
+    unsigned bin_index = jeSize2BinIndexLgQ3(region_size);
+    /* make sure bin_index is in range and reverse map is correct */
+    assert(bin_index < je_cb.nbins && region_size == je_cb.bin_info[bin_index].reg_size);
 
-    return makeDefragDecision(&je_cb.bin_info[binind],
-                              &je_usage_info[binind],
-                              je_cb.bin_info[binind].nregs - SLAB_NFREE(out, 0));
+    return makeDefragDecision(&je_cb.bin_info[bin_index],
+                              &je_usage_info[bin_index],
+                              je_cb.bin_info[bin_index].nregs - SLAB_NFREE(out, 0));
 }
 
 /* Utility function to get the fragmentation ratio from jemalloc.

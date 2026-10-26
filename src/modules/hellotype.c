@@ -206,7 +206,7 @@ int HelloBlock_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
 int HelloBlock_Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
-    return ValkeyModule_ReplyWithSimpleString(ctx, "Request timedout");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
 }
 
 /* Private data freeing callback for HELLOTYPE.BRANGE command. */
@@ -239,7 +239,7 @@ int HelloTypeBRange_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
         return HelloTypeRange_ValkeyCommand(ctx, argv, argc - 1);
     }
 
-    /* Otherwise let's block on the key. */
+    /* Otherwise, let's block on the key. */
     void *privdata = ValkeyModule_Alloc(100);
     ValkeyModule_BlockClientOnKeys(ctx, HelloBlock_Reply, HelloBlock_Timeout, HelloBlock_FreeData, timeout, argv + 1, 1,
                                    privdata);

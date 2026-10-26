@@ -15,6 +15,14 @@
             [
                 "7.0.0",
                 "Added selectors and changed the format of key and channel patterns from a list to their rule representation."
+            ],
+            [
+                "9.1.0",
+                "Added database permission rules."
+            ],
+            [
+                "9.2.0",
+                "Added roles."
             ]
         ],
         "command_flags": [
@@ -61,6 +69,10 @@
                             "description": "Root selector's channels.",
                             "type": "string"
                         },
+                        "databases": {
+                            "description": "Root selector's databases.",
+                            "type": "string"
+                        },
                         "selectors": {
                             "type": "array",
                             "items": {
@@ -75,8 +87,18 @@
                                     },
                                     "channels": {
                                         "type": "string"
+                                    },
+                                    "databases": {
+                                        "type": "string"
                                     }
                                 }
+                            }
+                        },
+                        "roles": {
+                            "description": "List of role names assigned to this user.",
+                            "type": "array",
+                            "items": {
+                                "type": "string"
                             }
                         }
                     }
@@ -86,6 +108,11 @@
                     "type": "null"
                 }
             ]
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

@@ -12,7 +12,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "SORTEDSET"
+            "FAST",
+            "SORTEDSET",
+            "WRITE"
         ],
         "key_specs": [
             {
@@ -51,7 +53,7 @@
             },
             {
                 "name": "member",
-                "type": "string"
+                "type": "member"
             }
         ]
     }

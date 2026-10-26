@@ -1,4 +1,4 @@
-start_server {tags {"psync2 external:skip"}} {
+start_server {tags {psync2 external:skip cluster:skip}} {
 start_server {} {
 start_server {} {
     set master [srv 0 client]
@@ -36,9 +36,11 @@ start_server {} {
         fail "Replication not started."
     }
 
-    test "PSYNC2: Partial resync after Master restart using RDB aux fields when offset is 0" {
-        assert {[status $master master_repl_offset] == 0}
-
+    test "PSYNC2: Partial resync after Master restart using RDB aux fields with no data" {
+        # The offset may be non-zero due to the initial PING on the replication
+        # stream, but no user data has been written.
+        assert_equal 0 [$master dbsize]
+        set offset [status $master master_repl_offset]
         set replid [status $master master_replid]
         $replica config resetstat
 
@@ -55,13 +57,13 @@ start_server {} {
 
         # Make sure master restore replication info correctly
         assert {[status $master master_replid] != $replid}
-        assert {[status $master master_repl_offset] == 0}
+        assert {[status $master master_repl_offset] == $offset}
         assert {[status $master master_replid2] eq $replid}
-        assert {[status $master second_repl_offset] == 1}
+        assert {[status $master second_repl_offset] == $offset + 1}
 
         # Make sure master set replication backlog correctly
         assert {[status $master repl_backlog_active] == 1}
-        assert {[status $master repl_backlog_first_byte_offset] == 1}
+        assert {[status $master repl_backlog_first_byte_offset] == $offset + 1}
         assert {[status $master repl_backlog_histlen] == 0}
 
         # Partial resync after Master restart

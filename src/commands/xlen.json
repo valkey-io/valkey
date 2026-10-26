@@ -1,6 +1,6 @@
 {
     "XLEN": {
-        "summary": "Return the number of messages in a stream.",
+        "summary": "Returns the number of messages in a stream.",
         "complexity": "O(1)",
         "group": "stream",
         "since": "5.0.0",
@@ -11,6 +11,8 @@
             "FAST"
         ],
         "acl_categories": [
+            "FAST",
+            "READ",
             "STREAM"
         ],
         "key_specs": [

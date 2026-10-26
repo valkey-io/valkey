@@ -42,18 +42,21 @@ distclean:
 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
-	-(cd fast_float_c_interface && $(MAKE) clean) > /dev/null || true
+	-(cd lz4 && $(MAKE) clean) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean
 
-LIBVALKEY_MAKE_FLAGS = SDS_INCLUDE_DIR=../../src/ DICT_INCLUDE_DIR=../../src/
+LIBVALKEY_MAKE_FLAGS = SDS_INCLUDE_DIR=../../src/
 ifneq (,$(filter $(BUILD_TLS),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_TLS=1
 endif
 
 ifneq (,$(filter $(BUILD_RDMA),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_RDMA=1
+	ifneq (,$(filter $(BUILD_RDMA),module))
+		LIBVALKEY_MAKE_FLAGS += USE_DLOPEN_RDMA=1
+	endif
 endif
 
 libvalkey: .make-prerequisites
@@ -76,7 +79,7 @@ hdr_histogram: .make-prerequisites
 
 fpconv: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd fpconv && $(MAKE)
+	cd fpconv && $(MAKE) CFLAGS="-fPIC $(CFLAGS)"
 
 .PHONY: fpconv
 
@@ -85,12 +88,12 @@ ifeq ($(uname_S),SunOS)
 	LUA_CFLAGS= -D__C99FEATURES__=1
 endif
 
-LUA_CFLAGS+= -Wall -DLUA_ANSI -DENABLE_CJSON_GLOBAL -DLUA_USE_MKSTEMP $(CFLAGS)
+LUA_CFLAGS+= -Wall -DLUA_ANSI -DENABLE_CJSON_GLOBAL -DLUA_USE_MKSTEMP $(CFLAGS) -fPIC
 LUA_LDFLAGS+= $(LDFLAGS)
 ifeq ($(LUA_DEBUG),yes)
 	LUA_CFLAGS+= -O0 -g -DLUA_USE_APICHECK
 else
-	LUA_CFLAGS+= -O2 
+	LUA_CFLAGS+= -O2
 endif
 ifeq ($(LUA_COVERAGE),yes)
 	LUA_CFLAGS += -fprofile-arcs -ftest-coverage
@@ -123,8 +126,16 @@ jemalloc: .make-prerequisites
 
 .PHONY: jemalloc
 
-fast_float_c_interface: .make-prerequisites
+gtest-parallel: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd fast_float_c_interface && $(MAKE)
+	@if [ ! -f gtest-parallel/gtest_parallel.py ]; then \
+		echo "Downloading gtest-parallel..."; \
+		rm -rf gtest-parallel; \
+		git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel; \
+	fi
 
-.PHONY: fast_float_c_interface
+lz4: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd lz4 && $(MAKE) CFLAGS="$(CFLAGS)"
+
+.PHONY: lz4

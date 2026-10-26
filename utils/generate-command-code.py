@@ -6,6 +6,8 @@ import argparse
 
 ARG_TYPES = {
     "string": "ARG_TYPE_STRING",
+    "field": "ARG_TYPE_STRING",
+    "member": "ARG_TYPE_STRING",
     "integer": "ARG_TYPE_INTEGER",
     "double": "ARG_TYPE_DOUBLE",
     "key": "ARG_TYPE_KEY",
@@ -15,6 +17,8 @@ ARG_TYPES = {
     "oneof": "ARG_TYPE_ONEOF",
     "block": "ARG_TYPE_BLOCK",
 }
+
+MEMBER_ARG_TYPES = {"field", "member"}
 
 GROUPS = {
     "generic": "COMMAND_GROUP_GENERIC",
@@ -34,6 +38,7 @@ GROUPS = {
     "geo": "COMMAND_GROUP_GEO",
     "stream": "COMMAND_GROUP_STREAM",
     "bitmap": "COMMAND_GROUP_BITMAP",
+    "pathhash": "COMMAND_GROUP_PATH_HASH",
 }
 
 
@@ -91,6 +96,61 @@ def check_command_key_specs(command):
         print("command: %s may have unused key_spec" % command.fullname())
         return False
 
+    return True
+
+
+def check_acl_categories(command):
+    """
+    Validate that ACL categories in JSON files follow rules:
+    
+    1. WRITE flag and WRITE category must match
+    2. READONLY flag (and NOT SCRIPTING category) requires READ category
+    3. ADMIN flag requires ADMIN and DANGEROUS categories
+    4. PUBSUB flag and PUBSUB category must match
+    5. FAST flag and FAST category must match
+    6. BLOCKING flag and BLOCKING category must match
+    7. Commands cannot be both FAST and SLOW
+    8. Commands without FAST category must have SLOW category
+    """
+    command_flags = set(command.desc.get("command_flags", []))
+    acl_categories = set(command.desc.get("acl_categories", []))
+    
+    errors = []
+    
+    if ("WRITE" in command_flags) != ("WRITE" in acl_categories):
+        errors.append("WRITE flag and WRITE category must match")
+    
+    if "READONLY" in command_flags and "SCRIPTING" not in acl_categories:
+        if "READ" not in acl_categories:
+            errors.append("READONLY flag (without SCRIPTING category) requires READ category")
+    
+    if "ADMIN" in command_flags:
+        if "ADMIN" not in acl_categories:
+            errors.append("ADMIN flag requires ADMIN category")
+        if "DANGEROUS" not in acl_categories:
+            errors.append("ADMIN flag requires DANGEROUS category")
+    
+    if ("PUBSUB" in command_flags) != ("PUBSUB" in acl_categories):
+        errors.append("PUBSUB flag and PUBSUB category must match")
+    
+    if ("FAST" in command_flags) != ("FAST" in acl_categories):
+        errors.append("FAST flag and FAST category must match")
+    
+    if ("BLOCKING" in command_flags) != ("BLOCKING" in acl_categories):
+        errors.append("BLOCKING flag and BLOCKING category must match")
+    
+    if "FAST" in acl_categories and "SLOW" in acl_categories:
+        errors.append("Command cannot be both FAST and SLOW")
+    
+    if "FAST" not in acl_categories and "SLOW" not in acl_categories:
+        errors.append("Commands without FAST category must have SLOW category")
+    
+    if errors:
+        print("command: %s - ACL category validation errors:" % command.fullname())
+        for error in errors:
+            print("  - %s" % error)
+        return False
+    
     return True
 
 
@@ -160,6 +220,33 @@ def verify_no_dup_names(container_fullname, args):
         print("{}: Dup argument names: {}".format(container_fullname, name_list))
         exit(1)
 
+
+def argument_width(arg):
+    """Return argv entries consumed by a fixed argument shape, or None."""
+    if arg.desc.get("optional", False) or arg.desc.get("multiple", False):
+        return None
+    if arg.type == "pure-token":
+        return 1
+
+    token_width = 1 if arg.desc.get("token") else 0
+
+    if arg.type == "oneof":
+        subarg_widths = set()
+        for subarg in arg.subargs:
+            subarg_width = argument_width(subarg)
+            if subarg_width is None:
+                return None
+            subarg_widths.add(subarg_width)
+        return token_width + subarg_widths.pop() if len(subarg_widths) == 1 else None
+    if arg.type == "block":
+        width = token_width
+        for subarg in arg.subargs:
+            subarg_width = argument_width(subarg)
+            if subarg_width is None:
+                return None
+            width += subarg_width
+        return width
+    return token_width + 1
 
 class Argument(object):
     def __init__(self, parent_name, desc):
@@ -325,6 +412,27 @@ class Command(object):
         if "reply_schema" in self.desc:
             self.reply_schema = ReplySchema(self.reply_schema_name(), self.desc["reply_schema"])
 
+    def infer_member_arg_index(self):
+        """Infer the first inner field/member argv position from argument metadata."""
+
+        def visit_args(arg_list, argv_index):
+            for arg in arg_list:
+                if arg.type in MEMBER_ARG_TYPES:
+                    return argv_index
+
+                if arg.type == "block":
+                    subargv_index = argv_index + (1 if arg.desc.get("token") else 0)
+                    target = visit_args(arg.subargs, subargv_index)
+                    if target:
+                        return target
+
+                width = argument_width(arg)
+                if width is None:
+                    return None
+                argv_index += width
+
+        return visit_args(self.args, 1)
+
     def fullname(self):
         return self.name.replace("-", "_").replace(":", "")
 
@@ -410,7 +518,7 @@ class Command(object):
                 s += "CMD_DOC_%s|" % flag
             return s[:-1] if s else "CMD_DOC_NONE"
 
-        s = "MAKE_CMD(\"%s\",%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%d,%s,%d,%s,%s,%s,%d,%s,%d)," % (
+        s = "MAKE_CMD(\"%s\",%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%d,%s,%d,%s,%s,%s,%s,%d,%s,%d)," % (
             self.name.lower(),
             get_optional_desc_string(self.desc, "summary"),
             get_optional_desc_string(self.desc, "complexity"),
@@ -428,6 +536,7 @@ class Command(object):
             self.desc["arity"],
             _flags_code(),
             _acl_categories_code(),
+            self.desc.get("get_dbid_args", "NULL"),
             self.key_specs_table_name(),
             len(self.key_specs),
             self.desc.get("get_keys_function", "NULL"),
@@ -439,6 +548,10 @@ class Command(object):
 
         if self.args:
             s += ".args=%s," % self.arg_table_name()
+
+        member_arg_index = self.infer_member_arg_index()
+        if member_arg_index:
+            s += ".member_arg_index=%d," % member_arg_index
 
         if self.reply_schema and args.with_reply_schema:
             s += ".reply_schema=&%s," % self.reply_schema_name()
@@ -563,6 +676,13 @@ print("Checking all commands...")
 for command in commands.values():
     if not check_command_key_specs(command):
         check_command_error_counter += 1
+    if not check_acl_categories(command):
+        check_command_error_counter += 1
+    
+    # Also check subcommands ACL categories
+    for subcommand in command.subcommands:
+        if not check_acl_categories(subcommand):
+            check_command_error_counter += 1
 
 if check_command_error_counter != 0:
     print("Error: There are errors in the commands check, please check the above logs.")
@@ -597,6 +717,7 @@ const char *COMMAND_GROUP_STR[] = {
     "geo",
     "stream",
     "bitmap",
+    "pathhash",
     "module"
 };
 

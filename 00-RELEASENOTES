@@ -11,6 +11,40 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.1.3  -  Released Mon 26 October 2026
+---------------------------------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
+
+### Security Fixes
+* GHSA-f4q9-j22m-xqq9: Fix a heap buffer overflow in cluster Pub/Sub message construction that could allow an authenticated client to potentially execute arbitrary code by publishing an oversized message by @roshkhatri (#5030)
+
+### Bug Fixes
+* Fix stream commands that mutate consumer-group or PEL state (`XGROUP`, `XSETID`, `XREADGROUP`, `XACK`, `XCLAIM`, `XAUTOCLAIM`) not triggering `WATCH` and client-side tracking invalidation by @Tarte12 (#3459)
+* Reject module write commands while the server is paused for writes, preventing a crash from module timer callbacks during `CLIENT PAUSE WRITE` or `CLUSTER FAILOVER` by @smkher (#3645)
+* Fix event loop busy-spinning on virtual machines by not using raw TSC for the monotonic clock when the kernel clocksource is not tsc by @quanyeyang (#4707)
+* Fix a crash in `ValkeyModule_HashHasStringRef` on a missing or expired field and correct wrong return values in the hash stringRef module APIs by @ShubhamTaple (#4504)
+* Fix a server abort on a RESTORE payload declaring a string length that overflows the allocation size; such payloads are now rejected as bad data by @enjoy-binbin (#4733)
+* Fix ZINTER/ZINTERSTORE returning input-order-dependent scores when a weighted term is 0*inf; a NaN weighted score now counts as 0, matching ZUNION by @leomurillo (#4997)
+* Clear a stale primary-failure gossip flag on replicas so later failovers don't incorrectly skip the election delay by @charsyam (#4533)
+* Correct `ValkeyModule_FreeModuleUser`, `ValkeyModule_ACLAddLogEntry` and `ValkeyModule_ACLAddLogEntryByUserName` declarations to return int as implemented, fixing undefined behavior on targets with strict call signature checks by @rainsupreme (#4676)
+* valkey-check-aof now recognizes RDB base files with the `VALKEY` signature instead of misreporting a valid multipart AOF as invalid by @sarthakaggarwal97 (#4739)
+* Fix module commands that access undeclared keys in other slots reading or writing the wrong slot in cluster mode, and aborting in debug builds by @patrickswedish (#4424)
+* Reject relative expire times in `SET`/`GETEX`, `RESTORE`, and `ValkeyModule_SetExpire` that overflow when added to the current time, preventing server aborts from negative expires by @madolson (#4880)
+* `HDEL`, `HGETDEL`, `HPERSIST`, and `HEXPIRE` no longer propagate fields they treat as expired, preventing replica and AOF-reload divergence by @xdk-amz (#4772)
+* Fix a server crash when loading an ACL file containing a selector with an unmatched parenthesis by @magic-peach (#4214)
+* Fix a segfault on Alpine/musl when Lua is built as a module, caused by a symbol clash on an internal clock function by @mohammedgqudah (#4270)
+* `COPY` of a hash now includes expired-but-unreaped fields so their deletion is propagated and replicas stay in sync by @pirate329 (#4939)
+* Restore acceptance of hexadecimal float sorted set scores (such as `0x10`), keeping replication and AOF replay compatible with Valkey 9.0 by @quanyeyang (#4875)
+* Sorted set range commands with a negative `LIMIT` offset now return an empty result instead of a spurious element on btree-encoded keys by @xiaocj (#4637)
+* Fix listpack encoding incompatibility that caused RDB load and replication failures for entries of certain lengths between 9.0 and 9.1.x by @jjuleslasarte (#4819)
+* Fix atomic slot migration not replicating evictions on the import target, which let replicas grow far past `maxmemory` by @shanezx-sc (#4920)
+* Redact error text in server logs when `hide-user-data-from-log` is enabled, so command arguments no longer leak into logs by @zackcam (#4815)
+* Fix `HSETEX` and `HGETEX` failing to parse their arguments when the key is named `fields` by @sebxt (#4945)
+* Fix cluster config saving to avoid publishing truncated `nodes.conf` files, losing the startup lock after the first save, and failing every save on SMB filesystems such as Azure Files; the lock now lives on a separate `nodes.conf.lock` file by @KewangZhili (#4489)
+* Fix `LSET` on 64-bit builds silently modifying the wrong element for out-of-range indexes instead of returning an index out of range error by @charsyam (#4823)
+* Fix atomic slot migration with `cluster-databases` > 1 applying writes made during the snapshot to the wrong database on the target by @pirate329 (#4952)
+
 Valkey 9.1.2  -  Released Mon 31 August 2026
 --------------------------------------------
 
@@ -222,6 +256,7 @@ new features, performance improvements, and bug fixes.
 * Abhishek Mathur @abmathur-ie
 * Adam Fowler @adam-fowler
 * Aditya Teltia @AdityaTeltia
+* Akanksha Trehun @magic-peach
 * Akash Kumar @akashkgit
 * Alina Liu @asagege
 * Allen Samuels @allenss-amazon
@@ -229,16 +264,19 @@ new features, performance improvements, and bug fixes.
 * aradz44 @aradz44
 * Arthur Lee @arthurkiller
 * bandalgomsu @bandalgomsu
+* Bara' Hasheesh @Baraa-Hasheesh
 * Baswanth @baswanth09
 * Benson-li @li-benson
 * Binbin @enjoy-binbin
 * Björn Svensson @bjosv
 * bpint @bpint
+* charsyam @charsyam
 * chenshi @chenshi5012
 * chzhoo @chzhoo
 * cjx-zar @cjx-zar
 * Daejun Kim @djk1027
 * Daniil Kashapov @dvkashapov
+* Dante Knowles @xdk-amz
 * Deepak Nandihalli @deepakrn
 * dgershko @dgershko
 * Diego Ciciani @diegociciani
@@ -251,8 +289,10 @@ new features, performance improvements, and bug fixes.
 * Harkrishn Patro @hpatro
 * Harry Lin @harrylin98
 * hieu2102 @hieu2102
+* Himangshu Deka @KewangZhili
 * Jacob Murphy @murphyjacob4
 * Jeff Duffy @jaduffy
+* Jerry Zhao @thweetkomputer
 * jiegang0219 @jiegang0219
 * Jim Brunner @JimB123
 * jjuleslasarte @jjuleslasarte
@@ -263,11 +303,13 @@ new features, performance improvements, and bug fixes.
 * jzy1688 @jzy1688
 * Katie Holly @Fusl
 * Ken @otherscase
+* KimHuiSu @Tarte12
 * korjeek @korjeek
 * Kurt McKee @kurtmckee
 * Kyle J. Davis @stockholmux
 * Kyle Kim @kyle-yh-kim
 * lcxn123 @lcxn123
+* Leo Murillo @leomurillo
 * Leon Anavi @leon-anavi
 * lovelypiska @chx9
 * Luke Palmer @lukepalmer
@@ -276,13 +318,16 @@ new features, performance improvements, and bug fixes.
 * Marc Jakobi @mrcjkb
 * martinrvisser @martinrvisser
 * Marvin Rösch @marvinroesch
+* mqudah @mohammedgqudah
 * Murad Shahmammadli @MuradSh
 * NAM UK KIM @namuk2004
 * nanyan @nanyan0312
 * Nikhil Manglore @Nikhil-Manglore
 * Ouri Half @ouriamzn
+* Patrick Ribbsaeter @patrickswedish
 * Patrik Hermansson @phermansson
 * Ping Xie @PingXie
+* pirate329 @pirate329
 * pkhartsk @pkhartsk
 * Quanye Yang @quanyeyang
 * Raghav Muddur @nmvk
@@ -298,11 +343,15 @@ new features, performance improvements, and bug fixes.
 * Sarthak Aggarwal @sarthakaggarwal97
 * Satheesha CH Gowda @satheeshaGowda
 * Saurabh K @smkher
+* Sebastian Turner @sebxt
 * Seungmin Lee @sungming2
+* shanezx-sc @shanezx-sc
 * Shinobu Nunotaba @Ada-Church-Closure
+* Shubham S Taple @ShubhamTaple
 * Simon Baatz @gmbnomis
 * skyfirelee @artikell
 * Sourav Singh Rawat @frostzt
+* Stav Ben Shahar @stavBenShahar
 * stydxm @stydxm
 * sushil paneru @sushilpaneru1
 * Taeknology @Taeknology
@@ -319,6 +368,7 @@ new features, performance improvements, and bug fixes.
 * withRiver @withRiver
 * wxmzy88 @wxmzy88
 * xbasel @xbasel
+* xiaocj @xiaocj
 * Yair Gottdenker @yairgott
 * Yana Molodetsky @yanamolo
 * Yang Zhao @yang-z-o

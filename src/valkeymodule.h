@@ -2358,6 +2358,10 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleUs
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 /* This is included inline inside each Valkey module. */
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
+/** Resolve server APIs and initialize the calling module's identity.
+ * This inline bootstrap runs during OnLoad. Unavailable optional API pointers
+ * remain NULL, so modules must check a newer API before using it. Return
+ * VALKEYMODULE_ERR if the requested module name is already in use. */
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
     void *getapifuncptr = ((void **)ctx)[0];
     ValkeyModule_GetApi = (int (*)(const char *, void *))(unsigned long)getapifuncptr;

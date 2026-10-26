@@ -2465,11 +2465,11 @@ void moduleListFree(void *config) {
     zfree(config);
 }
 
+/** Initialize the module identity and owned registries during module API setup.
+ * Internal to module initialization; repeated calls leave the module unchanged.
+ * New modules start without
+ * a replication credential provider and with no callback invocation in flight. */
 void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
-    /* Called by VM_Init() to set up the `ctx->module` structure.
-     *
-     * This is an internal function, module developers don't need
-     * to use it. */
     ValkeyModule *module;
 
     if (ctx->module != NULL) return;
@@ -8679,7 +8679,7 @@ void VM_RegisterAuthCallback(ValkeyModuleCtx *ctx, ValkeyModuleAuthCallback cb) 
     listAddNodeHead(moduleAuthCallbacks, auth_ctx);
 }
 
-/* Register a callback that supplies fresh credentials for outgoing replication
+/** Register a callback that supplies fresh credentials for outgoing replication
  * connections, instead of the primaryuser / primaryauth configuration. This API
  * must be called from ValkeyModule_OnLoad with a non-NULL callback. A module can
  * register one callback; if multiple loaded modules register one, the most
@@ -8711,8 +8711,10 @@ int VM_RegisterReplicationCredentialsCallback(ValkeyModuleCtx *ctx,
     return VALKEYMODULE_OK;
 }
 
-/* No provider is represented by two NULL outputs. A provider must return a
- * password, so this cannot be confused with a failed provider invocation. */
+/** Resolve the latest loaded provider and copy its credentials into owned SDSs.
+ * Return C_OK with two NULL outputs when no provider exists. Otherwise return
+ * C_OK with a password, or C_ERR if the provider fails or omits its password.
+ * The caller frees non-NULL outputs; context-owned strings are copied first. */
 int moduleGetReplicationCredentials(sds *username, sds *password) {
     *username = *password = NULL;
     listIter iter;
@@ -14077,6 +14079,10 @@ int moduleLoadStatic(const char *module_name, void **module_argv, int module_arg
                                         is_loadex, 1, NULL);
 }
 
+/** Unload a module after checking references and allowing its cleanup callback.
+ * Return C_ERR when unloading is unsafe or refused, with a diagnostic in errmsg
+ * for reference checks. In particular, a running replication credential callback
+ * must retain its module's code and context until it returns. */
 static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
     if (module->in_replication_credentials_cb) {
         *errmsg = "the module is executing a replication credentials callback";
@@ -15696,7 +15702,7 @@ int VM_ACLCheckKeyPrefixPermissions(ValkeyModuleUser *user, const char *key, siz
     return VALKEYMODULE_OK;
 }
 
-/* Register all the APIs we export. Keep this function at the end of the
+/** Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
     server.moduleapi = dictCreate(&moduleAPIDictType);

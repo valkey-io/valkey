@@ -2421,6 +2421,9 @@ void freeServerClientMemUsageBuckets(void) {
     server.client_mem_usage_buckets = NULL;
 }
 
+/** Populate initial server settings and runtime state before loading config.
+ * Replication starts disconnected, with neither channel expecting an AUTH reply;
+ * connection-specific authentication state is established by each handshake. */
 void initServerConfig(void) {
     int j;
     char *default_bindaddr[CONFIG_DEFAULT_BINDADDR_COUNT] = CONFIG_DEFAULT_BINDADDR;

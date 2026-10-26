@@ -24,6 +24,10 @@ enum {
     MODE_SELF_UNLOAD
 };
 
+/** Supply credentials in the mode selected by the test commands.
+ * Count every invocation, optionally fail after the main channel succeeds, and
+ * exercise both persistent and AutoMemory outputs. Self-unload mode verifies
+ * that the server refuses to unload the module while this callback is active. */
 static int credentials(ValkeyModuleCtx *ctx, ValkeyModuleString **user, ValkeyModuleString **pass) {
     calls++;
     if (mode == MODE_ERROR || (fail_after && calls > fail_after))
@@ -56,6 +60,9 @@ static int credentials(ValkeyModuleCtx *ctx, ValkeyModuleString **user, ValkeyMo
     return VALKEYMODULE_OK;
 }
 
+/** Replace the provider's persistent credentials with copies of command args.
+ * A username of "-" selects the default user. Copy the password as a module
+ * string so embedded NUL and CRLF bytes survive the authentication handshake. */
 static int setCredentials(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3)
         return ValkeyModule_WrongArity(ctx);
@@ -70,6 +77,9 @@ static int setCredentials(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+/** Select a callback outcome or lifetime scenario for subsequent handshakes.
+ * Reset any prior failure threshold; error-after-first permits one invocation
+ * before rejecting later calls, isolating failures on the RDB channel. */
 static int setMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2)
         return ValkeyModule_WrongArity(ctx);
@@ -93,6 +103,8 @@ static int setMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+/** Return the callback invocation count so tests can observe provider selection
+ * and confirm that both replication channels request their own credentials. */
 static int getCalls(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     if (argc != 1)
@@ -100,6 +112,9 @@ static int getCalls(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithLongLong(ctx, calls);
 }
 
+/** Attempt registration outside OnLoad and return the API result.
+ * Tests expect VALKEYMODULE_ERR, proving a command cannot replace the provider
+ * after module initialization has completed. */
 static int registerAgain(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     if (argc != 1)
@@ -109,6 +124,10 @@ static int registerAgain(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int ar
         ValkeyModule_RegisterReplicationCredentialsCallback(ctx, credentials));
 }
 
+/** Register the test provider and its control commands during module loading.
+ * Argument count chooses independent provider names without using APIs before
+ * initialization. Two arguments deliberately fail after callback registration
+ * to verify that a failed module load cannot become the active provider. */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     const char *name = argc == 0   ? "replicationauth"
@@ -143,6 +162,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     return VALKEYMODULE_OK;
 }
 
+/** Release credentials owned by this provider when it is unloaded.
+ * Returned callback strings are borrowed by the server, so the module retains
+ * ownership of these persistent copies throughout its loaded lifetime. */
 int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
     VALKEYMODULE_NOT_USED(ctx);
     if (username)

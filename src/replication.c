@@ -3498,8 +3498,10 @@ sds replicationSendAuth(connection *conn, const char *user, size_t user_len, con
     return sendCommandArgv(conn, argc, args, lens);
 }
 
-/* Resolve credentials once for this handshake and remember whether its reply
- * must be consumed, independently of later config changes or module unloads. */
+/** Resolve credentials and send AUTH when this handshake requires it.
+ * Set auth_sent only after a successful send, independently of later config
+ * changes or module unloads. Return NULL on success or an owned SDS error on
+ * provider/send failure. Configured credentials apply only without a provider. */
 static sds replicationSendHandshakeAuth(connection *conn, int *auth_sent) {
     *auth_sent = 0;
     sds user = NULL, pass = NULL;
@@ -3531,6 +3533,10 @@ robj *generateSelectCommand(int dictid) {
         OBJ_STRING, sdscatfmt(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%i\r\n%s\r\n", dictid_len, llstr));
 }
 
+/** Send the RDB channel's AUTH and REPLCONF commands after its initial reply.
+ * Resolve credentials for this connection and record whether an AUTH reply is
+ * expected. Return C_ERR and an owned error string in err if a send or provider
+ * fails; otherwise return C_OK. The caller frees the error string. */
 static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     dualChannelServerLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
     /* AUTH with the primary if required. */
@@ -3679,7 +3685,7 @@ static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     return C_OK;
 }
 
-/* Replication: Replica side.
+/** Replication: Replica side.
  * This connection handler is used to initialize the RDB connection (dual-channel-replication).
  * Once a replica with dual-channel-replication enabled, denied from PSYNC with its primary,
  * dualChannelFullSyncWithPrimary begins its role. The connection handler prepares server.repl_rdb_transfer_s
@@ -4355,6 +4361,10 @@ int syncWithPrimaryHandleReceivePingReplyState(connection *conn) {
     return C_OK;
 }
 
+/** Send main-channel authentication and capability negotiation commands.
+ * Select credentials once for this attempt and remember whether AUTH was sent.
+ * Return C_OK after all commands are sent, or log the failure and return C_ERR
+ * so the state machine can close the connection and retry. */
 int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
     /* AUTH with the primary if required. */
     sds err = replicationSendHandshakeAuth(conn, &server.repl_auth_sent);
@@ -4437,6 +4447,10 @@ err:
     return C_ERR;
 }
 
+/** Consume the main channel's AUTH reply only when this attempt sent AUTH.
+ * Current configuration and provider availability do not determine which reply
+ * is next on the wire. Return C_ERR for a read failure or rejected credentials,
+ * and C_OK when authentication succeeded or no AUTH reply is expected. */
 int syncWithPrimaryHandleReceiveAuthReplyState(connection *conn) {
     if (server.repl_auth_sent) {
         sds err = receiveSynchronousResponse(conn);
@@ -4545,6 +4559,9 @@ int syncWithPrimaryHandleSendPsyncState(connection *conn) {
     return C_OK;
 }
 
+/** Close failed handshake connections and release partial transfer resources.
+ * Clear both channels' AUTH bookkeeping and the caller's connection pointer,
+ * then return replication to REPL_STATE_CONNECT for a later retry. */
 void syncWithPrimaryHandleError(connection **conn) {
     server.repl_auth_sent = 0;
     server.repl_rdb_auth_sent = 0;
@@ -4635,8 +4652,9 @@ void syncWithPrimaryHandleError(connection **conn) {
  *   │                                                 │
  *   └─────────────────────────────────────────────────┘
  */
-/* This handler fires when the non blocking connect was able to
- * establish a connection with the primary. */
+/** Advance the main-channel replication handshake after connection events.
+ * Consume AUTH replies according to this attempt's sent flag, then negotiate
+ * partial or full synchronization. Failures tear down the attempt for retry. */
 void syncWithPrimary(connection *conn) {
     char tmpfile[256];
     int psync_result;
@@ -4891,6 +4909,10 @@ void syncWithPrimary(connection *conn) {
     server.bio_repl_transfer_read = 0;
 }
 
+/** Start a nonblocking connection with fresh per-attempt handshake state.
+ * On success, install syncWithPrimary as the connection callback and enter
+ * REPL_STATE_CONNECTING. Return C_ERR if starting the connection fails, after
+ * closing it and clearing the main transfer connection pointer. */
 int connectWithPrimary(void) {
     server.repl_auth_sent = 0;
     server.repl_rdb_auth_sent = 0;
@@ -4961,14 +4983,15 @@ void replicationAbortSyncTransfer(void) {
     server.repl_full_sync_start_time = 0;
 }
 
-/* This function aborts a non blocking replication attempt if there is one
+/** This function aborts a non blocking replication attempt if there is one
  * in progress, by canceling the non-blocking connect attempt or
  * the initial bulk transfer.
  *
  * If there was a replication handshake in progress 1 is returned and
  * the replication state (server.repl_state) set to REPL_STATE_CONNECT.
  *
- * Otherwise, zero is returned and no operation is performed at all. */
+ * Otherwise, zero is returned. Per-attempt AUTH state is cleared in all cases;
+ * a nonzero reconnect requests an immediate new connection after cancellation. */
 int cancelReplicationHandshake(int reconnect) {
     server.repl_auth_sent = 0;
     server.repl_rdb_auth_sent = 0;

@@ -26,6 +26,8 @@ typedef struct {
         struct {
             list *clients;
             char eofmark[RDB_EOF_MARK_SIZE];
+            int req;
+            int rdbver;
         } repl;
     } u;
 } forklessSaveInfo;
@@ -404,6 +406,10 @@ static void *forklessSaveProcessor(void *arg) {
 
     saveInfo->save_rio.check_abort_between_writes = forklessSaveShouldAbort;
 
+    /* The target RDB version: a disk save always emits the current version; a
+     * socket save emits the version negotiated for its cohort. */
+    int save_rdbver = (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) ? saveInfo->u.repl.rdbver : RDB_VERSION;
+
     const unsigned statsIntervalMs = 1000;
     monotime lastStatsTime;
     elapsedStart(&lastStatsTime);
@@ -434,6 +440,10 @@ static void *forklessSaveProcessor(void *arg) {
             break;
 
         case BGITERATOR_ITEM_DBENTRY:
+            /* A data-excluded save streams no keyspace. */
+            if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET &&
+                (saveInfo->u.repl.req & REPLICA_REQ_RDB_EXCLUDE_DATA))
+                break;
             if ((err = writeSelectDb(saveInfo, item->dbid)) == C_ERR) break;
             items++;
 
@@ -442,7 +452,7 @@ static void *forklessSaveProcessor(void *arg) {
             robj *o = item->u.dbe.de;
 
             long long expire = objectGetExpire(item->u.dbe.de);
-            if (rdbSaveKeyValuePair(&saveInfo->save_rio, &key, o, expire, item->dbid, RDB_VERSION) == -1) {
+            if (rdbSaveKeyValuePair(&saveInfo->save_rio, &key, o, expire, item->dbid, save_rdbver) == -1) {
                 serverLog(LL_WARNING, "forkless-save: error writing KV pair");
                 err = C_ERR;
             }
@@ -800,7 +810,7 @@ static int finishSocketBasedForklessSaveUsingCob(forklessSaveInfo *saveInfo) {
         ret = C_ERR;
         goto done;
     }
-    if (rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE) == C_ERR) {
+    if (rdbWriteFooter(&saveInfo->save_rio, saveInfo->u.repl.req) == C_ERR) {
         serverLog(LL_WARNING, "forkless-save: error while writing RDB footer");
         ret = C_ERR;
         goto done;
@@ -956,7 +966,7 @@ static void forklessSaveComplete(bool terminated, void *privdata) {
     }
 }
 
-static int forklessSaveCommonStart(forklessSaveInfo *saveInfo) {
+static int forklessSaveCommonStart(forklessSaveInfo *saveInfo, int req, int rdbver) {
     serverAssert(onServerMainThread());
 
     saveInfo->cur_db = -1;
@@ -966,9 +976,11 @@ static int forklessSaveCommonStart(forklessSaveInfo *saveInfo) {
     startSaving(RDBFLAGS_FORKLESS_SAVE);
 
     rdbSaveInfo rsi, *rsiptr = rdbPopulateSaveInfo(&rsi);
-    if (rdbWriteHeader(&saveInfo->save_rio, REPLICA_REQ_NONE, RDB_VERSION, RDBFLAGS_NONE, rsiptr) == C_ERR) return C_ERR;
+    if (rdbWriteHeader(&saveInfo->save_rio, req, rdbver, RDBFLAGS_NONE, rsiptr) == C_ERR) return C_ERR;
 
-    if (writeDbSizeHints(saveInfo) == C_ERR) return C_ERR;
+    /* A data-excluded (functions-only) save has no keyspace, so skip the
+     * per-db size hints that would otherwise scan it. */
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && writeDbSizeHints(saveInfo) == C_ERR) return C_ERR;
 
     return C_OK;
 }
@@ -1036,7 +1048,7 @@ int forklessSaveToDisk(const char *filename) {
         rioSetReclaimCache(&saveInfo->save_rio, 1);
     }
 
-    int rc = forklessSaveCommonStart(saveInfo);
+    int rc = forklessSaveCommonStart(saveInfo, REPLICA_REQ_NONE, RDB_VERSION);
     if (rc != C_OK) goto werr;
 
     /* Saving to a file indicates a consistent snapshot (a backup at a point in time) */
@@ -1158,7 +1170,7 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
     return true;
 }
 
-int forklessSaveToSockets(void) {
+int forklessSaveToSockets(int req, int rdbver) {
     serverAssert(onServerMainThread());
     serverAssert(currentForklessSave == NULL);
     serverLog(LL_NOTICE, "Beginning forklessSaveToSockets");
@@ -1167,6 +1179,8 @@ int forklessSaveToSockets(void) {
     memset(saveInfo, 0, sizeof(forklessSaveInfo));
     saveInfo->terminated = false;
     saveInfo->write_target = RDB_WRITE_TARGET_SOCKET;
+    saveInfo->u.repl.req = req;
+    saveInfo->u.repl.rdbver = rdbver;
 
     /* Collect replicas in WAIT_BGSAVE_END state (already set up by startBgsaveForReplication) */
     saveInfo->u.repl.clients = listCreate();
@@ -1203,7 +1217,7 @@ int forklessSaveToSockets(void) {
         goto werr;
     }
 
-    int rc = forklessSaveCommonStart(saveInfo);
+    int rc = forklessSaveCommonStart(saveInfo, saveInfo->u.repl.req, saveInfo->u.repl.rdbver);
     if (rc != C_OK) goto werr;
 
     /* Flush the ReplicaCOB intermediate buffer into the actual COBs so the

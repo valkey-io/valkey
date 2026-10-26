@@ -7,7 +7,7 @@
 #define FORKLESS_SOCKET_ITER_NAME "forkless_socket"
 
 int forklessSaveToDisk(const char *filename);
-int forklessSaveToSockets(void);
+int forklessSaveToSockets(int req, int rdbver);
 void forklessSaveCancel(void);
 int isForklessSaveInProgress(void);
 sds forkless_catInfo(sds info);

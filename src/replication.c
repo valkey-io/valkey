@@ -1385,10 +1385,6 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         const char *reason = NULL;
         if (!(mincapa & REPLICA_CAPA_INBAND_REPL)) {
             reason = "replica does not support inline replication";
-        } else if (req & REPLICA_REQ_RDB_MASK) {
-            reason = "cohort needs filtered RDB content";
-        } else if (rdbver != RDB_VERSION) {
-            reason = "cohort needs a non-current RDB version";
         } else if (sync_compression_algo != ALGO_NONE) {
             reason = "cohort needs stream compression";
         }
@@ -1421,7 +1417,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
 
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
         if (socket_target) {
-            if (forklessSaveToSockets() == C_ERR) {
+            if (forklessSaveToSockets(req, rdbver) == C_ERR) {
                 fail_msg = "Can't start the forkless process for a diskless full sync";
                 goto error;
             }

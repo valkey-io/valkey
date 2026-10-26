@@ -69,6 +69,7 @@ void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
 void clusterUpdateMyselfAvailabilityZone(void);
 
+int clusterPublishMessageLengthValid(robj *channel, robj *message);
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
 void clusterBroadcastPong(int target);
 

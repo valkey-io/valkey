@@ -4974,7 +4974,22 @@ int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi
 /* Write the RDB footer: module aux (after RDB), EOF opcode, and checksum.
  * Returns C_OK on success, C_ERR on error. */
 int rdbWriteFooter(rio *rdb, int req) {
-    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) return C_ERR;
+    if (rdbWriteModulesAuxAfter(rdb, req) == C_ERR) return C_ERR;
+    return rdbWriteEofAndChecksum(rdb);
+}
+
+/* Write the module AFTER_RDB aux fields (skipped when data is excluded). Module
+ * callbacks run here, so this is main-thread only.
+ * Returns C_OK on success, C_ERR on error. */
+int rdbWriteModulesAuxAfter(rio *rdb, int req) {
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1)
+        return C_ERR;
+    return C_OK;
+}
+
+/* Write the EOF opcode and the running RDB checksum that terminate an RDB.
+ * Returns C_OK on success, C_ERR on error. */
+int rdbWriteEofAndChecksum(rio *rdb) {
     if (rdbSaveType(rdb, RDB_OPCODE_EOF) == -1) return C_ERR;
     /* RDB checksum field. It will be zero if checksum computation is disabled, the
      * loading code skips the check in this case. */

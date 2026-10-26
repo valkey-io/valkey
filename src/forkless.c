@@ -28,6 +28,8 @@ typedef struct {
             char eofmark[RDB_EOF_MARK_SIZE];
             int req;
             int rdbver;
+            sds header_buf;
+            sds footer_buf;
         } repl;
     } u;
 } forklessSaveInfo;
@@ -35,92 +37,18 @@ typedef struct {
 /* Keep a global indicator of the current iterator (for cancellation purposes). */
 static forklessSaveInfo *currentForklessSave = NULL;
 
-/* During a socket forkless save, incoming (live) write commands must keep
- * reaching the syncing replica. There are three channels for them, used in
- * sequence as the sync progresses:
+/* True while a socket forkless save's iterator is scanning the keyspace. During
+ * that time the syncing replicas are not fed from the shared replication backlog
+ * like normal replicas: the iterator inlines live writes into the RDB stream
+ * instead, so they don't accumulate in the backlog for the whole scan.
+ * canFeedReplicaReplBuffer checks this flag to keep the replicas out of the
+ * backlog.
  *
- *   1. Into the RDB stream, by the bg iterator. While the iterator is scanning
- *      the keyspace it also captures live writes and inlines them into the RDB
- *      it is generating.
- *   2. Into a dedicated save buffer set up for this sync, by the main thread.
- *      Once the iterator has finished scanning it stops capturing, so channel 1
- *      is no longer available; but the replica is not online yet, so the shared
- *      backlog (channel 3) cannot be used for it either. In this transitional
- *      window live writes are mirrored into the per-replica buffer we allocated
- *      for the save so none are lost.
- *   3. Into the shared replication backlog, the normal path. After the replica
- *      ACKs and goes online it switches off the dedicated save buffer and reads
- *      the backlog like any other replica.
- *
- * Each live write belongs to exactly one channel at a time: never zero (a lost
- * write) and never two (a duplicate / desync).
- *
- * This flag marks the 1 -> 2 boundary. True while the iterator still owns
- * capture (channel 1), so live writes must NOT also be mirrored into the save
- * buffer (that would double-deliver). Cleared when the iterator finishes,
- * handing ownership to the save-buffer mirror (channel 2). */
+ * The flag is cleared when the iterator finishes. From then on the replicas
+ * behave like those of a fork-based socket sync: they are pinned to the backlog
+ * tail, the offset at that point goes into the RDB tail (repl-offset aux field),
+ * and later writes are sent from the backlog after the replica ACKs. */
 static bool iteratorOwnsIncomingReplication = false;
-
-/* A replica currently served by the forkless save COB (RDB being streamed to it
- * via using_cob while still in WAIT_BGSAVE_END). */
-static bool isActiveForklessSaveClient(client *replica) {
-    return replica->repl_data && replica->repl_data->using_cob &&
-           replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END;
-}
-
-/* Whether live replication should be mirrored into this replica's save COB now:
- * an active save client whose iterator has stopped inlining replication. */
-static bool shouldMirrorReplicationToForklessCob(client *replica) {
-    return isActiveForklessSaveClient(replica) && !iteratorOwnsIncomingReplication;
-}
-
-/* Write the RDB_OPCODE_UPDATE marker that frames an inline replication command
- * in the RDB stream. */
-static void forklessAddRdbOpcodeToCob(client *replica) {
-    static const unsigned char opcode[1] = {RDB_OPCODE_UPDATE};
-    addReplyProto(replica, (const char *)opcode, 1);
-}
-
-/* Mirror a replicated command into every forkless-save replica's COB, in the
- * same RDB_OPCODE_UPDATE inline format the bg thread uses (writeReplicationData). */
-void forklessAddReplicationCommandToReplicaCob(int argc, robj **argv) {
-    listNode *ln;
-    listIter li;
-    listRewind(server.replicas, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *replica = listNodeValue(ln);
-        if (!shouldMirrorReplicationToForklessCob(replica)) continue;
-        forklessAddRdbOpcodeToCob(replica);
-        addReplyArrayLen(replica, argc);
-        for (int j = 0; j < argc; j++) addReplyBulk(replica, argv[j]);
-    }
-}
-
-/* Write a SELECT into one forkless-save replica's COB in RDB format. Returns
- * true if the client is an eligible save replica and the SELECT was queued. */
-static bool forklessAddRdbSelectToCob(client *c, int dictid) {
-    if (!isActiveForklessSaveClient(c)) return false;
-    rio r;
-    rioInitWithBuffer(&r, sdsempty());
-    if (rdbSaveType(&r, RDB_OPCODE_SELECTDB) == -1 || rdbSaveLen(&r, dictid) == -1) {
-        serverAssert(0);
-    }
-    addReplyProto(c, r.io.buffer.ptr, sdslen(r.io.buffer.ptr));
-    sdsfree(r.io.buffer.ptr);
-    return true;
-}
-
-/* Mirror a SELECT into every forkless-save replica's COB in RDB format. */
-void forklessAddRdbSelectToReplicaCob(int dictid) {
-    listNode *ln;
-    listIter li;
-    listRewind(server.replicas, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *replica = listNodeValue(ln);
-        if (!shouldMirrorReplicationToForklessCob(replica)) continue;
-        forklessAddRdbSelectToCob(replica, dictid);
-    }
-}
 
 /* rio check_abort_between_writes callback: checks if the forkless save iterator is being terminated. */
 static int forklessSaveShouldAbort(rio *r) {
@@ -275,75 +203,14 @@ static void handleClosingClients(forklessSaveInfo *saveInfo) {
     }
 }
 
-/* Before writing directly to the connection, we need to wait for various buffers to drain. */
-static void waitForBuffersToDrain(forklessSaveInfo *saveInfo) {
+static int initConnset(forklessSaveInfo *saveInfo) {
     serverAssert(!onServerMainThread());
     serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
 
     listNode *ln;
     listIter li;
 
-    monotime startTimeMono;
-    elapsedStart(&startTimeMono);
-
-    /* Give clients a chance to flush COBs */
-    while (elapsedUs(startTimeMono) < (unsigned long long)server.repl_timeout * 1000000) {
-        const unsigned long loopDelayUs = 100000; // 100ms
-        usleep(loopDelayUs);
-        atomic_thread_fence(__ATOMIC_ACQUIRE);
-
-        handleClosingClients(saveInfo);
-
-        listRewind(saveInfo->u.repl.clients, &li);
-        bool allFlushed = true;
-        while ((ln = listNext(&li)) != NULL) {
-            client *c = listNodeValue(ln);
-            /* Check for pending data in the COB */
-            if (clientHasPendingReplies(c)) {
-                allFlushed = false;
-                break;
-            }
-        }
-        if (allFlushed) break;
-    }
-
-    /* Kill off clients which still have COB data */
-    listRewind(saveInfo->u.repl.clients, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        if (clientHasPendingReplies(c)) {
-            serverLog(LL_WARNING, "forkless-save: socket not draining (COB), client(%llu)", (unsigned long long)c->id);
-            dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
-        }
-    }
-
-    handleClosingClients(saveInfo);
-}
-
-/* Waits until all of the COBs have drained and transitions the RIO to a CONNSET.
- *
- * Two reasons for the transition:
- *   1. The COB send path is driven by the main-thread event loop, so it can't be
- *      used from the background save thread. There is also no need to: the bg
- *      thread's only job is to stream the DB, so it is fine with blocking writes
- *      straight to the sockets.
- *   2. We may be streaming to more than one replica at once, so we transition to
- *      a CONNSET (connection set) to abstract writing the same bytes to N sockets.
- *
- * Returns:  C_OK - successful transition, saveInfo->save_rio is now a CONNSET
- *           C_ERR - failure, saveInfo->save_rio is still ReplicaCOB */
-static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo) {
-    serverAssert(!onServerMainThread());
-    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
-
-    /* Drain the existing COB data before switching (e.g. the +FULLRESYNC handshake
-     * reply already queued on the socket) so the RDB stream stays in order. */
-    waitForBuffersToDrain(saveInfo);
-
-    listNode *ln;
-    listIter li;
-
-    /* Set remaining clients to blocking */
+    /* Set clients to blocking for direct socket writes from this thread. */
     listRewind(saveInfo->u.repl.clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
@@ -352,14 +219,13 @@ static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo) {
         }
     }
 
-    /* Hopefully we still have some clients left */
     int numConns = listLength(saveInfo->u.repl.clients);
-    if (numConns == 0) return C_ERR;
-
-    /* At this point, we are done with ReplicaCOB RIO. */
-    uint64_t current_cksum = saveInfo->save_rio.cksum;
-    size_t current_processed_bytes = saveInfo->save_rio.processed_bytes;
-    rioFreeReplicaCOB(&saveInfo->save_rio);
+    if (numConns == 0) {
+        /* save_rio is still the header buffer rio; zero it so the caller's
+         * unconditional rioFreeConnset only frees NULLs. */
+        memset(&saveInfo->save_rio, 0, sizeof(saveInfo->save_rio));
+        return C_ERR;
+    }
 
     connection **conns = zmalloc(sizeof(connection *) * numConns);
     listRewind(saveInfo->u.repl.clients, &li);
@@ -370,13 +236,42 @@ static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo) {
     }
 
     rioInitWithConnset(&saveInfo->save_rio, conns, numConns);
-    saveInfo->save_rio.cksum = current_cksum;
-    saveInfo->save_rio.processed_bytes = current_processed_bytes;
+    zfree(conns);
+    return C_OK;
+}
+
+/* Write the diskless $EOF framing and the staged RDB header through the
+ * connset. On failure the connset stays intact; the caller frees it. */
+static int writeSyncPreamble(forklessSaveInfo *saveInfo) {
+    serverAssert(!onServerMainThread());
+    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+
+    /* Write the diskless $EOF framing FIRST, with checksum still off: the
+     * "$EOF:<mark>\r\n" bytes are transport framing, not part of the RDB, so
+     * they must not be folded into the RDB checksum. */
+    char framing[5 + RDB_EOF_MARK_SIZE + 2];
+    memcpy(framing, "$EOF:", 5);
+    memcpy(framing + 5, saveInfo->u.repl.eofmark, RDB_EOF_MARK_SIZE);
+    framing[5 + RDB_EOF_MARK_SIZE] = '\r';
+    framing[5 + RDB_EOF_MARK_SIZE + 1] = '\n';
+    if (rioWrite(&saveInfo->save_rio, framing, sizeof(framing)) == 0) {
+        serverLog(LL_WARNING, "forkless-save: error writing diskless EOF start marker");
+        return C_ERR;
+    }
+
+    /* Now enable checksum for the RDB itself (header + body + tail). */
     if (server.rdb_checksum) {
         saveInfo->save_rio.update_cksum = rioGenericUpdateChecksum;
     }
 
-    zfree(conns);
+    /* Write the staged RDB header through the connset. */
+    sds header = saveInfo->u.repl.header_buf;
+    if (header != NULL && sdslen(header) > 0) {
+        if (rioWrite(&saveInfo->save_rio, header, sdslen(header)) == 0) {
+            serverLog(LL_WARNING, "forkless-save: error writing RDB header to connset");
+            return C_ERR;
+        }
+    }
     return C_OK;
 }
 
@@ -396,12 +291,11 @@ static void *forklessSaveProcessor(void *arg) {
     serverLog(LL_NOTICE, "forkless-save: background processor started");
     int err = C_OK;
 
-    bool rioIsConnset = false;
     if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
-        err = transitionRioReplicaCobToRioConnset(saveInfo);
-        rioIsConnset = (err == C_OK);
-        serverLog(LL_DEBUG, "forkless-save: transition to connset %s, %d clients remain",
-                  rioIsConnset ? "OK" : "FAILED", (int)listLength(saveInfo->u.repl.clients));
+        err = initConnset(saveInfo);
+        serverLog(LL_DEBUG, "forkless-save: connset init %s, %d clients remain",
+                  err == C_OK ? "OK" : "FAILED", (int)listLength(saveInfo->u.repl.clients));
+        if (err == C_OK) err = writeSyncPreamble(saveInfo);
     }
 
     saveInfo->save_rio.check_abort_between_writes = forklessSaveShouldAbort;
@@ -505,14 +399,29 @@ static void *forklessSaveProcessor(void *arg) {
     serverLog(LL_NOTICE, "forkless-save: background processor finished. %ld items processed. %s",
               items, message);
 
-    /* For socket saves, transition back from connset to COB so the main thread
-     * can write the end marker into the COB via finishSocketBasedForklessSaveUsingCob. */
+    /* For socket saves, finish the stream through the connset: write the staged
+     * tail (repl aux + module AFTER_RDB aux), then emit the EOF opcode + checksum 
+     * and the EOF end marker here. */
     if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
         if (!terminated && err == C_OK) {
+            sds footer = saveInfo->u.repl.footer_buf;
+            if (footer == NULL) {
+                /* Tail render failed on the main thread at iteration done. */
+                err = C_ERR;
+            } else if (rioWrite(&saveInfo->save_rio, footer, sdslen(footer)) == 0) {
+                serverLog(LL_WARNING, "forkless-save: error writing RDB tail to connset");
+                err = C_ERR;
+            } else if (rdbWriteEofAndChecksum(&saveInfo->save_rio) == C_ERR) {
+                serverLog(LL_WARNING, "forkless-save: error writing RDB EOF/checksum to connset");
+                err = C_ERR;
+            } else if (rdbWriteEofMarkEnd(&saveInfo->save_rio, saveInfo->u.repl.eofmark) == C_ERR) {
+                serverLog(LL_WARNING, "forkless-save: error writing diskless EOF end marker");
+                err = C_ERR;
+            }
             rioFlush(&saveInfo->save_rio);
         }
 
-        /* Capture bytes written so far (will be updated on main thread after EOF). */
+        /* Capture total bytes written for this save. */
         saveInfo->bytes_written = saveInfo->save_rio.processed_bytes;
 
         /* Return clients to non-blocking IO. */
@@ -526,25 +435,7 @@ static void *forklessSaveProcessor(void *arg) {
             }
         }
 
-        if (rioIsConnset) {
-            if (terminated || err != C_OK) {
-                rioFreeConnset(&saveInfo->save_rio);
-            } else {
-                /* Success: swap back to COB. End marker will be written on main thread. */
-                uint64_t cksum = saveInfo->save_rio.cksum;
-                size_t processed = saveInfo->save_rio.processed_bytes;
-                rioFreeConnset(&saveInfo->save_rio);
-                rioInitWithReplicaCOB(&saveInfo->save_rio);
-                saveInfo->save_rio.cksum = cksum;
-                saveInfo->save_rio.processed_bytes = processed;
-                if (server.rdb_checksum) {
-                    saveInfo->save_rio.update_cksum = rioGenericUpdateChecksum;
-                }
-            }
-        } else {
-            /* Error before transitioning to connset — still a COB rio. */
-            rioFreeReplicaCOB(&saveInfo->save_rio);
-        }
+        rioFreeConnset(&saveInfo->save_rio);
     }
 
     saveInfo->err_code = err;
@@ -567,7 +458,6 @@ static void freeClientsMarkedForCloseAfterBgThreadStopped(forklessSaveInfo *save
             listDelNode(saveInfo->u.repl.clients, ln);
             c->flag.forkless_managed = 0;
             atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
-            c->repl_data->using_cob = 0;
             freeClient(c);
         }
     }
@@ -601,7 +491,6 @@ static void resumeClientsAndFreeClientList(forklessSaveInfo *saveInfo, bool succ
         } else {
             serverLog(LL_NOTICE, "forkless-save: error or canceled, terminating client(%llu)", (unsigned long long)c->id);
             c->flag.forkless_managed = 0;
-            if (c->repl_data) c->repl_data->using_cob = 0;
             freeClient(c);
         }
     }
@@ -717,150 +606,6 @@ static long long snapshotEndMonitorTimeProc(struct aeEventLoop *eventLoop, long 
 }
 
 
-/* After a socket-based forkless save, set each replica's ref_repl_buf_node to the
- * tail of the shared replication buffer so that future replication data
- * (starting at server.primary_repl_offset+1) will be sent to the replica. */
-static void fixReplicationOffset(forklessSaveInfo *saveInfo) {
-    serverAssert(onServerMainThread());
-
-    serverLog(LL_NOTICE, "forkless-save: queuing repl_offset: %lld (on COB)", server.primary_repl_offset);
-
-    listNode *repl_node = listLast(server.repl_buffer_blocks);
-    replBufBlock *tail = repl_node ? listNodeValue(repl_node) : NULL;
-    listNode *target_node = NULL;
-    size_t target_pos = 0;
-
-    if (tail != NULL) {
-        target_node = repl_node;
-        target_pos = tail->used;
-    }
-
-    listNode *ln;
-    listIter li;
-    listRewind(saveInfo->u.repl.clients, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-
-        if (target_node != NULL) {
-            ((replBufBlock *)listNodeValue(target_node))->refcount++;
-            serverAssert(c->repl_data);
-            if (c->repl_data->ref_repl_buf_node != NULL) {
-                ((replBufBlock *)listNodeValue(c->repl_data->ref_repl_buf_node))->refcount--;
-            }
-            c->repl_data->ref_repl_buf_node = target_node;
-            c->repl_data->ref_block_pos = target_pos;
-        }
-
-        /* Tell the replica the final replication offset so it can continue
-         * replicating from the correct point after loading the RDB. */
-        addReplyArrayLen(c, 3);
-        addReplyBulkCString(c, "REPLCONF");
-        addReplyBulkCString(c, "psync-offset");
-        addReplyBulkLongLong(c, server.primary_repl_offset);
-    }
-}
-
-/* After the background thread finishes writing keys via the connset, the main
- * thread finishes the RDB stream using the COB:
- *   1) Update the RDB checksum with any data already in the COB
- *   2) Write the EOF, checksum, and eofmark into the COB
- *   3) Suspend writes until ACK, then resume so the COB drains
- *   4) Fix the replication offset so future repl data flows correctly */
-static int finishSocketBasedForklessSaveUsingCob(forklessSaveInfo *saveInfo) {
-    serverAssert(onServerMainThread());
-    serverAssert(listLength(saveInfo->u.repl.clients) > 0);
-
-    /* Update checksum with any replication data already in the COB.
-     * All forkless clients share the same COB content, so process once. */
-    client *c = listNodeValue(listFirst(saveInfo->u.repl.clients));
-    serverAssert(c->io_last_written.data_len == 0);
-
-    if (c->bufpos > 0) {
-        if (server.rdb_checksum) {
-            saveInfo->save_rio.update_cksum(&saveInfo->save_rio, c->buf, c->bufpos);
-        }
-        saveInfo->save_rio.processed_bytes += c->bufpos;
-    }
-
-    listNode *ln;
-    listIter li;
-    listRewind(c->reply, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        clientReplyBlock *replyBlock = listNodeValue(ln);
-        if (server.rdb_checksum) {
-            saveInfo->save_rio.update_cksum(&saveInfo->save_rio, replyBlock->buf, replyBlock->used);
-        }
-        saveInfo->save_rio.processed_bytes += replyBlock->used;
-    }
-
-    /* Write EOF, checksum, and eofmark into the COB */
-    /* After loading a for-sync save, the replica needs to continue replicating from the
-     * correct point in the replication stream.
-     * If using socket based replication, the replication stream is included with the
-     * snapshot data. The replica will continue after the last item seen. Since this end
-     * marker is being written synchronously on the main thread, we could simply save replication
-     * AUX fields based on the latest replication status on the main thread. */
-    rdbSaveInfo rsi, *rsiptr;
-    rsiptr = rdbPopulateSaveInfo(&rsi);
-    serverAssert(rsiptr);
-    int ret = C_OK;
-    if (rdbSaveInfoReplAuxFields(&saveInfo->save_rio, rsiptr) == -1) {
-        serverLog(LL_WARNING, "forkless-save: error while writing AUX fields for replication, err=%s",
-                  strerror(errno));
-        ret = C_ERR;
-        goto done;
-    }
-    if (rdbWriteFooter(&saveInfo->save_rio, saveInfo->u.repl.req) == C_ERR) {
-        serverLog(LL_WARNING, "forkless-save: error while writing RDB footer");
-        ret = C_ERR;
-        goto done;
-    }
-    if (rdbWriteEofMarkEnd(&saveInfo->save_rio, saveInfo->u.repl.eofmark) == C_ERR) {
-        serverLog(LL_WARNING, "forkless-save: error while writing valkey end eof string");
-        ret = C_ERR;
-        goto done;
-    }
-
-    saveInfo->bytes_written = saveInfo->save_rio.processed_bytes;
-
-    /* Flush the RDB into the COB before allowing further replica writes to it. */
-    rioFlush(&saveInfo->save_rio);
-
-    /* The COB is currently not sending. At this point, we set a STOP position after the end
-     * marker and re-enable COB writes. */
-    listRewind(saveInfo->u.repl.clients, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-
-        /* Don't write past the current point in the COB */
-        pauseCobSendAtCurrentPositionForAck(c);
-
-        /* Start sending */
-        resumeReplicaCobFlush(c);
-    }
-
-    /* REPLCONF will be sent immediately after ACK is received */
-    fixReplicationOffset(saveInfo);
-
-done:
-    rioFreeReplicaCOB(&saveInfo->save_rio);
-    return ret;
-}
-
-/* Suspend flushing a replica's COB to its socket until we receive a REPLCONF
- * ACK. Appends into the COB still accumulate; only the send is held. Used by
- * forkless-save-to-socket: after the RDB+EOF is queued in the COB, we hold the
- * flush so the replica sees a clean EOF boundary before any trailing data. */
-void suspendReplicaCobFlushUntilAck(client *replica) {
-    serverAssert(getClientType(replica) == CLIENT_TYPE_REPLICA);
-    replica->repl_data->stop_send_data_until_ack = 1;
-
-    if (replica->flag.pending_write) {
-        listUnlinkNode(server.clients_pending_write, &replica->clients_pending_write_node);
-        replica->flag.pending_write = 0;
-    }
-}
-
 /* Retire a replica client that is owned by a forkless save from the server's
  * replication tracking. The client object is left alive (the forkless save is
  * still using its connection) and will be freed later by the save; this only
@@ -893,7 +638,6 @@ static void freeAbandonedForklessReplica(client *c) {
     c->flag.forkless_managed = 0;
     if (c->repl_data) {
         atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
-        c->repl_data->using_cob = 0;
         c->repl_data->repl_state = REPL_STATE_NONE;
     }
     freeClient(c);
@@ -925,19 +669,12 @@ static void forklessSaveComplete(bool terminated, void *privdata) {
         freeClientsMarkedForCloseAfterBgThreadStopped(saveInfo);
         if (listLength(saveInfo->u.repl.clients) == 0) saveInfo->terminated = true;
 
-        if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
-            /* Finish the RDB stream on the main thread using the COB. */
-            int err = finishSocketBasedForklessSaveUsingCob(saveInfo);
-            if (err != C_OK) saveInfo->terminated = true;
-        } else if (rioCheckType(&saveInfo->save_rio) == RIO_TYPE_REPLICACOB) {
-            /* The bg thread finished successfully and swapped its rio back to a
-             * live COB, but every replica has since disconnected so there is
-             * nothing left to stream. Free that COB. On the abort paths the bg
-             * thread already freed its rio (a connset, whose pointers alias the
-             * COB buffer through the rio.io union), so the type check keeps us
-             * from freeing it a second time. */
-            rioFreeReplicaCOB(&saveInfo->save_rio);
-        }
+        /* The bg thread already wrote the entire RDB stream (header, body, and
+         * the staged footer/EOF) through the connset. Free the buffers. */
+        sdsfree(saveInfo->u.repl.header_buf);
+        saveInfo->u.repl.header_buf = NULL;
+        sdsfree(saveInfo->u.repl.footer_buf);
+        saveInfo->u.repl.footer_buf = NULL;
 
         resumeClientsAndFreeClientList(saveInfo, !saveInfo->terminated && saveInfo->err_code == C_OK);
 
@@ -1098,6 +835,12 @@ int isForklessSaveInProgress(void) {
     return server.cur_bgsave_type == RDB_BGSAVE_TYPE_FORKLESS;
 }
 
+/* True while a forkless socket save's iterator is still scanning the keyspace
+ * and inlining live writes into the RDB stream (see iteratorOwnsIncomingReplication). */
+int forklessIteratorOwnsIncomingReplication(void) {
+    return iteratorOwnsIncomingReplication;
+}
+
 
 /* Timer proc that runs on the main thread during socket-based forkless save.
  * The bg thread may need to abandon unresponsive replicas, but can't free
@@ -1125,21 +868,41 @@ static long long replicationMonitorTimeProc(struct aeEventLoop *eventLoop, long 
     return REPLICATION_MONITOR_INTERVAL_MS;
 }
 
-/* Called on the main thread when the bg iterator finishes iterating all keys.
- * This is the point where the bg thread is done writing key data, but the
- * end marker hasn't been written yet (that happens in forklessSaveComplete via
- * finishSocketBasedForklessSaveUsingCob).
+/* Render the RDB tail's main-thread-only parts into the footer_buf
+ * for the bg thread to write.
  *
- * Note this only means we finished iterating the keyspace; live replication
- * may still be flowing until we pause it here. */
-static bool forklessDoneIteratingKeyspace(void *privdata) {
+ * The EOF opcode + trailing checksum are NOT written here: this is a main-thread
+ * function, and the main thread produces the header and this tail but not the
+ * keyspace data, so it cannot compute an accurate checksum. 
+ *
+ * Returns C_OK with footer_buf set, or C_ERR with footer_buf left NULL. */
+static int renderForklessRdbTail(forklessSaveInfo *saveInfo) {
     serverAssert(onServerMainThread());
 
-    forklessSaveInfo *saveInfo = privdata;
-    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+    rio tail;
+    rioInitWithBuffer(&tail, sdsempty());
+    rdbSaveInfo rsi, *rsiptr = rdbPopulateSaveInfo(&rsi);
+    serverAssert(rsiptr);
 
-    serverLog(LL_NOTICE, "forkless-save: replication done - primary_repl_offset: %lld",
-              server.primary_repl_offset);
+    if (rdbSaveInfoReplAuxFields(&tail, rsiptr) == -1 ||
+        rdbWriteModulesAuxAfter(&tail, saveInfo->u.repl.req) == C_ERR) {
+        sdsfree(tail.io.buffer.ptr);
+        return C_ERR;
+    }
+    saveInfo->u.repl.footer_buf = tail.io.buffer.ptr;
+    return C_OK;
+}
+
+/* Pin each replica of the save to the current tail of the shared replication
+ * backlog. From the iteration-done cut point on, live writes accumulate in the
+ * shared backlog rather than being inlined into the RDB; the bytes are withheld 
+ * until the replica ACKs. */
+static void pinForklessCohortToBacklog(forklessSaveInfo *saveInfo) {
+    serverAssert(onServerMainThread());
+
+    listNode *target_node = listLast(server.repl_buffer_blocks);
+    if (target_node == NULL) return;
+    size_t target_pos = ((replBufBlock *)listNodeValue(target_node))->used;
 
     listNode *ln;
     listIter li;
@@ -1151,20 +914,48 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
                       (unsigned long long)c->id);
             continue;
         }
-        suspendReplicaCobFlushUntilAck(c);
+        serverAssert(c->repl_data);
+        ((replBufBlock *)listNodeValue(target_node))->refcount++;
+        if (c->repl_data->ref_repl_buf_node != NULL) {
+            ((replBufBlock *)listNodeValue(c->repl_data->ref_repl_buf_node))->refcount--;
+        }
+        c->repl_data->ref_repl_buf_node = target_node;
+        c->repl_data->ref_block_pos = target_pos;
+    }
+}
 
-        /* Force a SELECT into this replica's COB. The following live replication
-         * mirrored into the COB needs an explicit DB-select to frame it,
-         * otherwise the replica reads the next command without its leading
-         * SELECT. */
-        int dbid = server.primary ? server.primary->db->id : server.replicas_eldb;
-        if (dbid >= 0) forklessAddRdbSelectToCob(c, dbid);
+/* Called on the main thread when the bg iterator finishes iterating all keys.
+ * This is the iteration-done cut point. The bg thread has written all key data
+ * but not the RDB tail yet. Two independent things happen here:
+ *
+ *   1. We render the RDB tail (repl aux fields — carrying the offset — plus the
+ *      module AFTER_RDB aux) into footer_buf for the bg thread to emit after the
+ *      keyspace (renderForklessRdbTail).
+ *
+ *   2. We pick this instant as the offset cut point: from here on, live writes
+ *      stop being inlined into the RDB and instead accumulate in the shared
+ *      replication backlog, so we pin each replica to the backlog tail now
+ *      (pinForklessCohortToBacklog). */
+static bool forklessDoneIteratingKeyspace(void *privdata) {
+    serverAssert(onServerMainThread());
+
+    forklessSaveInfo *saveInfo = privdata;
+    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+
+    serverLog(LL_NOTICE, "forkless-save: replication done - primary_repl_offset: %lld",
+              server.primary_repl_offset);
+
+    /* Stage the RDB tail for the bg thread. On failure, footer_buf stays NULL
+     * and the bg thread fails the save cleanly when it finds no tail to write. */
+    if (renderForklessRdbTail(saveInfo) == C_ERR) {
+        serverLog(LL_WARNING, "forkless-save: error rendering RDB tail at iteration done");
+    } else {
+        /* Move the cohort onto the shared backlog for post-cut-point writes. */
+        pinForklessCohortToBacklog(saveInfo);
     }
 
-    /* The iterator is done inlining replication; from here, live writes are
-     * mirrored into the save replica COB (via replicationFeedReplicas ->
-     * forklessAddReplicationCommandToReplicaCob) instead of captured by the
-     * iterator. */
+    /* The iterator is done inlining replication. from here,
+     * live writes reach the cohort through the shared backlog. */
     iteratorOwnsIncomingReplication = false;
 
     return true;
@@ -1194,38 +985,29 @@ int forklessSaveToSockets(int req, int rdbver) {
             serverLog(LL_NOTICE, "forkless-save: beginning save to client ID: %llu", (unsigned long long)c->id);
             listAddNodeTail(saveInfo->u.repl.clients, c);
             c->flag.forkless_managed = 1;
-            c->repl_data->using_cob = 1;
         }
     }
     serverAssert(listLength(saveInfo->u.repl.clients) > 0);
     saveInfo->foreground_queue = NULL;
 
-    /* Initialize RIO with ReplicaCOB. This lets the main thread write sync metadata
-     * to all pending replicas through a single rioWrite() call in a non-blocking
-     * manner — it places the data into each replica's Client Output Buffer (COB),
-     * and the event loop flushes it to the network asynchronously.
-     *
-     * Later, when the background thread takes over, it waits for the COBs to drain,
-     * switches the connections to blocking mode, and begins writing directly to the
-     * sockets — blocking is acceptable since it's no longer on the main thread. */
-    rioInitWithReplicaCOB(&saveInfo->save_rio);
+    /* Render the RDB header into a buffer up front. The bg thread writes the
+     * diskless $EOF framing (NOT part of the RDB, so excluded from the RDB
+     * checksum), then this header buffer, then the keyspace; there is no
+     * per-replica COB. The replica expects:
+     *   $EOF:<40-byte-marker>\r\n<RDB data><marker> */
+    saveInfo->u.repl.header_buf = sdsempty();
+    saveInfo->u.repl.footer_buf = NULL;
+    rioInitWithBuffer(&saveInfo->save_rio, saveInfo->u.repl.header_buf);
 
-    /* Write diskless sync framing before the RDB header.
-     * The replica expects: $EOF:<40-byte-marker>\r\n<RDB data><marker>\r\n */
-    if (rdbWriteEofMarkStart(&saveInfo->save_rio, saveInfo->u.repl.eofmark) == C_ERR) {
-        serverLog(LL_WARNING, "forkless-save: error writing EOF start marker");
-        goto werr;
-    }
+    /* Generate the EOF marker here on the main thread */
+    getRandomHexChars(saveInfo->u.repl.eofmark, RDB_EOF_MARK_SIZE);
 
     int rc = forklessSaveCommonStart(saveInfo, saveInfo->u.repl.req, saveInfo->u.repl.rdbver);
     if (rc != C_OK) goto werr;
 
-    /* Flush the ReplicaCOB intermediate buffer into the actual COBs so the
-     * background thread only needs to wait for COBs to drain. */
-    if (!rioFlush(&saveInfo->save_rio)) {
-        serverLog(LL_WARNING, "forkless-save: unable to flush replica COB before transition");
-        goto werr;
-    }
+    /* The buffer rio may have reallocated the sds; keep the saved pointer in
+     * sync so the bg thread writes the full header and we free the right sds. */
+    saveInfo->u.repl.header_buf = saveInfo->save_rio.io.buffer.ptr;
 
     /* Disable read handlers on replica connections. We don't want the main
      * thread processing REPLCONF ACK or other commands from replicas while
@@ -1275,7 +1057,10 @@ werr:
     if (saveInfo->u.repl.clients) {
         resumeClientsAndFreeClientList(saveInfo, false);
     }
-    rioFreeReplicaCOB(&saveInfo->save_rio);
+    sdsfree(saveInfo->u.repl.header_buf);
+    saveInfo->u.repl.header_buf = NULL;
+    sdsfree(saveInfo->u.repl.footer_buf);
+    saveInfo->u.repl.footer_buf = NULL;
     zfree(saveInfo);
     serverLog(LL_WARNING, "Error in forklessSaveToSockets before starting thread");
     return C_ERR;

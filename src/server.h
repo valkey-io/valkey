@@ -1355,15 +1355,9 @@ typedef struct ClientReplicationData {
     int replica_listening_port;            /* As configured with: REPLCONF listening-port */
     char *replica_addr;                    /* Optionally given by REPLCONF ip-address */
     int replica_version;                   /* Version on the form 0xMMmmpp. */
-    unsigned long long tot_rdb_bytes_sent; /* Total RDB bytes sent to replica sockets. */
     short replica_capa;                    /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
-    int stop_send_data_until_ack;          /* Stop sending data to this replica until ACK received. */
-    int using_cob;                         /* Networking uses private COB instead of shared repl buffer. */
     _Atomic(int) forkless_pending_close;   /* Main thread asks the forkless save to hand this replica
                                             * back for closing. Atomic (relaxed) since both threads access it without a lock. */
-    size_t cob_pause_bufpos;               /* COB pause position: bufpos to drain to before suspending. */
-    listNode *cob_pause_tail;              /* COB pause position: last reply list node to drain. */
-    size_t cob_pause_objlen;               /* COB pause position: bytes to drain from tail node. */
     short replica_req;                     /* Replica requirements: REPLICA_REQ_* */
     uint64_t associated_rdb_client_id;     /* The client id of this replica's rdb connection */
     time_t rdb_client_disconnect_time;     /* Time of the first freeClient call on this client. Used for delaying free. */
@@ -2360,8 +2354,6 @@ struct valkeyServer {
     int repl_replica_lazy_flush;                   /* Lazy FLUSHALL before loading DB? */
     monotime repl_full_sync_start_time;            /* Monotonic time when full sync started. */
     long long repl_full_sync_complete_duration_ms; /* Duration of the last successful full sync in ms. */
-    int wait_for_psync_offset;                     /* Replica waiting for REPLCONF psync-offset. */
-    int skip_psync_offset;                         /* Skip psync-offset command in repl backlog. */
     /* Import Mode */
     int import_mode; /* If true, server is in import mode and forbid expiration and eviction. */
     /* Synchronous replication. */
@@ -3468,9 +3460,6 @@ void resizeReplicationBacklog(void);
 void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked);
 void replicationUnsetPrimary(void);
 void refreshGoodReplicasCount(void);
-void resumeReplicaCobFlush(client *replica);
-void computeCobFlushStopPosition(client *c, listNode **block, size_t *bufpos);
-void pauseCobSendAtCurrentPositionForAck(client *c);
 int checkGoodReplicasStatus(void);
 void processClientsWaitingReplicas(void);
 void unblockClientWaitingReplicas(client *c);

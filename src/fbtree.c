@@ -129,14 +129,15 @@ static innerNode *innerNodeCreate(void) {
     return zcalloc(sizeof(innerNode));
 }
 
-static leafNode *leafNodeCreate(void) {
+static leafNode *leafNodeCreate(fbtreeIndex *fbt) {
     leafNode *node = zcalloc(sizeof(*node));
     node->header.is_leaf = true;
+    fbt->num_leaves++;
     return node;
 }
 
-static leafNode *leafNodeCreateWithItem(sds item) {
-    leafNode *leaf = leafNodeCreate();
+static leafNode *leafNodeCreateWithItem(fbtreeIndex *fbt, sds item) {
+    leafNode *leaf = leafNodeCreate(fbt);
     leaf->values[0] = item;
     leaf->header.num_items = 1;
     return leaf;
@@ -147,6 +148,7 @@ fbtreeIndex *fbtreeCreate(void) {
     fbt->root = NULL;
     fbt->leftmost_leaf = NULL;
     fbt->rightmost_leaf = NULL;
+    fbt->num_leaves = 0;
     return fbt;
 }
 
@@ -154,7 +156,13 @@ fbtreeIndex *fbtreeCreate(void) {
  * Allows callers to perform side effects (e.g., hashtable removal). */
 typedef void (*fbtreeItemCallback)(sds item, void *ctx);
 
-static void freeNodeRecursive(node *n, fbtreeItemCallback callback, void *ctx) {
+/* Free a single, already-detached node, maintaining the leaf counter. */
+static void freeNode(fbtreeIndex *fbt, node *n) {
+    if (n->is_leaf) fbt->num_leaves--;
+    zfree(n);
+}
+
+static void freeNodeRecursive(fbtreeIndex *fbt, node *n, fbtreeItemCallback callback, void *ctx) {
     if (!n) return;
 
     if (n->is_leaf) {
@@ -163,26 +171,27 @@ static void freeNodeRecursive(node *n, fbtreeItemCallback callback, void *ctx) {
             if (callback) callback(leaf->values[i], ctx);
             sdsfree(leaf->values[i]);
         }
-        zfree(leaf);
+        freeNode(fbt, n);
     } else {
         innerNode *inner = (innerNode *)n;
         innerNodeFreePrefix(inner);
         for (int i = 0; i < inner->header.num_items; i++) {
             if (inner->children[i] != NULL) {
-                freeNodeRecursive(inner->children[i], callback, ctx);
+                freeNodeRecursive(fbt, inner->children[i], callback, ctx);
             }
         }
-        zfree(inner);
+        freeNode(fbt, n);
     }
 }
 
 /* Free all nodes and reset to empty. If callback is non-NULL, it is invoked
  * for each item before freeing. */
 static void fbtreeDeleteAll(fbtreeIndex *fbt, fbtreeItemCallback callback, void *callback_ctx) {
-    freeNodeRecursive(fbt->root, callback, callback_ctx);
+    freeNodeRecursive(fbt, fbt->root, callback, callback_ctx);
     fbt->root = NULL;
     fbt->leftmost_leaf = NULL;
     fbt->rightmost_leaf = NULL;
+    fbt->num_leaves = 0;
 }
 
 void fbtreeEmpty(fbtreeIndex *fbt) {
@@ -424,26 +433,26 @@ static void unlinkLeaf(leafNode *leaf) {
     if (leaf->next) leaf->next->prev = leaf->prev;
 }
 
-/* Free a node that has been emptied by deletion: unlink leaves from the leaf
- * chain, release any spilled prefix buffer on inner nodes, then free the
- * node itself. */
-static void freeEmptyNode(node *n) {
+/* Free a detached, emptied node already removed from the leaf chain. An emptied
+ * inner node still owns its spilled prefix buffer; release it before freeing.
+ * Maintains the leaf counter. */
+static void freeEmptyNodeAlreadyUnlinked(fbtreeIndex *fbt, node *n) {
+    if (!n->is_leaf) innerNodeFreePrefix((innerNode *)n);
+    freeNode(fbt, n);
+}
+
+/* Free an emptied node that is still in the leaf chain: unlink a leaf, or
+ * release an inner node's spilled prefix buffer, then free. Maintains the
+ * leaf counter. */
+static void freeEmptyNode(fbtreeIndex *fbt, node *n) {
     if (n->is_leaf)
         unlinkLeaf((leafNode *)n);
     else
         innerNodeFreePrefix((innerNode *)n);
-    zfree(n);
+    freeNode(fbt, n);
 }
 
-/* Variant for emptied nodes whose leaves have already been removed from the
- * leaf chain (range deletion splices the chain before trimming boundary
- * subtrees): only the spilled prefix release applies. */
-static void freeEmptyNodeAlreadyUnlinked(node *n) {
-    if (!n->is_leaf) innerNodeFreePrefix((innerNode *)n);
-    zfree(n);
-}
-
-static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint hint) {
+static insertResult leafNodeSplit(fbtreeIndex *fbt, leafNode *left_leaf, sds string, TraversalHint hint) {
     assert(left_leaf->header.num_items == NODE_SIZE);
 
     /* Binary search to find insertion point - reuse for pattern detection */
@@ -451,7 +460,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint
 
     if (insert_index == NODE_SIZE && hint == HINT_RIGHTMOST) {
         /* Append at tree edge: create new node with just the new item, left unchanged */
-        leafNode *right_leaf = leafNodeCreateWithItem(string);
+        leafNode *right_leaf = leafNodeCreateWithItem(fbt, string);
         linkLeafRight(left_leaf, right_leaf);
         return (insertResult){
             .new_node = (node *)right_leaf,
@@ -461,7 +470,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint
 
     if (insert_index == 0 && hint == HINT_LEFTMOST) {
         /* Prepend at tree edge: move all items to new right node, left gets just new item */
-        leafNode *right_leaf = leafNodeCreate();
+        leafNode *right_leaf = leafNodeCreate(fbt);
         memcpy(right_leaf->values, left_leaf->values, NODE_SIZE * sizeof(sds));
         right_leaf->header.num_items = NODE_SIZE;
         left_leaf->values[0] = string;
@@ -475,7 +484,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint
     }
 
     /* Middle insert: standard 50/50 split */
-    leafNode *right_leaf = leafNodeCreate();
+    leafNode *right_leaf = leafNodeCreate(fbt);
     size_t num_left = NODE_SIZE / 2;
     size_t num_right = NODE_SIZE - num_left;
 
@@ -806,12 +815,12 @@ static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child
     }
 }
 
-static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
+static insertResult subtreeInsert(fbtreeIndex *fbt, node *n, sds string, TraversalHint hint) {
     assert(n);
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
         if (leaf->header.num_items == NODE_SIZE) {
-            return leafNodeSplit(leaf, string, hint);
+            return leafNodeSplit(fbt, leaf, string, hint);
         } else {
             return leafNodeInsert(leaf, string);
         }
@@ -831,7 +840,7 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
             if (child_idx == parent->header.num_items) child_idx--;
         }
 
-        insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string, hint);
+        insertResult child_insert_result = subtreeInsert(fbt, parent->children[child_idx], string, hint);
 
         if (child_insert_result.updated_anchor) {
             parent->anchors[child_idx] = child_insert_result.updated_anchor;
@@ -868,7 +877,7 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
 
 sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     if (fbt->root == NULL) {
-        leafNode *leaf = leafNodeCreateWithItem(string);
+        leafNode *leaf = leafNodeCreateWithItem(fbt, string);
         fbt->root = (node *)leaf;
         fbt->leftmost_leaf = leaf;
         fbt->rightmost_leaf = leaf;
@@ -887,7 +896,7 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     }
 
     /* Insert with hint - skips inner node searches for append/prepend */
-    insertResult result = subtreeInsert(fbt->root, string, hint);
+    insertResult result = subtreeInsert(fbt, fbt->root, string, hint);
 
     if (result.new_node) {
         innerNode *new_root = innerNodeCreate();
@@ -1001,7 +1010,7 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
 
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
-        freeEmptyNode(inner->children[index]);
+        freeEmptyNode(fbt, inner->children[index]);
         innerNodeRemoveChild(inner, index);
         /* Anchor update: if we removed last child, new last child's anchor bubbles up */
         sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
@@ -1027,15 +1036,16 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
 /* Helper to handle root cleanup after delete */
 static void fbtreePostDeleteCleanup(fbtreeIndex *fbt) {
     if (getSubtreeSize(fbt->root) == 0) {
-        /* An emptied inner root still owns its spilled prefix buffer. */
-        freeEmptyNodeAlreadyUnlinked(fbt->root);
+        /* The emptied root may be a leaf or an inner node; the helper frees any
+         * spilled prefix buffer and maintains the leaf counter either way. */
+        freeEmptyNodeAlreadyUnlinked(fbt, fbt->root);
         fbt->root = NULL;
         fbt->leftmost_leaf = NULL;
         fbt->rightmost_leaf = NULL;
     } else if (!fbt->root->is_leaf && fbt->root->num_items == 1) {
         node *old_root = fbt->root;
         fbt->root = ((innerNode *)old_root)->children[0];
-        freeEmptyNodeAlreadyUnlinked(old_root);
+        freeEmptyNodeAlreadyUnlinked(fbt, old_root);
     }
 }
 
@@ -1081,7 +1091,7 @@ static deleteResult subtreePop(fbtreeIndex *fbt, node *n, TraversalHint hint, bo
 
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
-        freeEmptyNode(inner->children[index]);
+        freeEmptyNode(fbt, inner->children[index]);
         innerNodeRemoveChild(inner, index);
         sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
                              ? inner->anchors[inner->header.num_items - 1]
@@ -1224,6 +1234,10 @@ unsigned long fbtreeHeight(const fbtreeIndex *fbt) {
         height++;
     }
     return height;
+}
+
+unsigned long fbtreeNumLeaves(fbtreeIndex *fbt) {
+    return fbt->num_leaves;
 }
 
 void fbtreeResetIterator(fbtreeIterator *iterator) {
@@ -1819,7 +1833,7 @@ static unsigned long deleteRangeSameLeaf(fbtreeIndex *fbt,
         inner->child_sizes[ci] -= deleted;
 
         if (inner->child_sizes[ci] == 0) {
-            freeEmptyNode(inner->children[ci]);
+            freeEmptyNode(fbt, inner->children[ci]);
             innerNodeRemoveChild(inner, ci);
         } else {
             innerNodeRefreshChildMeta(inner, ci);
@@ -1954,13 +1968,13 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
 
         for (int i = ci + 1; i < inner->header.num_items; i++) {
             deleted += getSubtreeSize(inner->children[i]);
-            freeNodeRecursive(inner->children[i], callback, callback_ctx);
+            freeNodeRecursive(fbt, inner->children[i], callback, callback_ctx);
         }
         inner->header.num_items = ci + 1;
 
         /* Update or remove the boundary child */
         if (getSubtreeSize(inner->children[ci]) == 0) {
-            freeEmptyNodeAlreadyUnlinked(inner->children[ci]);
+            freeEmptyNodeAlreadyUnlinked(fbt, inner->children[ci]);
             inner->header.num_items = ci;
         } else {
             innerNodeRefreshChildMeta(inner, ci);
@@ -1975,7 +1989,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
 
         for (int i = 0; i < ci; i++) {
             deleted += getSubtreeSize(inner->children[i]);
-            freeNodeRecursive(inner->children[i], callback, callback_ctx);
+            freeNodeRecursive(fbt, inner->children[i], callback, callback_ctx);
         }
         if (ci > 0) {
             innerNodeRemoveChildrenRange(inner, 0, ci - 1);
@@ -1986,7 +2000,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         bp->right_sub_idx[d] = 0;
         int new_ci = 0;
         if (getSubtreeSize(inner->children[new_ci]) == 0) {
-            freeEmptyNodeAlreadyUnlinked(inner->children[new_ci]);
+            freeEmptyNodeAlreadyUnlinked(fbt, inner->children[new_ci]);
             innerNodeRemoveChildrenRange(inner, 0, 0);
         } else {
             innerNodeRefreshChildMeta(inner, new_ci);
@@ -1999,7 +2013,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         /* Free middle children subtrees (fully inside the range) */
         for (int i = li + 1; i < ri; i++) {
             deleted += getSubtreeSize(split_node->children[i]);
-            freeNodeRecursive(split_node->children[i], callback, callback_ctx);
+            freeNodeRecursive(fbt, split_node->children[i], callback, callback_ctx);
         }
 
         /* Check if boundary subtrees are now empty */
@@ -2010,11 +2024,11 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         int remove_end = ri - 1;
 
         if (left_size == 0) {
-            freeNodeRecursive(split_node->children[li], callback, callback_ctx);
+            freeNodeRecursive(fbt, split_node->children[li], callback, callback_ctx);
             remove_start = li;
         }
         if (right_size == 0) {
-            freeNodeRecursive(split_node->children[ri], callback, callback_ctx);
+            freeNodeRecursive(fbt, split_node->children[ri], callback, callback_ctx);
             remove_end = ri;
         }
 
@@ -2037,7 +2051,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         int ci = bp->shared_left_idx[d];
 
         if (getSubtreeSize(inner->children[ci]) == 0) {
-            freeEmptyNodeAlreadyUnlinked(inner->children[ci]);
+            freeEmptyNodeAlreadyUnlinked(fbt, inner->children[ci]);
             innerNodeRemoveChild(inner, ci);
         } else {
             innerNodeRefreshChildMeta(inner, ci);
@@ -2470,6 +2484,7 @@ unsigned long fbtreeCountRangeByValue(fbtreeIndex *fbt,
 typedef struct {
     bool valid;
     size_t size;
+    size_t leaves; /* leaf nodes reachable from the root */
     leafNode *leftmost_leaf;
     leafNode *rightmost_leaf;
 } validateResult;
@@ -2529,12 +2544,13 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose, vali
         }
         if (count > 0 && count % 8 != 0) printf("\n");
     }
-    return (validateResult){.valid = valid, .size = count, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
+    return (validateResult){.valid = valid, .size = count, .leaves = 1, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
 }
 
 static validateResult validateInner(innerNode *inner, int depth, bool verbose, validateErrCtx *err) {
     bool valid = true;
     size_t total_size = 0;
+    size_t total_leaves = 0;
     leafNode *leftmost = NULL;
     leafNode *rightmost = NULL;
 
@@ -2569,9 +2585,10 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
 
         validateResult child_result = validateNode(child, depth + 1, verbose, err);
 
-        /* Track leftmost/rightmost leaves */
+        /* Track leftmost/rightmost leaves and the structural leaf count */
         if (i == 0) leftmost = child_result.leftmost_leaf;
         rightmost = child_result.rightmost_leaf;
+        total_leaves += child_result.leaves;
 
         /* Validate stored size matches actual size */
         bool size_ok = (inner->child_sizes[i] == child_result.size);
@@ -2599,7 +2616,7 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
             printf("FAIL\033[0m\n");
         }
     }
-    return (validateResult){.valid = valid, .size = total_size, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
+    return (validateResult){.valid = valid, .size = total_size, .leaves = total_leaves, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
 }
 
 static validateResult validateNode(node *n, int depth, bool verbose, validateErrCtx *err) {
@@ -2620,10 +2637,15 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
     unsigned long length = fbt->root ? getSubtreeSize(fbt->root) : 0;
     if (verbose) printf("FBTree (length=%lu)\n", length);
     if (!fbt->root) {
-        /* Empty tree: caches must be NULL */
+        /* Empty tree: caches must be NULL and the leaf counter zero */
         if (fbt->leftmost_leaf || fbt->rightmost_leaf) {
             if (verbose) printf("\033[31mERROR: empty tree has non-NULL leaf cache\033[0m\n");
             validateFail(err, "empty tree has non-NULL leaf cache");
+            return false;
+        }
+        if (fbt->num_leaves != 0) {
+            if (verbose) printf("\033[31mERROR: empty tree has num_leaves %zu\033[0m\n", fbt->num_leaves);
+            validateFail(err, "empty tree has num_leaves %zu", fbt->num_leaves);
             return false;
         }
         return true;
@@ -2651,7 +2673,56 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
                      (void *)fbt->rightmost_leaf, (void *)actual_rightmost);
     }
 
-    return result.valid && length_ok && caches_ok;
+    /* Verify the cached leaf counter against the leaves reachable from the root. */
+    bool leaves_ok = (fbt->num_leaves == result.leaves);
+    if (!leaves_ok) {
+        if (verbose) printf("\033[31mERROR: num_leaves %zu != %zu leaves reachable from root\033[0m\n", fbt->num_leaves, result.leaves);
+        validateFail(err, "num_leaves %zu != %zu leaves reachable from root", fbt->num_leaves, result.leaves);
+    }
+
+    /* Verify the doubly-linked leaf chain: starts at the leftmost leaf with no
+     * predecessor, every next/prev pair is mutually consistent, keys never go
+     * backwards across a link, and it ends at the rightmost leaf after visiting
+     * exactly the leaves the tree owns. Any leaf reachable from the root but
+     * absent from the chain (or vice versa) shows up as a count mismatch. */
+    bool chain_ok = true;
+    if (actual_leftmost && actual_leftmost->prev != NULL) {
+        chain_ok = false;
+        validateFail(err, "leaf chain: leftmost leaf has non-NULL prev");
+    }
+    size_t chain_leaves = 0;
+    leafNode *leaf = actual_leftmost;
+    while (leaf && chain_ok) {
+        chain_leaves++;
+        if (chain_leaves > result.leaves) {
+            chain_ok = false;
+            validateFail(err, "leaf chain: more than %zu leaves reachable via next (cycle or stray leaf)", result.leaves);
+            break;
+        }
+        leafNode *next = leaf->next;
+        if (next) {
+            if (next->prev != leaf) {
+                chain_ok = false;
+                validateFail(err, "leaf chain: leaf %zu next->prev does not point back", chain_leaves - 1);
+            } else if (leaf->header.num_items > 0 && next->header.num_items > 0 &&
+                       sdscmp(leafNodeHighKey(leaf), leafNodeLowKey(next)) > 0) {
+                /* Equal keys across a link are legal: duplicates may span leaves. */
+                chain_ok = false;
+                validateFail(err, "leaf chain: keys decrease across link after leaf %zu", chain_leaves - 1);
+            }
+        } else if (leaf != actual_rightmost) {
+            chain_ok = false;
+            validateFail(err, "leaf chain: ends at leaf %zu, which is not the rightmost leaf", chain_leaves - 1);
+        }
+        leaf = next;
+    }
+    if (chain_ok && chain_leaves != result.leaves) {
+        chain_ok = false;
+        validateFail(err, "leaf chain: visits %zu leaves, tree has %zu", chain_leaves, result.leaves);
+    }
+    if (!chain_ok && verbose) printf("\033[31mERROR: leaf chain inconsistent\033[0m\n");
+
+    return result.valid && length_ok && caches_ok && leaves_ok && chain_ok;
 }
 
 /* ========== Defrag / Dismiss ========== */
@@ -2804,26 +2875,13 @@ void fbtreeDismissMemory(fbtreeIndex *fbt) {
 }
 
 size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt) {
-    unsigned long len = fbtreeLength(fbt);
     size_t size = sizeof(fbtreeIndex);
-    if (len == 0) return size;
+    if (fbt->num_leaves == 0) return size;
 
-    /* Leaf count is exact for small chains; for larger trees it is
-     * extrapolated from the fill of the first leaves, which reflects how
-     * sparse deletes have left the tree. */
-    enum {
-        FILL_SAMPLE_LEAVES = 16
-    };
-    size_t leaves_seen = 0, items_seen = 0;
-    leafNode *leaf = fbt->leftmost_leaf;
-    while (leaf && leaves_seen < FILL_SAMPLE_LEAVES) {
-        items_seen += leaf->header.num_items;
-        leaves_seen++;
-        leaf = leaf->next;
-    }
-    size_t est_leaves = (leaf == NULL) ? leaves_seen : (size_t)(len / ((double)items_seen / leaves_seen)) + 1;
-    size += est_leaves * sizeof(leafNode);
+    /* num_leaves is maintained exactly at every leaf birth and death, so the
+     * leaf level is counted directly rather than extrapolated from a sample. */
+    size += fbt->num_leaves * sizeof(leafNode);
     /* Inner levels shrink geometrically by the fanout. */
-    size += (est_leaves / (NODE_SIZE - 1) + 1) * sizeof(innerNode);
+    size += (fbt->num_leaves / (NODE_SIZE - 1) + 1) * sizeof(innerNode);
     return size;
 }

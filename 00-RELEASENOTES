@@ -26,7 +26,6 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Fix ZINTER/ZINTERSTORE returning input-order-dependent scores when a weighted term is 0*inf; a NaN weighted score now counts as 0, matching ZUNION by @leomurillo (#4997)
 * Correct `ValkeyModule_FreeModuleUser`, `ValkeyModule_ACLAddLogEntry` and `ValkeyModule_ACLAddLogEntryByUserName` declarations to return int as implemented, fixing undefined behavior on targets with strict call signature checks by @rainsupreme (#4676)
 * valkey-check-aof now recognizes RDB base files with the `VALKEY` signature instead of misreporting a valid multipart AOF as invalid by @sarthakaggarwal97 (#4739)
-* Fix valkey-benchmark spinning on would-block writes, which could starve reply processing and the `--duration` timer by @thweetkomputer (#4567)
 * Fix a huge memory allocation when a command such as COMMAND GETKEYS EVAL declares a far larger key count than the arguments provided by @murphyjacob4 (#3598)
 * Reject relative expire times in `SET`/`GETEX`, `RESTORE`, and `ValkeyModule_SetExpire` that overflow when added to the current time, preventing server aborts from negative expires by @madolson (#4880)
 * `HDEL`, `HGETDEL`, `HPERSIST`, and `HEXPIRE` no longer propagate fields they treat as expired, preventing replica and AOF-reload divergence by @xdk-amz (#4772)

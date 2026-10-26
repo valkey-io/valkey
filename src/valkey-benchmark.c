@@ -2174,7 +2174,7 @@ usage:
         "                    pipeline.\n",
         " -q                 Quiet. Just show query/sec values\n"
         " --precision        Number of significant figures in latency histograms\n"
-        "                    (default 3)\n"
+        "                    (default 3, maximum 4)\n"
         " --csv              Output in CSV format\n"
         " -l                 Loop. Run the tests forever\n"
         " -t <tests>         Only run the comma separated list of tests. The test\n"

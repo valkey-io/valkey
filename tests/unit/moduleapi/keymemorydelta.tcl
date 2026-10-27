@@ -330,9 +330,10 @@ end)}
             assert_kmd_consistent
         } {} {needs:debug}
 
-        test {Key memory delta tracks lists compressed by reads} {
+        test {Reads don't change the memory usage of compressed lists} {
             # An insertion grows a middle node that was too small to compress
-            # without compressing it, and the next iteration compresses it.
+            # without compressing it. Reads leave it as it is, so they aren't
+            # tracked; if this changes, list reads must be tracked again.
             kmd_reset
             set depth [lindex [r config get list-compress-depth] 1]
             set size [lindex [r config get list-max-listpack-size] 1]
@@ -346,7 +347,9 @@ end)}
                 assert_kmd_consistent
                 set usage [r memory usage list]
                 r lrange list 0 -1
-                assert_lessthan [r memory usage list] $usage
+                r lindex list 7
+                r lpos list b4
+                assert_equal $usage [r memory usage list]
                 assert_kmd_consistent
             } {
                 r config set list-compress-depth $depth

@@ -98,16 +98,10 @@ void keyMemoryDeltaTrackSlow(serverDb *db, sds key, robj *val) {
 
 /* Reads normally leave a value untouched, but a hashtable may rehash when it
  * is looked up, or shrink when a scan or random sampling resumes its paused
- * auto-shrinking, and iterating a quicklist compresses the nodes it leaves,
- * which writes may have left uncompressed. That changes its memory usage. */
+ * auto-shrinking. That changes its memory usage. Reads of a quicklist decompress
+ * nodes into the iterator, never in place, so they can't change a list. */
 static bool hashtableMayChangeOnRead(hashtable *ht) {
     return hashtableIsRehashing(ht) || hashtableNeedsShrink(ht);
-}
-
-/* Only the nodes beyond the compress depth from both ends are compressed (see
- * __quicklistCompress()), so a quicklist without any has none to compress. */
-static bool quicklistMayChangeOnRead(quicklist *ql) {
-    return ql->compress && ql->len > 2 * (unsigned long)ql->compress;
 }
 
 static bool valueMayChangeOnRead(robj *val) {
@@ -118,8 +112,6 @@ static bool valueMayChangeOnRead(robj *val) {
     case OBJ_ZSET:
         return objectGetEncoding(val) == OBJ_ENCODING_BTREE &&
                hashtableMayChangeOnRead(((zset *)objectGetVal(val))->ht);
-    case OBJ_LIST:
-        return objectGetEncoding(val) == OBJ_ENCODING_QUICKLIST && quicklistMayChangeOnRead(objectGetVal(val));
     case OBJ_PATH_HASH:
         /* Its size is estimated from nested hashes that reads may resize. */
         return true;
@@ -129,10 +121,10 @@ static bool valueMayChangeOnRead(robj *val) {
 
 /* Like valueMayChangeOnRead(), for code that resumes the paused rehashing of
  * a value's hashtables (active defrag, background iterations), which doesn't
- * apply to path hashes and lists. Defragmenting a hash may also change the
- * hashtables of its set of volatile fields. */
+ * apply to path hashes. Defragmenting a hash may also change the hashtables of
+ * its set of volatile fields. */
 static bool valueMayResize(robj *val) {
-    if (objectGetType(val) == OBJ_PATH_HASH || objectGetType(val) == OBJ_LIST) return false;
+    if (objectGetType(val) == OBJ_PATH_HASH) return false;
     if (objectGetType(val) == OBJ_HASH && hashTypeMayChangeVolatileSetOnDefrag(val)) return true;
     return valueMayChangeOnRead(val);
 }

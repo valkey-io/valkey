@@ -7145,7 +7145,9 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
 
 cleanup:
     if ((flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && errno) {
-        afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
+        /* Keep error accounting even when no reply message was requested. */
+        afterErrorReply(c, reply_error_msg ? reply_error_msg : "ERR",
+                        reply_error_msg ? sdslen(reply_error_msg) : 3, 0);
         incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
     }
     if (reply_error_msg != NULL && error != NULL) {
@@ -7206,7 +7208,8 @@ cleanup:
  *   * `VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM`: Respect deny-oom policy when
  *     executing the command (format specifier: "M").
  *   * `VALKEYMODULE_CALL_ARGV_DRY_RUN`: Execute in dry-run mode; implies
- *     `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES` (format specifier: "D").
+ *     `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES`. A successful dry run does not
+ *     execute the command or invoke reply callbacks (format specifier: "D").
  *   * `VALKEYMODULE_CALL_ARGV_REPLY_EXACT`: Request exact reply parsing (do not
  *     coerce reply types) (format specifier: "X").
  * * **resp_handlers**: Struct of callbacks that receive the command reply. The
@@ -7241,6 +7244,7 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 int flags,
                 const ValkeyModuleReplyHandlers *resp_handlers,
                 void *reply_ctx) {
+    if (flags & VALKEYMODULE_CALL_ARGV_DRY_RUN) flags |= VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
     if (resp_handlers && (resp_handlers->version == 0 ||
                           resp_handlers->version > VALKEYMODULE_REPLY_HANDLERS_VERSION)) {
         errno = EINVAL;
@@ -7309,7 +7313,8 @@ int moduleCallArgv(ValkeyModuleCtx *ctx,
             sdsfree(reply_error_msg);
         }
 
-        if (resp_handlers) {
+        /* Successful dry run produces no reply. */
+        if (resp_handlers && (!(flags & VALKEYMODULE_CALL_ARGV_DRY_RUN) || c->bufpos || listLength(c->reply))) {
             invokeReplyHandlers(ctx, c, resp_handlers, reply_ctx);
         }
     } else {

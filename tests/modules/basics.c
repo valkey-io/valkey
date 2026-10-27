@@ -159,9 +159,18 @@ static int countRawReply(void *ctx, ValkeyModuleCtx *mctx, const char *proto, si
     return 0;
 }
 
+static int replyWithRawRespAndCount(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t len) {
+    (*(int *)ctx)++;
+    return replyWithRawRespString(ctx, mctx, proto, len);
+}
+
 static void countErrorReply(void *ctx, const char *str, size_t len) {
     UNUSED(str);
     UNUSED(len);
+    (*(int *)ctx)++;
+}
+
+static void countReplyParsingError(void *ctx) {
     (*(int *)ctx)++;
 }
 
@@ -171,22 +180,25 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     const char *fmt = ValkeyModule_StringPtrLen(argv[1], NULL);
     int flags = 0;
     if (strchr(fmt, 'E')) flags |= VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    if (strchr(fmt, 'D')) flags |= VALKEYMODULE_CALL_ARGV_DRY_RUN;
+    if (strchr(fmt, 'S')) flags |= VALKEYMODULE_CALL_ARGV_SCRIPT_MODE;
     if (strchr(fmt, 'K')) flags |= VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK;
     int callbacks = 0;
     ValkeyModuleReplyHandlers handlers = {
         .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = countRawReply,
+        .replyParsingError = countReplyParsingError,
     };
     if (strchr(fmt, '0')) handlers.version = 0;
     if (strchr(fmt, '2')) handlers.version = VALKEYMODULE_REPLY_HANDLERS_VERSION + 1;
-    if (strchr(fmt, 'R')) handlers.onRespAvailable = replyWithRawRespString;
+    if (strchr(fmt, 'R')) handlers.onRespAvailable = replyWithRawRespAndCount;
     if (strchr(fmt, 'T')) {
         handlers.onRespAvailable = NULL;
         handlers.error = countErrorReply;
     }
     int ret = ValkeyModule_CallArgv(ctx, argv + 2, argc - 2, flags,
                                     strchr(fmt, 'N') ? NULL : &handlers, &callbacks);
-    if (strchr(fmt, 'R')) return VALKEYMODULE_OK;
+    if (handlers.onRespAvailable == replyWithRawRespAndCount && callbacks) return VALKEYMODULE_OK;
     int call_errno = errno;
     ValkeyModule_ReplyWithArray(ctx, 4);
     ValkeyModule_ReplyWithLongLong(ctx, ret == VALKEYMODULE_ERR);

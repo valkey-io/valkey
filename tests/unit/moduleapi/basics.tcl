@@ -103,6 +103,37 @@ start_server {tags {"modules"}} {
         assert_equal {0 0 1 1} [r test.call_argv_status E set]
     }
 
+    test "CallArgv DRY_RUN implies ERRORS_AS_REPLIES before validation and execution" {
+        foreach flags {D DT} {
+            assert_equal {0 0 1 1} [r test.call_argv_status $flags set]
+        }
+        assert_equal {0 0 1 0} [r test.call_argv_status DN set]
+        assert_match "-ERR wrong number*" [r test.call_argv_status DR set]
+        assert_equal {0 0 1 1} [r test.call_argv_status DK set dry-run-key value]
+        assert_equal {1 0 1 0} [r test.call_argv_status D0 set dry-run-key value]
+        foreach flags {D DT DR} {
+            assert_equal {0 0 0 0} [r test.call_argv_status $flags set dry-run-key value]
+        }
+        assert_equal 0 [r exists dry-run-key]
+    }
+
+    test "CallArgv SCRIPT_MODE handles errors without ERRORS_AS_REPLIES" {
+        assert_equal {1 0 1 1} [r test.call_argv_status S set]
+        assert_equal {1 0 0 1} [r test.call_argv_status S no-such-command]
+        assert_equal {1 0 0 1} [r test.call_argv_status S shutdown]
+        assert_equal {0 0 1 1} [r test.call_argv_status SE set]
+        assert_equal PONG [r ping]
+    }
+
+    test "CallArgv status replies when the raw callback did not run" {
+        assert_equal {0 0 0 0} [r test.call_argv_status RN ping]
+        assert_equal {0 0 0 0} [r test.call_argv_status RT ping]
+        assert_equal {0 0 1 1} [r test.call_argv_status RET set]
+        assert_equal {1 0 1 0} [r test.call_argv_status R0 ping]
+        assert_equal {1 0 1 0} [r test.call_argv_status RK ping]
+        assert_equal "+PONG\r\n" [r test.call_argv_status R ping]
+    }
+
     test "Test CallArgvRaw" {
         set reply [r test.call_argv_raw ping hello]
         assert_equal "\$5\r\nhello\r\n" $reply

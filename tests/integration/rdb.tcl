@@ -458,11 +458,14 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         assert_equal [r ping] "PONG"
     } {} {needs:debug}
 
-    test "forkless save survives PEXPIRE/PERSIST/SETEX on an existing key" {
+    test "forkless save survives PEXPIRE after a collection key is emptied" {
         r flushall
         r config set bgsave-default-method forkless
         r config set rdb-key-save-delay 0
         r debug populate 100000
+        # 22-char key: the set's dbEntry is 48 bytes, the same jemalloc bin as a
+        # populate string once an expire is attached to it.
+        r sadd set:000000000000000000 m
 
         r config set rdb-key-save-delay 10000
         r bgsave
@@ -472,9 +475,12 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not start"
         }
 
-        # PEXPIRE / PERSIST / SETEX on existing snapshot keys all go through setExpire ->
-        # objectSetKeyAndExpire, which reallocates the dbEntry onto a freed (expedited) slot -- the
-        # same reuse trigger as RENAME, with no RENAME in the workload.
+        # Emptying the set deletes it via SREM (not DEL), so its dbEntry pointer
+        # used to stay in early_iterate_entries after the free. Give the iterator
+        # time to hand the entry back so the free actually happens.
+        r srem set:000000000000000000 m
+        after 100
+        # PEXPIRE reallocates key:10's dbEntry; jemalloc returns the freed address.
         r pexpire key:10 10000000
         r persist key:11
         r setex key:12 1000 newval

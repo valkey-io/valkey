@@ -2457,9 +2457,12 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
         } else if (spec->find_keys_type == KSPEC_FK_KEYNUM) {
             step = spec->fk.keynum.keystep;
             long long numkeys;
-            if (spec->fk.keynum.keynumidx >= argc) goto invalid_spec;
+            /* keynumidx is relative to 'first', and the command may not have been
+             * arity-checked (an ACL check from a module or a script isn't). */
+            int keynum_idx = first + spec->fk.keynum.keynumidx;
+            if (keynum_idx < 0 || keynum_idx >= argc) goto invalid_spec;
 
-            sds keynum_str = objectGetVal(argv[first + spec->fk.keynum.keynumidx]);
+            sds keynum_str = objectGetVal(argv[keynum_idx]);
             if (!string2ll(keynum_str, sdslen(keynum_str), &numkeys) || numkeys < 0) {
                 /* Unable to parse the numkeys argument or it was invalid */
                 goto invalid_spec;
@@ -2753,6 +2756,17 @@ int genericGetKeys(int storeKeyOfs,
                    getKeysResult *result) {
     int i, num;
     keyReference *keys;
+
+    /* The command's own layout, picked by the getkeys callbacks below: a bad one
+     * is a bug, not a malformed command. */
+    serverAssert(storeKeyOfs >= 0 && keyCountOfs > storeKeyOfs && firstKeyOfs > keyCountOfs && keyStep >= 1);
+
+    /* argc, unlike the above, comes from the caller: a command that skipped the
+     * arity check can be too short to hold these arguments. */
+    if (keyCountOfs >= argc || firstKeyOfs >= argc) {
+        result->numkeys = 0;
+        return 0;
+    }
 
     num = atoi(objectGetVal(argv[keyCountOfs]));
     /* Sanity check. Don't return any key if the command is going to

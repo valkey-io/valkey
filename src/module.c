@@ -10668,6 +10668,7 @@ ValkeyModuleUser *VM_GetModuleUserFromUserName(ValkeyModuleString *name) {
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
  * * ENOENT: Specified command does not exist.
+ * * EINVAL: Invalid number of arguments for the specified command.
  * * EACCES: Command cannot be executed, according to ACL rules
  *
  * NOTE: Since 9.1, the underlying ACL check will NOT validate the user's access to the database.
@@ -10685,6 +10686,13 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
     /* Find command */
     if ((cmd = lookupCommand(argv, argc)) == NULL) {
         errno = ENOENT;
+        return VALKEYMODULE_ERR;
+    }
+
+    /* Checks arity, reject it here so key extraction never scans
+     * argv out of bounds. */
+    if (!commandCheckArity(cmd, argc, NULL)) {
+        errno = EINVAL;
         return VALKEYMODULE_ERR;
     }
 
@@ -10768,7 +10776,8 @@ int VM_ACLCheckChannelPermissions(ValkeyModuleUser *user, ValkeyModuleString *ch
  *
  * On success VALKEYMODULE_OK is returned, otherwise VALKEYMODULE_ERR is returned and
  * errno is set to one of the following values:
- * * EINVAL: Invalid arguments (e.g., negative dbid or dbid >= server.dbnum, command does not exist)
+ * * EINVAL: Invalid arguments (e.g., negative dbid or dbid >= server.dbnum, command does not exist,
+ *           wrong number of arguments for the specified command)
  * * EACCES: Permission denied (for any ACL violation)
  *
  * The optional denial_reason parameter can be used to get more specific information about
@@ -10792,6 +10801,13 @@ int VM_ACLCheckPermissions(ValkeyModuleUser *user,
     }
 
     if ((cmd = lookupCommand(argv, argc)) == NULL) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    /* Checks arity, reject it here so key extraction never scans
+     * argv out of bounds. */
+    if (!commandCheckArity(cmd, argc, NULL)) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
     }
@@ -15299,7 +15315,7 @@ int *VM_GetCommandKeysWithFlags(ValkeyModuleCtx *ctx,
         return NULL;
     }
 
-    if ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity)) {
+    if (!commandCheckArity(cmd, argc, NULL)) {
         errno = EINVAL;
         return NULL;
     }

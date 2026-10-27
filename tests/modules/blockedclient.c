@@ -903,6 +903,7 @@ int do_fake_bg_true(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argc);
 
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
+    if (!bc) return ValkeyModule_ReplyWithError(ctx, "block failed");
     ValkeyModuleCtx *bctx = ValkeyModule_GetThreadSafeContext(bc);
 
     ValkeyModule_ReplyWithBool(bctx, 1);

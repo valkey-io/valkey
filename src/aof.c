@@ -1799,8 +1799,8 @@ int loadSingleAppendOnlyFile(char *filename) {
 
     /* Read the actual AOF file, in REPL format, command by command. */
     while (1) {
-        int argc;
-        robj **argv;
+        int argc = 0;
+        robj **argv = NULL;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
 
         /* Serve the clients from time to time */

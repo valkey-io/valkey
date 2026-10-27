@@ -3813,8 +3813,8 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
          * prevents a crafted RDB from invoking arbitrary commands through the
          * fake client, which bypasses ACL checks. */
         if (type == RDB_OPCODE_UPDATE) {
-            robj **argv;
-            int argc;
+            robj **argv = NULL;
+            int argc = 0;
             respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdb, &argc, &argv);
             if (pr == RESP_PARSE_EOF) goto eoferr;
             if (pr == RESP_PARSE_FMTERR) goto inlinefmterr;

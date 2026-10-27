@@ -78,7 +78,9 @@ start_server {tags {"querybuf slow"}} {
         $rd client setname test_client
 
         # Create a large query buffer (more than PROTO_RESIZE_THRESHOLD - 32k)
-        $rd set x [string repeat A 400000]
+        # using an argument below PROTO_MBULK_BIG_ARG (32k) so the buffer grows
+        # greedily past 32k without being stolen by the big-arg zero-copy path.
+        $rd set x [string repeat A 30000]
 
         # Make sure query buff is larger than the peak resize threshold (PROTO_RESIZE_THRESHOLD) 32k
         set orig_test_client_qbuf [client_query_buffer test_client]
@@ -126,5 +128,28 @@ start_server {tags {"querybuf slow"}} {
      
         $rd close
     }
+
+    test "query buffer is not preallocated after big arg steal" {
+        r debug pause-cron 1
+        set rd [valkey_client]
+        $rd client setname test_client
+
+        # A bulk argument >= PROTO_MBULK_BIG_ARG (32k) is stolen into argv and
+        # replaced with an empty sds rather than preallocating bulklen+2 bytes.
+        set big [string repeat A 400000]
+        assert_equal {OK} [$rd set x $big]
+        assert_equal $big [r get x]
+        assert {[client_query_buffer test_client] < 16384}
+
+        # Back-to-back big arg commands continue to steal cleanly without
+        # retaining a fat query buffer.
+        set big2 [string repeat B 400000]
+        assert_equal {OK} [$rd set x $big2]
+        assert_equal $big2 [r get x]
+        assert {[client_query_buffer test_client] < 16384}
+
+        r debug pause-cron 0
+        $rd close
+    } {0} {needs:debug}
 
 }

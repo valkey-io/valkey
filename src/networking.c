@@ -4336,10 +4336,7 @@ static int parseMultibulk(client *c,
                 (*argv)[(*argc)++] = createObject(OBJ_STRING, c->querybuf);
                 *argv_len_sum += c->bulklen;
                 sdsIncrLen(c->querybuf, -2); /* remove CRLF */
-                /* Assume that if we saw a fat argument we'll see another one
-                 * likely... */
-                c->querybuf = sdsnewlen(SDS_NOINIT, c->bulklen + 2);
-                sdsclear(c->querybuf);
+                c->querybuf = sdsempty();
             } else {
                 (*argv)[(*argc)++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
                 *argv_len_sum += c->bulklen;

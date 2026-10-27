@@ -133,6 +133,52 @@ TEST_F(UtilTest, TestString2l) {
 #endif
 }
 
+TEST_F(UtilTest, TestString2ull) {
+    char buf[32];
+    unsigned long long v;
+
+    valkey_strlcpy(buf, "0", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, 0ULL);
+
+    valkey_strlcpy(buf, "9223372036854775807", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, (unsigned long long)LLONG_MAX);
+
+    /* Values above LLONG_MAX are handled by the strtoull() fallback. */
+    valkey_strlcpy(buf, "9223372036854775808", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, (unsigned long long)LLONG_MAX + 1);
+
+    valkey_strlcpy(buf, "18446744073709551615", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, ULLONG_MAX);
+
+    valkey_strlcpy(buf, "-0", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, 0ULL);
+
+    valkey_strlcpy(buf, "18446744073709551616", sizeof(buf)); /* overflow */
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    /* Negative values are out of range, including those that string2ll()
+     * rejects and strtoull() would silently wrap around. */
+    valkey_strlcpy(buf, "-1", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, " -1", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, "-9223372036854775809", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, "-18446744073709551615", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, "-18446744073709551616", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+}
+
 TEST_F(UtilTest, TestString2ullBase16AsyncSignalSafe) {
     char buf[32];
     unsigned long long value;

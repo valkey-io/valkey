@@ -71,7 +71,7 @@ static int connSetBlocking(connection *conn, bool blocking) {
             return C_ERR;
         }
         if (connRecvTimeout(conn, server.repl_timeout * 1000) == ANET_ERR) {
-            serverLog(LL_WARNING, "forkless-save: error setting send timeout");
+            serverLog(LL_WARNING, "forkless-save: error setting receive timeout");
             return C_ERR;
         }
     }
@@ -127,9 +127,15 @@ static void dropReplicaFromSaveAndQueueForMainThreadFree(forklessSaveInfo *saveI
     listDelNode(saveInfo->u.repl.clients, ln);
 
     int remaining = listLength(saveInfo->u.repl.clients);
+    int conn_errno = (c->conn && rioCheckType(&saveInfo->save_rio) == RIO_TYPE_CONNSET)
+                         ? rioConnsetConnErrno(&saveInfo->save_rio, c->conn)
+                         : 0;
     if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
         serverLog(LL_WARNING, "forkless-save: client(%llu) closed by primary. %d clients remain.",
                   (unsigned long long)c->id, remaining);
+    } else if (conn_errno) {
+        serverLog(LL_WARNING, "forkless-save: client(%llu) connection error: %s. %d clients remain.",
+                  (unsigned long long)c->id, strerror(conn_errno), remaining);
     } else {
         serverLog(LL_WARNING, "forkless-save: client(%llu) unresponsive. %d clients remain.",
                   (unsigned long long)c->id, remaining);
@@ -161,9 +167,6 @@ static void handleClosingClients(forklessSaveInfo *saveInfo) {
         if (pending_close || connset_error || !c->conn || connGetState(c->conn) != CONN_STATE_CONNECTED) {
             if (pending_close) {
                 serverLog(LL_DEBUG, "forkless-save: detected pending close on client(%llu).",
-                          (unsigned long long)c->id);
-            } else if (connset_error) {
-                serverLog(LL_WARNING, "forkless-save: client(%llu) connection error during stream, dropping.",
                           (unsigned long long)c->id);
             }
             dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
@@ -423,6 +426,7 @@ static void freeClientsMarkedForCloseAfterBgThreadStopped(forklessSaveInfo *save
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
+            serverLog(LL_WARNING, "forkless-save: replica %s closed by primary.", replicationGetReplicaName(c));
             listDelNode(saveInfo->u.repl.clients, ln);
             c->flag.forkless_managed = 0;
             atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
@@ -454,10 +458,8 @@ static void resumeClientsAndFreeClientList(forklessSaveInfo *saveInfo, bool succ
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (successful) {
-            serverLog(LL_NOTICE, "forkless-save: resuming regular activity for client(%llu)", (unsigned long long)c->id);
             resumeRegularReplicaActivity(c);
         } else {
-            serverLog(LL_NOTICE, "forkless-save: error or canceled, terminating client(%llu)", (unsigned long long)c->id);
             c->flag.forkless_managed = 0;
             freeClient(c);
         }
@@ -602,7 +604,6 @@ void retireForklessManagedReplica(client *c) {
  * forkless flags, reset its repl state, and free it. Runs on the main thread. */
 static void freeAbandonedForklessReplica(client *c) {
     serverAssert(onServerMainThread());
-    serverLog(LL_WARNING, "forkless-save: client(%llu) ended replication early", (unsigned long long)c->id);
     c->flag.forkless_managed = 0;
     if (c->repl_data) {
         atomic_store_explicit(&c->repl_data->forkless_pending_close, 0, memory_order_relaxed);
@@ -877,11 +878,7 @@ static void pinForklessCohortToBacklog(forklessSaveInfo *saveInfo) {
     listRewind(saveInfo->u.repl.clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
-        if (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) {
-            serverLog(LL_NOTICE, "forkless-save: skipping client(%llu) marked for closure in repl done",
-                      (unsigned long long)c->id);
-            continue;
-        }
+        if (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) continue;
         serverAssert(c->repl_data);
         ((replBufBlock *)listNodeValue(target_node))->refcount++;
         if (c->repl_data->ref_repl_buf_node != NULL) {
@@ -932,7 +929,6 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
 int forklessSaveToSockets(int req, int rdbver) {
     serverAssert(onServerMainThread());
     serverAssert(currentForklessSave == NULL);
-    serverLog(LL_NOTICE, "Beginning forklessSaveToSockets");
 
     forklessSaveInfo *saveInfo = zmalloc(sizeof(forklessSaveInfo));
     memset(saveInfo, 0, sizeof(forklessSaveInfo));
@@ -943,6 +939,7 @@ int forklessSaveToSockets(int req, int rdbver) {
 
     /* Collect replicas in WAIT_BGSAVE_END state (already set up by startBgsaveForReplication) */
     saveInfo->u.repl.clients = listCreate();
+    sds client_ids = sdsempty();
     listNode *ln;
     listIter li;
     listRewind(server.replicas, &li);
@@ -950,12 +947,15 @@ int forklessSaveToSockets(int req, int rdbver) {
         client *c = listNodeValue(ln);
         serverAssert(c->repl_data);
         if (c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
-            serverLog(LL_NOTICE, "forkless-save: beginning save to client ID: %llu", (unsigned long long)c->id);
+            client_ids = sdscatprintf(client_ids, " %s (client %llu)", replicationGetReplicaName(c),
+                                      (unsigned long long)c->id);
             listAddNodeTail(saveInfo->u.repl.clients, c);
             c->flag.forkless_managed = 1;
         }
     }
     serverAssert(listLength(saveInfo->u.repl.clients) > 0);
+    serverLog(LL_NOTICE, "forkless-save: beginning save to replicas:%s", client_ids);
+    sdsfree(client_ids);
     saveInfo->foreground_queue = NULL;
 
     /* Render the RDB header into a buffer up front. The bg thread writes the
@@ -1030,7 +1030,6 @@ werr:
     sdsfree(saveInfo->u.repl.footer_buf);
     saveInfo->u.repl.footer_buf = NULL;
     zfree(saveInfo);
-    serverLog(LL_WARNING, "Error in forklessSaveToSockets before starting thread");
     return C_ERR;
 }
 

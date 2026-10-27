@@ -2453,7 +2453,7 @@ foreach load_mode {disabled swapdb} {
                 $replica replicaof $primary_host $primary_port
 
                 # Make sure the forkless socket path (with inline commands) ran.
-                wait_for_log_messages -1 {"*Beginning forklessSaveToSockets*"} $loglines 100 100
+                wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
 
                 # Replica must sync while writes are still flowing.
                 wait_for_condition 100 100 {

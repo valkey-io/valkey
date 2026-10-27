@@ -2410,8 +2410,6 @@ int freeClient(client *c) {
     if (c->flag.forkless_managed) {
         if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed))
             return 0; /* Already marked, don't double-process. */
-        serverLog(LL_NOTICE, "freeClient: primary trying to free client(%llu) owned by forkless save",
-                  (unsigned long long)c->id);
         retireForklessManagedReplica(c);
         atomic_store_explicit(&c->repl_data->forkless_pending_close, 1, memory_order_relaxed);
         return 0;

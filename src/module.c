@@ -7287,12 +7287,19 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
         serverAssert(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK);
         serverAssert(c->bstate->async_rm_call_handle);
 
-        robj **argv_copy = zmalloc(sizeof(robj *) * argc);
-        for (int i = 0; i < argc; i++) {
-            incrRefCount(argv[i]);
-            argv_copy[i] = argv[i];
+        if (c->original_argv) {
+            /* The command name was rewritten, so the client already owns a copy of the arguments. The borrowed vector
+             * is only referenced by original_argv: drop that alias without freeing it. */
+            c->original_argv = NULL;
+            c->original_argc = 0;
+        } else {
+            robj **argv_copy = zmalloc(sizeof(robj *) * argc);
+            for (int i = 0; i < argc; i++) {
+                incrRefCount(argv[i]);
+                argv_copy[i] = argv[i];
+            }
+            c->argv = argv_copy;
         }
-        c->argv = argv_copy;
         c->flag.argv_borrowed = 0;
 
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;

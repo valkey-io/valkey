@@ -7,6 +7,7 @@ tags {"modules external:skip"} {
     set renames [list rename-command "CONFIG VCONFIG" \
                       rename-command "SET VSET" \
                       rename-command "ECHO VECHO" \
+                      rename-command "BLPOP VBLPOP" \
                       rename-command "LASTSAVE \"\""]
     start_server [list config_lines $renames] {
         r module load $testmodule
@@ -39,6 +40,27 @@ tags {"modules external:skip"} {
             assert_error {*unknown command*} {r eval "return server.call('do_rm_call', 'lastsave')" 0}
             assert_equal hi [r eval "return server.call('vecho', 'hi')" 0]
             assert_equal hi [r do_rm_call echo hi]
+        }
+
+        # A blocking call hands the arguments over to the blocked client, which must keep the renamed command name and
+        # not free the caller's vector.
+        foreach cmd {rm_call vm_call_argv} {
+            test "A blocking renamed command called by its original name unblocks - $cmd" {
+                set rd [valkey_deferring_client]
+                $rd do_${cmd}_async blpop l 0
+                wait_for_blocked_clients_count 1
+                r lpush l a
+                assert_equal [$rd read] {l a}
+                wait_for_blocked_clients_count 0
+                $rd close
+            }
+
+            test "A blocking renamed command called by its original name and replicated - $cmd" {
+                assert_equal {Blocked} [r do_${cmd}_fire_and_forget blpop l 0]
+                r lpush l a
+                wait_for_blocked_clients_count 0
+                assert_equal 0 [r llen l]
+            }
         }
 
         test {A removed command cannot be called in a replicated call} {

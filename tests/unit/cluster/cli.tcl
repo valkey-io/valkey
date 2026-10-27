@@ -21,7 +21,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         catch {exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
                         127.0.0.1:[srv 0 port] \
                         --cluster-replicas 1} err
-        assert_match "*Not enough nodes*" $err
+        assert_match "*Requested more replicas than nodes available*" $err
     }
 
     test {Create 1 node cluster} {

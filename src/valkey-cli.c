@@ -7212,9 +7212,7 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
     int replicas = config.cluster_manager_command.replicas;
     int primaries_count = CLUSTER_MANAGER_PRIMARIES_COUNT(node_len, replicas);
     if (primaries_count == 0) {
-        clusterManagerLogErr("*** Not enough nodes for %d replica(s) per primary: "
-                             "%d node(s) given, at least %d needed.\n",
-                             replicas, node_len, replicas + 1);
+        clusterManagerLogErr("*** Requested more replicas than nodes available.\n");
         return 0;
     }
     if (primaries_count < 3) {

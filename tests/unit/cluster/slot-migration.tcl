@@ -151,6 +151,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     R 0 SET "{aga}2" banana
 
     test "Slot migration states are replicated" {
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states
         assert_not_equal [get_open_slots 0] "\[609->-$R1_id\]"
         assert_not_equal [get_open_slots 1] "\[609-<-$R0_id\]"
@@ -171,7 +172,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration target is auto-updated after failover in target shard" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Trigger an auto-failover from R1 to R4
         fail_server 1 4
         # Validate final states
@@ -189,7 +190,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration source is auto-updated after failover in source shard" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Trigger an auto-failover from R0 to R3
         fail_server 0 3
         # Validate final states
@@ -207,7 +208,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica redirects key access in migrating slots" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -221,7 +222,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica of migrating node returns ASK redirect after READONLY" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -238,7 +239,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica of migrating node returns TRYAGAIN after READONLY" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -255,7 +256,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
         # (R3/R4) learn the migration state via gossip, which may still be
         # propagating when this test starts.
@@ -273,7 +274,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "New replica inherits migrating slot" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Reset R3 to turn it into an empty node
         assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
         assert_equal {OK} [R 3 CLUSTER RESET]
@@ -288,7 +289,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "New replica inherits importing slot" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Reset R4 to turn it into an empty node
         assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
         assert_equal {OK} [R 4 CLUSTER RESET]
@@ -329,6 +330,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
     set shard_pairs {0 3 1 4 2 5 6 7}
 
     test "Empty-shard migration replicates slot importing states" {
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states
         assert_not_equal [get_open_slots 0] "\[609->-$R6_id\]"
         assert_not_equal [get_open_slots 6] "\[609-<-$R0_id\]"
@@ -349,7 +351,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Empty-shard migration target is auto-updated after failover in target shard" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Trigger an auto-failover from R6 to R7
         fail_server 6 7
         # Validate final states
@@ -367,7 +369,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Empty-shard migration source is auto-updated after failover in source shard" {
-        normalize_cluster $shard_pairs
+        test_defer_fail { normalize_cluster $shard_pairs }
         # Trigger an auto-failover from R0 to R3
         fail_server 0 3
         # Validate final states

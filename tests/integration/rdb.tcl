@@ -482,6 +482,9 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         after 100
         # PEXPIRE reallocates key:10's dbEntry; jemalloc returns the freed address.
         r pexpire key:10 10000000
+        r persist key:11
+        r setex key:12 1000 newval
+        assert_equal [r get key:12] "newval"
 
         r config set rdb-key-save-delay 0
         waitForBgsave r

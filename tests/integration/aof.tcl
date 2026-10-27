@@ -832,4 +832,24 @@ tags {"aof cluster external:skip singledb"} {
         }
         clean_aof_persistence $aof_dirpath
     }
+
+    # A plain negative number was rejected by older versions as well, so such
+    # a record is not wrapped either; the error is ignored like any other.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand xadd s 1--3 f v]
+        append_to_aof [formatCommand xadd s 1-1 f v]
+    }
+
+    create_aof_manifest $aof_dirpath $aof_manifest_file {
+        append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+    }
+
+    start_server_aof [list dir $server_path propagation-error-behavior ignore] {
+        test "AOF with a plain negative stream ID sequence does not wrap it" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal {{1-1 {f v}}} [$client xrange s - +]
+        }
+        clean_aof_persistence $aof_dirpath
+    }
 }

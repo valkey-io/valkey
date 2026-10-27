@@ -1929,10 +1929,14 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
  * older primaries: keep the old conversion while executing commands from
  * those sources. Check the client that is executing the command rather than
  * the one passed to the parser, since some callers pass NULL to suppress
- * error replies (XCLAIM), and scripts run commands through their own client. */
+ * error replies (XCLAIM), and scripts run commands through their own client.
+ * Plain negative numbers such as "-3" were already rejected by older versions
+ * (string2ll() succeeds on them), so they are not accepted here either. */
 static int streamParseIDPart(const char *s, size_t slen, unsigned long long *value) {
     if (string2ull(s, slen, value)) return 1;
     if (server.current_client == NULL || !mustObeyClient(server.current_client)) return 0;
+    long long ll;
+    if (string2ll(s, slen, &ll)) return 0;
     errno = 0;
     char *endptr = NULL;
     *value = strtoull(s, &endptr, 10);

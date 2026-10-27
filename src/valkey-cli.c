@@ -6497,6 +6497,7 @@ static int clusterManagerFixOpenSlot(int slot) {
     sds migrating_str = sdsempty();
     sds importing_str = sdsempty();
     clusterManagerNode *owner = NULL; /* The obvious slot owner if any. */
+    int is_raft = cluster_manager.protocol == CLUSTER_MANAGER_PROTOCOL_RAFT;
 
     /* Iterate all the nodes, looking for potential owners of this slot. */
     listIter li;
@@ -6507,6 +6508,7 @@ static int clusterManagerFixOpenSlot(int slot) {
         if (n->flags & CLUSTER_MANAGER_FLAG_REPLICA) continue;
         if (n->slots[slot]) {
             listAddNodeTail(owners, n);
+            if (is_raft) owner = n;
         } else {
             valkeyReply *r = CLUSTER_MANAGER_COMMAND(n, "CLUSTER COUNTKEYSINSLOT %d", slot);
             success = clusterManagerCheckValkeyReply(n, r, NULL);
@@ -6624,8 +6626,12 @@ static int clusterManagerFixOpenSlot(int slot) {
         while ((ln = listNext(&li)) != NULL) {
             clusterManagerNode *n = ln->value;
             if (n == owner) continue;
-            success = clusterManagerDelSlot(n, slot, 1);
-            if (!success) goto cleanup;
+            /* Raft has no per-node slot ownership to remove. DELSLOTS here
+             * would unassign the slot everywhere and delete the owner's keys. */
+            if (!is_raft) {
+                success = clusterManagerDelSlot(n, slot, 1);
+                if (!success) goto cleanup;
+            }
             n->slots[slot] = 0;
             /* Assign the slot to the owner in the node 'n' configuration.' */
             success = clusterManagerSetSlot(n, owner, slot, "node", NULL);
@@ -6665,7 +6671,15 @@ static int clusterManagerFixOpenSlot(int slot) {
         listRewind(importing, &li);
         while ((ln = listNext(&li)) != NULL) {
             clusterManagerNode *n = ln->value;
-            if (n == owner) continue;
+            if (n == owner) {
+                /* A Raft ownership change may reach the importing node before
+                 * SETSLOT NODE is sent there to clear its node-local state. */
+                if (is_raft) {
+                    success = clusterManagerClearSlotStatus(n, slot);
+                    if (!success) goto cleanup;
+                }
+                continue;
+            }
             success = clusterManagerMoveSlot(n, owner, slot, move_opts, NULL);
             if (!success) goto cleanup;
             clusterManagerLogInfo(">>> Setting %d as STABLE in "

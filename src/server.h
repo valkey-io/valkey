@@ -1333,39 +1333,39 @@ typedef struct replicaCompressionState {
 } replicaCompressionState;
 
 typedef struct ClientReplicationData {
-    int repl_state;                        /* Replication state if this is a replica. */
-    int repl_start_cmd_stream_on_ack;      /* Install replica write handler on first ACK. */
-    int repldbfd;                          /* Replication DB file descriptor. */
-    off_t repldboff;                       /* Replication DB file offset. */
-    off_t repldbsize;                      /* Replication DB file size. */
-    sds replpreamble;                      /* Replication DB preamble. */
-    long long read_reploff;                /* Read replication offset if this is a primary. */
-    long long reploff;                     /* Applied replication offset if this is a primary. */
-    long long repl_applied;                /* Applied replication data count in querybuf, if this is a replica. */
-    int repl_applied_dbid;                 /* DB selected at repl_applied in the stream, if this is a slot import. */
-    long long repl_ack_off;                /* Replication ack offset, if this is a replica. */
-    long long repl_aof_off;                /* Replication AOF fsync ack offset, if this is a replica. */
-    long long repl_ack_time;               /* Replication ack time, if this is a replica. */
-    long long repl_last_partial_write;     /* The last time the server did a partial write from the RDB child pipe to this
-                                              replica  */
-    long long psync_initial_offset;        /* FULLRESYNC reply offset other replicas
-                                              copying this replica output buffer
-                                              should use. */
-    char replid[CONFIG_RUN_ID_SIZE + 1];   /* primary replication ID (if primary). */
-    int replica_listening_port;            /* As configured with: REPLCONF listening-port */
-    char *replica_addr;                    /* Optionally given by REPLCONF ip-address */
-    int replica_version;                   /* Version on the form 0xMMmmpp. */
-    short replica_capa;                    /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
-    _Atomic(int) forkless_pending_close;   /* Main thread asks the forkless save to hand this replica
-                                            * back for closing. Atomic (relaxed) since both threads access it without a lock. */
-    short replica_req;                     /* Replica requirements: REPLICA_REQ_* */
-    uint64_t associated_rdb_client_id;     /* The client id of this replica's rdb connection */
-    time_t rdb_client_disconnect_time;     /* Time of the first freeClient call on this client. Used for delaying free. */
-    listNode *ref_repl_buf_node;           /* Referenced node of replication buffer blocks,
-                                             see the definition of replBufBlock. */
-    size_t ref_block_pos;                  /* Access position of referenced buffer block,
-                                             i.e. the next offset to send. */
-    sds replica_nodeid;                    /* Node id in cluster mode. */
+    int repl_state;                      /* Replication state if this is a replica. */
+    int repl_start_cmd_stream_on_ack;    /* Install replica write handler on first ACK. */
+    int repldbfd;                        /* Replication DB file descriptor. */
+    off_t repldboff;                     /* Replication DB file offset. */
+    off_t repldbsize;                    /* Replication DB file size. */
+    sds replpreamble;                    /* Replication DB preamble. */
+    long long read_reploff;              /* Read replication offset if this is a primary. */
+    long long reploff;                   /* Applied replication offset if this is a primary. */
+    long long repl_applied;              /* Applied replication data count in querybuf, if this is a replica. */
+    int repl_applied_dbid;               /* DB selected at repl_applied in the stream, if this is a slot import. */
+    long long repl_ack_off;              /* Replication ack offset, if this is a replica. */
+    long long repl_aof_off;              /* Replication AOF fsync ack offset, if this is a replica. */
+    long long repl_ack_time;             /* Replication ack time, if this is a replica. */
+    long long repl_last_partial_write;   /* The last time the server did a partial write from the RDB child pipe to this
+                                            replica  */
+    long long psync_initial_offset;      /* FULLRESYNC reply offset other replicas
+                                            copying this replica output buffer
+                                            should use. */
+    char replid[CONFIG_RUN_ID_SIZE + 1]; /* primary replication ID (if primary). */
+    int replica_listening_port;          /* As configured with: REPLCONF listening-port */
+    char *replica_addr;                  /* Optionally given by REPLCONF ip-address */
+    int replica_version;                 /* Version on the form 0xMMmmpp. */
+    short replica_capa;                  /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
+    _Atomic(int) forkless_pending_close; /* Main thread asks the forkless save to hand this replica
+                                          * back for closing. Atomic (relaxed) since both threads access it without a lock. */
+    short replica_req;                   /* Replica requirements: REPLICA_REQ_* */
+    uint64_t associated_rdb_client_id;   /* The client id of this replica's rdb connection */
+    time_t rdb_client_disconnect_time;   /* Time of the first freeClient call on this client. Used for delaying free. */
+    listNode *ref_repl_buf_node;         /* Referenced node of replication buffer blocks,
+                                           see the definition of replBufBlock. */
+    size_t ref_block_pos;                /* Access position of referenced buffer block,
+                                           i.e. the next offset to send. */
+    sds replica_nodeid;                  /* Node id in cluster mode. */
 
     replicaCompressionState *repl_compression; /* Primary-side compression state for this link, or NULL for plaintext. */
 } ClientReplicationData;

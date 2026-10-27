@@ -400,7 +400,7 @@ static void *forklessSaveProcessor(void *arg) {
               items, message);
 
     /* For socket saves, finish the stream through the connset: write the staged
-     * tail (repl aux + module AFTER_RDB aux), then emit the EOF opcode + checksum 
+     * tail (repl aux + module AFTER_RDB aux), then emit the EOF opcode + checksum
      * and the EOF end marker here. */
     if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
         if (!terminated && err == C_OK) {
@@ -873,7 +873,7 @@ static long long replicationMonitorTimeProc(struct aeEventLoop *eventLoop, long 
  *
  * The EOF opcode + trailing checksum are NOT written here: this is a main-thread
  * function, and the main thread produces the header and this tail but not the
- * keyspace data, so it cannot compute an accurate checksum. 
+ * keyspace data, so it cannot compute an accurate checksum.
  *
  * Returns C_OK with footer_buf set, or C_ERR with footer_buf left NULL. */
 static int renderForklessRdbTail(forklessSaveInfo *saveInfo) {
@@ -895,7 +895,7 @@ static int renderForklessRdbTail(forklessSaveInfo *saveInfo) {
 
 /* Pin each replica of the save to the current tail of the shared replication
  * backlog. From the iteration-done cut point on, live writes accumulate in the
- * shared backlog rather than being inlined into the RDB; the bytes are withheld 
+ * shared backlog rather than being inlined into the RDB; the bytes are withheld
  * until the replica ACKs. */
 static void pinForklessCohortToBacklog(forklessSaveInfo *saveInfo) {
     serverAssert(onServerMainThread());

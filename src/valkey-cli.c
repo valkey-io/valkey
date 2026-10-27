@@ -2752,7 +2752,14 @@ static int parseOptions(int argc, char **argv) {
         } else if ((!strcmp(argv[i], "--cluster-only-replicas"))) {
             config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_REPLICAS_ONLY;
         } else if (!strcmp(argv[i], "--cluster-replicas") && !lastarg) {
-            config.cluster_manager_command.replicas = atoi(argv[++i]);
+            char *eptr;
+            errno = 0;
+            long replicas = strtol(argv[++i], &eptr, 10);
+            if (eptr == argv[i] || eptr[0] != '\0' || errno == ERANGE || replicas < 0 || replicas >= INT_MAX) {
+                fprintf(stderr, "Invalid --cluster-replicas value: '%s', must be a non-negative integer.\n", argv[i]);
+                exit(1);
+            }
+            config.cluster_manager_command.replicas = (int)replicas;
         } else if ((!strcmp(argv[i], "--cluster-master-id") || !strcmp(argv[i], "--cluster-primary-id")) && !lastarg) {
             config.cluster_manager_command.primary_id = argv[++i];
         } else if (!strcmp(argv[i], "--cluster-from") && !lastarg) {

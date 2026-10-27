@@ -5,12 +5,13 @@
 # STREAM_FILE is provided, its contents are sent after the RDB and the
 # connection stays open until the replica disconnects.
 #
-# Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE ?STREAM_FILE?
+# Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE ?STREAM_FILE? ?OFFSET?
 
 set port [lindex $argv 0]
 set payload_file [lindex $argv 1]
 set announce_size [lindex $argv 2]
 set stream_file [lindex $argv 3]
+set fullresync_offset [expr {$argc > 4 ? [lindex $argv 4] : 0}]
 
 set fd [open $payload_file r]
 fconfigure $fd -translation binary
@@ -29,7 +30,7 @@ if {$stream_file ne ""} {
 # once per command-name line keeps replies in step with pipelined commands;
 # RESP framing lines (*N, $N) and argument lines fall through unmatched.
 proc accept {sock host port} {
-    global payload announce_size stream_payload done
+    global payload announce_size stream_payload fullresync_offset done
     fconfigure $sock -translation binary -blocking 1
     set served 0
     catch {
@@ -42,7 +43,7 @@ proc accept {sock host port} {
                 puts -nonewline $sock "+OK\r\n"
                 flush $sock
             } elseif {$cmd eq "PSYNC"} {
-                puts -nonewline $sock "+FULLRESYNC [string repeat 0 40] 0\r\n"
+                puts -nonewline $sock "+FULLRESYNC [string repeat 0 40] $fullresync_offset\r\n"
                 puts -nonewline $sock "\$$announce_size\r\n"
                 puts -nonewline $sock $payload
                 flush $sock

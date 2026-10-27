@@ -2283,6 +2283,7 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
                     set loglines [count_log_lines 0]
                     $replica replicaof 127.0.0.1 $port
                     wait_for_log_messages 0 {"*the RDB doesn't carry a valid offset*"} $loglines 100 100
+                    assert_equal down [s 0 master_link_status]
                     $replica replicaof no one
                     catch {exec kill $pid}
                 }

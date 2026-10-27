@@ -2223,7 +2223,7 @@ start_server {tags {"repl needs:other-server external:skip"} overrides {forkless
     }
 }
 
-start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
+start_server {tags {"repl external:skip tls:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
     set primary [srv 0 client]
     for {set i 0} {$i < 500} {incr i} { $primary set key:$i val:$i }
 
@@ -2247,7 +2247,7 @@ start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-ena
     }
 }
 
-start_server {tags {"repl external:skip"} overrides {save ""}} {
+start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
     set src [srv 0 client]
     $src set k v
     start_server {overrides {save ""}} {

@@ -1524,9 +1524,109 @@ struct client *createAOFClient(void) {
     return c;
 }
 
-/* Adapts fread to the read_fn signature used by parseRespArgsFromReader. */
+/* Adapts fread to the read_fn signature used by parseRespCommandFromReader. */
 static size_t aofFileReader(void *ctx, void *buf, size_t len) {
     return fread(buf, len, 1, (FILE *)ctx) == 1 ? len : 0;
+}
+
+/* Read a "<prefix><number>\r\n" line through read_fn and parse the number into
+ * *out. Returns RESP_PARSE_OK, RESP_PARSE_EOF, or RESP_PARSE_FMTERR. */
+static respParseResult readRespNumberLine(size_t (*read_fn)(void *ctx, void *buf, size_t len),
+                                          void *ctx,
+                                          char prefix,
+                                          long *out) {
+    char buf[128];
+
+    if (read_fn(ctx, buf, 1) == 0) return RESP_PARSE_EOF;
+    if (buf[0] != prefix) return RESP_PARSE_FMTERR;
+    int pos = 0;
+    int found_newline = 0;
+    while (pos < (int)sizeof(buf) - 1) {
+        if (read_fn(ctx, buf + pos, 1) == 0) return RESP_PARSE_EOF;
+        if (buf[pos] == '\n') {
+            found_newline = 1;
+            break;
+        }
+        pos++;
+    }
+    /* An over-long line is malformed and would desync the stream. */
+    if (!found_newline) return RESP_PARSE_FMTERR;
+    buf[pos] = '\0'; /* overwrite \n; buf may have a trailing \r */
+    char *endptr;
+    *out = strtol(buf, &endptr, 10);
+    /* strtol leaves endptr at the start when it parsed no digits at all. */
+    if (endptr == buf) return RESP_PARSE_FMTERR;
+    return RESP_PARSE_OK;
+}
+
+/* Read one RESP command (*<argc>\r\n followed by argc $<len>\r\n<data>\r\n
+ * arguments) through read_fn into a freshly allocated argv. On RESP_PARSE_OK
+ * the caller owns argv and its objects.
+ *
+ * read_fn must read exactly len bytes into buf and return len on success or 0
+ * on failure. ctx is passed back untouched so the source (rio, FILE, ...)
+ * is opaque to this parser.
+ *
+ * Returns RESP_PARSE_OK, RESP_PARSE_EOF if the bytes could not be read,
+ * RESP_PARSE_FMTERR if the input is malformed, or RESP_PARSE_OOM if it is too
+ * large to allocate. On error any partial allocation is freed and the outputs
+ * are left untouched. */
+respParseResult parseRespCommandFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len),
+                                           void *ctx,
+                                           int *argc_out,
+                                           robj ***argv_out) {
+    long argc;
+    int j;
+    respParseResult result = readRespNumberLine(read_fn, ctx, '*', &argc);
+    if (result != RESP_PARSE_OK) return result;
+    if (argc < 1 || argc > INT_MAX || (size_t)argc > SIZE_MAX / sizeof(robj *)) return RESP_PARSE_FMTERR;
+
+    robj **argv = ztrymalloc(sizeof(robj *) * argc);
+    if (argv == NULL) return RESP_PARSE_OOM;
+    for (j = 0; j < argc; j++) {
+        long len;
+        result = readRespNumberLine(read_fn, ctx, '$', &len);
+        if (result != RESP_PARSE_OK) goto err;
+        /* A negative len would become a huge size_t. */
+        if (len < 0) {
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+
+        sds argsds = sdstrynewlen(SDS_NOINIT, len);
+        if (argsds == NULL) {
+            result = RESP_PARSE_OOM;
+            goto err;
+        }
+        if (len && read_fn(ctx, argsds, len) == 0) {
+            sdsfree(argsds);
+            result = RESP_PARSE_EOF;
+            goto err;
+        }
+        argv[j] = createObject(OBJ_STRING, argsds);
+
+        /* Discard the trailing \r\n, validating it is exactly \r\n. */
+        char crlf[2];
+        if (read_fn(ctx, crlf, 2) == 0) {
+            j++; /* argv[j] was assigned above; free it too. */
+            result = RESP_PARSE_EOF;
+            goto err;
+        }
+        if (crlf[0] != '\r' || crlf[1] != '\n') {
+            j++; /* argv[j] was assigned above; free it too. */
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+    }
+
+    *argc_out = (int)argc;
+    *argv_out = argv;
+    return RESP_PARSE_OK;
+
+err:
+    for (int k = 0; k < j; k++) decrRefCount(argv[k]);
+    zfree(argv);
+    return result;
 }
 
 /* Run one command that has already been parsed into argv/argc, using a fake
@@ -1693,24 +1793,25 @@ int loadSingleAppendOnlyFile(char *filename) {
             processEventsWhileBlocked();
             processModuleLoadingProgressEvent(1);
         }
-        if (fgets(buf, sizeof(buf), fp) == NULL) {
+        int ch = getc(fp);
+        if (ch == EOF) {
             if (feof(fp)) {
                 break;
             } else {
                 goto readerr;
             }
         }
-        if (buf[0] == '#') continue; /* Skip annotations */
-        if (buf[0] != '*') goto fmterr;
-        if (buf[1] == '\0') goto readerr;
-        argc = atoi(buf + 1);
-        if (argc < 1) goto fmterr;
-        if ((size_t)argc > SIZE_MAX / sizeof(robj *)) goto fmterr;
+        if (ch == '#') { /* Skip annotations */
+            if (fgets(buf, sizeof(buf), fp) == NULL && !feof(fp)) goto readerr;
+            continue;
+        }
+        ungetc(ch, fp);
 
-        /* Read the argument list into the fake client's argv. */
-        respParseResult pr = parseRespArgsFromReader(aofFileReader, fp, argc, &argv);
+        /* Read the next command into the fake client's argv. */
+        respParseResult pr = parseRespCommandFromReader(aofFileReader, fp, &argc, &argv);
         if (pr == RESP_PARSE_EOF) goto readerr;
         if (pr == RESP_PARSE_FMTERR) goto fmterr;
+        if (pr == RESP_PARSE_OOM) goto oomerr;
 
         /* Command lookup, validation and execution. Keep MULTI framing (0) so
          * AOF transactions replay as transactions. */
@@ -1788,6 +1889,11 @@ fmterr: /* Format error. */
               "Bad file format reading the append only file %s: "
               "make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>",
               filename);
+    ret = AOF_FAILED;
+    goto cleanup;
+
+oomerr: /* An argument too large to allocate. */
+    serverLog(LL_WARNING, "Out of memory reading the append only file %s", filename);
     ret = AOF_FAILED;
     /* fall through to cleanup. */
 

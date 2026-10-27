@@ -37,12 +37,13 @@
 /* TBD: include only necessary headers. */
 #include "server.h"
 
-/* Result of the RESP command parse helpers (parseRespArgsFromReader and the
- * RDB/AOF replay parsers). */
+/* Result of parseRespCommandFromReader, the RESP command parser shared by RDB
+ * and AOF loading. */
 typedef enum {
     RESP_PARSE_OK = 0, /* Parsed successfully. */
     RESP_PARSE_EOF,    /* Reader hit end of input (possibly a truncated tail). */
-    RESP_PARSE_FMTERR  /* Malformed input (bad protocol bytes). */
+    RESP_PARSE_FMTERR, /* Malformed input (bad protocol bytes). */
+    RESP_PARSE_OOM     /* An argument was too large to allocate. */
 } respParseResult;
 
 /* Result of loadCommandFromArgv(), which replays one command against a fake client */
@@ -292,7 +293,7 @@ void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end);
 void rdbClearSaveState(time_t save_end);
 
 /* RESP command replay parsers shared by RDB and AOF loading. */
-respParseResult parseRespArgsFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int argc, robj ***argv_out);
+respParseResult parseRespCommandFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int *argc_out, robj ***argv_out);
 struct client *createAOFClient(void);
 loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int ignore_multi_exec, sds *err);
 

@@ -3737,131 +3737,6 @@ static size_t rdbRioReader(void *ctx, void *buf, size_t len) {
     return rioRead((rio *)ctx, buf, len);
 }
 
-/* Read a RESP multi-bulk header (*<argc>\r\n) through read_fn and return the
- * argument count in *argc_out.
- *
- * read_fn must read exactly len bytes into buf and return len on success or 0
- * on failure (same contract as rioRead). ctx is passed back untouched so the
- * source (rio, FILE, ...) is opaque to this parser.
- *
- * Returns RESP_PARSE_OK with *argc_out set, RESP_PARSE_EOF if the bytes could
- * not be read, or RESP_PARSE_FMTERR if the header is malformed. */
-static respParseResult parseRespHeaderFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int *argc_out) {
-    char buf[128];
-
-    if (read_fn(ctx, buf, 1) == 0) return RESP_PARSE_EOF;
-    if (buf[0] != '*') return RESP_PARSE_FMTERR;
-    int pos = 0;
-    int found_newline = 0;
-    while (pos < (int)sizeof(buf) - 1) {
-        if (read_fn(ctx, buf + pos, 1) == 0) return RESP_PARSE_EOF;
-        if (buf[pos] == '\n') {
-            found_newline = 1;
-            break;
-        }
-        pos++;
-    }
-    if (!found_newline) return RESP_PARSE_FMTERR;
-    buf[pos] = '\0'; /* overwrite \n; buf may have a trailing \r */
-    char *endptr;
-    long argc = strtol(buf, &endptr, 10);
-    /* strtol leaves endptr at the start when it parsed no digits at all. */
-    int parsed_no_digits = (endptr == buf);
-    if (parsed_no_digits || argc < 1 || argc > 1024 * 1024) return RESP_PARSE_FMTERR;
-    *argc_out = (int)argc;
-    return RESP_PARSE_OK;
-}
-
-/* Read argc RESP arguments ($<len>\r\n<data>\r\n each) through read_fn into a
- * freshly allocated argv, returned in *argv_out. The caller must already know
- * argc (see parseRespHeaderFromReader) and owns argv and its objects on OK.
- *
- * read_fn has the same contract as in parseRespHeaderFromReader. Returns
- * RESP_PARSE_OK, RESP_PARSE_EOF, or RESP_PARSE_FMTERR; on error any partial
- * allocation is freed and *argv_out is left untouched. */
-respParseResult parseRespArgsFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int argc, robj ***argv_out) {
-    char buf[128];
-    int j;
-    respParseResult result;
-
-    robj **argv = ztrymalloc(sizeof(robj *) * argc);
-    /* argc is bounded by parseRespHeaderFromReader, but allocation can still fail
-     * under memory pressure; fail the load cleanly rather than crashing. */
-    if (argv == NULL) return RESP_PARSE_FMTERR;
-    for (j = 0; j < argc; j++) {
-        if (read_fn(ctx, buf, 1) == 0) {
-            result = RESP_PARSE_EOF;
-            goto err;
-        }
-        if (buf[0] != '$') {
-            result = RESP_PARSE_FMTERR;
-            goto err;
-        }
-        int pos = 0;
-        int found_newline = 0;
-        while (pos < (int)sizeof(buf) - 1) {
-            if (read_fn(ctx, buf + pos, 1) == 0) {
-                result = RESP_PARSE_EOF;
-                goto err;
-            }
-            if (buf[pos] == '\n') {
-                found_newline = 1;
-                break;
-            }
-            pos++;
-        }
-        /* An over-long bulk-length line is malformed and would desync the stream. */
-        if (!found_newline) {
-            result = RESP_PARSE_FMTERR;
-            goto err;
-        }
-        buf[pos] = '\0';
-        char *endptr;
-        long len = strtol(buf, &endptr, 10);
-        /* strtol leaves endptr at the start when it parsed no digits at all. */
-        int parsed_no_digits = (endptr == buf);
-        /* Reject non-numeric or negative lengths before allocating: a negative
-         * len becomes a huge size_t. */
-        if (parsed_no_digits || len < 0) {
-            result = RESP_PARSE_FMTERR;
-            goto err;
-        }
-
-        sds argsds = sdstrynewlen(SDS_NOINIT, len);
-        if (argsds == NULL) {
-            result = RESP_PARSE_FMTERR;
-            goto err;
-        }
-        if (len && read_fn(ctx, argsds, len) == 0) {
-            sdsfree(argsds);
-            result = RESP_PARSE_EOF;
-            goto err;
-        }
-        argv[j] = createObject(OBJ_STRING, argsds);
-
-        /* Discard the trailing \r\n, validating it is exactly \r\n. */
-        char crlf[2];
-        if (read_fn(ctx, crlf, 2) == 0) {
-            j++; /* argv[j] was assigned above; free it too. */
-            result = RESP_PARSE_EOF;
-            goto err;
-        }
-        if (crlf[0] != '\r' || crlf[1] != '\n') {
-            j++; /* argv[j] was assigned above; free it too. */
-            result = RESP_PARSE_FMTERR;
-            goto err;
-        }
-    }
-
-    *argv_out = argv;
-    return RESP_PARSE_OK;
-
-err:
-    for (int k = 0; k < j; k++) decrRefCount(argv[k]);
-    zfree(argv);
-    return result;
-}
-
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
  * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
@@ -3940,8 +3815,10 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if (type == RDB_OPCODE_UPDATE) {
             robj **argv;
             int argc;
-            if (parseRespHeaderFromReader(rdbRioReader, rdb, &argc) != RESP_PARSE_OK) goto eoferr;
-            if (parseRespArgsFromReader(rdbRioReader, rdb, argc, &argv) != RESP_PARSE_OK) goto eoferr;
+            respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdb, &argc, &argv);
+            if (pr == RESP_PARSE_EOF) goto eoferr;
+            if (pr == RESP_PARSE_FMTERR) goto inlinefmterr;
+            if (pr == RESP_PARSE_OOM) goto inlineoomerr;
 
             struct serverCommand *inline_cmd = lookupCommand(argv, argc);
             if (inline_cmd == NULL || !(inline_cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
@@ -4387,6 +4264,14 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
 loaderr:
     ret = RDB_FAILED;
     goto cleanup;
+
+inlinefmterr:
+    serverLog(LL_WARNING, "Malformed inline replication command in RDB");
+    goto loaderr;
+
+inlineoomerr:
+    serverLog(LL_WARNING, "Out of memory reading inline replication command in RDB");
+    goto loaderr;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
      * this will in turn either abort the server in most cases, or if we are loading

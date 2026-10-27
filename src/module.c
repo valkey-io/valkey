@@ -8487,7 +8487,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
     client *c = ctx->client;
     int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
     int type = getClientType(c);
-    int can_block = type == CLIENT_TYPE_NORMAL ||
+    bool can_block = type == CLIENT_TYPE_NORMAL ||
                     (type == CLIENT_TYPE_PUBSUB && c->resp != 2 && !is_keyspace_notification);
     if (c->flag.blocked || !can_block) {
         errno = ENOTSUP;

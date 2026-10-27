@@ -463,7 +463,7 @@ int test_rm_call_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
 
 /* Reply handler used by VM_CallArgv wrappers: forwards the raw RESP reply to the client */
 static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
-    UNUSED(ctx);
+    if (ctx) *(int *)ctx = 1;
     if (proto_len == 0) {
         /* DRY RUN FLAG case */
         ValkeyModule_ReplyWithError(mctx, "NULL reply returned");
@@ -568,7 +568,9 @@ int test_vm_call_argv_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
     };
 
     /* argv[2] is the command name; pass argv+2 so it becomes argv[0] of the call */
-    if (ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, NULL) == VALKEYMODULE_ERR) {
+    int replied = 0;
+    int ret = ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, &replied);
+    if (ret == VALKEYMODULE_ERR || !replied) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }
     return VALKEYMODULE_OK;

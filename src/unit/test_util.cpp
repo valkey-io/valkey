@@ -177,6 +177,35 @@ TEST_F(UtilTest, TestString2ull) {
 
     valkey_strlcpy(buf, "-18446744073709551616", sizeof(buf));
     ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    /* Negative values that string2ll() rejects for another reason (leading
+     * zero, leading whitespace, too long) and the fallback used to wrap. */
+    valkey_strlcpy(buf, "-01", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, "\t-7", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, "-00000000000000000001", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 0);
+
+    /* The strtoull() fallback keeps accepting a leading '+', leading
+     * whitespace and leading zeros. */
+    valkey_strlcpy(buf, "+5", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, 5ULL);
+
+    valkey_strlcpy(buf, " 5", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, 5ULL);
+
+    valkey_strlcpy(buf, "05", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, 5ULL);
+
+    /* Bytes after an embedded NUL are part of the input. */
+    ASSERT_EQ(string2ull("5\0-", 3, &v), 0);
+    ASSERT_EQ(string2ull("05\0", 3, &v), 0);
 }
 
 TEST_F(UtilTest, TestString2ullBase16AsyncSignalSafe) {

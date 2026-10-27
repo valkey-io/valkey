@@ -681,7 +681,9 @@ int string2ull(const char *s, size_t slen, unsigned long long *value) {
     errno = 0;
     char *endptr = NULL;
     *value = strtoull(s, &endptr, 10);
-    if (errno == EINVAL || errno == ERANGE || !(*s != '\0' && *endptr == '\0')) return 0; /* strtoull() failed. */
+    /* Require strtoull() to consume exactly slen bytes, so that the result
+     * does not depend on bytes after an embedded NUL. */
+    if (errno == EINVAL || errno == ERANGE || slen == 0 || endptr != s + slen) return 0; /* strtoull() failed. */
     /* strtoull() accepts a leading '-' and returns the negated value converted
      * to unsigned instead of failing, so reject negative values here as well
      * ("-0" still parses as 0). */

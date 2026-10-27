@@ -1381,7 +1381,7 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val) {
     return rdbSaveAuxField(rdb, key, strlen(key), buf, vlen);
 }
 
-/* Save a few default AUX fields with information about the RDB generated. */
+/* Save the replication AUX fields (stream db, replication ID and offset). */
 int rdbSaveInfoReplAuxFields(rio *rdb, rdbSaveInfo *rsi) {
     serverAssert(rsi != NULL);
     if (rdbSaveAuxFieldStrInt(rdb, "repl-stream-db", rsi->repl_stream_db) == -1) return -1;
@@ -1390,6 +1390,7 @@ int rdbSaveInfoReplAuxFields(rio *rdb, rdbSaveInfo *rsi) {
     return 1;
 }
 
+/* Save a few default AUX fields with information about the RDB generated. */
 int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     int redis_bits = (sizeof(void *) == 8) ? 64 : 32;
     int aof_base = (rdbflags & RDBFLAGS_AOF_PREAMBLE) != 0;
@@ -1401,11 +1402,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     if (rdbSaveAuxFieldStrInt(rdb, "used-mem", zmalloc_used_memory()) == -1) return -1;
 
     /* Handle saving options that generate aux fields. */
-    if (rsi) {
-        if (rdbSaveAuxFieldStrInt(rdb, "repl-stream-db", rsi->repl_stream_db) == -1) return -1;
-        if (rdbSaveAuxFieldStrStr(rdb, "repl-id", server.replid) == -1) return -1;
-        if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.primary_repl_offset) == -1) return -1;
-    }
+    if (rsi && rdbSaveInfoReplAuxFields(rdb, rsi) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb, "aof-base", aof_base) == -1) return -1;
 
     /* Handle additional dynamic aux fields */

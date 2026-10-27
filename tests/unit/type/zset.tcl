@@ -910,6 +910,73 @@ start_server {tags {"zset"}} {
             assert_equal {b} [r zrange zset 0 -1]
         }
 
+        test "ZLEXCOUNT/ZREMRANGEBYLEX with mixed scores - $encoding" {
+            # The range is the run in score order that starts at the first
+            # element >= min and stops at the first element after it > max.
+            foreach {members min max count left} {
+                {1 a 2 b 0 c} {[a} + 3 {}
+                {1 a 2 b 0 c} - + 3 {}
+                {1 a 2 b 0 c} {[a} {[a} 0 {c a b}
+                {1 a 2 b 0 c} {(a} + 3 {}
+                {1 a 2 b 0 c} - {[b} 0 {c a b}
+                {1 a 2 b 0 c} {[b} {[c} 3 {}
+                {1 a 2 b 0 c} {(c} + 0 {c a b}
+                {1 a 1 b 2 c 2 d 3 e} - + 5 {}
+                {1 a 1 b 2 c 2 d 3 e} {[b} {[d} 3 {a e}
+                {1 a 1 b 2 c 2 d 3 e} {(b} {(e} 2 {a b e}
+                {0 b 0 d 1 a 1 c 2 e} {[a} {[c} 1 {d a c e}
+                {0 b 0 d 1 a 1 c 2 e} {[c} + 4 {b}
+                {0 b 0 d 1 a 1 c 2 e} {(b} {(e} 3 {b e}
+                {0 b 0 d 1 a 1 c 2 e} - {(d} 1 {d a c e}
+                {0 b 0 d 1 a 1 c 2 e} {[e} + 1 {b d a c}
+                {0 b 0 d 1 a 1 c 2 e} {[f} + 0 {b d a c e}
+                {0 b 0 d 1 a 1 c 2 e} - {[a} 0 {b d a c e}
+            } {
+                r del zset
+                r zadd zset {*}$members
+                assert_encoding $encoding zset
+                assert_equal $count [r zlexcount zset $min $max]
+                assert_equal $count [r zremrangebylex zset $min $max]
+                assert_equal $left [r zrange zset 0 -1]
+            }
+        }
+
+        test "ZRANGEBYLEX/ZREVRANGEBYLEX/ZRANGESTORE BYLEX with mixed scores - $encoding" {
+            # Forward starts at the first element >= min, reverse at the last element <= max.
+            foreach {members cmd a b limit expected} {
+                {1 a 2 b 0 c} zrangebylex - + {1 2} {a b}
+                {1 a 2 b 0 c} zrangebylex {[a} + {1 1} {a}
+                {1 a 2 b 0 c} zrangebylex {[c} + {1 5} {}
+                {1 a 2 b 0 c} zrangebylex {(c} + {} {}
+                {1 a 2 b 0 c} zrevrangebylex + - {} {b a c}
+                {1 a 2 b 0 c} zrevrangebylex {[c} - {} {b a c}
+                {1 a 2 b 0 c} zrevrangebylex {(c} - {} {}
+                {1 a 2 b 0 c} zrevrangebylex {[e} - {1 5} {a c}
+                {0 b 0 d 1 a 1 c 2 e} zrangebylex {[c} + {1 5} {a c e}
+                {0 b 0 d 1 a 1 c 2 e} zrangebylex {(b} + {2 1} {c}
+                {0 b 0 d 1 a 1 c 2 e} zrevrangebylex {[c} - {} {c a d b}
+                {0 b 0 d 1 a 1 c 2 e} zrevrangebylex {(e} {(b} {} {c}
+                {0 b 0 d 1 a 1 c 2 e} zrevrangebylex + {[a} {1 1} {c}
+                {0 b 0 d 1 a 1 c 2 e} zrevrangebylex {[a} - {} {}
+            } {
+                r del zset
+                r zadd zset {*}$members
+                assert_encoding $encoding zset
+                if {$limit eq {}} {
+                    assert_equal $expected [r $cmd zset $a $b]
+                } else {
+                    assert_equal $expected [r $cmd zset $a $b LIMIT {*}$limit]
+                }
+            }
+
+            # ZRANGESTORE is replicated as is, so it must store the same members.
+            r del zset{t} dst{t}
+            r zadd zset{t} 0 a 1 b 1 c
+            assert_equal 1 [r zrangestore dst{t} zset{t} {[c} + BYLEX]
+            assert_equal {c} [r zrange dst{t} 0 -1]
+            assert_equal 1 [r zlexcount zset{t} {[c} +]
+        }
+
         test "ZRANGEBYLEX/ZREVRANGEBYLEX crossed sentinel bounds are empty - $encoding" {
             create_default_lex_zset
             assert_equal {} [r zrangebylex zset + \[c]
@@ -4037,6 +4104,39 @@ start_server {tags {"zset" "cluster:skip"}} {
             assert_equal 3 [r zlexcount zset "\[b" "\[d"]
             assert_equal 1 [r zlexcount zset "(b" "(d"]
             assert_equal 0 [r zlexcount zset "\[x" "\[z"]
+        }
+    }
+
+    test {Lex range commands agree across encodings on mixed-score sets} {
+        # ZREMRANGEBYLEX and ZRANGESTORE are replicated as is, so the encodings must agree.
+        set letters {a b c d e f}
+        set bounds {}
+        foreach l $letters { lappend bounds "\[$l" "($l" }
+        lappend bounds - +
+        for {set i 0} {$i < 500} {incr i} {
+            set members {}
+            for {set j 0} {$j < 1 + [randomInt 10]} {incr j} {
+                lappend members [randomInt 4] [lindex $letters [randomInt 6]][lindex $letters [randomInt 6]]
+            }
+            set min [lindex $bounds [randomInt [llength $bounds]]]
+            set max [lindex $bounds [randomInt [llength $bounds]]]
+            r del zlp zbt
+            with_config zset-max-ziplist-entries 128 { r zadd zlp {*}$members }
+            with_config zset-max-ziplist-entries 0 { r zadd zbt {*}$members }
+            assert_encoding listpack zlp
+            assert_encoding btree zbt
+            assert_equal [r zlexcount zlp $min $max] [r zlexcount zbt $min $max] "ZLEXCOUNT $min $max on $members"
+            set limit [list LIMIT [randomInt 4] [expr {[randomInt 5] - 1}]]
+            assert_equal [r zrangebylex zlp $min $max] [r zrangebylex zbt $min $max] "ZRANGEBYLEX $min $max on $members"
+            assert_equal [r zrangebylex zlp $min $max {*}$limit] [r zrangebylex zbt $min $max {*}$limit] "ZRANGEBYLEX $min $max $limit on $members"
+            assert_equal [r zrevrangebylex zlp $max $min] [r zrevrangebylex zbt $max $min] "ZREVRANGEBYLEX $max $min on $members"
+            assert_equal [r zrevrangebylex zlp $max $min {*}$limit] [r zrevrangebylex zbt $max $min {*}$limit] "ZREVRANGEBYLEX $max $min $limit on $members"
+            r del dst
+            assert_equal [r zrangestore dst zlp $min $max BYLEX] [r zrangestore dst2 zbt $min $max BYLEX] "ZRANGESTORE $min $max on $members"
+            assert_equal [r zrange dst 0 -1 withscores] [r zrange dst2 0 -1 withscores] "ZRANGESTORE result $min $max on $members"
+            r del dst dst2
+            assert_equal [r zremrangebylex zlp $min $max] [r zremrangebylex zbt $min $max] "ZREMRANGEBYLEX $min $max on $members"
+            assert_equal [r zrange zlp 0 -1 withscores] [r zrange zbt 0 -1 withscores] "after ZREMRANGEBYLEX $min $max on $members"
         }
     }
 }

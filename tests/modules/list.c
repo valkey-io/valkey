@@ -148,6 +148,8 @@ static int replyByErrno(ValkeyModuleCtx *ctx) {
         return ValkeyModule_ReplyWithError(ctx, "ERR index out of bounds");
     case ENOTSUP:
         return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
+    case EINVAL:
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid argument");
     default: assert(0); /* Can't happen */
     }
 }
@@ -229,6 +231,27 @@ int list_delete(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* LIST.NULLKEY index value
+ *
+ * Calls ListInsert and ListSet with a NULL key, which must fail with EINVAL.
+ */
+int list_nullkey(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    long long index;
+    if (ValkeyModule_StringToLongLong(argv[1], &index) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR index must be a number");
+    }
+    errno = 0;
+    if (ValkeyModule_ListInsert(NULL, index, argv[2]) != VALKEYMODULE_ERR || errno != EINVAL) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR ListInsert did not fail with EINVAL");
+    }
+    errno = 0;
+    if (ValkeyModule_ListSet(NULL, index, argv[2]) != VALKEYMODULE_ERR || errno != EINVAL) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR ListSet did not fail with EINVAL");
+    }
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -244,7 +267,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         ValkeyModule_CreateCommand(ctx, "list.insert", list_insert, "write",
                                   1, 1, 1) == VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "list.delete", list_delete, "write",
-                                  1, 1, 1) == VALKEYMODULE_OK) {
+                                  1, 1, 1) == VALKEYMODULE_OK &&
+        ValkeyModule_CreateCommand(ctx, "list.nullkey", list_nullkey, "",
+                                  0, 0, 0) == VALKEYMODULE_OK) {
         return VALKEYMODULE_OK;
     } else {
         return VALKEYMODULE_ERR;

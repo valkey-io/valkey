@@ -2836,6 +2836,21 @@ static void captureReplFullSyncCompleteDuration(void) {
     }
 }
 
+static int replicaCheckFullSyncOffsetFromRdb(rdbSaveInfo *rsi) {
+    /* Only a forkless sync sends -1 in +FULLRESYNC and its offset inside the RDB.
+     * Dual channel sync also has -1 here, but gets its offset from the main channel,
+     * not the RDB, so it is validated elsewhere. */
+    if (server.primary_initial_offset != -1 || server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE)
+        return C_OK;
+    if (!rsi->repl_id_is_set || rsi->repl_offset < 0 ||
+        memcmp(rsi->repl_id, server.primary_replid, CONFIG_RUN_ID_SIZE) != 0) {
+        serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: the RDB doesn't carry a valid offset for replication ID %s",
+                  server.primary_replid);
+        return C_ERR;
+    }
+    return C_OK;
+}
+
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
@@ -2843,12 +2858,8 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
     } else {
         /* A forkless (socket) full sync signalled its offset as -1 in
          * +FULLRESYNC; adopt the real offset from the RDB repl-offset aux field
-         * now that the RDB is loaded, and rebase the backlog onto it. */
-        if (server.primary_initial_offset == -1) {
-            server.primary_initial_offset = rsi->repl_offset;
-            server.primary_repl_offset = rsi->repl_offset;
-            if (server.repl_backlog) server.repl_backlog->offset = server.primary_repl_offset + 1;
-        }
+         * now that the RDB is loaded. */
+        if (server.primary_initial_offset == -1) server.primary_initial_offset = rsi->repl_offset;
         replicationCreatePrimaryClient(server.repl_transfer_s, rsi->repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
         server.repl_down_since = 0;
@@ -3165,7 +3176,8 @@ read_from_socket:
     }
 
     replicaBeforeLoadPrimaryRDB(conn, 1);
-    if (replicaLoadPrimaryRDBFromSocket(conn, buf, eofmark, &usemark, &rsi) == C_ERR) {
+    if (replicaLoadPrimaryRDBFromSocket(conn, buf, eofmark, &usemark, &rsi) == C_ERR ||
+        replicaCheckFullSyncOffsetFromRdb(&rsi) == C_ERR) {
         serverLog(LL_WARNING, "Failed to load RDB");
         cancelReplicationHandshake(1);
         return;
@@ -5900,7 +5912,7 @@ void handleBioThreadFinishedRDBDownload(void) {
     debugServerAssert(conn);
 
     replicaBeforeLoadPrimaryRDB(conn, 0);
-    if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR) {
+    if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR || replicaCheckFullSyncOffsetFromRdb(&rsi) == C_ERR) {
         serverLog(LL_WARNING, "Failed to load RDB");
         cancelReplicationHandshake(1);
         return;

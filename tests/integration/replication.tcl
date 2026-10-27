@@ -2214,6 +2214,74 @@ start_server {tags {"repl needs:other-server external:skip"} overrides {forkless
     }
 }
 
+start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
+    set primary [srv 0 client]
+    for {set i 0} {$i < 500} {incr i} { $primary set key:$i val:$i }
+
+    test "Forkless disk-based full sync is used for a replica without inline-replication support" {
+        set loglines [count_log_lines 0]
+        set forks_before [s total_forks]
+        set s [socket [srv 0 host] [srv 0 port]]
+        fconfigure $s -translation binary
+        foreach cmd [list "REPLCONF capa eof capa psync2" "REPLCONF version [s valkey_version]"] {
+            puts -nonewline $s "$cmd\r\n"
+            flush $s
+            assert_equal {+OK} [string trim [gets $s]]
+        }
+        puts -nonewline $s "PSYNC ? -1\r\n"
+        flush $s
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*method: forkless*"} $loglines 100 100
+        waitForBgsave $primary
+        assert_equal forkless [s rdb_last_bgsave_type]
+        assert_equal $forks_before [s total_forks]
+        close $s
+    }
+}
+
+start_server {tags {"repl external:skip"} overrides {save ""}} {
+    set src [srv 0 client]
+    $src set k v
+    start_server {overrides {save ""}} {
+        foreach payload_kind {no-repl-aux mismatched-replid} {
+            # A server without a backlog saves no repl-id/repl-offset aux fields.
+            # Attaching a replica creates one, so the save carries src's own
+            # repl-id, which differs from the fake primary's all-zero id.
+            if {$payload_kind eq "no-repl-aux"} {
+                $src save
+            } else {
+                [srv 0 client] replicaof [srv -1 host] [srv -1 port]
+                wait_for_sync [srv 0 client]
+                $src save
+                [srv 0 client] replicaof no one
+            }
+            set payload [read_binary_file [server_rdb_path $src]]
+            # disabled loads through a temp file, swapdb straight from the socket.
+            foreach load_mode {disabled swapdb} {
+                test "Replica rejects a FULLRESYNC -1 RDB without a matching repl offset ($payload_kind, repl-diskless-load $load_mode)" {
+                    set payload_file [tmpfile fake-primary-payload]
+                    write_binary_file $payload_file $payload
+                    set port [find_available_port $::baseport $::portcount]
+                    # Replies +FULLRESYNC <zero id> -1, as a forkless primary does, then sends the RDB.
+                    set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                                 $port $payload_file [string length $payload] "" -1 &]
+                    wait_for_condition 50 50 {
+                        [ping_server 127.0.0.1 $port]
+                    } else {
+                        fail "Failed to start fake primary"
+                    }
+                    set replica [srv 0 client]
+                    $replica config set repl-diskless-load $load_mode
+                    set loglines [count_log_lines 0]
+                    $replica replicaof 127.0.0.1 $port
+                    wait_for_log_messages 0 {"*the RDB doesn't carry a valid offset*"} $loglines 100 100
+                    $replica replicaof no one
+                    catch {exec kill $pid}
+                }
+            }
+        }
+    }
+}
+
 # Live writes that arrive after the bg iterator has finished scanning the
 # keyspace, but before the replica has come online, are not captured by the
 # iterator and cannot yet be served from the shared replication buffer. They

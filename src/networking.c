@@ -2705,10 +2705,6 @@ int freeClientsInAsyncFreeQueue(void) {
 
         if (c->flag.protected || clientHasPendingIO(c)) continue;
 
-        /* Don't free clients owned by forkless save — they'll be freed when
-         * forkless save completes or abandons them. */
-        if (c->flag.forkless_managed) continue;
-
         c->flag.close_asap = 0;
         freeClient(c);
         listDelNode(server.clients_to_close, ln);

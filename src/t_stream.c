@@ -1922,6 +1922,20 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
     return o;
 }
 
+/* Parse one numeric part of a stream ID. string2ull() rejects negative
+ * numbers, but older versions accepted them through strtoull(), which wraps
+ * them (e.g. "1--18446744073709551615" was read as 1-1). Explicit IDs are
+ * propagated as given, so such commands may exist in AOF files or come from
+ * older primaries: keep the old conversion for those clients only. */
+static int streamParseIDPart(client *c, const char *s, size_t slen, unsigned long long *value) {
+    if (string2ull(s, slen, value)) return 1;
+    if (c == NULL || !mustObeyClient(c)) return 0;
+    errno = 0;
+    char *endptr = NULL;
+    *value = strtoull(s, &endptr, 10);
+    return errno != EINVAL && errno != ERANGE && *s != '\0' && *endptr == '\0';
+}
+
 /* Parse a stream ID in the format given by clients to the server, that is
  * <ms>-<seq>, and converts it into a streamID structure. If
  * the specified ID is invalid C_ERR is returned and an error is reported
@@ -1970,14 +1984,14 @@ int streamGenericParseIDOrReply(client *c,
     unsigned long long ms, seq;
     char *dot = strchr(buf, '-');
     if (dot) *dot = '\0';
-    if (string2ull(buf, strlen(buf), &ms) == 0) goto invalid;
+    if (streamParseIDPart(c, buf, strlen(buf), &ms) == 0) goto invalid;
     if (dot) {
         size_t seqlen = strlen(dot + 1);
         if (seq_given != NULL && seqlen == 1 && *(dot + 1) == '*') {
             /* Handle the <ms>-* form. */
             seq = 0;
             *seq_given = 0;
-        } else if (string2ull(dot + 1, seqlen, &seq) == 0) {
+        } else if (streamParseIDPart(c, dot + 1, seqlen, &seq) == 0) {
             goto invalid;
         }
     } else {

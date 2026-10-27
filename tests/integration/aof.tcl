@@ -804,4 +804,25 @@ tags {"aof cluster external:skip singledb"} {
         }
         clean_aof_persistence $aof_dirpath
     }
+
+    # Older versions accepted a negative stream ID part and wrapped it, and
+    # an explicit XADD ID is propagated as given. Such a record must still
+    # load from an existing AOF, although clients now get an error.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand xadd s 1--18446744073709551615 f v]
+    }
+
+    create_aof_manifest $aof_dirpath $aof_manifest_file {
+        append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+    }
+
+    start_server_aof [list dir $server_path] {
+        test "AOF with a legacy negative stream ID sequence loads" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal {{1-1 {f v}}} [$client xrange s - +]
+            assert_error "*Invalid stream ID*" {$client xadd s 2--1 f v}
+        }
+        clean_aof_persistence $aof_dirpath
+    }
 }

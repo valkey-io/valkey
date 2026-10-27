@@ -429,7 +429,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     # unaffected, so the tests target forkless only.
     test "forkless save survives RENAME over an existing key" {
         r flushall
-        r config set bgsave-default-method forkless
+        r config set forkless-policy require-forkless
         r config set rdb-key-save-delay 0
 
         # Populate keys that are part of the snapshot.  The iterator has not yet reached them when
@@ -460,7 +460,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 
     test "forkless save survives PEXPIRE/PERSIST/SETEX on an existing key" {
         r flushall
-        r config set bgsave-default-method forkless
+        r config set forkless-policy require-forkless
         r config set rdb-key-save-delay 0
         r debug populate 100000
 

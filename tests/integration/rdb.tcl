@@ -1938,7 +1938,7 @@ close $fd
 start_server_and_kill_it [list "dir" $inband_path "rdb-version-check" "relaxed"] {
     test {Server rejects an on-disk RDB whose inline opcode carries a non-replicable command} {
         wait_for_condition 50 100 {
-            [string match {*inline replication opcode*not a replicable write*} \
+            [string match {*inline command*not a replicable write*} \
                 [exec tail -20 < [dict get $srv stdout]]]
         } else {
             fail "Server loaded an RDB whose inline opcode carried a non-replicable command"

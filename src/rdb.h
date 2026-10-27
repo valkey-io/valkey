@@ -54,6 +54,12 @@ typedef enum {
     LOAD_CMD_ERR          /* Failed: other. */
 } loadCommandResult;
 
+/* Where loadCommandFromArgv() commands come from */
+typedef enum {
+    LOAD_CMD_SOURCE_AOF,        /* Replaying an AOF. */
+    LOAD_CMD_SOURCE_INLINE_REPL /* Replaying inline replication commands from an RDB. */
+} loadCommandSource;
+
 /* The current RDB version. When the format changes in a way that is no longer
  * backward compatible this number gets incremented.
  *
@@ -295,6 +301,6 @@ void rdbClearSaveState(time_t save_end);
 /* RESP command replay parsers shared by RDB and AOF loading. */
 respParseResult parseRespCommandFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int *argc_out, robj ***argv_out);
 struct client *createAOFClient(void);
-loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int ignore_multi_exec, sds *err);
+loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, loadCommandSource source, sds *err);
 
 #endif

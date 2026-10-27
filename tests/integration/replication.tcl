@@ -2388,6 +2388,49 @@ foreach primary_diskless {yes no} {
     }
 }
 
+foreach kind {multi eval} {
+    start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless repl-diskless-sync-delay 0}} {
+        set primary [srv 0 client]
+        $primary select 0
+        $primary set counter 0
+        $primary select 2
+        $primary debug populate 10000
+        $primary select 0
+
+        start_server {overrides {save {}}} {
+            set replica [srv 0 client]
+
+            test "Forkless sync replays a transaction on an already sent key ($kind)" {
+                $primary config set rdb-key-save-delay 100
+                $replica replicaof [srv -1 host] [srv -1 port]
+                wait_for_condition 50 100 {
+                    [s -1 rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "Forkless save didn't start"
+                }
+                if {$kind eq "multi"} {
+                    $primary multi
+                    $primary incr counter
+                    $primary incr counter
+                    $primary exec
+                } else {
+                    $primary eval {redis.call('incr', KEYS[1]); redis.call('incr', KEYS[1])} 1 counter
+                }
+                assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                $primary config set rdb-key-save-delay 0
+                wait_for_condition 500 100 {
+                    [s 0 master_link_status] eq {up}
+                } else {
+                    fail "Replica didn't sync"
+                }
+                wait_for_ofs_sync $primary $replica
+                assert_equal 1 [s -1 sync_full]
+                assert_equal [$primary debug digest] [$replica debug digest]
+            }
+        }
+    }
+}
+
 foreach load_mode {disabled swapdb} {
     start_server {tags {"repl external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
         set primary [srv 0 client]

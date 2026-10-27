@@ -1642,9 +1642,10 @@ err:
  * LOAD_CMD_ERR if the number of arguments is wrong. In the error cases *err is
  * set to a short message that the caller must free.
  *
- * When ignore_multi_exec is non-zero the caller is replaying individual
- * commands, so MULTI/EXEC are skipped rather than queued into a transaction. */
-loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int ignore_multi_exec, sds *err) {
+ * With LOAD_CMD_SOURCE_INLINE_REPL the caller is replaying individual
+ * replicated commands, so MULTI/EXEC are skipped rather than queued into a
+ * transaction, and only commands a primary replicates are allowed. */
+loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, loadCommandSource source, sds *err) {
     struct serverCommand *cmd;
 
     fakeClient->argc = argc;
@@ -1662,10 +1663,19 @@ loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc,
 
     /* A caller replaying individual commands skips MULTI/EXEC framing so each
      * command applies immediately instead of being queued into a transaction. */
-    if (ignore_multi_exec && (cmd->proc == multiCommand || cmd->proc == execCommand)) {
+    if (source == LOAD_CMD_SOURCE_INLINE_REPL && (cmd->proc == multiCommand || cmd->proc == execCommand)) {
         serverLog(LL_DEBUG, "Skipping %s command while replaying individual commands", cmd->fullname);
         freeClientArgv(fakeClient);
         return LOAD_CMD_OK;
+    }
+
+    /* Inline replication only runs commands a primary replicates. Otherwise a
+     * crafted RDB could run any command through the fake client, which bypasses
+     * ACL checks. */
+    if (source == LOAD_CMD_SOURCE_INLINE_REPL && !(cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
+        *err = sdscatfmt(sdsempty(), "command '%s' is not a replicable write", cmd->fullname);
+        freeClientArgv(fakeClient);
+        return LOAD_CMD_ERR;
     }
 
     /* Note whether this command is a MULTI before running it, so the caller
@@ -1816,7 +1826,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         /* Command lookup, validation and execution. Keep MULTI framing (0) so
          * AOF transactions replay as transactions. */
         sds err = NULL;
-        loadCommandResult lr = loadCommandFromArgv(fakeClient, argv, argc, 0, &err);
+        loadCommandResult lr = loadCommandFromArgv(fakeClient, argv, argc, LOAD_CMD_SOURCE_AOF, &err);
         if (lr == LOAD_CMD_ERR_UNKNOWN || lr == LOAD_CMD_ERR) {
             serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename,
                       (server.hide_user_data_from_log && lr == LOAD_CMD_ERR_UNKNOWN) ? "*redacted*" : err);

@@ -3808,10 +3808,10 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         }
 
         /* Inline replication commands run on load. The opcode is honored on any
-         * load, but the embedded command is validated first: it must be a write
-         * command or one that may replicate (e.g. PUBLISH, EVAL). This prevents a
-         * crafted RDB from invoking arbitrary commands through the fake client,
-         * which bypasses ACL checks. */
+         * load, but loadCommandFromArgv only runs the embedded command if it is
+         * a write command or one that may replicate (e.g. PUBLISH, EVAL). This
+         * prevents a crafted RDB from invoking arbitrary commands through the
+         * fake client, which bypasses ACL checks. */
         if (type == RDB_OPCODE_UPDATE) {
             robj **argv;
             int argc;
@@ -3819,16 +3819,6 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             if (pr == RESP_PARSE_EOF) goto eoferr;
             if (pr == RESP_PARSE_FMTERR) goto inlinefmterr;
             if (pr == RESP_PARSE_OOM) goto inlineoomerr;
-
-            struct serverCommand *inline_cmd = lookupCommand(argv, argc);
-            if (inline_cmd == NULL || !(inline_cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
-                serverLog(LL_WARNING,
-                          "Rejecting inline replication opcode %d: command '%s' is not a replicable write",
-                          type, (argc > 0) ? (char *)objectGetVal(argv[0]) : "<none>");
-                for (int k = 0; k < argc; k++) decrRefCount(argv[k]);
-                zfree(argv);
-                goto loaderr;
-            }
 
             /* Create the fake client the first time we see an inline command,
              * then reuse it. Most loads have no inline commands, so we avoid
@@ -3846,7 +3836,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             if (swap_data) swapMainDbDataWithTempDb(rdb_loading_ctx->dbarray);
             fakeClient->db = server.db[db->id];
             sds err = NULL;
-            int load_cmd_ret = loadCommandFromArgv(fakeClient, argv, argc, 1, &err);
+            int load_cmd_ret = loadCommandFromArgv(fakeClient, argv, argc, LOAD_CMD_SOURCE_INLINE_REPL, &err);
             if (swap_data) swapMainDbDataWithTempDb(rdb_loading_ctx->dbarray);
             /* On an unknown or invalid command, stop the load. Skipping it
              * would leave this replica with different data than the primary. */
@@ -3854,7 +3844,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                 serverLog(LL_WARNING, "Error applying inline command from RDB stream: %s", err);
                 sdsfree(err);
                 /* loadCommandFromArgv already freed argv via the fake client. */
-                goto eoferr;
+                goto loaderr;
             }
             fakeClient->cmd = NULL;
             /* argv was freed by loadCommandFromArgv (through the fake client). */

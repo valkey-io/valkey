@@ -159,6 +159,12 @@ static int countRawReply(void *ctx, ValkeyModuleCtx *mctx, const char *proto, si
     return 0;
 }
 
+static void countErrorReply(void *ctx, const char *str, size_t len) {
+    UNUSED(str);
+    UNUSED(len);
+    (*(int *)ctx)++;
+}
+
 /* Report the call result, EAGAIN, EINVAL, and the number of reply callbacks. */
 int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 3) return ValkeyModule_WrongArity(ctx);
@@ -173,8 +179,14 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     };
     if (strchr(fmt, '0')) handlers.version = 0;
     if (strchr(fmt, '2')) handlers.version = VALKEYMODULE_REPLY_HANDLERS_VERSION + 1;
+    if (strchr(fmt, 'R')) handlers.onRespAvailable = replyWithRawRespString;
+    if (strchr(fmt, 'T')) {
+        handlers.onRespAvailable = NULL;
+        handlers.error = countErrorReply;
+    }
     int ret = ValkeyModule_CallArgv(ctx, argv + 2, argc - 2, flags,
                                     strchr(fmt, 'N') ? NULL : &handlers, &callbacks);
+    if (strchr(fmt, 'R')) return VALKEYMODULE_OK;
     int call_errno = errno;
     ValkeyModule_ReplyWithArray(ctx, 4);
     ValkeyModule_ReplyWithLongLong(ctx, ret == VALKEYMODULE_ERR);

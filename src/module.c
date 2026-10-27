@@ -7171,9 +7171,10 @@ cleanup:
  * run before this function returns; `reply_ctx` need only remain valid until then.
  *
  * If infrastructure (such as a forkless operation) prevents the command from
- * executing without blocking, returns VALKEYMODULE_ERR with errno = EAGAIN.
- * The command has not executed and is not queued for later execution. No reply
- * callbacks are invoked, even with VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES.
+ * executing without blocking, sets errno = EAGAIN. With
+ * VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES, delivers an error reply and returns
+ * VALKEYMODULE_OK; otherwise returns VALKEYMODULE_ERR without reply callbacks.
+ * The command has not executed and is not queued for later execution.
  * The caller may retry later, but must not busy-wait on the server thread.
  *
  * * **argv**: The array of arguments.
@@ -7197,10 +7198,11 @@ cleanup:
  *     (format specifier: "W").
  *   * `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES`: Deliver command and validation
  *     errors through reply_handlers and return VALKEYMODULE_OK, while leaving
- *     errno set for validation errors such as wrong command arity.
- *     Infrastructure refusal (EAGAIN), an unsupported ALLOW_BLOCK flag or reply
- *     handlers version (EINVAL) still return VALKEYMODULE_ERR without callbacks
- *     (format specifier: "E").
+ *     errno set for validation errors such as wrong command arity, unsupported
+ *     ALLOW_BLOCK (EINVAL), or infrastructure refusal (EAGAIN).
+ *     An unsupported reply handlers version still returns VALKEYMODULE_ERR
+ *     with errno = EINVAL without callbacks, since the callback table cannot
+ *     be used safely (format specifier: "E").
  *   * `VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM`: Respect deny-oom policy when
  *     executing the command (format specifier: "M").
  *   * `VALKEYMODULE_CALL_ARGV_DRY_RUN`: Execute in dry-run mode; implies
@@ -7215,12 +7217,13 @@ cleanup:
  *
  * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if an error
  * occurred before invoking the command and errno is set to one of:
- * * EAGAIN: Infrastructure would block the command (regardless of ERRORS_AS_REPLIES).
+ * * EAGAIN: Infrastructure would block the command (delivered through reply_handlers
+ *           and returns VALKEYMODULE_OK when ERRORS_AS_REPLIES is set).
  * * EBADF: wrong format specifier.
- * * EINVAL: wrong command arity (delivered through reply_handlers and returns
- *           VALKEYMODULE_OK when ERRORS_AS_REPLIES is set).
- * * EINVAL: VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK was specified or the reply handlers
- *           version is unsupported (returned regardless of ERRORS_AS_REPLIES,
+ * * EINVAL: wrong command arity or VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK was specified
+ *           (delivered through reply_handlers and returns VALKEYMODULE_OK when
+ *           ERRORS_AS_REPLIES is set).
+ * * EINVAL: the reply handlers version is unsupported (returned regardless of ERRORS_AS_REPLIES,
  *           without invoking reply callbacks or executing the command).
  * * ENOENT: command does not exist.
  * * EPERM: operation in Cluster instance with key in non local slot.
@@ -7238,14 +7241,21 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 int flags,
                 const ValkeyModuleReplyHandlers *resp_handlers,
                 void *reply_ctx) {
-    if (flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK) {
-        errno = EINVAL;
-        return VALKEYMODULE_ERR;
-    }
     if (resp_handlers && (resp_handlers->version == 0 ||
                           resp_handlers->version > VALKEYMODULE_REPLY_HANDLERS_VERSION)) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
+    }
+    if (flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK) {
+        if ((flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES) && resp_handlers) {
+            client *c = moduleAllocTempClient();
+            addReplyError(c, "CallArgv does not support ALLOW_BLOCK");
+            errno = EINVAL;
+            invokeReplyHandlers(ctx, c, resp_handlers, reply_ctx);
+            moduleReleaseTempClient(c);
+        }
+        errno = EINVAL;
+        return (flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
     }
     return moduleCallArgv(ctx, argv, argc, flags, resp_handlers, reply_ctx);
 }
@@ -7268,9 +7278,13 @@ int moduleCallArgv(ValkeyModuleCtx *ctx,
     int would_block = 0;
     moduleCallCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg, &would_block);
     if (would_block) {
+        if ((flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES) && resp_handlers) {
+            errno = EAGAIN;
+            invokeReplyHandlers(ctx, c, resp_handlers, reply_ctx);
+        }
         moduleReleaseTempClient(c);
         errno = EAGAIN;
-        return VALKEYMODULE_ERR;
+        return (flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
     }
 
     if (errno != 0 && !(flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES)) {

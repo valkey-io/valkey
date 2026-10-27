@@ -75,14 +75,22 @@ start_server {tags {"modules"}} {
     test "CallArgv is synchronous and rejects ALLOW_BLOCK without executing" {
         assert_equal {0 0 0 1} [r test.call_argv_status {} ping]
         assert_equal {0 0 0 1} [r test.call_argv_status {} blpop missing-list 0]
-        foreach flags {K EK} {
+        foreach flags {K KN} {
             assert_equal {1 0 1 0} [r test.call_argv_status $flags set not-executed 1]
             assert_equal 0 [r exists not-executed]
         }
+        foreach flags {EK EKT} {
+            assert_equal {0 0 1 1} [r test.call_argv_status $flags set not-executed 1]
+            assert_equal 0 [r exists not-executed]
+        }
+        assert_equal {0 0 1 0} [r test.call_argv_status EKN set not-executed 1]
+        assert_equal "-ERR CallArgv does not support ALLOW_BLOCK\r\n" \
+            [r test.call_argv_status EKR set not-executed 1]
+        assert_equal 0 [r exists not-executed]
     }
 
     test "CallArgv rejects unsupported reply handlers versions before executing" {
-        foreach flags {0 2 E0 E2} {
+        foreach flags {0 2 E0 E2 K0 K2 EK0 EK2} {
             assert_equal {1 0 1 0} [r test.call_argv_status $flags set invalid-version 1]
             assert_equal 0 [r exists invalid-version]
         }
@@ -141,7 +149,7 @@ start_server {tags {"modules external:skip"} overrides {requirepass mypass enabl
 start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
     r module load $testmodule forkless
 
-    test "CallArgv reports infrastructure blocking without reply callbacks or deferred writes" {
+    test "CallArgv infrastructure blocking respects ERRORS_AS_REPLIES without deferred writes" {
         r set held-key original
         r config set rdb-key-save-delay 2000000
         r bgsave
@@ -152,9 +160,15 @@ start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infra
         }
         assert_equal forkless [s rdb_current_bgsave_type]
 
-        foreach flags {{} E} {
+        foreach flags {{} N} {
             assert_equal {1 1 0 0} [r test.call_argv_status $flags set held-key changed]
         }
+        foreach flags {E ET} {
+            assert_equal {0 1 0 1} [r test.call_argv_status $flags set held-key changed]
+        }
+        assert_equal {0 1 0 0} [r test.call_argv_status EN set held-key changed]
+        assert_equal "-INUSE Key is being processed\r\n" \
+            [r test.call_argv_status ER set held-key changed]
         assert_equal original [r get held-key]
 
         waitForBgsave r

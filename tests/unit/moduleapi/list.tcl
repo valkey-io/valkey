@@ -61,6 +61,22 @@ start_server {tags {"modules"}} {
         assert_error {WRONGTYPE*} {r list.insert k 1 [string repeat x 9000]}
         assert_encoding listpack k
         assert_equal v [r hget k f]
+
+        # Index 0 and -1 on an empty key create the list; an out-of-range
+        # index on an existing list is still rejected with EDOM.
+        r del k
+        assert_equal OK [r list.insert k 0 foo]
+        assert_equal {foo} [r list.getall k]
+        assert_error {ERR index out*} {r list.insert k 2 bar}
+        assert_error {ERR index out*} {r list.insert k -3 bar}
+        r del k
+        assert_equal OK [r list.insert k -1 foo]
+        assert_equal {foo} [r list.getall k]
+    }
+
+    test {Module list get on a nonexistent key} {
+        r del nonexistent
+        assert_error {ERR invalid argument*} {r list.get nonexistent 0}
     }
 
     test {Module list insert and set with a NULL key} {

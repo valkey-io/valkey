@@ -1926,10 +1926,13 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
  * numbers, but older versions accepted them through strtoull(), which wraps
  * them (e.g. "1--18446744073709551615" was read as 1-1). Explicit IDs are
  * propagated as given, so such commands may exist in AOF files or come from
- * older primaries: keep the old conversion for those clients only. */
-static int streamParseIDPart(client *c, const char *s, size_t slen, unsigned long long *value) {
+ * older primaries: keep the old conversion while executing commands from
+ * those sources. Check the client that is executing the command rather than
+ * the one passed to the parser, since some callers pass NULL to suppress
+ * error replies (XCLAIM), and scripts run commands through their own client. */
+static int streamParseIDPart(const char *s, size_t slen, unsigned long long *value) {
     if (string2ull(s, slen, value)) return 1;
-    if (c == NULL || !mustObeyClient(c)) return 0;
+    if (server.current_client == NULL || !mustObeyClient(server.current_client)) return 0;
     errno = 0;
     char *endptr = NULL;
     *value = strtoull(s, &endptr, 10);
@@ -1984,14 +1987,14 @@ int streamGenericParseIDOrReply(client *c,
     unsigned long long ms, seq;
     char *dot = strchr(buf, '-');
     if (dot) *dot = '\0';
-    if (streamParseIDPart(c, buf, strlen(buf), &ms) == 0) goto invalid;
+    if (streamParseIDPart(buf, strlen(buf), &ms) == 0) goto invalid;
     if (dot) {
         size_t seqlen = strlen(dot + 1);
         if (seq_given != NULL && seqlen == 1 && *(dot + 1) == '*') {
             /* Handle the <ms>-* form. */
             seq = 0;
             *seq_given = 0;
-        } else if (streamParseIDPart(c, dot + 1, seqlen, &seq) == 0) {
+        } else if (streamParseIDPart(dot + 1, seqlen, &seq) == 0) {
             goto invalid;
         }
     } else {

@@ -810,6 +810,10 @@ tags {"aof cluster external:skip singledb"} {
     # load from an existing AOF, although clients now get an error.
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand xadd s 1--18446744073709551615 f v]
+        append_to_aof [formatCommand xgroup create s g 0]
+        append_to_aof [formatCommand xreadgroup group g c1 streams s >]
+        append_to_aof [formatCommand xclaim s g c2 0 1--18446744073709551615]
+        append_to_aof [formatCommand eval {return server.call('xadd', 's2', '1--18446744073709551615', 'f', 'v')} 0]
     }
 
     create_aof_manifest $aof_dirpath $aof_manifest_file {
@@ -821,7 +825,10 @@ tags {"aof cluster external:skip singledb"} {
             set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal {{1-1 {f v}}} [$client xrange s - +]
+            assert_equal {{1-1 c2}} [lmap e [$client xpending s g - + 10] {lrange $e 0 1}]
+            assert_equal {{1-1 {f v}}} [$client xrange s2 - +]
             assert_error "*Invalid stream ID*" {$client xadd s 2--1 f v}
+            assert_error "*Invalid stream ID*" {$client eval {return server.call('xadd', 's', '3--1', 'f', 'v')} 0}
         }
         clean_aof_persistence $aof_dirpath
     }

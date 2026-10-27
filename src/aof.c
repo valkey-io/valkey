@@ -1399,8 +1399,8 @@ try_fsync:
 
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     char buf[32];
+    char llstr[LONG_STR_SIZE];
     int len, j;
-    robj *o;
 
     buf[0] = '*';
     len = 1 + ll2string(buf + 1, sizeof(buf) - 1, argc);
@@ -1409,15 +1409,23 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     dst = sdscatlen(dst, buf, len);
 
     for (j = 0; j < argc; j++) {
-        o = getDecodedObject(argv[j]);
+        robj *o = argv[j];
+        char *p;
+        size_t plen;
+        if (sdsEncodedObject(o)) {
+            p = objectGetVal(o);
+            plen = sdslen(objectGetVal(o));
+        } else {
+            p = llstr;
+            plen = ll2string(llstr, sizeof(llstr), (long)objectGetVal(o));
+        }
         buf[0] = '$';
-        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(objectGetVal(o)));
+        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, plen);
         buf[len++] = '\r';
         buf[len++] = '\n';
         dst = sdscatlen(dst, buf, len);
-        dst = sdscatlen(dst, objectGetVal(o), sdslen(objectGetVal(o)));
+        dst = sdscatlen(dst, p, plen);
         dst = sdscatlen(dst, "\r\n", 2);
-        decrRefCount(o);
     }
     return dst;
 }

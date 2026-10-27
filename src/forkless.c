@@ -112,42 +112,10 @@ static int writeReplicationData(forklessSaveInfo *saveInfo, bgIteratorItem *item
 
     if (rdbSaveType(&saveInfo->save_rio, RDB_OPCODE_UPDATE) == -1) return C_ERR;
 
-    char llaux[LONG_STR_SIZE + 3];
-    char llstr[LONG_STR_SIZE];
-    int auxlen;
-
-    /* Multi bulk length */
-    auxlen = 0;
-    llaux[auxlen++] = '*';
-    auxlen += ll2string(llaux + auxlen, LONG_STR_SIZE, item->u.repl.argc);
-    llaux[auxlen++] = '\r';
-    llaux[auxlen++] = '\n';
-    if (!rioWrite(&saveInfo->save_rio, llaux, auxlen)) return C_ERR;
-
-    for (int i = 0; i < item->u.repl.argc; i++) {
-        robj *o = item->u.repl.argv[i];
-        int objlen;
-        char *p;
-
-        if (sdsEncodedObject(o)) {
-            p = objectGetVal(o);
-            objlen = sdslen(objectGetVal(o));
-        } else {
-            p = llstr;
-            objlen = ll2string(p, LONG_STR_SIZE, (long)objectGetVal(o));
-        }
-
-        auxlen = 0;
-        llaux[auxlen++] = '$';
-        auxlen += ll2string(llaux + auxlen, LONG_STR_SIZE, objlen);
-        llaux[auxlen++] = '\r';
-        llaux[auxlen++] = '\n';
-        if (!rioWrite(&saveInfo->save_rio, llaux, auxlen)) return C_ERR;
-        if (!rioWrite(&saveInfo->save_rio, p, objlen)) return C_ERR;
-        if (!rioWrite(&saveInfo->save_rio, "\r\n", 2)) return C_ERR;
-    }
-
-    return C_OK;
+    sds cmd = catAppendOnlyGenericCommand(sdsempty(), item->u.repl.argc, item->u.repl.argv);
+    int ok = rioWrite(&saveInfo->save_rio, cmd, sdslen(cmd));
+    sdsfree(cmd);
+    return ok ? C_OK : C_ERR;
 }
 
 /* If a client is unresponsive or is being closed by the main thread, we might have to drop it

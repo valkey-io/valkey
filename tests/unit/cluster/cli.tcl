@@ -16,6 +16,12 @@ start_multiple_servers 3 [list overrides $base_conf] {
                             --cluster-replicas $replicas} err
             assert_match "*Invalid --cluster-replicas value*" $err
         }
+        # With more replicas per primary than nodes there would be no primary
+        # at all; --cluster-yes must not go ahead and configure the node.
+        catch {exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        --cluster-replicas 1} err
+        assert_match "*Not enough nodes*" $err
     }
 
     test {Create 1 node cluster} {

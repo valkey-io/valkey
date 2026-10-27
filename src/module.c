@@ -7168,7 +7168,7 @@ cleanup:
  * reply is delivered directly through the `resp_handlers` callbacks, enabling
  * zero-copy pass-through and avoiding intermediate parsing overhead.
  *
- * This API is synchronous. VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK is not supported.
+ * This API is synchronous.
  * The ownership of the `argv` array remains with the caller. The reply callbacks
  * run before this function returns; `reply_ctx` need only remain valid until then.
  *
@@ -7200,8 +7200,8 @@ cleanup:
  *     (format specifier: "W").
  *   * `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES`: Deliver command and validation
  *     errors through reply_handlers and return VALKEYMODULE_OK, while leaving
- *     errno set for validation errors such as wrong command arity, unsupported
- *     ALLOW_BLOCK (EINVAL), or infrastructure refusal (EAGAIN).
+ *     errno set for validation errors such as wrong command arity (EINVAL)
+ *     or infrastructure refusal (EAGAIN).
  *     An unsupported reply handlers version still returns VALKEYMODULE_ERR
  *     with errno = EINVAL without callbacks, since the callback table cannot
  *     be used safely (format specifier: "E").
@@ -7222,10 +7222,9 @@ cleanup:
  * occurred before invoking the command and errno is set to one of:
  * * EAGAIN: Infrastructure would block the command (delivered through reply_handlers
  *           and returns VALKEYMODULE_OK when ERRORS_AS_REPLIES is set).
- * * EBADF: wrong format specifier.
- * * EINVAL: wrong command arity or VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK was specified
- *           (delivered through reply_handlers and returns VALKEYMODULE_OK when
- *           ERRORS_AS_REPLIES is set).
+ * * EBADF: invalid call arguments or unsupported flags.
+ * * EINVAL: wrong command arity (delivered through reply_handlers and returns
+ *           VALKEYMODULE_OK when ERRORS_AS_REPLIES is set).
  * * EINVAL: the reply handlers version is unsupported (returned regardless of ERRORS_AS_REPLIES,
  *           without invoking reply callbacks or executing the command).
  * * ENOENT: command does not exist.
@@ -7254,11 +7253,11 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
         if ((flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES) && resp_handlers) {
             client *c = moduleAllocTempClient();
             addReplyError(c, "CallArgv does not support ALLOW_BLOCK");
-            errno = EINVAL;
+            errno = EBADF;
             invokeReplyHandlers(ctx, c, resp_handlers, reply_ctx);
             moduleReleaseTempClient(c);
         }
-        errno = EINVAL;
+        errno = EBADF;
         return (flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
     }
     return moduleCallArgv(ctx, argv, argc, flags, resp_handlers, reply_ctx);

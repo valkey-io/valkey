@@ -75,15 +75,15 @@ start_server {tags {"modules"}} {
     test "CallArgv is synchronous and rejects ALLOW_BLOCK without executing" {
         assert_equal {0 0 0 1} [r test.call_argv_status {} ping]
         assert_equal {0 0 0 1} [r test.call_argv_status {} blpop missing-list 0]
-        foreach flags {K KN} {
+        foreach flags {KB KNB} {
             assert_equal {1 0 1 0} [r test.call_argv_status $flags set not-executed 1]
             assert_equal 0 [r exists not-executed]
         }
-        foreach flags {EK EKT} {
+        foreach flags {EKB EKTB} {
             assert_equal {0 0 1 1} [r test.call_argv_status $flags set not-executed 1]
             assert_equal 0 [r exists not-executed]
         }
-        assert_equal {0 0 1 0} [r test.call_argv_status EKN set not-executed 1]
+        assert_equal {0 0 1 0} [r test.call_argv_status EKNB set not-executed 1]
         assert_equal "-ERR CallArgv does not support ALLOW_BLOCK\r\n" \
             [r test.call_argv_status EKR set not-executed 1]
         assert_equal 0 [r exists not-executed]
@@ -109,7 +109,7 @@ start_server {tags {"modules"}} {
         }
         assert_equal {0 0 1 0} [r test.call_argv_status DN set]
         assert_match "-ERR wrong number*" [r test.call_argv_status DR set]
-        assert_equal {0 0 1 1} [r test.call_argv_status DK set dry-run-key value]
+        assert_equal {0 0 1 1} [r test.call_argv_status DKB set dry-run-key value]
         assert_equal {1 0 1 0} [r test.call_argv_status D0 set dry-run-key value]
         foreach flags {D DT DR} {
             assert_equal {0 0 0 0} [r test.call_argv_status $flags set dry-run-key value]
@@ -130,7 +130,7 @@ start_server {tags {"modules"}} {
         assert_equal {0 0 0 0} [r test.call_argv_status RT ping]
         assert_equal {0 0 1 1} [r test.call_argv_status RET set]
         assert_equal {1 0 1 0} [r test.call_argv_status R0 ping]
-        assert_equal {1 0 1 0} [r test.call_argv_status RK ping]
+        assert_equal {1 0 1 0} [r test.call_argv_status RKB ping]
         assert_equal "+PONG\r\n" [r test.call_argv_status R ping]
     }
 

@@ -174,7 +174,7 @@ static void countReplyParsingError(void *ctx) {
     (*(int *)ctx)++;
 }
 
-/* Report the call result, EAGAIN, EINVAL, and the number of reply callbacks. */
+/* Report the call result, EAGAIN, EINVAL (or EBADF with B), and the number of reply callbacks. */
 int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 3) return ValkeyModule_WrongArity(ctx);
     const char *fmt = ValkeyModule_StringPtrLen(argv[1], NULL);
@@ -203,7 +203,7 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     ValkeyModule_ReplyWithArray(ctx, 4);
     ValkeyModule_ReplyWithLongLong(ctx, ret == VALKEYMODULE_ERR);
     ValkeyModule_ReplyWithLongLong(ctx, call_errno == EAGAIN);
-    ValkeyModule_ReplyWithLongLong(ctx, call_errno == EINVAL);
+    ValkeyModule_ReplyWithLongLong(ctx, call_errno == (strchr(fmt, 'B') ? EBADF : EINVAL));
     ValkeyModule_ReplyWithLongLong(ctx, callbacks);
     return VALKEYMODULE_OK;
 }

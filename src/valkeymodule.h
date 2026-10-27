@@ -939,6 +939,7 @@ typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
 #define VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES (1 << 8)
 #define VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM (1 << 9)
 #define VALKEYMODULE_CALL_ARGV_DRY_RUN (1 << 10)
+/* Not supported by ValkeyModule_CallArgv; reserved for internal use. */
 #define VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK (1 << 11)
 #define VALKEYMODULE_CALL_ARGV_REPLY_EXACT (1 << 12)
 

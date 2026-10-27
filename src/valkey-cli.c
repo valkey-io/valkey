@@ -2572,6 +2572,9 @@ static valkeyReply *reconnectingValkeyCommand(valkeyContext *c, const char *fmt,
 
 static int parseOptions(int argc, char **argv) {
     int i;
+    /* parseEnv() runs first, so auth may already hold VALKEYCLI_AUTH. Only a
+     * password set by -a or -u below should trigger the warning. */
+    char *env_auth = config.conn_info.auth;
 
     for (i = 1; i < argc; i++) {
         int lastarg = i == argc - 1;
@@ -2906,7 +2909,7 @@ static int parseOptions(int argc, char **argv) {
         exit(1);
     }
 
-    if (!config.no_auth_warning && config.conn_info.auth != NULL) {
+    if (!config.no_auth_warning && config.conn_info.auth != env_auth) {
         fputs("Warning: Using a password with '-a' or '-u' option on the command"
               " line interface may not be safe.\n",
               stderr);

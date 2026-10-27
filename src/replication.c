@@ -1372,13 +1372,13 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         goto error;
     }
 
-    /* Forkless socket output can only emit a plain, current-version,
-     * uncompressed RDB and requires the replica to support inline replication.
+    /* Forkless output can only emit an uncompressed RDB, and on a socket also
+     * requires the replica to support inline replication.
      * For any cohort it cannot serve, fall back to fork under 'prefer-forkless', or
      * fail the sync under 'require-forkless' (which forbids forking). */
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
         const char *reason = NULL;
-        if (!(mincapa & REPLICA_CAPA_INBAND_REPL)) {
+        if (socket_target && !(mincapa & REPLICA_CAPA_INBAND_REPL)) {
             reason = "replica does not support inline replication";
         } else if (sync_compression_algo != ALGO_NONE) {
             reason = "cohort needs stream compression";

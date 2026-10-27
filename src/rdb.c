@@ -3820,10 +3820,9 @@ respParseResult parseRespArgsFromReader(size_t (*read_fn)(void *ctx, void *buf, 
         long len = strtol(buf, &endptr, 10);
         /* strtol leaves endptr at the start when it parsed no digits at all. */
         int parsed_no_digits = (endptr == buf);
-        /* Reject non-numeric, negative, or oversized lengths before allocating:
-         * a negative len becomes a huge size_t and a positive one past
-         * proto-max-bulk-len would otherwise abort the process on allocation. */
-        if (parsed_no_digits || len < 0 || len > server.proto_max_bulk_len) {
+        /* Reject non-numeric or negative lengths before allocating: a negative
+         * len becomes a huge size_t. */
+        if (parsed_no_digits || len < 0) {
             result = RESP_PARSE_FMTERR;
             goto err;
         }

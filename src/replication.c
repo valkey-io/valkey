@@ -1365,17 +1365,11 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         goto error;
     }
 
-    int chosen_save_type = resolveBgsaveType(&fail_msg);
-    if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        /* fail_msg was set by resolveBgsaveType to the reason forkless is
-         * unavailable under a no-fallback policy. */
-        goto error;
-    }
+    int chosen_save_type = resolveBgsaveType();
 
     /* Forkless output can only emit an uncompressed RDB, and on a socket also
      * requires the replica to support inline replication.
-     * For any cohort it cannot serve, fall back to fork under 'prefer-forkless', or
-     * fail the sync under 'require-forkless' (which forbids forking). */
+     * For any cohort it cannot serve, fall back to fork. */
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
         const char *reason = NULL;
         if (socket_target && !(mincapa & REPLICA_CAPA_INBAND_REPL)) {
@@ -1384,13 +1378,6 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
             reason = "cohort needs stream compression";
         }
         if (reason != NULL) {
-            if (server.forkless_policy == FORKLESS_POLICY_REQUIRE_FORKLESS) {
-                serverLog(LL_WARNING, "Can't serve SYNC forklessly (%s) and forkless-policy 'require-forkless' "
-                                      "forbids falling back to fork",
-                          reason);
-                fail_msg = "Can't serve this full sync forklessly and forkless-policy forbids fork";
-                goto error;
-            }
             serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: %s", reason);
             chosen_save_type = RDB_BGSAVE_TYPE_FORK;
         }

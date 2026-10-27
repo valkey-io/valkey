@@ -528,10 +528,9 @@ foreach mdl {no yes} dualchannel {no yes} {
             $master config set repl-diskless-sync-delay 5
             $master config set repl-diskless-sync-max-replicas 3
             # Forkless cannot serve a dual-channel sync (its RDB channel
-            # has no inline-replication capability), so use strict forkless
-            # only when dual-channel is off; a silent fork fallback here
-            # would hide a forkless regression.
-            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "require-forkless") : "require-fork"}]
+            # has no inline-replication capability), so use forkless only
+            # when dual-channel is off.
+            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "prefer-forkless") : "require-fork"}]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
             set slaves {}
@@ -614,6 +613,9 @@ foreach mdl {no yes} dualchannel {no yes} {
                             assert {$digest eq $digest0}
                             assert {$digest eq $digest1}
                             assert {$digest eq $digest2}
+                            if {$forkless eq "yes" && $dualchannel eq "no"} {
+                                assert_equal 0 [s -3 total_forks]
+                            }
                         }
                    }
                 }
@@ -685,10 +687,9 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
             $master config set save ""
             $master config set dual-channel-replication-enabled $dualchannel
             # Forkless cannot serve a dual-channel sync (its RDB channel
-            # has no inline-replication capability), so use strict forkless
-            # only when dual-channel is off; a silent fork fallback here
-            # would hide a forkless regression.
-            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "require-forkless") : "require-fork"}]
+            # has no inline-replication capability), so use forkless only
+            # when dual-channel is off.
+            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "prefer-forkless") : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled $dualchannel
@@ -763,6 +764,10 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
 
                         # Make sure amount of keys matches master
                         assert_equal [$replica dbsize] 1000
+
+                        if {$forkless eq "yes" && $dualchannel eq "no"} {
+                            assert_equal 0 [s 0 total_forks]
+                        }
                     }
                 }
             }
@@ -788,7 +793,7 @@ foreach testType {Successful Aborted} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
-            $master config set forkless-policy [expr {$forkless eq "yes" ? "require-forkless" : "require-fork"}]
+            $master config set forkless-policy [expr {$forkless eq "yes" ? "prefer-forkless" : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled no; # Doesn't work with swapdb
@@ -947,6 +952,10 @@ foreach testType {Successful Aborted} {
 
                         # Make sure amount of keys matches master
                         assert_equal [$replica dbsize] 2010
+
+                        if {$forkless eq "yes"} {
+                            assert_equal 0 [s 0 total_forks]
+                        }
                     }
                 }
             }
@@ -2287,7 +2296,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
 # iterator and cannot yet be served from the shared replication buffer. They
 # must still reach the replica (via the dedicated save buffer) or they are lost
 # -- the offsets converge but the replica is missing keys.
-start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless}} {
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -2324,6 +2333,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             wait_for_ofs_sync $primary $replica
             assert_equal [$primary dbsize] [$replica dbsize]
             assert_equal [$primary debug digest] [$replica debug digest]
+            assert_equal 0 [s -1 total_forks]
         }
     }
 }
@@ -2339,7 +2349,7 @@ foreach primary_diskless {yes no} {
         # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels the save.
         foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}} {
             lassign $inline_cmd cmd_db cmd
-            start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless}} {
+            start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
                 set primary [srv 0 client]
                 set ph [srv 0 host]
                 set pp [srv 0 port]
@@ -2381,6 +2391,7 @@ foreach primary_diskless {yes no} {
                         stop_write_load $load2
                         wait_for_ofs_sync $primary $replica
                         assert_equal [$primary debug digest] [$replica debug digest]
+                        assert_equal 0 [s -1 total_forks]
                     }
                 }
             }
@@ -2389,7 +2400,7 @@ foreach primary_diskless {yes no} {
 }
 
 foreach kind {multi eval} {
-    start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless repl-diskless-sync-delay 0}} {
+    start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync-delay 0}} {
         set primary [srv 0 client]
         $primary select 0
         $primary set counter 0
@@ -2426,6 +2437,7 @@ foreach kind {multi eval} {
                 wait_for_ofs_sync $primary $replica
                 assert_equal 1 [s -1 sync_full]
                 assert_equal [$primary debug digest] [$replica debug digest]
+                assert_equal 0 [s -1 total_forks]
             }
         }
     }

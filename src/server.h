@@ -700,9 +700,8 @@ typedef enum {
 
 /* Policy for server.forkless_policy */
 typedef enum {
-    FORKLESS_POLICY_REQUIRE_FORK,     /* Always fork; never use forkless. */
-    FORKLESS_POLICY_REQUIRE_FORKLESS, /* Forkless only; fail rather than fork. */
-    FORKLESS_POLICY_PREFER_FORKLESS   /* Forkless, falling back to fork when it cannot be served. */
+    FORKLESS_POLICY_REQUIRE_FORK,   /* Always fork; never use forkless. */
+    FORKLESS_POLICY_PREFER_FORKLESS /* Forkless, falling back to fork when it cannot be served. */
 } forklessPolicy;
 
 /* Replica failover policy for server.cluster_replica_no_failover. */
@@ -2221,7 +2220,7 @@ struct valkeyServer {
     int rdb_key_save_delay;               /* Delay in microseconds between keys while
                                            * writing aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
-    int forkless_policy;                  /* Fork vs forkless policy: FORKLESS_POLICY_REQUIRE_FORK, _REQUIRE_FORKLESS, or _PREFER_FORKLESS */
+    int forkless_policy;                  /* Fork vs forkless policy: FORKLESS_POLICY_REQUIRE_FORK or _PREFER_FORKLESS */
     int key_load_delay;                   /* Delay in microseconds between keys while
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */

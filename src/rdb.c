@@ -1852,47 +1852,23 @@ int isSaveInProgress(void) {
     return isForkBgsaveInProgress() || isForklessSaveInProgress();
 }
 
-/* Choose the background save method based on the forkless policy. Returns:
- *   RDB_BGSAVE_TYPE_FORK     - policy 'require-fork', or 'prefer-forkless' when forkless
- *                              cannot be used (e.g. an incompatible module).
- *   RDB_BGSAVE_TYPE_FORKLESS - policy 'require-forkless' or 'prefer-forkless', forkless usable.
- *   RDB_BGSAVE_TYPE_NONE     - policy 'require-forkless' but forkless cannot be used.
- *                              The caller must fail the operation rather than
- *                              fork: an operator who selected 'require-forkless' is
- *                              relying on fork never happening (e.g. to run
- *                              without the memory headroom a fork needs), so a
- *                              fork would defeat the policy and likely OOM.
- * Any fallback or failure is logged so it is never silent. When NONE is
- * returned and `err` is non-NULL, `*err` is set to a human-readable reason the
- * caller can surface (otherwise `*err` is set to NULL). Pass NULL for `err` if
- * the reason is not needed. */
-int resolveBgsaveType(const char **err) {
-    if (err) *err = NULL;
-    if (server.forkless_policy == FORKLESS_POLICY_REQUIRE_FORK) return RDB_BGSAVE_TYPE_FORK;
+/* Choose the background save method based on configuration. Returns forkless
+ * only when it is configured, the infrastructure is enabled, and every loaded
+ * module can handle a forkless save. Otherwise fall back to a fork-based save
+ * and log why, so the fallback is not silent. */
+int resolveBgsaveType(void) {
+    if (server.forkless_policy != FORKLESS_POLICY_PREFER_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
 
-    /* 'require-forkless' and 'prefer-forkless' can only be set when the infrastructure is enabled
-     * (enforced by config validation), so it must be enabled here. */
+    /* forkless-policy can only be set to prefer-forkless when the infrastructure
+     * is enabled (enforced by config validation), so it must be enabled here. */
     serverAssert(server.forkless_infrastructure_enabled);
 
-    /* Determine whether anything prevents a forkless save. Add future blockers
-     * here; the fail-vs-fallback decision below applies to all of them. */
-    const char *blocker = NULL;
-    if (!moduleAllModulesHandleForkless())
-        blocker = "a loaded module has not declared VALKEYMODULE_OPTIONS_HANDLE_FORKLESS";
-
-    if (blocker == NULL) return RDB_BGSAVE_TYPE_FORKLESS;
-
-    /* Forkless cannot be used. 'require-forkless' forbids forking, so the
-     * operation fails; 'prefer-forkless' falls back to a fork-based save. */
-    if (server.forkless_policy == FORKLESS_POLICY_REQUIRE_FORKLESS) {
-        serverLog(LL_WARNING, "Cannot perform forkless save: %s, and forkless-policy is "
-                              "'require-forkless' (no fork fallback)",
-                  blocker);
-        if (err) *err = blocker;
-        return RDB_BGSAVE_TYPE_NONE;
+    if (!moduleAllModulesHandleForkless()) {
+        serverLog(LL_WARNING, "Falling back to fork-based save: forkless is configured but a loaded "
+                              "module has not declared VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
+        return RDB_BGSAVE_TYPE_FORK;
     }
-    serverLog(LL_WARNING, "Falling back to fork-based save: %s", blocker);
-    return RDB_BGSAVE_TYPE_FORK;
+    return RDB_BGSAVE_TYPE_FORKLESS;
 }
 
 /* Start a background save, choosing fork or forkless based on bgsave_type. */
@@ -4660,15 +4636,12 @@ void bgsaveCommand(client *c) {
         }
     }
 
-    const char *bgsave_err = NULL;
-    int chosen_save_type = resolveBgsaveType(&bgsave_err);
+    int chosen_save_type = resolveBgsaveType();
 
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 
-    if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        addReplyErrorFormat(c, "Can't BGSAVE: %s", bgsave_err);
-    } else if (isSaveInProgress()) {
+    if (isSaveInProgress()) {
         addReplyError(c, "Background save already in progress");
     } else if (hasActiveChildProcess() || server.in_exec) {
         if (schedule || server.in_exec) {

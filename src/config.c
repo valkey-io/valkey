@@ -186,7 +186,6 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {NULL, 0}};
 
 configEnum forkless_policy_enum[] = {{"require-fork", FORKLESS_POLICY_REQUIRE_FORK},
-                                     {"require-forkless", FORKLESS_POLICY_REQUIRE_FORKLESS},
                                      {"prefer-forkless", FORKLESS_POLICY_PREFER_FORKLESS},
                                      {NULL, 0}};
 
@@ -673,8 +672,8 @@ void loadServerConfigFromString(sds config) {
         goto loaderr;
     }
     if (server.forkless_policy != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
-        err = "'forkless-policy require-forkless' and 'forkless-policy prefer-forkless' can only be selected when the "
-              "server was started with 'forkless-infrastructure-enabled yes'";
+        err = "'forkless-policy prefer-forkless' can only be selected when the server was started with "
+              "'forkless-infrastructure-enabled yes'";
         goto loaderr;
     }
 
@@ -2485,13 +2484,8 @@ static int isValidForklessPolicy(int val, const char **err) {
      * value is set. We will check it when loading the config string */
     if (reading_config_file) return 1;
     if (val != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
-        *err = "'require-forkless' and 'prefer-forkless' can only be selected when the server was started with "
+        *err = "'prefer-forkless' can only be selected when the server was started with "
                "'forkless-infrastructure-enabled yes'";
-        return 0;
-    }
-    if (val == FORKLESS_POLICY_REQUIRE_FORKLESS && !moduleAllModulesHandleForkless()) {
-        *err = "'require-forkless' can only be selected when all loaded modules declare "
-               "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS";
         return 0;
     }
     return 1;

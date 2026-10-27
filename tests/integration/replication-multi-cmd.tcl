@@ -95,7 +95,7 @@ start_server {tags {"repl external:skip"}} {
 
 # Chained replication (subreplica -> replica -> primary).
 # Verifies the replica forwards the exact byte stream to its own replicas.
-foreach policy {require-fork require-forkless} {
+foreach policy {require-fork prefer-forkless} {
 start_server {tags {"repl external:skip"}} {
     start_server [list overrides [list forkless-infrastructure-enabled yes forkless-policy $policy \
                                        repl-diskless-sync yes repl-diskless-sync-delay 0]] {
@@ -226,7 +226,7 @@ start_server {tags {"repl external:skip"}} {
                 for {set i 0} {$i < 20000} {incr i} { $primary set load:$i $i }
                 wait_for_sync $subreplica 500 100
 
-                if {$policy eq "require-forkless"} {
+                if {$policy eq "prefer-forkless"} {
                     wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 1 1
                 }
                 assert_primary_replica_consistent $primary $replica

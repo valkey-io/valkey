@@ -328,12 +328,13 @@ find the right reviewer:
   to anyone's attention.
 * Reviewing other people's pull requests is one of the best ways to get
   involved and to learn the codebase. Reviews from non-maintainers are read
-  and valued; a maintainer still performs the final merge.
+  and valued; a maintainer or committer still performs the final merge.
 
 ## How a pull request gets merged
 
-A pull request is merged by a maintainer once CI is green, every review thread
-is resolved or answered, and it has an approval from a maintainer or committer.
+A pull request is merged by a maintainer or committer once CI is green, every
+review thread is resolved or answered, and it has an approval from a maintainer
+or committer.
 Pull requests are squash-merged, so you do not need to squash or rewrite your
 own commits during review; the pull request title and description become the
 commit message, so keep them up to date as the change evolves. After the merge,

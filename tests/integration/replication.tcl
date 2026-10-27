@@ -2329,48 +2329,59 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
 }
 
 
-# A SWAPDB issued on the primary while a forkless full sync is in progress is
-# carried to the replica as an inline command in the RDB stream. It must land
-# on the databases being loaded. In swapdb-mode diskless load those are a
-# temporary array (not the live server.db), which is the case that previously
-# applied the swap to the wrong databases. Exercise every replica-side load
-# mode, under both a socket (diskless) and a disk-based primary save.
+# A SWAPDB, FLUSHDB, MOVE or COPY issued on the primary while a forkless full
+# sync is in progress is carried to the replica as an inline command in the RDB
+# stream. It must land on the databases being loaded. In swapdb-mode diskless
+# load those are a temporary array (not the live server.db), which is the case
+# that previously applied the command to the wrong databases.
 foreach primary_diskless {yes no} {
     foreach replica_load {disabled on-empty-db swapdb} {
-        start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless}} {
-            set primary [srv 0 client]
-            set ph [srv 0 host]
-            set pp [srv 0 port]
-            $primary config set repl-diskless-sync $primary_diskless
-            $primary config set repl-diskless-sync-delay 0
-            # Distinct data in db0 and db1 so a wrong swap changes the digest.
-            $primary select 1
-            for {set i 0} {$i < 500} {incr i} { $primary set db1:$i $i }
-            $primary select 0
-            $primary debug populate 200000
+        # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels the save.
+        foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}} {
+            lassign $inline_cmd cmd_db cmd
+            start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy require-forkless}} {
+                set primary [srv 0 client]
+                set ph [srv 0 host]
+                set pp [srv 0 port]
+                $primary config set repl-diskless-sync $primary_diskless
+                $primary config set repl-diskless-sync-delay 0
+                # Distinct data in db0 and db1 so a wrong swap changes the digest.
+                $primary select 1
+                for {set i 0} {$i < 500} {incr i} { $primary set db1:$i $i }
+                $primary select 2
+                $primary debug populate 10000
+                $primary select 0
 
-            start_server {overrides {save {}}} {
-                set replica [srv 0 client]
-                $replica config set repl-diskless-load $replica_load
+                start_server {overrides {save {}}} {
+                    set replica [srv 0 client]
+                    $replica config set repl-diskless-load $replica_load
 
-                test "SWAPDB during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
-                    set load1 [start_write_load $ph $pp 8]
-                    set load2 [start_write_load $ph $pp 8]
-                    after 150
-                    $replica replicaof $ph $pp
-                    # Issue the SWAPDB while the sync is in flight.
-                    after 100
-                    catch {$primary swapdb 0 1}
-                    wait_for_condition 500 100 {
-                        [s 0 master_link_status] eq {up}
-                    } else {
-                        fail "Replica didn't sync"
+                    test "[string toupper [lindex $cmd 0]] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
+                        set load1 [start_write_load $ph $pp 8]
+                        set load2 [start_write_load $ph $pp 8]
+                        $primary config set rdb-key-save-delay 100
+                        $replica replicaof $ph $pp
+                        wait_for_condition 50 100 {
+                            [s -1 rdb_bgsave_in_progress] == 1
+                        } else {
+                            fail "Forkless save didn't start"
+                        }
+                        $primary select $cmd_db
+                        catch {$primary {*}$cmd}
+                        $primary select 0
+                        assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                        $primary config set rdb-key-save-delay 0
+                        wait_for_condition 500 100 {
+                            [s 0 master_link_status] eq {up}
+                        } else {
+                            fail "Replica didn't sync"
+                        }
+                        after 800
+                        stop_write_load $load1
+                        stop_write_load $load2
+                        wait_for_ofs_sync $primary $replica
+                        assert_equal [$primary debug digest] [$replica debug digest]
                     }
-                    after 800
-                    stop_write_load $load1
-                    stop_write_load $load2
-                    wait_for_ofs_sync $primary $replica
-                    assert_equal [$primary debug digest] [$replica debug digest]
                 }
             }
         }

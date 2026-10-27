@@ -1833,6 +1833,15 @@ void dbSwapDataFields(serverDb *db1, serverDb *db2) {
     copyDbExpiry(db2, &aux);
 }
 
+void swapMainDbDataWithTempDb(serverDb **tempDb) {
+    for (int i = 0; i < server.dbnum; i++) {
+        if (tempDb[i] == NULL && server.db[i] == NULL) continue;
+        if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
+        if (server.db[i] == NULL) server.db[i] = createDatabase(i);
+        dbSwapDataFields(server.db[i], tempDb[i]);
+    }
+}
+
 /* Swap two databases at runtime so that all clients will magically see
  * the new database even if already connected. Note that the client
  * structure c->db points to a given DB, so we need to be smarter and

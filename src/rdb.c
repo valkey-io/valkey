@@ -3863,36 +3863,6 @@ err:
     return result;
 }
 
-/* SWAPDB replayed during a swapdb-mode diskless load must be applied to the
- * databases being loaded, not the live server.db, so swap their data fields
- * directly here. Returns 1 if this was a swapdb-mode SWAPDB and has been handled
- * (argv is freed), or 0 otherwise (not swapdb mode or not a SWAPDB; the caller
- * should replay argv normally and argv is left untouched). */
-static int tryHandleInlineSwapdbForTempLoad(rdbLoadingCtx *rdb_loading_ctx, robj **argv, int argc) {
-    /* Validate we are in swapdb mode: only that mode loads into a temporary
-     * database array (dbarray) distinct from the live server.db. */
-    if (rdb_loading_ctx->dbarray == server.db) return 0;
-
-    struct serverCommand *cmd = lookupCommand(argv, argc);
-    if (cmd->proc != swapdbCommand) return 0;
-
-    /* Parse and validate the two db ids. No ACL check is needed here: this is an
-     * internal replication replay, not a client command. A no-op swap (e.g.
-     * "swapdb 0 0") or an out-of-range/malformed one leaves nothing to do. */
-    long long id1, id2;
-    if (argc == 3 && !server.cluster_enabled && getLongLongFromObject(argv[1], &id1) == C_OK &&
-        getLongLongFromObject(argv[2], &id2) == C_OK && id1 >= 0 && id1 < server.dbnum && id2 >= 0 &&
-        id2 < server.dbnum && id1 != id2) {
-        if (rdb_loading_ctx->dbarray[id1] == NULL) rdb_loading_ctx->dbarray[id1] = createDatabase(id1);
-        if (rdb_loading_ctx->dbarray[id2] == NULL) rdb_loading_ctx->dbarray[id2] = createDatabase(id2);
-        dbSwapDataFields(rdb_loading_ctx->dbarray[id1], rdb_loading_ctx->dbarray[id2]);
-    }
-
-    for (int k = 0; k < argc; k++) decrRefCount(argv[k]);
-    zfree(argv);
-    return 1;
-}
-
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
  * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
@@ -3984,10 +3954,6 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                 goto loaderr;
             }
 
-            /* Edge case: SWAPDB during a swapdb-mode load must be handled
-             * separately and not through the fake client. */
-            if (tryHandleInlineSwapdbForTempLoad(rdb_loading_ctx, argv, argc)) continue;
-
             /* Create the fake client the first time we see an inline command,
              * then reuse it. Most loads have no inline commands, so we avoid
              * making one until it is actually needed. */
@@ -3995,12 +3961,20 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                 rdb_loading_ctx->update_client = createAOFClient();
             }
             client *fakeClient = rdb_loading_ctx->update_client;
-            fakeClient->db = db;
 
+            /* In swapdb mode the RDB loads into a separate set of databases, so
+             * move their data into server.db while the command runs. Otherwise
+             * commands that pick a db by number, like FLUSHDB or MOVE, change the
+             * live data instead of the data being loaded from the RDB. */
+            int swap_data = rdb_loading_ctx->dbarray != server.db;
+            if (swap_data) swapMainDbDataWithTempDb(rdb_loading_ctx->dbarray);
+            fakeClient->db = server.db[db->id];
+            sds err = NULL;
+            int load_cmd_ret = loadCommandFromArgv(fakeClient, argv, argc, 1, &err);
+            if (swap_data) swapMainDbDataWithTempDb(rdb_loading_ctx->dbarray);
             /* On an unknown or invalid command, stop the load. Skipping it
              * would leave this replica with different data than the primary. */
-            sds err = NULL;
-            if (loadCommandFromArgv(fakeClient, argv, argc, 1, &err) != LOAD_CMD_OK) {
+            if (load_cmd_ret != LOAD_CMD_OK) {
                 serverLog(LL_WARNING, "Error applying inline command from RDB stream: %s", err);
                 sdsfree(err);
                 /* loadCommandFromArgv already freed argv via the fake client. */

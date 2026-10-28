@@ -356,7 +356,8 @@ void phexistsCommand(client *c) {
     addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);
 }
 
-/* The operation notification is emitted first, followed by the key deletion. */
+/* Call after the operation notification. This may free o, so callers must not
+ * access the object afterwards. */
 static void pathHashDeleteIfEmpty(client *c, robj *o) {
     pathHashObject *path_hash = objectGetVal(o);
     if (raxSize(path_hash->index) == 0) {

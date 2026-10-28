@@ -579,7 +579,12 @@ start_server {tags {pathhash}} {
     test {Deleting the final path removes the key, TTL, and WATCH state} {
         set other [valkey_client]
         with_cleanup {
-            foreach deletion {{phdel empty-tree p f missing f} {phdel empty-tree p} {phdelprefix empty-tree p} {phdelprefix empty-tree {}}} {
+            foreach deletion {
+                {phdel empty-tree p f missing f}
+                {phdel empty-tree p}
+                {phdelprefix empty-tree p}
+                {phdelprefix empty-tree {}}
+            } {
                 r phset empty-tree p fields 1 f v
                 r pexpire empty-tree 60000
                 r watch empty-tree
@@ -727,7 +732,12 @@ start_server {tags {pathhash external:skip}} {
             $primary phdelprefix tree ab
             $primary phset empty-tree path fields 1 field value
             $primary phdel empty-tree path
-            foreach deletion {{phdel final-tree p f} {phdel final-tree p} {phdelprefix final-tree p} {phdelprefix final-tree {}}} {
+            foreach deletion {
+                {phdel final-tree p f}
+                {phdel final-tree p}
+                {phdelprefix final-tree p}
+                {phdelprefix final-tree {}}
+            } {
                 $primary phset final-tree p fields 1 f v
                 $primary pexpire final-tree 60000
                 $primary {*}$deletion

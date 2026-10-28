@@ -156,7 +156,15 @@ int rm_call_aclcheck_cmd(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyMod
     /* Check that the command can be executed */
     int ret = ValkeyModule_ACLCheckCommandPermissions(user, argv + 1, argc - 1);
     if (ret != 0) {
-        ValkeyModule_ReplyWithError(ctx, "DENIED CMD");
+        if (errno == ENOENT) {
+            ValkeyModule_ReplyWithError(ctx, "ERR unknown command");
+        } else if (errno == EINVAL) {
+            ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+        } else if (errno == EACCES) {
+            ValkeyModule_ReplyWithError(ctx, "DENIED CMD");
+        } else {
+            ValkeyModule_ReplyWithError(ctx, "ERR unknown error");
+        }
         /* Add entry to ACL log */
         ValkeyModule_ACLAddLogEntry(ctx, user, argv[1], VALKEYMODULE_ACL_LOG_CMD);
         return VALKEYMODULE_OK;

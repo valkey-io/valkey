@@ -140,6 +140,31 @@ start_server {tags {"modules"}} {
         assert_match {*has no permissions to access the 'write' key*} [r ACL DRYRUN testuser kspec.tworanges write rw]
     }
 
+    test "Module key specs: KEYNUM spec past argc does not read out of bounds" {
+        # kspec.complex2 has a KEYNUM spec at index 3 that resolves numkeys at
+        # argv[3], but only three arguments are given here. Its arity is -1, so
+        # unlike a built-in command with a wrong arity nothing rejects it earlier,
+        # and key extraction must not read past the end of argv.
+        assert_error {*Invalid arguments specified for command*} {r command getkeys kspec.complex2 foo bar}
+    }
+
+    test "Module key specs: KEYNUM spec past argc - ACL on dispatch" {
+        # A regular client with key patterns: the ACL check extracts the keys
+        # before dispatching the command, and used to read argv[3] out of a
+        # three element argv. No key is found, so the command runs.
+        r ACL setuser kspecuser on nopass +@all %R~read*
+        r auth kspecuser ""
+        assert_equal "OK" [r kspec.complex2 foo bar]
+        r auth default ""
+        r ACL DELUSER kspecuser
+    }
+
+    test "Module key specs: KEYNUM spec past argc - ACL DRYRUN" {
+        # Same key extraction, reached through ACL DRYRUN, which shares
+        # ACLCheckAllUserCommandPerm() with the dispatch path.
+        assert_equal "OK" [r ACL DRYRUN testuser kspec.complex2 foo bar]
+    }
+
     foreach cmd {kspec.none kspec.tworanges} {
         test "$cmd command will not be marked with movablekeys" {
             set info [lindex [r command info $cmd] 0]

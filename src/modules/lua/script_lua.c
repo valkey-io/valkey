@@ -1400,7 +1400,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
 
     if (ValkeyModule_ACLCheckPermissions(user, argv, argc, dbid, NULL) != VALKEYMODULE_OK) {
         if (errno == EINVAL) {
-            luaPushError(lua, "Invalid command or wrong number of arguments passed to server.acl_check_cmd()");
+            luaPushError(lua, "Invalid command passed to server.acl_check_cmd()");
             raise_error = 1;
         } else {
             ValkeyModule_Assert(errno == EACCES);

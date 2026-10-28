@@ -1174,12 +1174,12 @@ start_server {tags {"scripting"}} {
         } 0] {}
 
         # Check error due to invalid command
-        assert_error {ERR *Invalid command or wrong number of arguments passed to server.acl_check_cmd()*} {run_script {
+        assert_error {ERR *Invalid command passed to server.acl_check_cmd()*} {run_script {
             return redis.acl_check_cmd('invalid-cmd','arg')
         } 0}
 
         # Check error due to wrong arity.
-        assert_error {ERR *Invalid command or wrong number of arguments passed to server.acl_check_cmd()*} {run_script {
+        assert_error {ERR *Invalid command passed to server.acl_check_cmd()*} {run_script {
             return redis.acl_check_cmd('eval','body')
         } 0}
     }

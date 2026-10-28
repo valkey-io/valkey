@@ -41,6 +41,17 @@ start_server {tags {"modules"}} {
         r getkeys.introspect 1 set key1 value1
     } {{key1 OW}}
 
+    test {RM_GetCommandKeys with more than 256 keys} {
+        # Exceed the inline buffer so leak checkers can catch missing cleanup.
+        set keys {}
+        for {set i 0} {$i < 300} {incr i} {
+            lappend keys "key:$i"
+        }
+
+        assert_equal 300 [llength [r getkeys.introspect 0 mget {*}$keys]]
+        assert_equal 300 [llength [r getkeys.introspect 1 mget {*}$keys]]
+    }
+
     test {RM_GetCommandKeys on EVAL} {
         r getkeys.introspect 0 eval "" 4 key1 key2 key3 key4 arg1 arg2
     } {key1 key2 key3 key4}

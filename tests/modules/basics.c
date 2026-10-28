@@ -156,6 +156,7 @@ static int countRawReply(void *ctx, ValkeyModuleCtx *mctx, const char *proto, si
     UNUSED(proto);
     UNUSED(len);
     (*(int *)ctx)++;
+    errno = EIO; /* CallArgv must preserve errno even when a callback changes it. */
     return 0;
 }
 
@@ -168,13 +169,14 @@ static void countErrorReply(void *ctx, const char *str, size_t len) {
     UNUSED(str);
     UNUSED(len);
     (*(int *)ctx)++;
+    errno = EIO;
 }
 
 static void countReplyParsingError(void *ctx) {
     (*(int *)ctx)++;
 }
 
-/* Report the call result, EAGAIN, EINVAL (or EBADF with B), and the number of reply callbacks. */
+/* Report the call result, errno name, and the number of reply callbacks. */
 int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 3) return ValkeyModule_WrongArity(ctx);
     const char *fmt = ValkeyModule_StringPtrLen(argv[1], NULL);
@@ -183,6 +185,9 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     if (strchr(fmt, 'D')) flags |= VALKEYMODULE_CALL_ARGV_DRY_RUN;
     if (strchr(fmt, 'S')) flags |= VALKEYMODULE_CALL_ARGV_SCRIPT_MODE;
     if (strchr(fmt, 'K')) flags |= VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK;
+    if (strchr(fmt, 'U')) flags |= (1 << 13);
+    if (strchr(fmt, 'H')) flags |= (1 << 30);
+    if (strchr(fmt, 'J')) flags = -1;
     int callbacks = 0;
     ValkeyModuleReplyHandlers handlers = {
         .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
@@ -196,14 +201,24 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
         handlers.onRespAvailable = NULL;
         handlers.error = countErrorReply;
     }
-    int ret = ValkeyModule_CallArgv(ctx, argv + 2, argc - 2, flags,
+    int ret = ValkeyModule_CallArgv(ctx, strchr(fmt, 'Z') ? NULL : argv + 2,
+                                    strchr(fmt, 'Q') ? 0 : argc - 2, flags,
                                     strchr(fmt, 'N') ? NULL : &handlers, &callbacks);
     if (handlers.onRespAvailable == replyWithRawRespAndCount && callbacks) return VALKEYMODULE_OK;
     int call_errno = errno;
-    ValkeyModule_ReplyWithArray(ctx, 4);
-    ValkeyModule_ReplyWithLongLong(ctx, ret == VALKEYMODULE_ERR);
-    ValkeyModule_ReplyWithLongLong(ctx, call_errno == EAGAIN);
-    ValkeyModule_ReplyWithLongLong(ctx, call_errno == (strchr(fmt, 'B') ? EBADF : EINVAL));
+    const char *errno_name;
+    switch (call_errno) {
+    case 0: errno_name = "0"; break;
+    case EAGAIN: errno_name = "EAGAIN"; break;
+    case EBADF: errno_name = "EBADF"; break;
+    case EINVAL: errno_name = "EINVAL"; break;
+    case ENOENT: errno_name = "ENOENT"; break;
+    case ESPIPE: errno_name = "ESPIPE"; break;
+    default: errno_name = "UNKNOWN"; break;
+    }
+    ValkeyModule_ReplyWithArray(ctx, 3);
+    ValkeyModule_ReplyWithSimpleString(ctx, ret == VALKEYMODULE_ERR ? "ERR" : "OK");
+    ValkeyModule_ReplyWithSimpleString(ctx, errno_name);
     ValkeyModule_ReplyWithLongLong(ctx, callbacks);
     return VALKEYMODULE_OK;
 }

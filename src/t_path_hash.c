@@ -557,7 +557,7 @@ static int pathHashPathHasPrefix(const unsigned char *path,
 }
 
 void phpathdelCommand(client *c) {
-    int withsubpaths = c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "withsubpaths");
+    bool withsubpaths = c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "withsubpaths");
     if (c->argc != 3 && !withsubpaths) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;

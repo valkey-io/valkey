@@ -194,7 +194,8 @@ start_server {tags {pathhash}} {
 
     test {PHPATHDEL deletes exact paths or byte-prefix subtrees and counts paths} {
         r del del-tree
-        r phmset del-tree {} fields 1 f root ab fields 2 f one g two abc fields 1 f child abx fields 1 f other
+        r phmset del-tree {} fields 1 f root ab fields 2 f one g two \
+            abc fields 1 f child abx fields 1 f other
         assert_equal 1 [r phpathdel del-tree ab]
         assert_equal 3 [r phcard del-tree]
         assert_equal {child} [r phget del-tree abc f]

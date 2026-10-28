@@ -576,6 +576,48 @@ start_server {tags {pathhash}} {
         }
     } {} {needs:debug}
 
+    test {Final root and binary path deletions remove the key but preserve other paths} {
+        set binary_path [binary format H* 00ff61]
+        foreach path [list {} $binary_path] {
+            foreach delete_fields {0 1} {
+                r del final-tree
+                r phset final-tree $path fields 2 f one g two
+                r phset final-tree keep fields 1 f other
+                if {$delete_fields} {
+                    assert_equal 2 [r phdel final-tree $path f g f]
+                } else {
+                    assert_equal 1 [r phdel final-tree $path]
+                }
+                assert_equal 1 [r exists final-tree]
+                assert_equal 1 [r phcard final-tree]
+                assert_equal {other} [r phget final-tree keep f]
+                assert_equal 1 [r phdel final-tree keep f]
+                assert_equal 0 [r exists final-tree]
+
+                r phset final-tree $path fields 2 f one g two
+                if {$delete_fields} {
+                    assert_equal 2 [r phdel final-tree $path f g f]
+                } else {
+                    assert_equal 1 [r phdel final-tree $path]
+                }
+                assert_equal 0 [r exists final-tree]
+                assert_equal none [r type final-tree]
+            }
+        }
+    }
+
+    test {Prefix deletion removes the final key across deletion chunk boundaries} {
+        r del final-tree
+        set prefix [binary format H* 00ff]
+        for {set i 0} {$i < 600} {incr i} {
+            r phset final-tree "${prefix}$i" fields 1 f v
+        }
+        assert_equal 600 [r phdelprefix final-tree $prefix]
+        assert_equal 0 [r exists final-tree]
+        assert_equal 0 [r phcard final-tree]
+        assert_equal 0 [r phdelprefix final-tree $prefix]
+    }
+
     test {Deleting the final path removes the key, TTL, and WATCH state} {
         set other [valkey_client]
         with_cleanup {

@@ -350,7 +350,7 @@ void phgetallCommand(client *c) {
         addReply(c, shared.emptymap[c->resp]);
 }
 
-void phexistsCommand(client *c) {
+void phpathexistsCommand(client *c) {
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
     addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);

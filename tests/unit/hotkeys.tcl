@@ -408,4 +408,36 @@ start_server {tags {"hotkey external:skip"}} {
         }
         assert {[lsearch $names "obj_probe"] < 0}
     }
+
+    test "Client DEL is counted whether the key exists, is expired, or is missed" {
+        hk_enable
+        r flushall sync
+        r debug set-active-expire 0
+
+        # One key, one DEL per state, hotkeys reset in between: the DEL is then
+        # the only charge in its window, so a broken path leaves it unreported.
+
+        # hit: the key is there and dbDelete removes it.
+        r set "del_key" "val"
+        r hotkeys reset
+        r del "del_key"
+        assert_equal [hk_names [hk_wait_hotkeys]] {del_key}
+
+        # expire: logically expired but still physically present, so the expire
+        # path removes it and dbDelete never runs.
+        r flushall sync
+        r set "del_key" "val" px 1
+        after 2
+        r hotkeys reset
+        r del "del_key"
+        assert_equal [hk_names [hk_wait_hotkeys]] {del_key}
+
+        # miss: the key does not exist, so nothing is removed.
+        r flushall sync
+        r hotkeys reset
+        r del "del_key"
+        assert_equal [hk_names [hk_wait_hotkeys]] {del_key}
+
+        r debug set-active-expire 1
+    }
 }

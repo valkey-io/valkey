@@ -7263,6 +7263,10 @@ void testOnlyWriteToReplica(client *c) {
     writeToReplica(c);
 }
 
+int testOnlyWritevToClient(client *c) {
+    return writevToClient(c);
+}
+
 void testOnlyBackupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) {
     backupAndUpdateClientArgv(c, new_argc, new_argv);
 }

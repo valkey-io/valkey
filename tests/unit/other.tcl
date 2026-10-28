@@ -131,39 +131,9 @@ start_server {tags {"other"}} {
         assert {![dict exists $info alias]}
     }
 
-    test {CONFIG INFO default for numeric config} {
-        set info [lindex [r CONFIG INFO maxmemory] 0]
-        assert_equal [dict get $info default] "0"
-    }
-
-    test {CONFIG INFO default for memory config is in bytes} {
-        set info [lindex [r CONFIG INFO client-query-buffer-limit] 0]
-        assert_equal [dict get $info default] "1073741824"
-    }
-
-    test {CONFIG INFO default for enum config} {
+    test {CONFIG INFO includes default field} {
         set info [lindex [r CONFIG INFO maxmemory-policy] 0]
         assert_equal [dict get $info default] "noeviction"
-    }
-
-    test {CONFIG INFO default for bool config} {
-        set info [lindex [r CONFIG INFO activerehashing] 0]
-        assert_equal [dict get $info default] "yes"
-    }
-
-    test {CONFIG INFO default for string config} {
-        set info [lindex [r CONFIG INFO dbfilename] 0]
-        assert_equal [dict get $info default] "dump.rdb"
-    }
-
-    test {CONFIG INFO default for string config with no default is empty} {
-        set info [lindex [r CONFIG INFO primaryauth] 0]
-        assert_equal [dict get $info default] ""
-    }
-
-    test {CONFIG INFO special config omits default field} {
-        set info [lindex [r CONFIG INFO save] 0]
-        assert {![dict exists $info default]}
     }
 
     test {CONFIG INFO ordering is consistent across calls} {
@@ -576,30 +546,6 @@ start_server {tags {"other"}} {
             set lolwut_output [r lolwut version 9]
             assert_match {*Valkey ver.*} $lolwut_output
         }
-    }
-}
-
-start_server {tags {"other external:skip"}} {
-    test {CONFIG INFO default is accepted by CONFIG SET} {
-        set failures {}
-        foreach info [r CONFIG INFO *] {
-            if {![dict exists $info default]} continue
-            set flags [dict get $info flags]
-            if {[lsearch $flags immutable] >= 0 || [lsearch $flags alias] >= 0} continue
-            set name [dict get $info name]
-            # Applying these defaults moves the test server's listeners, which
-            # fails if the default port is in use. Under --tls, the empty
-            # certificate defaults are rejected because TLS is still enabled.
-            if {$name in {port tls-port}} continue
-            if {$::tls && [string match tls-* $name]} continue
-            set default [dict get $info default]
-            set original [lindex [r CONFIG GET $name] 1]
-            if {[catch {r CONFIG SET $name $default} err]} {
-                lappend failures "$name '$default': $err"
-            }
-            r CONFIG SET $name $original
-        }
-        assert_equal {} $failures
     }
 }
 

@@ -21,7 +21,8 @@ concurrency:
 
 jobs:
   clang-format-check:
-    runs-on: ubuntu-latest
+    # The tree is formatted with clang-format 18.1.8 which was shipped in 26.04
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code

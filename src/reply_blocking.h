@@ -14,9 +14,6 @@
 #include "uncommitted_keys.h"
 #include "post_commit_task.h"
 
-/* Command filter codes that are used in pre execution stage of a command. */
-#define CMD_FILTER_ALLOW 0
-#define CMD_FILTER_REJECT 1
 /* Returns true if the cmd is a script command that never replicates. */
 #define IS_SCRIPT_CALL_READONLY_CMD(cmd) ((cmd) && (((cmd)->proc == fcallroCommand) || ((cmd)->proc == evalRoCommand) || ((cmd)->proc == evalShaRoCommand)))
 
@@ -31,8 +28,6 @@
  * specs (see its definition in commands.h for the criterion). */
 #define IS_KEYSPACE_GLOBAL(cmd) ((cmd) && ((cmd)->flags & CMD_KEYSPACE_GLOBAL))
 
-/* Flags below help in correctly classifying transactions as
- * either read/write commands or non-keyspace commands. */
 #define REPLY_BLOCKING_CLIENT_LAST_CMD_WRITE (1ULL << 0)
 #define REPLY_BLOCKING_CLIENT_LAST_CMD_READONLY (1ULL << 1)
 
@@ -175,9 +170,6 @@ typedef struct clientReplyBlockingState {
     /* This client is waiting for reply-blocking providers to acknowledge
      * the write before its response can be sent. */
     uint64_t reply_blocked : 1;
-    /* Modules can set the blocking offset for read cmds */
-    long long module_cmd_blocking_offset;
-
     uint64_t reply_blocking_flags;
 } clientReplyBlockingState;
 
@@ -192,8 +184,7 @@ void replyBlockingClearPrimaryState(void);
 /* Command processing hooks for offset and COB tracking */
 void recordReplOffsetBaseline(client *c);
 void computeCommandBlockingOffset(client *c);
-int beginCommandReplyBlocking(client *c);
-char *validateScriptForReplyBlocking(client *c);
+void beginCommandReplyBlocking(client *c);
 void finalizeCommandReplyBlocking(client *c);
 void notifyReplyBlockingProgress(void);
 

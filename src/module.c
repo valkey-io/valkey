@@ -7085,9 +7085,8 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
      * COB until the write is acked, but a module consumes a VM_Call reply
      * synchronously here in C, so there is nothing left to hold once call()
      * returns. This matches stock Valkey under `appendfsync always`, where a
-     * module's VM_Call reply is likewise returned before the fsync. Gating
-     * module reads on durability is a future opt-in feature (see the unused
-     * module_cmd_blocking_offset hook); for now we neither reject nor block. */
+     * module's VM_Call reply is likewise returned before the fsync, so we
+     * neither reject nor block here. */
 
     /* Mirror processInputBuffer: set pending_command so that if the command
      * blocks on keys, unblockClientOnKey will reprocess it on unblock. */

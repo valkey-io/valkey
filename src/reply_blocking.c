@@ -151,7 +151,6 @@ void replyBlockingClientInit(client *c) {
         listSetFreeMethod(c->reply_blocking_state.blocked_responses, zfree);
         resetPreExecutionOffset(c);
         c->reply_blocking_state.current_command_repl_offset = -1;
-        c->reply_blocking_state.module_cmd_blocking_offset = -1;
         c->reply_blocking_state.deferred_block_offset = -1;
         c->reply_blocking_state.pending_notify_tasks = listCreate();
     }
@@ -179,7 +178,6 @@ void replyBlockingClientReset(client *c) {
 
     resetPreExecutionOffset(c);
     c->reply_blocking_state.current_command_repl_offset = -1;
-    c->reply_blocking_state.module_cmd_blocking_offset = -1;
 }
 
 // Determines if a client is doing a transaction or not.
@@ -573,8 +571,6 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
         blocking_repl_offset = getFuncStoreBlockingOffset();
     } else if (IS_SCRIPT_CALL_READONLY_CMD(c->cmd)) {
         return -1;
-    } else if ((c->cmd->flags & CMD_MODULE) && (c->reply_blocking_state.module_cmd_blocking_offset != -1)) {
-        blocking_repl_offset = c->reply_blocking_state.module_cmd_blocking_offset;
     } else if (c->cmd->flags & (CMD_READONLY | CMD_WRITE)) {
         blocking_repl_offset = c->db->dirty_repl_offset;
         getKeysResult result;
@@ -689,16 +685,10 @@ void computeCommandBlockingOffset(client *c) {
     handleDatabaseModification(c);
 }
 
-char *validateScriptForReplyBlocking(client *c) {
-    UNUSED(c);
-    return NULL;
-}
-
 // Perform pre-processing before command execution for a given client.
-int beginCommandReplyBlocking(client *c) {
+void beginCommandReplyBlocking(client *c) {
     c->reply_blocking_state.reply_blocking_flags = 0;
     c->reply_blocking_state.current_command_repl_offset = -1;
-    c->reply_blocking_state.module_cmd_blocking_offset = -1;
     c->reply_blocking_state.deferred_block_offset = -1;
 
     if (iAmPrimary() && clientEligibleForResponseTracking(c)) {
@@ -716,7 +706,6 @@ int beginCommandReplyBlocking(client *c) {
     }
 
     server.reply_blocking.pre_command_replication_offset = server.primary_repl_offset;
-    return CMD_FILTER_ALLOW;
 }
 
 // Perform post-processing after command execution for a given client.

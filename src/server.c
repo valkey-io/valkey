@@ -5068,9 +5068,7 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
-        if (server.bio_aof_offload_enabled && beginCommandReplyBlocking(c) == CMD_FILTER_REJECT) {
-            return C_OK;
-        }
+        if (server.bio_aof_offload_enabled) beginCommandReplyBlocking(c);
         int flags = CMD_CALL_FULL;
         call(c, flags);
         if (server.bio_aof_offload_enabled) finalizeCommandReplyBlocking(c);

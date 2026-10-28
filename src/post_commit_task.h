@@ -14,7 +14,7 @@ struct serverObject;
 struct list;
 
 /* Define the supported task types for deferred work that executes
- * after reply-blocking has been confirmed (replica ACK). */
+ * after the write they depend on has been durably committed. */
 typedef enum {
     POST_COMMIT_KEYSPACE_NOTIFY_TASK = 0, /* KEYSPACE NOTIFY task */
     POST_COMMIT_KEY_INVALIDATION_TASK,    /* Key invalidation task for client side caching */

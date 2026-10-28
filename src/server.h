@@ -995,9 +995,8 @@ typedef struct serverDb {
 
     /* fields related to dirty key tracking
      * for consistent writes with reply-blocking */
-    hashtable *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
+    hashtable *uncommitted_keys; /* Map of dirty keys to the offset that must be durably committed */
     long long dirty_repl_offset; /* Replication offset for a dirty DB */
-    rax *reply_duration;         /* Radix tree tracking reply durations for reply-blocked clients */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1291,8 +1290,6 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t reply_blocked_client : 1;     /* This is a reply-blocked client that is waiting for the server to
-                                            * acknowledge the write of the command that caused it to be blocked. */
     uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */

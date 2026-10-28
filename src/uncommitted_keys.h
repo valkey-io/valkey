@@ -46,8 +46,7 @@ void drainBackgroundModifiedKeys(long long offset);
  * @param previous_acked_offset The last durably committed offset (passed by caller) */
 long long getUncommittedKeyOffset(sds key, struct serverDb *db, long long previous_acked_offset);
 
-/* Drain committed entries from the offset tracker queue, removing keys
- * from uncommitted_keys when their offset has been durably committed.
+/* Remove keys from uncommitted_keys when their offset has been durably committed.
  * Called from beforeSleep / notifyReplyBlockingProgress. */
 void drainCommittedKeys(long long committed_offset);
 

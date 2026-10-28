@@ -778,7 +778,7 @@ TEST_F(SyncReplicationTest, PreCommandExecReplyBlockingDisabled) {
     server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_repl_offset = 555;
 
-    ASSERT_EQ(beginCommandReplyBlocking(c), CMD_FILTER_ALLOW);
+    beginCommandReplyBlocking(c);
     /* beginCommandReplyBlocking always resets current_command_repl_offset to -1 */
     ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
     /* pre_command_replication_offset is always snapshotted */
@@ -800,7 +800,7 @@ TEST_F(FullReplyBlockingTest, PreCommandExecReplyBlockingEnabledOnPrimary) {
     c->reply_blocking_state.current_command_repl_offset = 88;
     server.primary_repl_offset = 1234;
 
-    ASSERT_EQ(beginCommandReplyBlocking(c), CMD_FILTER_ALLOW);
+    beginCommandReplyBlocking(c);
     /* current_command_repl_offset should be reset to -1 */
     ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
     /* Pre-execution position should be tracked */

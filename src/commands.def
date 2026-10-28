@@ -5526,9 +5526,7 @@ struct COMMAND_ARG PHMSET_Args[] = {
 
 #ifndef SKIP_CMD_TIPS_TABLE
 /* PHPREFIXES tips */
-const char *PHPREFIXES_Tips[] = {
-"nondeterministic_output_order",
-};
+#define PHPREFIXES_Tips NULL
 #endif
 
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
@@ -12764,7 +12762,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("phgetall","Returns all field-value pairs at an exact path in a path hash.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHGETALL_History,0,PHGETALL_Tips,1,phgetallCommand,3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHGETALL_Keyspecs,1,NULL,2),.args=PHGETALL_Args},
 {MAKE_CMD("phmget","Returns fields from multiple exact paths in a path hash.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHMGET_History,0,PHMGET_Tips,0,phmgetCommand,-6,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHMGET_Keyspecs,1,NULL,2),.args=PHMGET_Args},
 {MAKE_CMD("phmset","Atomically sets fields across multiple paths in a path hash.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHMSET_History,0,PHMSET_Tips,0,phmsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,PHMSET_Keyspecs,1,NULL,2),.args=PHMSET_Args},
-{MAKE_CMD("phprefixes","Returns stored ancestor prefixes of a query in a path hash, from longest to shortest.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPREFIXES_History,0,PHPREFIXES_Tips,1,phprefixesCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHPREFIXES_Keyspecs,1,NULL,7),.args=PHPREFIXES_Args},
+{MAKE_CMD("phprefixes","Returns stored ancestor prefixes of a query in a path hash, from longest to shortest.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPREFIXES_History,0,PHPREFIXES_Tips,0,phprefixesCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHPREFIXES_Keyspecs,1,NULL,7),.args=PHPREFIXES_Args},
 {MAKE_CMD("phscan","Incrementally traverses paths in a path hash in lexicographic order.","O(L + C + O) per call.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHSCAN_History,0,PHSCAN_Tips,1,phscanCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHSCAN_Keyspecs,1,NULL,5),.args=PHSCAN_Args},
 {MAKE_CMD("phset","Atomically sets one or more fields at a path in a path hash.","O(L + F*U), where L is the path length, F is the number of fields, and U is the payload field lookup cost.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHSET_History,0,PHSET_Tips,0,phsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,PHSET_Keyspecs,1,NULL,4),.args=PHSET_Args},
 /* pubsub */

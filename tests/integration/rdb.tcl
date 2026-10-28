@@ -1894,4 +1894,42 @@ test {Server starts with bgsave-default-method before forkless-infrastructure-en
     }
 }
 
+start_server {overrides {save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    start_server {overrides {
+        bgsave-default-method forkless
+        forkless-infrastructure-enabled yes
+        repl-diskless-load swapdb
+    }} {
+        set replica [srv 0 client]
+
+        # Regression test for a use-after-free in fullScanIteratorGetEntries: a
+        # swapdb-mode full sync frees the replica's old keyspace while a forkless
+        # save's background iterator still holds live references into it. Fixed by
+        # tearing down iterators in swapMainDbWithTempDb() before the free.
+        #
+        # Large keyspace on the replica + tiny primary makes the collision
+        # likely: the save can't finish before the small RDB loads and swaps.
+        test {forkless save during swapdb full sync does not use-after-free} {
+            $primary debug populate 100
+            $replica debug populate 5000000
+            $replica bgsave
+
+            wait_for_condition 50 10 {
+                [s 0 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "forkless save did not start"
+            }
+
+            $replica replicaof $primary_host $primary_port
+
+            wait_for_sync $replica
+            assert_equal [$replica dbsize] [$primary dbsize]
+        } {} {needs:debug}
+    }
+}
+
 } ;# tags

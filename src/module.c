@@ -5186,6 +5186,10 @@ int VM_ZsetScore(ValkeyModuleKey *key, ValkeyModuleString *ele, double *score) {
  * or moved out of range (without setting the end-of-range flag), and
  * VM_ZsetRangeNext() / VM_ZsetRangePrev() re-seek from the saved (score,
  * member) position to the next or previous element still in range.
+ *
+ * If the key itself is deleted (for example because a command run through
+ * ValkeyModule_Call() removed its last element), the key handle is no longer
+ * valid and must not be used.
  * -------------------------------------------------------------------------- */
 
 void zsetKeyReset(ValkeyModuleKey *key) {

@@ -587,6 +587,11 @@ start_server {tags {"other external:skip"}} {
             set flags [dict get $info flags]
             if {[lsearch $flags immutable] >= 0 || [lsearch $flags alias] >= 0} continue
             set name [dict get $info name]
+            # Applying these defaults moves the test server's listeners, which
+            # fails if the default port is in use. Under --tls, the empty
+            # certificate defaults are rejected because TLS is still enabled.
+            if {$name in {port tls-port}} continue
+            if {$::tls && [string match tls-* $name]} continue
             set default [dict get $info default]
             set original [lindex [r CONFIG GET $name] 1]
             if {[catch {r CONFIG SET $name $default} err]} {

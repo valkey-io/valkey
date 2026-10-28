@@ -504,14 +504,10 @@ void notifyReplyBlockingProgress(void) {
      * interleaved with it. The next regular beforeSleep catches up. */
     if (ProcessingEventsWhileBlocked || server.execution_nesting) return;
 
-    /* Keys and tasks normally get their offset at the end of their execution
-     * unit. Stamp any left over by a path that never reached
-     * postExecutionUnitOperations(); with nothing waiting to propagate, the
-     * current offset is final. */
-    if (!server.also_propagate.numops) {
-        if (hasPendingUncommittedData()) stampPendingUncommittedData(server.primary_repl_offset);
-        if (hasPendingDeferredTasks()) certifyPendingDeferredTasks();
-    }
+    /* Every writer ends its execution unit with postExecutionUnitOperations(),
+     * which stamps the keys and tasks it registered. Anything still pending
+     * here means a writer skipped it: its keys would hold reads forever. */
+    debugServerAssert(server.also_propagate.numops || (!hasPendingUncommittedData() && !hasPendingDeferredTasks()));
 
     const long long consensus_ack_offset = getDurablyCommittedOffset();
     if (consensus_ack_offset <= rb_state->previous_acked_offset) {

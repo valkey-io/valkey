@@ -12,7 +12,9 @@
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {
             "description": "Cursor and field/value pairs, in both RESP2 and RESP3.",
-            "type": "array", "minItems": 2, "maxItems": 2,
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
             "items": [
                 {"description": "The next Hash scan cursor, or 0 when complete.", "type": "string"},
                 {"description": "Alternating field names and values.", "type": "array", "items": {"type": "string"}}

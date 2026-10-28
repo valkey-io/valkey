@@ -7270,7 +7270,7 @@ int moduleCallArgv(ValkeyModuleCtx *ctx,
                    int flags,
                    const ValkeyModuleReplyHandlers *resp_handlers,
                    void *reply_ctx) {
-    serverAssert(resp_handlers == NULL || resp_handlers->version == VALKEYMODULE_REPLY_HANDLERS_VERSION);
+    serverAssert(resp_handlers == NULL || resp_handlers->version <= VALKEYMODULE_REPLY_HANDLERS_VERSION);
 
     int ret = VALKEYMODULE_OK;
     client *c = NULL;

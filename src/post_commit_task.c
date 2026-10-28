@@ -145,7 +145,7 @@ static void executeKeyInvalidationTask(const taskWaitingAck *task) {
 
 // Create the flush invalidation task.
 static taskWaitingAck *createFlushInvalidationTask(va_list ap) {
-    // Flush invalidation task has database ID as argument
+    // Flush invalidation task has the flush's async flag as argument
     int argc = 1;
     taskWaitingAck *task = zcalloc(sizeof(taskWaitingAck));
     task->argv = zmalloc(argc * sizeof(void *));
@@ -164,11 +164,9 @@ static void destroyFlushInvalidationTask(void *ptr) {
 
 // Execute the flush invalidation task.
 static void executeFlushInvalidationTask(const taskWaitingAck *task) {
-    bool is_flush_all = (bool)task->argv[0];
-    /* Use DBID -1 for FLUSHALL, otherwise use 0 for DBID.
-     * Note: This assumes the OSS Redis code below doesn't operate on the actual
-     * DBID besides differentiating between FLUSHDB and FLUSHALL. */
-    trackingInvalidateKeysOnFlush(is_flush_all ? -1 : 0);
+    /* Pass through the original flush's async flag, which decides whether the
+     * tracking table is freed in the background. */
+    trackingInvalidateKeysOnFlush((int)(intptr_t)task->argv[0]);
 }
 
 /*================================= Default callback ========================= */
@@ -204,10 +202,11 @@ void initTaskTypes(void) {
 /* Create task based on the given task type and arguments, and append the new
  * task to the end of the linkedlist of the pending tasks of that task type.
  *
- * Note that at this point in time, we might not know about the replication
- * offset we want to configure this task with so we put it onto a pending list.
- * And at a later point in time, when we know the replication offset, we would
- * set it and move the task to the official tasks list. */
+ * The replication offset the task depends on is not known yet: the write that
+ * triggered it (a client command, or expiry and eviction, which notify before
+ * they propagate the DEL) is propagated at the end of the execution unit. So
+ * the task waits on a pending list, and certifyPendingDeferredTasks() sets the
+ * offset and moves it to the official list once the unit has propagated. */
 bool replyBlockingRegisterPostCommitTask(int type, ...) {
     // Check reply-blocking is active and the type is valid
     if (!isPrimaryReplyBlockingEnabled() || type < 0 || type >= POST_COMMIT_TASK_TYPE_MAX) {
@@ -220,18 +219,7 @@ bool replyBlockingRegisterPostCommitTask(int type, ...) {
     taskWaitingAck *task = taskTypes[type].create_task(ap);
     if (task) {
         task->type = type;
-        if (server.current_client != NULL) {
-            /* Here the notification is triggered by an incoming client request when we
-             * don't yet know the actual replication offset after command is applied,
-             * so we need to put it onto a pending tasks list. */
-            listAddNodeTail(server.reply_blocking.pending_tasks_waiting_ack[type], task);
-        } else {
-            /* This notification is triggered from a background job such as
-             * active expiry or eviction outside of a regular client command.
-             * The replication offset is already updated so we use it directly. */
-            task->offset = server.primary_repl_offset;
-            listAddNodeTail(server.reply_blocking.tasks_waiting_ack[type], task);
-        }
+        listAddNodeTail(server.reply_blocking.pending_tasks_waiting_ack[type], task);
         return_code = true;
     }
     va_end(ap);
@@ -243,10 +231,11 @@ bool replyBlockingRegisterPostCommitTask(int type, ...) {
 bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struct serverObject *key) {
     if (!isPrimaryReplyBlockingEnabled()) return false;
 
-    /* Background writes (expiry/eviction) call signalModifiedKey with a NULL
-     * client and have no argv; track them here. Client-command keys are handled
-     * by the command's own offset computation. */
-    if (c == NULL) trackBackgroundModifiedKey(db, key);
+    /* Track every modified key here, whoever the writer is: client commands,
+     * MULTI/EXEC, scripts, module calls, timers and the key API, expiry and
+     * eviction. Deriving keys from argv keyspecs misses keys a command does not
+     * declare and writes that have no command at all. */
+    trackModifiedKey(db, key);
 
     // Defer key invalidation messages until the reply-blocking providers acknowledge.
     return replyBlockingRegisterPostCommitTask(POST_COMMIT_KEY_INVALIDATION_TASK,
@@ -254,10 +243,10 @@ bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struc
 }
 
 
-bool replyBlockingSignalFlushedDb(int dbid) {
+bool replyBlockingSignalFlushedDb(int async) {
     // Defer flush invalidation messages until the reply-blocking providers acknowledge.
     return replyBlockingRegisterPostCommitTask(POST_COMMIT_FLUSH_INVALIDATION_TASK,
-                                               (void *)(intptr_t)(dbid == -1));
+                                               (void *)(intptr_t)async);
 }
 
 /*================================= Task Execution =========================== */
@@ -290,6 +279,15 @@ void executeDeferredTasksForAck(const long long consensus_ack_offset) {
     }
 
     rb_state->in_post_commit_task_execution = prev_in_post_commit_task_execution;
+}
+
+// True when tasks registered in the current execution unit wait for an offset.
+bool hasPendingDeferredTasks(void) {
+    for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
+        list *pending = server.reply_blocking.pending_tasks_waiting_ack[i];
+        if (pending != NULL && listLength(pending) != 0) return true;
+    }
+    return false;
 }
 
 // Move pending deferred tasks to the official list with the current replication offset.

@@ -815,7 +815,7 @@ void signalFlushedDb(int dbid, int async) {
         touchAllWatchedKeysInDb(server.db[j], NULL);
     }
 
-    if (replyBlockingSignalFlushedDb(dbid)) {
+    if (replyBlockingSignalFlushedDb(async)) {
         return;
     }
 

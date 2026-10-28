@@ -1,6 +1,5 @@
 #include "server.h"
 #include "zmalloc.h"
-#include "script.h"
 #include <math.h>
 
 /*================================= Internal Data Structures ================= */
@@ -9,31 +8,25 @@ typedef struct uncommittedKeyEntry {
     long long offset;
 } uncommittedKeyEntry;
 
-/* Pending key reference used during multi-command blocks (MULTI/EXEC, Lua).
- * We mark keys dirty immediately but don't yet know the final replication
- * offset, so we keep a reference to update the offset after the transaction
- * completes. */
+/* Reference to a key marked dirty with the LLONG_MAX placeholder offset. The
+ * final replication offset is only known once the execution unit that modified
+ * the key has propagated, so we keep a reference to stamp it then. */
 typedef struct pendingUncommittedKey {
     robj *key;
     hashtable *uncommitted_keys;
 } pendingUncommittedKey;
 
-/* Pending keys buffered during MULTI/EXEC or Lua scripts.  These are keys
- * that have already been marked dirty in uncommitted_keys (with LLONG_MAX
- * as a placeholder offset) but whose real offset is not yet known. */
-static list *pending_uncommitted_keys;
+/* Keys modified in the current execution unit, fed from signalModifiedKey()
+ * for every writer (client commands, MULTI/EXEC, scripts, modules, expiry,
+ * eviction). They are already in uncommitted_keys with the LLONG_MAX
+ * placeholder; stampPendingUncommittedData() sets the real offset. */
+static list *pending_modified_keys;
 
-// Pending databases dirtied during a multi-command block.
+// Databases dirtied (FLUSHDB/SWAPDB) in the current execution unit.
 static list *pending_uncommitted_dbs;
 
-/* Keys modified by background/implicit writes (expiry, eviction) — i.e.
- * signalModifiedKey() with a NULL client, which have no argv to derive keys
- * from. Marked dirty here; drainBackgroundModifiedKeys() sets the real offset. */
-static list *background_modified_keys;
-
-/* Tracks whether all databases were dirtied during the current command
- * within a multi-command block (MULTI/EXEC or Lua script). Module-local
- * state — only accessed within uncommitted_keys.c. */
+/* Whether all databases were dirtied (FLUSHALL) in the current execution
+ * unit. Module-local state, only accessed within uncommitted_keys.c. */
 static bool all_dbs_dirty_in_current_cmd;
 
 
@@ -45,7 +38,7 @@ static uint64_t uncommittedKeysHash(const void *key);
 static int uncommittedKeysKeyCompare(const void *key1, const void *key2);
 static const void *uncommittedKeyEntryGetKey(const void *entry);
 static void uncommittedKeyEntryDestructor(void *entry);
-static void handleDirtyDatabase(client *c, serverDb *db);
+static void handleDirtyDatabase(serverDb *db);
 static bool swapdbGetParams(robj **argv, int argc, int *id1_p, int *id2_p);
 
 /*================================= Hashtable Type =========================== */
@@ -100,26 +93,25 @@ unsigned long long getNumberOfUncommittedKeys(void) {
 
 /*================================= Key Tracking ============================= */
 
-/* Mark a key as uncommitted at a particular replication offset.
- * If the key already exists in the hashtable, update its offset. */
+/* Mark a key as uncommitted at a particular replication offset, or update the
+ * offset of a key that is already tracked. Looks the key up first so that a
+ * hot key costs no allocation. Returns false when the key already carried the
+ * LLONG_MAX placeholder (it is then already referenced by a pending record). */
 static bool addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
+    hashtablePosition position;
+    void *existing = NULL;
+    if (!hashtableFindPositionForInsert(uncommittedKeys, key, &position, &existing)) {
+        uncommittedKeyEntry *existing_entry = existing;
+        bool was_placeholder = (existing_entry->offset == LLONG_MAX);
+        existing_entry->offset = offset;
+        return !was_placeholder;
+    }
+
     uncommittedKeyEntry *entry = zmalloc(sizeof(*entry));
     entry->key = sdsdup(key);
     entry->offset = offset;
-
-    void *existing = NULL;
-    if (hashtableAddOrFind(uncommittedKeys, entry, &existing)) {
-        return true; /* newly added — caller should enqueue pending record */
-    }
-
-    // Key already tracked — update to the latest offset
-    uncommittedKeyEntry *existing_entry = existing;
-    bool was_placeholder = (existing_entry->offset == LLONG_MAX);
-    existing_entry->offset = offset;
-    sdsfree(entry->key);
-    zfree(entry);
-    // Only need a new pending record if the existing entry wasn't already a placeholder
-    return !was_placeholder;
+    hashtableInsertAtPosition(uncommittedKeys, entry, &position);
+    return true;
 }
 
 /* Retrieve the uncommitted replication offset for a given key.
@@ -142,101 +134,45 @@ long long getUncommittedKeyOffset(const sds key, serverDb *db, long long previou
     return key_offset;
 }
 
-/* Handle a dirty key for a given client.
- *
- * Keys are marked dirty immediately in db->uncommitted_keys.  For single
- * commands outside a transaction the real replication offset is known.
- *
- * Inside a MULTI/EXEC or Lua script we use LLONG_MAX as a placeholder
- * offset (so reads are blocked immediately) and buffer a reference in
- * pending_uncommitted_keys.  processPendingUncommittedData() will later
- * update the offset once the transaction completes.
- *
- * Cleanup happens in drainCommittedKeys() which iterates the hashtable
- * and removes entries whose offset has been committed. */
-void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
-    sds keystr = objectGetVal(key);
-
-    if (scriptIsRunning() || ((c != NULL) && c->flag.multi)) {
-        if (all_dbs_dirty_in_current_cmd) return;
-
-        // Mark dirty immediately with placeholder offset
-        bool needs_pending = addUncommittedKey(keystr, LLONG_MAX, db->uncommitted_keys);
-
-        // Buffer a reference so we can update offset later (only if not already pending)
-        if (needs_pending) {
-            if (pending_uncommitted_keys == NULL) {
-                pending_uncommitted_keys = listCreate();
-                listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
-            }
-            pendingUncommittedKey *dirty_key = zmalloc(sizeof(pendingUncommittedKey));
-            incrRefCount(key);
-            dirty_key->key = key;
-            dirty_key->uncommitted_keys = db->uncommitted_keys;
-            listAddNodeTail(pending_uncommitted_keys, dirty_key);
-        }
-    } else {
-        // Single command: mark dirty with real offset
-        addUncommittedKey(keystr, server.primary_repl_offset, db->uncommitted_keys);
-    }
-}
-
-/* Record a key modified by a background write (expiry/eviction), fed from
- * signalModifiedKey with a NULL client. Marked dirty with an LLONG_MAX
- * placeholder; drainBackgroundModifiedKeys() sets the real offset after
- * propagation (the deletion isn't propagated yet at signalModifiedKey time). */
-void trackBackgroundModifiedKey(serverDb *db, robj *key) {
+/* Record a key modified by any writer, fed from signalModifiedKey(). The key is
+ * marked dirty with the LLONG_MAX placeholder right away, so a read of it can
+ * never see it as committed; stampPendingUncommittedData() sets the real
+ * offset once the execution unit has propagated the write. */
+void trackModifiedKey(serverDb *db, robj *key) {
     if (all_dbs_dirty_in_current_cmd) return;
 
     if (addUncommittedKey(objectGetVal(key), LLONG_MAX, db->uncommitted_keys)) {
-        if (background_modified_keys == NULL) {
-            background_modified_keys = listCreate();
-            listSetFreeMethod(background_modified_keys, pendingUncommittedKeyDestructor);
-        }
         pendingUncommittedKey *entry = zmalloc(sizeof(*entry));
         incrRefCount(key);
         entry->key = key;
         entry->uncommitted_keys = db->uncommitted_keys;
-        listAddNodeTail(background_modified_keys, entry);
+        listAddNodeTail(pending_modified_keys, entry);
     }
 }
 
-bool hasBackgroundModifiedKeys(void) {
-    return background_modified_keys != NULL && listLength(background_modified_keys) != 0;
-}
-
-/* Apply the final replication offset to keys dirtied by background writes in
- * the execution unit that just completed, then clear the set. Called from
- * postExecutionUnitOperations() after propagation, so the offset is final. */
-void drainBackgroundModifiedKeys(long long offset) {
-    if (!hasBackgroundModifiedKeys()) return;
-
-    listIter li;
-    listNode *ln;
-    listRewind(background_modified_keys, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        const pendingUncommittedKey *uk = listNodeValue(ln);
-        uncommittedKeyEntry *entry = NULL;
-        if (hashtableFind(uk->uncommitted_keys, objectGetVal(uk->key), (void **)&entry)) {
-            if (entry->offset == LLONG_MAX || entry->offset < offset) {
-                entry->offset = offset;
-            }
-        }
-        listDelNode(background_modified_keys, ln);
-    }
+/* True when keys or databases dirtied in the current execution unit still
+ * wait for stampPendingUncommittedData(). Used by the post-execution-unit
+ * pending-work gate so the stamp is never skipped. */
+bool hasPendingUncommittedData(void) {
+    return (pending_modified_keys != NULL && listLength(pending_modified_keys) != 0) ||
+           (pending_uncommitted_dbs != NULL && listLength(pending_uncommitted_dbs) != 0) ||
+           all_dbs_dirty_in_current_cmd;
 }
 
 /*================================= Database Modification ==================== */
 
-static void handleDirtyDatabase(client *c, serverDb *db) {
-    if ((c->flag.multi) || scriptIsRunning()) {
+/* computeCommandBlockingOffset() runs after the command has left its execution
+ * unit, so a nesting level of zero means the command was top level and has
+ * already propagated. Inside MULTI/EXEC, scripts and module calls the offset is
+ * only final at the end of the outer unit, so the database is stamped then. */
+static void handleDirtyDatabase(serverDb *db) {
+    if (server.execution_nesting) {
         if (all_dbs_dirty_in_current_cmd) return;
         if (db != NULL) {
             listAddNodeTail(pending_uncommitted_dbs, db);
         } else {
             all_dbs_dirty_in_current_cmd = true;
-            listEmpty(pending_uncommitted_keys);
-            if (background_modified_keys != NULL) listEmpty(background_modified_keys);
+            listEmpty(pending_modified_keys);
             listEmpty(pending_uncommitted_dbs);
             /* FLUSHALL inside a transaction: any keys previously dirtied
              * in this transaction are now gone.  Clear the per-DB
@@ -265,13 +201,13 @@ void handleDatabaseModification(client *c) {
     if (c->cmd->proc == swapdbCommand && server.cluster_enabled == 0) {
         int id1, id2;
         if (swapdbGetParams(c->argv, c->argc, &id1, &id2)) {
-            handleDirtyDatabase(c, server.db[id1]);
-            handleDirtyDatabase(c, server.db[id2]);
+            handleDirtyDatabase(server.db[id1]);
+            handleDirtyDatabase(server.db[id2]);
         }
     } else if (c->cmd->proc == flushdbCommand) {
-        handleDirtyDatabase(c, c->db);
+        handleDirtyDatabase(c->db);
     } else if (c->cmd->proc == flushallCommand) {
-        handleDirtyDatabase(c, NULL);
+        handleDirtyDatabase(NULL);
     }
 }
 
@@ -336,11 +272,8 @@ void clearAllUncommittedKeys(void) {
     serverLog(LL_DEBUG, "Clearing all uncommitted keys");
     /* Clear pending list first — entries hold raw pointers to db->uncommitted_keys
      * hashtables that we're about to free. */
-    if (pending_uncommitted_keys != NULL) {
-        listEmpty(pending_uncommitted_keys);
-    }
-    if (background_modified_keys != NULL) {
-        listEmpty(background_modified_keys);
+    if (pending_modified_keys != NULL) {
+        listEmpty(pending_modified_keys);
     }
     if (pending_uncommitted_dbs != NULL) {
         listEmpty(pending_uncommitted_dbs);
@@ -368,22 +301,16 @@ int hasUncommittedKeys(void) {
 /*================================= Pending Data Processing ================== */
 
 void uncommittedKeysInitPending(void) {
-    pending_uncommitted_keys = listCreate();
-    listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
-    background_modified_keys = listCreate();
-    listSetFreeMethod(background_modified_keys, pendingUncommittedKeyDestructor);
+    pending_modified_keys = listCreate();
+    listSetFreeMethod(pending_modified_keys, pendingUncommittedKeyDestructor);
     pending_uncommitted_dbs = listCreate();
     all_dbs_dirty_in_current_cmd = false;
 }
 
 void uncommittedKeysCleanupPending(void) {
-    if (pending_uncommitted_keys != NULL) {
-        listRelease(pending_uncommitted_keys);
-        pending_uncommitted_keys = NULL;
-    }
-    if (background_modified_keys != NULL) {
-        listRelease(background_modified_keys);
-        background_modified_keys = NULL;
+    if (pending_modified_keys != NULL) {
+        listRelease(pending_modified_keys);
+        pending_modified_keys = NULL;
     }
     if (pending_uncommitted_dbs != NULL) {
         listRelease(pending_uncommitted_dbs);
@@ -391,14 +318,15 @@ void uncommittedKeysCleanupPending(void) {
     }
 }
 
-/* After a transaction completes, update the placeholder offsets on keys
- * that were dirtied during the transaction to the real replication offset.
- * Cleanup will happen when drainCommittedKeys() iterates the hashtable. */
-void processPendingUncommittedData(long long blocking_repl_offset) {
-    if (listLength(pending_uncommitted_keys) > 0) {
+/* Apply the final replication offset to the keys and databases dirtied in the
+ * execution unit that just completed. Called from postExecutionUnitOperations()
+ * after propagatePendingCommands(), so the offset is final. Cleanup happens when
+ * drainCommittedKeys() iterates the hashtable. */
+void stampPendingUncommittedData(long long blocking_repl_offset) {
+    if (listLength(pending_modified_keys) > 0) {
         listIter li;
         listNode *key_node;
-        listRewind(pending_uncommitted_keys, &li);
+        listRewind(pending_modified_keys, &li);
         while ((key_node = listNext(&li)) != NULL) {
             const pendingUncommittedKey *uk = listNodeValue(key_node);
             sds keystr = objectGetVal(uk->key);
@@ -412,7 +340,7 @@ void processPendingUncommittedData(long long blocking_repl_offset) {
                 }
             }
 
-            listDelNode(pending_uncommitted_keys, key_node);
+            listDelNode(pending_modified_keys, key_node);
         }
     }
 
@@ -434,7 +362,7 @@ void processPendingUncommittedData(long long blocking_repl_offset) {
         }
     }
 
-    serverAssert(listLength(pending_uncommitted_keys) == 0);
+    serverAssert(listLength(pending_modified_keys) == 0);
     serverAssert(listLength(pending_uncommitted_dbs) == 0);
     serverAssert(all_dbs_dirty_in_current_cmd == false);
 }

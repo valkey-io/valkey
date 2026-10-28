@@ -426,6 +426,8 @@ foreach provider_mode {aof} {
                 # A key deleted by lazy expiry is a background write (signalModifiedKey
                 # with a NULL client). It must be tracked as uncommitted with no
                 # per-function hook, so a later read blocks until the deletion is durable.
+                # The read that triggers the expiry propagates the DEL, so it is held
+                # at the post-propagation offset too.
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
                 $primary debug set-active-expire 0
 
@@ -436,28 +438,113 @@ foreach provider_mode {aof} {
 
                 pause_provider
 
-                # Trigger lazy expiry: returns nil immediately (the triggering read is
-                # not itself a write), deletes the key, and marks the deletion dirty.
-                assert_equal {} [$primary get durable:lazyexp]
+                # Trigger lazy expiry: deletes the key and marks the deletion dirty.
+                # The triggering read propagated the DEL, so its reply waits too.
+                set trigger [valkey_deferring_client -1]
+                $trigger get durable:lazyexp
+                wait_for_condition 50 100 {
+                    [catch {$primary debug object durable:lazyexp}] == 1
+                } else {
+                    fail "lazy expiry did not delete the key"
+                }
 
                 # A later read of the now-deleted key must block until durable.
                 set rd [valkey_deferring_client -1]
                 $rd exists durable:lazyexp
                 wait_for_condition 50 100 {
-                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                    [string match "*reply_blocking_clients_waiting_ack:2*" [$primary info debug]]
                 } else {
                     fail "lazy-expiry deletion was not tracked as uncommitted"
                 }
 
-                set fd [$rd channel]
-                fconfigure $fd -blocking 0
-                assert_equal "" [read $fd]
-                fconfigure $fd -blocking 1
+                foreach client [list $trigger $rd] {
+                    set fd [$client channel]
+                    fconfigure $fd -blocking 0
+                    assert_equal "" [read $fd]
+                    fconfigure $fd -blocking 1
+                }
 
                 unblock_with_provider
+                assert_equal {} [$trigger read]
                 assert_equal 0 [$rd read]
+                $trigger close
                 $rd close
                 $primary debug set-active-expire 1
+            }
+
+            test "($provider_mode) Read that lazily expires a key still waits for other dirty keys it reads" {
+                # Lazy expiry propagates a DEL during a read, so the read counts
+                # as having propagated something. It must still be held for the
+                # dirty sibling key it returns.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                $primary debug set-active-expire 0
+
+                $primary set durable:mget:exp v
+                $primary pexpire durable:mget:exp 1
+                after 10
+
+                pause_provider
+
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer set durable:mget:dirty dirty
+                wait_for_condition 50 10 {
+                    [catch {$primary debug object durable:mget:dirty}] == 0
+                } else {
+                    fail "Writer's SET was not processed in time"
+                }
+
+                set rd [valkey_deferring_client -1]
+                $rd mget durable:mget:exp durable:mget:dirty
+                after 100
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+                assert_equal {{} dirty} [$rd read]
+                $rd close
+                $writer close
+                $primary debug set-active-expire 1
+            }
+
+            test "($provider_mode) Expired keyspace event waits until the active-expiry DEL is durable" {
+                # Active expiry fires the 'expired' event before it propagates the
+                # DEL, so the event must not be released at the pre-DEL offset.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                set saved_events [lindex [$primary config get notify-keyspace-events] 1]
+                $primary config set notify-keyspace-events Ex
+                $primary debug set-active-expire 0
+
+                set sub [valkey_deferring_client -1]
+                $sub subscribe __keyevent@9__:expired
+                assert_equal {subscribe __keyevent@9__:expired 1} [$sub read]
+
+                $primary set durable:expev v
+                $primary pexpire durable:expev 1
+                after 10
+
+                pause_provider
+                $primary debug set-active-expire 1
+                wait_for_condition 50 100 {
+                    [catch {$primary debug object durable:expev}] == 1
+                } else {
+                    fail "Key was not actively expired"
+                }
+                after 100
+
+                set fd [$sub channel]
+                fconfigure $fd -blocking 0
+                set early_event [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_event
+
+                unblock_with_provider
+                assert_equal {message __keyevent@9__:expired durable:expev} [$sub read]
+                $sub close
+                $primary config set notify-keyspace-events $saved_events
             }
 
             # ==================== Non-blocking tests ====================

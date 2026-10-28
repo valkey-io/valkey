@@ -17,25 +17,15 @@ struct serverCommand;
 // Initialize reply-blocking-related fields for a database.
 void replyBlockingInitDatabase(struct serverDb *db);
 
-/* Handle a dirty key for a given client.
- * Marks the key as dirty immediately in db->uncommitted_keys.
- * @param c The calling client. NULL if the key becomes dirty outside a client command (i.e. expiry/eviction)
- * @param key The key object
- * @param db The database */
-void handleUncommittedKeyForClient(const struct client *c, struct serverObject *key, struct serverDb *db);
+/* Record a key modified by any writer, fed from signalModifiedKey(). The key is
+ * marked dirty with a placeholder offset; stampPendingUncommittedData() applies
+ * the real offset at the end of the execution unit. */
+void trackModifiedKey(struct serverDb *db, struct serverObject *key);
 
-/* Record a key modified by a background write (expiry/eviction), fed from
- * signalModifiedKey with a NULL client so such paths need no per-function
- * callsite. drainBackgroundModifiedKeys() applies the real offset later. */
-void trackBackgroundModifiedKey(struct serverDb *db, struct serverObject *key);
-
-/* True when background-modified keys are waiting for drainBackgroundModifiedKeys().
- * Used by the post-execution-unit pending-work gate so the drain is never skipped. */
-bool hasBackgroundModifiedKeys(void);
-
-/* Apply the final replication offset to keys dirtied by background writes in
- * the just-completed execution unit. Called from postExecutionUnitOperations(). */
-void drainBackgroundModifiedKeys(long long offset);
+/* True when keys or databases dirtied in the current execution unit wait for
+ * stampPendingUncommittedData(). Used by the post-execution-unit pending-work
+ * gate so the stamp is never skipped. */
+bool hasPendingUncommittedData(void);
 
 /* Retrieve the uncommitted replication offset for a given key.
  * Returns -1 if the key is not tracked or has already been committed
@@ -61,11 +51,10 @@ unsigned long long getNumberOfUncommittedKeys(void);
 // Handle database-level modification commands (FLUSHDB, FLUSHALL, SWAPDB).
 void handleDatabaseModification(struct client *c);
 
-/* Commit pending uncommitted data (keys, databases, function store)
- * after a transaction completes. Sets the real replication offset on
- * keys that were dirtied during the transaction and enqueues them for
- * cleanup tracking. */
-void processPendingUncommittedData(long long blocking_repl_offset);
+/* Apply the final replication offset to the keys and databases dirtied in the
+ * execution unit that just completed. Called after propagation, so the offset
+ * is final. */
+void stampPendingUncommittedData(long long blocking_repl_offset);
 
 // Initialize the pending uncommitted data structures.
 void uncommittedKeysInitPending(void);

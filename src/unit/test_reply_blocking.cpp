@@ -18,6 +18,13 @@ extern "C" {
 
 /* ========================= Test Helpers ========================= */
 
+/* Mark a key dirty the way a write does: signalModifiedKey() tracks it with a
+ * placeholder, and the end of the execution unit stamps the current offset. */
+static void markKeyDirty(robj *key, serverDb *db) {
+    trackModifiedKey(db, key);
+    stampPendingUncommittedData(server.primary_repl_offset);
+}
+
 static void initTestEnv(void) {
     static char test_logfile[] = "";
     if (server.logfile == nullptr) {
@@ -133,9 +140,11 @@ class UncommittedKeysTest : public ::testing::Test {
         server.db = (serverDb **)zcalloc(sizeof(serverDb *));
         server.db[0] = (serverDb *)zcalloc(sizeof(serverDb));
         replyBlockingInitDatabase(server.db[0]);
+        uncommittedKeysInitPending();
     }
 
     void TearDown() override {
+        uncommittedKeysCleanupPending();
         hashtableRelease(server.db[0]->uncommitted_keys);
         zfree(server.db[0]);
         zfree(server.db);
@@ -409,7 +418,7 @@ TEST_F(UncommittedKeysTest, HandleAndPurgeUncommittedKey) {
     sds key = (sds)objectGetVal(key_obj);
     long long offset = 10;
     server.primary_repl_offset = offset;
-    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+    markKeyDirty(key_obj, server.db[0]);
 
     /* Key should be in uncommitted set */
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
@@ -437,9 +446,9 @@ TEST_F(UncommittedKeysTest, MultipleKeysTracked) {
     robj *k2 = createStringObject("key2", 4);
 
     server.primary_repl_offset = 10;
-    handleUncommittedKeyForClient(nullptr, k1, server.db[0]);
+    markKeyDirty(k1, server.db[0]);
     server.primary_repl_offset = 20;
-    handleUncommittedKeyForClient(nullptr, k2, server.db[0]);
+    markKeyDirty(k2, server.db[0]);
 
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 2u);
 
@@ -466,12 +475,12 @@ TEST_F(UncommittedKeysTest, KeyOffsetUpdatedOnRewrite) {
     robj *key_obj = createStringObject("key", 3);
 
     server.primary_repl_offset = 10;
-    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+    markKeyDirty(key_obj, server.db[0]);
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
 
     /* Rewrite same key at higher offset */
     server.primary_repl_offset = 50;
-    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+    markKeyDirty(key_obj, server.db[0]);
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
 
     /* Old offset acked but new offset not */
@@ -494,7 +503,7 @@ TEST_F(UncommittedKeysTest, HasUncommittedKeysAcrossDBs) {
 
     robj *key_obj = createStringObject("key", 3);
     server.primary_repl_offset = 10;
-    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+    markKeyDirty(key_obj, server.db[0]);
     ASSERT_EQ(hasUncommittedKeys(), 1);
 
     /* Purge it */
@@ -513,9 +522,9 @@ TEST_F(UncommittedKeysTest, GetNumberOfUncommittedKeys) {
     robj *k3 = createStringObject("c", 1);
 
     server.primary_repl_offset = 10;
-    handleUncommittedKeyForClient(nullptr, k1, server.db[0]);
-    handleUncommittedKeyForClient(nullptr, k2, server.db[0]);
-    handleUncommittedKeyForClient(nullptr, k3, server.db[0]);
+    markKeyDirty(k1, server.db[0]);
+    markKeyDirty(k2, server.db[0]);
+    markKeyDirty(k3, server.db[0]);
 
     ASSERT_EQ(getNumberOfUncommittedKeys(), 3u);
 
@@ -530,11 +539,11 @@ TEST_F(UncommittedKeysTest, DrainCommittedKeysRemovesCommitted) {
     robj *k3 = createStringObject("key3", 4);
 
     server.primary_repl_offset = 10;
-    handleUncommittedKeyForClient(nullptr, k1, server.db[0]);
+    markKeyDirty(k1, server.db[0]);
     server.primary_repl_offset = 20;
-    handleUncommittedKeyForClient(nullptr, k2, server.db[0]);
+    markKeyDirty(k2, server.db[0]);
     server.primary_repl_offset = 30;
-    handleUncommittedKeyForClient(nullptr, k3, server.db[0]);
+    markKeyDirty(k3, server.db[0]);
 
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 3u);
 
@@ -561,11 +570,11 @@ TEST_F(UncommittedKeysTest, DrainPreservesReDirtiedKey) {
 
     /* Write at offset 10 */
     server.primary_repl_offset = 10;
-    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+    markKeyDirty(key_obj, server.db[0]);
 
     /* Re-dirty at offset 50 */
     server.primary_repl_offset = 50;
-    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+    markKeyDirty(key_obj, server.db[0]);
 
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
 
@@ -813,39 +822,26 @@ TEST_F(FullReplyBlockingTest, PreCommandExecReplyBlockingEnabledOnPrimary) {
     zfree(c);
 }
 
-/* Migrated from test_multi_exec_defers_dirty_keys */
-TEST_F(FullReplyBlockingTest, MultiExecDefersDirtyKeys) {
-    client *c = (client *)zcalloc(sizeof(client));
-    replyBlockingClientInit(c);
-    c->db = server.db[0];
-    c->reply = listCreate();
-    listSetFreeMethod(c->reply, zfree);
-
-    /* Inside a MULTI — key is marked dirty immediately with placeholder offset */
-    c->flag.multi = 1;
+/* A modified key carries the LLONG_MAX placeholder until its execution unit
+ * ends, so a read can never see it as committed; the stamp sets the offset. */
+TEST_F(FullReplyBlockingTest, ModifiedKeyCarriesPlaceholderUntilStamped) {
     robj *key_obj = createStringObject("multi-key", 9);
-    handleUncommittedKeyForClient(c, key_obj, server.db[0]);
-    /* Key should be in uncommitted set immediately (with LLONG_MAX placeholder) */
+    server.reply_blocking.previous_acked_offset = 0;
+
+    trackModifiedKey(server.db[0], key_obj);
+    ASSERT_TRUE(hasPendingUncommittedData());
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
     ASSERT_EQ(getUncommittedKeyOffset((sds)objectGetVal(key_obj), server.db[0], server.reply_blocking.previous_acked_offset), LLONG_MAX);
 
-    /* After EXEC completes: finalizeCommandReplyBlocking commits deferred keys */
-    c->flag.multi = 0;
-    struct serverCommand exec_cmd = {.declared_name = "exec", .proc = execCommand, .flags = 0};
-    c->cmd = &exec_cmd;
-    c->reply_blocking_state.current_command_repl_offset = -1;
-    server.primary_repl_offset = 100;
-    server.reply_blocking.pre_command_replication_offset = 100;
-    server.reply_blocking.previous_acked_offset = 0;
-    finalizeCommandReplyBlocking(c);
+    /* Modifying it again in the same unit adds no second pending record. */
+    trackModifiedKey(server.db[0], key_obj);
 
+    stampPendingUncommittedData(100);
+    ASSERT_FALSE(hasPendingUncommittedData());
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
     ASSERT_EQ(getUncommittedKeyOffset((sds)objectGetVal(key_obj), server.db[0], server.reply_blocking.previous_acked_offset), 100);
 
     decrRefCount(key_obj);
-    listRelease(c->reply);
-    replyBlockingClientReset(c);
-    zfree(c);
 }
 
 /* Note: test_exec_blocks_reply_and_tracks_dirty_keys from the C test suite
@@ -949,8 +945,17 @@ TEST_F(FullReplyBlockingTest, KeyspaceNotifyTaskCopiesEventString) {
     /* The task should still be valid and executable without crash.
      * Execute all tasks at offset 100 — the event string inside the task
      * should be an independent copy that's still valid. */
+    /* A background task (active expiry, eviction) registers before its DEL is
+     * propagated, so it must wait for the end of the unit like any other. */
+    ASSERT_EQ(listLength(server.reply_blocking.tasks_waiting_ack[POST_COMMIT_KEYSPACE_NOTIFY_TASK]), 0u);
+    ASSERT_TRUE(hasPendingDeferredTasks());
+    server.primary_repl_offset = 120; /* the DEL propagated */
+    certifyPendingDeferredTasks();
+    ASSERT_FALSE(hasPendingDeferredTasks());
     ASSERT_EQ(listLength(server.reply_blocking.tasks_waiting_ack[POST_COMMIT_KEYSPACE_NOTIFY_TASK]), 1u);
     executeDeferredTasksForAck(100);
+    ASSERT_EQ(listLength(server.reply_blocking.tasks_waiting_ack[POST_COMMIT_KEYSPACE_NOTIFY_TASK]), 1u);
+    executeDeferredTasksForAck(120);
     ASSERT_EQ(listLength(server.reply_blocking.tasks_waiting_ack[POST_COMMIT_KEYSPACE_NOTIFY_TASK]), 0u);
 
     decrRefCount(key_obj);

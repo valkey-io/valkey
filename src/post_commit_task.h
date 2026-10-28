@@ -39,6 +39,7 @@ void executeDeferredTasksForAck(long long consensus_ack_offset);
 /* Move pending tasks (registered during command execution before the
  * replication offset was known) to the official tasks list, setting
  * their offset to server.primary_repl_offset. */
+bool hasPendingDeferredTasks(void);
 void certifyPendingDeferredTasks(void);
 
 /* Notify the task system that a client is being destroyed so that
@@ -56,7 +57,7 @@ bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struc
  *
  * Return true if no further processing are required in signalFlushedDb() such
  * as some async tasks are created which need some time to finish, false otherwise. */
-bool replyBlockingSignalFlushedDb(int dbid);
+bool replyBlockingSignalFlushedDb(int async);
 
 /* Initialize the task lists in the reply-blocking structure.
  * Called from replyBlockingInit(). */

@@ -4077,7 +4077,7 @@ static void propagatePendingCommands(void) {
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
     return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags ||
-           (server.bio_aof_offload_enabled && hasBackgroundModifiedKeys());
+           (server.bio_aof_offload_enabled && (hasPendingUncommittedData() || hasPendingDeferredTasks()));
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4115,11 +4115,15 @@ void postExecutionUnitOperations(void) {
          * context (e.g. within a module timer) we can propagate what we accumulated. */
         propagatePendingCommands();
 
-        /* Apply the final offset to keys dirtied by background writes (expiry/eviction)
-         * in this unit. Must run after propagatePendingCommands() so the offset is final.
-         * hasPostExecutionUnitPendingWork() accounts for these keys, so this is never
+        /* Apply the final offset to the keys, databases and deferred tasks
+         * (keyspace events, invalidations) from this unit. Must run after
+         * propagatePendingCommands() so the offset is final.
+         * hasPostExecutionUnitPendingWork() accounts for them, so this is never
          * skipped by the gate above. */
-        if (server.bio_aof_offload_enabled) drainBackgroundModifiedKeys(server.primary_repl_offset);
+        if (server.bio_aof_offload_enabled) {
+            stampPendingUncommittedData(server.primary_repl_offset);
+            certifyPendingDeferredTasks();
+        }
 
         /* Module subsystem post-execution-unit logic */
         modulePostExecutionUnitOperations();
@@ -5068,10 +5072,13 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
-        if (server.bio_aof_offload_enabled) beginCommandReplyBlocking(c);
+        /* Finalize only what was begun: the command itself may toggle the
+         * feature (CONFIG SET bio-aof-offload-enabled). */
+        int reply_blocking = server.bio_aof_offload_enabled;
+        if (reply_blocking) beginCommandReplyBlocking(c);
         int flags = CMD_CALL_FULL;
         call(c, flags);
-        if (server.bio_aof_offload_enabled) finalizeCommandReplyBlocking(c);
+        if (reply_blocking) finalizeCommandReplyBlocking(c);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;

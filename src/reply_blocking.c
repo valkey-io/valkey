@@ -7,6 +7,9 @@
  * which has header dependency issues when included before server.h */
 int moduleClientIsBlockedOnKeys(client *c);
 
+/* Set while processEventsWhileBlocked() runs the event loop (server.c). */
+extern int ProcessingEventsWhileBlocked;
+
 /*============================ Internal prototypes ========================= */
 static void resetPreExecutionOffset(struct client *c);
 static void trackCommandPreExecutionPosition(struct client *c);
@@ -323,8 +326,12 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
     serverAssert(isPrimaryReplyBlockingEnabled());
 
     /* A client scheduled for async close is freed at the next beforeSleep and
-     * is refused all writes until then, so there is no reply to hold. */
-    if (!c->flag.close_asap && isBlockingNeededForOffset(c, blockingReplOffset)) {
+     * is refused all writes until then, so there is no reply to hold. Without a
+     * recorded start position (the command began before reply blocking was
+     * turned on, e.g. CONFIG SET appendfsync always) there is no boundary to
+     * hold at either. */
+    if (!c->flag.close_asap && c->reply_blocking_state.offset.recorded &&
+        isBlockingNeededForOffset(c, blockingReplOffset)) {
         serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d",
                   blockingReplOffset, c->cmd->declared_name, (c->cmd->flags & CMD_WRITE) ? 1 : 0);
         blockLastResponseIfExist(c, blockingReplOffset);
@@ -448,6 +455,21 @@ void notifyReplyBlockingProgress(void) {
      * sendable bytes and no write handler. */
     wakeReplicasForDurableProgress();
 
+    /* Don't release replies or run deferred tasks (pub/sub publishes,
+     * invalidation pushes) while a busy script or a yielding module command is
+     * in the middle of its execution: other clients would observe effects
+     * interleaved with it. The next regular beforeSleep catches up. */
+    if (ProcessingEventsWhileBlocked || server.execution_nesting) return;
+
+    /* Keys and tasks normally get their offset at the end of their execution
+     * unit. Stamp any left over by a path that never reached
+     * postExecutionUnitOperations(); with nothing waiting to propagate, the
+     * current offset is final. */
+    if (!server.also_propagate.numops) {
+        if (hasPendingUncommittedData()) stampPendingUncommittedData(server.primary_repl_offset);
+        if (hasPendingDeferredTasks()) certifyPendingDeferredTasks();
+    }
+
     const long long consensus_ack_offset = getDurablyCommittedOffset();
     if (consensus_ack_offset <= rb_state->previous_acked_offset) {
         return;
@@ -512,48 +534,15 @@ static bool getCopyCommandDestDbId(client *c, int *dest_dbid) {
     return true;
 }
 
-// Process a single replicating command for consistent write blocking.
+/* Process a single command that propagated something. The keys it modified are
+ * tracked by signalModifiedKey(), so all that is left is the reply: hold it at
+ * the post-propagation offset. That covers everything the command read too,
+ * since the log is ordered. This applies to reads that propagate as well, such
+ * as a lazy expiry DEL during MGET, which must not skip the check of the other
+ * dirty keys they return. */
 static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) {
-    if (!(c->cmd->flags & CMD_WRITE)) {
-        return -1;
-    }
-
     if (isFunctionRWCommand(c)) {
         handleUncommittedFunctionStore();
-    } else {
-        getKeysResult result;
-        initGetKeysResult(&result);
-        /* Use key specs directly to extract key positions. We avoid
-         * getKeysFromCommand / getkeys_proc because some commands (e.g. SET)
-         * rewrite argv during execution (EX→PXAT) and the custom getkeys_proc
-         * may crash on the rewritten embedded-string robj. We only need key
-         * positions here, not per-key flags, so key specs are sufficient. */
-        int numkeys = getKeysUsingKeySpecs(c->cmd, c->argv, c->argc, GET_KEYSPEC_DEFAULT, &result);
-        keyReference *keys = result.keys;
-        if (numkeys > 0) {
-            if (c->cmd->proc == moveCommand) {
-                int dest_dbid = -1;
-                if (getIntFromObject(c->argv[2], &dest_dbid) == C_ERR || dest_dbid < 0 || dest_dbid >= server.dbnum) {
-                    getKeysFreeResult(&result);
-                    return -1;
-                }
-                handleUncommittedKeyForClient(c, c->argv[keys[0].pos], server.db[dest_dbid]);
-            } else if (c->cmd->proc == copyCommand) {
-                int dest_dbid;
-                if (!getCopyCommandDestDbId(c, &dest_dbid)) {
-                    getKeysFreeResult(&result);
-                    return -1;
-                }
-                if (dest_dbid != c->db->id) {
-                    handleUncommittedKeyForClient(c, c->argv[2], server.db[dest_dbid]);
-                }
-            }
-
-            for (int i = 0; i < numkeys; i++) {
-                handleUncommittedKeyForClient(c, c->argv[keys[i].pos], c->db);
-            }
-        }
-        getKeysFreeResult(&result);
     }
 
     if (!server.execution_nesting) {
@@ -716,7 +705,17 @@ void finalizeCommandReplyBlocking(client *c) {
 
     long long blocking_repl_offset = c->reply_blocking_state.current_command_repl_offset;
 
-    if (server.primary_repl_offset > server.reply_blocking.pre_command_replication_offset && (c->cmd->flags & CMD_WRITE || isClientDoingTransaction(c)) && c->cmd->proc != syncCommand && c->cmd->proc != clusterCommand && c->cmd->proc != shutdownCommand) {
+    /* A tracked command that propagated is held at the post-propagation offset,
+     * not only CMD_WRITE ones: a read can propagate a lazy expiry DEL. Admin
+     * commands are never tracked, so they are never held. */
+    if (server.primary_repl_offset > server.reply_blocking.pre_command_replication_offset && clientEligibleForResponseTracking(c) && c->cmd->proc != syncCommand && c->cmd->proc != clusterCommand && c->cmd->proc != shutdownCommand) {
+        blocking_repl_offset = server.primary_repl_offset;
+    }
+
+    /* A key read in the same unit that modified it still carries the LLONG_MAX
+     * placeholder when the read is checked. The unit has ended by now, so the
+     * key's final offset is the current one. */
+    if (blocking_repl_offset > server.primary_repl_offset) {
         blocking_repl_offset = server.primary_repl_offset;
     }
 
@@ -724,7 +723,6 @@ void finalizeCommandReplyBlocking(client *c) {
         serverAssert(clientEligibleForResponseTracking(c));
     }
 
-    processPendingUncommittedData(server.primary_repl_offset);
     updateFuncStoreBlockingOffsetForWrite(server.primary_repl_offset);
 
     if (c->flag.blocked && isDeferredReplyEnabled(c) && listLength(c->deferred_reply) > 0) {

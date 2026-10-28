@@ -636,7 +636,8 @@ start_server {tags {pathhash}} {
                 assert_equal {} [r exec]
                 assert_equal 0 [r exists empty-tree]
                 assert_equal -2 [r pttl empty-tree]
-                assert_equal 0 [r copy empty-tree empty-copy]
+                # COPY checks slots even when the source key is missing.
+                assert_equal 0 [r copy empty-tree empty-copy{empty-tree}]
                 assert_equal {} [r dump empty-tree]
                 r set empty-tree string
                 assert_equal string [r get empty-tree]

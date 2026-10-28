@@ -325,6 +325,78 @@ foreach provider_mode {aof} {
                 $primary config set busy-reply-threshold $saved_limit
             }
 
+            test "($provider_mode) MONITOR output for a busy script is withheld during the yield" {
+                # A MONITOR client's position is recorded when the command begins.
+                # While the script yields, the monitor must not be sent the script's
+                # own lines (no boundary exists for them yet), and writes that drain
+                # its older output must not free the block the position points at.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                set saved_limit [lindex [$primary config get busy-reply-threshold] 1]
+                $primary config set busy-reply-threshold 10
+
+                set mon [valkey_deferring_client -1]
+                $mon monitor
+                assert_equal OK [$mon read]
+
+                # Leave several MB of monitor output unsent, more than the socket
+                # buffers hold, so the server still has reply blocks queued.
+                set big [string repeat x 1000000]
+                for {set i 0} {$i < 20} {incr i} {
+                    $primary set durable:mon:filler $big
+                }
+
+                pause_provider
+
+                # A script that writes, then spins for ~1s so it yields repeatedly.
+                set script {
+                    redis.call('set', KEYS[1], 'monitored-write')
+                    local t = redis.call('time')
+                    while true do
+                        local n = redis.call('time')
+                        if (n[1] - t[1]) * 1000000 + (n[2] - t[2]) > 1000000 then break end
+                    end
+                    return 1
+                }
+                set busy [valkey_deferring_client -1]
+                $busy eval $script 1 durable:mon:busy
+
+                # Drain the monitor while the script runs, so the server writes to
+                # it from the re-entrant event loop.
+                set fd [$mon channel]
+                fconfigure $fd -blocking 0 -translation binary
+                set seen ""
+                set deadline [expr {[clock milliseconds] + 800}]
+                while {[clock milliseconds] < $deadline} {
+                    append seen [read $fd]
+                    after 5
+                }
+
+                # The script's own monitor lines must not have leaked.
+                assert_equal -1 [string first "monitored-write" $seen]
+
+                # The script wrote, so its own reply is held until the write is durable.
+                wait_for_condition 100 50 {
+                    [catch {$primary ping} e] == 0
+                } else {
+                    fail "busy script did not finish"
+                }
+                unblock_with_provider
+                assert_equal 1 [$busy read]
+                $busy close
+
+                # Once durable, the monitor gets the script's lines and the server is alive.
+                wait_for_condition 100 50 {
+                    [string first "monitored-write" [append seen [read $fd]]] != -1
+                } else {
+                    fail "monitor never received the script's lines"
+                }
+                fconfigure $fd -blocking 1
+                assert_equal PONG [$primary ping]
+                $mon close
+                $primary del durable:mon:filler
+                $primary config set busy-reply-threshold $saved_limit
+            }
+
             test "($provider_mode) Key-targeting reads block per-key, not on the global dirty offset" {
                 # KEYSPACE_GLOBAL narrowing: commands that carry a key argument
                 # (EXISTS/TYPE/TTL/...) must block only on their own key's offset,

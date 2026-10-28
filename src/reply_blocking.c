@@ -16,12 +16,17 @@ static void trackCommandPreExecutionPosition(struct client *c);
 static int unblockClientWaitingAck(struct client *c);
 static bool clientEligibleForResponseTracking(client *c);
 static void unblockFirstResponse(const struct client *c);
+static inline int isCommandReplicatedToMonitors(void);
+static void finalizeMonitors(client *c, long long blockingReplOffset);
 static int isBlockingNeededForOffset(const struct client *c, long long offset);
-static void blockClientAndMonitorsOnReplOffset(struct client *c, long long blockingReplOffset);
 static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c);
 static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *c);
 static long long getSingleCommandBlockingOffsetForConsistentWrites(client *c);
 static void replyBlockingResetPrimaryState(bool is_free_clients_needed);
+
+/* The client whose command recorded the MONITOR positions, or NULL. Commands
+ * that run while it yields (busy script, module yield) leave them alone. */
+static client *monitor_snapshot_owner = NULL;
 
 
 /*================================= Utility functions ======================== */
@@ -121,12 +126,18 @@ static void trackCommandPreExecutionPosition(struct client *c) {
 
     if (reply != NULL && listLength(reply) > 0) {
         listNode *last_reply_block = listLast(reply);
+        clientReplyBlock *tail = listNodeValue(last_reply_block);
         c->reply_blocking_state.offset.reply_block = last_reply_block;
-        c->reply_blocking_state.offset.byte_offset = ((clientReplyBlock *)listNodeValue(last_reply_block))->used;
+        c->reply_blocking_state.offset.byte_offset = tail->used;
+        /* In an encoded buffer the next reply could extend the current payload
+         * header across the boundary; a write capped at the boundary would then
+         * stop in the middle of it. Start a new header instead. */
+        tail->last_header = NULL;
     } else if (bufpos > 0) {
         c->reply_blocking_state.offset.reply_block = NULL;
         c->reply_blocking_state.offset.byte_offset = bufpos;
     }
+    c->last_header = NULL;
     c->reply_blocking_state.offset.recorded = true;
 }
 
@@ -179,6 +190,7 @@ void replyBlockingClientReset(client *c) {
         c->reply_blocking_state.pending_notify_tasks = NULL;
     }
 
+    if (monitor_snapshot_owner == c) finalizeMonitors(c, -1);
     resetPreExecutionOffset(c);
     c->reply_blocking_state.current_command_repl_offset = -1;
 }
@@ -201,6 +213,56 @@ static bool clientEligibleForResponseTracking(client *c) {
     }
 
     return ((c->cmd->flags & (CMD_WRITE | CMD_READONLY)) || isClientDoingTransaction(c) || is_keyspace_global_cmd || isFunctionStoreRWCommand(c));
+}
+
+/* True for a MONITOR client while a command it is recording is still running.
+ * Its output for that command has no boundary until finalize, and finalize
+ * needs the recorded position to still exist, so nothing is written to it in
+ * the meantime (e.g. from processEventsWhileBlocked() during a busy script). */
+bool isMonitorOutputHeld(const client *c) {
+    return c->flag.monitor && c->reply_blocking_state.offset.recorded;
+}
+
+/* Record each MONITOR's COB position for client c's command. */
+static void snapshotMonitors(client *c) {
+    if (monitor_snapshot_owner != NULL || !isCommandReplicatedToMonitors()) return;
+    monitor_snapshot_owner = c;
+    listNode *ln;
+    listIter li;
+    listRewind(server.monitors, &li);
+    while ((ln = listNext(&li))) {
+        client *monitor = ln->value;
+        /* The recorded position points into the monitor's reply list, so no
+         * write may free that block before finalize. Mark the monitor held
+         * first, then finish an in-flight I/O write here, so the post-write
+         * cleanup that frees blocks runs before the snapshot and does not
+         * dispatch a new write. */
+        monitor->reply_blocking_state.offset.recorded = true;
+        waitForClientIO(monitor);
+        if (monitor->io_write_state == CLIENT_COMPLETED_IO) processClientIOWriteDone(monitor);
+        trackCommandPreExecutionPosition(monitor);
+    }
+}
+
+/* Apply the boundary for client c's command to every MONITOR (offset -1: no
+ * hold) and let them write again. A no-op unless c recorded the positions. */
+static void finalizeMonitors(client *c, long long blockingReplOffset) {
+    if (monitor_snapshot_owner != c) return;
+    monitor_snapshot_owner = NULL;
+    listNode *ln;
+    listIter li;
+    listRewind(server.monitors, &li);
+    while ((ln = listNext(&li))) {
+        client *monitor = ln->value;
+        if (!monitor->reply_blocking_state.offset.recorded) continue;
+        if (blockingReplOffset != -1 && isPrimaryReplyBlockingEnabled()) {
+            blockClientOnReplOffset(monitor, blockingReplOffset);
+        } else {
+            resetPreExecutionOffset(monitor);
+        }
+        /* Writes skipped while held dropped it from the pending-write queue. */
+        if (clientHasPendingReplies(monitor)) putClientInPendingWriteQueue(monitor);
+    }
 }
 
 /* Check if we only allow client to receive up to a certain
@@ -348,25 +410,6 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
 // Utility function to determine whether a command should be replicated to monitors.
 static inline int isCommandReplicatedToMonitors(void) {
     return listLength(server.monitors) && !server.loading;
-}
-
-// Block all connected MONITOR clients on the specified replication offset.
-static void blockMonitorsOnReplOffset(long long blockingReplOffset) {
-    if (isCommandReplicatedToMonitors()) {
-        listNode *ln;
-        listIter li;
-        listRewind(server.monitors, &li);
-        while ((ln = listNext(&li))) {
-            client *monitor = ln->value;
-            blockClientOnReplOffset(monitor, blockingReplOffset);
-        }
-    }
-}
-
-// Block a client and all connected MONITOR clients on the specified replication offset.
-static void blockClientAndMonitorsOnReplOffset(client *c, long long blockingReplOffset) {
-    blockClientOnReplOffset(c, blockingReplOffset);
-    blockMonitorsOnReplOffset(blockingReplOffset);
 }
 
 /* Snapshot the COB tail just before a parked deferred reply is committed, so the
@@ -683,15 +726,7 @@ void beginCommandReplyBlocking(client *c) {
     if (iAmPrimary() && clientEligibleForResponseTracking(c)) {
         trackCommandPreExecutionPosition(c);
 
-        if (isCommandReplicatedToMonitors()) {
-            listNode *ln;
-            listIter li;
-            listRewind(server.monitors, &li);
-            while ((ln = listNext(&li))) {
-                client *monitor = ln->value;
-                trackCommandPreExecutionPosition(monitor);
-            }
-        }
+        snapshotMonitors(c);
     }
 
     server.reply_blocking.pre_command_replication_offset = server.primary_repl_offset;
@@ -700,6 +735,7 @@ void beginCommandReplyBlocking(client *c) {
 // Perform post-processing after command execution for a given client.
 void finalizeCommandReplyBlocking(client *c) {
     if (!isPrimaryReplyBlockingEnabled() || c->cmd == NULL || c->flag.multi) {
+        finalizeMonitors(c, -1);
         return;
     }
 
@@ -731,10 +767,10 @@ void finalizeCommandReplyBlocking(client *c) {
          * reply is committed (commitDeferredReplyBuffer); block monitors now (not deferred). */
         resetPreExecutionOffset(c);
         c->reply_blocking_state.deferred_block_offset = blocking_repl_offset;
-        blockMonitorsOnReplOffset(blocking_repl_offset);
     } else {
-        blockClientAndMonitorsOnReplOffset(c, blocking_repl_offset);
+        blockClientOnReplOffset(c, blocking_repl_offset);
     }
+    finalizeMonitors(c, blocking_repl_offset);
 
     certifyPendingDeferredTasks();
 }

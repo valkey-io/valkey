@@ -206,6 +206,7 @@ long long getAofDurableOffset(void);
 void pauseAofReplyBlocking(void);
 void resumeAofReplyBlocking(void);
 bool isClientReplyBufferLimited(client *c);
+bool isMonitorOutputHeld(const client *c);
 sds genReplyBlockingInfoString(sds info);
 
 /* Function store dirty tracking (reply-blocking for function store writes) */

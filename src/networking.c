@@ -1874,6 +1874,7 @@ int clientHasUnsentOutput(client *c) {
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
 int clientHasPendingReplies(client *c) {
+    if (isMonitorOutputHeld(c)) return 0;
     if (isClientReplyBufferLimited(c)) {
         /* Check if our first allowed reply boundary is in a position that comes
          * after the current position that valkey has written up to in the COB. */
@@ -3281,10 +3282,13 @@ static int writevToClient(client *c) {
     replyIOV reply;
     initReplyIOV(c, iovmax, iov_arr, prefixes, crlf, &reply);
 
-    /* Cap the iov at disallowed_byte_offset when reply blocking is active. */
+    /* Cap the iov at disallowed_byte_offset when reply blocking is active. An
+     * I/O thread gets the cap folded into io_last_reply_block/io_last_bufpos by
+     * trySendWriteToIOThreads(), and must not read blocked_responses, which the
+     * main thread can free concurrently. */
     listNode *disallowed_block = NULL;
     size_t disallowed_offset = 0;
-    if (isClientReplyBufferLimited(c)) {
+    if (inMainThread() && isClientReplyBufferLimited(c)) {
         const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
         if (br->disallowed_reply_block == NULL) {
             /* Boundary is in c->buf — cap bufpos and skip reply blocks. */
@@ -3410,8 +3414,9 @@ int _writeToClient(client *c) {
     serverAssert(c->io_last_written.data_len == 0 || c->io_last_written.buf == c->buf);
 
     /* Cap bufpos at disallowed_byte_offset when reply blocking is active and
-     * the boundary is in c->buf (disallowed_reply_block == NULL). */
-    if (isClientReplyBufferLimited(c)) {
+     * the boundary is in c->buf (disallowed_reply_block == NULL). I/O threads
+     * get the cap through io_last_bufpos instead (see trySendWriteToIOThreads). */
+    if (inMainThread() && isClientReplyBufferLimited(c)) {
         const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
         if (br->disallowed_reply_block == NULL && br->disallowed_byte_offset < bufpos) {
             bufpos = br->disallowed_byte_offset;

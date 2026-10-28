@@ -2069,4 +2069,57 @@ start_server {tags {"stream"}} {
         catch {r XINFO help xxx} e
         assert_match "*wrong number of arguments for 'xinfo|help' command" $e
     }
+
+    test {Consumer group lag and entries_read with deleted entries (Upstash report)} {
+        r DEL planets
+        r XGROUP CREATE planets processing $ MKSTREAM
+        r XADD planets 0-1 name Mercury
+        r XADD planets 0-2 name Venus
+        r XREADGROUP GROUP processing alice STREAMS planets >
+        r XADD planets 0-3 name Earth
+        r XADD planets 0-4 name Jupiter
+
+        r XDEL planets 0-1
+        r XDEL planets 0-2
+
+        # 0-1 and 0-2 deleted, processing read up to 0-2. Lag should be 2 (0-3 and 0-4 waiting).
+        set reply [r XINFO GROUPS planets]
+        set group [lindex $reply 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 2
+
+        # Delete 0-3 which is between group last_id (0-2) and stream last_id (0-4).
+        # A tombstone ahead of last_id makes lag undetermined (null).
+        r XDEL planets 0-3
+        set reply [r XINFO GROUPS planets]
+        set group [lindex $reply 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] {}
+
+        # Consume remaining entry 0-4. Lag must return to 0 once group reaches last_id.
+        r XREADGROUP GROUP processing alice STREAMS planets >
+        set reply [r XINFO GROUPS planets]
+        set group [lindex $reply 0]
+        assert_equal [dict get $group entries-read] 4
+        assert_equal [dict get $group lag] 0
+
+        # When stream is emptied, lag must be 0 and entries_read must not corrupt for other groups.
+        r XDEL planets 0-4
+        set reply [r XINFO GROUPS planets]
+        set group [lindex $reply 0]
+        assert_equal [dict get $group lag] 0
+
+        r XGROUP CREATE planets other 0
+        set reply [r XINFO GROUPS planets]
+        foreach g $reply {
+            if {[dict get $g name] eq "other"} {
+                assert_equal [dict get $g entries-read] {}
+                assert_equal [dict get $g lag] 0
+            }
+            if {[dict get $g name] eq "processing"} {
+                assert_equal [dict get $g entries-read] 4
+                assert_equal [dict get $g lag] 0
+            }
+        }
+    }
 }

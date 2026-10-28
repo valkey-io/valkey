@@ -1421,8 +1421,8 @@ int streamIDEqZero(streamID *id) {
 int streamRangeHasTombstones(stream *s, streamID *start, streamID *end) {
     streamID start_id, end_id;
 
-    if (!s->length || streamIDEqZero(&s->max_deleted_entry_id)) {
-        /* The stream is empty or has no tombstones. */
+    if (streamIDEqZero(&s->max_deleted_entry_id)) {
+        /* The stream has no tombstones. */
         return 0;
     }
 
@@ -1457,8 +1457,8 @@ void streamReplyWithCGLag(client *c, stream *s, streamCG *cg) {
     int valid = 0;
     long long lag = 0;
 
-    if (!s->entries_added) {
-        /* The lag of a newly-initialized stream is 0. */
+    if (!s->entries_added || !s->length) {
+        /* The lag of a newly-initialized or empty stream is 0. */
         lag = 0;
         valid = 1;
     } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
@@ -1511,11 +1511,6 @@ long long streamEstimateDistanceFromFirstEverEntry(stream *s, streamID *id) {
         return 0;
     }
 
-    /* In the empty stream, if the ID is smaller or equal to the last ID,
-     * it can set to the current added_entries value. */
-    if (!s->length && streamCompareID(id, &s->last_id) < 1) {
-        return s->entries_added;
-    }
 
     if (!streamIDEqZero(id) && streamCompareID(id, &s->max_deleted_entry_id) < 0) {
         /* The ID is before the last tombstone, so the counter is unknown. */

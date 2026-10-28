@@ -1138,6 +1138,9 @@ start_server {tags {"repl"} overrides {save ""}} {
 
         start_server {overrides {save "" repl-compression lz4 dual-channel-replication-enabled yes}} {
             set replica [srv 0 client]
+            # Open the pipelining client before the sync window opens, so that
+            # connecting (and the TLS handshake) does not eat into it.
+            set rd [valkey_deferring_client -1]
             $replica replicaof $primary_host $primary_port
 
             # rdb-key-save-delay stretches the RDB stage; catch the sync window.
@@ -1150,14 +1153,20 @@ start_server {tags {"repl"} overrides {save ""}} {
 
             # Writes made during load reach the replica via the compressed main
             # channel: +CONTINUE starts compression, put-online must not restart
-            # it (a second init would emit a new envelope mid-frame).
+            # it (a second init would emit a new envelope mid-frame). Pipeline
+            # them: sequential round trips can outlast the rdb-key-save-delay
+            # window on a slow runner, letting the sync finish mid-writes (#5003).
             for {set i 0} {$i < 200} {incr i} {
-                $primary set "during_load:$i" "value_$i"
+                $rd set "during_load:$i" "value_$i"
             }
             # This compresses below one socket read but expands past one decode
             # budget, exercising streamReplDataBufToDb's resumable decode loop.
             set during_load_payload [string repeat x [expr {2 * 1024 * 1024}]]
-            $primary set during_load:large $during_load_payload
+            $rd set during_load:large $during_load_payload
+            for {set i 0} {$i < 201} {incr i} {
+                assert_equal OK [$rd read]
+            }
+            $rd close
             assert_equal 1 [s 0 master_sync_in_progress]
             assert_match {*state=bg_transfer*repl_compression=lz4*} [$primary info replication]
 

@@ -593,6 +593,11 @@ void debugCommand(client *c) {
         sdsdup(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reload")) {
+        if (server.loading || server.async_loading) {
+            addReplyErrorObject(c, shared.loadingerr);
+            return;
+        }
+
         int flush = 1, save = 1;
         int flags = RDBFLAGS_NONE;
 
@@ -639,6 +644,11 @@ void debugCommand(client *c) {
         serverLog(LL_NOTICE, "DB reloaded by DEBUG RELOAD");
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "loadaof")) {
+        if (server.loading || server.async_loading) {
+            addReplyErrorObject(c, shared.loadingerr);
+            return;
+        }
+
         if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
         emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
         protectClient(c);

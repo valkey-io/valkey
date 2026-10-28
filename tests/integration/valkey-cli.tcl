@@ -376,6 +376,23 @@ start_server {tags {"cli logreqres:skip"}} {
         r ACL deluser clienv
     }
 
+    test_nontty_cli "VALKEYCLI_AUTH does not trigger the command line password warning" {
+        r ACL setuser clienv on >mypass ~* +@all
+        set warning "Warning: Using a password with '-a' or '-u' option on the command line interface may not be safe."
+        set cmd [valkeycli [srv host] [srv port] [list -n $::dbnum --user clienv]]
+
+        assert_equal "OK" [exec env VALKEYCLI_AUTH=mypass {*}$cmd set envkey envval 2>@1]
+
+        # -a on the command line still warns and overrides VALKEYCLI_AUTH.
+        assert_equal "$warning\nOK" [exec env VALKEYCLI_AUTH=wrongpass {*}$cmd -a mypass set envkey envval 2>@1]
+
+        # So does a password in a -u URI.
+        set uri [valkeycliuri "redis://clienv:mypass@" [srv host] [srv port] [list -n $::dbnum]]
+        assert_equal "$warning\nOK" [exec env VALKEYCLI_AUTH=wrongpass {*}$uri set envkey envval 2>@1]
+
+        r ACL deluser clienv
+    }
+
 if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test_nontty_cli "ASK redirect test" {
         # Set up two fake nodes.

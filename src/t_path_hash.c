@@ -404,12 +404,12 @@ static int pathHashParseMatchOptions(client *c,
                                      long *numfields,
                                      long *count,
                                      long *maxpathlen,
-                                     int *exclusive) {
+                                     bool *exclusive) {
     *reply_mode = PATH_HASH_REPLY_PATH;
     *value_mode = PATH_HASH_VALUES_NONE;
     *fields = NULL;
     *numfields = 0;
-    *exclusive = 0;
+    *exclusive = false;
     *count = -1;
     *maxpathlen = -1;
     for (int i = start; i < c->argc;) {
@@ -439,7 +439,7 @@ static int pathHashParseMatchOptions(client *c,
             i += 2;
         } else if (!strcasecmp(arg, "exclusive")) {
             if (*exclusive) goto syntax;
-            *exclusive = 1;
+            *exclusive = true;
             i++;
         } else if (!strcasecmp(arg, "maxpathlen")) {
             if (*maxpathlen != -1 || i + 1 >= c->argc) goto syntax;
@@ -485,7 +485,7 @@ void phprefixesCommand(client *c) {
     robj **fields;
     long numfields;
     long count, maxpathlen;
-    int exclusive;
+    bool exclusive;
     if (pathHashParseMatchOptions(c, 3, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen, &exclusive) !=
         C_OK)
         return;

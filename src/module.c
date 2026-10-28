@@ -8696,7 +8696,8 @@ void VM_RegisterAuthCallback(ValkeyModuleCtx *ctx, ValkeyModuleAuthCallback cb) 
  * borrowed: the server copies them before freeing the callback context. A
  * provider may return its own persistent strings or use AutoMemory to create
  * temporary strings in ctx. The server does not take ownership of persistent
- * strings. The callback must not block or unload its own module; providers
+ * strings. The callback must not block, unload its own module, or change
+ * replication state (REPLICAOF, CLUSTER REPLICATE, CLUSTER RESET). Providers
  * should refresh tokens in advance and return the current token here.
  *
  * VALKEYMODULE_ERR or a missing password aborts the connection attempt without

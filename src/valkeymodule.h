@@ -1548,7 +1548,8 @@ typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx,
 /* Provide credentials for one outgoing replication authentication handshake.
  * Return VALKEYMODULE_OK with a borrowed password and optional username, or
  * VALKEYMODULE_ERR to abort. The server copies outputs before freeing ctx;
- * use AutoMemory for temporary strings and refresh tokens outside this call. */
+ * use AutoMemory for temporary strings and refresh tokens outside this call.
+ * Do not change replication state from this callback. */
 typedef int (*ValkeyModuleReplicationCredentialsCallback)(ValkeyModuleCtx *ctx,
                                                           ValkeyModuleString **username,
                                                           ValkeyModuleString **password);

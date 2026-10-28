@@ -3505,7 +3505,13 @@ sds replicationSendAuth(connection *conn, const char *user, size_t user_len, con
 static sds replicationSendHandshakeAuth(connection *conn, int *auth_sent) {
     *auth_sent = 0;
     sds user = NULL, pass = NULL;
-    if (moduleGetReplicationCredentials(&user, &pass) == C_ERR)
+    int result = moduleGetReplicationCredentials(&user, &pass);
+    if (conn != server.repl_transfer_s && conn != server.repl_rdb_transfer_s) {
+        sdsfree(user);
+        sdsfree(pass);
+        return sdsnew("Replication handshake cancelled by credentials callback");
+    }
+    if (result == C_ERR)
         return sdsnew("Replication credentials callback failed");
     if (!pass && server.primary_auth) {
         pass = sdsdup(server.primary_auth);
@@ -3732,12 +3738,13 @@ static void dualChannelFullSyncWithPrimary(connection *conn) {
     return;
 
 error:
-    server.repl_auth_sent = 0;
-    server.repl_rdb_auth_sent = 0;
     if (err) {
         serverLog(LL_WARNING, "Dual channel sync failed with error %s", err);
         sdsfree(err);
     }
+    if (conn != server.repl_rdb_transfer_s) return;
+    server.repl_auth_sent = 0;
+    server.repl_rdb_auth_sent = 0;
     if (server.repl_transfer_s) {
         connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;
@@ -4676,7 +4683,7 @@ void syncWithPrimary(connection *conn) {
         /* fall through */
     case REPL_STATE_SEND_HANDSHAKE:
         if (syncWithPrimaryHandleSendHandshakeState(conn) == C_ERR) {
-            syncWithPrimaryHandleError(&conn);
+            if (conn == server.repl_transfer_s) syncWithPrimaryHandleError(&conn);
             return;
         }
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;

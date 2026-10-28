@@ -107,6 +107,25 @@ foreach dualchannel {no yes} {
                 }
             }
 
+            test "Changing replication state in the callback cancels the handshake, dual channel: $dualchannel" {
+                $replica replicaof no one
+                if {$dualchannel eq "yes"} {
+                    $primary debug change-repl-id
+                    $primary debug change-repl-id
+                }
+                $replica replicationauth.mode [expr {$dualchannel eq "yes" ? "cancel-after-first" : "cancel-handshake"}]
+                set calls [$replica replicationauth.calls]
+                $replica replicaof $primary_host $primary_port
+                wait_for_condition 50 100 {
+                    [$replica replicationauth.calls] > $calls && [status $replica role] eq "master"
+                } else { fail "callback did not cancel replication: calls $calls to [$replica replicationauth.calls], role [status $replica role]" }
+                after 1200
+                assert_equal master [status $replica role]
+                assert_equal OK [$replica replicationauth.mode ok]
+                $replica replicaof $primary_host $primary_port
+                wait_for_sync $replica
+            }
+
             test "Callback AutoMemory strings survive context cleanup, dual channel: $dualchannel" {
                 $replica replicaof no one
                 $replica replicationauth.mode auto-memory

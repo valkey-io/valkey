@@ -21,7 +21,8 @@ enum {
     MODE_ERROR,
     MODE_MISSING_PASSWORD,
     MODE_AUTO_MEMORY,
-    MODE_SELF_UNLOAD
+    MODE_SELF_UNLOAD,
+    MODE_CANCEL_HANDSHAKE
 };
 
 /* Supply credentials in the mode selected by the test commands.
@@ -30,10 +31,15 @@ enum {
  * that the server refuses to unload the module while this callback is active. */
 static int credentials(ValkeyModuleCtx *ctx, ValkeyModuleString **user, ValkeyModuleString **pass) {
     calls++;
-    if (mode == MODE_ERROR || (fail_after && calls > fail_after))
+    if (mode == MODE_ERROR || (mode == MODE_OK && fail_after && calls > fail_after))
         return VALKEYMODULE_ERR;
     if (mode == MODE_MISSING_PASSWORD)
         return VALKEYMODULE_OK;
+    if (mode == MODE_CANCEL_HANDSHAKE && (!fail_after || calls > fail_after)) {
+        ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "REPLICAOF", "cc", "NO", "ONE");
+        if (reply) ValkeyModule_FreeCallReply(reply);
+        return VALKEYMODULE_ERR;
+    }
     if (mode == MODE_SELF_UNLOAD) {
         ValkeyModuleCallReply *reply =
             ValkeyModule_Call(ctx, "MODULE", "Ecc", "UNLOAD", module_name);
@@ -95,6 +101,12 @@ static int setMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         mode = MODE_AUTO_MEMORY;
     else if (!strcmp(value, "self-unload"))
         mode = MODE_SELF_UNLOAD;
+    else if (!strcmp(value, "cancel-handshake"))
+        mode = MODE_CANCEL_HANDSHAKE;
+    else if (!strcmp(value, "cancel-after-first")) {
+        mode = MODE_CANCEL_HANDSHAKE;
+        fail_after = calls + 1;
+    }
     else if (!strcmp(value, "error-after-first")) {
         mode = MODE_OK;
         fail_after = calls + 1;

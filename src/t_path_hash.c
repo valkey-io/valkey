@@ -556,7 +556,13 @@ static int pathHashPathHasPrefix(const unsigned char *path,
     return path_len >= prefix_len && memcmp(path, prefix, prefix_len) == 0;
 }
 
-void phdelprefixCommand(client *c) {
+void phpathdelCommand(client *c) {
+    int withsubpaths = c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "withsubpaths");
+    if (c->argc != 3 && !withsubpaths) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
     if (o == NULL) {
@@ -566,50 +572,52 @@ void phdelprefixCommand(client *c) {
     pathHashObject *path_hash = objectGetVal(o);
     sds prefix = objectGetVal(c->argv[2]);
     size_t prefix_len = sdslen(prefix);
-    if (prefix_len == 0) {
-        long long deleted = raxSize(path_hash->index);
+    long long deleted = 0;
+    if (!withsubpaths) {
+        void *payload = NULL;
+        if (raxRemove(path_hash->index, (unsigned char *)prefix, prefix_len, &payload)) {
+            path_hash->num_fields -= hashTypeLength(payload);
+            decrRefCount(payload);
+            deleted = 1;
+        }
+    } else if (prefix_len == 0) {
+        deleted = raxSize(path_hash->index);
         if (deleted) {
             rax *empty = raxNew();
             raxFreeWithCallback(path_hash->index, freePathHashPayload);
             path_hash->index = empty;
             path_hash->num_fields = 0;
-            signalModifiedKey(c, c->db, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
-            server.dirty += deleted;
         }
-        addReplyLongLong(c, deleted);
-        return;
-    }
+    } else {
+        /* Deletion invalidates the iterator, so collect a bounded number of path
+         * copies before removing them. This bounds temporary path copies only; the
+         * complete matching subtree is still deleted synchronously by this command. */
+        while (1) {
+            sds paths[PATH_HASH_DELETE_CHUNK_SIZE];
+            size_t chunk_len = 0;
+            raxIterator iter;
+            raxStart(&iter, path_hash->index);
+            raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
+            while (chunk_len < PATH_HASH_DELETE_CHUNK_SIZE && raxNext(&iter) &&
+                   pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) {
+                paths[chunk_len++] = sdsnewlen(iter.key, iter.key_len);
+            }
+            raxStop(&iter);
+            if (chunk_len == 0) break;
 
-    /* Deletion invalidates the iterator, so collect a bounded number of path
-     * copies before removing them. This bounds temporary path copies only; the
-     * complete matching subtree is still deleted synchronously by this command. */
-    long long deleted = 0;
-    while (1) {
-        sds paths[PATH_HASH_DELETE_CHUNK_SIZE];
-        size_t chunk_len = 0;
-        raxIterator iter;
-        raxStart(&iter, path_hash->index);
-        raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
-        while (chunk_len < PATH_HASH_DELETE_CHUNK_SIZE && raxNext(&iter) &&
-               pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) {
-            paths[chunk_len++] = sdsnewlen(iter.key, iter.key_len);
+            for (size_t i = 0; i < chunk_len; i++) {
+                void *payload = NULL;
+                serverAssert(raxRemove(path_hash->index, (unsigned char *)paths[i], sdslen(paths[i]), &payload));
+                path_hash->num_fields -= hashTypeLength(payload);
+                decrRefCount(payload);
+                sdsfree(paths[i]);
+            }
+            deleted += chunk_len;
         }
-        raxStop(&iter);
-        if (chunk_len == 0) break;
-
-        for (size_t i = 0; i < chunk_len; i++) {
-            void *payload = NULL;
-            serverAssert(raxRemove(path_hash->index, (unsigned char *)paths[i], sdslen(paths[i]), &payload));
-            path_hash->num_fields -= hashTypeLength(payload);
-            decrRefCount(payload);
-            sdsfree(paths[i]);
-        }
-        deleted += chunk_len;
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
+        notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phpathdel", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);

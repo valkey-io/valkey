@@ -172,7 +172,7 @@ start_server {tags {pathhash}} {
         }
         assert_equal {0 1 2 4} [r phprefixes tree $query lengths]
         assert_equal 4 [r phlongest tree $query length]
-        assert_equal 2 [r phdelprefix tree $p1]
+        assert_equal 2 [r phpathdel tree $p1 withsubpaths]
         assert_equal [list {} $p0 $sibling] [lindex [r phscan tree 0 count 100] 1]
     }
 
@@ -192,21 +192,42 @@ start_server {tags {pathhash}} {
         assert_equal 0 [r phdel tree ab]
     }
 
-    test {PHDELPREFIX deletes only descendants and empty prefix clears the tree} {
+    test {PHPATHDEL deletes exact paths or byte-prefix subtrees and counts paths} {
+        r del del-tree
+        r phmset del-tree {} fields 1 f root ab fields 2 f one g two abc fields 1 f child abx fields 1 f other
+        assert_equal 1 [r phpathdel del-tree ab]
+        assert_equal 3 [r phcard del-tree]
+        assert_equal {child} [r phget del-tree abc f]
+        assert_equal 0 [r phpathdel del-tree ab]
+        assert_equal 2 [r phpathdel del-tree ab withsubpaths]
+        assert_equal 1 [r phcard del-tree]
+        assert_equal 1 [r phpathdel del-tree {}]
+        assert_equal 0 [r phpathdel missing path withsubpaths]
+        r phset del-tree abc fields 1 f child
+        assert_equal 0 [r phpathdel del-tree a]
+        assert_equal 1 [r phpathdel del-tree a withsubpaths]
+        foreach key {del-tree missing} {
+            assert_error ERR*syntax* {r phpathdel $key a invalid}
+            assert_error ERR*syntax* {r phpathdel $key a withsubpaths extra}
+        }
+        assert_equal {{}} [r command info phdelprefix]
+    }
+
+    test {PHPATHDEL deletes only descendants and empty prefix clears the tree} {
         r del tree
         foreach path {a ab abc ac b ba} {r phset tree $path fields 1 f $path}
-        assert_equal 2 [r phdelprefix tree ab]
+        assert_equal 2 [r phpathdel tree ab withsubpaths]
         set result [r phscan tree 0 count 100]
         assert_equal 0 [lindex $result 0]
         assert_equal {a ac b ba} [lindex $result 1]
-        assert_equal 4 [r phdelprefix tree {}]
+        assert_equal 4 [r phpathdel tree {} withsubpaths]
         assert_equal 1 [r exists tree]
         assert_equal pathhash [r type tree]
         assert_equal 0 [r phcard tree]
-        assert_equal 0 [r phdelprefix tree anything]
+        assert_equal 0 [r phpathdel tree anything withsubpaths]
     }
 
-    test {PHDELPREFIX deletes matching paths in fixed-size chunks} {
+    test {PHPATHDEL deletes matching paths in fixed-size chunks} {
         r del tree
         set assignments {}
         for {set i 0} {$i < 600} {incr i} {
@@ -215,7 +236,7 @@ start_server {tags {pathhash}} {
         lappend assignments keep:a fields 1 f one keep:b fields 1 f two keep:c fields 1 f three
         assert_equal OK [r phmset tree {*}$assignments]
         assert_equal 603 [r phcard tree]
-        assert_equal 600 [r phdelprefix tree delete:]
+        assert_equal 600 [r phpathdel tree delete: withsubpaths]
         assert_equal 3 [r phcard tree]
         assert_equal {keep:a keep:b keep:c} [lindex [r phscan tree 0 count 100] 1]
     }
@@ -235,15 +256,15 @@ start_server {tags {pathhash}} {
         assert_equal 5 [s rdb_changes_since_last_save]
         assert_equal 2 [r phdel dirty-tree p f1 f2]
         assert_equal 7 [s rdb_changes_since_last_save]
-        assert_equal 2 [r phdelprefix dirty-tree branch:]
+        assert_equal 2 [r phpathdel dirty-tree branch: withsubpaths]
         assert_equal 9 [s rdb_changes_since_last_save]
-        assert_equal 0 [r phdelprefix dirty-tree branch:]
+        assert_equal 0 [r phpathdel dirty-tree branch: withsubpaths]
         assert_equal 9 [s rdb_changes_since_last_save]
 
         assert_equal OK [r phmset empty-dirty-tree a fields 1 f one \
             b fields 1 f two c fields 1 f three]
         r save
-        assert_equal 3 [r phdelprefix empty-dirty-tree {}]
+        assert_equal 3 [r phpathdel empty-dirty-tree {} withsubpaths]
         assert_equal 3 [s rdb_changes_since_last_save]
     }
 
@@ -301,7 +322,7 @@ start_server {tags {pathhash}} {
             {phdel not-pathhash p}
             {phlongest not-pathhash p}
             {phprefixes not-pathhash p}
-            {phdelprefix not-pathhash p}
+            {phpathdel not-pathhash p withsubpaths}
             {phscan not-pathhash 0}
             {phcard not-pathhash}
         } {
@@ -339,7 +360,7 @@ start_server {tags {pathhash}} {
     }
 
     test {Path Hash commands are registered with the PH prefix} {
-        set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
+        set commands {phcard phdel phexists phget phgetall phlongest phmget phmset phpathdel phprefixes phscan phset}
         assert_equal $commands [lsort [r command list filterby aclcat pathhash]]
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
@@ -494,11 +515,11 @@ start_server {tags {pathhash}} {
             r phset notify-tree a fields 1 f one
             r phmset notify-tree ab fields 1 f two
             r phdel notify-tree a
-            r phdelprefix notify-tree a
+            r phpathdel notify-tree a withsubpaths
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phmset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phdel" [$rd1 read]
-            assert_match "pmessage * __keyspace@*__:notify-tree phdelprefix" [$rd1 read]
+            assert_match "pmessage * __keyspace@*__:notify-tree phpathdel" [$rd1 read]
 
             r config set notify-keyspace-events Kpg
             assert_equal gpK [lindex [r config get notify-keyspace-events] 1]
@@ -512,12 +533,12 @@ start_server {tags {pathhash}} {
 
             r phset notify-tree a fields 1 f one
             r phset notify-tree ab fields 1 f two
-            r phdelprefix notify-tree {}
+            r phpathdel notify-tree {} withsubpaths
             assert_equal 1 [r exists notify-tree]
             r del notify-tree
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
-            assert_match "pmessage * __keyspace@*__:notify-tree phdelprefix" [$rd1 read]
+            assert_match "pmessage * __keyspace@*__:notify-tree phpathdel" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree del" [$rd1 read]
         } {
             catch {$rd1 close}
@@ -725,7 +746,7 @@ start_server {tags {pathhash external:skip}} {
             $primary phset tree a fields 1 f one
             $primary phmset tree ab fields 1 f two abc fields 1 f three
             assert_equal {} [$primary phset tree a fnx fields 1 f ignored]
-            $primary phdelprefix tree ab
+            $primary phpathdel tree ab withsubpaths
             $primary phset empty-tree path fields 1 field value
             $primary phdel empty-tree path
             wait_for_ofs_sync $primary $replica

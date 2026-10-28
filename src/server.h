@@ -3859,6 +3859,7 @@ void phlongestCommand(client *c);
 void phprefixesCommand(client *c);
 void phdelprefixCommand(client *c);
 void phscanCommand(client *c);
+void phpathscanCommand(client *c);
 void phcardCommand(client *c);
 
 /* Pub / Sub */

@@ -173,7 +173,7 @@ start_server {tags {pathhash}} {
         assert_equal {0 1 2 4} [r phprefixes tree $query lengths]
         assert_equal 4 [r phlongest tree $query length]
         assert_equal 2 [r phdelprefix tree $p1]
-        assert_equal [list {} $p0 $sibling] [lindex [r phscan tree 0 count 100] 1]
+        assert_equal [list {} $p0 $sibling] [lindex [r phpathscan tree 0 count 100] 1]
     }
 
     test {PHDEL removes fields, prunes empty payloads, and preserves descendants} {
@@ -196,7 +196,7 @@ start_server {tags {pathhash}} {
         r del tree
         foreach path {a ab abc ac b ba} {r phset tree $path fields 1 f $path}
         assert_equal 2 [r phdelprefix tree ab]
-        set result [r phscan tree 0 count 100]
+        set result [r phpathscan tree 0 count 100]
         assert_equal 0 [lindex $result 0]
         assert_equal {a ac b ba} [lindex $result 1]
         assert_equal 4 [r phdelprefix tree {}]
@@ -217,7 +217,7 @@ start_server {tags {pathhash}} {
         assert_equal 603 [r phcard tree]
         assert_equal 600 [r phdelprefix tree delete:]
         assert_equal 3 [r phcard tree]
-        assert_equal {keep:a keep:b keep:c} [lindex [r phscan tree 0 count 100] 1]
+        assert_equal {keep:a keep:b keep:c} [lindex [r phpathscan tree 0 count 100] 1]
     }
 
     test {Path Hash write commands account server dirty by logical mutations} {
@@ -247,44 +247,116 @@ start_server {tags {pathhash}} {
         assert_equal 3 [s rdb_changes_since_last_save]
     }
 
-    test {PHSCAN uses an opaque cursor and traverses lexicographically} {
+    test {PHSCAN scans exact-path fields and MATCH filters names, not values} {
+        r del scan-tree
+        r phset scan-tree a fields 3 user:1 Alice user:2 Bob status user:fake
+        r phset scan-tree ab fields 1 user:3 child
+        assert_equal {0 {user:1 Alice user:2 Bob}} [r phscan scan-tree a 0 match user:* count 1]
+        assert_equal {0 {}} [r phscan scan-tree a 0 match Alice]
+        assert_equal {0 {}} [r phscan scan-tree missing 0]
+        assert_equal {0 {}} [r phscan missing a 0]
+        set path [binary format H* 0061ff]
+        set field [binary format H* 6600ff]
+        set value [binary format H* 7600ff]
+        r phset scan-tree $path fields 1 $field $value
+        assert_equal [list 0 [list $field $value]] [r phscan scan-tree $path 0 match "${field}*"]
+        r phset scan-tree {} fields 1 root value
+        assert_equal {0 {root value}} [r phscan scan-tree {} 0]
+        assert_error ERR*invalid*cursor* {r phscan scan-tree a invalid}
+        assert_error ERR*syntax* {r phscan scan-tree a 0 prefix a}
+        assert_error ERR*syntax* {r phscan scan-tree a 0 withvalues}
+        assert_error ERR*syntax* {r phscan scan-tree a 0 novalues}
+        assert_error ERR*syntax* {r phscan scan-tree a 0 count 0}
+        assert_error ERR*syntax* {r phscan scan-tree a 0 match}
+        assert_error ERR*syntax* {r phpathscan scan-tree 0 withvalues}
+        assert_error ERR*syntax* {r phpathscan scan-tree 0 match *}
+        assert_error ERR*wrong*number* {r phscan scan-tree 0}
+        assert_equal {scan-tree} [r command getkeys phscan scan-tree a 0 match user:*]
+        assert_equal {scan-tree} [r command getkeys phpathscan scan-tree 0 prefix a]
+    }
+
+    test {PHSCAN paginates large field maps without returning other paths} {
+        r del scan-tree
+        for {set i 0} {$i < 600} {incr i} {
+            r phset scan-tree p fields 1 "field:$i" "value:$i"
+        }
+        r phset scan-tree px fields 1 unrelated hidden
+        set cursor 0
+        set values {}
+        set pages 0
+        while 1 {
+            lassign [r phscan scan-tree p $cursor count 5] cursor entries
+            incr pages
+            foreach {field value} $entries {dict set values $field $value}
+            if {$cursor eq "0"} break
+            assert {$pages < 1000}
+        }
+        assert {$pages > 1}
+        assert_equal 600 [dict size $values]
+        for {set i 0} {$i < 600} {incr i} {
+            assert_equal "value:$i" [dict get $values "field:$i"]
+        }
+        set cursor 0
+        set fields {}
+        while 1 {
+            lassign [r phscan scan-tree p $cursor match field:59* count 2] cursor entries
+            foreach {field value} $entries {dict set fields $field $value}
+            if {$cursor eq "0"} break
+        }
+        assert_equal 11 [dict size $fields]
+        set page [r phscan scan-tree p 0 count 1]
+        assert {[lindex $page 0] ne "0"}
+        r phdel scan-tree p
+        assert_equal {0 {}} [r phscan scan-tree p [lindex $page 0]]
+    }
+
+    test {PHPATHSCAN handles binary prefixes and resumes after a deleted boundary} {
+        r del scan-tree
+        set prefix [binary format H* 00ff]
+        foreach suffix {a b c} {r phset scan-tree "${prefix}$suffix" fields 1 f $suffix}
+        lassign [r phpathscan scan-tree 0 prefix $prefix count 1] cursor entries
+        assert_equal [list "${prefix}a"] $entries
+        r phdel scan-tree "${prefix}a"
+        assert_equal [list 0 [list "${prefix}b" "${prefix}c"]] \
+            [r phpathscan scan-tree $cursor prefix $prefix count 2]
+        assert_error {*cursor does not belong*} {r phpathscan scan-tree $cursor prefix other}
+    }
+
+    test {PHPATHSCAN uses an opaque cursor and traverses lexicographically} {
         r del tree
         foreach path {{} b aa a ab c} {r phset tree $path fields 1 f "v:$path"}
         set cursor 0
         set paths {}
         while 1 {
-            set page [r phscan tree $cursor count 2]
+            set page [r phpathscan tree $cursor count 2]
             set cursor [lindex $page 0]
             foreach path [lindex $page 1] {lappend paths $path}
             if {$cursor eq "0"} break
         }
         assert_equal {{} a aa ab b c} $paths
 
-        set prefixed [r phscan tree 0 prefix a count 100 withvalues]
+        set prefixed [r phpathscan tree 0 prefix a count 100]
         assert_equal 0 [lindex $prefixed 0]
-        assert_equal {a aa ab} [lmap entry [lindex $prefixed 1] {lindex $entry 0}]
-        foreach entry [lindex $prefixed 1] {
-            assert_equal "v:[lindex $entry 0]" [dict get [dict create {*}[lindex $entry 1]] f]
-        }
+        assert_equal {a aa ab} [lindex $prefixed 1]
     }
 
-    test {PHSCAN ends the traversal without an extra empty call} {
+    test {PHPATHSCAN ends the traversal without an extra empty call} {
         r del tree
         r phset tree a fields 1 f v
         r phset tree b fields 1 f v
-        set page [r phscan tree 0 count 2]
+        set page [r phpathscan tree 0 count 2]
         assert_equal 0 [lindex $page 0]
         assert_equal {a b} [lindex $page 1]
 
-        set page [r phscan tree 0 count 1]
+        set page [r phpathscan tree 0 count 1]
         assert_equal {a} [lindex $page 1]
         assert {[lindex $page 0] ne "0"}
-        set page [r phscan tree [lindex $page 0] count 1]
+        set page [r phpathscan tree [lindex $page 0] count 1]
         assert_equal {b} [lindex $page 1]
         assert_equal 0 [lindex $page 0]
 
         r phset tree ba fields 1 f v
-        set page [r phscan tree 0 prefix b count 2]
+        set page [r phpathscan tree 0 prefix b count 2]
         assert_equal {b ba} [lindex $page 1]
         assert_equal 0 [lindex $page 0]
     }
@@ -302,7 +374,8 @@ start_server {tags {pathhash}} {
             {phlongest not-pathhash p}
             {phprefixes not-pathhash p}
             {phdelprefix not-pathhash p}
-            {phscan not-pathhash 0}
+            {phpathscan not-pathhash 0}
+            {phscan not-pathhash p 0}
             {phcard not-pathhash}
         } {
             assert_error WRONGTYPE* {r {*}$command}
@@ -333,13 +406,13 @@ start_server {tags {pathhash}} {
         assert_error ERR*value*out*range* {r phprefixes tree p count 0}
         assert_error ERR*value*out*range* {r phprefixes tree p maxpathlen -1}
         assert_error ERR*syntax* {r phprefixes tree p fields 2 only-one}
-        assert_error ERR*invalid*cursor* {r phscan tree invalid}
-        assert_error ERR*syntax* {r phscan tree 0 count 1 count 2}
-        assert_error ERR*value*out*range* {r phscan tree 0 count 0}
+        assert_error ERR*invalid*cursor* {r phpathscan tree invalid}
+        assert_error ERR*syntax* {r phpathscan tree 0 count 1 count 2}
+        assert_error ERR*value*out*range* {r phpathscan tree 0 count 0}
     }
 
     test {Path Hash commands are registered with the PH prefix} {
-        set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
+        set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phpathscan phprefixes phscan phset}
         assert_equal $commands [lsort [r command list filterby aclcat pathhash]]
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
@@ -360,7 +433,8 @@ start_server {tags {pathhash}} {
             assert_equal OK [r acl setuser ph-user reset on nopass ~* +@pathhash]
             assert_equal OK [r acl dryrun ph-user phset tree a fields 1 f v]
             assert_equal OK [r acl dryrun ph-user phget tree a f]
-            assert_equal OK [r acl dryrun ph-user phscan tree 0]
+            assert_equal OK [r acl dryrun ph-user phpathscan tree 0]
+            assert_equal OK [r acl dryrun ph-user phscan tree a 0]
             assert_match {*no permissions*} [r acl dryrun ph-user set tree value]
             assert_equal OK [r acl setuser ph-user -@pathhash]
             assert_match {*no permissions*} [r acl dryrun ph-user phset tree a fields 1 f v]
@@ -431,19 +505,20 @@ start_server {tags {pathhash}} {
                 {phlongest tree a length} [list {:1}] \
                 {phprefixes tree a} [list {*1} {$1} a] \
                 {phprefixes tree a lengths count 1 maxpathlen 1} [list {*1} {:1}] \
-                {phscan tree 0 count 1} [list {*2} {$1} 0 {*1} {$1} a] \
+                {phpathscan tree 0 count 1} [list {*2} {$1} 0 {*1} {$1} a] \
+                {phscan tree a 0} [list {*2} {$1} 0 {*2} {$2} f1 {$2} v1] \
+                {phscan missing a 0} [list {*2} {$1} 0 {*0}] \
                 {phlongest tree a withvalues} $match \
                 {phlongest tree a length withvalues} [concat [list {*2} {:1}] $payload] \
                 {phprefixes tree a withvalues} [concat [list {*1}] $match] \
                 {phprefixes tree a lengths withvalues} [concat [list {*1} {*2} {:1}] $payload] \
-                {phscan tree 0 withvalues} [concat [list {*2} {$1} 0 {*1}] $match] \
                 {phlongest tree a fields 1 f1} [list {*2} {$1} a {*1} {$2} v1] \
                 {phprefixes tree a fields 1 f1} [list {*1} {*2} {$1} a {*1} {$2} v1] \
                 {phlongest tree a fields 2 f1 missing} $fields \
                 {phprefixes tree a fields 2 f1 missing} [concat [list {*1}] $fields] \
                 {phlongest tree z withvalues} [list $null] \
                 {phprefixes tree z withvalues} [list {*0}] \
-                {phscan missing 0 withvalues} [list {*2} {$1} 0 {*0}]] {
+                {phpathscan missing 0} [list {*2} {$1} 0 {*0}]] {
                 r {*}$command
                 foreach line $expected {
                     assert_equal $line [r read]
@@ -603,7 +678,7 @@ start_server {tags {pathhash}} {
             assert_equal 1 [r exists $key]
             assert_equal pathhash [r type $key]
             assert_equal 0 [r phcard $key]
-            assert_equal {0 {}} [r phscan $key 0]
+            assert_equal {0 {}} [r phpathscan $key 0]
         }
         assert_equal 1 [r del $empty_tree]
         assert_equal 1 [r unlink $empty_copy]

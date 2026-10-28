@@ -243,6 +243,25 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     }
 }
 
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "Oversized PING length is rejected before the body is buffered" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+
+        # Only the 14-byte header: signature, totlen of 256MB, ver, port, type PING.
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 0
+        puts -nonewline $sock "RCmb[binary format ISSS [expr {256 * 1024 * 1024}] 1 0 0]"
+
+        # The node must drop the link rather than wait for 256MB of body.
+        wait_for_condition 100 50 {
+            [read $sock] eq "" && [eof $sock]
+        } else {
+            fail "Node kept the link open waiting for an oversized packet"
+        }
+        close $sock
+    }
+}
+
 start_cluster 10 0 {tags {external:skip cluster tls:skip}} {
     test "Gossip count scales with higher percentage of `cluster-message-gossip-perc`" {
         R 0 config set cluster-message-gossip-perc 80

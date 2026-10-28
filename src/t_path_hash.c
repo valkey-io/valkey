@@ -755,13 +755,36 @@ void phscanCommand(client *c) {
     zfree(entries);
 }
 
-void phcardCommand(client *c) {
+/* Count stored paths with a byte prefix; an empty prefix counts the whole tree. */
+size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len) {
+    pathHashObject *path_hash = objectGetVal(o);
+    if (prefix_len == 0) return raxSize(path_hash->index);
+
+    size_t count = 0;
+    raxIterator iter;
+    raxStart(&iter, path_hash->index);
+    raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
+    while (raxNext(&iter) && pathHashPathHasPrefix(iter.key, iter.key_len, prefix, prefix_len)) count++;
+    raxStop(&iter);
+    return count;
+}
+
+void phpathcountCommand(client *c) {
+    sds prefix = NULL;
+    if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[2]), "prefix")) {
+        prefix = objectGetVal(c->argv[3]);
+    } else if (c->argc != 2) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
-    if (o == NULL)
+    if (o == NULL) {
         addReply(c, shared.czero);
-    else
-        addReplyLongLong(c, raxSize(((pathHashObject *)objectGetVal(o))->index));
+        return;
+    }
+    addReplyLongLong(c, pathHashTypeCount(o, (unsigned char *)prefix, prefix ? sdslen(prefix) : 0));
 }
 
 int rewritePathHashObject(rio *r, robj *key, robj *o) {

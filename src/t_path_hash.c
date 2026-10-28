@@ -356,6 +356,15 @@ void phexistsCommand(client *c) {
     addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);
 }
 
+/* The operation notification is emitted first, followed by the key deletion. */
+static void pathHashDeleteIfEmpty(client *c, robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
+    if (raxSize(path_hash->index) == 0) {
+        dbDelete(c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+    }
+}
+
 void phdelCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
@@ -391,6 +400,7 @@ void phdelCommand(client *c) {
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
+        pathHashDeleteIfEmpty(c, o);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -575,6 +585,7 @@ void phdelprefixCommand(client *c) {
             path_hash->num_fields = 0;
             signalModifiedKey(c, c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
+            pathHashDeleteIfEmpty(c, o);
             server.dirty += deleted;
         }
         addReplyLongLong(c, deleted);
@@ -610,6 +621,7 @@ void phdelprefixCommand(client *c) {
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
+        pathHashDeleteIfEmpty(c, o);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -767,19 +779,6 @@ void phcardCommand(client *c) {
 int rewritePathHashObject(rio *r, robj *key, robj *o) {
     pathHashObject *path_hash = objectGetVal(o);
     raxIterator paths;
-
-    if (raxSize(path_hash->index) == 0) {
-        /* As with XADD MAXLEN 0 for an empty stream, create a temporary
-         * logical path and remove it again to reconstruct an empty path hash. */
-        if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "PHSET", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkString(r, "FIELDS", 6) || !rioWriteBulkLongLong(r, 1) ||
-            !rioWriteBulkString(r, "", 0) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkCount(r, '*', 3) || !rioWriteBulkString(r, "PHDEL", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0))
-            return 0;
-        return 1;
-    }
 
     raxStart(&paths, path_hash->index);
     raxSeek(&paths, "^", NULL, 0);

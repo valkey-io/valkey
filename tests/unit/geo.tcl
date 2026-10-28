@@ -592,6 +592,36 @@ start_server {tags {"geo"}} {
         }
     }
 
+    test {GEOSEARCH repeated BYPOLYGON uses the last polygon} {
+        r del points "{points}dest"
+        r geoadd points 0.5 0.5 first 10.5 10.5 last
+        set first {BYPOLYGON 4 0 0 1 0 1 1 0 1}
+        set last {BYPOLYGON 4 10 10 11 10 11 11 10 11}
+        assert_equal {last} [r geosearch points {*}$first {*}$last]
+        assert_equal 1 [r geosearchstore "{points}dest" points {*}$first {*}$last]
+        assert_equal {last} [r zrange "{points}dest" 0 -1]
+        assert_error {ERR COUNT must be > 0} {
+            r geosearch points {*}$first {*}$last COUNT 0
+        }
+        r del points "{points}dest"
+    }
+
+    test {GEOSEARCH repeated BYPOLYGON releases previous vertices} {
+        r del missing{points}
+        set polygon [concat {BYPOLYGON 1024} [lrepeat 2048 0]]
+        set command [concat {GEOSEARCH missing{points}} $polygon {BYPOLYGON 3 0 0 1 0 0 1}]
+        # Warm the query buffer and command accounting before sampling memory.
+        for {set i 0} {$i < 8} {incr i} {
+            assert_equal {} [r {*}$command]
+        }
+        set before [s used_memory]
+        for {set i 0} {$i < 32} {incr i} {
+            assert_equal {} [r {*}$command]
+        }
+        # Leaking the first polygon would retain 512 KiB. Allow unrelated overhead.
+        assert_lessthan [expr {[s used_memory] - $before}] 262144
+    } {} {external:skip}
+
     test {GEOSEARCH BYPOLYGON standard operations} {
         r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"

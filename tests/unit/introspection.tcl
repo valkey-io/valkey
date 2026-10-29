@@ -2066,6 +2066,23 @@ test {CONFIG REWRITE handles large unsigned memory config values} {
     }
 } {} {external:skip}
 
+# A sysfs attribute reports a size of 4096 but reads back far fewer bytes,
+# which gives a deterministic short read of the old config file.
+set sysfs_file /sys/kernel/mm/transparent_hugepage/enabled
+if {[file readable $sysfs_file] && [file size $sysfs_file] > [string length [exec cat $sysfs_file]]} {
+    test {CONFIG REWRITE fails when the old config file reads short} {
+        start_server {tags {"introspection"}} {
+            set config_file [srv 0 config_file]
+            file rename $config_file $config_file.bak
+            file link -symbolic $config_file $sysfs_file
+            catch {r config rewrite} err
+            file delete $config_file
+            file rename $config_file.bak $config_file
+            assert_match {*Rewriting config file: Input/output error*} $err
+        }
+    } {} {external:skip}
+}
+
 test {SIGNED MEMORY CONFIG allows negative number} {
     start_server {tags {"introspection"}} {
         r config set slot-migration-max-failover-repl-bytes -1

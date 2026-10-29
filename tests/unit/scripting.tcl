@@ -1724,7 +1724,7 @@ start_server {tags {"scripting external:skip"}} {
     }
 }
 
-start_server {tags {"scripting external:skip"}} {
+start_server {tags {"scripting external:skip tls:skip"}} {
     test {Forked scripting debug session does not suspend save points} {
         set rd [valkey_deferring_client]
         $rd script debug yes

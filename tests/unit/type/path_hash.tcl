@@ -186,8 +186,8 @@ start_server {tags {pathhash}} {
         assert_equal 1 [r phcard tree]
         assert_equal [list child] [r phget tree ab f]
         assert_equal 1 [r phdel tree ab]
-        assert_equal 1 [r exists tree]
-        assert_equal pathhash [r type tree]
+        assert_equal 0 [r exists tree]
+        assert_equal none [r type tree]
         assert_equal 0 [r phcard tree]
         assert_equal 0 [r phdel tree ab]
     }
@@ -200,8 +200,8 @@ start_server {tags {pathhash}} {
         assert_equal 0 [lindex $result 0]
         assert_equal {a ac b ba} [lindex $result 1]
         assert_equal 4 [r phdelprefix tree {}]
-        assert_equal 1 [r exists tree]
-        assert_equal pathhash [r type tree]
+        assert_equal 0 [r exists tree]
+        assert_equal none [r type tree]
         assert_equal 0 [r phcard tree]
         assert_equal 0 [r phdelprefix tree anything]
     }
@@ -504,8 +504,7 @@ start_server {tags {pathhash}} {
             assert_equal gpK [lindex [r config get notify-keyspace-events] 1]
             r phset notify-tree a fields 1 f one
             r phdel notify-tree a
-            assert_equal 1 [r exists notify-tree]
-            r del notify-tree
+            assert_equal 0 [r exists notify-tree]
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phdel" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree del" [$rd1 read]
@@ -513,8 +512,7 @@ start_server {tags {pathhash}} {
             r phset notify-tree a fields 1 f one
             r phset notify-tree ab fields 1 f two
             r phdelprefix notify-tree {}
-            assert_equal 1 [r exists notify-tree]
-            r del notify-tree
+            assert_equal 0 [r exists notify-tree]
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phdelprefix" [$rd1 read]
@@ -522,6 +520,60 @@ start_server {tags {pathhash}} {
         } {
             catch {$rd1 close}
             r config set notify-keyspace-events {}
+        }
+    }
+
+    test {Partial Path Hash deletions do not send generic del notifications} {
+        r del partial-tree
+        r phmset partial-tree a fields 2 f one g two ab fields 1 f child keep fields 1 f keep
+        set old_notify [lindex [r config get notify-keyspace-events] 1]
+        test_defer {r config set notify-keyspace-events $old_notify}
+        r config set notify-keyspace-events Kpg
+        set subscriber [valkey_deferring_client]
+        test_defer {$subscriber close}
+        assert_equal {1} [psubscribe $subscriber *:partial-tree]
+        foreach deletion {
+            {phdel partial-tree a f}
+            {phdel partial-tree a}
+            {phdelprefix partial-tree ab}
+        } {
+            assert_equal 1 [r {*}$deletion]
+            assert_equal 1 [r exists partial-tree]
+            assert_match "pmessage * __keyspace@*__:partial-tree [lindex $deletion 0]" [$subscriber read]
+            # A following operation is a barrier: any spurious del arrives first.
+            r phset partial-tree keep fields 1 f keep
+            assert_match "pmessage * __keyspace@*__:partial-tree phset" [$subscriber read]
+        }
+    }
+
+    test {Path Hash deletion cleanup does not count internal key lookups} {
+        foreach command {{phdel stats-tree p} {phdelprefix stats-tree p}} {
+            r del stats-tree
+            r phset stats-tree p fields 1 f v
+            set hits [getInfoProperty [r info stats] keyspace_hits]
+            set misses [getInfoProperty [r info stats] keyspace_misses]
+            assert_equal 1 [r {*}$command]
+            assert_equal $hits [getInfoProperty [r info stats] keyspace_hits]
+            assert_equal $misses [getInfoProperty [r info stats] keyspace_misses]
+        }
+    }
+
+    test {Clearing all Path Hash paths honors lazyfree-lazy-server-del} {
+        set old_lazyfree [lindex [r config get lazyfree-lazy-server-del] 1]
+        test_defer {r config set lazyfree-lazy-server-del $old_lazyfree}
+        foreach mode {no yes} {
+            r config set lazyfree-lazy-server-del $mode
+            wait_lazyfree_done r
+            set freed [s lazyfreed_objects]
+            for {set i 0} {$i < 100} {incr i} {
+                r phset lazy-tree path:$i fields 1 f value:$i
+            }
+            assert_equal 100 [r phdelprefix lazy-tree {}]
+            assert_equal 0 [r exists lazy-tree]
+            wait_lazyfree_done r
+            set expected $freed
+            if {$mode eq "yes"} {incr expected}
+            assert_equal $expected [s lazyfreed_objects]
         }
     }
 
@@ -578,39 +630,74 @@ start_server {tags {pathhash}} {
         }
     } {} {needs:debug}
 
-    test {Empty Path Hash survives COPY, DUMP/RESTORE, and RDB reload} {
-        set empty_tree {empty-tree:{pathhash-empty}}
-        set empty_copy {empty-copy:{pathhash-empty}}
-        set empty_restored {empty-restored:{pathhash-empty}}
-        r del $empty_tree $empty_copy $empty_restored
-        r phset $empty_tree path fields 1 field value
-        assert_equal 1 [r phdel $empty_tree path]
-        assert_equal 1 [r exists $empty_tree]
-        assert_equal pathhash [r type $empty_tree]
-        assert_equal 0 [r phcard $empty_tree]
+    test {Final root and binary path deletions remove the key but preserve other paths} {
+        set binary_path [binary format H* 00ff61]
+        foreach path [list {} $binary_path] {
+            foreach delete_fields {0 1} {
+                r del final-tree
+                r phset final-tree $path fields 2 f one g two
+                r phset final-tree keep fields 1 f other
+                if {$delete_fields} {
+                    assert_equal 2 [r phdel final-tree $path f g f]
+                } else {
+                    assert_equal 1 [r phdel final-tree $path]
+                }
+                assert_equal 1 [r exists final-tree]
+                assert_equal 1 [r phcard final-tree]
+                assert_equal {other} [r phget final-tree keep f]
+                assert_equal 1 [r phdel final-tree keep f]
+                assert_equal 0 [r exists final-tree]
 
-        assert_equal 1 [r copy $empty_tree $empty_copy]
-        assert_equal pathhash [r type $empty_copy]
-        assert_equal 0 [r phcard $empty_copy]
-
-        set dumped [r dump $empty_tree]
-        assert_equal OK [r restore $empty_restored 0 $dumped]
-        assert_equal pathhash [r type $empty_restored]
-        assert_equal 0 [r phcard $empty_restored]
-
-        r debug reload
-        foreach key [list $empty_tree $empty_copy $empty_restored] {
-            assert_equal 1 [r exists $key]
-            assert_equal pathhash [r type $key]
-            assert_equal 0 [r phcard $key]
-            assert_equal {0 {}} [r phscan $key 0]
+                r phset final-tree $path fields 2 f one g two
+                if {$delete_fields} {
+                    assert_equal 2 [r phdel final-tree $path f g f]
+                } else {
+                    assert_equal 1 [r phdel final-tree $path]
+                }
+                assert_equal 0 [r exists final-tree]
+                assert_equal none [r type final-tree]
+            }
         }
-        assert_equal 1 [r del $empty_tree]
-        assert_equal 1 [r unlink $empty_copy]
-        assert_equal 0 [r exists $empty_tree]
-        assert_equal 0 [r exists $empty_copy]
-        assert_equal 1 [r exists $empty_restored]
-    } {} {needs:debug}
+    }
+
+    test {Prefix deletion removes the final key across deletion chunk boundaries} {
+        r del final-tree
+        set prefix [binary format H* 00ff]
+        for {set i 0} {$i < 600} {incr i} {
+            r phset final-tree "${prefix}$i" fields 1 f v
+        }
+        assert_equal 600 [r phdelprefix final-tree $prefix]
+        assert_equal 0 [r exists final-tree]
+        assert_equal 0 [r phcard final-tree]
+        assert_equal 0 [r phdelprefix final-tree $prefix]
+    }
+
+    test {Deleting the final path removes the key, TTL, and WATCH state} {
+        set other [valkey_client]
+        test_defer { $other close }
+        foreach deletion {
+            {phdel empty-tree p f missing f}
+            {phdel empty-tree p}
+            {phdelprefix empty-tree p}
+            {phdelprefix empty-tree {}}
+        } {
+            r phset empty-tree p fields 1 f v
+            r pexpire empty-tree 60000
+            r watch empty-tree
+            assert_equal 1 [$other {*}$deletion]
+            r multi
+            r exists empty-tree
+            assert_equal {} [r exec]
+            assert_equal 0 [r exists empty-tree]
+            assert_equal -2 [r pttl empty-tree]
+            # COPY checks slots even when the source key is missing.
+            assert_equal 0 [r copy empty-tree empty-copy{empty-tree}]
+            assert_equal {} [r dump empty-tree]
+            r set empty-tree string
+            assert_equal string [r get empty-tree]
+            r del empty-tree
+        }
+    }
 
     test {RDB reload restores path hash paths, binary data, root payload, and TTL} {
         r del tree
@@ -629,6 +716,13 @@ start_server {tags {pathhash}} {
 
     test {RESTORE rejects malformed path hash payloads without destabilizing the server} {
         r debug set-skip-checksum-validation 1
+
+        # Legacy empty containers must not be restored as live keys.
+        r phset legacy-source p fields 1 f v
+        set dumped [r dump legacy-source]
+        set empty_dump "[string index $dumped 0]\x00[string range $dumped end-9 end]"
+        assert_error {*Bad data format*} {r restore legacy-empty 0 $empty_dump}
+        assert_equal 0 [r exists legacy-empty]
 
         r del source
         r del corrupt
@@ -687,13 +781,15 @@ start_server {tags {pathhash}} {
 }
 
 start_server {tags {pathhash needs:debug} overrides {appendonly yes aof-use-rdb-preamble no}} {
-    test {AOF rewrite and reload preserve populated and empty Path Hash values} {
+    test {AOF rewrite and reload preserve populated Path Hash values and final key deletion} {
         r phset tree {} fields 1 root value
         r phset tree abc fields 2 f1 v1 f2 v2
         r phset tree abcd fields 1 child v3
         r phdel tree abc f1
         r phset empty-tree path fields 1 field value
         r phdel empty-tree path
+        r debug loadaof
+        assert_equal 0 [r exists empty-tree]
         r bgrewriteaof
         waitForBgrewriteaof r
         r debug loadaof
@@ -701,8 +797,8 @@ start_server {tags {pathhash needs:debug} overrides {appendonly yes aof-use-rdb-
         assert_equal [list value] [r phget tree {} root]
         assert_equal {{} v2} [r phget tree abc f1 f2]
         assert_equal [list v3] [r phget tree abcd child]
-        assert_equal 1 [r exists empty-tree]
-        assert_equal pathhash [r type empty-tree]
+        assert_equal 0 [r exists empty-tree]
+        assert_equal none [r type empty-tree]
         assert_equal 0 [r phcard empty-tree]
     }
 }
@@ -728,12 +824,25 @@ start_server {tags {pathhash external:skip}} {
             $primary phdelprefix tree ab
             $primary phset empty-tree path fields 1 field value
             $primary phdel empty-tree path
+            foreach deletion {
+                {phdel final-tree p f}
+                {phdel final-tree p}
+                {phdelprefix final-tree p}
+                {phdelprefix final-tree {}}
+            } {
+                $primary phset final-tree p fields 1 f v
+                $primary pexpire final-tree 60000
+                $primary {*}$deletion
+                wait_for_ofs_sync $primary $replica
+                assert_equal 0 [$replica exists final-tree]
+                assert_equal -2 [$replica pttl final-tree]
+            }
             wait_for_ofs_sync $primary $replica
             assert_equal 1 [$replica phcard tree]
             assert_equal [list one] [$replica phget tree a f]
             assert_equal [list {}] [$replica phget tree ab f]
-            assert_equal 1 [$replica exists empty-tree]
-            assert_equal pathhash [$replica type empty-tree]
+            assert_equal 0 [$replica exists empty-tree]
+            assert_equal none [$replica type empty-tree]
             assert_equal 0 [$replica phcard empty-tree]
         }
     }

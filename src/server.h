@@ -1487,6 +1487,7 @@ typedef struct client {
     int nread;                                    /* Number of bytes of the last read. */
     int read_flags;                               /* Client Read flags - used to communicate the client read state. */
     int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
+    int call_flags;                               /* Propagation flags for the currently executing command. */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
     /* In updateClientMemoryUsage() we track the memory usage of

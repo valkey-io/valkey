@@ -356,6 +356,32 @@ void phexistsCommand(client *c) {
     addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);
 }
 
+/* Queue the deletion before a notification callback can queue another write. */
+static void pathHashPropagateDelete(client *c) {
+    int target = PROPAGATE_NONE;
+    if (!c->flag.prevent_prop) {
+        if ((c->call_flags & CMD_CALL_PROPAGATE_AOF) && !c->flag.prevent_aof_prop &&
+            !c->flag.module_prevent_aof_prop)
+            target |= PROPAGATE_AOF;
+        if ((c->call_flags & CMD_CALL_PROPAGATE_REPL) && !c->flag.prevent_repl_prop &&
+            !c->flag.module_prevent_repl_prop)
+            target |= PROPAGATE_REPL;
+    }
+    if (target != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, target, c->slot);
+    preventCommandPropagation(c);
+}
+
+/* Call after the operation notification while the caller retains o. A module
+ * callback may have removed or replaced the key in the meantime. */
+static void pathHashDeleteIfEmpty(client *c, robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
+    const int lookup_flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOHOTKEYS;
+    if (raxSize(path_hash->index) == 0 && lookupKeyReadWithFlags(c->db, c->argv[1], lookup_flags) == o) {
+        dbDelete(c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+    }
+}
+
 void phdelCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
@@ -390,7 +416,11 @@ void phdelCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
+        pathHashPropagateDelete(c);
+        incrRefCount(o);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
+        pathHashDeleteIfEmpty(c, o);
+        decrRefCount(o);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -569,12 +599,12 @@ void phdelprefixCommand(client *c) {
     if (prefix_len == 0) {
         long long deleted = raxSize(path_hash->index);
         if (deleted) {
-            rax *empty = raxNew();
-            raxFreeWithCallback(path_hash->index, freePathHashPayload);
-            path_hash->index = empty;
-            path_hash->num_fields = 0;
+            /* Delete the whole key so lazyfree-lazy-server-del can free its tree. */
+            dbDelete(c->db, c->argv[1]);
             signalModifiedKey(c, c->db, c->argv[1]);
+            pathHashPropagateDelete(c);
             notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
             server.dirty += deleted;
         }
         addReplyLongLong(c, deleted);
@@ -609,7 +639,11 @@ void phdelprefixCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
+        pathHashPropagateDelete(c);
+        incrRefCount(o);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
+        pathHashDeleteIfEmpty(c, o);
+        decrRefCount(o);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -767,19 +801,6 @@ void phcardCommand(client *c) {
 int rewritePathHashObject(rio *r, robj *key, robj *o) {
     pathHashObject *path_hash = objectGetVal(o);
     raxIterator paths;
-
-    if (raxSize(path_hash->index) == 0) {
-        /* As with XADD MAXLEN 0 for an empty stream, create a temporary
-         * logical path and remove it again to reconstruct an empty path hash. */
-        if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "PHSET", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkString(r, "FIELDS", 6) || !rioWriteBulkLongLong(r, 1) ||
-            !rioWriteBulkString(r, "", 0) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkCount(r, '*', 3) || !rioWriteBulkString(r, "PHDEL", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0))
-            return 0;
-        return 1;
-    }
 
     raxStart(&paths, path_hash->index);
     raxSeek(&paths, "^", NULL, 0);

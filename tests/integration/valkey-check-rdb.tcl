@@ -3,6 +3,32 @@ proc get_function_code {args} {
 }
 
 tags {"check-rdb external:skip logreqres:skip"} {
+    # Saved by commit 692e57e6f, which kept the key after deleting its last path.
+    # The fixture contains "emptied" (zero paths) and "kept" (p -> f = v).
+    test {Server skips an emptied Path Hash when loading a legacy RDB} {
+        set server_path [tmpdir "server.rdb-path-hash-empty-key"]
+        exec cp tests/assets/path-hash-empty-key.rdb $server_path
+        start_server [list overrides [list dir $server_path dbfilename path-hash-empty-key.rdb]] {
+            r select 0
+            assert_equal 1 [r dbsize]
+            assert_equal 0 [r exists emptied]
+            assert_equal {v} [r phget kept p f]
+            verify_log_message 0 "*skipping empty key: emptied*" 0
+        }
+    }
+
+    foreach fixture {path-hash-empty-key.rdb corrupt_empty_keys.rdb} {
+        test "Check RDB with legacy empty containers: $fixture" {
+            set result [exec $::VALKEY_CHECK_RDB_BIN tests/assets/$fixture]
+            assert_no_match {*Unexpected EOF*} $result
+            assert_match {*RDB looks OK!*} $result
+        }
+        test "Check RDB stats with legacy empty containers: $fixture" {
+            set result [exec $::VALKEY_CHECK_RDB_BIN tests/assets/$fixture --stats --format info]
+            assert_match {*RDB looks OK!*} $result
+        }
+    }
+
     test {Check old valid RDB} {
         catch {
             exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings.rdb

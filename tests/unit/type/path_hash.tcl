@@ -546,6 +546,18 @@ start_server {tags {pathhash}} {
         }
     }
 
+    test {Path Hash deletion cleanup does not count internal key lookups} {
+        foreach command {{phdel stats-tree p} {phdelprefix stats-tree p}} {
+            r del stats-tree
+            r phset stats-tree p fields 1 f v
+            set hits [getInfoProperty [r info stats] keyspace_hits]
+            set misses [getInfoProperty [r info stats] keyspace_misses]
+            assert_equal 1 [r {*}$command]
+            assert_equal $hits [getInfoProperty [r info stats] keyspace_hits]
+            assert_equal $misses [getInfoProperty [r info stats] keyspace_misses]
+        }
+    }
+
     test {Clearing all Path Hash paths honors lazyfree-lazy-server-del} {
         set old_lazyfree [lindex [r config get lazyfree-lazy-server-del] 1]
         test_defer {r config set lazyfree-lazy-server-del $old_lazyfree}

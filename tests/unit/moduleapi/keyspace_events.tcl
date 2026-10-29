@@ -1,4 +1,5 @@
 set testmodule [file normalize tests/modules/keyspace_events.so]
+set miscmodule [file normalize tests/modules/misc.so]
 
 tags "modules" {
     start_server [list overrides [list loadmodule "$testmodule"]] {
@@ -149,6 +150,50 @@ tags "modules" {
             r zadd t 1 f1 2 f2
             r xadd s * f v
             r ping
+        }
+    }
+
+    start_server [list tags {external:skip} overrides [list loadmodule $testmodule appendonly yes appendfsync always]] {
+        test {Path Hash deletions precede writes from generic del callbacks in AOF} {
+            r module load $miscmodule
+            foreach {key command} {
+                phdel-order {phdel phdel-order p}
+                prefix-order {phdelprefix prefix-order p}
+                clear-order {phdelprefix clear-order {}}
+            } {
+                r phset $key p fields 1 f v
+                r set "${key}_copy" v
+                assert_equal 1 [r {*}$command]
+            }
+
+            r phset no-aof p fields 1 f v
+            assert_equal 1 [r test.rm_call_flags !A phdel no-aof p]
+            r phset aof-only p fields 1 f v
+            assert_equal 1 [r test.rm_call_flags !R phdel aof-only p]
+
+            set aof [get_last_incr_aof_path r]
+            r config set appendonly no
+            set fp [open $aof r]
+            fconfigure $fp -translation binary
+            set commands {}
+            while 1 {
+                set command [read_from_aof $fp]
+                if {$command eq {}} break
+                lappend commands $command
+            }
+            close $fp
+
+            foreach {key command} {
+                phdel-order {phdel phdel-order p}
+                prefix-order {phdelprefix prefix-order p}
+                clear-order {phdelprefix clear-order {}}
+            } {
+                set parent [lsearch -exact $commands $command]
+                set callback [lsearch -exact $commands [list del "${key}_copy"]]
+                assert {$parent >= 0 && $callback > $parent}
+            }
+            assert_equal -1 [lsearch -exact $commands {phdel no-aof p}]
+            assert {[lsearch -exact $commands {phdel aof-only p}] >= 0}
         }
     }
 }

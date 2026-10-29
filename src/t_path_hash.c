@@ -356,11 +356,27 @@ void phexistsCommand(client *c) {
     addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);
 }
 
+/* Queue the deletion before a notification callback can queue another write. */
+static void pathHashPropagateDelete(client *c) {
+    int target = PROPAGATE_NONE;
+    if (!c->flag.prevent_prop) {
+        if ((c->call_flags & CMD_CALL_PROPAGATE_AOF) && !c->flag.prevent_aof_prop &&
+            !c->flag.module_prevent_aof_prop)
+            target |= PROPAGATE_AOF;
+        if ((c->call_flags & CMD_CALL_PROPAGATE_REPL) && !c->flag.prevent_repl_prop &&
+            !c->flag.module_prevent_repl_prop)
+            target |= PROPAGATE_REPL;
+    }
+    if (target != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, target, c->slot);
+    preventCommandPropagation(c);
+}
+
 /* Call after the operation notification while the caller retains o. A module
  * callback may have removed or replaced the key in the meantime. */
 static void pathHashDeleteIfEmpty(client *c, robj *o) {
     pathHashObject *path_hash = objectGetVal(o);
-    if (raxSize(path_hash->index) == 0 && lookupKeyRead(c->db, c->argv[1]) == o) {
+    const int lookup_flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOHOTKEYS;
+    if (raxSize(path_hash->index) == 0 && lookupKeyReadWithFlags(c->db, c->argv[1], lookup_flags) == o) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     }
@@ -400,6 +416,7 @@ void phdelCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
+        pathHashPropagateDelete(c);
         incrRefCount(o);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
         pathHashDeleteIfEmpty(c, o);
@@ -585,6 +602,7 @@ void phdelprefixCommand(client *c) {
             /* Delete the whole key so lazyfree-lazy-server-del can free its tree. */
             dbDelete(c->db, c->argv[1]);
             signalModifiedKey(c, c->db, c->argv[1]);
+            pathHashPropagateDelete(c);
             notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
             server.dirty += deleted;
@@ -621,6 +639,7 @@ void phdelprefixCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
+        pathHashPropagateDelete(c);
         incrRefCount(o);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
         pathHashDeleteIfEmpty(c, o);

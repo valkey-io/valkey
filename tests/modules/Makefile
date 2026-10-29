@@ -65,7 +65,6 @@ TEST_MODULES = \
     publish.so \
     usercall.so \
     postnotifications.so \
-    path_hash_notification.so \
     moduleauthtwo.so \
     rdbloadsave.so \
     crash.so \

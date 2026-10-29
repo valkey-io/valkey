@@ -4239,7 +4239,10 @@ void call(client *c, int flags) {
         }
     }
 
+    int old_call_flags = c->call_flags;
+    c->call_flags = flags;
     c->cmd->proc(c);
+    c->call_flags = old_call_flags;
 
     if (c->flag.argv_borrowed && server.enable_debug_assert) {
         robj **argv = c->original_argv ? c->original_argv : c->argv;

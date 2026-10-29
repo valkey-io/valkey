@@ -293,3 +293,30 @@ start_server {tags {"repl external:skip"}} {
         }
     }
 }
+
+start_server {tags {"repl needs:debug external:skip"}} {
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {} {
+        set replica [srv 0 client]
+        set replica_pid [srv 0 pid]
+        start_server {} {
+            set sub_replica [srv 0 client]
+
+            test {Full sync with a sub-replica whose free is deferred does not crash} {
+                $sub_replica replicaof [srv -1 host] [srv -1 port]
+                wait_for_sync $sub_replica
+
+                # A protected client can only be freed asynchronously, the same
+                # as a replica with a write in flight on an I/O thread.
+                regexp {id=(\d+)} [$replica client list type replica] -> id
+                $replica debug protect-client $id
+
+                $replica replicaof $primary_host $primary_port
+                catch {wait_for_sync $replica}
+                assert {[process_is_alive $replica_pid]}
+                assert_equal up [status $replica master_link_status]
+            }
+        }
+    }
+}

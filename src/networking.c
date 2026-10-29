@@ -2229,7 +2229,12 @@ void disconnectReplicas(void) {
         client *replica = (client *)ln->value;
         /* If we are going to disconnect all replicas, there is no need to protect the rdb channel. */
         replica->flag.protected_rdb_channel = 0;
-        freeClient(replica);
+        if (freeClient(replica)) continue;
+        /* The free was deferred, e.g. because an I/O thread is still writing to
+         * the replica. Some callers free the replication backlog next, so wait for
+         * the I/O thread and release the replica's reference to it now. */
+        waitForClientIO(replica);
+        freeReplicaReferencedReplBuffer(replica);
     }
 }
 

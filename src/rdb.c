@@ -1865,11 +1865,31 @@ int rdbStartBgsave(int bgsave_type) {
     }
 }
 
+/* A replication disk save writes its own file instead of dbfilename, so it must
+ * not change what INFO and the stop-writes-on-bgsave-error gate report about
+ * persistence. Capture the metrics it would overwrite before forking and put
+ * them back when it ends. The dirty counter and LASTSAVE are not captured:
+ * rdbRecordEndMetrics() leaves them alone for such saves, while restoring the
+ * captured values would also drop the changes that arrived during the save. */
+static void rdbCapturePersistenceMetrics(void) {
+    server.rdb_child_prev_metrics.lastbgsave_status = server.lastbgsave_status;
+    server.rdb_child_prev_metrics.lastbgsave_type = server.lastbgsave_type;
+    server.rdb_child_prev_metrics.lastbgsave_try = server.lastbgsave_try;
+}
+
+static void rdbRestorePersistenceMetrics(void) {
+    server.lastbgsave_status = server.rdb_child_prev_metrics.lastbgsave_status;
+    server.lastbgsave_type = server.rdb_child_prev_metrics.lastbgsave_type;
+    server.lastbgsave_try = server.rdb_child_prev_metrics.lastbgsave_try;
+}
+
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     pid_t childpid;
+    int for_replication = (rdbflags & RDBFLAGS_REPLICATION) != 0;
 
     if (hasActiveChildProcess()) return C_ERR;
     server.stat_rdb_saves++;
+    if (for_replication) rdbCapturePersistenceMetrics();
 
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
@@ -1893,6 +1913,9 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
             server.rdb_child_rdbver = RDB_VERSION;
             server.lastbgsave_status = C_ERR;
             server.lastbgsave_try = time(NULL);
+            /* No child, so no completion handler will put the persistence
+             * metrics back. */
+            if (for_replication) rdbRestorePersistenceMetrics();
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
             return C_ERR;
         }
@@ -4239,6 +4262,9 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
          * triggering an error condition. */
         if (bysignal != SIGUSR1) rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORK, C_ERR, save_end);
     }
+    /* A replication save writes its own file, so it is not a persistence save:
+     * put back the metrics captured when it started, whatever the outcome. */
+    if (server.rdb_child_for_replication) rdbRestorePersistenceMetrics();
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.

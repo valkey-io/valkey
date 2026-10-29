@@ -696,6 +696,14 @@ typedef enum {
     RDB_BGSAVE_TYPE_FORKLESS = 2 /* Forkless bgsave. */
 } rdbBgsaveType;
 
+/* Persistence save metrics captured before a replication disk save, which writes
+ * its own file and must put them back when it ends. */
+typedef struct {
+    int lastbgsave_status;
+    rdbBgsaveType lastbgsave_type;
+    time_t lastbgsave_try;
+} rdbSaveMetrics;
+
 /* Replica failover policy for server.cluster_replica_no_failover. */
 typedef enum {
     CLUSTER_REPLICA_NO_FAILOVER_NO = 0,   /* Allow automatic failover (default). */
@@ -2197,6 +2205,7 @@ struct valkeyServer {
     compressionAlgo rdb_child_sync_algo;  /* Streaming compression used by the active replication disk child. */
     int rdb_child_rdbver;                 /* RDB version used by the active replication disk child. */
     int rdb_child_for_replication;        /* Active disk child writes the replication RDB, not dbfilename. */
+    rdbSaveMetrics rdb_child_prev_metrics; /* Metrics to put back when the replication disk child ends. */
     int lastbgsave_status;                /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */

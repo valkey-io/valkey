@@ -1984,6 +1984,8 @@ start_server {tags {"repl external:skip"}} {
         test {Disk-based full sync uses repl-rdbfilename and leaves dbfilename untouched} {
             set lastsave_before [status $primary rdb_last_save_time]
             set changes_before [status $primary rdb_changes_since_last_save]
+            set bgsave_status_before [status $primary rdb_last_bgsave_status]
+            set bgsave_type_before [status $primary rdb_last_bgsave_type]
 
             $replica replicaof [srv -1 host] [srv -1 port]
             wait_for_sync $replica
@@ -2008,6 +2010,51 @@ start_server {tags {"repl external:skip"}} {
             # configured save points still trigger a real snapshot.
             assert_equal $lastsave_before [status $primary rdb_last_save_time]
             assert_equal $changes_before [status $primary rdb_changes_since_last_save]
+            # The last-bgsave metrics describe the persistence save, so the full
+            # sync doesn't report itself as one.
+            assert_equal $bgsave_status_before [status $primary rdb_last_bgsave_status]
+            assert_equal $bgsave_type_before [status $primary rdb_last_bgsave_type]
+        }
+    }
+}
+
+# A replication save must not decide whether the last persistence save succeeded:
+# it writes its own file, so it can neither clear the error left by a failed
+# dbfilename save (which gates writes under stop-writes-on-bgsave-error) nor
+# report itself as the last bgsave.
+start_server {tags {"repl external:skip needs:debug"}} {
+    set primary [srv 0 client]
+
+    $primary config set save ""
+    $primary config set repl-diskless-sync no
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set bgsave-default-method fork
+    $primary set primary_key primary_value
+
+    # Force a persistence bgsave to fail, leaving an error status behind.
+    $primary config set rdb-key-save-delay 10000000
+    $primary debug populate 1000
+    $primary bgsave
+    wait_for_condition 50 100 {
+        [status $primary rdb_bgsave_in_progress] == 1
+    } else {
+        fail "bgsave didn't start"
+    }
+    catch {exec kill -9 [get_child_pid 0]}
+    $primary config set rdb-key-save-delay 0
+    waitForBgsave $primary
+    assert_equal {err} [status $primary rdb_last_bgsave_status]
+
+    start_server {overrides {save ""}} {
+        set replica [srv 0 client]
+
+        test {A full sync preserves the failed status of the last persistence bgsave} {
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            wait_done_loading $replica
+
+            assert_equal {primary_value} [$replica get primary_key]
+            assert_equal {err} [status $primary rdb_last_bgsave_status]
         }
     }
 }

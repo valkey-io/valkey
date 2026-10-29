@@ -115,6 +115,28 @@ start_server {tags {pathhash}} {
             [r phprefixes tree "${path}x" lengths fields 3 f missing f count 1 exclusive]
     }
 
+    test {PHPREFIXES COUNT pagination matches the full ancestor list} {
+        r del tree
+        foreach path {{} a ab abc abcd abcde abcdef} {r phset tree $path fields 1 f $path}
+        foreach query {abcdef abcdefgh z {}} {
+            set full [r phprefixes tree $query]
+            set boundary $query
+            set options {}
+            set paths {}
+            set pages 0
+            while 1 {
+                set page [r phprefixes tree $boundary count 2 {*}$options]
+                if {[llength $page] == 0} break
+                assert {[llength $page] <= 2}
+                lappend paths {*}$page
+                set boundary [lindex $page end]
+                set options {exclusive}
+                assert {[incr pages] < 10}
+            }
+            assert_equal $full $paths
+        }
+    }
+
     test {PHPREFIXES orders ancestors and applies MAXPATHLEN before deepest COUNT} {
         r del tree
         foreach path {{} a ab abc abcd} {

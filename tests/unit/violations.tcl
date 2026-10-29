@@ -104,3 +104,21 @@ start_server [list overrides [list save ""] ] {
         r llen mylist
     } {2} {cluster:skip}
 }
+
+# SORT BY substitution with a set member >= 2^31 bytes.
+# lookupKeyByPattern() kept the prefix, element, and postfix lengths as int.
+# A member exactly at INT_MAX+1 bytes makes prefixlen+sublen+postfixlen overflow
+# to a negative int, which sign-extends to ~2^64 as size_t and causes an OOM panic.
+run_solo {sort-subst-overflow} {
+start_server [list overrides [list save ""] tags {"sort large-memory"}] {
+    test {SORT BY with a >=2^31-byte element does not overflow and crash} {
+        r config set proto-max-bulk-len 3000000000
+        r config set client-query-buffer-limit 3000000000
+        r write "*3\r\n\$4\r\nSADD\r\n\$6\r\nbigset\r\n"
+        write_big_bulk 2147483649 ;# INT_MAX + 2 bytes, which is >= 2^31
+        # weight_<member> does not exist; the important thing is no crash.
+        r sort bigset by weight_* limit 0 0
+        r ping
+    } {PONG} {cluster:skip}
+}
+} ;# run_solo

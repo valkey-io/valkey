@@ -7204,7 +7204,7 @@ cleanup:
  *     or infrastructure refusal (EAGAIN).
  *     Malformed API calls (EBADF) still return VALKEYMODULE_ERR without callbacks;
  *     these indicate module programming errors rather than command errors.
- *     errno is set before reply dispatch and restored before returning. Callbacks
+ *     errno is set before reply dispatch and again before returning. Callbacks
  *     that change errno must preserve it if subsequent callbacks need its value
  *     (format specifier: "E").
  *   * `VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM`: Respect deny-oom policy when

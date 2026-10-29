@@ -579,6 +579,40 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+start_server {overrides {forkless-infrastructure-enabled yes bgsave-default-method forkless save ""}} {
+    test "ZINTERCARD on a set source during forkless bgsave does not corrupt the snapshot" {
+        # A zset lookup marks its key by rewriting the sds header, which makes
+        # an SDS_TYPE_5 (under 32 bytes) member read as empty. Members over 20
+        # bytes are LZF compressed on save, which keeps the saver slower than
+        # ZINTERCARD so the two pass each other on the same member. The extra
+        # zset member makes s the smaller source, which ZINTERCARD iterates.
+        r eval {
+            for i = 1, 50000 do
+                local m = string.format('member-padding-%010d', i)
+                redis.call('sadd', 's', m)
+                redis.call('zadd', 'z', 0, m)
+            end
+            redis.call('zadd', 'z', 0, 'extra')
+        } 0
+        assert_encoding hashtable s
+        assert_encoding btree z
+        set digest [r debug digest-value s]
+
+        # The race is timing dependent, so give it several saves to show up.
+        for {set i 0} {$i < 10} {incr i} {
+            r bgsave
+            while {[s rdb_bgsave_in_progress]} {
+                for {set j 0} {$j < 10} {incr j} { r zintercard 2 s z }
+            }
+            assert_equal ok [s rdb_last_bgsave_status]
+            # Two corrupted members load as duplicates, so the reload fails.
+            catch {r debug reload nosave} err
+            assert_equal OK $err
+            assert_equal $digest [r debug digest-value s]
+        }
+    } {} {needs:debug}
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "multiple databases modifications during forkless bgsave" {
         

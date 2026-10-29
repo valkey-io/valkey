@@ -146,6 +146,12 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
         double central_lat = atan2(z, central_hyp);
         shape->xy[0] = rad_deg(central_lon);
         shape->xy[1] = rad_deg(central_lat);
+        /* When the vertex longitudes cancel out (e.g. -90 and 90) the centroid is a pole, which geohashEncode()
+         * rejects. Fall back to the center of the bounding box, which is always in range. */
+        if (shape->xy[1] > GEO_LAT_MAX || shape->xy[1] < GEO_LAT_MIN) {
+            shape->xy[0] = (min_lon + max_lon) / 2;
+            shape->xy[1] = (min_lat + max_lat) / 2;
+        }
         return 1;
     }
     double longitude = shape->xy[0];

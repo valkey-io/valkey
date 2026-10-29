@@ -3279,21 +3279,34 @@ void xnackCommand(client *c) {
         return;
     }
 
-    /* Check for trailing options */
+    /* Consume trailing arguments. For compatibility, only the latest option
+     * is used when multiple are present. ex. RETRYCOUNT 1 RETRYCOUNT 2 results
+     * in 2 being used and 1 is ignored. */
     bool force_mode = false;
-    size_t arg_endi = c->argc - 1;
-    if (strcasecmp(objectGetVal(c->argv[arg_endi]), "FORCE") == 0) {
-        force_mode = true;
-        arg_endi--;
-    }
-
     long long retrycount = -1;
-    if (strcasecmp(objectGetVal(c->argv[arg_endi - 1]), "RETRYCOUNT") == 0) {
-        if (getLongLongFromObject(c->argv[arg_endi], &retrycount) != C_OK || retrycount < 0) {
-            addReplyError(c, "value is not an integer or out of range");
-            return;
+    size_t arg_endi = c->argc - 1;
+    while (arg_endi > 6) {
+        if (strcasecmp(objectGetVal(c->argv[arg_endi]), "FORCE") == 0) {
+            force_mode = true;
+            arg_endi--;
+            continue;
         }
-        arg_endi -= 2;
+
+        if (strcasecmp(objectGetVal(c->argv[arg_endi - 1]), "RETRYCOUNT") == 0) {
+            long long parsed_count = -1;
+            if (getLongLongFromObject(c->argv[arg_endi], &parsed_count) != C_OK || parsed_count < 0) {
+                addReplyError(c, "value is not an integer or out of range");
+                return;
+            }
+
+            /* Only use the last value, ie. set once since we're looping in reverse. */
+            if (retrycount < 0) retrycount = parsed_count;
+            arg_endi -= 2;
+            continue;
+        }
+
+        /* Neither FORCE, nor RETRYCOUNT, thus must be stream message ID */
+        break;
     }
 
     /* Parse and validate fragment: IDS <numids> */

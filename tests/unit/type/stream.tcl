@@ -1609,6 +1609,20 @@ start_server {
 
         # No hits
         assert_equal 0 [r XNACK mystream mygroup SILENT IDS 3 97-0 98-0 99-0]
+
+        # Trailing options work in any order
+        assert {[catch {r XNACK mystream mygroup FAIL IDS 1 1-0 FORCE RETRYCOUNT 10}] == 0}
+        assert_equal 10 [lindex [r XPENDING mystream mygroup - + 10] 0 3]
+        assert {[catch {r XNACK mystream mygroup FAIL IDS 1 1-0 RETRYCOUNT 9 FORCE}] == 0}
+        assert_equal 9 [lindex [r XPENDING mystream mygroup - + 10] 0 3]
+
+        # Repeat trailing options use the last value
+        assert {[catch {r XNACK mystream mygroup FAIL IDS 1 1-0 RETRYCOUNT 7 FORCE FORCE FORCE RETRYCOUNT 6}] == 0}
+        assert_equal 6 [lindex [r XPENDING mystream mygroup - + 10] 0 3]
+
+        # Each retry count (when repeated) is checked
+        assert_error "*value is not an integer or out of range*" {r XNACK mystream mygroup SILENT IDS 1 1-0 RETRYCOUNT 10 RETRYCOUNT bad}
+        assert_error "*value is not an integer or out of range*" {r XNACK mystream mygroup SILENT IDS 1 1-0 RETRYCOUNT bad RETRYCOUNT 10}
     }
 
     test {XNACK modes affect delivery count appropriately} {

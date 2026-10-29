@@ -619,6 +619,30 @@ TEST_F(ThrottleTest, removeClient) {
     freeFakeClient(c2);
 }
 
+/* The IO-thread read path can call processPendingCommandAndInputBuffer() again on a client
+ * whose command was just throttled. throttle_checked is still set, so processCommand() would
+ * skip the throttle check and execute the command, and the throttler would execute it again on
+ * release. */
+TEST_F(ThrottleTest, throttledClientIsNotReprocessed) {
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(Return(1));
+    client *c = createFakeClient(1, true);
+    EXPECT_TRUE(throttle_throttleClientIfNeeded(c));
+    EXPECT_TRUE(clientIsThrottled(c));
+
+    EXPECT_CALL(mock, processCommand(_)).Times(0);
+    EXPECT_EQ(processPendingCommandAndInputBuffer(c), C_OK);
+    EXPECT_TRUE(clientIsThrottled(c));
+    EXPECT_EQ(c->flag.pending_command, 1ULL);
+
+    EXPECT_CALL(mock, aeDeleteTimeEvent(_, _)).WillOnce(Return(AE_OK));
+    throttle_removeClient(c);
+    throttle_deregister(t);
+    freeFakeClient(c);
+}
+
 /* ---- Death tests ---- */
 
 TEST_F(ThrottleDeathTest, deregisterThrottlerFail) {

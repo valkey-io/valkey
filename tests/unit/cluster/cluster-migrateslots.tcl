@@ -1331,6 +1331,34 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Swapdb full sync of a replica during import keeps the import" {
+        populate 500 "$16383_slot_tag:1:" 1000 -2
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+        wait_for_countkeysinslot 3 16383 500
+
+        # Full sync the replica while its old dataset holds the importing keys.
+        test_config_set {R 3} repl-diskless-load swapdb
+        set syncs [status [Rn 0] sync_full]
+        R 0 DEBUG CHANGE-REPL-ID
+        R 0 CLIENT KILL TYPE replica
+        wait_for_condition 100 100 {
+            [status [Rn 0] sync_full] > $syncs && [status [Rn 3] master_link_status] eq "up"
+        } else {
+            fail "Replica did not full sync"
+        }
+        assert_equal "occurring-on-primary" [dict get [get_migration_by_name 3 $jobname] state]
+
+        set_debug_prevent_pause 0
+        wait_for_migration 0 16383
+        wait_for_countkeysinslot 3 16383 500
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
     test "Partial data in replica removed on failover" {
         # Load some data before the snapshot
         populate 500 "$16383_slot_tag:1:" 1000 -2

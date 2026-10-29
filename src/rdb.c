@@ -3819,7 +3819,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             }
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_SLOT_IMPORT) {
-            if (clusterRDBLoadSlotImport(rdb) == C_ERR) goto eoferr;
+            if (clusterRDBLoadSlotImport(rdb, rdb_loading_ctx->dbarray) == C_ERR) goto eoferr;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB

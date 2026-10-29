@@ -100,7 +100,8 @@ static bool isSlotMigrationJobInProgress(slotMigrationJob *job);
 static slotMigrationJob *createSlotImportJob(client *c,
                                              clusterNode *source_node,
                                              char *name,
-                                             list *slot_ranges);
+                                             list *slot_ranges,
+                                             serverDb **dbarray);
 static int connectSlotExportJob(slotMigrationJob *job);
 static const char *slotMigrationJobStateToString(slotMigrationJobState state);
 static void updateSlotMigrationJobState(slotMigrationJob *job,
@@ -396,8 +397,8 @@ int clusterRDBSaveSlotImports(rio *rdb, int rdbver) {
     return C_OK;
 }
 
-/* Load a single slot import from the RDB. */
-int clusterRDBLoadSlotImport(rio *rdb) {
+/* Load a single slot import from the RDB into dbarray. */
+int clusterRDBLoadSlotImport(rio *rdb, serverDb **dbarray) {
     robj *job_name = NULL;
     list *slot_ranges = createSlotRangeList();
     uint64_t num_slot_ranges;
@@ -423,7 +424,7 @@ int clusterRDBLoadSlotImport(rio *rdb) {
         slot_range->end_slot = end_slot;
         listAddNodeTail(slot_ranges, slot_range);
     }
-    slotMigrationJob *new_import = createSlotImportJob(NULL, NULL, objectGetVal(job_name), slot_ranges);
+    slotMigrationJob *new_import = createSlotImportJob(NULL, NULL, objectGetVal(job_name), slot_ranges, dbarray);
     listAddNodeTail(server.cluster->slot_migration_jobs, new_import);
     decrRefCount(job_name);
     return C_OK;
@@ -650,7 +651,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
         goto cleanup;
     }
 
-    slotMigrationJob *job = createSlotImportJob(c, source_node, name, slot_ranges);
+    slotMigrationJob *job = createSlotImportJob(c, source_node, name, slot_ranges, server.db);
     fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED);
     listAddNodeHead(server.cluster->slot_migration_jobs, job);
 
@@ -820,7 +821,8 @@ void clusterCommandSyncSlotsFinish(client *c) {
 slotMigrationJob *createSlotImportJob(client *c,
                                       clusterNode *source_node,
                                       char *name,
-                                      list *slot_ranges) {
+                                      list *slot_ranges,
+                                      serverDb **dbarray) {
     slotMigrationJob *job = zcalloc(sizeof(slotMigrationJob));
     memcpy(job->name, name, CLUSTER_NAMELEN);
     job->ctime = server.unixtime;
@@ -831,8 +833,10 @@ slotMigrationJob *createSlotImportJob(client *c,
     job->slot_ranges_str = representSlotRangeList(slot_ranges);
     job->description = generateSlotMigrationJobDescription(job, source_node);
 
-    /* Mark all the slots as importing in the kvstore */
-    setSlotImportingStateInAllDbs(slot_ranges, 1);
+    /* Mark all the slots as importing in the kvstore. During a swapdb load,
+     * dbarray is the temporary db, not server.db, which still holds the old
+     * dataset. */
+    for (int i = 0; i < server.dbnum; i++) setSlotImportingStateInDb(dbarray[i], slot_ranges, 1);
 
     serverLog(LL_NOTICE, "New slot import job created: %s.", job->description);
 
@@ -1061,11 +1065,6 @@ void cleanupSlotImportsWithReason(char *reason) {
  * afterwards will it send a FINISH notification to its replicas. */
 void clusterCleanSlotImportsOnPromotion(void) {
     cleanupSlotImportsWithReason("A failover occurred during slot import");
-}
-
-/* Cleanup all active imports on resyncing with a primary. */
-void clusterCleanSlotImportsOnFullSync(void) {
-    cleanupSlotImportsWithReason("Full resynchronization occurred");
 }
 
 /* Remove all slot migrations in anticipation for a load. */

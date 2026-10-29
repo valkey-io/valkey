@@ -6290,7 +6290,8 @@ static int64_t latencyValueAtPercentile(const struct hdr_histogram *h,
 
 /* Fill percentile distribution of latencies. */
 sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram) {
-    int32_t min_idx = latencyHistogramIndexOf(histogram, histogram->min_value);
+    /* hdr_min() instead of min_value, which does not track recorded zeros. */
+    int32_t min_idx = latencyHistogramIndexOf(histogram, hdr_min(histogram));
     int32_t max_idx = latencyHistogramIndexOf(histogram, histogram->max_value);
     info = sdscatfmt(info, "latency_percentiles_usec_%s:", histogram_name);
     for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {

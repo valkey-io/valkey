@@ -106,6 +106,14 @@ TEST_F(LatencyPercentilesTest, MinAndMaxRange) {
     checkLine();
 }
 
+TEST_F(LatencyPercentilesTest, ZeroValues) {
+    /* updateCommandLatencyHistogram() never records 0, so record it directly.
+     * hdr does not track 0 in min_value. */
+    record(5000, 4);
+    for (int i = 0; i < 6; i++) hdr_record_value(histogram, 0);
+    checkLine();
+}
+
 TEST_F(LatencyPercentilesTest, BodyWithSlowOutlier) {
     /* The common shape: fast calls plus one slow call, so p99.9 is the max. */
     srand(1);

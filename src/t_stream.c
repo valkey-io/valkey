@@ -215,7 +215,7 @@ robj *streamDup(robj *o) {
         raxSeek(&ri_cg_pel, "^", NULL, 0);
         while (raxNext(&ri_cg_pel)) {
             streamNACK *nack = ri_cg_pel.data;
-            streamNACK *new_nack = streamCreateNACK(NULL, 1);
+            streamNACK *new_nack = streamCreateNACK(NULL);
             new_nack->delivery_time = nack->delivery_time;
             new_nack->delivery_count = nack->delivery_count;
             raxInsert(new_cg->pel, ri_cg_pel.key, sizeof(streamID), new_nack, NULL);
@@ -1805,7 +1805,7 @@ size_t streamReplyWithRange(client *c,
             /* Try to add a new NACK. Most of the time this will work and
              * will not require extra lookups. We'll fix the problem later
              * if we find that there is already an entry for this ID. */
-            streamNACK *nack = streamCreateNACK(consumer, 1);
+            streamNACK *nack = streamCreateNACK(consumer);
             int group_inserted = raxTryInsert(group->pel, buf, sizeof(buf), nack, NULL);
             int consumer_inserted = raxTryInsert(consumer->pel, buf, sizeof(buf), nack, NULL);
 
@@ -2564,10 +2564,10 @@ cleanup: /* Cleanup. */
 /* Create a NACK entry setting the delivery count to 1 and the delivery
  * time to the current time. The NACK consumer will be set to the one
  * specified as argument of the function. */
-streamNACK *streamCreateNACK(streamConsumer *consumer, uint64_t delivery_count) {
+streamNACK *streamCreateNACK(streamConsumer *consumer) {
     streamNACK *nack = zmalloc(sizeof(*nack));
     nack->delivery_time = commandTimeSnapshot();
-    nack->delivery_count = delivery_count;
+    nack->delivery_count = 1;
     nack->consumer = consumer;
     return nack;
 }
@@ -3332,7 +3332,9 @@ void xnackCommand(client *c) {
              * 1 (a real delivery), but a FORCE-created entry was never
              * delivered, so start from 0 before the mode/retrycount logic
              * below. */
-            result = streamCreateNACK(NULL, 0);
+            streamNACK *new_nack = streamCreateNACK(NULL);
+            new_nack->delivery_count = 0;
+            result = (void *)new_nack;
             raxInsert(group->pel, buf, sizeof(buf), result, NULL);
         }
 
@@ -3598,7 +3600,7 @@ void xclaimCommand(client *c) {
          * and replication of consumer groups. */
         if (force && nack == NULL) {
             /* Create the NACK. */
-            nack = streamCreateNACK(NULL, 1);
+            nack = streamCreateNACK(NULL);
             raxInsert(group->pel, buf, sizeof(buf), nack, NULL);
         }
 

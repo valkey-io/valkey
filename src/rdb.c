@@ -3159,7 +3159,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     decrRefCount(o);
                     return NULL;
                 }
-                streamNACK *nack = streamCreateNACK(NULL, 0);
+                streamNACK *nack = streamCreateNACK(NULL);
                 nack->delivery_time = rdbLoadMillisecondTime(rdb, RDB_VERSION);
                 nack->delivery_count = rdbLoadLen(rdb, NULL);
                 if (rioGetReadError(rdb)) {

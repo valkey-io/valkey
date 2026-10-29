@@ -694,7 +694,7 @@ jobs:
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: |
-          ./build-release/runtest-sentinel --failures-output test-failures/sentinel.json --tls-module ${{github.event.inputs.cluster_test_args}}
+          ./build-release/runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures

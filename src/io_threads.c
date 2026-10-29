@@ -373,6 +373,23 @@ static inline void processTaggedSPMCJob(void *tagged_job) {
     }
 }
 
+/* CPU pause hint for the polling loop: reduces pipeline and cache pressure
+ * while spinning on shared queue state, giving the producer (main thread)
+ * better access to the contended cache lines. */
+#if defined(__x86_64__) || defined(__i386__)
+#define ioThreadCpuRelax() __builtin_ia32_pause()
+#elif defined(__aarch64__) || defined(__arm__)
+#define ioThreadCpuRelax() __asm__ __volatile__("yield")
+#else
+#define ioThreadCpuRelax() ((void)0)
+#endif
+
+/* How many consecutive empty polls before an IO thread visits its park gate
+ * (io_threads_mutex). The gate is uncontended unless the main thread wants to
+ * suspend this thread, so visiting it rarely only delays suspension by
+ * microseconds while removing a mutex lock/unlock pair from every empty poll. */
+#define IO_THREAD_PARK_CHECK_MASK 0x3FF /* every 1024 empty polls */
+
 static void *IOThreadMain(void *myid) {
     /* The ID is the thread ID number (from 1 to server.io_threads_num-1). ID 0 is the main thread. */
     long id = (long)myid;
@@ -386,22 +403,18 @@ static void *IOThreadMain(void *myid) {
     pthread_cleanup_push(cleanupThreadResources, NULL);
 
     void *batch_jobs[BATCH_SIZE];
-    int processed = 0;
-    monotime work_start_time = 0;
+    unsigned long idle_polls = 0;
     while (1) {
-        /* Cancellation point so that pthread_cancel() from main thread is honored. */
-        pthread_testcancel();
         size_t batch_count = 0;
-        monotime prev_work_start_time = work_start_time;
-        work_start_time = getMonotonicUs();
-        if (processed != 0) {
-            atomic_fetch_add_explicit(&used_active_time_io_thread[id].value,
-                                      work_start_time - prev_work_start_time,
-                                      memory_order_relaxed);
-        }
-        processed = 0;
+        int processed = 0;
+        /* Timestamps are taken only around actual work: on the first
+         * successful dequeue and after processing. Empty polls stay free of
+         * clock reads. */
+        monotime work_start_time = 0;
+
         /* PRIORITY 1: Drain Private SPSC Queue (Batch Processing) */
         while ((batch_count = spscDequeueBatch(&io_private_inbox[id], batch_jobs, BATCH_SIZE)) > 0) {
+            if (!work_start_time) work_start_time = getMonotonicUs();
             for (size_t i = 0; i < batch_count; i++) {
                 void *data;
                 int type;
@@ -425,31 +438,46 @@ static void *IOThreadMain(void *myid) {
          * Only checked after SPSC is drained. */
         void *tagged_job;
         if ((tagged_job = spmcDequeue(&io_shared_inbox[JOB_PRIORITY_HIGH])) != NULL) {
+            if (!work_start_time) work_start_time = getMonotonicUs();
             processTaggedSPMCJob(tagged_job);
             processed++;
         }
 
         if ((tagged_job = spmcDequeue(&io_shared_inbox[JOB_PRIORITY_NORMAL])) != NULL) {
+            if (!work_start_time) work_start_time = getMonotonicUs();
             processTaggedSPMCJob(tagged_job);
             processed++;
         }
 
+        /* Cancellation points: pthread_cancel() from the main thread is
+         * honored on every path except the pure spin below, which is bounded
+         * to IO_THREAD_PARK_CHECK_MASK iterations before the park-gate visit.
+         * This keeps cancel latency bounded even when the queues stay busy
+         * (e.g. crash teardown via killIOThreads(), which does not drain them
+         * first) while keeping hot empty polls free of the call. */
         if (processed) {
+            idle_polls = 0;
             atomic_fetch_add_explicit(&io_jobs_finished.value, processed, memory_order_release);
-        }
-
-        /* If both queues were empty (no processing done), wait for signal. */
-        if (processed == 0) {
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id].value,
+                                      getMonotonicUs() - work_start_time,
+                                      memory_order_relaxed);
+            pthread_testcancel();
+        } else {
+            /* Both queues were empty (no processing done). */
             int has_pending = 0;
             for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
                 if (pending_io_responses[p]) has_pending = 1;
             }
             if (unlikely(has_pending)) {
                 flushPendingIOResponses(0);
-            } else {
+                pthread_testcancel();
+            } else if ((++idle_polls & IO_THREAD_PARK_CHECK_MASK) == 0) {
                 /* If it is locked. We should block until main thread unlocks it. */
                 pthread_mutex_lock(&io_threads_mutex[id]);
                 pthread_mutex_unlock(&io_threads_mutex[id]);
+                pthread_testcancel();
+            } else {
+                ioThreadCpuRelax();
             }
         }
     }

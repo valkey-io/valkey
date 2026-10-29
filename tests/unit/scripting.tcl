@@ -101,6 +101,12 @@ start_server {tags {"scripting"}} {
         r get x
     } {}
 
+    test {EVAL - Return or raise error table with a metatable that raises error} {
+        catch {run_script {return setmetatable({err='x'}, {__index=function() error('boom') end})} 0}
+        catch {run_script {error(setmetatable({}, {__index=function() error('boom') end}))} 0}
+        r ping
+    } {PONG}
+
     test {EVAL - Lua integer -> Redis protocol type conversion} {
         run_script {return 100.5} 0
     } {100}

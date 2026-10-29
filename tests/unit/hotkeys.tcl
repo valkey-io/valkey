@@ -413,6 +413,7 @@ start_server {tags {"hotkey external:skip"}} {
         hk_enable
         r flushall sync
         r debug set-active-expire 0
+        test_defer_fail {r debug set-active-expire 1}
 
         # One key, one DEL per state, hotkeys reset in between: the DEL is then
         # the only charge in its window, so a broken path leaves it unreported.
@@ -438,6 +439,6 @@ start_server {tags {"hotkey external:skip"}} {
         r del "del_key"
         assert_equal [hk_names [hk_wait_hotkeys]] {del_key}
 
-        test_defer_fail {r debug set-active-expire 1}
+        r debug set-active-expire 1
     }
 }

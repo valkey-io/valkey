@@ -224,6 +224,48 @@ start_server_and_kill_it [list "dir" $server_path] {
     }
 }
 
+# A primary skips an expired set member while loading, so a repeated member
+# whose first copy has expired must still be detected.
+set server_path [tmpdir "server.rdb-set-dup-test"]
+set dump_path [file join $server_path dump.rdb]
+
+start_server [list overrides [list "dir" $server_path rdbchecksum no] keep_persistence true] {
+    test {Save a set whose first member has expired} {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        r SADDEX myset PX 1 MEMBERS 1 aa
+        r SADDEX myset EX 100000 MEMBERS 1 ab
+        wait_for_condition 100 10 {
+            [r SISMEMBER myset aa] == 0
+        } else {
+            fail "aa did not expire"
+        }
+        r SAVE
+    } {OK} {needs:debug}
+}
+
+# Rename ab to aa. The RDB was saved without a checksum, so the edit loads.
+set fd [open $dump_path r]
+fconfigure $fd -translation binary
+set content [read $fd]
+close $fd
+set pos [string first "[binary format c 2]ab" $content]
+assert_morethan $pos -1
+set fd [open $dump_path w]
+fconfigure $fd -translation binary
+puts -nonewline $fd [string replace $content [expr {$pos + 1}] [expr {$pos + 2}] aa]
+close $fd
+
+start_server_and_kill_it [list "dir" $server_path] {
+    test {Server should not start if a set repeats a member whose first copy expired} {
+        wait_for_condition 50 100 {
+            [string match {*Duplicate set members detected*} \
+                [exec tail -10 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though a set repeats a member!"
+        }
+    }
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     foreach bgsave_type {"fork" "forkless"} {
         test "Test FLUSHALL aborts bgsave $bgsave_type" {

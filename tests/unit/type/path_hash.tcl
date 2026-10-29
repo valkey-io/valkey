@@ -176,6 +176,22 @@ start_server {tags {pathhash}} {
         assert_equal [list {} $p0 $sibling] [lindex [r phscan tree 0 count 100] 1]
     }
 
+    test {PHPATHDEL exact mode preserves binary descendants and sibling paths} {
+        r del del-tree
+        set path [binary format H* 0061ff]
+        set child "${path}\x00"
+        set sibling [binary format H* 0062ff]
+        foreach p [list {} $path $child $sibling] {r phset del-tree $p fields 2 f one g two}
+        assert_equal 1 [r phpathdel del-tree $path]
+        assert_equal 0 [r phpathdel del-tree $path]
+        assert_equal 3 [r phcard del-tree]
+        foreach p [list {} $child $sibling] {assert_equal {one two} [r phget del-tree $p f g]}
+        assert_equal 1 [r phpathdel del-tree {}]
+        assert_equal 2 [r phcard del-tree]
+        assert_equal 1 [r phpathdel del-tree $child]
+        assert_equal {one two} [r phget del-tree $sibling f g]
+    }
+
     test {PHDEL removes fields, prunes empty payloads, and preserves descendants} {
         r del tree
         r phset tree a fields 2 f1 v1 f2 v2
@@ -735,6 +751,30 @@ start_server {tags {pathhash external:skip}} {
         set primary_host [srv -1 host]
         set primary_port [srv -1 port]
         set replica [srv 0 client]
+
+        test {PHPATHDEL exact deletion replicates binary paths without removing descendants} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {[s 0 master_link_status] eq {up}} else {
+                fail "Replication not started"
+            }
+            set path [binary format H* 0061ff]
+            set child "${path}\x00"
+            $primary phmset exact-tree $path fields 2 f one g two \
+                $child fields 1 f child {} fields 1 f root
+            wait_for_ofs_sync $primary $replica
+            assert_equal 3 [$replica phcard exact-tree]
+            assert_equal 1 [$primary phpathdel exact-tree $path]
+            assert_equal 0 [$primary phpathdel exact-tree $path]
+            wait_for_ofs_sync $primary $replica
+            assert_equal 0 [$replica phexists exact-tree $path]
+            assert_equal {child} [$replica phget exact-tree $child f]
+            assert_equal {root} [$replica phget exact-tree {} f]
+            assert_equal 2 [$replica phcard exact-tree]
+            assert_equal 1 [$primary phpathdel exact-tree {}]
+            wait_for_ofs_sync $primary $replica
+            assert_equal 1 [$replica phcard exact-tree]
+            assert_equal {child} [$replica phget exact-tree $child f]
+        }
 
         test {Path Hash writes, conditional no-ops, and subtree deletes replicate} {
             $replica replicaof $primary_host $primary_port

@@ -75,6 +75,11 @@ void syncWithPrimary(connection *conn);
  * the instance is configured to have no persistence. */
 int RDBGeneratedByReplication = 0;
 
+/* Bumped by every cancelReplicationHandshake(). Loading a primary RDB from
+ * disk processes events, and one of them (e.g. a cluster bus message that
+ * moves us to a new primary) can cancel the sync being loaded. */
+static unsigned long long repl_handshake_cancellations = 0;
+
 /* --------------------------- Utility functions ---------------------------- */
 ConnectionType *connTypeOfReplication(void) {
     if (server.tls_replication) {
@@ -2988,7 +2993,14 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
      * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
+    unsigned long long cancellations = repl_handshake_cancellations;
     int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
+    if (retval == RDB_OK && cancellations != repl_handshake_cancellations) {
+        /* The sync was cancelled during the load. Its transfer state is gone
+         * or belongs to a newer sync, so don't finalize it. */
+        serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Sync was cancelled while loading the DB");
+        retval = RDB_FAILED;
+    }
 
     if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
@@ -4952,6 +4964,7 @@ void replicationAbortSyncTransfer(void) {
  *
  * Otherwise, zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
+    repl_handshake_cancellations++;
     if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
         /* Wait for the disk-saving bio thread to notice the abort flag
          * and exit. If it is blocked in a socket read this stalls the

@@ -80,3 +80,44 @@ test "Instance #0, #1, #2 gets converted into a slaves" {
 }
 
 } ;# start_cluster
+
+start_cluster 1 2 {tags {external:skip cluster} overrides {repl-diskless-load disabled}} {
+    test "Replica resyncs when its primary changes while it loads a full sync" {
+        # DEBUG POPULATE does not propagate, so give replica 2 the same keys.
+        R 0 debug populate 100000 key 100
+        R 2 debug populate 100000 key 100
+        # Slow the load on replica 1 so the takeover lands mid-load, then
+        # force it into a full sync.
+        R 1 config set key-load-delay 50
+        R 1 config set loading-process-events-interval-bytes 1024
+        R 0 debug change-repl-id
+        R 1 client kill type primary
+        wait_for_condition 100 50 {
+            [s -1 loading] eq 1
+        } else {
+            fail "Replica did not start loading"
+        }
+
+        # A write the snapshot replica 1 is loading does not have.
+        R 0 set foo bar
+        wait_for_ofs_sync [srv 0 client] [srv -2 client]
+
+        # The new primary's slot claim reaches replica 1 over the cluster bus
+        # while it is still loading.
+        R 2 cluster failover takeover
+        wait_for_condition 1000 50 {
+            [s -1 loading] eq 0
+        } else {
+            fail "Replica did not finish loading"
+        }
+        R 1 config set key-load-delay 0
+
+        wait_for_condition 1000 50 {
+            [catch {R 1 dbsize} size] == 0 && $size == 100001
+        } else {
+            fail "Replica kept the old primary's dataset"
+        }
+        # The takeover must have landed mid-load for this test to mean anything.
+        verify_log_message -1 "*Sync was cancelled while loading the DB*" 0
+    }
+}

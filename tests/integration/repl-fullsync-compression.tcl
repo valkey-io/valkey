@@ -3,9 +3,9 @@
 # (truncation, corruption, premature EOF, non-capable replicas), and byte
 # accounting. Transport policy: repl-diskless-sync alone selects disk vs socket for
 # replicas that advertise EOF; a replica without EOF is always served from a file.
-# Codec policy: a round runs in the codec its replicas negotiated, except that a
-# replica which cannot decode any codec degrades the whole round to plaintext so it
-# can join instead of waiting for a round of its own.
+# Codec policy: each round runs in the codec its replicas negotiated, so replicas
+# that negotiated different codecs are served by separate rounds and a replica that
+# cannot decode any codec never downgrades the others to plaintext.
 
 # --- helpers --------------------------------------------------------------
 
@@ -225,7 +225,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
     $primary config set repl-diskless-sync no
     $primary config set rdb-del-sync-files no
 
-    test {A replica that cannot decode compression degrades the shared disk round to plaintext} {
+    test {A replica that cannot decode compression is served by its own plaintext disk round} {
         $primary config set rdbcompression lz4
         $primary config set repl-compression lz4
         # Enough keys so the manual BGSAVE stays alive for both replicas to register.
@@ -246,16 +246,15 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
                 park_replicas_for_grouped_bgsave \
                     $primary $capable $plain $primary_host $primary_port
 
-                assert_replica_synced $primary $capable "(plaintext degradation capable)"
-                assert_replica_synced $primary $plain "(plaintext degradation plain)"
+                assert_replica_synced $primary $capable "(split codes capable)"
+                assert_replica_synced $primary $plain "(split codes plain)"
 
-                # The incapable replica joins the round instead of waiting for one of
-                # its own, so the single round is served uncompressed to both. The
-                # capable replica still gets compression on the incremental stream.
-                assert_equal 1 [expr {[count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before}]
+                # The incapable replica is not swept into the lz4 round and the lz4
+                # replica is not downgraded to plaintext: each codec is served by a
+                # disk round of its own.
+                assert_equal 2 [expr {[count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before}]
                 assert_equal 1 [expr {[count_log_message -2 "target: disk using: .*compression: none"] - $plain_before}]
-                assert_equal 0 [expr {[count_log_message -2 "target: disk using: .*compression: lz4"] - $lz4_before}]
-                assert_equal 0 [rdb_is_compressed $primary]
+                assert_equal 1 [expr {[count_log_message -2 "target: disk using: .*compression: lz4"] - $lz4_before}]
 
                 $plain replicaof no one
                 $capable replicaof no one
@@ -738,10 +737,10 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
     }
 }
 # Mixed diskless cohort (one capable, one not): both park in WAIT_BGSAVE_START, so
-# the incapable replica degrades the single round to plaintext instead of being
-# served separately. Transport still follows repl-diskless-sync (on), so the round
-# streams over sockets, uncompressed. A slow manual BGSAVE occupies the child slot
-# so both replicas park together, exercising the decision deterministically.
+# each codec gets a diskless round of its own instead of the incapable replica
+# downgrading the capable one. Transport still follows repl-diskless-sync (on), so
+# both rounds stream over sockets. A slow manual BGSAVE occupies the child slot so
+# both replicas park together, exercising the decision deterministically.
 start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
@@ -756,21 +755,23 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
         start_server {overrides {save "" repl-compression no repl-diskless-load swapdb}} {
             set replica_plain [srv 0 client]
 
-            test {Mixed diskless cohort degrades the shared round to plaintext} {
+            test {Mixed diskless cohorts are streamed by codec in separate rounds} {
                 set rounds_before [count_log_message -2 {Starting BGSAVE for SYNC}]
                 set sockets_before [count_log_message -2 {target: replicas sockets}]
-                set compr_before [count_log_message -2 {target: replicas sockets using: .*compression: lz4}]
+                set lz4_before [count_log_message -2 {target: replicas sockets using: .*compression: lz4}]
+                set none_before [count_log_message -2 {target: replicas sockets using: .*compression: none}]
 
                 park_replicas_for_grouped_bgsave $primary $replica_capable $replica_plain $primary_host $primary_port
 
                 assert_replica_synced $primary $replica_capable "(mixed diskless capable)"
                 assert_replica_synced $primary $replica_plain "(mixed diskless plain)"
 
-                # One diskless round, served uncompressed to both: the incapable
-                # replica joins it rather than getting a plaintext round of its own.
-                assert_equal 1 [expr {[count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before}]
-                assert_equal 1 [expr {[count_log_message -2 {target: replicas sockets}] - $sockets_before}]
-                assert_equal 0 [expr {[count_log_message -2 {target: replicas sockets using: .*compression: lz4}] - $compr_before}]
+                # Two diskless rounds, one per codec: the incapable replica is not
+                # swept into the lz4 round and the capable replica keeps lz4.
+                assert_equal 2 [expr {[count_log_message -2 {Starting BGSAVE for SYNC}] - $rounds_before}]
+                assert_equal 2 [expr {[count_log_message -2 {target: replicas sockets}] - $sockets_before}]
+                assert_equal 1 [expr {[count_log_message -2 {target: replicas sockets using: .*compression: lz4}] - $lz4_before}]
+                assert_equal 1 [expr {[count_log_message -2 {target: replicas sockets using: .*compression: none}] - $none_before}]
 
                 $replica_plain replicaof no one
                 $replica_capable replicaof no one

@@ -1288,13 +1288,13 @@ compressionAlgo replSelectFullSyncCompression(int replica_capa) {
 
 /* Whether a replica waiting for a full sync belongs to the cohort described by the
  * given requirements, RDB version and codec, i.e. whether it can share that sync.
- * A plaintext round serves every replica, since every replica reads a plain RDB; a
- * compressed round only serves replicas that negotiated that same codec. Replicas
- * that don't match keep waiting for their own round, so a replica that cannot
- * decode the current payload never changes what the others receive. */
+ * A round is written in a single codec, so only replicas that negotiated exactly
+ * that codec join it and the others keep waiting for a round of their own. This
+ * keeps a replica that cannot decode compression from downgrading the round: it
+ * is served by a separate plaintext round instead. */
 bool isReplicaInCohort(client *replica, int req, int rdbver, compressionAlgo compr) {
-    if (replica->repl_data->replica_req != req || replicaRdbVersion(replica) != rdbver) return false;
-    return compr == ALGO_NONE || replSelectFullSyncCompression(replica->repl_data->replica_capa) == compr;
+    return replica->repl_data->replica_req == req && replicaRdbVersion(replica) == rdbver &&
+           replSelectFullSyncCompression(replica->repl_data->replica_capa) == compr;
 }
 
 /* Bitwise AND of the capabilities of the replicas waiting for the round described
@@ -1600,17 +1600,18 @@ void syncCommand(client *c) {
         }
         /* To attach this replica, we check that it has at least all the
          * capabilities of the replica that triggered the current BGSAVE, its
-         * exact requirements and RDB version, and that it can decode the codec the
-         * save is being written in (server.rdb_child_sync_algo). Compression
-         * capability bits are masked out of the superset check so that check
-         * concerns only the non-compression capabilities. A replica that can't
-         * decode the in-progress file can't reuse it, so it waits for the next
-         * BGSAVE, which will then serve it alone. */
+         * exact requirements and RDB version, and that its negotiated wire codec
+         * equals the codec the save is being written in
+         * (server.rdb_child_sync_algo), since the file is sent verbatim.
+         * Compression capability bits are masked out of the superset check so that
+         * check concerns only the non-compression capabilities. A replica that
+         * negotiated another codec can't reuse the in-progress file, so it waits
+         * for the next BGSAVE, which will then serve it alone. */
         int trigger_capa = ln ? (replica->repl_data->replica_capa & ~REPLICA_CAPA_COMPRESSION_MASK) : 0;
         if (ln && ((c->repl_data->replica_capa & trigger_capa) == trigger_capa) &&
             c->repl_data->replica_req == replica->repl_data->replica_req &&
             replicaRdbVersion(c) == server.rdb_child_rdbver &&
-            replicaAcceptsCompressionAlgorithm(c->repl_data->replica_capa, server.rdb_child_sync_algo)) {
+            replSelectFullSyncCompression(c->repl_data->replica_capa) == server.rdb_child_sync_algo) {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
@@ -6050,32 +6051,23 @@ int shouldStartChildReplication(int *req_out, int *rdbver_out, compressionAlgo *
         int rdbver = 0;
         int req = 0;
         compressionAlgo compr = ALGO_NONE;
-        int first = 1;
-        int plaintext_required = 0;
         listNode *ln;
         listIter li;
 
         /* Pick the requirements, RDB version and codec of the round from the first
-         * waiting replica. A replica that can't decode any codec needs a plaintext
-         * payload, and a plaintext payload can be read by every replica, so such a
-         * replica degrades the whole round instead of waiting for a separate one. */
+         * waiting replica. Only replicas that match all three join that round; a
+         * replica that negotiated a different codec waits for a round of its own,
+         * so a replica without compression capability never downgrades the round
+         * for the replicas that have one. */
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
             if (replica->repl_data->repl_state != REPLICA_STATE_WAIT_BGSAVE_START) continue;
-            if (first) {
-                req = replica->repl_data->replica_req;
-                rdbver = replicaRdbVersion(replica);
-                compr = replSelectFullSyncCompression(replica->repl_data->replica_capa);
-                first = 0;
-            } else if (replica->repl_data->replica_req != req || replicaRdbVersion(replica) != rdbver) {
-                continue;
-            }
-            if (replSelectFullSyncCompression(replica->repl_data->replica_capa) == ALGO_NONE) {
-                plaintext_required = 1;
-            }
+            req = replica->repl_data->replica_req;
+            rdbver = replicaRdbVersion(replica);
+            compr = replSelectFullSyncCompression(replica->repl_data->replica_capa);
+            break;
         }
-        if (plaintext_required) compr = ALGO_NONE;
 
         /* Count the members of the round and how long the oldest one has been
          * waiting. */

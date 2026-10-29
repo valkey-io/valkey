@@ -1446,6 +1446,30 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         r ACL LOAD
         assert {[r ACL DIGEST] ne $digest}
     }
+
+    test {ACL LOAD disconnects default user clients subscribed to revoked channels} {
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        set rd [valkey_deferring_client]
+        $rd SUBSCRIBE secret
+        $rd read
+
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* resetchannels &public +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        r AUTH alice alice
+        r PUBLISH secret test-message
+        catch {$rd read} e
+        assert_match {*I/O error*} $e
+        $rd close
+    }
 }
 
 set server_path [tmpdir "resetchannels.acl"]

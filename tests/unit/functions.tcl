@@ -1058,6 +1058,28 @@ start_server {tags {"scripting"}} {
 }
 
 start_server {tags {"scripting"}} {
+    test {FUNCTION RESTORE applies the load timeout} {
+        # Swap a dumped library body for a same-length endless loop.
+        set lib "#!lua name=lib\nserver.register_function('f', function() return 1 end)"
+        set loop [format "%-*s" [string length $lib] "#!lua name=lib\nwhile 1 do end"]
+        r config set rdbcompression no
+        r function load $lib
+        set payload [string map [list $lib $loop] [r function dump]]
+        r debug set-skip-checksum-validation 1
+
+        # Read the reply without blocking, since an unbounded load never answers.
+        set rd [valkey_deferring_client]
+        $rd function restore $payload REPLACE
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        wait_for_condition 50 100 {[gets $fd reply] > 0} else {
+            fail "FUNCTION RESTORE did not return"
+        }
+        assert_match {*FUNCTION LOAD timeout*} $reply
+    } {} {needs:debug}
+}
+
+start_server {tags {"scripting"}} {
     test {FUNCTION - wrong flags type named arguments} {
         catch {r function load replace {#!lua name=test
             server.register_function{

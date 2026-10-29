@@ -375,12 +375,12 @@ start_server {tags {"repl"} overrides {save ""}} {
     test {Backlog cursor stays pinned until the compressed batch fully drains} {
         # The cursor advances only on full out_buf drain: pause the replica and
         # uncompressed_bytes must freeze while master_repl_offset grows.
-        $primary config set repl-compression lz4
+        test_config_set $primary repl-compression lz4
         # On a slow runner the replica can stay paused past the default
         # repl-timeout. Raise it on both sides: the primary gets no REPLCONF
         # ACK, and on resume the replica's cron can run before it reads the
         # queued stream.
-        $primary config set repl-timeout 3600
+        test_config_set $primary repl-timeout 3600
         $primary flushall
 
         start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb repl-timeout 3600}} {
@@ -466,9 +466,6 @@ start_server {tags {"repl"} overrides {save ""}} {
 
             $replica replicaof no one
         }
-
-        $primary config set repl-compression no
-        $primary config set repl-timeout 60
     }
 
     test {Compressed replica obeys the hard output buffer limit and resynchronizes} {

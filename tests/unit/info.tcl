@@ -93,6 +93,9 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             r SET k v
             set latencystatline_debug [latency_percentiles_usec debug]
             set latencystatline_set [latency_percentiles_usec set]
+            # Values are microseconds with exactly three decimals.
+            assert {[regexp {^p50=[0-9]+\.[0-9]{3}$} $latencystatline_debug]}
+            assert {[regexp {^p50=[0-9]+\.[0-9]{3}$} $latencystatline_set]}
             regexp "p50=(.+\..+)" $latencystatline_debug -> p50_debug
             regexp "p50=(.+\..+)" $latencystatline_set -> p50_set
             assert {$p50_debug >= 50000}

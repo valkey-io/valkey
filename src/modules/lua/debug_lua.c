@@ -249,10 +249,9 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
         break;
     }
     case LUA_TNUMBER: {
-        ValkeyModuleString *old_s = s;
-        const char *prefix = ValkeyModule_StringPtrLen(s, NULL);
-        s = ValkeyModule_CreateStringPrintf(NULL, "%s%g", prefix, (double)lua_tonumber(lua, idx));
-        ValkeyModule_FreeString(NULL, old_s);
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "%g", (double)lua_tonumber(lua, idx));
+        ValkeyModule_StringAppendBuffer(NULL, s, buf, len);
         break;
     }
     case LUA_TNIL: ValkeyModule_StringAppendBuffer(NULL, s, "nil", 3); break;
@@ -307,10 +306,9 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
             typename = "thread";
         else if (t == LUA_TLIGHTUSERDATA)
             typename = "light-userdata";
-        ValkeyModuleString *old_s = s;
-        const char *prefix = ValkeyModule_StringPtrLen(s, NULL);
-        s = ValkeyModule_CreateStringPrintf(NULL, "%s \"%s@%p\"", prefix, typename, p);
-        ValkeyModule_FreeString(NULL, old_s);
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), " \"%s@%p\"", typename, p);
+        ValkeyModule_StringAppendBuffer(NULL, s, buf, len);
     } break;
     default: {
         const char *unknown_str = "\"<unknown-lua-type>\"";

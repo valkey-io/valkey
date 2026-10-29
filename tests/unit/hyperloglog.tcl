@@ -147,6 +147,19 @@ start_server {tags {"hll"}} {
         set e
     } {*INVALIDOBJ*}
 
+    test {Corrupted sparse HyperLogLogs are detected: Truncated XZERO at tail} {
+        r del hll
+        r pfadd hll
+        # Invalidate the cached cardinality, then three ZEROs of 64, a ZERO
+        # of 63 and the first byte of an XZERO that the NUL terminator would
+        # complete to 16129 registers.
+        r setrange hll 15 "\x80\x3f\x3f\x3f\x3e\x7f"
+        assert_error {*INVALIDOBJ*} {r pfadd hll a}
+        assert_error {*INVALIDOBJ*} {r pfcount hll}
+        assert_error {*INVALIDOBJ*} {r pfmerge hll hll}
+        assert_error {*INVALIDOBJ*} {r pfdebug todense hll}
+    } {} {needs:pfdebug}
+
     test {Corrupted sparse HyperLogLogs are detected: Broken magic} {
         r del hll
         r pfadd hll a b c

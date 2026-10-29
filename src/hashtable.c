@@ -2435,6 +2435,19 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
 
 /* --- Random entries --- */
 
+/* Rehashes after sampling that called hashtableScan 'scans' times. While
+ * shrinking, each scan call visits 2^(exp0 - exp1) buckets of the old table, so
+ * one rehash step per sample makes repeated sampling quadratic in the old table
+ * size. Each step rehashes at least one old bucket, so take one step per old
+ * bucket the scans visited. */
+static void rehashStepOnSampleIfNeeded(hashtable *ht, size_t scans) {
+    size_t steps = 1;
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < ht->bucket_exp[0]) {
+        steps = scans * numBuckets(ht->bucket_exp[0] - ht->bucket_exp[1]);
+    }
+    while (steps--) rehashStepOnReadIfNeeded(ht);
+}
+
 /* Scan independent random buckets and collect entries using reservoir sampling.
  * Unlike hashtableSampleEntries which scans contiguous buckets for unique
  * results, this picks a new random bucket each time for fair sampling at the
@@ -2445,10 +2458,12 @@ static unsigned sampleRandomBuckets(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
+    size_t scans = 0;
     while (samples.seen < count) {
         hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        scans++;
     }
-    rehashStepOnReadIfNeeded(ht);
+    rehashStepOnSampleIfNeeded(ht, scans);
     return samples.seen <= count ? samples.seen : count;
 }
 
@@ -2492,10 +2507,12 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.seen = 0;
     samples.entries = dst;
     size_t cursor = randomSizeT();
+    size_t scans = 0;
     while (samples.seen < count) {
         cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
+        scans++;
     }
-    rehashStepOnReadIfNeeded(ht);
+    rehashStepOnSampleIfNeeded(ht, scans);
     /* samples.seen is the number of entries scanned. It may be greater than
      * the requested count and the size of the dst array. */
     return samples.seen <= count ? samples.seen : count;

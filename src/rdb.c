@@ -1707,9 +1707,13 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     int saved_errno;
     char *err_op; /* For a detailed log */
     compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
-    /* Replication full sync uses the codec selected before the child was forked. */
+    int rdbver = RDB_VERSION;
+    /* Replication full sync uses the codec and RDB version selected before the
+     * child was forked. The file is sent verbatim to the round's replicas, so it
+     * must be written in exactly the format they negotiated. */
     if (rdbflags & RDBFLAGS_REPLICATION) {
         compression_algo = server.rdb_child_sync_algo;
+        rdbver = server.rdb_child_rdbver;
     }
 
     FILE *fp = fopen(filename, "w");
@@ -1732,7 +1736,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
         if (!(rdbflags & RDBFLAGS_KEEP_CACHE)) rioSetReclaimCache(&rdb, 1);
     }
 
-    if (rdbSaveRio(compression_algo, req, RDB_VERSION, &rdb, &error, rdbflags, rsi) == C_ERR) {
+    if (rdbSaveRio(compression_algo, req, rdbver, &rdb, &error, rdbflags, rsi) == C_ERR) {
         errno = error;
         err_op = "rdbSaveRio";
         goto werr;
@@ -1885,7 +1889,8 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     } else {
         /* Parent */
         if (childpid == -1) {
-            server.rdb_child_sync_algo = ALGO_NONE; /* Roll back the caller's sync-algo assignment. */
+            server.rdb_child_sync_algo = ALGO_NONE; /* Roll back the caller's assignments. */
+            server.rdb_child_rdbver = RDB_VERSION;
             server.lastbgsave_status = C_ERR;
             server.lastbgsave_try = time(NULL);
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
@@ -4276,6 +4281,7 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
 
     rdbClearSaveState(save_end);
     server.rdb_child_sync_algo = ALGO_NONE;
+    server.rdb_child_rdbver = RDB_VERSION;
 
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */

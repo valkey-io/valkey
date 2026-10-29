@@ -538,7 +538,7 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
 
-        test {Full sync diverts to diskless when rdbcompression differs from the wire codec} {
+        test {Full sync transport follows repl-diskless-sync, not the negotiated codec} {
             $primary config set rdbcompression lz4
             $primary config set rdb-del-sync-files no
             $primary flushall
@@ -549,7 +549,7 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
             $primary config set repl-diskless-sync-delay 0
             $replica config set repl-diskless-load swapdb
             # The replica does not enable replication compression, so its
-            # negotiated wire codec is plaintext while the primary stores lz4.
+            # negotiated codec is plaintext while rdbcompression is lz4.
             $replica config set repl-compression no
 
             foreach diskless {no yes} {
@@ -567,20 +567,22 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
                 assert_equal [$primary debug digest] [$replica debug digest]
                 assert_equal [string repeat "payload42 " 40] [$replica get repl:42]
 
-                # rdbcompression lz4 but the replica's wire codec is plaintext:
-                # the mismatch forces a diskless (socket target) sync even when
-                # repl-diskless-sync is no, so dump.rdb is never written in the
-                # wrong (plaintext) format, and rdbcompression does not leak into
-                # the diskless wire (which follows repl-compression).
-                wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: replicas sockets*"} $primary_loglines 50 100
-                verify_no_log_message 0 "*target: replicas sockets*compression: lz4*" $primary_loglines
+                # A mismatched codec no longer forces a diskless sync: with
+                # repl-diskless-sync off the sync goes through dump.rdb, written in
+                # the negotiated plaintext codec, and with it on the sync streams.
+                if {$diskless} {
+                    wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: replicas sockets*"} \
+                        $primary_loglines 50 100
+                } else {
+                    wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*compression: none*"} \
+                        $primary_loglines 50 100
+                }
+                verify_no_log_message 0 "*compression: lz4*" $primary_loglines
             }
 
-            # The mismatch never wrote a plaintext dump.rdb; any snapshot that
-            # exists must be in the configured lz4 (VCS) format.
-            if {[file exists [dump_rdb_path $primary]]} {
-                assert_equal "VCS" [string range [read_dump_rdb_header_bytes $primary] 0 2]
-            }
+            # The replication snapshot follows the negotiated codec, not
+            # rdbcompression: the disk-based round rewrote dump.rdb plaintext.
+            assert_equal "VALKEY" [string range [read_dump_rdb_header_bytes $primary] 0 5]
 
             $primary set repl:post-sync "after-sync"
             wait_for_condition 50 100 {

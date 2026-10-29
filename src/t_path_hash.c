@@ -404,12 +404,12 @@ static int pathHashParseMatchOptions(client *c,
                                      long *numfields,
                                      long *count,
                                      long *maxpathlen,
-                                     bool *exclusive) {
+                                     bool *exclude_self) {
     *reply_mode = PATH_HASH_REPLY_PATH;
     *value_mode = PATH_HASH_VALUES_NONE;
     *fields = NULL;
     *numfields = 0;
-    *exclusive = false;
+    *exclude_self = false;
     *count = -1;
     *maxpathlen = -1;
     for (int i = start; i < c->argc;) {
@@ -437,9 +437,9 @@ static int pathHashParseMatchOptions(client *c,
             if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, count, NULL) != C_OK)
                 return C_ERR;
             i += 2;
-        } else if (!strcasecmp(arg, "exclusive")) {
-            if (*exclusive) goto syntax;
-            *exclusive = true;
+        } else if (!strcasecmp(arg, "excludeself")) {
+            if (*exclude_self) goto syntax;
+            *exclude_self = true;
             i++;
         } else if (!strcasecmp(arg, "maxpathlen")) {
             if (*maxpathlen != -1 || i + 1 >= c->argc) goto syntax;
@@ -485,8 +485,8 @@ void phprefixesCommand(client *c) {
     robj **fields;
     long numfields;
     long count, maxpathlen;
-    bool exclusive;
-    if (pathHashParseMatchOptions(c, 3, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen, &exclusive) !=
+    bool exclude_self;
+    if (pathHashParseMatchOptions(c, 3, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen, &exclude_self) !=
         C_OK)
         return;
 
@@ -506,7 +506,7 @@ void phprefixesCommand(client *c) {
         .limit = count == -1 ? SIZE_MAX : (size_t)count,
         .max_path_len = maxpathlen == -1 ? SIZE_MAX : (size_t)maxpathlen,
     };
-    if (exclusive) {
+    if (exclude_self) {
         /* A strict prefix of an empty query cannot exist. Avoid underflow. */
         if (sdslen(query) == 0) {
             addReply(c, shared.emptyarray);

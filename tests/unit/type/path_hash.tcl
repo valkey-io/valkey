@@ -92,27 +92,28 @@ start_server {tags {pathhash}} {
         assert_equal {{}} [r command info phlongest]
     }
 
-    test {PHPREFIXES EXCLUSIVE paginates strict ancestors and handles root and limits} {
+    test {PHPREFIXES EXCLUDESELF paginates strict ancestors and handles root and limits} {
         r del tree
         foreach path {{} a ab abc abcd} {r phset tree $path fields 1 f $path}
         assert_equal {abcd abc} [r phprefixes tree abcdef count 2]
-        assert_equal {ab a} [r phprefixes tree abc exclusive count 2]
-        assert_equal [list {}] [r phprefixes tree a exclusive count 2]
-        assert_equal {} [r phprefixes tree {} exclusive]
-        assert_equal {2 1 0} [r phprefixes tree abc lengths exclusive maxpathlen 2]
-        assert_equal {2 1 0} [r phprefixes tree abc lengths exclusive maxpathlen 3]
-        assert_equal {3 2} [r phprefixes tree abcdef lengths exclusive maxpathlen 3 count 2]
+        assert_equal {ab a} [r phprefixes tree abc excludeself count 2]
+        assert_equal [list {}] [r phprefixes tree a excludeself count 2]
+        assert_equal {} [r phprefixes tree {} excludeself]
+        assert_equal {2 1 0} [r phprefixes tree abc lengths excludeself maxpathlen 2]
+        assert_equal {2 1 0} [r phprefixes tree abc lengths excludeself maxpathlen 3]
+        assert_equal {3 2} [r phprefixes tree abcdef lengths excludeself maxpathlen 3 count 2]
         # The boundary need not be stored, including after concurrent deletion.
         r phdel tree abc
-        assert_equal {ab a} [r phprefixes tree abc exclusive count 2]
-        assert_error ERR*syntax* {r phprefixes tree abc exclusive exclusive}
-        assert_error ERR*syntax* {r phprefixes missing abc exclusive exclusive}
+        assert_equal {ab a} [r phprefixes tree abc excludeself count 2]
+        assert_error ERR*syntax* {r phprefixes tree abc excludeself excludeself}
+        assert_error ERR*syntax* {r phprefixes missing abc excludeself excludeself}
+        assert_error ERR*syntax* {r phprefixes tree abc exclusive}
         set path [binary format H* 00ff]
         r phset tree $path fields 1 f binary
         r phset tree "${path}x" fields 1 f child
-        assert_equal {2 0} [r phprefixes tree "${path}x" lengths exclusive]
+        assert_equal {2 0} [r phprefixes tree "${path}x" lengths excludeself]
         assert_equal [list [list 2 [list binary {} binary]]] \
-            [r phprefixes tree "${path}x" lengths fields 3 f missing f count 1 exclusive]
+            [r phprefixes tree "${path}x" lengths fields 3 f missing f count 1 excludeself]
     }
 
     test {PHPREFIXES COUNT pagination matches the full ancestor list} {
@@ -130,7 +131,7 @@ start_server {tags {pathhash}} {
                 assert {[llength $page] <= 2}
                 lappend paths {*}$page
                 set boundary [lindex $page end]
-                set options {exclusive}
+                set options {excludeself}
                 assert {[incr pages] < 10}
             }
             assert_equal $full $paths

@@ -5556,7 +5556,7 @@ struct COMMAND_ARG PHPREFIXES_Args[] = {
 {MAKE_ARG("values",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=PHPREFIXES_values_Subargs},
 {MAKE_ARG("count",ARG_TYPE_INTEGER,-1,"COUNT","Hard limit on the number of deepest matches, from 1 to LONG_MAX of the server build. Out-of-range values return an error.",NULL,CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("max-path-bytes",ARG_TYPE_INTEGER,-1,"MAXPATHLEN","Maximum path length in bytes, from 0 to LONG_MAX of the server build, applied before COUNT. Out-of-range values return an error.",NULL,CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("exclusive",ARG_TYPE_PURE_TOKEN,-1,"EXCLUSIVE","Exclude a path equal to the query, allowing pagination through strict ancestors.",NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("excludeself",ARG_TYPE_PURE_TOKEN,-1,"EXCLUDESELF","Exclude a path equal to the query, allowing pagination through strict ancestors.",NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** PHSCAN ********************/

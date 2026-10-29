@@ -1687,9 +1687,12 @@ void clusterInitLast(void) {
 void clusterAutoFailoverOnShutdown(void) {
     if (!nodeIsPrimary(myself)) return;
 
-    /* Find the first best replica, that is, the replica with the largest offset. */
+    /* Find the best replica: prefer a fully synchronized replica that is not
+     * marked NOFAILOVER. If all fully synchronized replicas have NOFAILOVER set,
+     * fall back to one of them. */
     int legacy_replica = 0;
     client *best_replica = NULL;
+    client *fallback_nofailover_replica = NULL;
     listIter replicas_iter;
     listNode *replicas_list_node;
     listRewind(server.replicas, &replicas_iter);
@@ -1700,13 +1703,24 @@ void clusterAutoFailoverOnShutdown(void) {
         if (replica->repl_data->replica_version < 0x90000) {
             legacy_replica = 1;
             best_replica = NULL;
+            fallback_nofailover_replica = NULL;
             break;
         }
         if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
             replica->repl_data->repl_ack_off == server.primary_repl_offset &&
             replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
-            best_replica = replica;
+            clusterNode *node = clusterLookupNode(replica->repl_data->replica_nodeid, CLUSTER_NAMELEN);
+            if (node && nodeCantFailover(node)) {
+                if (fallback_nofailover_replica == NULL) fallback_nofailover_replica = replica;
+            } else {
+                best_replica = replica;
+                break;
+            }
         }
+    }
+
+    if (best_replica == NULL) {
+        best_replica = fallback_nofailover_replica;
     }
 
     /* We are not able to find the replica to do the auto failover. */

@@ -47,6 +47,13 @@ proc kmd_reset {} {
     r kmd.reset
 }
 
+# The FIELDS arguments naming fields f<first> to f<last>.
+proc kmd_fields {first last} {
+    set fields {}
+    for {set i $first} {$i <= $last} {incr i} {lappend fields f$i}
+    return [list FIELDS [llength $fields] {*}$fields]
+}
+
 tags "modules" {
     start_server [list overrides [list loadmodule "$testmodule"]] {
         test {Key memory delta tracks writes to all data types} {
@@ -418,6 +425,125 @@ end)}
                 assert_kmd_consistent
             } {
                 r config set hash-max-listpack-entries 512
+                r debug set-active-expire 1
+            }
+        } {} {needs:debug}
+
+        test {Key memory delta tracks values resized by active defrag} {
+            if {[catch {r config set activedefrag yes}]} {
+                skip "active defrag is not supported by this build"
+            }
+            r config set activedefrag no
+            kmd_reset
+            set saved {}
+            foreach name {active-defrag-ignore-bytes active-defrag-threshold-lower active-defrag-cycle-min
+                          active-defrag-cycle-max hash-max-listpack-entries} {
+                lappend saved $name [lindex [r config get $name] 1]
+            }
+            # Hashes with volatile fields can be listpacks; only hashtables
+            # have sets of volatile fields for defrag to resize.
+            r config set hash-max-listpack-entries 0
+            # Keep active expiration from visiting the volatile sets before
+            # defrag does.
+            r debug set-active-expire 0
+            with_cleanup {
+                # Hashes whose volatile fields expire together, so that their
+                # sets of volatile fields are a RAX holding a hashtable bucket.
+                # Their entries are interleaved with those of hashes deleted
+                # below, which leaves them for defrag to move. The large hash
+                # has more fields than active-defrag-max-scan-fields, and is
+                # defragmented later, in steps.
+                set t [expr {[clock milliseconds] + 100000000}]
+                foreach {key n} {volatile:large 2000 volatile:small 300} {
+                    r eval {
+                        for i = 0, tonumber(ARGV[1]) - 1 do
+                            for _, key in ipairs(KEYS) do
+                                server.call('hsetex', key, 'PXAT', ARGV[2], 'FIELDS', 1, 'f' .. i, 'v')
+                            end
+                        end
+                    } 2 $key filler:$key $n $t
+                }
+                set members {}
+                set pairs {}
+                set scored {}
+                for {set i 0} {$i < 4000} {incr i} {
+                    lappend members m$i
+                    lappend pairs m$i v
+                    lappend scored $i m$i
+                }
+                r hset hash {*}$pairs
+                r sadd set {*}$members
+                r zadd zset {*}$scored
+                r rpush list {*}$members
+                # A set of volatile fields small enough to remain a vector,
+                # which defrag moves as it is.
+                r hset vector {*}$pairs
+                r hpexpireat vector $t FIELDS 100 {*}[lrange $members 0 99]
+                foreach {key encoding} {
+                    volatile:large hashtable volatile:small hashtable hash hashtable set hashtable
+                    zset btree list quicklist vector hashtable
+                } {
+                    assert_encoding $encoding $key
+                }
+
+                # Remove most elements, and the TTLs of most volatile fields, the
+                # last ones while resizing is forbidden, as during a fork: the
+                # tables then need to shrink, which defrag makes them do. The
+                # first removals complete any rehashing, which delays shrinking.
+                foreach {resizing elements large small} {
+                    1 {0 1999} {0 999} {0 149}
+                    0 {2000 3699} {1000 1899} {150 284}
+                } {
+                    r debug dict-resizing $resizing
+                    set removed [lrange $members {*}$elements]
+                    r hdel hash {*}$removed
+                    r srem set {*}$removed
+                    r zrem zset {*}$removed
+                    r hpersist volatile:large {*}[kmd_fields {*}$large]
+                    r hpersist volatile:small {*}[kmd_fields {*}$small]
+                }
+                r debug dict-resizing 1
+                r del filler:volatile:large filler:volatile:small
+                # The tables of the volatile hashes keep their size, so only
+                # their sets of volatile fields can change.
+                foreach key {volatile:large volatile:small} {
+                    assert_no_match {*Hash table 1*} [r debug htstats-key $key full]
+                }
+                assert_kmd_consistent
+
+                set usage {}
+                foreach key {volatile:large volatile:small hash set} {
+                    lappend usage $key [r memory usage $key]
+                }
+                # Defragment whatever the fragmentation, until the values that
+                # need to shrink did.
+                set hits [s active_defrag_hits]
+                r config set active-defrag-ignore-bytes 1
+                r config set active-defrag-threshold-lower 0
+                r config set active-defrag-cycle-min 25
+                r config set active-defrag-cycle-max 75
+                r config set activedefrag yes
+                foreach {key bytes} $usage {
+                    wait_for_condition 100 100 {
+                        [r memory usage $key] != $bytes
+                    } else {
+                        fail "active defrag did not resize $key"
+                    }
+                }
+                r config set activedefrag no
+                wait_for_condition 50 100 {
+                    [s active_defrag_running] eq 0
+                } else {
+                    fail "active defrag did not stop"
+                }
+                assert_morethan [s active_defrag_hits] $hits
+                assert_kmd_consistent
+            } {
+                r config set activedefrag no
+                foreach {name value} $saved {
+                    r config set $name $value
+                }
+                r debug dict-resizing 1
                 r debug set-active-expire 1
             }
         } {} {needs:debug}

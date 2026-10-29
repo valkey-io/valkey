@@ -1452,6 +1452,12 @@ static int luaLogCommand(lua_State *lua) {
         }
     }
 
+    /* The legacy log format writes the message verbatim, so a line break
+     * would let the script start a record without the module tag. */
+    for (char *p = log; p && *p; p++) {
+        if (*p == '\r' || *p == '\n') *p = ' ';
+    }
+
     const char *level_str = NULL;
     switch (level) {
     case LL_DEBUG: level_str = "debug"; break;

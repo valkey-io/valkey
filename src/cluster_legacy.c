@@ -1713,8 +1713,7 @@ void clusterAutoFailoverOnShutdown(void) {
             if (node && nodeCantFailover(node)) {
                 if (fallback_nofailover_replica == NULL) fallback_nofailover_replica = replica;
             } else {
-                best_replica = replica;
-                break;
+                if (best_replica == NULL) best_replica = replica;
             }
         }
     }

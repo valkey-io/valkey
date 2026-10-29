@@ -599,6 +599,14 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 start_server {tags {"modules"}} {
     r module load $testmodule
 
+    test "VM_Call script-mode validation errors without error replies do not crash" {
+        assert_equal {ERR ENOENT} [r test.call_script_mode nosuchcmd]
+        assert_equal {ERR EINVAL} [r test.call_script_mode set]
+        assert_equal {ERR ESPIPE} [r test.call_script_mode shutdown]
+        assert_equal {OK 0} [r test.call_script_mode ping]
+        assert_equal PONG [r ping]
+    }
+
     foreach cmd {rm_call_flags vm_call_argv_flags} {
         test "test Dry Run - OK OOM/ACL with $cmd" {
             set x 5

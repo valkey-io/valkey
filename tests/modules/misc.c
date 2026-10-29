@@ -463,6 +463,27 @@ int test_rm_call_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     return VALKEYMODULE_OK;
 }
 
+/* Exercise script-mode validation without requesting error replies. */
+int test_call_script_mode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    const char *cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmd, "S");
+    int call_errno = errno;
+    const char *errno_name;
+    switch (call_errno) {
+    case 0: errno_name = "0"; break;
+    case ENOENT: errno_name = "ENOENT"; break;
+    case EINVAL: errno_name = "EINVAL"; break;
+    case ESPIPE: errno_name = "ESPIPE"; break;
+    default: errno_name = "UNKNOWN"; break;
+    }
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithSimpleString(ctx, reply ? "OK" : "ERR");
+    ValkeyModule_ReplyWithSimpleString(ctx, errno_name);
+    if (reply) ValkeyModule_FreeCallReply(reply);
+    return VALKEYMODULE_OK;
+}
+
 /* Reply handler used by VM_CallArgv wrappers: forwards the raw RESP reply to the client */
 static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
     UNUSED(ctx);
@@ -733,7 +754,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.rm_call", test_rm_call,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_flags", test_rm_call_flags,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_flags", test_rm_call_flags, "allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.call_script_mode", test_call_script_mode, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.rm_call_replicate", test_rm_call_replicate,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;

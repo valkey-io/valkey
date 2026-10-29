@@ -438,6 +438,6 @@ start_server {tags {"hotkey external:skip"}} {
         r del "del_key"
         assert_equal [hk_names [hk_wait_hotkeys]] {del_key}
 
-        r debug set-active-expire 1
+        test_defer_fail {r debug set-active-expire 1}
     }
 }

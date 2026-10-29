@@ -396,7 +396,14 @@ void resizeReplicationBacklog(void) {
 }
 
 void freeReplicationBacklog(void) {
-    serverAssert(listLength(server.replicas) == 0);
+    /* Only replicas whose free disconnectReplicas() deferred may be left. */
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        serverAssert(replica->flag.close_asap && replica->repl_data->ref_repl_buf_node == NULL);
+    }
     if (server.repl_backlog == NULL) return;
 
     /* Decrease the start buffer node reference count. */

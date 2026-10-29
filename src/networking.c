@@ -7130,9 +7130,10 @@ int processClientIOReadsDone(client *c) {
         int mask = 0;
         if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
             mask = CONN_POSTPONE_READ;
-            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
             needs_post_read_update = 1;
         }
+        /* An IO thread may still be writing, keep WRITE postponed until processClientIOWriteDone. */
+        if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
         connSetPostponeUpdateState(c->conn, mask);
         connUpdateState(c->conn);
     }

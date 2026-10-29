@@ -884,6 +884,43 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+foreach repl {REPL_ALL REPL_AOF REPL_NONE} {
+    # A fresh server per case keeps the iterator's adaptive queue small, so
+    # the iterator is still in db0 when the swap runs.
+    start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+        test "SWAPDB from a script with $repl during forkless bgsave" {
+            r select 1
+            r debug populate 500 db1
+            r select 0
+            r debug populate 500 db0
+
+            r config set rdb-key-save-delay 10000
+            r config set bgsave-default-method forkless
+            r bgsave
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless bgsave did not start"
+            }
+
+            r eval "server.set_repl(server.$repl); return server.call('swapdb', '0', '1')" 0
+
+            r config set rdb-key-save-delay 0
+            waitForBgsave r
+            assert_equal [s rdb_last_bgsave_status] ok
+
+            # The snapshot is point-in-time, so each DB holds its own keys from
+            # before the swap.
+            r debug reload nosave
+            for {set db 0} {$db < 2} {incr db} {
+                r select $db
+                assert_equal 500 [r dbsize]
+                assert_equal 500 [llength [r keys db$db:*]]
+            }
+        } {} {needs:debug}
+    }
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "deleting keys during forkless bgsave" {
         

@@ -2312,6 +2312,12 @@ void bgIteration_flushall(void) {
 
 
 // PUBLIC API
+void bgIteration_swapdb(int db1, int db2) {
+    if (bgIteration_iterationActive()) handleSwapdb(db1, db2);
+}
+
+
+// PUBLIC API
 bool bgIteration_blockClientIfRequired(client *c) {
     serverAssert(hasMainThreadExclusivity());
     iteratorReplicationFlagsWereUpdated = false;
@@ -2449,14 +2455,6 @@ void bgIteration_handleCommandReplication(int dbid,
         sds sdsArgv = createSdsFromClientArgv(argc, argv);
         debugBuffer = sdscatprintf(debugBuffer, "REPL?: (%d)%s\n", dbid, sdsArgv);
         sdsfree(sdsArgv);
-    }
-
-    if (cmd->proc == swapdbCommand) {
-        // All iterators and clients must be informed of swapdb
-        int id1, id2;
-        // command has been processed, but Valkey allows "swapdb 0 0" (which can be ignored)
-        if (getParamsForSwapdb(argc, argv, NULL, &id1, &id2))
-            handleSwapdb(id1, id2);
     }
 
     /* In the case that a key is touched in a different DB (COPY/MOVE) the key is recorded as

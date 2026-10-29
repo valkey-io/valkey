@@ -1828,6 +1828,7 @@ static void copyDbExpiry(serverDb *target, const serverDb *source) {
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
+    bgIteration_swapdb(id1, id2);
     serverDb *db1 = createDatabaseIfNeeded(id1);
     serverDb *db2 = createDatabaseIfNeeded(id2);
     serverDb aux = *db1;

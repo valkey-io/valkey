@@ -209,6 +209,13 @@ start_server {tags {"string"}} {
         close_replication_stream $repl
     } {} {needs:repl}
 
+    test {GETDEL against key with wrong type} {
+        r del foo
+        r lpush foo bar
+        assert_error "WRONGTYPE*" {r getdel foo}
+        assert_equal 1 [r exists foo]
+    }
+
     test {GETEX without argument does not propagate to replica} {
         set repl [attach_to_replication_stream]
         r set foo bar

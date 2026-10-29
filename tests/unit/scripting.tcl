@@ -1796,6 +1796,13 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         assert_match {*<value>*somearg*} [r read]
         reconnect
     }
+
+    test {Test scripting debug with an empty script} {
+        r script debug sync
+        catch {r eval "\r\n" 0}
+        reconnect
+        assert_equal [r ping] {PONG}
+    }
 }
 
 start_server {tags {"scripting external:skip"}} {

@@ -3877,10 +3877,9 @@ static void propagateToBgIteration(int dbid, int argc, robj **argv, int target) 
         // Called from alsoPropagate() to replicate a command
         if (target & PROPAGATE_REPL && bgIteration_iterationActive()) {
             if (!sentMultiToBgIterator && (scriptIsRunning() || server.in_exec)) {
-                /* For a script or multi/exec, we should be sending the MULTI at
-                 * the beginning of the execution unit.  There shouldn't be any
-                 * commands in the propagation queue yet. */
-                serverAssert(server.also_propagate.numops == 0);
+                /* Ops already queued are either AOF-only or were handed to
+                 * bgIteration when queued (e.g. a key expired while checking
+                 * EXEC conditions), so they don't belong in this MULTI. */
                 /* If this is the first propagated command of a script or multi,
                  * make it a transaction.  It may turn out that there is only 1
                  * command in the MULTI block, but we can't know that now.

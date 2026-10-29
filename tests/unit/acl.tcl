@@ -1395,6 +1395,53 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         # Verify server is still running
         assert_equal [r PING] "PONG"
     }
+
+    test {ACL VALIDATE: basic syntax verification and error handling} {
+        # 1. Test wrong number of arguments
+        catch {r ACL VALIDATE} err
+        assert_match "*wrong number of arguments*" $err
+
+        catch {r ACL VALIDATE file.acl extra_arg} err
+        assert_match "*wrong number of arguments*" $err
+
+        # 2. Test validating a missing file path (using expr for random suffix)
+        set id [expr {int(rand()*100000)}]
+        set non_existent_file "missing_acl_file_${id}.acl"
+        catch {r ACL VALIDATE $non_existent_file} err
+        assert_match "*ERR Error loading ACLs, opening file*" $err
+    }
+
+    test {ACL VALIDATE: checking a completely valid ACL configuration file} {
+        # Dynamically build a standard, valid ACL mock file
+        set clean_acl_path "[pwd]/tmp_clean_validate_test.acl"
+        set fp [open $clean_acl_path w]
+        puts $fp "user testing_alice on >password123 +get ~*"
+        puts $fp "user testing_bob off nopass -@all"
+        close $fp
+
+        # Run validation—must return OK and should remain completely stateless
+        assert_equal "OK" [r ACL VALIDATE $clean_acl_path]
+        assert_equal "" [r ACL GETUSER testing_alice] ;# Verification that memory state is untouched
+
+        # Clean up temporary test assets
+        file delete $clean_acl_path
+    }
+
+    test {ACL VALIDATE: tracking compilation logs across a corrupted ACL file} {
+        # Build an explicitly broken ACL mock file containing structural mistakes
+        set corrupted_acl_path "[pwd]/tmp_corrupted_validate_test.acl"
+        set fp [open $corrupted_acl_path w]
+        puts $fp "user testing_charlie on +invalid_command_identifier_xyz"
+        puts $fp "malformed_row_missing_user_keyword_prefix"
+        close $fp
+
+        # Run validation and check for error propagation
+        catch {r ACL VALIDATE $corrupted_acl_path} err
+        assert_match "*Unknown command or category name in ACL*" $err
+
+        # Clean up temporary test assets
+        file delete $corrupted_acl_path
+    }
 }
 
 set server_path [tmpdir "digest.acl"]

@@ -492,6 +492,40 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+start_server {tags {"repl"} overrides {save ""}} {
+    start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+        test "Replica applies a primary write to a key held by its forkless save" {
+            set replica [srv 0 client]
+            set primary [srv -1 client]
+            $primary debug populate 100000
+            $primary rpush mylist a
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            wait_for_ofs_sync $primary $replica
+
+            # Hold the save open so the iterator has not reached mylist yet.
+            $replica config set bgsave-default-method forkless
+            $replica config set rdb-key-save-delay 10000
+            $replica bgsave
+            wait_for_condition 50 100 {
+                [s 0 rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless bgsave did not start"
+            }
+
+            # Lists are not cloned for the save thread, so the primary link must wait for it.
+            $primary rpush mylist b
+            wait_for_condition 50 100 {
+                [$replica lrange mylist 0 -1] eq {a b}
+            } else {
+                fail "replica did not apply the write"
+            }
+            $replica config set rdb-key-save-delay 0
+            waitForBgsave $replica
+        } {} {needs:debug}
+    }
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         

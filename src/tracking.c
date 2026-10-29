@@ -43,6 +43,8 @@
  * them when invalidation messages are received. */
 rax *TrackingTable = NULL;
 rax *PrefixTable = NULL;
+rax *PrefixesToBroadcast = NULL;      /* Prefixes with keys modified in the current
+                                         event loop cycle. */
 uint64_t TrackingTableTotalItems = 0; /* Total number of IDs stored across
                                          the whole tracking table. This gives
                                          a hint about the total memory we
@@ -194,6 +196,7 @@ void enableTracking(client *c, uint64_t redirect_to, struct ClientFlags options,
     if (TrackingTable == NULL) {
         TrackingTable = raxNew();
         PrefixTable = raxNew();
+        PrefixesToBroadcast = raxNew();
         TrackingChannelName = createStringObject("__redis__:invalidate", 20);
     }
 
@@ -331,6 +334,24 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
     if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
+typedef struct rememberKeyContext {
+    client *c;
+    char *keyname;
+    size_t keylen;
+} rememberKeyContext;
+
+static int trackingRememberKeyForPrefix(size_t prefix_len, void *data, void *context) {
+    rememberKeyContext *ctx = context;
+    bcastState *bs = data;
+    raxInsert(PrefixesToBroadcast, (unsigned char *)ctx->keyname, prefix_len, NULL, NULL);
+    /* We insert the client pointer as associated value in the radix
+     * tree. This way we know who was the client that did the last
+     * change to the key, and can avoid sending the notification in the
+     * case the client is in NOLOOP mode. */
+    raxInsert(bs->keys, (unsigned char *)ctx->keyname, ctx->keylen, ctx->c, NULL);
+    return 1;
+}
+
 /* This function is called when a key is modified in the server and in the case
  * we have at least one client with the BCAST mode enabled.
  * Its goal is to set the key in the right broadcast state if the key
@@ -338,20 +359,8 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
  * return to the event loop, we'll send invalidation messages to the
  * clients subscribed to each prefix. */
 void trackingRememberKeyToBroadcast(client *c, char *keyname, size_t keylen) {
-    raxIterator ri;
-    raxStart(&ri, PrefixTable);
-    raxSeek(&ri, "^", NULL, 0);
-    while (raxNext(&ri)) {
-        if (ri.key_len > keylen) continue;
-        if (ri.key_len != 0 && memcmp(ri.key, keyname, ri.key_len) != 0) continue;
-        bcastState *bs = ri.data;
-        /* We insert the client pointer as associated value in the radix
-         * tree. This way we know who was the client that did the last
-         * change to the key, and can avoid sending the notification in the
-         * case the client is in NOLOOP mode. */
-        raxInsert(bs->keys, (unsigned char *)keyname, keylen, c, NULL);
-    }
-    raxStop(&ri);
+    rememberKeyContext ctx = {c, keyname, keylen};
+    raxForEachPrefix(PrefixTable, (unsigned char *)keyname, keylen, trackingRememberKeyForPrefix, &ctx);
 }
 
 /* This function is called from signalModifiedKey() or other places in the server
@@ -812,14 +821,17 @@ void trackingBroadcastInvalidationMessages(void) {
     raxIterator ri, ri2;
 
     /* Return ASAP if there is nothing to do here. */
-    if (TrackingTable == NULL || !server.tracking_clients) return;
+    if (TrackingTable == NULL || raxSize(PrefixesToBroadcast) == 0) return;
 
-    raxStart(&ri, PrefixTable);
+    raxStart(&ri, PrefixesToBroadcast);
     raxSeek(&ri, "^", NULL, 0);
 
     /* For each prefix... */
     while (raxNext(&ri)) {
-        bcastState *bs = ri.data;
+        void *result;
+        /* The prefix is gone if its last client stopped tracking it. */
+        if (!raxFind(PrefixTable, ri.key, ri.key_len, &result)) continue;
+        bcastState *bs = result;
 
         if (raxSize(bs->keys)) {
             /* Generate the common protocol for all the clients that are
@@ -854,6 +866,8 @@ void trackingBroadcastInvalidationMessages(void) {
         bs->keys = raxNew();
     }
     raxStop(&ri);
+    raxFree(PrefixesToBroadcast);
+    PrefixesToBroadcast = raxNew();
 }
 
 /* This is just used in order to access the amount of used slots in the

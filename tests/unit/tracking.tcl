@@ -456,6 +456,51 @@ start_server {tags {"tracking network logreqres:skip"}} {
         $r close
     }
 
+    test {BCAST cost does not grow with the number of unmatched prefixes} {
+        r CLIENT TRACKING off
+        # Two clients, since prefix collision checking is quadratic per client.
+        set clients {}
+        foreach c {a b} {
+            set rc [valkey_client]
+            set args {}
+            for {set i 0} {$i < 10000} {incr i} { lappend args PREFIX $c$i: }
+            $rc CLIENT TRACKING on BCAST {*}$args
+            lappend clients $rc
+        }
+
+        set kv {}
+        for {set i 0} {$i < 1000} {incr i} { lappend kv key:$i v }
+        r config resetstat
+        r mset {*}$kv
+        set mset_usec [getInfoProperty [r info commandstats] cmdstat_mset]
+        regexp {usec=([0-9]+)} $mset_usec -> mset_usec
+
+        # Time each idle event loop cycle spends outside of commands.
+        set cycles [s eventloop_cycles]
+        set other [expr {[s eventloop_duration_sum] - [s eventloop_duration_cmd_sum]}]
+        for {set i 0} {$i < 1000} {incr i} { r ping }
+        set cycles [expr {[s eventloop_cycles] - $cycles}]
+        set other [expr {[s eventloop_duration_sum] - [s eventloop_duration_cmd_sum] - $other}]
+
+        foreach rc $clients { $rc close }
+        if {!$::valgrind} {
+            assert_lessthan $mset_usec 50000
+            assert_lessthan [expr {$other / $cycles}] 200
+        }
+    }
+
+    test {BCAST prefix removed after a matching write in the same event loop cycle} {
+        set rc [valkey_client]
+        $rc CLIENT TRACKING on BCAST PREFIX gone:
+        $rc MULTI
+        $rc SET gone:key 1
+        $rc CLIENT TRACKING off
+        $rc CLIENT TRACKING on
+        $rc EXEC
+        assert_equal PONG [$rc PING]
+        $rc close
+    }
+
     test {hdel deliver invalidate message after response in the same connection} {
         r CLIENT TRACKING off
         r HELLO 3

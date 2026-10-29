@@ -31,6 +31,11 @@ proc check_sanitizer_errors srv {
         if {$::dump_logs} {
             dump_server_log $srv
         }
+    } elseif {[sanitizer_ptrace_warning_in_file [dict get $srv stderr]]} {
+        # Non-fatal, but keep each occurrence countable in the output. When
+        # the warning came with an exit-time hang, that process was killed
+        # before its leak scan ran, so the scan was skipped for this server.
+        puts [format "LeakSanitizer ptrace probe warning (pid %d), leak scan may have been skipped" [dict get $srv pid]]
     }
 }
 
@@ -105,8 +110,14 @@ proc kill_server config {
     # kill server and wait for the process to be totally exited
     send_data_packet $::test_server_fd server-killing $pid
     catch {exec kill $pid}
-    # Node might have been stopped in the test
-    catch {exec kill -SIGCONT $pid}
+    # Node might have been stopped in the test. Only resume it in that case:
+    # a SIGCONT sent to a process that is already exiting discards the
+    # SIGSTOPs that LeakSanitizer's stop-the-world tracer relies on to
+    # suspend threads for the exit-time leak scan, and that scan then never
+    # completes.
+    if {[process_is_stopped $pid]} {
+        catch {exec kill -SIGCONT $pid}
+    }
     if {$::valgrind} {
         set max_wait 120000
     } else {

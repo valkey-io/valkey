@@ -1796,6 +1796,22 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         assert_match {*<value>*somearg*} [r read]
         reconnect
     }
+
+    # tls:skip since the sync debugger drops a reply past the first TLS record.
+    test {Test scripting debug print of a table holding itself is bounded} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        r write "*2\r\n\$6\r\nmaxlen\r\n\$1\r\n0\r\n"
+        r flush
+        r read
+        set code {local t = {string.rep('x', 1000)} t[2] = t t[3] = t return t}
+        r write "*2\r\n\$4\r\neval\r\n\$[string length $code]\r\n$code\r\n"
+        r flush
+        set ret [r read]
+        assert_lessthan [string length $ret] 100000
+        reconnect
+        assert_equal [r ping] {PONG}
+    } {} {tls:skip}
 }
 
 start_server {tags {"scripting external:skip"}} {

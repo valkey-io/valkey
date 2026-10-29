@@ -1796,6 +1796,27 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         assert_match {*<value>*somearg*} [r read]
         reconnect
     }
+
+    test {Test scripting debug input buffer is cleared after max client buffer error} {
+        r script debug sync
+        r eval {pcall(function()
+                    server.breakpoint()
+                    return 1
+                end)
+                server.breakpoint()
+                return 'done'} 0
+        r write "*1\r\n\$8\r\ncontinue\r\n"
+        r flush
+        r read
+        # pcall catches the buffer limit error, so the script stops at the second breakpoint.
+        r write "*[string repeat x [expr {1 << 20}]]"
+        r flush
+        r read
+        r write "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
+        r flush
+        assert_match {*PONG*} [r read]
+        reconnect
+    }
 }
 
 start_server {tags {"scripting external:skip"}} {

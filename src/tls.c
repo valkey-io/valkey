@@ -1309,11 +1309,12 @@ static int handleSSLReturnCode(tls_connection *conn, int ret_value) {
  * Returns ret_value, or -1 on error or dropped connection.
  */
 static int updateStateAfterSSLIO(tls_connection *conn, int ret_value, int update_event) {
+    conn->c.last_errno = 0;
     /* If system call was interrupted, there's no need to go through the full
      * OpenSSL error handling and just report this for the caller to retry the
      * operation.
      */
-    if (errno == EINTR) {
+    if (ret_value <= 0 && errno == EINTR) {
         conn->c.last_errno = EINTR;
         return -1;
     }

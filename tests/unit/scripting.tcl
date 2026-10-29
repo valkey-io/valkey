@@ -1796,6 +1796,28 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         assert_match {*<value>*somearg*} [r read]
         reconnect
     }
+
+    test {Test scripting debug kills a looping script once its client is gone} {
+        r config set busy-reply-threshold 100
+        set loglines [count_log_lines 0]
+        set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $dbg script debug sync
+        $dbg eval {while true do end} 0
+        $dbg close
+
+        # Wait on the log, since a command would hang if the server is stuck.
+        wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines 50 100
+        assert_equal [r ping] {PONG}
+    }
+}
+
+start_server {tags {"scripting external:skip"} overrides {rename-command {CONFIG ""}}} {
+    test {Test scripting debug works with CONFIG disabled} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        reconnect
+        assert_equal [r ping] {PONG}
+    }
 }
 
 start_server {tags {"scripting external:skip"}} {

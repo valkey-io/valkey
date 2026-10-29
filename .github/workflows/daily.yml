@@ -647,6 +647,59 @@ jobs:
         uses: ./.github/actions/upload-test-failures
         with:
           job-name: ${{ github.job }}
+  test-ubuntu-cmake-tls-module:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
+      !contains(github.event.inputs.skipjobs, 'tls')
+    timeout-minutes: 1440
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: cmake and make
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake pkg-config libssl-dev
+          cmake -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TLS=module
+          cmake --build build-release -j$(nproc)
+      - name: testprep
+        run: |
+          sudo apt-get install tcl8.6 tclx tcl-tls
+          ./utils/gen-test-certs.sh
+      - name: test
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: |
+          ./build-release/runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --tls-module ${{github.event.inputs.test_args}}
+      - name: module api test
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: |
+          CFLAGS='-Werror' ./build-release/runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs --tls-module ${{github.event.inputs.test_args}}
+      - name: sentinel tests
+        if: true && !contains(github.event.inputs.skiptests, 'sentinel')
+        run: |
+          ./build-release/runtest-sentinel --failures-output test-failures/sentinel.json --tls-module ${{github.event.inputs.cluster_test_args}}
+      - name: Upload test failures
+        if: always()
+        uses: ./.github/actions/upload-test-failures
+        with:
+          job-name: ${{ github.job }}
   test-ubuntu-io-threads:
     runs-on: ubuntu-latest
     if: |
@@ -2223,6 +2276,7 @@ jobs:
       - test-ubuntu-32bit
       - test-ubuntu-tls
       - test-ubuntu-tls-no-tls
+      - test-ubuntu-cmake-tls-module
       - test-ubuntu-io-threads
       - test-ubuntu-tls-io-threads
       - test-valgrind-test
@@ -2407,6 +2461,7 @@ jobs:
       - test-ubuntu-32bit
       - test-ubuntu-tls
       - test-ubuntu-tls-no-tls
+      - test-ubuntu-cmake-tls-module
       - test-ubuntu-io-threads
       - test-ubuntu-tls-io-threads
       - test-ubuntu-reclaim-cache

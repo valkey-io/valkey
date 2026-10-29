@@ -780,7 +780,7 @@ hashtableType hashWithVolatileItemsHashtableType = {
 
 /* Hashtable type without destructor */
 hashtableType sdsReplyHashtableType = {
-    .hashFunction = dictSdsCaseHash,
+    .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare};
 
 /* Keylist hash table type has unencoded Objects as keys and

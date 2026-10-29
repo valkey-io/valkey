@@ -10,7 +10,9 @@
 #undef NDEBUG
 #include <cassert>
 #include <climits>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <sys/types.h>
@@ -814,6 +816,176 @@ TEST_F(VsetTest, TestVsetLargeExpiryBucketOverflow) {
 
     vsetRelease(&set);
     for (int i = 0; i < total_entries; i++) mockFreeEntry(entries[i]);
+}
+
+#define RAX_BASE_ENTRIES 128
+
+/* The base entries share one bucket and overflow the vector limit, forcing a RAX. */
+static void makeRaxBase(vset *set, mock_entry **base) {
+    vsetInit(set);
+    for (size_t i = 0; i < RAX_BASE_ENTRIES; i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "rax_base_%zu", i);
+        base[i] = mockCreateEntry(key, 80);
+        ASSERT_TRUE(vsetAddEntry(set, mockGetExpiry, base[i]));
+    }
+}
+
+TEST_F(VsetTest, TestVsetHasHidden) {
+    /* Expiration is strict: a deadline equal to the time is live. */
+    {
+        vset set;
+        vsetInit(&set);
+        mock_entry *entry = mockCreateEntry("single", 50);
+        ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entry));
+        ASSERT_FALSE(vsetHasHidden(&set, mockGetExpiry, 50));
+        ASSERT_TRUE(vsetHasHidden(&set, mockGetExpiry, 51));
+        vsetRelease(&set);
+        mockFreeEntry(entry);
+    }
+
+    /* A top-level vector is kept sorted, whatever the insertion order, so its
+     * earliest entry decides. */
+    {
+        vset set;
+        vsetInit(&set);
+        mock_entry *entries[] = {
+            mockCreateEntry("vector_a", 300),
+            mockCreateEntry("vector_b", 120),
+            mockCreateEntry("vector_c", 200),
+        };
+        const size_t count = sizeof(entries) / sizeof(entries[0]);
+        for (size_t i = 0; i < count; i++) ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[i]));
+        ASSERT_FALSE(vsetHasHidden(&set, mockGetExpiry, 120));
+        ASSERT_TRUE(vsetHasHidden(&set, mockGetExpiry, 121));
+        vsetRelease(&set);
+        for (size_t i = 0; i < count; i++) mockFreeEntry(entries[i]);
+    }
+
+    /* A RAX answers from its earliest bucket: by the entries while the bucket's
+     * window is open, by the bucket's key once it has closed. */
+    {
+        vset set;
+        mock_entry *base[RAX_BASE_ENTRIES];
+        makeRaxBase(&set, base);
+        mock_entry *later = mockCreateEntry("later_window", 20000);
+        ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, later));
+        ASSERT_FALSE(vsetHasHidden(&set, mockGetExpiry, 80));
+        ASSERT_TRUE(vsetHasHidden(&set, mockGetExpiry, 81));
+        ASSERT_TRUE(vsetHasHidden(&set, mockGetExpiry, 19000));
+        vsetRelease(&set);
+        for (size_t i = 0; i < RAX_BASE_ENTRIES; i++) mockFreeEntry(base[i]);
+        mockFreeEntry(later);
+    }
+}
+
+/* An expiry drawn to exercise every encoding: spread deadlines (vector
+ * buckets), a few shared deadlines (hashtable buckets), deadlines packed into
+ * one window, and the LLONG_MAX bucket. */
+static long long liveTestExpiry(int style, long long base) {
+    switch (style) {
+    case 0: return base + rand() % 200000;
+    case 1: return base + (long long)(rand() % 6) * 20000;
+    case 2: return base + rand() % 40;
+    default: return rand() % 8 == 0 ? LLONG_MAX - rand() % 3 : base + rand() % 30000;
+    }
+}
+
+/* The live census, the bounded collection and both hidden checks agree with a
+ * brute-force scan at every time that matters: each entry's own expiry and its
+ * neighbours, and the edges of the windows the RAX files it under. A time of
+ * LLONG_MAX is never a command time, so it is not probed. */
+#define LIVE_TEST_MAX_ENTRIES 2600 /* A round adds at most 100 + 2499 entries. */
+#define LIVE_TEST_EDGES 8
+/* Four fixed probes, and LIVE_TEST_EDGES for each of at most 64 sampled entries. */
+#define LIVE_TEST_MAX_PROBES (4 + 64 * LIVE_TEST_EDGES)
+
+static int comparePointers(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)(*(void *const *)a), y = (uintptr_t)(*(void *const *)b);
+    return (x > y) - (x < y);
+}
+
+TEST_F(VsetTest, TestVsetLiveEntriesMatchBruteForce) {
+    static mock_entry *entries[LIVE_TEST_MAX_ENTRIES];
+    static void *live[LIVE_TEST_MAX_ENTRIES];
+    static void *out[LIVE_TEST_MAX_ENTRIES + 1];
+    static long long probes[LIVE_TEST_MAX_PROBES];
+
+    srand(12345);
+    for (int round = 0; round < 48; round++) {
+        int style = round % 4;
+        int n = round < 8 ? round * 23 : 100 + rand() % 2500;
+        long long base = 1000000 + rand() % 100000;
+        vset set;
+        vsetInit(&set);
+        size_t count = 0;
+        for (int i = 0; i < n; i++) {
+            char key[32];
+            snprintf(key, sizeof(key), "live_%d_%d", round, i);
+            entries[count] = mockCreateEntry(key, liveTestExpiry(style, base));
+            ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[count]));
+            count++;
+        }
+        /* Removals and expiry changes reshape the buckets the walks read. */
+        for (int k = 0; k < n / 3 && count > 0; k++) {
+            size_t i = rand() % count;
+            if (rand() % 2) {
+                ASSERT_TRUE(vsetRemoveEntry(&set, mockGetExpiry, entries[i]));
+                mockFreeEntry(entries[i]);
+                entries[i] = entries[--count];
+            } else {
+                mock_entry *old = entries[i];
+                long long old_expiry = mockGetExpiry(old);
+                entries[i] = mockEntryUpdate(old, liveTestExpiry(style, base));
+                ASSERT_TRUE(vsetUpdateEntry(&set, mockGetExpiry, old, entries[i], old_expiry, mockGetExpiry(entries[i])));
+            }
+        }
+
+        size_t num_probes = 0;
+        probes[num_probes++] = 0;
+        probes[num_probes++] = base - 1;
+        probes[num_probes++] = base;
+        probes[num_probes++] = LLONG_MAX - 1;
+        for (size_t i = 0; i < count; i += 1 + count / 64) {
+            long long e = mockGetExpiry(entries[i]);
+            if (e >= LLONG_MAX - 16) continue;
+            long long min_window = e & ~15LL, max_window = e & ~8191LL;
+            long long edges[LIVE_TEST_EDGES] = {e - 1, e, e + 1, min_window, min_window + 16,
+                                                max_window + 8191, max_window + 8192, max_window + 8193};
+            for (int j = 0; j < LIVE_TEST_EDGES; j++) probes[num_probes++] = edges[j];
+        }
+
+        for (size_t p = 0; p < num_probes; p++) {
+            long long now = probes[p];
+            size_t num_live = 0;
+            bool hidden = false;
+            for (size_t i = 0; i < count; i++) {
+                if (mockGetExpiry(entries[i]) < now)
+                    hidden = true;
+                else
+                    live[num_live++] = entries[i];
+            }
+            qsort(live, num_live, sizeof(void *), comparePointers);
+            ASSERT_EQ(vsetCountLive(&set, mockGetExpiry, now), num_live) << "round " << round << " now " << now;
+            ASSERT_EQ(vsetHasHidden(&set, mockGetExpiry, now), hidden) << "round " << round << " now " << now;
+            if (hidden) {
+                ASSERT_TRUE(vsetMayHaveHidden(&set, mockGetExpiry, now)) << "round " << round << " now " << now;
+            }
+
+            size_t got = vsetCollectLive(&set, mockGetExpiry, now, num_live, out);
+            ASSERT_EQ(got, num_live) << "round " << round << " now " << now;
+            qsort(out, got, sizeof(void *), comparePointers);
+            ASSERT_EQ(memcmp(out, live, got * sizeof(void *)), 0) << "round " << round << " now " << now;
+            /* One fewer than the live entries is not enough room. */
+            if (num_live > 0) {
+                ASSERT_EQ(vsetCollectLive(&set, mockGetExpiry, now, num_live - 1, out), num_live)
+                    << "round " << round << " now " << now;
+            }
+        }
+
+        vsetRelease(&set);
+        for (size_t i = 0; i < count; i++) mockFreeEntry(entries[i]);
+    }
 }
 
 TEST_F(VsetTest, TestVsetDefrag) {

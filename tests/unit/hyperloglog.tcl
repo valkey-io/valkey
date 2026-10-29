@@ -117,6 +117,24 @@ start_server {tags {"hll"}} {
         }
     } {} {needs:pfdebug}
 
+    test {PFMERGE into a short sparse HLL does not abort when deltalen is zero} {
+        # hll_dst: header (16 bytes) + XZERO(65){0x40,0x40} + XZERO(16319){0x7f,0xbe}
+        # = 20 bytes, stored as SDS_TYPE_5.  With hll-sparse-max-bytes below the
+        # string length the sdsResize() guard is skipped.  Updating register 0 in
+        # the XZERO(65) produces VAL(count,1)+ZERO(64) -- same 2 bytes as the XZERO,
+        # so deltalen == 0.  The SDS_TYPE_5 branch of sdsIncrLen() rejected zero
+        # increment and aborted the server.
+        set hdr [binary format a4c4x8 HYLL {1 0 0 0}]
+        # hll_dst: XZERO(65)={0x40,0x40} + XZERO(16319)={0x7f,0xbe}, total 20 bytes
+        r set hll_dst "$hdr\x40\x40\x7f\xbe"
+        # hll_src: VAL(1,1)={0x80} + XZERO(16383)={0x7f,0xfe}, total 19 bytes
+        r set hll_src "$hdr\x80\x7f\xfe"
+        r config set hll-sparse-max-bytes 0
+        r pfmerge hll_dst hll_src
+        r config set hll-sparse-max-bytes 3000
+        assert_equal 1 [r pfcount hll_dst]
+    }
+
     test {HyperLogLog sparse encoding stress test} {
         for {set x 0} {$x < 1000} {incr x} {
             r del hll1

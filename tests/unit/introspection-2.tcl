@@ -180,6 +180,12 @@ start_server {tags {"introspection"}} {
         assert_equal {key1 key2} [r command getkeys lcs key1 key2]
     }
 
+    test {COMMAND GETKEYS PFMERGE without source keys} {
+        assert_equal {k1} [r command getkeys pfmerge k1]
+        assert_equal {{k1 {RW access insert}}} [r command getkeysandflags pfmerge k1]
+        assert_equal {k1 k2} [r command getkeys pfmerge k1 k2]
+    }
+
     test {COMMAND GETKEYS MORE THAN 256 KEYS} {
         set all_keys [list]
         set numkeys 260

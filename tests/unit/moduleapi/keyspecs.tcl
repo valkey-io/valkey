@@ -43,6 +43,8 @@ start_server {tags {"modules"}} {
         assert_equal [lindex $keyspecs 0] {flags {RO access} begin_search {type index spec {index 1}} find_keys {type range spec {lastkey 0 keystep 1 limit 0}}}
         assert_equal [lindex $keyspecs 1] {flags {RW update} begin_search {type index spec {index 2}} find_keys {type range spec {lastkey 0 keystep 1 limit 0}}}
         assert_equal [r command getkeys kspec.tworanges foo bar baz quux] {foo bar}
+        # The second spec starts past the last argument and matches nothing
+        assert_equal [r command getkeys kspec.tworanges foo] {foo}
     }
 
     test "Module key specs: Two ranges with gap" {
@@ -57,6 +59,10 @@ start_server {tags {"modules"}} {
         assert_equal [lindex $keyspecs 0] {flags {RO access} begin_search {type index spec {index 1}} find_keys {type range spec {lastkey 0 keystep 1 limit 0}}}
         assert_equal [lindex $keyspecs 1] {flags {RW update} begin_search {type index spec {index 3}} find_keys {type range spec {lastkey 0 keystep 1 limit 0}}}
         assert_equal [r command getkeys kspec.tworangeswithgap foo bar baz quux] {foo baz}
+    }
+
+    test "Module key specs: Incomplete spec past the last argument falls back to getkeys-api" {
+        assert_equal [r command getkeys kspec.incompletewithgetkeys a b c] {a c}
     }
 
     test "Module key specs: Keyword-only spec clears the legacy triple" {
@@ -102,12 +108,14 @@ start_server {tags {"modules"}} {
         assert_equal [lindex $keyspecs 3] {flags {RW update} begin_search {type index spec {index 3}} find_keys {type keynum spec {keynumidx 0 firstkey 1 keystep 1}}}
         assert_equal [lindex $keyspecs 4] {flags {RW update} begin_search {type keyword spec {keyword MOREKEYS startfrom 5}} find_keys {type range spec {lastkey -1 keystep 1 limit 0}}}
         assert_equal [r command getkeys kspec.complex2 foo bar 2 baz quux banana STORE dst dummy MOREKEYS hey ho] {dst foo bar baz quux hey ho}
+        # The keynum spec starts past the last argument and matches nothing
+        assert_equal [r command getkeys kspec.complex2 foo bar] {foo bar}
     }
 
     test "Module command list filtering" {
         ;# Note: we piggyback this tcl file to test the general functionality of command list filtering
         set reply [r command list filterby module keyspecs]
-        assert_equal [lsort $reply] {kspec.complex1 kspec.complex2 kspec.keyword kspec.none kspec.nonewithgetkeys kspec.tworanges kspec.tworangeswithgap}
+        assert_equal [lsort $reply] {kspec.complex1 kspec.complex2 kspec.incompletewithgetkeys kspec.keyword kspec.none kspec.nonewithgetkeys kspec.tworanges kspec.tworangeswithgap}
         assert_equal [r command getkeys kspec.complex2 foo bar 2 baz quux banana STORE dst dummy MOREKEYS hey ho] {dst foo bar baz quux hey ho}
     }
 
@@ -138,6 +146,7 @@ start_server {tags {"modules"}} {
         assert_equal "OK" [r ACL DRYRUN testuser kspec.tworanges rw rw]
         assert_match {*has no permissions to access the 'read' key*} [r ACL DRYRUN testuser kspec.tworanges rw read]
         assert_match {*has no permissions to access the 'write' key*} [r ACL DRYRUN testuser kspec.tworanges write rw]
+        assert_match {*has no permissions to access the 'write' key*} [r ACL DRYRUN testuser kspec.tworanges write]
     }
 
     foreach cmd {kspec.none kspec.tworanges} {

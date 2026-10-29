@@ -2422,6 +2422,15 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
         first = 0;
         if (spec->begin_search_type == KSPEC_BS_INDEX) {
             first = spec->bs.index.pos;
+            /* The optional arguments holding this spec's keys were omitted, e.g.
+             * PFMERGE with no source keys. Like a missing keyword, the spec matches
+             * nothing, instead of invalidating the keys found by the other specs.
+             * An incomplete spec still defers to the getkeys callback, which may
+             * find keys elsewhere. */
+            if (first >= argc) {
+                if (spec->flags & CMD_KEY_INCOMPLETE) goto invalid_spec;
+                continue;
+            }
         } else if (spec->begin_search_type == KSPEC_BS_KEYWORD) {
             int start_index =
                 spec->bs.keyword.startfrom > 0 ? spec->bs.keyword.startfrom : argc + spec->bs.keyword.startfrom;

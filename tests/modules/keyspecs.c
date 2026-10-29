@@ -100,6 +100,36 @@ int createKspecTwoRangesWithGap(ValkeyModuleCtx *ctx) {
     return VALKEYMODULE_OK;
 }
 
+int createKspecIncompleteWithGetkeys(ValkeyModuleCtx *ctx) {
+    /* An incomplete spec that can start past the last argument. Key extraction
+     * must still fall back to the getkeys callback, which reports odd positions. */
+    if (ValkeyModule_CreateCommand(ctx,"kspec.incompletewithgetkeys",kspec_impl,"getkeys-api",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    ValkeyModuleCommand *command = ValkeyModule_GetCommand(ctx,"kspec.incompletewithgetkeys");
+    ValkeyModuleCommandInfo info = {
+        .version = VALKEYMODULE_COMMAND_INFO_VERSION,
+        .arity = -2,
+        .key_specs = (ValkeyModuleCommandKeySpec[]){
+            {
+                .flags = VALKEYMODULE_CMD_KEY_RO | VALKEYMODULE_CMD_KEY_ACCESS,
+                .begin_search_type = VALKEYMODULE_KSPEC_BS_INDEX,
+                .bs.index.pos = 1,
+            },
+            {
+                .flags = VALKEYMODULE_CMD_KEY_RO | VALKEYMODULE_CMD_KEY_ACCESS | VALKEYMODULE_CMD_KEY_INCOMPLETE,
+                .begin_search_type = VALKEYMODULE_KSPEC_BS_INDEX,
+                .bs.index.pos = 4,
+            },
+            {0}
+        }
+    };
+    if (ValkeyModule_SetCommandInfo(command, &info) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    return VALKEYMODULE_OK;
+}
+
 int createKspecKeyword(ValkeyModuleCtx *ctx) {
     /* Only keyword-based specs. The legacy triple is wiped and set to (0,0,0). */
     if (ValkeyModule_CreateCommand(ctx,"kspec.keyword",kspec_impl,"",3,-1,1) == VALKEYMODULE_ERR)
@@ -229,6 +259,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (createKspecNoneWithGetkeys(ctx) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
     if (createKspecTwoRanges(ctx) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
     if (createKspecTwoRangesWithGap(ctx) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (createKspecIncompleteWithGetkeys(ctx) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
     if (createKspecKeyword(ctx) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
     if (createKspecComplex1(ctx) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
     if (createKspecComplex2(ctx) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;

@@ -103,6 +103,41 @@ int acquire_gil(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     return VALKEYMODULE_OK;
 }
 
+/* Misuses the API: the postponed length is never set. The thread safe context
+ * is kept until postponed_unmatched_free, after the client was unblocked. */
+static ValkeyModuleCtx *postponed_unmatched_ctx = NULL;
+
+void *postponed_unmatched_worker(void *arg) {
+    ValkeyModuleBlockedClient *bc = arg;
+    postponed_unmatched_ctx = ValkeyModule_GetThreadSafeContext(bc);
+    ValkeyModule_ReplyWithArray(postponed_unmatched_ctx, VALKEYMODULE_POSTPONED_LEN);
+    ValkeyModule_UnblockClient(bc, NULL);
+    return NULL;
+}
+
+int postponed_unmatched_thread(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
+
+    pthread_t tid;
+    int res = pthread_create(&tid, NULL, postponed_unmatched_worker, bc);
+    assert(res == 0);
+    pthread_detach(tid);
+
+    return VALKEYMODULE_OK;
+}
+
+int postponed_unmatched_free(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    ValkeyModule_FreeThreadSafeContext(postponed_unmatched_ctx);
+    postponed_unmatched_ctx = NULL;
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 typedef struct {
     ValkeyModuleString **argv;
     int argc;
@@ -1128,6 +1163,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "unblock_by_timer", unblock_by_timer, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "postponed_unmatched_thread", postponed_unmatched_thread, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "postponed_unmatched_free", postponed_unmatched_free, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

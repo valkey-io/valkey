@@ -173,6 +173,15 @@ int rw_verbatim(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithVerbatimString(ctx, verbatim_str, verbatim_len);
 }
 
+/* Misuses the API: the postponed length is never set. */
+int rw_postponed_unmatched(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -208,6 +217,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"rw.error_format",rw_error_format,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"rw.verbatim",rw_verbatim,"",0,0,0) != VALKEYMODULE_OK)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"rw.postponed_unmatched",rw_postponed_unmatched,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

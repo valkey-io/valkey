@@ -305,12 +305,16 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
         }
 
         const char *key = lua_tostring(lua, -2);
+        /* Keys are matched case-insensitively, so the same argument can be
+         * given more than once. The last one visited wins. */
         if (!strcasecmp(key, "function_name")) {
+            if (name) ValkeyModule_FreeString(NULL, name);
             if (!(name = luaGetStringObject(lua, -1))) {
                 err = "function_name argument given to server.register_function must be a string";
                 goto error;
             }
         } else if (!strcasecmp(key, "description")) {
+            if (desc) ValkeyModule_FreeString(NULL, desc);
             if (!(desc = luaGetStringObject(lua, -1))) {
                 err = "description argument given to server.register_function must be a string";
                 goto error;
@@ -322,7 +326,11 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
             }
             int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
-            script = ValkeyModule_Alloc(sizeof(*script));
+            if (script) {
+                lua_unref(lua, script->function_ref);
+            } else {
+                script = ValkeyModule_Alloc(sizeof(*script));
+            }
             script->lua = lua;
             script->function_ref = lua_function_ref;
             continue; /* value was already popped, so no need to pop it out. */

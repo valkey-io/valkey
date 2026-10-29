@@ -1415,8 +1415,8 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
 
 /* server.log() */
 static int luaLogCommand(lua_State *lua) {
+    /* There is no run context when called from a library body during FUNCTION LOAD. */
     luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
 
     int j, argc = lua_gettop(lua);
     int level;
@@ -1461,7 +1461,7 @@ static int luaLogCommand(lua_State *lua) {
     default: ValkeyModule_Assert(0);
     }
 
-    ValkeyModule_Log(rctx->module_ctx, level_str, "%s", log);
+    ValkeyModule_Log(rctx ? rctx->module_ctx : NULL, level_str, "%s", log);
     ValkeyModule_Free(log);
     return 0;
 }

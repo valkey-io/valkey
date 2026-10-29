@@ -1724,6 +1724,26 @@ start_server {tags {"scripting external:skip"}} {
     }
 }
 
+start_server {tags {"scripting external:skip"}} {
+    test {Forked scripting debug session does not suspend save points} {
+        set rd [valkey_deferring_client]
+        $rd script debug yes
+        assert_equal OK [$rd read]
+        $rd eval {return 'hello'} 0
+        assert_match {*Stopped at*} [$rd read]
+
+        r config set save "1 1"
+        r set foo bar
+        wait_for_condition 50 100 {
+            [s rdb_changes_since_last_save] == 0
+        } else {
+            fail "Save point did not fire while a forked debug session was open"
+        }
+        $rd close
+        r config set save ""
+    }
+}
+
 start_server {tags {"scripting needs:debug external:skip"}} {
     test {Test scripting debug protocol parsing} {
         r script debug sync

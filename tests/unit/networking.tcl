@@ -164,6 +164,7 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
             # Clearing the password re-enables protected mode
             assert_equal {OK} [r config set requirepass ""]
             set r2 [get_nonloopback_client]
+            catch {$r2 ping} err
             assert_match {*DENIED*} $err
             $r2 close
 

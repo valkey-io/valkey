@@ -1860,7 +1860,7 @@ void replconfCommand(client *c) {
             else
                 c->flag.repl_rdbonly = 0;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-filter-only")) {
-            /* REPLCONFG RDB-FILTER-ONLY is used to define "include" filters
+            /* REPLCONF RDB-FILTER-ONLY is used to define "include" filters
              * for the RDB snapshot. Currently we only support a single
              * include filter: "functions". In the future we may want to add
              * other filters like key patterns, key types, non-volatile, module
@@ -5538,7 +5538,7 @@ void replicationRequestAckFromReplicas(void) {
     server.get_ack_from_replicas = 1;
 }
 
-/* This function return client woff. If the script is currently running,
+/* This function returns client woff. If the script is currently running,
  * returns the actual client woff */
 long long getClientWriteOffset(client *c) {
     if (scriptIsRunning()) {

@@ -1878,7 +1878,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
             }
 
             /* We know that (at least) one of the AOF files has data (total_size > 0),
-             * so empty incr AOF file doesn't count as a AOF_EMPTY result */
+             * so empty incr AOF file doesn't count as an AOF_EMPTY result */
             if (ret == AOF_EMPTY) ret = AOF_OK;
 
             /* If the truncated file is not the last file, we consider this to be a fatal error. */

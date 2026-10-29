@@ -767,7 +767,7 @@ socket_err:
 }
 
 /* Cluster node sanity check. Returns C_OK if the node id
- * is valid an C_ERR otherwise. */
+ * is valid and C_ERR otherwise. */
 int verifyClusterNodeId(const char *name, int length) {
     if (length != CLUSTER_NAMELEN) return C_ERR;
     for (int i = 0; i < length; i++) {

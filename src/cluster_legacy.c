@@ -2712,7 +2712,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  * value.
  * -------------------------------------------------------------------------- */
 
-/* Before of the addNode() or Exists() operations we always remove expired
+/* Before the addNode() or Exists() operations we always remove expired
  * entries from the black list. This is an O(N) operation but it is not a
  * problem since add / exists operations are called very infrequently and
  * the hash table is supposed to contain very little elements at max.

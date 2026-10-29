@@ -289,7 +289,7 @@ static pVector *pvMakeRoomFor(pVector *pv, size_t additional) {
     } else {
         pv = zrealloc_usable(pv, required, &required);
     }
-    /* Make sure we have the capacity to save the alloation size */
+    /* Make sure we have the capacity to save the allocation size */
     assert(required <= (size_t)((1ULL << PV_ALLOC_BITS) - 1));
     pv->alloc = required;
     return pv;
@@ -384,7 +384,7 @@ pVector *pvSplit(pVector **pv_ptr, uint32_t split_index) {
 
     /* Handle edge cases: */
 
-    /* 1. null vector, ot split index which includes the entire vector in the left size
+    /* 1. null vector, or split index which includes the entire vector in the left size
      * Should simply return a NULL vector (right size).
      */
     if (!pv || split_index >= pvLen(pv)) return NULL;
@@ -427,7 +427,7 @@ pVector *pvSplit(pVector **pv_ptr, uint32_t split_index) {
  *
  * Return:
  *   A pointer to the newly allocated pVector.
- *   Note that a NULL is a !!valid!! cector which size is zero.
+ *   Note that a NULL is a !!valid!! vector which size is zero.
  *
  * Note:
  *   The logical length (`len`) of the returned vector is initialized to 0.
@@ -622,7 +622,7 @@ void pvFree(pVector *pv) {
  *   A (possibly reallocated) pVector with the new element inserted at the end.
  *
  * Notes:
- *   Internally this uses pvInsert() with the current length of the vector,
+ *   Internally this uses pvInsertAt() with the current length of the vector,
  *   effectively appending the element. */
 pVector *pvPush(pVector *pv, void *elem) {
     return pvInsertAt(pv, elem, pvLen(pv));
@@ -1227,7 +1227,7 @@ static inline vsetBucket *insertToBucket_RAX(vsetGetExpiryFunc getExpiry, vsetBu
         if (pvLen(pv) == VOLATILESET_VECTOR_BUCKET_MAX_SIZE) {
             /* Try to split the bucket. If not possible switch to hashtable encoding. */
             if (!splitBucketIfPossible(target, getExpiry, bucket, bucket_ts, node)) {
-                /* Can't split? insrt to the vector anyway, it will just expand to hashtable */
+                /* Can't split? insert to the vector anyway, it will just expand to hashtable */
                 bucket = insertToBucket_VECTOR(getExpiry, bucket, entry, expiry, -1);
                 assert(vsetBucketType(bucket) == VSET_BUCKET_HT);
                 /* In order to avoid rax override, we directly change the node data */
@@ -1272,7 +1272,7 @@ static inline vsetBucket *removeFromBucket_VECTOR(vsetGetExpiryFunc getExpiry, v
     vsetBucket *new_bucket = bucket;
     bool success = false;
     pVector *pv = vsetBucketVector(bucket);
-    /* In case we we removed the entry */
+    /* In case we removed the entry */
     uint32_t vlen = pvLen(pv);
     if (vlen <= 2) {
         /* convert to single if needed */

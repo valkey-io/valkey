@@ -240,7 +240,7 @@ typedef enum {
 
 /* Flag indicating that the replication stream for keys which have already been processed should be
  * forwarded to the iteration client.  Used for non-consistent iteration to track changes
- * to keys already processed.  By tracking changes, this allows an non-consistent iteration client
+ * to keys already processed.  By tracking changes, this allows a non-consistent iteration client
  * to achieve a consistent view at the END of the iteration.
  * NOTE:  Replication events will be provided ordered and synchronized with any SWAPDB events. */
 #define BGITERATOR_FLAG_REPLICATION (1 << 1)

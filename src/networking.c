@@ -1367,7 +1367,7 @@ void addReplyDouble(client *c, double d) {
         serverAssert(start >= 0);
         dbuf[start] = '$';
 
-        /* Convert `dlen` to string, putting it's digits after '$' and before the
+        /* Convert `dlen` to string, putting its digits after '$' and before the
          * formatted double string. */
         for (int i = digits, val = dlen; val && i > 0; --i, val /= 10) {
             dbuf[start + i] = "0123456789"[val % 10];
@@ -4145,7 +4145,7 @@ void parseMultibulkBuffer(client *c) {
  * argv_len, argc, read_flag.
  *
  * Returns a non-zero if parsing is complete (either error or success) and zero
- * if the input buffer doesn't contain a enough data to parse a complete
+ * if the input buffer doesn't contain enough data to parse a complete
  * command. If non-zero is returned, the returned value is a read flag, either
  * READ_FLAGS_PARSING_COMPLETED on success or one of the READ_FLAGS_ERROR_(...)
  * values on parse error. */

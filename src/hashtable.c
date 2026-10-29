@@ -39,7 +39,7 @@
  * - The hashtable was designed by Viktor Söderqvist.
  * - The bucket chaining is based on an idea by Madelyn Olson.
  * - The cache-line sized bucket is inspired by ideas used in 'Swiss tables'
- *   (Benzaquen, Evlogimenos, Kulukundis, and Perepelitsa et. al.).
+ *   (Benzaquen, Evlogimenos, Kulukundis, and Perepelitsa et al.).
  * - The incremental rehashing using two tables and much of the API is based on
  *   the design used in dict, designed by Salvatore Sanfilippo.
  * - The original scan algorithm was designed by Pieter Noordhuis.
@@ -1625,7 +1625,7 @@ bool hashtableFind(hashtable *ht, const void *key, void **found) {
  * NULL if not found. To get the entry, dereference the returned pointer. The
  * pointer can be used to replace the entry with an equivalent entry (same
  * key, same hash value), but note that the pointer may be invalidated by future
- * accesses to the hash table due to incermental rehashing, so use with care. */
+ * accesses to the hash table due to incremental rehashing, so use with care. */
 void **hashtableFindRef(hashtable *ht, const void *key) {
     if (hashtableSize(ht) == 0) return NULL;
     uint64_t hash = hashKey(ht, key);

@@ -727,7 +727,7 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures
- * used by the hooks API ValkeyModule_RegisterToServerEvent().
+ * used by the hooks API ValkeyModule_SubscribeToServerEvent().
  *
  * The structures always start with a 'version' field. This is useful
  * when we want to pass a reference to the structure to the core APIs,

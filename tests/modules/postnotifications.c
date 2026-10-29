@@ -43,7 +43,7 @@
  *
  * In addition, the module register a new command, 'postnotification.async_set', that performs a set
  * command from a background thread. This allows to check the 'ValkeyModule_AddPostNotificationJob' on
- * notifications that was triggered on a background thread. */
+ * notifications that were triggered on a background thread. */
 
 #define _BSD_SOURCE
 #define _DEFAULT_SOURCE /* For usleep */

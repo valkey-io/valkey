@@ -4541,7 +4541,7 @@ void sentinelCheckObjectivelyDown(sentinelValkeyInstance *primary) {
 }
 
 /* Receive the SENTINEL is-primary-down-by-addr reply, see the
- * sentinelAskPrimariesStateToOtherSentinels() function for more information. */
+ * sentinelAskPrimaryStateToOtherSentinels() function for more information. */
 void sentinelReceiveIsPrimaryDownReply(valkeyAsyncContext *c, void *reply, void *privdata) {
     sentinelValkeyInstance *ri = privdata;
     instanceLink *link = c->data;

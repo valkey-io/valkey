@@ -234,7 +234,7 @@ static inline void rioCloseASAP(rio *r) {
 
 /* This function allows to know if there was a read error in any past
  * operation, since the rio stream was created or since the last call
- * to rioClearError(). */
+ * to rioClearErrors(). */
 static inline int rioGetReadError(rio *r) {
     return (r->flags & RIO_FLAG_READ_ERROR) != 0;
 }

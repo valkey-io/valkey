@@ -21,7 +21,7 @@ static const double EPSILON = 0.0001;                         /* values below th
 static const double TOKENS_BURST_RATE_SEC = 0.1;              /* burst capacity in seconds of sustained rate */
 static const double MIN_ADJUST_AFTER_DISABLE = 100.0;         /* initial rate when recovering from halted state */
 
-static hashtable *metrics_table = NULL;    /* Maps throtter type name to metricsEntry*. */
+static hashtable *metrics_table = NULL;    /* Maps throttler type name to metricsEntry*. */
 static list *throttler_list = NULL;        /* all currently registered throttlers */
 static long long total_throttled_commands; /* framework-level cumulative throttled-command counter */
 

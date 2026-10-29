@@ -1265,7 +1265,7 @@ void hincrbyCommand(client *c) {
         dbUpdateObjectWithVolatileItemsTracking(c->db, o);
     }
     signalModifiedKey(c, c->db, c->argv[1]);
-    /* In case we overitten an expired field, we need to act as if it was just expired */
+    /* In case we overwrote an expired field, we need to act as if it was just expired */
     if (expired_overwritten) {
         server.stat_expiredfields++;
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
@@ -1349,7 +1349,7 @@ void hincrbyfloatCommand(client *c) {
         dbUpdateObjectWithVolatileItemsTracking(c->db, o);
     }
     signalModifiedKey(c, c->db, c->argv[1]);
-    /* In case we overitten an expired field, we need to act as if it was just expired */
+    /* In case we overwrote an expired field, we need to act as if it was just expired */
     if (expired_overwritten) {
         server.stat_expiredfields++;
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
@@ -1669,7 +1669,7 @@ void hsetnxCommand(client *c) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
-        /* In case we overitten an expired field, we need to act as if it was just expired */
+        /* In case we overwrote an expired field, we need to act as if it was just expired */
         if (expired_overwritten) {
             server.stat_expiredfields++;
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
@@ -1701,7 +1701,7 @@ void hsetCommand(client *c) {
     for (i = 2; i < c->argc; i += 2) {
         bool expired = false;
         created += !hashTypeSet(o, objectGetVal(c->argv[i]), objectGetVal(c->argv[i + 1]), EXPIRY_NONE, HASH_SET_COPY, &expired);
-        /* NOTE - We do not need to track all expired items which are overitten in order to propagate them, since the replica will surely just override them
+        /* NOTE - We do not need to track all expired items which are overwritten in order to propagate them, since the replica will surely just override them
          * we just need to remember that we had such items to report the keyspace notification and update the stats */
         if (expired) expired_overwritten++;
     }
@@ -1709,7 +1709,7 @@ void hsetCommand(client *c) {
         dbUpdateObjectWithVolatileItemsTracking(c->db, o);
     }
     signalModifiedKey(c, c->db, c->argv[1]);
-    /* In case we overitten an expired field, we need to act as if it was just expired */
+    /* In case we overwrote an expired field, we need to act as if it was just expired */
     if (expired_overwritten) {
         server.stat_expiredfields += expired_overwritten;
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
@@ -3197,7 +3197,7 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
             }
         }
     } else {
-        /* We're already defraging volatile set. */
+        /* We're already defragging volatile set. */
         vset *vset = hashTypeGetVolatileSet(ob);
         vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc);
         if (vset_cursor->cursor == 0) {

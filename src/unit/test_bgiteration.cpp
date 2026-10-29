@@ -50,7 +50,7 @@ static bool iteratorRepldoneFn(void *privdata) {
     return true;
 }
 
-// A more complicated repldone function that can delay the replcation done condition.
+// A more complicated repldone function that can delay the replication done condition.
 static int replDoneRejected;
 static bool iteratorRepldoneFnNotBeingReadyInitially(void *privdata) {
     EXPECT_EQ(privdata, PRIVDATA);
@@ -144,7 +144,7 @@ static const char *logfile = "";
  * are simulating CMD or CME, full scan, or slot-based.  The majority of tests are independent of
  * these concerns.
  *
- * However, there are some tests which are are unique to these configurations and use a specialized
+ * However, there are some tests which are unique to these configurations and use a specialized
  * derived class to handle the differences.  We do not want to duplicate all of the tests for
  * the different configurations, but we do want to ensure that each configuration works properly.
  *   - bgIterationTestCluster - handles tests unique to full scan in cluster mode
@@ -1186,7 +1186,7 @@ TEST_F(BgIterationTest, modFutureItem) {
 
 // Modify a future item, without replication but with consistency.  (Like a SAVE operation)
 // Our expectation for this case is that the modification SHOULD be blocked, as we have to save the
-//  the item in it's state before the modification.  To reduce blocking time, the item should be
+//  item in its state before the modification.  To reduce blocking time, the item should be
 //  moved to the head of the queue - there's no replication in this case, so out-of-order processing
 //  isn't a concern.
 TEST_F(BgIterationTest, modFutureItem_start) {

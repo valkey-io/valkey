@@ -9,9 +9,7 @@
 #define UNUSED(x) (void)(x)
 
 /* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
 #define ValkeyModule_ReplyRaw VM_ReplyRaw
 
 static int n_events = 0;
@@ -486,12 +484,7 @@ int test_call_script_mode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
 
 /* Reply handler used by VM_CallArgv wrappers: forwards the raw RESP reply to the client */
 static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
-    UNUSED(ctx);
-    if (proto_len == 0) {
-        /* DRY RUN FLAG case */
-        ValkeyModule_ReplyWithError(mctx, "NULL reply returned");
-        return 1;
-    }
+    if (ctx) *(int *)ctx = 1;
     ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     return 0;
 }
@@ -591,7 +584,9 @@ int test_vm_call_argv_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
     };
 
     /* argv[2] is the command name; pass argv+2 so it becomes argv[0] of the call */
-    if (ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, NULL) == VALKEYMODULE_ERR) {
+    int replied = 0;
+    int ret = ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, &replied);
+    if (ret == VALKEYMODULE_ERR || !replied) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }
     return VALKEYMODULE_OK;

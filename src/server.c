@@ -385,7 +385,7 @@ void dictHashtableDestructor(void *val) {
 
 /* Returns 1 when keys match */
 int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
+    size_t l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;

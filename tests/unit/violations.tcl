@@ -89,6 +89,38 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         r object encoding H1
     } {hashtable}
 }
+
+# A 2^31 byte length is negative as an int
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {SADD the same 2GiB member twice} {
+        r config set proto-max-bulk-len 10000000000 ;#10gb
+        r config set client-query-buffer-limit 10000000000 ;#10gb
+        for {set j 0} {$j < 2} {incr j} {
+            r write "*3\r\n\$4\r\nSADD\r\n\$1\r\nS\r\n"
+            write_big_bulk 2147483648 ;#2gb
+        }
+        r scard S
+    } {1}
+}
+
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {Evict a key with a 2GiB name} {
+        r config set proto-max-bulk-len 10000000000 ;#10gb
+        r config set client-query-buffer-limit 10000000000 ;#10gb
+        r write "*3\r\n\$3\r\nSET\r\n"
+        write_big_bulk 2147483648 "" yes ;#2gb
+        r write "\$1\r\nv\r\n"
+        r flush
+        assert_equal OK [r read]
+        r config set maxmemory-policy allkeys-lru
+        r config set maxmemory 1mb
+        wait_for_condition 50 100 {
+            [r dbsize] == 0
+        } else {
+            fail "key was not evicted"
+        }
+    }
+}
 } ;# run_solo
 
 # SORT which stores an integer encoded element into a list.

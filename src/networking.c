@@ -387,6 +387,7 @@ client *createClient(connection *conn) {
     c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
+    c->call_flags = 0;
     c->ctime = c->last_interaction = server.unixtime;
     c->duration = 0;
     clientSetDefaultAuth(c);

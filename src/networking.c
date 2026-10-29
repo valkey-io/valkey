@@ -5245,7 +5245,7 @@ void resetCommand(client *c) {
         flags.replica = 0;
     }
 
-    if (flags.replica || flags.primary || flags.module) {
+    if (flags.replica || flags.primary || flags.module || c->slot_migration_job) {
         addReplyError(c, "can only reset normal client connections");
         return;
     }

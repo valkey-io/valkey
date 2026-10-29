@@ -1601,6 +1601,16 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "RESET is rejected on a slot migration client" {
+        assert_does_not_resync {
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                $client RESET
+            }
+            assert_equal PONG [R 0 PING]
+        }
+    }
+
     test "CLUSTER SYNCSLOTS ESTABLISH command interface" {
         assert_does_not_resync {
             # No arguments

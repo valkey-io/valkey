@@ -44,6 +44,7 @@
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/x509v3.h>
 #include <valkey/tls.h>
 #endif
 #ifdef USE_RDMA
@@ -70,6 +71,8 @@ int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err)
         }
         SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
         SSL_CTX_set_verify(ssl_ctx, config.skip_cert_verify ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, NULL);
+        if (config.skip_cert_verify)
+            fprintf(stderr, "Warning: --insecure disables server certificate and hostname verification\n");
 
         if (config.cacert || config.cacertdir) {
             if (!SSL_CTX_load_verify_locations(ssl_ctx, config.cacert, config.cacertdir)) {
@@ -116,7 +119,25 @@ int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err)
         return VALKEY_ERR;
     }
 
-    return valkeyInitiateTLS(c, ssl);
+    const char *name = config.sni ? config.sni : c->tcp.host;
+    if (!config.skip_cert_verify) {
+        X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+        X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        if (!name || !*name ||
+            (!X509_VERIFY_PARAM_set1_ip_asc(param, name) && !X509_VERIFY_PARAM_set1_host(param, name, strlen(name)))) {
+            *err = "Failed to configure server certificate name verification, use --sni or --insecure";
+            SSL_free(ssl);
+            return VALKEY_ERR;
+        }
+    }
+
+    if (valkeyInitiateTLS(c, ssl) != VALKEY_OK) {
+        long res = SSL_get_verify_result(ssl);
+        *err = res != X509_V_OK ? X509_verify_cert_error_string(res) : c->errstr;
+        SSL_free(ssl);
+        return VALKEY_ERR;
+    }
+    return VALKEY_OK;
 
 error:
     SSL_CTX_free(ssl_ctx);

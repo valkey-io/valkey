@@ -62,6 +62,14 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
         }
 
+        if {$::tls} {
+            test {benchmark: fails on server certificate name mismatch} {
+                set cmd [valkeybenchmark $master_host $master_port "--sni wrong.example.com -c 1 -n 10 -t ping"]
+                catch {exec {*}$cmd 2>@1} out
+                assert {[string match -nocase {*hostname mismatch*} $out]}
+            }
+        }
+
         test {benchmark: connecting using URI with authentication set,get} {
             r config set primaryauth pass
             set cmd [valkeybenchmarkuriuserpass $master_host $master_port "default" pass "-c 5 -n 10 -t set,get"]

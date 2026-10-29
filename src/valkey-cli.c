@@ -1657,7 +1657,7 @@ static int cliConnect(int flags) {
         if (!context->err && config.tls) {
             const char *err = NULL;
             if (cliSecureConnection(context, config.sslconfig, &err) == VALKEY_ERR && err) {
-                fprintf(stderr, "Could not negotiate a TLS connection: %s\n", err);
+                if (!(flags & CC_QUIET)) fprintf(stderr, "Could not negotiate a TLS connection: %s\n", err);
                 valkeyFree(context);
                 context = NULL;
                 return VALKEY_ERR;

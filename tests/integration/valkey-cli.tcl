@@ -912,6 +912,20 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
             set cmdline [valkeycliuri "valkeys://" [srv host] [srv port]]
             assert_equal {PONG} [exec {*}$cmdline PING]
         }
+
+        test "valkey-cli verifies the server certificate name" {
+            assert_equal {PONG} [exec {*}[valkeycli localhost [srv port]] PING]
+            assert_equal {PONG} [exec {*}[valkeycli [srv host] [srv port] {--sni localhost}] PING]
+
+            catch {exec {*}[valkeycli [srv host] [srv port] {--sni wrong.example.com}] PING} err
+            assert {[string match -nocase {*hostname mismatch*} $err]}
+
+            catch {exec {*}[valkeycli [srv host] [srv port] {--sni 127.0.0.2}] PING} err
+            assert_match {*IP address mismatch*} $err
+
+            set out [exec {*}[valkeycli [srv host] [srv port] {--sni wrong.example.com --insecure}] PING 2>@1]
+            assert_match {*--insecure disables server certificate and hostname verification*PONG*} $out
+        }
     }
 
     test "valkey-cli command table hint will not leak memory when COMMAND fails due to auth" {

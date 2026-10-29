@@ -1033,7 +1033,7 @@ sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibC
         goto error;
     }
 
-    functionsAddEngineStats(md.engine);
+    functionsAddEngineStats(scriptingEngineGetName(engine));
 
     old_li = dictFetchValue(lib_ctx->libraries, md.name);
     if (old_li && !replace) {

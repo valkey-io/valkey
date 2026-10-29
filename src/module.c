@@ -12373,7 +12373,7 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
                 (vstr != NULL) ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLongWithSds(vll);
             p = lpNext(objectGetVal(o), p);
             /* Skip hash fields not visible in the current context, like HSCAN. */
-            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(objectGetVal(o), p))) {
+            if (is_hash && !listpackObjectItemIsValid(hashTypeListpackGetExpiry(objectGetVal(o), p))) {
                 decrRefCount(field);
                 p = lpNext(objectGetVal(o), p);
                 continue;
@@ -12538,7 +12538,7 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
             p = lpNext(lp, p);
             if (!p) break;
             /* Skip hash fields not visible in the current context, like HSCAN. */
-            if (is_hash && !hashTypeListpackFieldIsValid(hashTypeListpackGetExpiry(lp, p))) {
+            if (is_hash && !listpackObjectItemIsValid(hashTypeListpackGetExpiry(lp, p))) {
                 p = lpNext(lp, p);
                 continue;
             }

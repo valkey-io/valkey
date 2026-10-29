@@ -1575,3 +1575,57 @@ proc ldbl_overflow_operand {{level 0}} {
     r $level del __ldbl_probe
     error "no long double operand large enough to overflow on this platform"
 }
+
+proc get_keys_with_volatile_items {r {db *}} {
+    foreach line [split [$r info keyspace] "\n"] {
+        if {[string match "db$db:*" $line] && [regexp {keys_with_volatile_items=(\d+)} $line -> val]} {
+            return $val
+        }
+    }
+    return 0
+}
+
+proc setup_single_keyspace_notification {r} {
+    $r config set notify-keyspace-events KEA
+    set rd [valkey_deferring_client]
+    assert_equal {1} [psubscribe $rd __keyevent@*]
+    return $rd
+}
+
+proc assert_keyevent_patterns {rd key args} {
+    foreach event_type $args {
+        set event [$rd read]
+        assert_match "pmessage __keyevent@* __keyevent@*:$event_type $key" $event
+    }
+}
+
+proc validate_aof_content {aof_file pxat_count del_count {del_command HDEL}} {
+    wait_for_condition 100 100 {
+        [file exists $aof_file]
+    } else {
+        fail "AOF file $aof_file was not created"
+    }
+
+    set fp [open $aof_file r]
+    fconfigure $fp -translation binary
+    fconfigure $fp -blocking 1
+
+    set got_pxat_count 0
+    set got_del_count 0
+    set del_command [string tolower $del_command]
+    while {[set cmd_argv [read_from_aof $fp]] ne ""} {
+        if {[lindex $cmd_argv 0] eq $del_command} {
+            incr got_del_count
+        }
+        # read_from_aof lowercases only the command name, so match PXAT as written.
+        foreach arg [lrange $cmd_argv 1 end] {
+            if {$arg eq "PXAT"} {
+                incr got_pxat_count
+            }
+        }
+    }
+    close $fp
+
+    assert_equal $pxat_count $got_pxat_count
+    assert_equal $del_count $got_del_count
+}

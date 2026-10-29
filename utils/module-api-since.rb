@@ -1,5 +1,5 @@
-# This file maps module API functions to the Redis OSS versions that added them.
-# This is needed only for old API functions from the pre-forking time.
+# This file maps module API functions to the versions that made them public.
+# It covers pre-fork Redis OSS APIs and overrides for APIs that existed privately.
 $since = {
 "Alloc" => "4.0.0",
 "TryAlloc" => "7.0.0",
@@ -160,6 +160,7 @@ $since = {
 "CreateStringFromCallReply" => "4.0.0",
 "SetContextUser" => "7.0.6",
 "Call" => "4.0.0",
+"CallArgv" => "9.2.0",
 "CallReplyProto" => "4.0.0",
 "CreateDataType" => "4.0.0",
 "ModuleTypeSetValue" => "4.0.0",

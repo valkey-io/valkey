@@ -33,11 +33,10 @@
 #include "valkeymodule.h"
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 
 /* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
 #define ValkeyModule_ReplyRaw VM_ReplyRaw
 
 /* --------------------------------- Helpers -------------------------------- */
@@ -149,6 +148,76 @@ int TestCallArgvScriptMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     int flags = VALKEYMODULE_CALL_ARGV_SCRIPT_MODE | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
     ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, ctx);
 
+    return VALKEYMODULE_OK;
+}
+
+static int countRawReply(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t len) {
+    UNUSED(mctx);
+    UNUSED(proto);
+    UNUSED(len);
+    (*(int *)ctx)++;
+    errno = EIO; /* CallArgv must preserve errno even when a callback changes it. */
+    return 0;
+}
+
+static int replyWithRawRespAndCount(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t len) {
+    (*(int *)ctx)++;
+    return replyWithRawRespString(ctx, mctx, proto, len);
+}
+
+static void countErrorReply(void *ctx, const char *str, size_t len) {
+    UNUSED(str);
+    UNUSED(len);
+    (*(int *)ctx)++;
+    errno = EIO;
+}
+
+static void countReplyParsingError(void *ctx) {
+    (*(int *)ctx)++;
+}
+
+/* Report the call result, errno name, and the number of reply callbacks. */
+int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 3) return ValkeyModule_WrongArity(ctx);
+    const char *fmt = ValkeyModule_StringPtrLen(argv[1], NULL);
+    int flags = 0;
+    if (strchr(fmt, 'E')) flags |= VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    if (strchr(fmt, 'D')) flags |= VALKEYMODULE_CALL_ARGV_DRY_RUN;
+    if (strchr(fmt, 'K')) flags |= VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK;
+    if (strchr(fmt, 'U')) flags |= (1 << 13);
+    if (strchr(fmt, 'H')) flags |= (1 << 30);
+    if (strchr(fmt, 'J')) flags = -1;
+    int callbacks = 0;
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        .onRespAvailable = countRawReply,
+        .replyParsingError = countReplyParsingError,
+    };
+    if (strchr(fmt, '0')) handlers.version = 0;
+    if (strchr(fmt, '2')) handlers.version = VALKEYMODULE_REPLY_HANDLERS_VERSION + 1;
+    if (strchr(fmt, 'R')) handlers.onRespAvailable = replyWithRawRespAndCount;
+    if (strchr(fmt, 'T')) {
+        handlers.onRespAvailable = NULL;
+        handlers.error = countErrorReply;
+    }
+    int ret = ValkeyModule_CallArgv(ctx, strchr(fmt, 'Z') ? NULL : argv + 2,
+                                    strchr(fmt, 'Q') ? 0 : argc - 2, flags,
+                                    strchr(fmt, 'N') ? NULL : &handlers, &callbacks);
+    if (handlers.onRespAvailable == replyWithRawRespAndCount && callbacks) return VALKEYMODULE_OK;
+    int call_errno = errno;
+    const char *errno_name;
+    switch (call_errno) {
+    case 0: errno_name = "0"; break;
+    case EAGAIN: errno_name = "EAGAIN"; break;
+    case EBADF: errno_name = "EBADF"; break;
+    case EINVAL: errno_name = "EINVAL"; break;
+    case ENOENT: errno_name = "ENOENT"; break;
+    default: errno_name = "UNKNOWN"; break;
+    }
+    ValkeyModule_ReplyWithArray(ctx, 3);
+    ValkeyModule_ReplyWithSimpleString(ctx, ret == VALKEYMODULE_ERR ? "ERR" : "OK");
+    ValkeyModule_ReplyWithSimpleString(ctx, errno_name);
+    ValkeyModule_ReplyWithLongLong(ctx, callbacks);
     return VALKEYMODULE_OK;
 }
 
@@ -1062,6 +1131,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_Init(ctx,"test",1,VALKEYMODULE_APIVER_1)
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
+    if (argc == 1 && !strcmp(ValkeyModule_StringPtrLen(argv[0], NULL), "forkless"))
+        ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_FORKLESS);
+
     /* Perform RM_Call inside the ValkeyModule_OnLoad
      * to verify that it works as expected without crashing.
      * The tests will verify it on different configurations
@@ -1098,6 +1170,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx,"test.call_argv_s",
         TestCallArgvScriptMode,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "test.call_argv_status", TestCallArgvStatus,
+                                   "write deny-oom", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"test.call_argv_null_array_start",

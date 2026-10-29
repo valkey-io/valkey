@@ -1138,6 +1138,10 @@ start_server {tags {"repl"} overrides {save ""}} {
 
         start_server {overrides {save "" repl-compression lz4 dual-channel-replication-enabled yes}} {
             set replica [srv 0 client]
+            # Hold the RDB load open until the in-load assertions below.
+            # Process events often enough to answer INFO and CONFIG SET.
+            $replica config set key-load-delay 10000
+            $replica config set loading-process-events-interval-bytes 1024
             # Open the pipelining client before the sync window opens, so that
             # connecting (and the TLS handshake) does not eat into it.
             set rd [valkey_deferring_client -1]
@@ -1154,8 +1158,8 @@ start_server {tags {"repl"} overrides {save ""}} {
             # Writes made during load reach the replica via the compressed main
             # channel: +CONTINUE starts compression, put-online must not restart
             # it (a second init would emit a new envelope mid-frame). Pipeline
-            # them: sequential round trips can outlast the rdb-key-save-delay
-            # window on a slow runner, letting the sync finish mid-writes (#5003).
+            # them to avoid a client round trip per key; key-load-delay above
+            # keeps the load window open independently of client speed (#5003).
             for {set i 0} {$i < 200} {incr i} {
                 $rd set "during_load:$i" "value_$i"
             }
@@ -1169,6 +1173,7 @@ start_server {tags {"repl"} overrides {save ""}} {
             $rd close
             assert_equal 1 [s 0 master_sync_in_progress]
             assert_match {*state=bg_transfer*repl_compression=lz4*} [$primary info replication]
+            $replica config set key-load-delay 0
 
             wait_for_condition 200 100 {
                 [s 0 master_link_status] eq {up}
@@ -1275,6 +1280,10 @@ start_server {tags {"repl"} overrides {save ""}} {
 
             start_server [list overrides [list save "" repl-compression $replica_mode dual-channel-replication-enabled yes]] {
                 set replica [srv 0 client]
+                # Hold the RDB load open until the in-load assertions below.
+                # Process events often enough to answer INFO and CONFIG SET.
+                $replica config set key-load-delay 10000
+                $replica config set loading-process-events-interval-bytes 1024
                 $replica replicaof $primary_host $primary_port
 
                 wait_for_condition 500 10 {
@@ -1297,6 +1306,7 @@ start_server {tags {"repl"} overrides {save ""}} {
                 assert_match {*state=bg_transfer*} [$primary info replication]
                 assert_equal $initial_compressed \
                     [regexp -all {repl_compression=(lz4|zstd)} [$primary info replication]]
+                $replica config set key-load-delay 0
 
                 wait_for_condition 200 100 {
                     [status $primary sync_partial_ok] == $partial_before + 1 &&

@@ -523,6 +523,48 @@ start_server {tags {pathhash}} {
         }
     }
 
+    test {Partial Path Hash deletions do not send generic del notifications} {
+        r del partial-tree
+        r phmset partial-tree a fields 2 f one g two ab fields 1 f child keep fields 1 f keep
+        set old_notify [lindex [r config get notify-keyspace-events] 1]
+        test_defer {r config set notify-keyspace-events $old_notify}
+        r config set notify-keyspace-events Kpg
+        set subscriber [valkey_deferring_client]
+        test_defer {$subscriber close}
+        assert_equal {1} [psubscribe $subscriber *:partial-tree]
+        foreach deletion {
+            {phdel partial-tree a f}
+            {phdel partial-tree a}
+            {phdelprefix partial-tree ab}
+        } {
+            assert_equal 1 [r {*}$deletion]
+            assert_equal 1 [r exists partial-tree]
+            assert_match "pmessage * __keyspace@*__:partial-tree [lindex $deletion 0]" [$subscriber read]
+            # A following operation is a barrier: any spurious del arrives first.
+            r phset partial-tree keep fields 1 f keep
+            assert_match "pmessage * __keyspace@*__:partial-tree phset" [$subscriber read]
+        }
+    }
+
+    test {Clearing all Path Hash paths honors lazyfree-lazy-server-del} {
+        set old_lazyfree [lindex [r config get lazyfree-lazy-server-del] 1]
+        test_defer {r config set lazyfree-lazy-server-del $old_lazyfree}
+        foreach mode {no yes} {
+            r config set lazyfree-lazy-server-del $mode
+            wait_lazyfree_done r
+            set freed [s lazyfreed_objects]
+            for {set i 0} {$i < 100} {incr i} {
+                r phset lazy-tree path:$i fields 1 f value:$i
+            }
+            assert_equal 100 [r phdelprefix lazy-tree {}]
+            assert_equal 0 [r exists lazy-tree]
+            wait_lazyfree_done r
+            set expected $freed
+            if {$mode eq "yes"} {incr expected}
+            assert_equal $expected [s lazyfreed_objects]
+        }
+    }
+
     test {UNLINK asynchronously frees a large path hash object} {
         r del tree
         for {set i 0} {$i < 100} {incr i} {
@@ -620,35 +662,30 @@ start_server {tags {pathhash}} {
 
     test {Deleting the final path removes the key, TTL, and WATCH state} {
         set other [valkey_client]
-        with_cleanup {
-            foreach deletion {
-                {phdel empty-tree p f missing f}
-                {phdel empty-tree p}
-                {phdelprefix empty-tree p}
-                {phdelprefix empty-tree {}}
-            } {
-                r phset empty-tree p fields 1 f v
-                r pexpire empty-tree 60000
-                r watch empty-tree
-                assert_equal 1 [$other {*}$deletion]
-                r multi
-                r exists empty-tree
-                assert_equal {} [r exec]
-                assert_equal 0 [r exists empty-tree]
-                assert_equal -2 [r pttl empty-tree]
-                # COPY checks slots even when the source key is missing.
-                assert_equal 0 [r copy empty-tree empty-copy{empty-tree}]
-                assert_equal {} [r dump empty-tree]
-                r set empty-tree string
-                assert_equal string [r get empty-tree]
-                r del empty-tree
-            }
-            r debug reload
-            assert_equal 0 [r exists empty-tree]
+        test_defer { $other close }
+        foreach deletion {
+            {phdel empty-tree p f missing f}
+            {phdel empty-tree p}
+            {phdelprefix empty-tree p}
+            {phdelprefix empty-tree {}}
         } {
-            $other close
+            r phset empty-tree p fields 1 f v
+            r pexpire empty-tree 60000
+            r watch empty-tree
+            assert_equal 1 [$other {*}$deletion]
+            r multi
+            r exists empty-tree
+            assert_equal {} [r exec]
+            assert_equal 0 [r exists empty-tree]
+            assert_equal -2 [r pttl empty-tree]
+            # COPY checks slots even when the source key is missing.
+            assert_equal 0 [r copy empty-tree empty-copy{empty-tree}]
+            assert_equal {} [r dump empty-tree]
+            r set empty-tree string
+            assert_equal string [r get empty-tree]
+            r del empty-tree
         }
-    } {} {needs:debug}
+    }
 
     test {RDB reload restores path hash paths, binary data, root payload, and TTL} {
         r del tree

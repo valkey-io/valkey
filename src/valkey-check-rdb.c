@@ -852,8 +852,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.keys++;
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
-        if ((val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, NULL, RDBFLAGS_NONE, 0)) == NULL) goto eoferr;
-        if (rdbCheckStats) {
+        int error = 0;
+        val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, &error, RDBFLAGS_NONE, 0);
+        /* Empty containers are valid legacy data that the server skips on load. */
+        if (val == NULL && error != RDB_LOAD_ERR_EMPTY_KEY) goto eoferr;
+        if (val && rdbCheckStats) {
             int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
             if (max_stats_num > rdbstate.stats_num) {
                 rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
@@ -867,7 +870,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         if (expiretime != -1) rdbstate.expires++;
         rdbstate.key = NULL;
         decrRefCount(key);
-        decrRefCount(val);
+        if (val) decrRefCount(val);
         rdbstate.key_type = -1;
         expiretime = -1;
     }

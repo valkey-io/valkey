@@ -580,13 +580,11 @@ void phdelprefixCommand(client *c) {
     if (prefix_len == 0) {
         long long deleted = raxSize(path_hash->index);
         if (deleted) {
-            rax *empty = raxNew();
-            raxFreeWithCallback(path_hash->index, freePathHashPayload);
-            path_hash->index = empty;
-            path_hash->num_fields = 0;
+            /* Delete the whole key so lazyfree-lazy-server-del can free its tree. */
+            dbDelete(c->db, c->argv[1]);
             signalModifiedKey(c, c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
-            pathHashDeleteIfEmpty(c, o);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
             server.dirty += deleted;
         }
         addReplyLongLong(c, deleted);

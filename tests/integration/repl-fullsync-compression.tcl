@@ -10,12 +10,12 @@
 # --- helpers --------------------------------------------------------------
 
 proc rdb_is_compressed {client} {
-    set header [read_binary_file_prefix [server_rdb_path $client] 3]
+    set header [read_binary_file_prefix [server_repl_rdb_path $client] 3]
     return [expr {$header eq "VCS"}]
 }
 
 proc rdb_compression_codec {client} {
-    binary scan [read_binary_file_prefix [server_rdb_path $client] 5] cu* bytes
+    binary scan [read_binary_file_prefix [server_repl_rdb_path $client] 5] cu* bytes
     return [lindex $bytes 4]
 }
 
@@ -108,12 +108,13 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
 
     # Routing matrix: with repl-diskless-sync off, every combination is served from
     # disk regardless of the negotiated codec, because the codec no longer selects
-    # the transport. The disk-based round writes dump.rdb in the negotiated wire
-    # codec, so a replication snapshot may differ from rdbcompression. The wire
-    # codec is pinned via repl-compression on both ends (negotiation itself is
-    # covered in repl-compression.tcl; the replica-side handling of the received
-    # stream is covered by the transcode matrix below). A swapdb replica keeps the
-    # assertions on the primary's decision and dump.rdb.
+    # the transport. The disk-based round writes repl-rdbfilename in the
+    # negotiated wire codec, so a replication snapshot may differ from
+    # rdbcompression. The wire codec is pinned via repl-compression on both ends
+    # (negotiation itself is covered in repl-compression.tcl; the replica-side
+    # handling of the received stream is covered by the transcode matrix below). A
+    # swapdb replica keeps the assertions on the primary's decision and
+    # repl-rdbfilename.
     #   {rdbcompression wire}
     set routing_matrix {
         {no   no}
@@ -141,7 +142,8 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
 
                 wait_for_log_messages -1 [list "*Starting BGSAVE for SYNC with target: disk*compression: [expr {$wire eq "no" ? "none" : $wire}]*"] \
                     $primary_loglines 50 100
-                # dump.rdb was produced by the disk-based sync, in the wire codec.
+                # The replication RDB file was produced by the disk-based sync,
+                # in the wire codec.
                 if {$wire eq "no"} {
                     assert_equal 0 [rdb_is_compressed $primary]
                 } else {
@@ -196,8 +198,8 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
                 # The lz4-only replica cannot decode zstd, so the wire codec
                 # negotiates down to lz4 (the strongest it accepts) rather than
                 # dropping to plaintext. The transport follows repl-diskless-sync
-                # (off here), so the round is disk-based and dump.rdb is written in
-                # lz4 even though rdbcompression is zstd.
+                # (off here), so the round is disk-based and repl-rdbfilename is
+                # written in lz4 even though rdbcompression is zstd.
                 wait_for_log_messages -1 {"*target: disk*compression: lz4*"} \
                     $primary_loglines 50 100
                 assert_equal 1 [rdb_is_compressed $primary]
@@ -299,12 +301,12 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
 
 # A replica that advertises neither EOF nor any compression codec (an RDB parser
 # such as redis-shake, or a client using a plain PSYNC) must still be served: it
-# can't take an EOF-framed socket payload, so the round goes through dump.rdb, and
-# since it can't decode anything the round is written uncompressed even though
-# rdbcompression and repl-compression ask for lz4. A throwaway client sends a bare
-# PSYNC (advertising no capabilities) and reads the raw +FULLRESYNC reply, so the
-# test fails cleanly if the client is rejected instead of switching into replica
-# mode.
+# can't take an EOF-framed socket payload, so the round goes through the
+# replication RDB file, and since it can't decode anything the round is written
+# uncompressed even though rdbcompression and repl-compression ask for lz4. A
+# throwaway client sends a bare PSYNC (advertising no capabilities) and reads the
+# raw +FULLRESYNC reply, so the test fails cleanly if the client is rejected
+# instead of switching into replica mode.
 start_server {tags {"repl rdb-compression external:skip"} overrides {save ""}} {
     test {Full sync accepts a replica without EOF or compression capability} {
         r config set rdbcompression lz4
@@ -317,8 +319,8 @@ start_server {tags {"repl rdb-compression external:skip"} overrides {save ""}} {
 
         waitForBgsave r
         wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*compression: none*"} $loglines 50 100
-        # The disk-based round wrote dump.rdb in the negotiated (uncompressed)
-        # codec, not in rdbcompression.
+        # The disk-based round wrote the replication RDB file in the negotiated
+        # (uncompressed) codec, not in rdbcompression.
         assert_equal 0 [rdb_is_compressed r]
         $rd close
     }
@@ -329,10 +331,11 @@ start_server {tags {"repl rdb-compression external:skip"} overrides {save ""}} {
 # codec). The running save's codec is the codec negotiated for the trigger, and a
 # joiner attaches when it can decode the file being written; otherwise it waits
 # and gets its own round. A joiner that cannot decode compression therefore ends
-# up in a plaintext round of its own, so the final dump.rdb is plaintext even
-# though the trigger's round was compressed. rdb-key-save-delay 13000 (~2s over
-# 155 keys x 13ms: above one PSYNC round trip, under wait_for_sync's ~5s budget on
-# slow runners) keeps the save in flight while the joiner arrives.
+# up in a plaintext round of its own, so the final replication RDB file is
+# plaintext even though the trigger's round was compressed. rdb-key-save-delay
+# 13000 (~2s over 155 keys x 13ms: above one PSYNC round trip, under
+# wait_for_sync's ~5s budget on slow runners) keeps the save in flight while the
+# joiner arrives.
 # ============================================================================
 
 start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides {save "" enable-debug-command local}} {
@@ -574,15 +577,15 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
 
 }
 
-# Transcode matrix: doing a disk-based load, the replica writes dump.rdb in its
-# own rdbcompression codec, transcoding the received full-sync stream when the
-# wire codec differs (verbatim / decode / encode / recode). `framing` selects the
-# receive path exercised: eof = diskless ($EOF-marked), size = disk-based
-# ($<len>). The replica's dump.rdb must end up in the `disk` codec and the data
+# Transcode matrix: doing a disk-based load, the replica writes its replication
+# RDB file in its own rdbcompression codec, transcoding the received full-sync
+# stream when the wire codec differs (verbatim / decode / encode / recode).
+# `framing` selects the receive path exercised: eof = diskless ($EOF-marked),
+# size = disk-based ($<len>). The file must end up in the `disk` codec and the data
 # must load (a bad recomputed CRC64 on a plaintext target would fail the load). A
-# non-empty save point keeps the synced dump.rdb so its format can be inspected.
+# non-empty save point keeps the file so its format can be inspected.
 proc assert_replica_dump {client codec} {
-    set path [file join [lindex [$client config get dir] 1] dump.rdb]
+    set path [server_repl_rdb_path $client]
     if {$codec eq "no"} {
         assert_equal "VALKEY" [string range [read_binary_file_prefix $path 6] 0 5]
     } else {
@@ -611,7 +614,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     foreach case $transcode_matrix {
         lassign $case wire disk framing
         if {($wire eq "zstd" || $disk eq "zstd") && !$::fullsync_zstd_supported} continue
-        test "Disk-receive transcodes a $framing-framed $wire wire to a $disk dump.rdb" {
+        test "Disk-receive transcodes a $framing-framed $wire wire to a $disk replication RDB" {
             if {$framing eq "eof"} {
                 $primary config set repl-diskless-sync yes
                 $primary config set repl-diskless-sync-delay 0
@@ -635,10 +638,10 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                 if {$wire eq $disk && $framing eq "size"} {
                     # Verbatim disk-based: the replica copies the primary's RDB
                     # byte-for-byte (a re-encode would produce a different frame).
-                    set primary_rdb [server_rdb_path $primary]
-                    set replica_rdb [server_rdb_path $replica]
+                    set primary_rdb [server_repl_rdb_path $primary]
+                    set replica_rdb [server_repl_rdb_path $replica]
                     assert_equal 1 [files_are_identical $primary_rdb $replica_rdb] \
-                        "primary and replica dump.rdb differ ([file size $primary_rdb] vs [file size $replica_rdb] bytes)"
+                        "primary and replica replication RDB differ ([file size $primary_rdb] vs [file size $replica_rdb] bytes)"
                 }
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal value [$replica get xcode:key]

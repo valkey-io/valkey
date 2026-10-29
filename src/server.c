@@ -3082,6 +3082,7 @@ void initServer(void) {
     server.rdb_pipe_read = -1;
     server.rdb_child_exit_pipe = -1;
     server.rdb_child_rdbver = RDB_VERSION;
+    server.rdb_child_for_replication = 0;
     server.slot_migration_pipe_read = -1;
     server.slot_migration_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();

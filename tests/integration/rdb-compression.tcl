@@ -568,8 +568,9 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
                 assert_equal [string repeat "payload42 " 40] [$replica get repl:42]
 
                 # A mismatched codec no longer forces a diskless sync: with
-                # repl-diskless-sync off the sync goes through dump.rdb, written in
-                # the negotiated plaintext codec, and with it on the sync streams.
+                # repl-diskless-sync off the sync goes through repl-rdbfilename,
+                # written in the negotiated plaintext codec, and with it on the
+                # sync streams.
                 if {$diskless} {
                     wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: replicas sockets*"} \
                         $primary_loglines 50 100
@@ -581,8 +582,12 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
             }
 
             # The replication snapshot follows the negotiated codec, not
-            # rdbcompression: the disk-based round rewrote dump.rdb plaintext.
-            assert_equal "VALKEY" [string range [read_dump_rdb_header_bytes $primary] 0 5]
+            # rdbcompression, and lives in repl-rdbfilename. A full sync never
+            # touches dbfilename: with no save point and no SAVE, no dump.rdb was
+            # written at all.
+            set repl_rdb [server_repl_rdb_path $primary]
+            assert_equal "VALKEY" [string range [read_binary_file_prefix $repl_rdb 6] 0 5]
+            assert_equal 0 [file exists [server_rdb_path $primary]]
 
             $primary set repl:post-sync "after-sync"
             wait_for_condition 50 100 {

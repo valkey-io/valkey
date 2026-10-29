@@ -2179,6 +2179,7 @@ struct valkeyServer {
     struct saveparam *saveparams;         /* Save points array for RDB */
     int saveparamslen;                    /* Number of saving points */
     char *rdb_filename;                   /* Name of RDB file */
+    char *repl_rdb_filename;              /* Name of the RDB file used for full sync */
     int rdb_compression;                  /* RDB compression mode */
     int repl_compression;                 /* Replication compression mode */
     int rdb_checksum;                     /* Use RDB checksum? */
@@ -2195,6 +2196,7 @@ struct valkeyServer {
     rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */
     compressionAlgo rdb_child_sync_algo;  /* Streaming compression used by the active replication disk child. */
     int rdb_child_rdbver;                 /* RDB version used by the active replication disk child. */
+    int rdb_child_for_replication;        /* Active disk child writes the replication RDB, not dbfilename. */
     int lastbgsave_status;                /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */

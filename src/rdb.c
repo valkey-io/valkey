@@ -4282,9 +4282,10 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     rdbClearSaveState(save_end);
     server.rdb_child_sync_algo = ALGO_NONE;
     server.rdb_child_rdbver = RDB_VERSION;
+    server.rdb_child_for_replication = 0;
 
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
-     * (the first stage of SYNC is a bulk transfer of dump.rdb) */
+     * (the first stage of SYNC is a bulk transfer of repl-rdbfilename) */
     updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
 }
 
@@ -4734,7 +4735,13 @@ void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end) {
     server.lastbgsave_status = status;
     server.lastbgsave_type = bgsave_type;
     if (status == C_OK) {
-        server.dirty = server.dirty - server.dirty_before_bgsave;
-        server.lastsave = save_end;
+        /* A replication save writes repl-rdbfilename, not dbfilename, so it
+         * doesn't make the persistence snapshot any fresher: leave the dirty
+         * counter and the last save time alone so the configured save points
+         * still trigger a snapshot. */
+        if (!server.rdb_child_for_replication) {
+            server.dirty = server.dirty - server.dirty_before_bgsave;
+            server.lastsave = save_end;
+        }
     }
 }

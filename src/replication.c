@@ -118,12 +118,12 @@ static int appendReplCompressionCapabilities(char **argv, size_t *lens, size_t a
     }
 }
 
-/* The whole-stream compression codec of the on-disk RDB (dump.rdb) format, i.e.
- * the codec that frames the entire RDB and is therefore what a disk-based full
- * sync sends verbatim. Derived from the configured rdbcompression codec, mapping
- * LZF to ALGO_NONE: LZF is a per-string codec inside a plain RDB envelope, not a
- * whole-stream frame. Any future whole-stream codec (e.g. zstd) flows through
- * unchanged. Ungated by replica capability, since it describes the file itself. */
+/* The whole-stream compression codec of this server's own RDB files, i.e. the
+ * codec that frames the entire RDB. Derived from the configured rdbcompression
+ * codec, mapping LZF to ALGO_NONE: LZF is a per-string codec inside a plain RDB
+ * envelope, not a whole-stream frame. A replica receiving a full sync to disk
+ * transcodes the payload into this codec, so the file it stores follows its own
+ * rdbcompression setting regardless of the wire codec. */
 static compressionAlgo rdbStreamCompressionAlgorithm(void) {
     compressionAlgo algo = rdbCompressionAlgorithm(server.rdb_compression);
     return algo == ALGO_LZF ? ALGO_NONE : algo;
@@ -458,10 +458,10 @@ static inline client *lookupRdbClientByID(uint64_t id) {
 int replicaRdbVersion(client *replica) {
     if (!(replica->repl_data->replica_capa & REPLICA_CAPA_EOF)) {
         /* The replica doesn't have CAPA EOF, so it can only be served a
-         * disk-based full sync, which writes this server's dump.rdb. Use the
-         * latest RDB version: an older format is only needed to stream directly
-         * to a replica, and there is no reason to downgrade the snapshot file
-         * for it. */
+         * disk-based full sync, which writes this server's replication RDB
+         * file. Use the latest RDB version: an older format is only needed to
+         * stream directly to a replica, and there is no reason to downgrade the
+         * file for it. */
         return RDB_VERSION;
     }
     /* Search the version map backwards to select the highest RDB version the
@@ -1279,9 +1279,9 @@ need_full_resync:
  * that repl-compression permits and that the replica advertised it can decode, or
  * ALGO_NONE (a plain RDB, with per-string LZF still governed by rdbcompression)
  * when it advertises no compression capability. This is the codec of the payload
- * a replica gets, whether it arrives over a socket or through dump.rdb; whether
- * the payload goes to a socket or through a file follows repl-diskless-sync and
- * EOF capability only. */
+ * a replica gets, whether it arrives over a socket or through the replication
+ * RDB file; whether the payload goes to a socket or through a file follows
+ * repl-diskless-sync and EOF capability only. */
 compressionAlgo replSelectFullSyncCompression(int replica_capa) {
     return replicaNegotiatedCompressionAlgorithm(replica_capa);
 }
@@ -1344,11 +1344,11 @@ int startBgsaveForReplication(int req, int rdbver, compressionAlgo compr) {
 
     /* Whether a full sync goes to sockets or through a file strictly follows
      * repl-diskless-sync: a replica that can read an EOF-marked stream is served
-     * over a socket when diskless sync is enabled and from dump.rdb otherwise,
-     * with no implicit transport switch. A replica without EOF capability can
-     * never be served over a socket. Filtered RDBs are generated on the fly and
-     * can't replace dump.rdb, so they always use a socket (syncCommand already
-     * rejects filtered replicas without EOF). */
+     * over a socket when diskless sync is enabled and from repl-rdbfilename
+     * otherwise, with no implicit transport switch. A replica without EOF
+     * capability can never be served over a socket. Filtered RDBs are generated
+     * on the fly and can't replace the file, so they always use a socket
+     * (syncCommand already rejects filtered replicas without EOF). */
     if ((req & REPLICA_REQ_RDB_MASK) || ((mincapa & REPLICA_CAPA_EOF) && server.repl_diskless_sync)) {
         socket_target = 1;
     }
@@ -1373,26 +1373,31 @@ int startBgsaveForReplication(int req, int rdbver, compressionAlgo compr) {
             goto error;
         }
     } else {
-        /* The forked child reads these globals to write dump.rdb in the round's
-         * format. A disk-based round serves the whole cohort from that file
-         * verbatim, so every replica in it can decode this codec and RDB
-         * version. */
+        /* The forked child reads these globals to write the replication RDB file
+         * in the round's format. A disk-based round serves the whole cohort from
+         * that file verbatim, so every replica in it can decode this codec and
+         * RDB version. The file is separate from dbfilename so that a full sync
+         * never overwrites the snapshot used for persistence and backups. */
         server.rdb_child_sync_algo = compr;
         server.rdb_child_rdbver = rdbver;
         /* Keep the page cache since it'll get used soon */
-        if (rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE) == C_ERR) {
+        if (rdbSaveBackground(req, server.repl_rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE) == C_ERR) {
             fail_msg = "Can't start the child process for a disk-based full sync";
             goto error;
         }
+        /* Only the parent reads this flag, on save completion, so set it after
+         * the fork actually started: an early rdbSaveBackground() failure must
+         * not make an unrelated running child look like a replication save. */
+        server.rdb_child_for_replication = 1;
     }
     if (server.debug_pause_after_fork) debugPauseProcess();
 
     /* If the target is socket, rdbSaveToReplicasSockets() already setup the replicas
-     * for a full resync. For a disk target do it now, and remember that dump.rdb was
-     * generated for replication so that we can later delete the file if needed. Note
-     * that we don't set the flag if the feature is disabled; otherwise, it would never
-     * be cleared: the file is not deleted. This way if the user enables it later with
-     * CONFIG SET, we are fine. */
+     * for a full resync. For a disk target do it now, and remember that the sync RDB
+     * was generated for replication so that we can later delete the file if needed.
+     * Note that we don't set the flag if the feature is disabled; otherwise, it would
+     * never be cleared: the file is not deleted. This way if the user enables it later
+     * with CONFIG SET, we are fine. */
     if (!socket_target) {
         if (server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
         listRewind(server.replicas, &li);
@@ -2056,11 +2061,11 @@ void removeRDBUsedToSyncReplicas(void) {
         }
         if (delrdb) {
             struct stat sb;
-            if (lstat(server.rdb_filename, &sb) != -1) {
+            if (lstat(server.repl_rdb_filename, &sb) != -1) {
                 RDBGeneratedByReplication = 0;
                 serverLog(LL_NOTICE, "Removing the RDB file used to feed replicas "
                                      "in a persistence-less instance");
-                bg_unlink(server.rdb_filename);
+                bg_unlink(server.repl_rdb_filename);
             }
         }
     }
@@ -2454,7 +2459,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
                 }
                 replica->repl_data->repl_start_cmd_stream_on_ack = 1;
             } else {
-                repldbfd = open(server.rdb_filename, O_RDONLY);
+                repldbfd = open(server.repl_rdb_filename, O_RDONLY);
                 if (repldbfd == -1) {
                     freeClientAsync(replica);
                     serverLog(LL_WARNING, "SYNC failed. Can't open DB after BGSAVE: %s", strerror(errno));
@@ -2967,8 +2972,9 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
 
 int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
-    /* Make sure the new file (also used for persistence) is fully synced
-     * (not covered by earlier calls to rdb_fsync_range). */
+    /* Make sure the new file is fully synced (not covered by earlier calls to
+     * rdb_fsync_range). It is the replication RDB, not the snapshot used for
+     * persistence, so dbfilename stays untouched by a full sync. */
     if (fsync(server.repl_transfer_fd) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to sync the temp DB to disk in "
@@ -2978,12 +2984,12 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     }
 
     /* Rename rdb like renaming rewrite aof asynchronously. */
-    int old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
-    if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
+    int old_rdb_fd = open(server.repl_rdb_filename, O_RDONLY | O_NONBLOCK);
+    if (rename(server.repl_transfer_tmpfile, server.repl_rdb_filename) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to rename the temp DB into %s in "
                   "PRIMARY <-> REPLICA synchronization: %s",
-                  server.rdb_filename, strerror(errno));
+                  server.repl_rdb_filename, strerror(errno));
         if (old_rdb_fd != -1) close(old_rdb_fd);
         return C_ERR;
     }
@@ -2991,11 +2997,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 0);
 
     /* Sync the directory to ensure rename is persisted */
-    if (fsyncFileDir(server.rdb_filename) == -1) {
+    if (fsyncFileDir(server.repl_rdb_filename) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to sync DB directory %s in "
                   "PRIMARY <-> REPLICA synchronization: %s",
-                  server.rdb_filename, strerror(errno));
+                  server.repl_rdb_filename, strerror(errno));
         return C_ERR;
     }
 
@@ -3006,7 +3012,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
      * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-    int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
+    int retval = rdbLoad(server.repl_rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
 
     if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
@@ -3015,7 +3021,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                                  "the primary. This replica has persistence "
                                  "disabled");
-            bg_unlink(server.rdb_filename);
+            bg_unlink(server.repl_rdb_filename);
         }
 
         /* If RDB failed compatibility check, we did not load the new data set or flush our old data. */
@@ -3041,7 +3047,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                              "the primary. This replica has persistence "
                              "disabled");
-        bg_unlink(server.rdb_filename);
+        bg_unlink(server.repl_rdb_filename);
     }
 
     zfree(server.repl_transfer_tmpfile);

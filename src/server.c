@@ -2491,6 +2491,8 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[0] = 50.0; /* p50 */
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
+    server.latency_tracking_info_percentiles_labels = NULL;
+    updateLatencyTrackingInfoPercentilesLabels();
 
     server.tls_server_cert_expire_time = 0;
     server.tls_server_alt_cert_expire_time = 0;
@@ -6222,23 +6224,25 @@ void bytesToHuman(char *s, size_t size, unsigned long long n) {
     }
 }
 
-/* Create the "p<percentile>=" labels used by fillPercentileDistributionLatencies().
- * They depend only on the config, so build them once per INFO call instead of
- * once per command. Free with freePercentileLabels(). */
-static sds *createPercentileLabels(void) {
-    sds *labels = zmalloc(sizeof(sds) * server.latency_tracking_info_percentiles_len);
+/* Rebuild the "p<percentile>=" labels when the percentile configuration changes.
+ * The NULL terminator lets us free the previous labels after the list length changes. */
+void updateLatencyTrackingInfoPercentilesLabels(void) {
+    sds *labels = NULL;
+    if (server.latency_tracking_info_percentiles_len)
+        labels = zmalloc(sizeof(sds) * (server.latency_tracking_info_percentiles_len + 1));
     for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {
         char fbuf[128];
         size_t len = snprintf(fbuf, sizeof(fbuf), "%f", server.latency_tracking_info_percentiles[j]);
         len = trimDoubleString(fbuf, len);
         labels[j] = sdscatlen(sdscatlen(sdsnewlen("p", 1), fbuf, len), "=", 1);
     }
-    return labels;
-}
-
-static void freePercentileLabels(sds *labels) {
-    for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) sdsfree(labels[j]);
-    zfree(labels);
+    if (labels) labels[server.latency_tracking_info_percentiles_len] = NULL;
+    sds *old_labels = server.latency_tracking_info_percentiles_labels;
+    if (old_labels) {
+        for (int j = 0; old_labels[j]; j++) sdsfree(old_labels[j]);
+        zfree(old_labels);
+    }
+    server.latency_tracking_info_percentiles_labels = labels;
 }
 
 /* Returns the largest counts index whose value is <= 'value'.
@@ -7218,9 +7222,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Latencystats\r\n");
         if (server.latency_tracking_enabled) {
-            sds *labels = createPercentileLabels();
-            info = genValkeyInfoStringLatencyStats(info, server.commands, labels);
-            freePercentileLabels(labels);
+            info = genValkeyInfoStringLatencyStats(info, server.commands, server.latency_tracking_info_percentiles_labels);
         }
     }
 

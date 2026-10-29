@@ -3352,6 +3352,7 @@ setConfigLatencyTrackingInfoPercentilesOutputOption(standardConfig *config, sds 
         server.latency_tracking_info_percentiles[j] = percentile;
     }
 
+    updateLatencyTrackingInfoPercentilesLabels();
     return 1;
 configerr:
     zfree(server.latency_tracking_info_percentiles);

@@ -2126,6 +2126,7 @@ struct valkeyServer {
     int latency_tracking_enabled;              /* 1 if extended latency tracking is enabled, 0 otherwise. */
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
+    sds *latency_tracking_info_percentiles_labels;
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
                                                     invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
@@ -4543,6 +4544,7 @@ sds fillPercentileDistributionLatencies(sds info,
                                         const char *histogram_name,
                                         struct hdr_histogram *histogram,
                                         sds *labels);
+void updateLatencyTrackingInfoPercentilesLabels(void);
 dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything);
 void releaseInfoSectionDict(dict *sec);
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything);

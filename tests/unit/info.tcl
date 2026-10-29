@@ -37,12 +37,20 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_match [r config get latency-tracking-info-percentiles] {latency-tracking-info-percentiles {0 50 100}}
             assert_match {*p0=*,p50=*,p100=*} [latency_percentiles_usec set]
             assert_match {*p0=*,p50=*,p100=*} [latency_percentiles_usec get]
+            r CONFIG SET latency-tracking-info-percentiles "25.0 75.0"
+            assert_match {p25=*,p75=*} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles ""
+            assert_equal {} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles "99.9"
+            assert_match {p99.9=*} [latency_percentiles_usec set]
             r config resetstat
             assert_match {} [latency_percentiles_usec set]
         }
 
         test {latencystats: bad configure percentiles} {
             r config resetstat
+            r SET a b
+            set oldlatencyline [latency_percentiles_usec set]
             set configlatencyline [r config get latency-tracking-info-percentiles]
             catch {r CONFIG SET latency-tracking-info-percentiles "10.0 50.0 a"} e
             assert_match {ERR CONFIG SET failed*} $e
@@ -52,6 +60,7 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_match {ERR CONFIG SET failed*} $e
             assert_equal [s total_error_replies] 2
             assert_match [r config get latency-tracking-info-percentiles] $configlatencyline
+            assert_equal $oldlatencyline [latency_percentiles_usec set]
             r config resetstat
             assert_match {} [errorstat ERR]
         }

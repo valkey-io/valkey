@@ -1296,6 +1296,18 @@ start_server {tags {"scripting external:skip large-memory"}} {
 }
 
 start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - server.error_reply with a string larger than 2GB} {
+        # The formatted "-<msg>" error is longer than INT_MAX, which vsnprintf() rejects.
+        run_script {
+            local s = string.rep("a", 1024 * 1024)
+            local t = {} for i=1,2048 do t[i] = s end
+            s = table.concat(t)
+            return {#s, server.error_reply(s)["err"]}
+        } 0
+    } {2147483648 {ERR }}
+}
+
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Test long escape sequences for strings} {
         r eval {
             -- Generate 1gb '==...==' separator

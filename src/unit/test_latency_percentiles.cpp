@@ -25,27 +25,25 @@ class LatencyPercentilesTest : public ::testing::Test {
     struct hdr_histogram *histogram;
     double *saved_percentiles;
     int saved_percentiles_len;
-    sds labels[sizeof(test_percentiles) / sizeof(test_percentiles[0])];
 
     void SetUp() override {
         histogram = NULL;
         saved_percentiles = server.latency_tracking_info_percentiles;
         saved_percentiles_len = server.latency_tracking_info_percentiles_len;
-        server.latency_tracking_info_percentiles = test_percentiles;
-        server.latency_tracking_info_percentiles_len = num_percentiles;
-        for (int j = 0; j < num_percentiles; j++) {
-            char fbuf[128];
-            size_t len = snprintf(fbuf, sizeof(fbuf), "%f", test_percentiles[j]);
-            len = trimDoubleString(fbuf, len);
-            labels[j] = sdscatlen(sdscatlen(sdsnew("p"), fbuf, len), "=", 1);
-        }
+        setPercentiles(test_percentiles, num_percentiles);
     }
 
     void TearDown() override {
-        for (int j = 0; j < num_percentiles; j++) sdsfree(labels[j]);
         if (histogram) hdr_close(histogram);
-        server.latency_tracking_info_percentiles = saved_percentiles;
-        server.latency_tracking_info_percentiles_len = saved_percentiles_len;
+        setPercentiles(saved_percentiles, saved_percentiles_len);
+    }
+
+    /* Labels must be freed while the old length is still set. */
+    void setPercentiles(double *percentiles, int len) {
+        freeLatencyTrackingInfoPercentilesLabels();
+        server.latency_tracking_info_percentiles = percentiles;
+        server.latency_tracking_info_percentiles_len = len;
+        updateLatencyTrackingInfoPercentilesLabels();
     }
 
     void record(long long value, long long count) {
@@ -57,8 +55,11 @@ class LatencyPercentilesTest : public ::testing::Test {
     sds expectedLine(void) {
         sds s = sdsnew("latency_percentiles_usec_cmd:");
         for (int j = 0; j < num_percentiles; j++) {
+            char fbuf[128];
+            size_t len = snprintf(fbuf, sizeof(fbuf), "%f", test_percentiles[j]);
+            trimDoubleString(fbuf, len);
             double value = (double)hdr_value_at_percentile(histogram, test_percentiles[j]) / 1000.0;
-            s = sdscatprintf(s, "%s%.3f", labels[j], value);
+            s = sdscatprintf(s, "p%s=%.3f", fbuf, value);
             if (j != num_percentiles - 1) s = sdscatlen(s, ",", 1);
         }
         return sdscatlen(s, "\r\n", 2);
@@ -66,7 +67,7 @@ class LatencyPercentilesTest : public ::testing::Test {
 
     void checkLine(void) {
         sds expected = expectedLine();
-        sds actual = fillPercentileDistributionLatencies(sdsempty(), "cmd", histogram, labels);
+        sds actual = fillPercentileDistributionLatencies(sdsempty(), "cmd", histogram);
         EXPECT_STREQ(expected, actual);
         sdsfree(expected);
         sdsfree(actual);
@@ -76,6 +77,27 @@ class LatencyPercentilesTest : public ::testing::Test {
 TEST_F(LatencyPercentilesTest, SingleValue) {
     record(1500, 1);
     checkLine();
+}
+
+TEST_F(LatencyPercentilesTest, SinglePercentile) {
+    static double p50[] = {50.0};
+    record(1000, 1);
+    record(2000, 3);
+    setPercentiles(p50, 1);
+    double value = (double)hdr_value_at_percentile(histogram, 50.0) / 1000.0;
+    sds expected = sdscatprintf(sdsempty(), "latency_percentiles_usec_cmd:p50=%.3f\r\n", value);
+    sds actual = fillPercentileDistributionLatencies(sdsempty(), "cmd", histogram);
+    EXPECT_STREQ(expected, actual);
+    sdsfree(expected);
+    sdsfree(actual);
+}
+
+TEST_F(LatencyPercentilesTest, EmptyPercentiles) {
+    record(1500, 1);
+    setPercentiles(NULL, 0);
+    sds actual = fillPercentileDistributionLatencies(sdsempty(), "cmd", histogram);
+    EXPECT_STREQ("latency_percentiles_usec_cmd:\r\n", actual);
+    sdsfree(actual);
 }
 
 TEST_F(LatencyPercentilesTest, MinAndMaxRange) {

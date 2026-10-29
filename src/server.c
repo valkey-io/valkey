@@ -6224,23 +6224,25 @@ void bytesToHuman(char *s, size_t size, unsigned long long n) {
     }
 }
 
-/* Rebuild the "p<percentile>=" labels when the percentile configuration changes.
- * The NULL terminator lets us free the previous labels after the list length changes. */
+/* Free the labels before changing the percentile configuration and its length. */
+void freeLatencyTrackingInfoPercentilesLabels(void) {
+    sds *labels = server.latency_tracking_info_percentiles_labels;
+    if (!labels) return;
+    for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) sdsfree(labels[j]);
+    zfree(labels);
+    server.latency_tracking_info_percentiles_labels = NULL;
+}
+
+/* Create the "p<percentile>=" labels after parsing the percentile configuration. */
 void updateLatencyTrackingInfoPercentilesLabels(void) {
     sds *labels = NULL;
     if (server.latency_tracking_info_percentiles_len)
-        labels = zmalloc(sizeof(sds) * (server.latency_tracking_info_percentiles_len + 1));
+        labels = zmalloc(sizeof(sds) * server.latency_tracking_info_percentiles_len);
     for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {
         char fbuf[128];
         size_t len = snprintf(fbuf, sizeof(fbuf), "%f", server.latency_tracking_info_percentiles[j]);
         len = trimDoubleString(fbuf, len);
         labels[j] = sdscatlen(sdscatlen(sdsnewlen("p", 1), fbuf, len), "=", 1);
-    }
-    if (labels) labels[server.latency_tracking_info_percentiles_len] = NULL;
-    sds *old_labels = server.latency_tracking_info_percentiles_labels;
-    if (old_labels) {
-        for (int j = 0; old_labels[j]; j++) sdsfree(old_labels[j]);
-        zfree(old_labels);
     }
     server.latency_tracking_info_percentiles_labels = labels;
 }
@@ -6285,10 +6287,7 @@ static int64_t latencyValueAtPercentile(const struct hdr_histogram *h,
 }
 
 /* Fill percentile distribution of latencies. */
-sds fillPercentileDistributionLatencies(sds info,
-                                        const char *histogram_name,
-                                        struct hdr_histogram *histogram,
-                                        sds *labels) {
+sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram) {
     int32_t min_idx = latencyHistogramIndexOf(histogram, histogram->min_value);
     int32_t max_idx = latencyHistogramIndexOf(histogram, histogram->max_value);
     info = sdscatfmt(info, "latency_percentiles_usec_%s:", histogram_name);
@@ -6304,7 +6303,7 @@ sds fillPercentileDistributionLatencies(sds info,
         buf[len++] = '0' + frac / 100;
         buf[len++] = '0' + frac / 10 % 10;
         buf[len++] = '0' + frac % 10;
-        info = sdscatsds(info, labels[j]);
+        info = sdscatsds(info, server.latency_tracking_info_percentiles_labels[j]);
         info = sdscatlen(info, buf, len);
         if (j != server.latency_tracking_info_percentiles_len - 1) info = sdscatlen(info, ",", 1);
     }
@@ -6381,7 +6380,7 @@ sds genValkeyInfoStringACLStats(sds info) {
     return info;
 }
 
-sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands, sds *labels) {
+sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
     hashtableIterator iter;
     void *next;
     hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
@@ -6390,11 +6389,11 @@ sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands, sds *labels) 
         char *tmpsafe;
         if (c->latency_histogram) {
             info = fillPercentileDistributionLatencies(
-                info, getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram, labels);
+                info, getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram);
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_ht) {
-            info = genValkeyInfoStringLatencyStats(info, c->subcommands_ht, labels);
+            info = genValkeyInfoStringLatencyStats(info, c->subcommands_ht);
         }
     }
     hashtableCleanupIterator(&iter);
@@ -7222,7 +7221,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Latencystats\r\n");
         if (server.latency_tracking_enabled) {
-            info = genValkeyInfoStringLatencyStats(info, server.commands, server.latency_tracking_info_percentiles_labels);
+            info = genValkeyInfoStringLatencyStats(info, server.commands);
         }
     }
 

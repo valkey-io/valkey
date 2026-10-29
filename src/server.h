@@ -4540,11 +4540,9 @@ void setupDebugSigHandlers(void);
 void setupSigSegvHandler(void);
 void removeSigSegvHandlers(void);
 const char *getSafeInfoString(const char *s, size_t len, char **tmp);
-sds fillPercentileDistributionLatencies(sds info,
-                                        const char *histogram_name,
-                                        struct hdr_histogram *histogram,
-                                        sds *labels);
+sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram);
 void updateLatencyTrackingInfoPercentilesLabels(void);
+void freeLatencyTrackingInfoPercentilesLabels(void);
 dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything);
 void releaseInfoSectionDict(dict *sec);
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything);

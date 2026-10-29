@@ -43,6 +43,8 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_equal {} [latency_percentiles_usec set]
             r CONFIG SET latency-tracking-info-percentiles "99.9"
             assert_match {p99.9=*} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles "0 25 50 75 100"
+            assert_match {p0=*,p25=*,p50=*,p75=*,p100=*} [latency_percentiles_usec set]
             r config resetstat
             assert_match {} [latency_percentiles_usec set]
         }
@@ -63,6 +65,19 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_equal $oldlatencyline [latency_percentiles_usec set]
             r config resetstat
             assert_match {} [errorstat ERR]
+        }
+
+        test {latencystats: restore empty percentiles after invalid configuration} {
+            r CONFIG SET latency-tracking-info-percentiles ""
+            r SET a b
+            assert_error {ERR CONFIG SET failed*} {
+                r CONFIG SET latency-tracking-info-percentiles "10 50 invalid"
+            }
+            assert_equal {latency-tracking-info-percentiles {}} [r CONFIG GET latency-tracking-info-percentiles]
+            assert_equal {} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles "50 99 99.9"
+            assert_match {p50=*,p99=*,p99.9=*} [latency_percentiles_usec set]
+            r config resetstat
         }
 
         test {latencystats: blocking commands} {

@@ -1075,6 +1075,9 @@ start_server {tags {"scripting"}} {
         wait_for_condition 50 100 {[gets $fd reply] > 0} else {
             fail "FUNCTION RESTORE did not return"
         }
+        $rd close
+        r debug set-skip-checksum-validation 0
+        r config set rdbcompression yes
         assert_match {*FUNCTION LOAD timeout*} $reply
     } {} {needs:debug}
 }

@@ -655,10 +655,44 @@ static sds pathHashEncodeCursor(const unsigned char *path, size_t len) {
     return cursor;
 }
 
+/* Validate both scan commands before looking up the key or path. */
+static int pathHashParseScanOptions(client *c, int start, int paths, scanOptions *opts, robj **prefix) {
+    *opts = (scanOptions){.count = 10, .type = LLONG_MAX, .input_slot = -1, .match_slot = -1};
+    *prefix = NULL;
+    int count_seen = 0, filter_seen = 0;
+    for (int i = start; i < c->argc; i += 2) {
+        char *arg = objectGetVal(c->argv[i]);
+        if (i + 1 >= c->argc) goto syntax;
+        if (!strcasecmp(arg, "count") && !count_seen) {
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, &opts->count, NULL) != C_OK)
+                return C_ERR;
+            count_seen = 1;
+        } else if (!strcasecmp(arg, paths ? "prefix" : "match") && !filter_seen) {
+            filter_seen = 1;
+            if (paths) {
+                *prefix = c->argv[i + 1];
+            } else {
+                opts->pat = objectGetVal(c->argv[i + 1]);
+                opts->patlen = sdslen(opts->pat);
+                opts->use_pattern = !(opts->patlen == 1 && opts->pat[0] == '*');
+            }
+        } else {
+            goto syntax;
+        }
+    }
+    return C_OK;
+syntax:
+    addReplyErrorObject(c, shared.syntaxerr);
+    return C_ERR;
+}
+
 /* Scan only the field map of an exact path, using the Hash scan cursor. */
 void phscanCommand(client *c) {
     unsigned long long cursor;
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[3]), &cursor) != C_OK) return;
+    scanOptions opts;
+    robj *prefix;
+    if (pathHashParseScanOptions(c, 4, 0, &opts, &prefix) != C_OK) return;
 
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
@@ -667,34 +701,14 @@ void phscanCommand(client *c) {
         addReply(c, shared.emptyscan);
         return;
     }
-
-    scanOptions opts;
-    if (parseScanOptionsOrReply(c, payload, 4, false, &opts) != C_OK) return;
-    if (opts.only_keys) {
-        addReplyErrorObject(c, shared.syntaxerr);
-        return;
-    }
     scanGenericCommandWithOptions(c, payload, cursor, &opts, NULL);
 }
 
 void phpathscanCommand(client *c) {
-    int count_seen = 0;
-    long count = 10;
-    robj *prefix_arg = NULL;
-    for (int i = 3; i < c->argc;) {
-        char *arg = objectGetVal(c->argv[i]);
-        if (!strcasecmp(arg, "prefix") && i + 1 < c->argc && prefix_arg == NULL) {
-            prefix_arg = c->argv[i + 1];
-            i += 2;
-        } else if (!strcasecmp(arg, "count") && i + 1 < c->argc && !count_seen) {
-            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, &count, NULL) != C_OK) return;
-            count_seen = 1;
-            i += 2;
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
+    scanOptions opts;
+    robj *prefix_arg;
+    if (pathHashParseScanOptions(c, 3, 1, &opts, &prefix_arg) != C_OK) return;
+    long count = opts.count;
 
     int initial;
     sds previous = pathHashDecodeCursor(c, c->argv[2], &initial);

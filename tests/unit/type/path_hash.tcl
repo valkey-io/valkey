@@ -251,7 +251,16 @@ start_server {tags {pathhash}} {
         r del scan-tree
         r phset scan-tree a fields 3 user:1 Alice user:2 Bob status user:fake
         r phset scan-tree ab fields 1 user:3 child
-        assert_equal {0 {user:1 Alice user:2 Bob}} [r phscan scan-tree a 0 match user:* count 1]
+        set cursor 0
+        set values {}
+        set pages 0
+        while 1 {
+            lassign [r phscan scan-tree a $cursor match user:* count 1] cursor entries
+            foreach {field value} $entries {dict set values $field $value}
+            if {$cursor eq "0"} break
+            assert {[incr pages] < 1000}
+        }
+        assert_equal {user:1 Alice user:2 Bob} [lsort -stride 2 $values]
         assert_equal {0 {}} [r phscan scan-tree a 0 match Alice]
         assert_equal {0 {}} [r phscan scan-tree missing 0]
         assert_equal {0 {}} [r phscan missing a 0]
@@ -266,13 +275,59 @@ start_server {tags {pathhash}} {
         assert_error ERR*syntax* {r phscan scan-tree a 0 prefix a}
         assert_error ERR*syntax* {r phscan scan-tree a 0 withvalues}
         assert_error ERR*syntax* {r phscan scan-tree a 0 novalues}
-        assert_error ERR*syntax* {r phscan scan-tree a 0 count 0}
+        assert_error ERR*range* {r phscan scan-tree a 0 count 0}
         assert_error ERR*syntax* {r phscan scan-tree a 0 match}
         assert_error ERR*syntax* {r phpathscan scan-tree 0 withvalues}
         assert_error ERR*syntax* {r phpathscan scan-tree 0 match *}
         assert_error ERR*wrong*number* {r phscan scan-tree 0}
         assert_equal {scan-tree} [r command getkeys phscan scan-tree a 0 match user:*]
         assert_equal {scan-tree} [r command getkeys phpathscan scan-tree 0 prefix a]
+    }
+
+    test {Path Hash scans validate options even for missing keys and paths} {
+        foreach command {
+            {phscan scan-tree a 0} {phscan scan-tree missing 0}
+            {phscan missing a 0} {phpathscan scan-tree 0} {phpathscan missing 0}
+        } {
+            set filter match
+            if {[lindex $command 0] eq "phpathscan"} {set filter prefix}
+            foreach options [list {count 1 count 5} [list $filter a $filter b] \
+                {unknown value} {count} [list $filter]] {
+                assert_error ERR*syntax* {r {*}$command {*}$options}
+            }
+            foreach count {0 -1} {
+                assert_error ERR*range* {r {*}$command count $count}
+            }
+            assert_error ERR*integer* {r {*}$command count invalid}
+        }
+    }
+
+    test {PHSCAN handles payload promotion between calls} {
+        r del scan-tree
+        set old_limit [lindex [r config get hash-max-listpack-entries] 1]
+        test_defer {r config set hash-max-listpack-entries $old_limit}
+        r config set hash-max-listpack-entries 4
+        r phset scan-tree p fields 2 f0 v0 f1 v1
+        # Compact payloads finish in one call, even with COUNT 1.
+        lassign [r phscan scan-tree p 0 count 1] cursor entries
+        assert_equal 0 $cursor
+        assert_equal {f0 v0 f1 v1} [lsort -stride 2 $entries]
+        for {set i 2} {$i < 100} {incr i} {
+            r phset scan-tree p fields 1 f$i v$i
+        }
+        # Reuse the returned cursor after promotion; zero starts a new pass.
+        set values {}
+        set pages 0
+        while 1 {
+            lassign [r phscan scan-tree p $cursor count 1] cursor entries
+            foreach {field value} $entries {dict set values $field $value}
+            incr pages
+            if {$cursor eq "0"} break
+            assert {$pages < 1000}
+        }
+        assert {$pages > 1}
+        assert_equal 100 [dict size $values]
+        for {set i 0} {$i < 100} {incr i} {assert_equal v$i [dict get $values f$i]}
     }
 
     test {PHSCAN paginates large field maps without returning other paths} {
@@ -788,6 +843,34 @@ start_server {tags {pathhash external:skip}} {
         set primary_host [srv -1 host]
         set primary_port [srv -1 port]
         set replica [srv 0 client]
+
+        test {PHSCAN fully iterates a large payload on a read-only replica} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {[s 0 master_link_status] eq {up}} else {
+                fail "Replication not started"
+            }
+            for {set i 0} {$i < 600} {incr i} {
+                $primary phset replica-scan p fields 1 field:$i value:$i
+            }
+            $primary phset replica-scan px fields 1 unrelated hidden
+            wait_for_ofs_sync $primary $replica
+            set cursor 0
+            set values {}
+            set pages 0
+            while 1 {
+                lassign [$replica phscan replica-scan p $cursor match field:5* count 2] cursor entries
+                foreach {field value} $entries {dict set values $field $value}
+                incr pages
+                if {$cursor eq "0"} break
+                assert {$pages < 1000}
+            }
+            assert {$pages > 1}
+            assert_equal 111 [dict size $values]
+            foreach field [dict keys $values] {
+                assert_match field:5* $field
+                assert_equal value:[string range $field 6 end] [dict get $values $field]
+            }
+        }
 
         test {Path Hash writes, conditional no-ops, and subtree deletes replicate} {
             $replica replicaof $primary_host $primary_port

@@ -3287,20 +3287,27 @@ void xnackCommand(client *c) {
     size_t arg_endi = c->argc - 1;
     while (arg_endi > 6) {
         if (strcasecmp(objectGetVal(c->argv[arg_endi]), "FORCE") == 0) {
+            if (force_mode) {
+                addReplyErrorObject(c, shared.syntaxerr); /* Reject repeated FORCE */
+                return;
+            }
+
             force_mode = true;
             arg_endi--;
             continue;
         }
 
         if (strcasecmp(objectGetVal(c->argv[arg_endi - 1]), "RETRYCOUNT") == 0) {
-            long long parsed_count = -1;
-            if (getLongLongFromObject(c->argv[arg_endi], &parsed_count) != C_OK || parsed_count < 0) {
+            if (retrycount >= 0) {
+                addReplyErrorObject(c, shared.syntaxerr); /* Reject repeated RETRYCOUNT */
+                return;
+            }
+
+            if (getLongLongFromObject(c->argv[arg_endi], &retrycount) != C_OK || retrycount < 0) {
                 addReplyError(c, "value is not an integer or out of range");
                 return;
             }
 
-            /* Only use the last value, ie. set once since we're looping in reverse. */
-            if (retrycount < 0) retrycount = parsed_count;
             arg_endi -= 2;
             continue;
         }

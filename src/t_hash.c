@@ -1881,11 +1881,18 @@ void hsetexCommand(client *c) {
                 strcasecmp(objectGetVal(c->argv[i]), "FNX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "FXX")) {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-                 * EX/PX/EXAT flag. */
-                if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {
-                    robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                    new_argv[new_argc++] = shared.pxat;
-                    new_argv[new_argc++] = milliseconds_obj;
+                 * EX/PX/EXAT flag. EX/PX/EXAT may be repeated and only the last one
+                 * applies, so drop the earlier ones, which are a syntax error next to
+                 * PXAT. i > 1 skips the key, which may itself be named EX. */
+                if (expire && !(flags & ARGS_PXAT) && i > 1 &&
+                    (!strcasecmp(objectGetVal(c->argv[i]), "EX") ||
+                     !strcasecmp(objectGetVal(c->argv[i]), "PX") ||
+                     !strcasecmp(objectGetVal(c->argv[i]), "EXAT"))) {
+                    if (c->argv[i + 1] == expire) {
+                        robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                        new_argv[new_argc++] = shared.pxat;
+                        new_argv[new_argc++] = milliseconds_obj;
+                    }
                     i++; // skip the original expire argument
                 } else {
                     new_argv[new_argc++] = c->argv[i];

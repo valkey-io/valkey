@@ -988,6 +988,9 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
     initGetKeysResult(&result);
     int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
     int slot = -1;
+    /* Callers may reuse the same flags across commands, so drop any result
+     * left over from a previous call. */
+    *read_flags &= ~(READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT);
     if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
     for (int i = 0; i < numkeys; i++) {
         sds key = objectGetVal(argv[result.keys[i].pos]);

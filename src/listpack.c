@@ -1181,6 +1181,8 @@ unsigned char *lpBatchDelete(unsigned char *lp, unsigned char **ps, unsigned lon
         unsigned char *skip = ps[i];
         assert(skip != NULL && skip[0] != LP_EOF);
         unsigned char *keep_start = lpSkip(skip);
+        /* Metadata entries are logically coupled to the selected element. */
+        while (keep_start[0] != LP_EOF && LP_ENCODING_IS_TAGGED(keep_start[0])) keep_start = lpSkip(keep_start);
         unsigned char *keep_end;
         if (i + 1 < count) {
             keep_end = ps[i + 1];

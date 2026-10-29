@@ -521,11 +521,16 @@ start_server {tags {"repl external:skip"}} {
 
 foreach mdl {no yes} dualchannel {no yes} {
     foreach sdl {disabled swapdb} {
-        start_server {tags {"repl external:skip"} overrides {save {}}} {
+        foreach forkless {no yes} {
+        start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes}} {
             set master [srv 0 client]
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 5
             $master config set repl-diskless-sync-max-replicas 3
+            # Forkless cannot serve a dual-channel sync (its RDB channel
+            # has no inline-replication capability), so use forkless only
+            # when dual-channel is off.
+            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "prefer-forkless") : "require-fork"}]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
             set slaves {}
@@ -535,7 +540,7 @@ foreach mdl {no yes} dualchannel {no yes} {
                     lappend slaves [srv 0 client]
                     start_server {overrides {save {}}} {
                         lappend slaves [srv 0 client]
-                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl dual-channel-replication-enabled=$dualchannel" {
+                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl dual-channel-replication-enabled=$dualchannel forkless=$forkless" {
                             # start load handles only inside the test, so that the test can be skipped
                             set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000000]
                             set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000000]
@@ -608,10 +613,14 @@ foreach mdl {no yes} dualchannel {no yes} {
                             assert {$digest eq $digest0}
                             assert {$digest eq $digest1}
                             assert {$digest eq $digest2}
+                            if {$forkless eq "yes" && $dualchannel eq "no"} {
+                                assert_equal 0 [s -3 total_forks]
+                            }
                         }
                    }
                 }
             }
+        }
         }
     }
 }
@@ -661,12 +670,13 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
 
 # Diskless load swapdb when NOT async_loading (different master replid)
 foreach testType {Successful Aborted} dualchannel {yes no} {
+    foreach forkless {no yes} {
     start_server {tags {"repl external:skip"}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        start_server {} {
+        start_server {overrides {forkless-infrastructure-enabled yes}} {
             set master [srv 0 client]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
@@ -676,6 +686,10 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
             $master config set dual-channel-replication-enabled $dualchannel
+            # Forkless cannot serve a dual-channel sync (its RDB channel
+            # has no inline-replication capability), so use forkless only
+            # when dual-channel is off.
+            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "prefer-forkless") : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled $dualchannel
@@ -698,7 +712,7 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
                     # Start the replication process
                     $replica replicaof $master_host $master_port
 
-                    test "Diskless load swapdb (different replid): replica enter loading dual-channel-replication-enabled=$dualchannel" {
+                    test "Diskless load swapdb (different replid): replica enter loading dual-channel-replication-enabled=$dualchannel forkless=$forkless" {
                         # Wait for the replica to start reading the rdb
                         wait_for_condition 100 100 {
                             [s -1 loading] eq 1
@@ -722,7 +736,7 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
                         fail "Replica didn't disconnect"
                     }
 
-                    test "Diskless load swapdb (different replid): old database is exposed after replication fails dual-channel=$dualchannel" {
+                    test "Diskless load swapdb (different replid): old database is exposed after replication fails dual-channel=$dualchannel forkless=$forkless" {
                         # Ensure we see old values from replica
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -744,27 +758,33 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
                         fail "Master <-> Replica didn't finish sync"
                     }
 
-                    test "Diskless load swapdb (different replid): new database is exposed after swapping dual-channel=$dualchannel" {
+                    test "Diskless load swapdb (different replid): new database is exposed after swapping dual-channel=$dualchannel forkless=$forkless" {
                         # Ensure we don't see anymore the key that was stored only to replica and also that we don't get LOADING status
                         assert_equal [$replica GET mykey] ""
 
                         # Make sure amount of keys matches master
                         assert_equal [$replica dbsize] 1000
+
+                        if {$forkless eq "yes" && $dualchannel eq "no"} {
+                            assert_equal 0 [s 0 total_forks]
+                        }
                     }
                 }
             }
         }
     }
+    }
 }
 
 # Diskless load swapdb when async_loading (matching master replid)
+foreach forkless {no yes} {
 foreach testType {Successful Aborted} {
     start_server {tags {"repl external:skip"}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        start_server {} {
+        start_server {overrides {forkless-infrastructure-enabled yes}} {
             set master [srv 0 client]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
@@ -773,6 +793,7 @@ foreach testType {Successful Aborted} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
+            $master config set forkless-policy [expr {$forkless eq "yes" ? "prefer-forkless" : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled no; # Doesn't work with swapdb
@@ -839,7 +860,7 @@ foreach testType {Successful Aborted} {
 
             switch $testType {
                 "Aborted" {
-                    test {Diskless load swapdb (async_loading): replica enter async_loading} {
+                    test "Diskless load swapdb (async_loading): replica enter async_loading forkless=$forkless" {
                         # Wait for the replica to start reading the rdb
                         wait_for_condition 100 100 {
                             [s -1 async_loading] eq 1
@@ -850,7 +871,7 @@ foreach testType {Successful Aborted} {
                         assert_equal [s -1 loading] 0
                     }
 
-                    test {Diskless load swapdb (async_loading): old database is exposed while async replication is in progress} {
+                    test "Diskless load swapdb (async_loading): old database is exposed while async replication is in progress forkless=$forkless" {
                         # Ensure we still see old values while async_loading is in progress and also not LOADING status
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -900,7 +921,7 @@ foreach testType {Successful Aborted} {
                         fail "Replica didn't disconnect"
                     }
 
-                    test {Diskless load swapdb (async_loading): old database is exposed after async replication fails} {
+                    test "Diskless load swapdb (async_loading): old database is exposed after async replication fails forkless=$forkless" {
                         # Ensure we see old values from replica
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -922,7 +943,7 @@ foreach testType {Successful Aborted} {
                         fail "Master <-> Replica didn't finish sync"
                     }
 
-                    test {Diskless load swapdb (async_loading): new database is exposed after swapping} {
+                    test "Diskless load swapdb (async_loading): new database is exposed after swapping forkless=$forkless" {
                         # Ensure we don't see anymore the key that was stored only to replica and also that we don't get LOADING status
                         assert_equal [$replica GET mykey] ""
 
@@ -931,6 +952,10 @@ foreach testType {Successful Aborted} {
 
                         # Make sure amount of keys matches master
                         assert_equal [$replica dbsize] 2010
+
+                        if {$forkless eq "yes"} {
+                            assert_equal 0 [s 0 total_forks]
+                        }
                     }
                 }
             }
@@ -1046,6 +1071,7 @@ test {diskless loading short read} {
         }
     }
 } {} {external:skip}
+}
 
 # get current stime and utime metrics for a thread (since it's creation)
 proc get_cpu_metrics { statfile } {
@@ -2142,6 +2168,321 @@ start_server {tags {"repl external:skip cluster:skip"}} {
                 [status $replica mem_clients_normal] < 1000000
             } else {
                 fail "mem_clients_normal leaked: expected < 1000000 but got [status $replica mem_clients_normal]"
+            }
+        }
+    }
+}
+
+# Forkless full sync requires the replica to advertise the "inband-repl"
+# capability (it must understand the RDB_OPCODE_UPDATE commands that forkless
+# save inlines into the RDB stream). A forkless-configured primary uses forkless
+# only for replicas that advertise it, and otherwise falls back to a fork-based
+# save.
+start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    for {set i 0} {$i < 500} {incr i} { $primary set key:$i val:$i }
+    set primary_dbsize [$primary dbsize]
+
+    start_server {overrides {repl-diskless-load disabled}} {
+        set replica [srv 0 client]
+
+        test "Forkless full sync is used for a replica that supports inline replication" {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            assert_equal $primary_dbsize [$replica dbsize]
+            assert_equal "val:499" [$replica get key:499]
+            assert_equal "forkless" [s -1 rdb_last_bgsave_type]
+            assert_equal "ok" [s -1 rdb_last_bgsave_status]
+        }
+    }
+}
+
+# A replica running an older version does not advertise "inband-repl", so a
+# forkless-configured primary must fall back to a fork-based save. Requires an
+# old server binary (--other-server-path), otherwise skipped.
+start_server {tags {"repl needs:other-server external:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    for {set i 0} {$i < 500} {incr i} { $primary set key:$i val:$i }
+    set primary_dbsize [$primary dbsize]
+
+    start_server {start-other-server 1 config "minimal.conf"} {
+        set replica [srv 0 client]
+
+        test "Forkless primary falls back to fork for a replica without inline-replication support" {
+            set loglines [count_log_lines -1]
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            assert_equal $primary_dbsize [$replica dbsize]
+            assert_equal "val:499" [$replica get key:499]
+            # Confirm the fallback to a fork-based save actually happened.
+            wait_for_log_messages -1 {"*Falling back to fork-based save for SYNC: replica does not support inline replication*"} $loglines 100 100
+        }
+    }
+}
+
+start_server {tags {"repl external:skip tls:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
+    set primary [srv 0 client]
+    for {set i 0} {$i < 500} {incr i} { $primary set key:$i val:$i }
+
+    test "Forkless disk-based full sync is used for a replica without inline-replication support" {
+        set loglines [count_log_lines 0]
+        set forks_before [s total_forks]
+        set s [socket [srv 0 host] [srv 0 port]]
+        fconfigure $s -translation binary
+        foreach cmd [list "REPLCONF capa eof capa psync2" "REPLCONF version [s valkey_version]"] {
+            puts -nonewline $s "$cmd\r\n"
+            flush $s
+            assert_equal {+OK} [string trim [gets $s]]
+        }
+        puts -nonewline $s "PSYNC ? -1\r\n"
+        flush $s
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*method: forkless*"} $loglines 100 100
+        waitForBgsave $primary
+        assert_equal forkless [s rdb_last_bgsave_type]
+        assert_equal $forks_before [s total_forks]
+        close $s
+    }
+}
+
+start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
+    set src [srv 0 client]
+    $src set k v
+    start_server {overrides {save ""}} {
+        foreach payload_kind {no-repl-aux mismatched-replid} {
+            # A server without a backlog saves no repl-id/repl-offset aux fields.
+            # Attaching a replica creates one, so the save carries src's own
+            # repl-id, which differs from the fake primary's all-zero id.
+            if {$payload_kind eq "no-repl-aux"} {
+                $src save
+            } else {
+                [srv 0 client] replicaof [srv -1 host] [srv -1 port]
+                wait_for_sync [srv 0 client]
+                $src save
+                [srv 0 client] replicaof no one
+            }
+            set payload [read_binary_file [server_rdb_path $src]]
+            # disabled loads through a temp file, swapdb straight from the socket.
+            foreach load_mode {disabled swapdb} {
+                test "Replica rejects a FULLRESYNC -1 RDB without a matching repl offset ($payload_kind, repl-diskless-load $load_mode)" {
+                    set payload_file [tmpfile fake-primary-payload]
+                    write_binary_file $payload_file $payload
+                    set port [find_available_port $::baseport $::portcount]
+                    # Replies +FULLRESYNC <zero id> -1, as a forkless primary does, then sends the RDB.
+                    set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                                 $port $payload_file [string length $payload] "" -1 &]
+                    wait_for_condition 50 50 {
+                        [ping_server 127.0.0.1 $port]
+                    } else {
+                        fail "Failed to start fake primary"
+                    }
+                    set replica [srv 0 client]
+                    $replica config set repl-diskless-load $load_mode
+                    set loglines [count_log_lines 0]
+                    $replica replicaof 127.0.0.1 $port
+                    wait_for_log_messages 0 {"*the RDB doesn't carry a valid offset*"} $loglines 100 100
+                    assert_equal down [s 0 master_link_status]
+                    $replica replicaof no one
+                    catch {exec kill $pid}
+                }
+            }
+        }
+    }
+}
+
+# Live writes that arrive after the bg iterator has finished scanning the
+# keyspace, but before the replica has come online, are not captured by the
+# iterator and cannot yet be served from the shared replication buffer. They
+# must still reach the replica (via the dedicated save buffer) or they are lost
+# -- the offsets converge but the replica is missing keys.
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary debug populate 800000
+    start_server {overrides {save {}}} {
+        set replica [srv 0 client]
+        test "Writes after bg iterator termination still reach the replica" {
+            # Heavy concurrent write load across the whole save, so writes keep
+            # arriving in the window between the iterator finishing its scan and
+            # the replica coming online -- when such writes are neither captured
+            # by the iterator nor yet served from the shared replication buffer.
+            # This load has proved heavy enough to reliably cause writes to land
+            # in that window.
+            set load1 [start_write_load $primary_host $primary_port 10]
+            set load2 [start_write_load $primary_host $primary_port 10]
+            set load3 [start_write_load $primary_host $primary_port 10]
+            set load4 [start_write_load $primary_host $primary_port 10]
+            after 200
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 500 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replica didn't sync"
+            }
+            # Keep the load running a little past sync completion to cover the
+            # iterator-done -> replica-online handoff, then settle.
+            after 2000
+            stop_write_load $load1
+            stop_write_load $load2
+            stop_write_load $load3
+            stop_write_load $load4
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary dbsize] [$replica dbsize]
+            assert_equal [$primary debug digest] [$replica debug digest]
+            assert_equal 0 [s -1 total_forks]
+        }
+    }
+}
+
+
+# A SWAPDB, FLUSHDB, MOVE or COPY issued on the primary while a forkless full
+# sync is in progress is carried to the replica as an inline command in the RDB
+# stream. It must land on the databases being loaded. In swapdb-mode diskless
+# load those are a temporary array (not the live server.db), which is the case
+# that previously applied the command to the wrong databases.
+foreach primary_diskless {yes no} {
+    foreach replica_load {disabled on-empty-db swapdb} {
+        # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels the save.
+        foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}} {
+            lassign $inline_cmd cmd_db cmd
+            start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
+                set primary [srv 0 client]
+                set ph [srv 0 host]
+                set pp [srv 0 port]
+                $primary config set repl-diskless-sync $primary_diskless
+                $primary config set repl-diskless-sync-delay 0
+                # Distinct data in db0 and db1 so a wrong swap changes the digest.
+                $primary select 1
+                for {set i 0} {$i < 500} {incr i} { $primary set db1:$i $i }
+                $primary select 2
+                $primary debug populate 10000
+                $primary select 0
+
+                start_server {overrides {save {}}} {
+                    set replica [srv 0 client]
+                    $replica config set repl-diskless-load $replica_load
+
+                    test "[string toupper [lindex $cmd 0]] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
+                        set load1 [start_write_load $ph $pp 8]
+                        set load2 [start_write_load $ph $pp 8]
+                        $primary config set rdb-key-save-delay 100
+                        $replica replicaof $ph $pp
+                        wait_for_condition 50 100 {
+                            [s -1 rdb_bgsave_in_progress] == 1
+                        } else {
+                            fail "Forkless save didn't start"
+                        }
+                        $primary select $cmd_db
+                        catch {$primary {*}$cmd}
+                        $primary select 0
+                        assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                        $primary config set rdb-key-save-delay 0
+                        wait_for_condition 500 100 {
+                            [s 0 master_link_status] eq {up}
+                        } else {
+                            fail "Replica didn't sync"
+                        }
+                        after 800
+                        stop_write_load $load1
+                        stop_write_load $load2
+                        wait_for_ofs_sync $primary $replica
+                        assert_equal [$primary debug digest] [$replica debug digest]
+                        assert_equal 0 [s -1 total_forks]
+                    }
+                }
+            }
+        }
+    }
+}
+
+foreach kind {multi eval} {
+    start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync-delay 0}} {
+        set primary [srv 0 client]
+        $primary select 0
+        $primary set counter 0
+        $primary select 2
+        $primary debug populate 10000
+        $primary select 0
+
+        start_server {overrides {save {}}} {
+            set replica [srv 0 client]
+
+            test "Forkless sync replays a transaction on an already sent key ($kind)" {
+                $primary config set rdb-key-save-delay 100
+                $replica replicaof [srv -1 host] [srv -1 port]
+                wait_for_condition 50 100 {
+                    [s -1 rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "Forkless save didn't start"
+                }
+                if {$kind eq "multi"} {
+                    $primary multi
+                    $primary incr counter
+                    $primary incr counter
+                    $primary exec
+                } else {
+                    $primary eval {redis.call('incr', KEYS[1]); redis.call('incr', KEYS[1])} 1 counter
+                }
+                assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                $primary config set rdb-key-save-delay 0
+                wait_for_condition 500 100 {
+                    [s 0 master_link_status] eq {up}
+                } else {
+                    fail "Replica didn't sync"
+                }
+                wait_for_ofs_sync $primary $replica
+                assert_equal 1 [s -1 sync_full]
+                assert_equal [$primary debug digest] [$replica debug digest]
+                assert_equal 0 [s -1 total_forks]
+            }
+        }
+    }
+}
+
+foreach load_mode {disabled swapdb} {
+    start_server {tags {"repl external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        $primary config set forkless-policy prefer-forkless
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary debug populate 200000
+
+        start_server {overrides {save ""}} {
+            set replica [srv 0 client]
+            $replica config set repl-diskless-load $load_mode
+
+            test "Forkless diskless full sync under write load, repl-diskless-load=$load_mode" {
+                set loglines [count_log_lines -1]
+                set load1 [start_write_load $primary_host $primary_port 60]
+                set load2 [start_write_load $primary_host $primary_port 60]
+                after 200
+                $replica replicaof $primary_host $primary_port
+
+                # Make sure the forkless socket path (with inline commands) ran.
+                wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+
+                # Replica must sync while writes are still flowing.
+                wait_for_condition 100 100 {
+                    [s 0 master_link_status] eq {up}
+                } else {
+                    fail "Replica didn't sync (repl-diskless-load=$load_mode)"
+                }
+
+                stop_write_load $load1
+                stop_write_load $load2
+                wait_for_ofs_sync $primary $replica
+                assert_equal [$primary dbsize] [$replica dbsize]
+                assert_equal [$primary debug digest] [$replica debug digest]
             }
         }
     }

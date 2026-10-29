@@ -185,9 +185,9 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {"zstd", RDB_COMPRESSION_ZSTD},
                                      {NULL, 0}};
 
-configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
-                                   {"forkless", RDB_BGSAVE_TYPE_FORKLESS},
-                                   {NULL, 0}};
+configEnum forkless_policy_enum[] = {{"require-fork", FORKLESS_POLICY_REQUIRE_FORK},
+                                     {"prefer-forkless", FORKLESS_POLICY_PREFER_FORKLESS},
+                                     {NULL, 0}};
 
 configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILOVER_NO},
                                                  {"yes", CLUSTER_REPLICA_NO_FAILOVER_YES},
@@ -671,8 +671,8 @@ void loadServerConfigFromString(sds config) {
         err = "replicaof directive not allowed in cluster mode";
         goto loaderr;
     }
-    if (server.bgsave_default_method == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
-        err = "'bgsave-default-method forkless' can only be selected when the server was started with "
+    if (server.forkless_policy != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
+        err = "'forkless-policy prefer-forkless' can only be selected when the server was started with "
               "'forkless-infrastructure-enabled yes'";
         goto loaderr;
     }
@@ -2478,15 +2478,25 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     {.type = SPECIAL_CONFIG,                                                           \
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
-static int isValidBgsaveDefaultMethod(int val, const char **err) {
+static int isValidForklessPolicy(int val, const char **err) {
     /* During startup config parsing the directives are applied one by one, so
      * forkless-infrastructure-enabled may not have been read yet when this
      * value is set. We will check it when loading the config string */
     if (reading_config_file) return 1;
-    if (val == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
-        *err = "'forkless' can only be selected when the server was started with "
+    if (val != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
+        *err = "'prefer-forkless' can only be selected when the server was started with "
                "'forkless-infrastructure-enabled yes'";
         return 0;
+    }
+    return 1;
+}
+
+static int updateForklessPolicy(const char **err) {
+    UNUSED(err);
+    if (server.forkless_policy == FORKLESS_POLICY_PREFER_FORKLESS && !moduleAllModulesHandleForkless()) {
+        serverLog(LL_WARNING, "forkless-policy is 'prefer-forkless' but a loaded module does not declare "
+                              "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS; forkless operations will fall "
+                              "back to fork.");
     }
     return 1;
 }
@@ -3448,7 +3458,6 @@ standardConfig static_configs[] = {
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
-    createEnumConfig("bgsave-default-method", NULL, MODIFIABLE_CONFIG, bgsave_method_enum, server.bgsave_default_method, RDB_BGSAVE_TYPE_FORK, isValidBgsaveDefaultMethod, NULL),
     createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, server.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
     createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 1, NULL, NULL),
@@ -3558,6 +3567,7 @@ standardConfig static_configs[] = {
     createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, isValidRdbCompression, NULL),
     createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
     createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, isValidReplCompression, NULL),
+    createEnumConfig("forkless-policy", NULL, MODIFIABLE_CONFIG, forkless_policy_enum, server.forkless_policy, FORKLESS_POLICY_REQUIRE_FORK, isValidForklessPolicy, updateForklessPolicy),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),

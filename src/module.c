@@ -13889,6 +13889,14 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
         handle = NULL;
     }
 
+    /* 'prefer-forkless' allows a non-forkless module but will always fall back to fork */
+    if (server.forkless_policy == FORKLESS_POLICY_PREFER_FORKLESS &&
+        !(ctx.module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS)) {
+        serverLog(LL_WARNING, "%sModule %s does not declare VALKEYMODULE_OPTIONS_HANDLE_FORKLESS; "
+                              "with forkless-policy 'prefer-forkless', forkless operations will fall back to fork.",
+                  is_static ? "Static " : "", display_name);
+    }
+
     /* Module loaded! Register it. */
     listAddNodeTail(modules, ctx.module);
     ctx.module->blocked_clients = 0;

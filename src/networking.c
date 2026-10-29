@@ -32,6 +32,7 @@
 #include "cluster_slot_stats.h"
 #include "cluster_migrateslots.h"
 #include "script.h"
+#include "forkless.h"
 #include "intset.h"
 #include "sds.h"
 #include "fpconv_dtoa.h"
@@ -2399,6 +2400,18 @@ int freeClient(client *c) {
     if (server.debug_force_free_primary_async && c->flag.primary) {
         server.debug_force_free_primary_async = 0;
         freeClientAsync(c);
+        return 0;
+    }
+
+    /* The forkless save's background thread may still be using this replica's
+     * connection, so we must not free it here. Instead, remove it from the
+     * replica tracking now and mark it for close; the forkless save owns the
+     * client and frees it when it is safe to do so. */
+    if (c->flag.forkless_managed) {
+        if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed))
+            return 0; /* Already marked, don't double-process. */
+        retireForklessManagedReplica(c);
+        atomic_store_explicit(&c->repl_data->forkless_pending_close, 1, memory_order_relaxed);
         return 0;
     }
 
@@ -4988,6 +5001,11 @@ int isClientConnIpV6(client *c) {
     return getClientPeerId(c)[0] == '[';
 }
 
+static int clientIsClosing(client *c) {
+    return c->flag.close_asap ||
+           (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed));
+}
+
 /* Concatenate a string representing the state of a client in a human
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
@@ -5012,7 +5030,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.dirty_cas) *p++ = 'd';
     if (client->flag.close_after_reply) *p++ = 'c';
     if (client->flag.unblocked) *p++ = 'u';
-    if (client->flag.close_asap) *p++ = 'A';
+    if (clientIsClosing(client)) *p++ = 'A';
     if (client->flag.unix_socket) *p++ = 'U';
     if (client->flag.readonly) *p++ = 'r';
     if (client->flag.no_evict) *p++ = 'e';
@@ -5687,7 +5705,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
             if (!c->flag.unblocked) return 0;
             break;
         case 'A': /* Close ASAP */
-            if (!c->flag.close_asap) return 0;
+            if (!clientIsClosing(c)) return 0;
             break;
         case 'U': /* client is connected via a Unix domain socket */
             if (!c->flag.unix_socket) return 0;
@@ -5721,7 +5739,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.multi || c->flag.blocked || c->flag.tracking ||
                 c->flag.tracking_broken_redir || c->flag.tracking_bcast ||
                 c->flag.dirty_cas || c->flag.close_after_reply ||
-                c->flag.unblocked || c->flag.close_asap ||
+                c->flag.unblocked || clientIsClosing(c) ||
                 c->flag.unix_socket || c->flag.readonly ||
                 c->flag.no_evict || c->flag.no_touch || c->flag.throttled ||
                 c->flag.import_source || c->slot_migration_job ||

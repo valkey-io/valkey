@@ -147,6 +147,21 @@ start_server {tags {"hll"}} {
         set e
     } {*INVALIDOBJ*}
 
+    test {PFADD propagates elements applied before a corrupted sparse HLL error} {
+        # A sparse HLL whose single XZERO opcode covers only registers 0..8191.
+        # Element "d" lands inside that range, element "a" runs off the end.
+        r set hll "HYLL\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x5f\xff"
+        set repl [attach_to_replication_stream]
+        assert_error {*INVALIDOBJ*} {r pfadd hll d a}
+        r set marker 1
+        assert_replication_stream $repl {
+            {select *}
+            {pfadd hll d}
+            {set marker 1}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
     test {Corrupted sparse HyperLogLogs are detected: Broken magic} {
         r del hll
         r pfadd hll a b c

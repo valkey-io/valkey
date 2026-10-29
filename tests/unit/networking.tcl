@@ -156,20 +156,20 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
 
             # Setting a password should disable protected mode
             assert_equal {OK} [r config set requirepass "secret"]
-            set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
+            set r2 [get_nonloopback_client]
             assert_equal {OK} [$r2 auth secret]
             assert_equal {PONG} [$r2 ping]
             $r2 close
 
             # Clearing the password re-enables protected mode
             assert_equal {OK} [r config set requirepass ""]
-            set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
+            set r2 [get_nonloopback_client]
             assert_match {*DENIED*} $err
             $r2 close
 
             # Explicitly disabling protected-mode works
             assert_equal {OK} [r config set protected-mode no]
-            set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
+            set r2 [get_nonloopback_client]
             assert_equal {PONG} [$r2 ping]
             $r2 close
         }

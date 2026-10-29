@@ -1251,8 +1251,11 @@ proc get_nonloopback_addr {} {
     return [lindex $addrlist 0]
 }
 
+# The test server certificate only lists loopback addresses and localhost in its
+# subjectAltName, and tcltls 2.0 verifies the peer against the host it connects
+# to. Verify against localhost instead of the non-loopback address.
 proc get_nonloopback_client {} {
-    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
+    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls {-servername localhost}]
 }
 
 # The following functions and variables are used only when running large-memory

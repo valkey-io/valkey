@@ -356,11 +356,11 @@ void phexistsCommand(client *c) {
     addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);
 }
 
-/* Call after the operation notification. This may free o, so callers must not
- * access the object afterwards. */
+/* Call after the operation notification while the caller retains o. A module
+ * callback may have removed or replaced the key in the meantime. */
 static void pathHashDeleteIfEmpty(client *c, robj *o) {
     pathHashObject *path_hash = objectGetVal(o);
-    if (raxSize(path_hash->index) == 0) {
+    if (raxSize(path_hash->index) == 0 && lookupKeyRead(c->db, c->argv[1]) == o) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     }
@@ -400,8 +400,10 @@ void phdelCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
+        incrRefCount(o);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
         pathHashDeleteIfEmpty(c, o);
+        decrRefCount(o);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -619,8 +621,10 @@ void phdelprefixCommand(client *c) {
     }
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
+        incrRefCount(o);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
         pathHashDeleteIfEmpty(c, o);
+        decrRefCount(o);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);

@@ -3087,4 +3087,30 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
         wait_for_migration 2 16383
     }
+
+    test "Slot migration skips keys expired before snapshot start" {
+        R 0 DEBUG SET-ACTIVE-EXPIRE 0
+        R 2 DEBUG SET-ACTIVE-EXPIRE 0
+
+        # Populate slot 16383 with 100 live keys and 100 keys expiring in 50ms
+        for {set j 0} {$j < 100} {incr j} {
+            R 2 SET "$16383_slot_tag:live:$j" "val_$j"
+            R 2 SET "$16383_slot_tag:expired:$j" "val_$j" PX 50
+        }
+        after 150
+
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        wait_for_migration 0 16383
+
+        # Target node 0 should only contain the 100 live keys, not the already-expired keys
+        assert_equal 100 [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+
+        R 0 DEBUG SET-ACTIVE-EXPIRE 1
+        R 2 DEBUG SET-ACTIVE-EXPIRE 1
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
 }

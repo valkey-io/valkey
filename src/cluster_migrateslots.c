@@ -84,6 +84,7 @@ typedef struct slotMigrationJob {
     sds description;                          /* Description, used for
                                                * logging. */
     size_t stat_cow_bytes;                    /* Copy on write bytes during slot migration fork. */
+    mstime_t snapshot_start_time;             /* Timestamp before fork when snapshot began. */
     bool is_tracking_only;                    /* True, if this job is only for the purpose of
                                                * tracking a slot migration occurring somewhere else
                                                * (e.g. primary, or previous snapshot). */
@@ -1657,7 +1658,7 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
             slotRange *r = (slotRange *)ln->value;
             for (int slot = r->start_slot; slot <= r->end_slot; slot++) {
                 if (rewriteSlotToAppendOnlyFileRio(
-                        aof, db_num, slot, &key_count) == C_ERR) return C_ERR;
+                        aof, db_num, slot, &key_count, job->snapshot_start_time) == C_ERR) return C_ERR;
             }
         }
     }
@@ -1721,6 +1722,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
     server.slot_migration_child_exit_pipe = pipefds[1]; /* write end */
 
     server.slot_migration_pipe_conn = job->client->conn;
+    job->snapshot_start_time = mstime();
 
     if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
         /* Child */

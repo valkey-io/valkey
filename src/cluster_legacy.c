@@ -3519,8 +3519,13 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * It is also possible that the sender is a primary in a different
      * shard and our primary just had its last slot migrated to the
      * sender. In this case we don't reconfigure ourselves as a replica
-     * of the sender. */
-    if (new_primary && cur_primary->numslots == 0) {
+     * of the sender.
+     *
+     * cur_primary is NULL for a replica whose primary is unknown, for
+     * example after the primary was deleted from the nodes table. Such a
+     * shard owns no slots. Unassigned slots match the NULL cur_primary in
+     * the loop above, which is how new_primary gets set in that case. */
+    if (new_primary && (!cur_primary || cur_primary->numslots == 0)) {
         if (server.cluster_allow_replica_migration || are_in_same_shard) {
             serverLog(LL_NOTICE,
                       "Configuration change detected. Reconfiguring myself "

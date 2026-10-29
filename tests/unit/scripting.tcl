@@ -1379,6 +1379,54 @@ start_server {tags {"scripting"}} {
         assert_match {*killed by user*} $res
     }
 
+    test {Timed out read-only scripts can be killed by SCRIPT KILL even when use nested coroutines} {
+        set rd [valkey_deferring_client]
+        r config set lua-time-limit 10
+        run_script_on_connection $rd {
+            local function spin() while true do end end
+            local function mid() while true do coroutine.resume(coroutine.create(spin)) end end
+            while true do coroutine.resume(coroutine.create(mid)) end
+        } 0
+
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+
+        kill_script
+
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 0
+        } else {
+            fail "Can't wait for script to be killed"
+        }
+
+        catch {$rd read} res
+        $rd close
+
+        assert_match {*killed by user*} $res
+    }
+
+    test {Timed out scripts are detected even when each coroutine runs briefly} {
+        set rd [valkey_deferring_client]
+        r config set lua-time-limit 10
+        run_script_on_connection $rd {
+            local function spin() for i=1,20000 do end end
+            local function mid() for i=1,100 do coroutine.resume(coroutine.create(spin)) end end
+            for i=1,100 do coroutine.resume(coroutine.create(mid)) end
+        } 0
+
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+
+        $rd read
+        $rd close
+    }
+
     test {Timed out script does not cause a false dead client} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10

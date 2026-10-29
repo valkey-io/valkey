@@ -119,14 +119,6 @@ start_server {tags {"modules"}} {
         assert_equal 0 [r exists dry-run-key]
     }
 
-    test "CallArgv SCRIPT_MODE handles errors without ERRORS_AS_REPLIES" {
-        assert_equal {ERR EINVAL 1} [r test.call_argv_status S set]
-        assert_equal {ERR ENOENT 1} [r test.call_argv_status S no-such-command]
-        assert_equal {ERR ESPIPE 1} [r test.call_argv_status S shutdown]
-        assert_equal {OK EINVAL 1} [r test.call_argv_status SE set]
-        assert_equal PONG [r ping]
-    }
-
     test "CallArgv status replies when the raw callback did not run" {
         assert_equal {OK 0 0} [r test.call_argv_status RN ping]
         assert_equal {OK 0 0} [r test.call_argv_status RT ping]

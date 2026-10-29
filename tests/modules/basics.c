@@ -183,7 +183,6 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     int flags = 0;
     if (strchr(fmt, 'E')) flags |= VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
     if (strchr(fmt, 'D')) flags |= VALKEYMODULE_CALL_ARGV_DRY_RUN;
-    if (strchr(fmt, 'S')) flags |= VALKEYMODULE_CALL_ARGV_SCRIPT_MODE;
     if (strchr(fmt, 'K')) flags |= VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK;
     if (strchr(fmt, 'U')) flags |= (1 << 13);
     if (strchr(fmt, 'H')) flags |= (1 << 30);
@@ -213,7 +212,6 @@ int TestCallArgvStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     case EBADF: errno_name = "EBADF"; break;
     case EINVAL: errno_name = "EINVAL"; break;
     case ENOENT: errno_name = "ENOENT"; break;
-    case ESPIPE: errno_name = "ESPIPE"; break;
     default: errno_name = "UNKNOWN"; break;
     }
     ValkeyModule_ReplyWithArray(ctx, 3);

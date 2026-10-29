@@ -7145,9 +7145,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
 
 cleanup:
     if ((flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && errno) {
-        /* Keep error accounting even when no reply message was requested. */
-        afterErrorReply(c, reply_error_msg ? reply_error_msg : "ERR",
-                        reply_error_msg ? sdslen(reply_error_msg) : 3, 0);
+        afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
         incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
     }
     if (reply_error_msg != NULL && error != NULL) {

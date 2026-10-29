@@ -333,3 +333,39 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
         }
     }
 }
+
+start_server {tags {}} {
+    test {MGET with 343+ empty RAW strings does not overflow the iov prefix buffer} {
+        # writevToClient sizes its per-call prefix array as iovmax/3+1,
+        # assuming each bulk string costs 3 iov entries (prefix, data, CRLF).
+        # An empty RAW string costs only 2: addPlainBufferToReplyIOV skips
+        # the zero-length data iov, so 343 or more empty strings overflow
+        # the array and corrupt the adjacent iov_arr on the stack.
+        #
+        # Setting min-io-threads-avoid-copy-reply to 1 enables copy avoidance
+        # on the default single-threaded server so the test does not need
+        # io-threads 7. SET creates an EMBSTR object; APPEND on the existing
+        # key calls dbUnshareStringValue which converts it to RAW encoding.
+        set orig [lindex [r config get min-io-threads-avoid-copy-reply] 1]
+        r config set min-io-threads-avoid-copy-reply 1
+
+        set keys {}
+        for {set i 0} {$i < 343} {incr i} {
+            r set "{k:iov}:$i" ""
+            r append "{k:iov}:$i" ""
+            lappend keys "{k:iov}:$i"
+        }
+
+        # Before the fix, the overflow writes past the prefix array into
+        # adjacent stack data. Under ASAN this is caught directly; on a
+        # plain build the corrupted iov entries typically cause writev to
+        # return EFAULT and drop this connection.
+        set results [r mget {*}$keys]
+        r config set min-io-threads-avoid-copy-reply $orig
+
+        assert_equal 343 [llength $results]
+        foreach val $results {
+            assert_equal {} $val
+        }
+    }
+}

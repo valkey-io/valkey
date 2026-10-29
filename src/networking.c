@@ -3193,9 +3193,14 @@ static void proceedToUnwritten(replyIOV *reply, int nwritten) {
 static int writevToClient(client *c) {
     int iovmax = min(IOV_MAX, c->conn->iovcnt);
     struct iovec iov_arr[iovmax];
-    /* iov_arr can accommodate iovmax / NUM_OF_IOV_PER_BULK_STR full bulk string replies
-     * and one partial bulk reply */
-    char prefixes[iovmax / NUM_OF_IOV_PER_BULK_STR + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];
+    /* Each referenced bulk string needs a $<length>\r\n prefix slot.
+     * A non-empty string costs NUM_OF_IOV_PER_BULK_STR (3) iov entries;
+     * an empty string costs only 2 because addPlainBufferToReplyIOV skips
+     * the zero-length data iov. The worst-case prefix count is therefore
+     * iovmax/2. The +1 is needed because when iovmax is even the last CRLF
+     * fills iov_arr before limit_reached is set, so the loop writes one more
+     * prefix entry before discovering the array is full. */
+    char prefixes[iovmax / 2 + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];
     char crlf[2] = {'\r', '\n'};
     size_t bufcnt = 0;
 

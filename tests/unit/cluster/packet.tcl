@@ -243,6 +243,43 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     }
 }
 
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "A cluster bus peer with a read backlog does not starve clients" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        set pid [srv 0 pid]
+
+        # Header-only PINGs with protocol version 0. Each is counted and then
+        # dropped, leaving the link open.
+        set ping "RCmb[binary format ISSS 2256 0 0 0][string repeat "\x00" 2242]"
+        set count 1000
+
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 0
+        set rd [valkey_deferring_client]
+
+        # Queue the PINGs and then a client command while the node is stopped,
+        # so both are readable on the first event loop after it resumes.
+        pause_process $pid
+        puts -nonewline $sock [string repeat $ping $count]
+        $rd cluster info
+        resume_process $pid
+
+        regexp {cluster_stats_messages_ping_received:(\d+)} [$rd read] -> seen
+        assert_lessthan $seen $count
+
+        # Send whatever did not fit in the kernel buffers.
+        fconfigure $sock -blocking 1
+        flush $sock
+        wait_for_condition 1000 10 {
+            [CI 0 cluster_stats_messages_ping_received] == $count
+        } else {
+            fail "PINGs were never all received"
+        }
+        $rd close
+        close $sock
+    }
+}
+
 start_cluster 10 0 {tags {external:skip cluster tls:skip}} {
     test "Gossip count scales with higher percentage of `cluster-message-gossip-perc`" {
         R 0 config set cluster-message-gossip-perc 80

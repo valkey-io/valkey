@@ -55,7 +55,7 @@ typedef struct {
     /* Hash function. Defaults to hashing the bits in the pointer, effectively
      * treating the pointer as an integer. */
     uint64_t (*hashFunction)(const void *key);
-    /* Compare function, returns 0 if the keys are equal. Defaults to just
+    /* Compare function, returns non-zero if the keys are equal. Defaults to
      * comparing the pointers for equality. */
     int (*keyCompare)(const void *key1, const void *key2);
     /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */

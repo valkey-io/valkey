@@ -760,9 +760,10 @@ int trySendWriteToIOThreads(client *c) {
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
     clientReplyBlock *block = NULL;
     if (is_replica) {
-        c->io_last_reply_block = listLast(server.repl_buffer_blocks);
-        replBufBlock *o = listNodeValue(c->io_last_reply_block);
-        c->io_last_bufpos = o->used;
+        /* Snapshot the send limit rather than the buffer tail: under reply
+         * blocking the IO thread must stop at the last durable byte too. No
+         * limit means nothing to send; let the main thread handle it. */
+        if (!getReplicationSendLimit(&c->io_last_reply_block, &c->io_last_bufpos)) return C_ERR;
     } else {
         /* Save the last block of the reply list to io_last_reply_block and the used
          * position to io_last_bufpos. The I/O thread will write only up to
@@ -775,9 +776,24 @@ int trySendWriteToIOThreads(client *c) {
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
         }
+        /* Under reply blocking, stop the snapshot at the first held reply. The
+         * I/O thread must not read blocked_responses: the main thread frees its
+         * entries when an fsync completes, which can happen while this write is
+         * in flight. */
+        if (isClientReplyBufferLimited(c)) {
+            const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+            if (br->disallowed_reply_block == NULL) {
+                /* The boundary is in c->buf; every reply block comes after it. */
+                c->io_last_reply_block = NULL;
+                c->io_last_bufpos = min(br->disallowed_byte_offset, (size_t)c->bufpos);
+            } else {
+                c->io_last_reply_block = br->disallowed_reply_block;
+                c->io_last_bufpos = br->disallowed_byte_offset;
+            }
+        }
     }
 
-    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
+    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || c->io_last_reply_block || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;

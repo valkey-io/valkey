@@ -37,7 +37,9 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "reply_blocking.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -525,6 +527,13 @@ typedef enum {
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
 
+enum {
+    AOF_BIO_FLUSH_IDLE = 0,
+    AOF_BIO_FLUSH_PENDING,
+    AOF_BIO_FLUSH_DONE,
+    AOF_BIO_FLUSH_ERR,
+};
+
 /* Replication diskless load defines */
 #define REPL_DISKLESS_LOAD_DISABLED 0
 #define REPL_DISKLESS_LOAD_WHEN_DB_EMPTY 1
@@ -983,6 +992,11 @@ typedef struct serverDb {
         long long avg_ttl;    /* Average TTL, just for stats */
         unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
+
+    /* fields related to dirty key tracking
+     * for consistent writes with reply-blocking */
+    hashtable *uncommitted_keys; /* Map of dirty keys to the offset that must be durably committed */
+    long long dirty_repl_offset; /* Replication offset for a dirty DB */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1520,6 +1534,7 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
+    struct clientReplyBlockingState reply_blocking_state;
 } client;
 
 /* Forward declaration */
@@ -1551,6 +1566,7 @@ static inline int getClientType(client *c) {
     if (unlikely(c->slot_migration_job)) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
     return CLIENT_TYPE_NORMAL;
 }
+
 
 /* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
  * skip certain types of initialization. This type is used to indicate a client that has been initialized
@@ -1911,6 +1927,7 @@ struct valkeyServer {
                                           during startup or arguments to loadex. */
     list *loadmodule_queue;            /* List of modules to load at startup. */
     int module_pipe[2];                /* Pipe used to awake the event loop by module threads. */
+    int aof_pipe[2];                   /* Pipe used by BIO to wake event loop after AOF flush. */
     pid_t child_pid;                   /* PID of current child */
     int child_type;                    /* Type of current child */
     _Atomic(int) module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
@@ -2165,11 +2182,17 @@ struct valkeyServer {
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
     int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
+    _Atomic(int) aof_bio_flush_state;   /* AOF always-fsync BIO-thread flush state. */
+    _Atomic(int) aof_bio_flush_errno;   /* Errno of AOF always-fsync BIO-thread flush. */
+    _Atomic(off_t) aof_bio_flush_size;  /* Bytes written by the last BIO-thread flush. */
     _Atomic(int) aof_bio_fsync_status;  /* Status of AOF fsync in bio job. */
     _Atomic(int) aof_bio_fsync_errno;   /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
     int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
                                            default no. (for testings). */
+    int bio_aof_offload_enabled;        /* Hidden feature flag to enable/disable BIO AOF offload
+                                         * and dirty key tracking. */
+    reply_blocking_t reply_blocking;    /* Reply-blocking state container. */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */
@@ -3194,7 +3217,6 @@ size_t getClientOutputBufferMemoryUsage(client *c);
 size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage);
 int freeClientsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
-int getClientType(client *c);
 int getClientTypeByName(char *name);
 char *getClientTypeName(int client_class);
 void flushReplicasOutputBuffers(void);
@@ -3217,6 +3239,7 @@ void blockingOperationEnds(void);
 int handleClientsWithPendingWrites(void);
 void adjustThreadedIOIfNeeded(void);
 int clientHasPendingReplies(client *c);
+int clientHasUnsentOutput(client *c);
 int updateClientMemUsageAndBucket(client *c);
 void removeClientFromMemUsageBucket(client *c, int allow_eviction);
 void unlinkClient(client *c);
@@ -3243,6 +3266,8 @@ void processClientIOWriteDone(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 int clientConnPostponeMask(client *c);
+
+int getIntFromObject(robj *o, int *target);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val);
 
@@ -3418,6 +3443,9 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
 int prepareReplicasToWrite(void);
+int getReplicationSendLimit(listNode **last_node, size_t *last_pos);
+int replicaCursorBeforeSendLimit(client *c, listNode *limit_node, size_t limit_pos);
+void wakeReplicasForDurableProgress(void);
 void replicationFeedReplicas(int dictid, robj **argv, int argc);
 void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen);
 void replicationFeedStreamFromSlotImport(int start_dbid, int end_dbid, char *buf, size_t buflen);
@@ -3519,6 +3547,8 @@ void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
+int aofIOFlushInProgress(void);
+void aofPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask);
 int rewriteSelectDbRio(rio *aof, int db_num);
 
 /* Child info */
@@ -4072,6 +4102,7 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
                                 getKeysResult *result);
 keyReference *getKeysPrepareResult(getKeysResult *result, int numkeys);
 int getKeysFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result);
 int doesCommandHaveKeys(struct serverCommand *cmd);
 int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags);

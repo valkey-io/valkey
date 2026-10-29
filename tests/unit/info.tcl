@@ -80,6 +80,27 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             r config resetstat
         }
 
+        test {latencystats: restore percentiles after another CONFIG SET option fails} {
+            set originalpercentiles [lindex [r CONFIG GET latency-tracking-info-percentiles] 1]
+            set oldhz [r CONFIG GET hz]
+            r SET a b
+            foreach oldpercentiles {{} {50} {0 25 50 75 100}} {
+                r CONFIG SET latency-tracking-info-percentiles $oldpercentiles
+                set oldconfig [r CONFIG GET latency-tracking-info-percentiles]
+                set oldlatencyline [latency_percentiles_usec set]
+                foreach newpercentiles {{} {99.9} {10 50 90}} {
+                    assert_error {ERR CONFIG SET failed*hz*} {
+                        r CONFIG SET latency-tracking-info-percentiles $newpercentiles hz invalid
+                    }
+                    assert_equal $oldconfig [r CONFIG GET latency-tracking-info-percentiles]
+                    assert_equal $oldlatencyline [latency_percentiles_usec set]
+                    assert_equal $oldhz [r CONFIG GET hz]
+                }
+            }
+            r CONFIG SET latency-tracking-info-percentiles $originalpercentiles
+            r config resetstat
+        }
+
         test {latencystats: blocking commands} {
             r config resetstat
             r CONFIG SET latency-tracking yes

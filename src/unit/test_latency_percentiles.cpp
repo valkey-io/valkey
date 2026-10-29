@@ -43,7 +43,7 @@ class LatencyPercentilesTest : public ::testing::Test {
         freeLatencyTrackingInfoPercentilesLabels();
         server.latency_tracking_info_percentiles = percentiles;
         server.latency_tracking_info_percentiles_len = len;
-        updateLatencyTrackingInfoPercentilesLabels();
+        createLatencyTrackingInfoPercentilesLabels();
     }
 
     void record(long long value, long long count) {

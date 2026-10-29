@@ -2492,7 +2492,7 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
     server.latency_tracking_info_percentiles_labels = NULL;
-    updateLatencyTrackingInfoPercentilesLabels();
+    createLatencyTrackingInfoPercentilesLabels();
 
     server.tls_server_cert_expire_time = 0;
     server.tls_server_alt_cert_expire_time = 0;
@@ -6233,8 +6233,10 @@ void freeLatencyTrackingInfoPercentilesLabels(void) {
     server.latency_tracking_info_percentiles_labels = NULL;
 }
 
-/* Create the "p<percentile>=" labels after parsing the percentile configuration. */
-void updateLatencyTrackingInfoPercentilesLabels(void) {
+/* Create the "p<percentile>=" labels after parsing the percentile configuration.
+ * Existing labels must be freed before changing the configuration and its length. */
+void createLatencyTrackingInfoPercentilesLabels(void) {
+    serverAssert(server.latency_tracking_info_percentiles_labels == NULL);
     sds *labels = NULL;
     if (server.latency_tracking_info_percentiles_len)
         labels = zmalloc(sizeof(sds) * server.latency_tracking_info_percentiles_len);

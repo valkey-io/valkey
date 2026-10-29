@@ -29,15 +29,18 @@ jobs:
 
       - name: Set up Clang
         run: |
-          sudo apt-get update -y
-          sudo apt-get install clang-format-18 -y
+          # Pin the exact release so the result does not depend on the runner image's packages.
+          python3 -m venv "$RUNNER_TEMP/clang-format"
+          "$RUNNER_TEMP/clang-format/bin/pip" install clang-format==18.1.8
+          echo "$RUNNER_TEMP/clang-format/bin" >> "$GITHUB_PATH"
       - name: Run clang-format
         id: clang-format
         run: |
+          clang-format --version
           # Run clang-format and capture the diff
           cd src
           shopt -s globstar
-          clang-format-18 -i **/*.c **/*.h **/*.cpp **/*.hpp
+          clang-format -i **/*.c **/*.h **/*.cpp **/*.hpp
           # Capture the diff output
           DIFF=$(git diff)
           if [ ! -z "$DIFF" ]; then

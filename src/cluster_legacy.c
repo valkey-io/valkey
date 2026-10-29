@@ -3133,7 +3133,8 @@ int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * joining another cluster. */
             if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename, CLUSTER_NAMELEN)) {
                 clusterNode *node;
-                node = createClusterNode(g->nodename, flags);
+                /* MYSELF is only meaningful to the node that set it. */
+                node = createClusterNode(g->nodename, flags & ~CLUSTER_NODE_MYSELF);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
                 node->tcp_port = msg_tcp_port;
                 node->tls_port = msg_tls_port;

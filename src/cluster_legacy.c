@@ -870,6 +870,11 @@ int clusterLoadConfig(char *filename) {
             goto fmterr;
         }
         *p = '\0';
+        if ((size_t)(p - aux_argv[0]) >= NET_IP_STR_LEN) {
+            sdsfreesplitres(aux_argv, aux_argc);
+            sdsfreesplitres(argv, argc);
+            goto fmterr;
+        }
         memcpy(n->ip, aux_argv[0], strlen(aux_argv[0]) + 1);
         char *port = p + 1;
         char *busp = strchr(port, '@');

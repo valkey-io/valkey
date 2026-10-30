@@ -404,6 +404,23 @@ start_server {tags {"geo"}} {
         lindex [r geohash points test] 0
     } {ezs42e44yx0}
 
+    test {GEOHASH returns null for a missing member} {
+        r del points
+        r geoadd points -5.6 42.6 test
+        set protocols {2 3}
+        if {$::force_resp3} {
+            set protocols {3}
+        }
+        foreach resp $protocols {
+            set rd [valkey_client]
+            $rd hello $resp
+            $rd readraw 1
+            assert_equal {*1} [$rd geohash points missing]
+            assert_equal [expr {$resp == 2 ? {$-1} : {_}}] [$rd read]
+            $rd close
+        }
+    }
+
     test {GEOHASH with only key as argument} {
         r del points
         r geoadd points 10 20 a 30 40 b

@@ -1563,6 +1563,7 @@ typedef struct {
 #define OPVAL_DIRTY_SDS 1
 #define OPVAL_DIRTY_LL 2
 #define OPVAL_VALID_LL 4
+#define OPVAL_ESTR_IS_SDS 8
 
 /* Store value retrieved from the iterator. */
 typedef struct {
@@ -1697,7 +1698,13 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
         } else if (op->encoding == OBJ_ENCODING_HASHTABLE) {
             void *next;
             if (!hashtableNext(it->ht.iter, &next)) return 0;
-            val->ele = next;
+            /* Expose the member as a buffer, not as val->ele. Zset lookups
+             * rewrite the sds header of their key while they run, and this
+             * member belongs to the keyspace, where a forkless save may be
+             * reading it at the same time. */
+            val->estr = next;
+            val->elen = sdslen(next);
+            val->flags |= OPVAL_ESTR_IS_SDS;
             val->score = 1.0;
         } else if (op->encoding == OBJ_ENCODING_LISTPACK) {
             if (it->lp.p == NULL) return 0;
@@ -1775,7 +1782,8 @@ static int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
     if (op->type == OBJ_SET) {
         char *str = val->ele ? val->ele : (char *)val->estr;
         size_t len = val->ele ? sdslen(val->ele) : val->elen;
-        if (setTypeIsMemberAux(op->subject, str, len, val->ell, val->ele != NULL)) {
+        int str_is_sds = val->ele != NULL || (val->flags & OPVAL_ESTR_IS_SDS);
+        if (setTypeIsMemberAux(op->subject, str, len, val->ell, str_is_sds)) {
             *score = 1.0;
             return 1;
         } else {

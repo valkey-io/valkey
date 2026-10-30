@@ -889,6 +889,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Populate database with all data types
         createComplexDatasetForVerification r 20
+        set keys [r keys *]
+
+        # Add filler keys that are never deleted, so the save still has
+        # work left after every key above has been deleted (and therefore
+        # already serialized).
+        createComplexDatasetForVerification r 200 "filler_"
+        set filler_count [expr {[r dbsize] - [llength $keys]}]
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
@@ -900,14 +907,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not start"
         }
         
-        # Delete all keys in the database
-        set keys [r keys *]
+        # Delete all non-filler keys
         foreach key $keys {
             r del $key
         }
         
-        # Verify all keys deleted and save still in progress
-        assert_equal [r dbsize] 0
+        # Verify all non-filler keys deleted and save still in progress
+        assert_equal [r dbsize] $filler_count
         assert_equal [s rdb_bgsave_in_progress] 1
         
         # Speed up and complete save
@@ -916,16 +922,19 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Reload from RDB and verify ORIGINAL keys still exist
         catch {r debug reload nosave}
-        for {set i 0} {$i < 20} {incr i} {
-            assert_equal [r get before_$i] "value_before_$i"
-            assert_equal [r get int_$i] [expr {42 + $i}]
-            assert_equal [r lrange lst_$i 0 -1] [list "L1" "L2" "R1" "R2"]
-            assert_equal [lsort [r smembers set_$i]] [list "B1" "B2"]
-            assert_equal [r zscore zset_$i "Z1"] 1
-            assert_equal [r hget hash_$i "H1"] "a"
-            assert_equal [r pfcount hll_$i] 1
-            assert_equal [r zcard geo_$i] 1
-            assert_equal [r zcard geo_set_$i] 1
+        assert_equal [r dbsize] [expr {[llength $keys] + $filler_count}]
+        foreach {prefix count} {"" 20 "filler_" 200} {
+            for {set i 0} {$i < $count} {incr i} {
+                assert_equal [r get ${prefix}before_$i] "value_before_$i"
+                assert_equal [r get ${prefix}int_$i] [expr {42 + $i}]
+                assert_equal [r lrange ${prefix}lst_$i 0 -1] [list "L1" "L2" "R1" "R2"]
+                assert_equal [lsort [r smembers ${prefix}set_$i]] [list "B1" "B2"]
+                assert_equal [r zscore ${prefix}zset_$i "Z1"] 1
+                assert_equal [r hget ${prefix}hash_$i "H1"] "a"
+                assert_equal [r pfcount ${prefix}hll_$i] 1
+                assert_equal [r zcard ${prefix}geo_$i] 1
+                assert_equal [r zcard ${prefix}geo_set_$i] 1
+            }
         }
     } {} {needs:debug}
 }

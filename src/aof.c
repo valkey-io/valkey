@@ -2443,7 +2443,7 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
 
 /* This function is currently used in slot migration to rewrite the corresponding
  * slot hashtable to rio. */
-int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
+int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count, mstime_t expire_cutoff) {
     long long updated_time = 0;
 
     if (dbHasNoKeys(db_num)) return C_OK;
@@ -2458,6 +2458,12 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
     void *next;
     while (kvstoreHashtableIteratorNext(iter, &next)) {
         robj *o = next;
+
+        /* Skip keys already expired before snapshot start (unless in import mode) */
+        long long expiretime = objectGetExpire(o);
+        if (!server.import_mode && expire_cutoff > 0 && expiretime != -1 && expiretime <= expire_cutoff) {
+            continue;
+        }
 
         /* Update info every 1 second (approximately).
          * in order to avoid calling mstime() on each iteration, we will

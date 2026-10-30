@@ -354,6 +354,13 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal "foo\nbar" [run_cli lrange list 0 -1]
     }
 
+    test "Non-interactive non-TTY CLI: RESP3 attribute is skipped" {
+        set reply "Some real reply following the attribute"
+        assert_equal $reply [run_cli -3 debug protocol attrib]
+        assert_equal "\"$reply\"" [run_cli -3 --csv debug protocol attrib]
+        assert_equal "\"$reply\"" [run_cli -3 --json debug protocol attrib]
+    } {} {needs:debug}
+
     test_nontty_cli "--eval should not crash valkey-cli" {
         set scriptfile [write_tmpfile "return { 1 }"]
         assert_equal "1" [run_cli --eval $scriptfile]

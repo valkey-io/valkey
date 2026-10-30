@@ -2539,6 +2539,12 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     }
 
     if (!strncmp(reply,"+CONTINUE",9)) {
+        /* We sent PSYNC ? -1, so there is no cached master to continue from. */
+        if (server.cached_master == NULL) {
+            serverLog(LL_WARNING, "Master replied +CONTINUE to a full resynchronization request, will try later.");
+            sdsfree(reply);
+            return PSYNC_TRY_LATER;
+        }
         /* Partial resync was accepted. */
         serverLog(LL_NOTICE,
             "Successful partial resynchronization with master.");

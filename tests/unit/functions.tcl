@@ -354,6 +354,27 @@ start_server {tags {"scripting"}} {
         r function flush
     }
 
+    test {FUNCTION - lazy free of restored-over functions does not touch a recreated Lua state} {
+        r config set lazyfree-lazy-user-flush yes
+        r function flush sync
+        set empty_dump [r function dump]
+        for {set i 0} {$i < 65} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r multi
+        r function restore $empty_dump flush
+        r function flush sync
+        r function load [get_function_code LUA test test {return 'hello'}]
+        r exec
+        wait_for_condition 50 100 {
+            [s lazyfree_pending_objects] == 0
+        } else {
+            fail "lazyfree isn't done"
+        }
+        catch {r fcall test 0} res
+        assert_equal $res hello
+    }
+
     test {FUNCTION - test function wrong argument} {
         catch {r function flush bad_arg} e
         assert_match {*only supports SYNC|ASYNC*} $e

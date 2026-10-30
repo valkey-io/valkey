@@ -37,6 +37,7 @@ typedef struct pathHashScanEntry {
 } pathHashScanEntry;
 
 #define PATH_HASH_DELETE_CHUNK_SIZE 256
+#define PATH_HASH_DELETE_CHUNK_BYTES (64 * 1024)
 
 static void freePathHashPayload(void *data) {
     decrRefCount(data);
@@ -582,18 +583,22 @@ void phdelprefixCommand(client *c) {
     }
 
     /* Deletion invalidates the iterator, so collect a bounded number of path
-     * copies before removing them. This bounds temporary path copies only; the
-     * complete matching subtree is still deleted synchronously by this command. */
+     * copies before removing them. The index stores a shared prefix once, so
+     * the copies are bounded in bytes as well as in count. This bounds temporary
+     * path copies only; the complete matching subtree is still deleted
+     * synchronously by this command. */
     long long deleted = 0;
     while (1) {
         sds paths[PATH_HASH_DELETE_CHUNK_SIZE];
-        size_t chunk_len = 0;
+        size_t chunk_len = 0, chunk_bytes = 0;
         raxIterator iter;
         raxStart(&iter, path_hash->index);
         raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
-        while (chunk_len < PATH_HASH_DELETE_CHUNK_SIZE && raxNext(&iter) &&
+        while (chunk_len < PATH_HASH_DELETE_CHUNK_SIZE && chunk_bytes < PATH_HASH_DELETE_CHUNK_BYTES &&
+               raxNext(&iter) &&
                pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) {
             paths[chunk_len++] = sdsnewlen(iter.key, iter.key_len);
+            chunk_bytes += iter.key_len;
         }
         raxStop(&iter);
         if (chunk_len == 0) break;

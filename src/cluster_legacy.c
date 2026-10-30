@@ -139,6 +139,9 @@ int auxAnnounceClientTlsPortPresent(clusterNode *n);
 int auxReplicaPrioritySetter(clusterNode *n, void *value, size_t length);
 sds auxReplicaPriorityGetter(clusterNode *n, sds s);
 int auxReplicaPriorityPresent(clusterNode *n);
+int auxVoterSetter(clusterNode *n, void *value, size_t length);
+sds auxVoterGetter(clusterNode *n, sds s);
+int auxVoterPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 int freeClusterLink(clusterLink *link);
@@ -165,6 +168,19 @@ static inline clusterMsgLight *toClusterMsgLight(void *buf) {
  * Returns 1 if the node has voting rights, otherwise returns 0. */
 int clusterNodeIsVotingPrimary(clusterNode *n) {
     return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
+}
+
+/* Returns 1 if the node is a voter according to the policy it announces
+ * (cluster-voter), otherwise returns 0. With auto, the default and what older
+ * nodes announce, only primaries that own slots vote. With yes or no, the
+ * node votes or not whatever its role, so failovers and slot moves don't
+ * change the voter set. */
+static int clusterNodeIsVoter(clusterNode *n) {
+    switch (n->voter) {
+    case CLUSTER_VOTER_YES: return 1;
+    case CLUSTER_VOTER_NO: return 0;
+    default: return clusterNodeIsVotingPrimary(n);
+    }
 }
 
 /* Returns if myself is the best ranked replica in an automatic failover process.
@@ -426,6 +442,7 @@ typedef enum {
     af_announce_client_tls_port,
     af_availability_zone,
     af_replica_priority,
+    af_voter,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -444,6 +461,7 @@ auxFieldHandler auxFieldHandlers[] = {
     {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
     {"availability-zone", auxAvailabilityZoneSetter, auxAvailabilityZoneGetter, auxAvailabilityZonePresent},
     {"replica-priority", auxReplicaPrioritySetter, auxReplicaPriorityGetter, auxReplicaPriorityPresent},
+    {"voter", auxVoterSetter, auxVoterGetter, auxVoterPresent},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
@@ -658,6 +676,27 @@ int auxReplicaPriorityPresent(clusterNode *n) {
      * which is the default and the highest failover rank, so there's no need
      * to store the absent default. */
     return n->replica_priority != 0;
+}
+
+/* The voting policy is persisted as an aux field, so that CLUSTER NODES
+ * replies are unchanged for clients. Auto is the default and isn't stored. */
+int auxVoterSetter(clusterNode *n, void *value, size_t length) {
+    if (length == 3 && !memcmp(value, "yes", 3)) {
+        n->voter = CLUSTER_VOTER_YES;
+    } else if (length == 2 && !memcmp(value, "no", 2)) {
+        n->voter = CLUSTER_VOTER_NO;
+    } else {
+        return C_ERR;
+    }
+    return C_OK;
+}
+
+sds auxVoterGetter(clusterNode *n, sds s) {
+    return sdscat(s, n->voter == CLUSTER_VOTER_YES ? "yes" : "no");
+}
+
+int auxVoterPresent(clusterNode *n) {
+    return n->voter != CLUSTER_VOTER_AUTO;
 }
 
 /* clusterLink send queue blocks */
@@ -1322,6 +1361,11 @@ void clusterUpdateMyselfFlags(void) {
     int nofailover = server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
+    /* The voting policy changes the voter set and so the quorum. */
+    if (myself->voter != server.cluster_voter) {
+        myself->voter = server.cluster_voter;
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+    }
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
                      CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
                      CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
@@ -1536,7 +1580,8 @@ void clusterInit(void) {
     server.cluster->fail_reason = CLUSTER_FAIL_NONE;
     server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
-    server.cluster->size_fail = 0;
+    server.cluster->voters = 0;
+    server.cluster->voters_fail = 0;
     server.cluster->todo_before_sleep = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
@@ -2150,6 +2195,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     node->replica_priority = 0;
+    node->voter = CLUSTER_VOTER_AUTO;
     return node;
 }
 
@@ -2781,15 +2827,15 @@ void markNodeAsFailing(clusterNode *node) {
  */
 void markNodeAsFailingIfNeeded(clusterNode *node) {
     int failures;
-    int needed_quorum = (server.cluster->size / 2) + 1;
+    int needed_quorum = (server.cluster->voters / 2) + 1;
 
     if (!nodeTimedOut(node)) return; /* We can reach it. */
     if (nodeFailed(node)) return;    /* Already FAILing. */
 
     failures = clusterNodeFailureReportsCount(node);
-    /* Also count myself as a voter if I'm a voting primary. */
-    if (clusterNodeIsVotingPrimary(myself)) failures++;
-    if (failures < needed_quorum) return; /* No weak agreement from primaries. */
+    /* Also count myself if I'm a voter. */
+    if (clusterNodeIsVoter(myself)) failures++;
+    if (failures < needed_quorum) return; /* No weak agreement from voters. */
 
     serverLog(LL_NOTICE, "Marking node %.40s (%s) as failing (quorum reached).", node->name, humanNodename(node));
 
@@ -3010,11 +3056,11 @@ int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         /* Ignore gossips about self. */
         if (node && node != myself) {
             /* We already know this node.
-             * Handle failure reports, the report is added only if the sender is a voting primary,
+             * Handle failure reports, the report is added only if the sender is a voter,
              * and deletion of a failure report is not restricted. */
             if (sender) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
-                    if (clusterNodeIsVotingPrimary(sender) && clusterNodeAddFailureReport(node, sender)) {
+                    if (clusterNodeIsVoter(sender) && clusterNodeAddFailureReport(node, sender)) {
                         serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
                                   humanNodename(sender), node->name, humanNodename(node));
                     }
@@ -4137,6 +4183,17 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     clusterMsg *msg = toClusterMsg(link->rcvbuf);
+
+    /* A node announces a single voting policy, both voter bits set is an
+     * invalid packet. */
+    if ((msg->mflags[1] & CLUSTERMSG_FLAG1_VOTER_NO) && (msg->mflags[1] & CLUSTERMSG_FLAG1_VOTER_YES)) {
+        serverLog(LL_WARNING,
+                  "Closing link for node %.40s that sent a %s packet with both voter flags set",
+                  msg->sender, clusterGetMessageTypeString(type));
+        freeClusterLink(link);
+        return 0;
+    }
+
     uint16_t flags = ntohs(msg->flags);
     uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
     clusterNode *sender = getNodeFromLinkAndMsg(link, msg);
@@ -4441,6 +4498,19 @@ int clusterProcessPacket(clusterLink *link) {
             }
             sender->flags &= ~CLUSTER_NODE_NOFAILOVER;
             sender->flags |= nofailover;
+
+            /* Same for the voting policy, which changes the voter set and so
+             * the quorum. */
+            int voter = CLUSTER_VOTER_AUTO;
+            if (msg->mflags[1] & CLUSTERMSG_FLAG1_VOTER_YES) {
+                voter = CLUSTER_VOTER_YES;
+            } else if (msg->mflags[1] & CLUSTERMSG_FLAG1_VOTER_NO) {
+                voter = CLUSTER_VOTER_NO;
+            }
+            if (voter != sender->voter) {
+                sender->voter = voter;
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+            }
         }
 
         /* Update the node address if it changed. */
@@ -4734,14 +4804,14 @@ int clusterProcessPacket(clusterLink *link) {
         clusterSendFailoverAuthIfNeeded(sender, msg);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK) {
         if (!sender) return 1; /* We don't know that node. */
-        /* We consider this vote only if the sender is a primary serving
-         * a non zero number of slots, and its currentEpoch is greater or
-         * equal to epoch where this node started the election. */
-        if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
+        /* We consider this vote only if the sender is a voter, and its
+         * currentEpoch is greater or equal to epoch where this node started
+         * the election. */
+        if (clusterNodeIsVoter(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
             server.cluster->failover_auth_count++;
             serverLog(LL_NOTICE, "Failover auth ACK from %.40s (%s) for epoch %llu (ACKs %d, quorum %d)",
                       sender->name, humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
-                      server.cluster->failover_auth_count, (server.cluster->size / 2) + 1);
+                      server.cluster->failover_auth_count, (server.cluster->voters / 2) + 1);
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
@@ -4749,18 +4819,18 @@ int clusterProcessPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
         if (!sender) return 1; /* We don't know that node. */
 
-        /* We consider this nack only if the sender is a primary serving a
-         * non-zero number of slots, we have an election in progress, and the
-         * NACK rejects the request of *this* election. The NACK echoes the
-         * epoch of the request it rejects; the sender's header currentEpoch
-         * is not usable for this (see clusterSendFailoverNack), because a
-         * voter rejecting an old request already claims a newer epoch, which
-         * would let a NACK for a previous election be counted against the
-         * current one and reset an election we could still win. */
+        /* We consider this nack only if the sender is a voter, we have an
+         * election in progress, and the NACK rejects the request of *this*
+         * election. The NACK echoes the epoch of the request it rejects; the
+         * sender's header currentEpoch is not usable for this (see
+         * clusterSendFailoverNack), because a voter rejecting an old request
+         * already claims a newer epoch, which would let a NACK for a previous
+         * election be counted against the current one and reset an election
+         * we could still win. */
         uint64_t nack_epoch = ntohu64(msg->data.failover_nack.nack.epoch);
         if (server.cluster->failover_auth_time &&
             server.cluster->failover_auth_sent &&
-            clusterNodeIsVotingPrimary(sender) &&
+            clusterNodeIsVoter(sender) &&
             nack_epoch == server.cluster->failover_auth_epoch) {
             clusterProcessFailoverAuthNack(sender, msg);
         }
@@ -5269,6 +5339,8 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
 
     /* Set the message flags. */
     if (clusterNodeIsPrimary(myself) && server.cluster->mf_end) hdr->mflags[0] |= CLUSTERMSG_FLAG0_PAUSED;
+    if (myself->voter == CLUSTER_VOTER_YES) hdr->mflags[1] |= CLUSTERMSG_FLAG1_VOTER_YES;
+    if (myself->voter == CLUSTER_VOTER_NO) hdr->mflags[1] |= CLUSTERMSG_FLAG1_VOTER_NO;
 
     hdr->totlen = htonl(msglen);
 }
@@ -5818,11 +5890,9 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     int slot;
     clusterNode *slot_owner;
 
-    /* IF we are not a primary serving at least 1 slot, we don't have the
-     * right to vote, as the cluster size is the number
-     * of primaries serving at least one slot, and quorum is the cluster
-     * size + 1 */
-    if (!clusterNodeIsVotingPrimary(myself)) return;
+    /* If we are not a voter we don't have the right to vote, as the quorum
+     * is a majority of the voters. */
+    if (!clusterNodeIsVoter(myself)) return;
 
     if (!server.cluster->safe_to_join) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
@@ -5918,12 +5988,21 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     clusterSendFailoverAuth(node);
     serverLog(LL_NOTICE, "Failover auth granted to %.40s (%s) for epoch %llu", node->name, humanNodename(node),
               (unsigned long long)server.cluster->currentEpoch);
+
+    /* If we are a replica voting for a sibling, yield: give up our own
+     * election, unless we already asked for votes, so that the replicas don't
+     * keep splitting the votes. Marking the election as sent makes it expire
+     * and retry later as usual. */
+    if (nodeIsReplica(myself) && myself->replicaof == primary && !server.cluster->failover_auth_sent) {
+        server.cluster->failover_auth_time = mstime();
+        server.cluster->failover_auth_sent = 1;
+    }
 }
 
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
     /* Ignore NACKs from FAIL nodes to avoid double-counting: FAIL nodes are
-     * already accounted for in size_fail, and they will never ACK, so including
+     * already accounted for in voters_fail, and they will never ACK, so including
      * their NACK would undercount achievable votes. */
     if (nodeFailed(sender)) {
         return;
@@ -5936,8 +6015,8 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
      * not NACKed, minus FAIL voters that will never reply (they count towards
      * size but neither ACK nor NACK). Fast-fail once that bound drops below
      * the quorum we need to win.. */
-    int needed_quorum = (server.cluster->size / 2) + 1;
-    int max_possible_acks = server.cluster->size - server.cluster->size_fail - server.cluster->failover_auth_nack_count;
+    int needed_quorum = (server.cluster->voters / 2) + 1;
+    int max_possible_acks = server.cluster->voters - server.cluster->voters_fail - server.cluster->failover_auth_nack_count;
     serverLog(LL_NOTICE, "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d, quorum %d)",
               clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
               humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
@@ -5947,7 +6026,7 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
                   "Failover election for epoch %llu cannot reach quorum %d (NACKs %d, dead voters %d). "
                   "Resetting the election since we cannot win an election without quorum.",
                   (unsigned long long)server.cluster->failover_auth_epoch, needed_quorum,
-                  server.cluster->failover_auth_nack_count, server.cluster->size_fail);
+                  server.cluster->failover_auth_nack_count, server.cluster->voters_fail);
         server.cluster->failover_auth_time = 0;
         /* Maybe we could start a new election, set a flag here to make sure
          * we check as soon as possible, instead of waiting for a cron. */
@@ -6126,7 +6205,7 @@ void clusterLogCantFailover(int reason) {
     serverLog(LL_NOTICE, "Currently unable to failover: %s", msg);
 
     int cur_vote = server.cluster->failover_auth_count;
-    int cur_quorum = (server.cluster->size / 2) + 1;
+    int cur_quorum = (server.cluster->voters / 2) + 1;
     /* Emits a log when an election is in progress and waiting for votes or when the failover attempt expired. */
     if (reason == CLUSTER_CANT_FAILOVER_WAITING_VOTES || reason == CLUSTER_CANT_FAILOVER_EXPIRED) {
         serverLog(LL_NOTICE, "Needed quorum: %d. Number of votes received so far: %d", cur_quorum, cur_vote);
@@ -6195,7 +6274,7 @@ void clusterHandleReplicaFailover(void) {
     mstime_t now = mstime();
     mstime_t data_age;
     mstime_t auth_age = now - server.cluster->failover_auth_time;
-    int needed_quorum = (server.cluster->size / 2) + 1;
+    int needed_quorum = (server.cluster->voters / 2) + 1;
     int manual_failover = server.cluster->mf_end != 0 && server.cluster->mf_can_start;
     mstime_t auth_timeout, auth_retry_time;
 
@@ -6408,6 +6487,16 @@ void clusterHandleReplicaFailover(void) {
         server.cluster->failover_auth_epoch = server.cluster->currentEpoch;
         serverLog(LL_NOTICE, "Starting a failover election for epoch %llu, node config epoch is %llu",
                   (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
+        /* A voter votes for itself, unless it already voted in this epoch.
+         * The vote is persisted together with the epoch below, before the
+         * request leaves, like a vote granted to another node. */
+        if (clusterNodeIsVoter(myself) && server.cluster->lastVoteEpoch < server.cluster->failover_auth_epoch) {
+            server.cluster->lastVoteEpoch = server.cluster->failover_auth_epoch;
+            server.cluster->failover_auth_count++;
+            serverLog(LL_NOTICE, "Voted for myself for epoch %llu (ACKs %d, quorum %d)",
+                      (unsigned long long)server.cluster->failover_auth_epoch, server.cluster->failover_auth_count,
+                      needed_quorum);
+        }
         clusterRequestFailoverAuth();
         server.cluster->failover_auth_sent = 1;
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
@@ -6933,7 +7022,7 @@ void clusterCron(void) {
                 serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, humanNodename(node));
                 node->flags |= CLUSTER_NODE_PFAIL;
                 update_state = 1;
-                if (clusterNodeIsVotingPrimary(myself)) {
+                if (clusterNodeIsVoter(myself)) {
                     markNodeAsFailingIfNeeded(node);
                 }
             }
@@ -7247,7 +7336,7 @@ void clusterLogFailReason(int reason) {
 
 void clusterUpdateState(void) {
     int j, new_state, new_reason;
-    int reachable_primaries = 0;
+    int reachable_voters = 0;
     static mstime_t among_minority_time;
     static mstime_t first_call_time = 0;
 
@@ -7287,22 +7376,26 @@ void clusterUpdateState(void) {
     /* Compute the cluster size, that is the number of primary nodes
      * serving at least a single slot.
      *
-     * At the same time count the number of reachable primaries having
-     * at least one slot. */
+     * At the same time count the voters, and how many of them are
+     * reachable. */
     {
         dictIterator *di;
         dictEntry *de;
 
         server.cluster->size = 0;
-        server.cluster->size_fail = 0;
+        server.cluster->voters = 0;
+        server.cluster->voters_fail = 0;
         di = dictGetSafeIterator(server.cluster->nodes);
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
 
-            if (clusterNodeIsVotingPrimary(node)) {
-                server.cluster->size++;
-                if (node->flags & CLUSTER_NODE_FAIL) server.cluster->size_fail++;
-                if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
+            if (clusterNodeIsVotingPrimary(node)) server.cluster->size++;
+            /* Voters are counted regardless of their health: a FAIL voter
+             * still counts, so a minority partition can't shrink the quorum. */
+            if (clusterNodeIsVoter(node)) {
+                server.cluster->voters++;
+                if (node->flags & CLUSTER_NODE_FAIL) server.cluster->voters_fail++;
+                if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_voters++;
             }
         }
         dictReleaseIterator(di);
@@ -7311,9 +7404,9 @@ void clusterUpdateState(void) {
     /* If we are in a minority partition, change the cluster state
      * to FAIL. */
     {
-        int needed_quorum = (server.cluster->size / 2) + 1;
+        int needed_quorum = (server.cluster->voters / 2) + 1;
 
-        if (reachable_primaries < needed_quorum) {
+        if (reachable_voters < needed_quorum) {
             new_state = CLUSTER_FAIL;
             new_reason = CLUSTER_FAIL_MINORITY_PARTITION;
             among_minority_time = mstime();
@@ -7919,6 +8012,10 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         reply_count++;
     }
 
+    addReplyBulkCString(c, "voter");
+    addReplyBulkCString(c, clusterNodeIsVoter(node) ? "yes" : "no");
+    reply_count++;
+
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
@@ -7997,13 +8094,13 @@ sds genClusterInfoString(sds info) {
 
         if (nodeTimedOut(node)) {
             nodes_pfail++;
-            if (clusterNodeIsVotingPrimary(node)) {
+            if (clusterNodeIsVoter(node)) {
                 voting_nodes_pfail++;
             }
         }
         if (nodeFailed(node)) {
             nodes_fail++;
-            if (clusterNodeIsVotingPrimary(node)) {
+            if (clusterNodeIsVoter(node)) {
                 voting_nodes_fail++;
             }
         }
@@ -8025,6 +8122,7 @@ sds genClusterInfoString(sds info) {
                      "cluster_voting_nodes_fail:%i\r\n"
                      "cluster_known_nodes:%U\r\n"
                      "cluster_size:%i\r\n"
+                     "cluster_voters:%i\r\n"
                      "cluster_current_epoch:%U\r\n"
                      "cluster_my_epoch:%U\r\n"
                      "cluster_config_save_status:%s\r\n"
@@ -8032,7 +8130,7 @@ sds genClusterInfoString(sds info) {
                      statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
-                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch,
+                     server.cluster->voters, (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch,
                      (config_save_status == C_OK) ? "ok" : "err",
                      (long long)config_last_save_time);
 

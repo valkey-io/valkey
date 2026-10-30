@@ -11,6 +11,10 @@
             [
                 "9.1.0",
                 "Added shard level `id` field and node level `availability-zone` field."
+            ],
+            [
+                "10.0.0",
+                "Added node level `voter` field."
             ]
         ],
         "command_flags": [
@@ -87,6 +91,16 @@
                                 },
                                 "availability-zone": {
                                     "type": "string"
+                                },
+                                "voter": {
+                                    "oneOf": [
+                                        {
+                                            "const": "yes"
+                                        },
+                                        {
+                                            "const": "no"
+                                        }
+                                    ]
                                 }
                             }
                         }

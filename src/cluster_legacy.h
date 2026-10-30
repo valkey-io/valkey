@@ -411,6 +411,11 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
                                               primary is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
 
+/* The sender's voting policy (cluster-voter). Neither bit set means auto,
+ * which is also what older nodes send. */
+#define CLUSTERMSG_FLAG1_VOTER_NO (1 << 0)  /* Sender never votes. */
+#define CLUSTERMSG_FLAG1_VOTER_YES (1 << 1) /* Sender always votes. */
+
 /* Reason values carried in clusterMsgDataFailoverNack.reason. */
 #define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE 1       /* Voter is not safe to vote yet. */
 #define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD 2  /* Request epoch < voter's currentEpoch. */
@@ -500,6 +505,7 @@ struct _clusterNode {
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
     unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
+    int voter;                              /* Voting policy announced by the node (CLUSTER_VOTER_*). */
 };
 
 /* Struct used for storing slot statistics. */
@@ -521,7 +527,8 @@ struct clusterState {
     int fail_reason;        /* Why the cluster state changes to fail. */
     int safe_to_join;       /* Can the restarted node safely join the cluster? */
     int size;               /* Num of primary nodes with at least one slot */
-    int size_fail;          /* Num of voting primaries currently in FAIL state (subset of size). */
+    int voters;             /* Num of voters: primaries with slots plus nodes flagged as voter. */
+    int voters_fail;        /* Num of voters currently in FAIL state (subset of voters). */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */

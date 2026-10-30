@@ -194,6 +194,11 @@ configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILO
                                                  {"if-empty", CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY},
                                                  {NULL, 0}};
 
+configEnum cluster_voter_enum[] = {{"auto", CLUSTER_VOTER_AUTO},
+                                    {"no", CLUSTER_VOTER_NO},
+                                    {"yes", CLUSTER_VOTER_YES},
+                                    {NULL, 0}};
+
 configEnum repl_compression_enum[] = {{"no", REPL_COMPRESSION_NO},
                                       {"yes", REPL_COMPRESSION_YES},
                                       {"lz4", REPL_COMPRESSION_LZ4},
@@ -3557,6 +3562,7 @@ standardConfig static_configs[] = {
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
     createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, isValidRdbCompression, NULL),
     createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
+    createEnumConfig("cluster-voter", NULL, MODIFIABLE_CONFIG, cluster_voter_enum, server.cluster_voter, CLUSTER_VOTER_AUTO, NULL, updateClusterFlags),
     createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, isValidReplCompression, NULL),
 
     /* Integer configs */

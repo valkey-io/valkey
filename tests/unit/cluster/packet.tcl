@@ -1,5 +1,5 @@
 # Create a clusterbus message packet
-proc create_cluster_meet_packet {sender_name sender_port sender_cport {count 0} {extensions 0} {mflags 0}} {
+proc create_cluster_meet_packet {sender_name sender_port sender_cport {count 0} {extensions 0} {mflags 0} {mflags1 0}} {
     # Constants
     set CLUSTER_NAMELEN 40
     set CLUSTER_SLOTS 16384
@@ -70,7 +70,7 @@ proc create_cluster_meet_packet {sender_name sender_port sender_cport {count 0} 
 
     # mflags[3] - message flags (WITH CLUSTERMSG_FLAG0_EXT_DATA flag set)
     # CLUSTERMSG_FLAG0_EXT_DATA = (1 << 2) = 4
-    append packet [binary format ccc $mflags 0 0]
+    append packet [binary format ccc $mflags $mflags1 0]
 
     # Update totlen
     set totlen [string length $packet]
@@ -240,6 +240,36 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
         } else {
             fail "Packet was never received"
         }    
+    }
+}
+
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "Packet with both voter flags set closes the link" {
+        set base_port [srv 0 port]
+        set cluster_port [expr {$base_port + 10000}]
+        set fake_node_id "abcdef1234567890abcdef1234567890abcdef12"
+        set loglines [count_log_lines 0]
+
+        # CLUSTERMSG_FLAG1_VOTER_NO | CLUSTERMSG_FLAG1_VOTER_YES = 3
+        set packet [create_cluster_meet_packet $fake_node_id $base_port $cluster_port 0 0 0 3]
+
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 1
+        puts -nonewline $sock $packet
+        flush $sock
+
+        # The server closes the link instead of answering the MEET.
+        fconfigure $sock -blocking 0
+        wait_for_condition 1000 10 {
+            [string length [read $sock]] >= 0 && [eof $sock]
+        } else {
+            fail "The link wasn't closed"
+        }
+        close $sock
+
+        wait_for_log_messages 0 {"*Closing link for node abcdef1234567890abcdef1234567890abcdef12 that sent a meet packet with both voter flags set*"} $loglines 1000 10
+        assert_equal 1 [CI 0 cluster_known_nodes]
+        assert_equal "PONG" [R 0 ping]
     }
 }
 

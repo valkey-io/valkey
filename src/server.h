@@ -703,6 +703,13 @@ typedef enum {
     CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY, /* Refuse automatic failover only while the replica is empty. */
 } cluster_replica_no_failover_policy;
 
+/* Voting policy of a cluster node, see cluster-voter. */
+typedef enum {
+    CLUSTER_VOTER_AUTO = 0, /* Vote if a primary that owns slots (default). */
+    CLUSTER_VOTER_NO,       /* Never vote. */
+    CLUSTER_VOTER_YES,      /* Always vote, whatever the role. */
+} cluster_voter_policy;
+
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
 #define NOTIFY_KEYSPACE (1 << 0)   /* K */
@@ -2420,6 +2427,7 @@ struct valkeyServer {
     int cluster_require_full_coverage;                     /* If true, put the cluster down if
                                                               there is at least an uncovered slot.*/
     int cluster_replica_no_failover;                       /* Replica failover policy (NO/YES/IF_EMPTY). */
+    int cluster_voter;                                     /* Voting policy (AUTO/NO/YES). */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
     char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
     char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */

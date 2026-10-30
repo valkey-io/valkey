@@ -9,6 +9,6 @@ start_cluster 1 1 {tags {pathhash external:skip cluster}} {
         wait_for_ofs_sync $primary $replica
         $replica readonly
         assert_equal [list generation-1] [$replica phget $key ab worker-a]
-        assert_equal 2 [$replica phcard $key]
+        assert_equal 2 [$replica phpathcount $key]
     }
 }

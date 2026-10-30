@@ -6,11 +6,39 @@ start_server {tags {pathhash}} {
         assert_equal OK [r phset tree $path fields 1 $field $value]
         assert_equal pathhash [r type tree]
         assert_equal pathhash [r object encoding tree]
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
         assert_equal [list $value] [r phget tree $path $field]
         assert_equal [list {}] [r phget tree $path missing]
         assert_equal [list $value {}] [r phget tree $path $field missing]
-        assert_equal 0 [r phcard missing]
+        assert_equal 0 [r phpathcount missing]
+    }
+
+    test {PHPATHCOUNT counts byte prefixes including exact and binary paths} {
+        r del count-tree
+        foreach path {{} a ab abc abcd abx b} {
+            r phset count-tree $path fields 1 f v
+        }
+        assert_equal 7 [r phpathcount count-tree]
+        assert_equal 7 [r phpathcount count-tree prefix {}]
+        assert_equal 5 [r phpathcount count-tree prefix a]
+        assert_equal 4 [r phpathcount count-tree prefix ab]
+        assert_equal 1 [r phpathcount count-tree prefix abcd]
+        assert_equal 0 [r phpathcount count-tree prefix z]
+        assert_equal 0 [r phpathcount missing prefix a]
+        set prefix [binary format H* 00ff]
+        r phset count-tree $prefix fields 1 f v
+        r phset count-tree "${prefix}child" fields 1 f v
+        assert_equal 2 [r phpathcount count-tree prefix $prefix]
+        r phdel count-tree $prefix
+        assert_equal 1 [r phpathcount count-tree prefix $prefix]
+        foreach key {count-tree missing} {
+            assert_error ERR*syntax* {r phpathcount $key prefix}
+            assert_error ERR*syntax* {r phpathcount $key match a}
+            assert_error ERR*syntax* {r phpathcount $key prefix a prefix b}
+        }
+        r set count-wrongtype value
+        assert_error WRONGTYPE* {r phpathcount count-wrongtype prefix a}
+        assert_equal {{}} [r command info phcard]
     }
 
     test {PHSET FNX and FXX atomically apply to the complete field group} {
@@ -31,7 +59,7 @@ start_server {tags {pathhash}} {
         assert_equal [list updated] [r phget tree path second]
         assert_equal OK [r phset tree path fields 2 duplicate first duplicate last]
         assert_equal [list last] [r phget tree path duplicate]
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
     }
 
     test {Exact path operations do not confuse ancestors and descendants} {
@@ -41,7 +69,7 @@ start_server {tags {pathhash}} {
         assert_equal [list two] [r phget tree ab f]
         assert_equal [list three] [r phget tree abc f]
         assert_equal [list {}] [r phget tree abcd f]
-        assert_equal 3 [r phcard tree]
+        assert_equal 3 [r phpathcount tree]
     }
 
     test {PHGET, PHMGET, and PHGETALL preserve field semantics} {
@@ -183,12 +211,12 @@ start_server {tags {pathhash}} {
         assert_equal 1 [r phdel tree a missing f1 missing]
         assert_equal {{} v2} [r phget tree a f1 f2]
         assert_equal 1 [r phdel tree a f2]
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
         assert_equal [list child] [r phget tree ab f]
         assert_equal 1 [r phdel tree ab]
         assert_equal 1 [r exists tree]
         assert_equal pathhash [r type tree]
-        assert_equal 0 [r phcard tree]
+        assert_equal 0 [r phpathcount tree]
         assert_equal 0 [r phdel tree ab]
     }
 
@@ -202,7 +230,7 @@ start_server {tags {pathhash}} {
         assert_equal 4 [r phdelprefix tree {}]
         assert_equal 1 [r exists tree]
         assert_equal pathhash [r type tree]
-        assert_equal 0 [r phcard tree]
+        assert_equal 0 [r phpathcount tree]
         assert_equal 0 [r phdelprefix tree anything]
     }
 
@@ -214,9 +242,9 @@ start_server {tags {pathhash}} {
         }
         lappend assignments keep:a fields 1 f one keep:b fields 1 f two keep:c fields 1 f three
         assert_equal OK [r phmset tree {*}$assignments]
-        assert_equal 603 [r phcard tree]
+        assert_equal 603 [r phpathcount tree]
         assert_equal 600 [r phdelprefix tree delete:]
-        assert_equal 3 [r phcard tree]
+        assert_equal 3 [r phpathcount tree]
         assert_equal {keep:a keep:b keep:c} [lindex [r phscan tree 0 count 100] 1]
     }
 
@@ -322,7 +350,7 @@ start_server {tags {pathhash}} {
             {phprefixes not-pathhash p}
             {phdelprefix not-pathhash p}
             {phscan not-pathhash 0}
-            {phcard not-pathhash}
+            {phpathcount not-pathhash}
         } {
             assert_error WRONGTYPE* {r {*}$command}
         }
@@ -358,7 +386,7 @@ start_server {tags {pathhash}} {
     }
 
     test {Path Hash commands are registered with the PH prefix} {
-        set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
+        set commands {phdel phdelprefix phexists phget phgetall phlongest phmget phmset phpathcount phprefixes phscan phset}
         assert_equal $commands [lsort [r command list filterby aclcat pathhash]]
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
@@ -549,7 +577,7 @@ start_server {tags {pathhash}} {
         for {set i 0} {$i < 100} {incr i} {
             r phset tree "path:$i" fields 1 field "value:$i"
         }
-        assert_equal 100 [r phcard tree]
+        assert_equal 100 [r phpathcount tree]
         assert_equal 1 [r unlink tree]
         assert_equal 0 [r exists tree]
         wait_for_condition 100 10 {
@@ -576,7 +604,7 @@ start_server {tags {pathhash}} {
         assert {[r pttl $tree_copy] > 0}
         assert_equal 1 [r persist $tree_copy]
         assert_equal {root value} [r phgetall $tree_copy {}]
-        assert_equal 2 [r phcard $tree_copy]
+        assert_equal 2 [r phpathcount $tree_copy]
         set dumped [r dump $tree]
         assert_equal OK [r restore $tree_restored 0 $dumped]
         assert_equal [r phprefixes $tree abc withvalues] [r phprefixes $tree_restored abc withvalues]
@@ -606,22 +634,22 @@ start_server {tags {pathhash}} {
         assert_equal 1 [r phdel $empty_tree path]
         assert_equal 1 [r exists $empty_tree]
         assert_equal pathhash [r type $empty_tree]
-        assert_equal 0 [r phcard $empty_tree]
+        assert_equal 0 [r phpathcount $empty_tree]
 
         assert_equal 1 [r copy $empty_tree $empty_copy]
         assert_equal pathhash [r type $empty_copy]
-        assert_equal 0 [r phcard $empty_copy]
+        assert_equal 0 [r phpathcount $empty_copy]
 
         set dumped [r dump $empty_tree]
         assert_equal OK [r restore $empty_restored 0 $dumped]
         assert_equal pathhash [r type $empty_restored]
-        assert_equal 0 [r phcard $empty_restored]
+        assert_equal 0 [r phpathcount $empty_restored]
 
         r debug reload
         foreach key [list $empty_tree $empty_copy $empty_restored] {
             assert_equal 1 [r exists $key]
             assert_equal pathhash [r type $key]
-            assert_equal 0 [r phcard $key]
+            assert_equal 0 [r phpathcount $key]
             assert_equal {0 {}} [r phscan $key 0]
         }
         assert_equal 1 [r del $empty_tree]
@@ -642,7 +670,7 @@ start_server {tags {pathhash}} {
         assert_equal pathhash [r type tree]
         assert_equal [list root-value] [r phget tree {} root]
         assert_equal [list $binary_value] [r phget tree $binary_path field]
-        assert_equal 2 [r phcard tree]
+        assert_equal 2 [r phpathcount tree]
         assert {[r pttl tree] > 0}
     } {} {needs:debug}
 
@@ -683,7 +711,7 @@ start_server {tags {pathhash}} {
         for {set i 0} {$i < 600} {incr i} {
             r phset tree path fields 1 "field:$i" "value:$i"
         }
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
         assert_equal [list value:599] [r phget tree path field:599]
         r debug reload
         assert_equal [list value:0] [r phget tree path field:0]
@@ -716,13 +744,13 @@ start_server {tags {pathhash needs:debug} overrides {appendonly yes aof-use-rdb-
         r bgrewriteaof
         waitForBgrewriteaof r
         r debug loadaof
-        assert_equal 3 [r phcard tree]
+        assert_equal 3 [r phpathcount tree]
         assert_equal [list value] [r phget tree {} root]
         assert_equal {{} v2} [r phget tree abc f1 f2]
         assert_equal [list v3] [r phget tree abcd child]
         assert_equal 1 [r exists empty-tree]
         assert_equal pathhash [r type empty-tree]
-        assert_equal 0 [r phcard empty-tree]
+        assert_equal 0 [r phpathcount empty-tree]
     }
 }
 
@@ -748,12 +776,12 @@ start_server {tags {pathhash external:skip}} {
             $primary phset empty-tree path fields 1 field value
             $primary phdel empty-tree path
             wait_for_ofs_sync $primary $replica
-            assert_equal 1 [$replica phcard tree]
+            assert_equal 1 [$replica phpathcount tree]
             assert_equal [list one] [$replica phget tree a f]
             assert_equal [list {}] [$replica phget tree ab f]
             assert_equal 1 [$replica exists empty-tree]
             assert_equal pathhash [$replica type empty-tree]
-            assert_equal 0 [$replica phcard empty-tree]
+            assert_equal 0 [$replica phpathcount empty-tree]
         }
     }
 }

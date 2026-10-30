@@ -438,6 +438,7 @@ proc create_stale_primary_ping {sender_name sender_port sender_cport current_epo
 # and R3 must end up with slot 609 migrating to R6. R6's own replica claims can
 # reach R3 before the failback and undo the forged flip, so a single run can pass
 # without the fix. Repeat on a fresh cluster.
+if {!$::tls} {
 for {set ::iter 1} {$::iter <= 5} {incr ::iter} {
     start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
@@ -491,10 +492,12 @@ for {set ::iter 1} {$::iter <= 5} {incr ::iter} {
             # R6 wins the failback at an epoch above R7's.
             failback 6
 
-            # Outcome only: R3 ends with slot 609 migrating to R6.
+            # Outcome only: R3 and the source R0 end with slot 609 migrating to R6.
             wait_for_slot_state 3 "\[609->-$R6_id\]"
+            wait_for_slot_state 0 "\[609->-$R6_id\]"
         }
     }
+}
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {

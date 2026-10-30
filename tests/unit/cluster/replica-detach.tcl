@@ -83,3 +83,36 @@ start_cluster $number_of_shards $number_of_shards {tags {external:skip cluster}}
         }
     }
 }
+
+start_cluster 2 1 {tags {external:skip cluster needs:debug}} {
+    test "Replica survives CLUSTER REPLICATE sent by its primary" {
+        wait_for_cluster_state ok
+        set new_primary_id [R 1 CLUSTER MYID]
+        R 0 DEBUG REPLICATE CLUSTER REPLICATE $new_primary_id
+        wait_for_condition 100 100 {
+            [dict get [cluster_get_myself 2] slaveof] eq $new_primary_id
+        } else {
+            fail "Replica did not switch to the new primary"
+        }
+        assert_equal {PONG} [R 2 PING]
+    }
+
+    test "Replica full syncs after CLUSTER REPLICATE NO ONE sent by its primary" {
+        # "foo" hashes to a slot owned by node 1, the replica's primary now.
+        R 1 SET foo bar
+        wait_for_ofs_sync [srv -1 client] [srv -2 client]
+        R 1 DEBUG REPLICATE CLUSTER REPLICATE NO ONE
+        wait_for_condition 100 100 {
+            [lindex [R 2 ROLE] 0] eq {master}
+        } else {
+            fail "Replica did not become a primary"
+        }
+        R 2 CLUSTER REPLICATE [R 1 CLUSTER MYID]
+        wait_for_condition 100 100 {
+            [status [srv -2 client] master_link_status] eq {up}
+        } else {
+            fail "Replica did not resync"
+        }
+        assert_equal 1 [R 2 DBSIZE]
+    }
+}

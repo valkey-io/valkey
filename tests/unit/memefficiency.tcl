@@ -580,6 +580,86 @@ run_solo {defrag} {
     }
 
 
+    # CLIENT LIST line of the client named "stalled", or empty if it is gone.
+    proc stalled_client_info {} {
+        return [lsearch -inline [split [r client list] "\r\n"] "* name=stalled *"]
+    }
+
+    proc test_pubsub_pending_reply {type} {
+        set title "Active Defrag pubsub with a pending channel reply: $type"
+        test $title {
+            # Copy avoidance makes a queued SUBSCRIBE/UNSUBSCRIBE reply hold a
+            # reference to the channel object until the reply is written.
+            r config set min-io-threads-avoid-copy-reply 1
+            r config set client-output-buffer-limit "pubsub 0 0 0"
+            r config set active-defrag-threshold-lower 0
+            r config set active-defrag-ignore-bytes 1
+            r config set active-defrag-cycle-min 25
+            r config set active-defrag-cycle-max 75
+
+            # Must stay over the embedded string limit, copy avoidance only
+            # references RAW objects.
+            set chan [string repeat c 128]
+            set listener [valkey_deferring_client]
+            $listener subscribe $chan
+            $listener read
+
+            # This client never reads, so once its socket is full its replies stay queued.
+            set stalled [valkey_deferring_client]
+            $stalled client setname stalled
+            $stalled subscribe filler
+            wait_for_condition 50 100 {
+                [string match {*cmd=subscribe*} [stalled_client_info]]
+            } else {
+                fail "stalled client did not subscribe"
+            }
+            set payload [string repeat x [expr {1024 * 1024}]]
+            for {set j 0} {$j < 32} {incr j} {
+                r publish filler $payload
+            }
+            assert_match {* omem=[1-9]*} [stalled_client_info]
+
+            $stalled subscribe $chan
+            $stalled unsubscribe
+            wait_for_condition 50 100 {
+                [string match {*cmd=unsubscribe*} [stalled_client_info]]
+            } else {
+                fail "stalled client did not unsubscribe"
+            }
+
+            # Let defrag scan the pubsub table while the replies are queued.
+            set old_defrag_time [s total_active_defrag_time]
+            r config set activedefrag yes
+            wait_for_condition 50 100 {
+                [s total_active_defrag_time] ne $old_defrag_time
+            } else {
+                fail "defrag not started"
+            }
+            after 2000
+            assert_equal PONG [r ping]
+            assert_match {* omem=[1-9]*} [stalled_client_info]
+            assert_equal [list $chan 1] [r pubsub numsub $chan]
+
+            # With the extra references gone, defrag may move the channel. The
+            # listener's own channel table must still point at the live object.
+            $stalled close
+            wait_for_condition 50 100 {
+                [stalled_client_info] eq {}
+            } else {
+                fail "stalled client was not freed"
+            }
+            after 2000
+            r config set activedefrag no
+
+            assert_equal 1 [r publish $chan hello]
+            assert_equal [list message $chan hello] [$listener read]
+            $listener unsubscribe $chan
+            assert_equal [list unsubscribe $chan 0] [$listener read]
+            assert_equal [list $chan 0] [r pubsub numsub $chan]
+            $listener close
+        }
+    }
+
     proc test_tracking_table {type} {
         set title "Active Defrag tracking table: $type"
         test $title {
@@ -675,6 +755,7 @@ run_solo {defrag} {
     lappend tests [list test_big_zset_fixed_score standalone $std_overrides]
     lappend tests [list test_stream standalone $std_overrides]
     lappend tests [list test_pubsub standalone $std_overrides]
+    lappend tests [list test_pubsub_pending_reply standalone $std_overrides]
     lappend tests [list test_tracking_table standalone $std_overrides]
 
     lappend tests [list test_main_dictionary cluster $std_overrides]

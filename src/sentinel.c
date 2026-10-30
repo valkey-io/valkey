@@ -3292,6 +3292,12 @@ void sentinelConfigGetCommand(client *c) {
             dictAdd(d, "loglevel", NULL);
             matches++;
         }
+        if (stringmatch(pattern, "aclfile", 1) && !dictFind(d, "aclfile")) {
+            addReplyBulkCString(c, "aclfile");
+            addReplyBulkCString(c, server.acl_filename ? server.acl_filename : "");
+            dictAdd(d, "aclfile", NULL);
+            matches++;
+        }
     }
     dictRelease(d);
     setDeferredMapLen(c, replylen, matches);

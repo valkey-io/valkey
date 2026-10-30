@@ -84,8 +84,9 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
     target_link_libraries(${target} PRIVATE ${libs} ${ld_flags})
     target_link_libraries(${target} PRIVATE valkey::valkey)
-    if (USE_TLS)
-        # Add required libraries needed for TLS
+    if (USE_TLS EQUAL 1)
+        # Add required libraries needed for TLS. When TLS is built as a module only the client tools need them, see
+        # TLS_CLIENT_LIBS below.
         target_link_libraries(${target} PRIVATE OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
@@ -162,22 +163,29 @@ endif ()
 message(STATUS "Using ${MALLOC_LIB}")
 
 # TLS support
+set(BUILD_TLS_MODULE 0)
 if (BUILD_TLS)
     valkey_parse_build_option(${BUILD_TLS} USE_TLS)
-    if (USE_TLS EQUAL 1)
-        # Only search for OpenSSL if needed
+    if (USE_TLS EQUAL 1 OR USE_TLS EQUAL 2)
+        # Both the builtin and the module build need OpenSSL
         find_package(OpenSSL REQUIRED)
         message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
         message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
         include_directories(${OPENSSL_INCLUDE_DIR})
     endif ()
 
-    if (USE_TLS EQUAL 1)
+    if (USE_TLS EQUAL 2)
+        message(STATUS "Building TLS as a module")
+        add_valkey_server_compiler_options("-DUSE_OPENSSL=2")
+        set(BUILD_TLS_MODULE 2)
+        # The server loads the module at runtime, but valkey-cli and valkey-benchmark have no module support, so they
+        # link OpenSSL directly. Mirrors TLS_CLIENT_LIBS in the Makefile.
+        set(TLS_CLIENT_LIBS OpenSSL::SSL valkey::valkey_tls)
+    elseif (USE_TLS EQUAL 1)
+        message(STATUS "Building TLS as builtin")
         add_valkey_server_compiler_options("-DUSE_OPENSSL=1")
         add_valkey_server_compiler_options("-DBUILD_TLS_MODULE=0")
     else ()
-        # Build TLS as a module RDMA can only be built as a module. So disable it
-        message(WARNING "BUILD_TLS can be one of: [ON | OFF | 1 | 0], but '${BUILD_TLS}' was provided")
         message(STATUS "TLS support is disabled")
         set(USE_TLS 0)
     endif ()
@@ -187,8 +195,8 @@ else ()
     set(USE_TLS 0)
 endif ()
 
+set(BUILD_RDMA_MODULE 0)
 if (BUILD_RDMA)
-    set(BUILD_RDMA_MODULE 0)
     # RDMA support (Linux only)
     if (LINUX AND NOT APPLE)
         valkey_parse_build_option(${BUILD_RDMA} USE_RDMA)

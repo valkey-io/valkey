@@ -1464,7 +1464,14 @@ void streamReplyWithCGLag(client *c, stream *s, streamCG *cg) {
     } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
         /* No fragmentation ahead means that the group's logical reads counter
          * is valid for performing the lag calculation. */
-        lag = (long long)s->entries_added - cg->entries_read;
+        if (!s->length || streamCompareID(&cg->last_id, &s->first_id) < 0) {
+            /* The group is positioned before the first entry, so entries it
+             * hasn't read may have been trimmed (XTRIM doesn't update
+             * max_deleted_entry_id). Everything left in the stream is unread. */
+            lag = (long long)s->length;
+        } else {
+            lag = (long long)s->entries_added - cg->entries_read;
+        }
         valid = 1;
     } else {
         /* Attempt to retrieve the group's last ID logical read counter. */

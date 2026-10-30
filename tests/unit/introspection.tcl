@@ -1106,6 +1106,22 @@ start_server {tags {"introspection"}} {
         $rd close
     } {0} {needs:repl}
 
+    test {MONITOR redacts credentials of rejected commands} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ; # Discard the OK
+
+        catch {r hello 4 AUTH not-real not-a-password} _
+        catch {r hello 3 AUTH not-a-password} _
+        catch {r auth not-real not-a-password extra} _
+        catch {r migrate [srv 0 host] [srv 0 port] key 9 5000 bogus AUTH not-a-password} _
+
+        for {set i 0} {$i < 4} {incr i} {
+            assert_no_match {*not-a-password*} [$rd read]
+        }
+        $rd close
+    } {0} {needs:repl}
+
     test {MONITOR correctly handles multi-exec cases} {
         set rd [valkey_deferring_client]
         $rd monitor

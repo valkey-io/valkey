@@ -3295,10 +3295,10 @@ static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
 
 /* Compact `in` to slots owned by this node. Does not free `in`.
  * *out is newly allocated, or NULL if none remain. */
-static int raftOwnedDelSlotRanges(slotRange *in, int nin, slotRange **out) {
+static int raftOwnedDelSlotRanges(slotRange *in, int numranges, slotRange **out) {
     clusterNode *me = getMyClusterNode();
     int owned = 0, n = 0;
-    for (int i = 0; i < nin; i++) {
+    for (int i = 0; i < numranges; i++) {
         for (int s = in[i].start_slot; s <= in[i].end_slot; s++) {
             if (getNodeBySlot(s) == me) owned++;
         }
@@ -3309,7 +3309,7 @@ static int raftOwnedDelSlotRanges(slotRange *in, int nin, slotRange **out) {
     }
 
     slotRange *ranges = zmalloc(sizeof(*ranges) * owned);
-    for (int i = 0; i < nin; i++) {
+    for (int i = 0; i < numranges; i++) {
         for (int s = in[i].start_slot; s <= in[i].end_slot; s++) {
             if (getNodeBySlot(s) != me) continue;
             if (n && s == ranges[n - 1].end_slot + 1)

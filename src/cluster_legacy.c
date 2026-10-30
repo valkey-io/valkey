@@ -3360,6 +3360,17 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     return totlen;
 }
 
+/* Values received from peers are persisted to nodes.conf, so ignore any that
+ * clusterLoadConfig() would reject. */
+static char *getLoadableStringExtension(char *value) {
+    return isValidAuxString(value, strlen(value)) ? value : NULL;
+}
+
+static char *getLoadableIpExtension(char *value, int af) {
+    struct in6_addr addr;
+    return inet_pton(af, value, &addr) == 1 ? value : NULL;
+}
+
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. */
 void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
@@ -3378,19 +3389,19 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         uint16_t type = ntohs(ext->type);
         if (type == CLUSTERMSG_EXT_TYPE_HOSTNAME) {
             clusterMsgPingExtHostname *hostname_ext = (clusterMsgPingExtHostname *)&(ext->ext[0].hostname);
-            ext_hostname = hostname_ext->hostname;
+            ext_hostname = getLoadableStringExtension(hostname_ext->hostname);
         } else if (type == CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME) {
             clusterMsgPingExtHumanNodename *humannodename_ext =
                 (clusterMsgPingExtHumanNodename *)&(ext->ext[0].human_nodename);
-            ext_humannodename = humannodename_ext->human_nodename;
+            ext_humannodename = getLoadableStringExtension(humannodename_ext->human_nodename);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV4) {
             clusterMsgPingExtClientIpV4 *clientipv4_ext =
                 (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].announce_client_ipv4);
-            ext_clientipv4 = clientipv4_ext->announce_client_ipv4;
+            ext_clientipv4 = getLoadableIpExtension(clientipv4_ext->announce_client_ipv4, AF_INET);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV6) {
             clusterMsgPingExtClientIpV6 *clientipv6_ext =
                 (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
-            ext_clientipv6 = clientipv6_ext->announce_client_ipv6;
+            ext_clientipv6 = getLoadableIpExtension(clientipv6_ext->announce_client_ipv6, AF_INET6);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_PORT) {
             clusterMsgPingExtClientPort *clientport_ext =
                 (clusterMsgPingExtClientPort *)&(ext->ext[0].announce_client_port);

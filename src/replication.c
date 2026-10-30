@@ -5750,7 +5750,7 @@ void processClientsWaitingReplicas(void) {
             if (numlocal < c->bstate->numlocal) continue;
         }
 
-        /* Reply before unblocking, because unblock client calls reqresAppendResponse */
+        /* Reply before unblocking; processUnblockedClients() calls reqresAppendResponse. */
         if (is_wait_aof) {
             /* WAITAOF has an array reply */
             addReplyArrayLen(c, 2);

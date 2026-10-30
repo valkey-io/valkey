@@ -4379,7 +4379,7 @@ void commandProcessed(client *c) {
      *
      * 1. Don't reset the client structure for blocked clients, so that the reply
      *    callback will still be able to access the client argv and argc fields.
-     *    The client will be reset in unblockClient().
+     *    The client will be reset in processUnblockedClients().
      * 2. Don't update replication offset or propagate commands to replicas,
      *    since we have not applied the command. */
     if (c->flag.blocked || c->flag.throttled) return;

@@ -69,7 +69,7 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     char *p, *f, *k;
     sds spat, ssub;
     robj *keyobj, *fieldobj = NULL, *o;
-    int prefixlen, sublen, postfixlen, fieldlen;
+    size_t prefixlen, sublen, postfixlen, fieldlen;
 
     /* If the pattern is "#" return the substitution object itself in order
      * to implement the "SORT ... GET #" feature. */

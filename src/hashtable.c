@@ -2351,15 +2351,17 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
+            if (iter->hashtable->tables[0] == NULL) {
+                /* Empty hashtable. We're done. Check this before pausing,
+                 * since cleanup never resumes an iterator that is still in
+                 * its initial position. */
+                break;
+            }
             if (isSafe(iter)) {
                 hashtablePauseRehashing(iter->hashtable);
                 iter->last_seen_size = iter->hashtable->used[iter->table];
             } else {
                 iter->fingerprint = hashtableFingerprint(iter->hashtable);
-            }
-            if (iter->hashtable->tables[0] == NULL) {
-                /* Empty hashtable. We're done. */
-                break;
             }
             iter->index = 0;
             /* Skip already rehashed buckets. */

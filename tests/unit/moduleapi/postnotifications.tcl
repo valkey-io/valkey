@@ -216,4 +216,21 @@ tags "modules" {
             close_replication_stream $repl
         }
     }
+
+    start_server {} {
+        r module load $testmodule
+
+        test {Test post notification job deleting a hash during active field expiration} {
+            # Only one field expires, so the hash is still there when the job
+            # deletes it, and the reclamation would go on with another batch.
+            r hset hexpired_del f1 v1 f2 v2
+            r hpexpire hexpired_del 100 FIELDS 1 f1
+            wait_for_condition 50 100 {
+                [r exists hexpired_del] == 0
+            } else {
+                fail "the hash wasn't deleted"
+            }
+            assert_equal {PONG} [r ping]
+        }
+    }
 }

@@ -3257,6 +3257,37 @@ static void clusterLogSlotRangeMigration(int first_slot,
               target_node->name, humanNodename(target_node), target_node->shard_id);
 }
 
+/* Returns true if a slot that is migrating to 'mn' should migrate to 'sender' instead. */
+static inline int isMigrationTargetRepairNeeded(clusterNode *mn, clusterNode *sender, uint64_t senderConfigEpoch) {
+    return mn != NULL && mn != sender &&
+           (mn->configEpoch < senderConfigEpoch || nodeIsReplica(mn)) &&
+           areInSameShard(mn, sender);
+}
+
+/* For each migrating slot that 'sender' does not claim, point the slot's
+ * migration target to 'sender' if the old target's shard failed over to it.
+ * Used when 'sender' becomes primary without its slots changing, such as in
+ * an empty shard, where clusterUpdateSlotsConfigWith() is not called. */
+static void clusterRepairMigrationTargetsOfPrimary(clusterNode *sender, uint64_t senderConfigEpoch, unsigned char *slots) {
+    /* A safe iterator is required: setMigratingSlotDest() looks up and updates
+     * entries of the same dict while we iterate. */
+    dictIterator *di = dictGetSafeIterator(server.cluster->migrating_slots_to);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        int j = (int)(uintptr_t)dictGetKey(de);
+        if (bitmapTestBit(slots, j)) continue;
+        clusterNode *mn = dictGetVal(de);
+        if (!isMigrationTargetRepairNeeded(mn, sender, senderConfigEpoch)) continue;
+        serverLog(LL_VERBOSE,
+                  "Failover occurred in migration target."
+                  " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
+                  j, sender->name, humanNodename(sender), sender->shard_id);
+        setMigratingSlotDest(j, sender);
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+    }
+    dictReleaseIterator(di);
+}
+
 /* This function is called when we receive a primary configuration via a
  * PING, PONG or UPDATE packet. What we receive is a node, a configEpoch of the
  * node, and the set of slots claimed under this configEpoch.
@@ -3426,10 +3457,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * the shard. Update the migrating_slots_to state to point to the
              * sender if it has just taken over the primary role. */
             clusterNode *mn = getMigratingSlotDest(j);
-            if (mn != NULL && mn != sender &&
-                (mn->configEpoch < senderConfigEpoch ||
-                 nodeIsReplica(mn)) &&
-                areInSameShard(mn, sender)) {
+            if (isMigrationTargetRepairNeeded(mn, sender, senderConfigEpoch)) {
                 serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
@@ -4749,6 +4777,12 @@ int clusterProcessPacket(clusterLink *link) {
                     }
                 }
             }
+        } else if (sender && sender_claims_to_be_primary && isAnySlotInManualMigratingState()) {
+            /* The slot set did not change, so clusterUpdateSlotsConfigWith() did
+             * not run. A primary can still take over the shard of a migration
+             * target without changing its slots (e.g. the failback to an empty
+             * shard), so re-point those migrating targets to the sender here. */
+            clusterRepairMigrationTargetsOfPrimary(sender, sender_claimed_config_epoch, msg->myslots);
         }
 
         /* If our config epoch collides with the sender's try to fix

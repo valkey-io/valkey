@@ -77,7 +77,6 @@
             {
                 "name": "from",
                 "type": "oneof",
-                "optional": true,
                 "arguments": [
                     {
                         "token": "FROMMEMBER",

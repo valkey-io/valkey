@@ -135,6 +135,15 @@ start_server {tags {"introspection"}} {
         assert_morethan [r command count] 0
     }
 
+    test {COMMAND DOCS marks GEOSEARCH origins as required} {
+        foreach {command from_index} {geosearch 1 geosearchstore 2} {
+            set docs [dict get [r command docs $command] $command]
+            set from [lindex [dict get $docs arguments] $from_index]
+            assert_equal from [dict get $from name]
+            assert_equal 0 [dict exists $from flags]
+        }
+    }
+
     test {COMMAND GETKEYS GET} {
         assert_equal {key} [r command getkeys get key]
     }

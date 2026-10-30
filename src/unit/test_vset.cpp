@@ -6,6 +6,8 @@
 
 #include "generated_wrappers.hpp"
 
+#include "test_server_fixture.hpp"
+
 /* Ensure assert() is never compiled out, even in Release builds. */
 #undef NDEBUG
 #include <cassert>
@@ -166,7 +168,7 @@ static int free_mock_entries(void) {
 class VsetTest : public ::testing::Test {
   protected:
     static void SetUpTestSuite() {
-        allocatorDefragInit();
+        testAllocatorDefragInitOnce();
     }
 
     void TearDown() override {

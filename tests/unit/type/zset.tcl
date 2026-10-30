@@ -382,6 +382,19 @@ start_server {tags {"zset"}} {
             assert_error "*NaN*" {r zincrby myzset -inf abc}
         }
 
+        test "ZADD INCR and ZINCRBY reply the stored score for -0 on a new member - $encoding" {
+            r del ztmp
+            assert_equal 0 [r zadd ztmp incr -0 a]
+            assert_equal 0 [r zscore ztmp a]
+            assert_equal 0 [r zincrby ztmp -0 b]
+            assert_equal 0 [r zscore ztmp b]
+            # An INCR of -0 on existing members already replied 0.
+            assert_equal 0 [r zadd ztmp incr -0 a]
+            assert_equal 0 [r zincrby ztmp -0 b]
+            assert_equal {a 0 b 0} [r zrange ztmp 0 -1 withscores]
+            assert_encoding $encoding ztmp
+        }
+
         test "ZINCRBY against invalid incr value - $encoding" {
             r del zincr
             r zadd zincr 1 "one"
@@ -4139,4 +4152,35 @@ start_server {tags {"zset" "cluster:skip"}} {
             assert_equal [r zrange zlp 0 -1 withscores] [r zrange zbt 0 -1 withscores] "after ZREMRANGEBYLEX $min $max on $members"
         }
     }
+}
+
+start_server [list overrides [list save ""] tags {"zset needs:debug external:skip"}] {
+    # A listpack payload written before integral scores were stored as integers
+    # can hold the string "-0": the listpack below holds the two entries
+    # {"m", "-0"}.
+    set legacy_negzero "\x11\x0e\x0e\x00\x00\x00\x02\x00\x81m\x02\x82-0\x03\xff\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+    test "ZADD INCR and ZINCRBY reply the stored score for a legacy -0 listpack score" {
+        r debug set-skip-checksum-validation 1
+        r del ztmp
+        r restore ztmp 0 $legacy_negzero
+        assert_encoding listpack ztmp
+        assert_equal -0 [r zscore ztmp m]
+
+        # The score reported through an INCR must be the score that is stored.
+        assert_equal [r zscore ztmp m] [r zincrby ztmp -0 m]
+        assert_equal [r zscore ztmp m] [r zadd ztmp incr -0 m]
+        r debug set-skip-checksum-validation 0
+    } {OK} {needs:debug}
+
+    test "ZADD INCR and ZINCRBY of +0 reply the stored score for a legacy -0 listpack score" {
+        r debug set-skip-checksum-validation 1
+        r del ztmp
+        r restore ztmp 0 $legacy_negzero
+        # -0 + 0 is +0, which compares equal to -0: the score is not updated.
+        assert_equal [r zscore ztmp m] [r zincrby ztmp 0 m]
+        assert_equal [r zscore ztmp m] [r zadd ztmp incr 0 m]
+        assert_equal -0 [r zscore ztmp m]
+        r debug set-skip-checksum-validation 0
+    } {OK} {needs:debug}
 }

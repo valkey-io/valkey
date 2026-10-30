@@ -703,7 +703,10 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         }
     } else if (ob->type == OBJ_ZSET) {
         if (ob->encoding == OBJ_ENCODING_LISTPACK) {
-            if ((newzl = activeDefragAlloc(objectGetVal(ob)))) objectSetVal(ob, newzl);
+            if ((newzl = activeDefragAlloc(objectGetVal(ob)))) {
+                zzlBumpModCount();
+                objectSetVal(ob, newzl);
+            }
         } else if (ob->encoding == OBJ_ENCODING_BTREE) {
             defragZset(ob);
         } else {

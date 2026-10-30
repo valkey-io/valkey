@@ -25,6 +25,8 @@ const_sds fbtreePeekMax(fbtreeIndex *fbt);
 void fbtreeEmpty(fbtreeIndex *fbt);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
+uint64_t fbtreeGetModCount(const fbtreeIndex *fbt);
+void fbtreeBumpModCount(fbtreeIndex *fbt);
 size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt);
 unsigned long fbtreeHeight(const fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);

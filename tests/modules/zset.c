@@ -215,6 +215,103 @@ int zset_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* ZSET.ITER_ADD key score member
+ *
+ * Starts a full score-range scan on key, adds (score, member) through the open
+ * key handle (which may convert a listpack to a btree), then replies with all
+ * elements yielded from the current iterator position to the end of the range.
+ */
+int zset_iter_add(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+    size_t len;
+    double score = strtod(ValkeyModule_StringPtrLen(argv[2], &len), NULL);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
+    if (ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                           VALKEYMODULE_POSITIVE_INFINITE, 0, 0) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR range init failed");
+
+    ValkeyModule_ZsetAdd(key, score, argv[3], NULL);
+
+    long count = 0;
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    do {
+        zset_walk_reply_current(ctx, key);
+        count++;
+    } while (ValkeyModule_ZsetRangeNext(key));
+    ValkeyModule_ReplySetArrayLength(ctx, count);
+    ValkeyModule_ZsetRangeStop(key);
+    return VALKEYMODULE_OK;
+}
+
+/* ZSET.ITER_REM key min max
+ *
+ * Walks the inclusive score range [min, max] forward, deleting each visited
+ * element through the open key handle before advancing with ZsetRangeNext.
+ * Replies with the deleted elements in iteration order.
+ */
+int zset_iter_rem(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+    size_t len;
+    double min = strtod(ValkeyModule_StringPtrLen(argv[2], &len), NULL);
+    double max = strtod(ValkeyModule_StringPtrLen(argv[3], &len), NULL);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
+    if (ValkeyModule_ZsetFirstInScoreRange(key, min, max, 0, 0) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR range init failed");
+
+    long count = 0;
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    while (!ValkeyModule_ZsetRangeEndReached(key)) {
+        ValkeyModuleString *ele = ValkeyModule_ZsetRangeCurrentElement(key, NULL);
+        if (ele)
+            ValkeyModule_ReplyWithString(ctx, ele);
+        else
+            ValkeyModule_ReplyWithNull(ctx);
+        count++;
+        if (ele) ValkeyModule_ZsetRem(key, ele, NULL);
+        ValkeyModule_ZsetRangeNext(key);
+    }
+    ValkeyModule_ReplySetArrayLength(ctx, count);
+    ValkeyModule_ZsetRangeStop(key);
+    return VALKEYMODULE_OK;
+}
+
+/* ZSET.ITER_CALL_REM key start end
+ *
+ * Seeks the last element of key, executes ZREMRANGEBYRANK key start end via
+ * ValkeyModule_Call (bypassing the key handle), and replies with
+ * [current, end_reached_before_step, prev_or_END, end_reached_after_step].
+ */
+int zset_iter_call_rem(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+    long long start, end;
+    if (ValkeyModule_StringToLongLong(argv[2], &start) != VALKEYMODULE_OK ||
+        ValkeyModule_StringToLongLong(argv[3], &end) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid rank");
+
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
+    if (ValkeyModule_ZsetLastInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                          VALKEYMODULE_POSITIVE_INFINITE, 0, 0) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR range init failed");
+
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "ZREMRANGEBYRANK", "sll", argv[1], start, end);
+    if (!rep || ValkeyModule_CallReplyType(rep) == VALKEYMODULE_REPLY_ERROR)
+        return ValkeyModule_ReplyWithError(ctx, "ERR call failed");
+
+    ValkeyModule_ReplyWithArray(ctx, 4);
+    zset_walk_reply_current(ctx, key);
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ZsetRangeEndReached(key));
+    if (ValkeyModule_ZsetRangePrev(key))
+        zset_walk_reply_current(ctx, key);
+    else
+        ValkeyModule_ReplyWithSimpleString(ctx, "END");
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ZsetRangeEndReached(key));
+    ValkeyModule_ZsetRangeStop(key);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -246,6 +343,18 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.walk", zset_walk, "readonly",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.iter_add", zset_iter_add, "write",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.iter_rem", zset_iter_rem, "write",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.iter_call_rem", zset_iter_call_rem, "write",
                                   1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 

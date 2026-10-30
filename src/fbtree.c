@@ -142,12 +142,26 @@ static leafNode *leafNodeCreateWithItem(sds item) {
     return leaf;
 }
 
+static inline uint64_t fbtreeNextModStamp(void) {
+    static uint64_t seq = 0;
+    return __atomic_add_fetch(&seq, 1, __ATOMIC_RELAXED);
+}
+
 fbtreeIndex *fbtreeCreate(void) {
     fbtreeIndex *fbt = zmalloc(sizeof(*fbt));
     fbt->root = NULL;
     fbt->leftmost_leaf = NULL;
     fbt->rightmost_leaf = NULL;
+    fbt->mod_count = fbtreeNextModStamp();
     return fbt;
+}
+
+uint64_t fbtreeGetModCount(const fbtreeIndex *fbt) {
+    return fbt->mod_count;
+}
+
+void fbtreeBumpModCount(fbtreeIndex *fbt) {
+    fbt->mod_count = fbtreeNextModStamp();
 }
 
 /* Callback invoked for each item being deleted, before sdsfree.

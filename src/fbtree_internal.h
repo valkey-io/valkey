@@ -63,6 +63,7 @@ struct fbtreeIndex {
     node *root;
     leafNode *leftmost_leaf;  /* Cache for fast-path prepend */
     leafNode *rightmost_leaf; /* Cache for fast-path append */
+    uint64_t mod_count;       /* Monotonic structural modification stamp */
 };
 
 /* Architecture-specific size assertions */

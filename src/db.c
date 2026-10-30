@@ -250,10 +250,48 @@ int getKVStoreIndexUsingCachedSlot(sds key) {
     return server.cluster_enabled ? getCachedKeySlot(key) : 0;
 }
 
+int clusterxGetCachedKeySlot(sds key) {
+    serverAssert(server.cluster_enabled);
+    /* This is performance optimization that uses pre-set slot id from the current command,
+     * in order to avoid calculation of the key hash.
+     *
+     * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
+     * It only gets set during the execution of command under `call` method. Other flows requesting
+     * the key slot would fall back to keyHashSlot.
+     *
+     * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
+     * so we must always recompute the slot for commands coming from the primary or AOF.
+     */
+    client *c = server.current_client;
+    const char *cmd_name = (c && c->cmd) ? c->cmd->declared_name : NULL;
+    int is_blocking_pop =
+        cmd_name && cmd_name[0] == 'b' && (!strcasecmp(cmd_name, "brpop") || !strcasecmp(cmd_name, "blpop"));
+    if (!is_blocking_pop) {
+        if (c && c->slot >= 0 && c->flag.executing_command && !mustObeyClient(c) && c->cmd &&
+            !(c->cmd->flags & (CMD_MODULE | CMD_TOUCHES_ARBITRARY_KEYS))) {
+            debugServerAssertWithInfo(c, NULL, (int)keyHashSlot(key, (int)sdslen(key)) == c->slot);
+            return c->slot;
+        }
+    }
+
+    int slot = keyHashSlot(key, (int)sdslen(key));
+    /* For the case of commands from clients we must obey, getNodeByQuery() never gets called,
+     * and thus c->slot never gets populated. That said, if this command ends up accessing
+     * a key, we are able to backfill c->slot here, where the key's hash calculation is made. */
+    if (c && mustObeyClient(c)) {
+        c->slot = slot;
+    }
+    return slot;
+}
+
 /* Returns the slot cached on the client for the currently executing command, computing it from the key
  * when no cached slot is available. Only valid for keys that command declared: any other key can hash to
  * a different slot, so use keyHashSlot() or getKVStoreIndexForKey() for those. */
 int getCachedKeySlot(sds key) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    return clusterxGetCachedKeySlot(key);
+#endif
+
     serverAssert(server.cluster_enabled);
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.

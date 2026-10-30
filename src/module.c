@@ -547,6 +547,7 @@ int moduleVerifyResourceName(const char *name);
 
 int moduleCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error, int *would_block);
+static void moduleDefragGlobalsUnlink(listNode *ln);
 
 /* --------------------------------------------------------------------------
  * ## Heap allocation raw functions
@@ -14163,6 +14164,7 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     serverLog(LL_NOTICE, "Module %s unloaded", module->name);
     listNode *ln = listSearchKey(modules, module->name);
     serverAssert(ln != NULL);
+    moduleDefragGlobalsUnlink(ln);
     listDelNode(modules, ln);
     moduleFreeModuleStructure(module);
 
@@ -15604,15 +15606,25 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
 }
 
 /* Global defrag walks the modules one at a time.  These two values are the whole resume state: the
- * module currently being defragged (by position, since a module can be unloaded between invocations)
- * and the cursor that module last stored.  Both are reset at the start of every cycle. */
-static long defrag_module_position = 0;
+ * list node of the module currently being defragged (NULL once the pass is complete) and the cursor
+ * that module last stored.  Both are reset at the start of every cycle, and MODULE UNLOAD moves the
+ * node off a module before deleting it (see moduleDefragGlobalsUnlink). */
+static listNode *defrag_module_node = NULL;
 static unsigned long defrag_module_cursor = 0;
 
 /* Begin a fresh pass from the first module.  Called internally when the stage starts (endtime==0);
  * a cycle that was aborted mid-pass leaves stale values here, which this discards. */
 static void moduleDefragGlobalsStart(void) {
-    defrag_module_position = 0;
+    defrag_module_node = listFirst(modules);
+    defrag_module_cursor = 0;
+}
+
+/* Called before 'ln' is removed from the modules list.  If global defrag stopped on that module, the
+ * pass resumes at the next module with a fresh cursor, since the stored one belonged to the module
+ * being removed. */
+static void moduleDefragGlobalsUnlink(listNode *ln) {
+    if (ln != defrag_module_node) return;
+    defrag_module_node = ln->next;
     defrag_module_cursor = 0;
 }
 
@@ -15627,10 +15639,7 @@ bool moduleDefragGlobals(monotime endtime) {
         return true;
     }
 
-    /* Resolve the resume position to a node once; walking with listIndex per step would be quadratic
-     * in the number of loaded modules.  The list can't change during a single call (defrag is
-     * single-threaded), so the node stays valid until we return. */
-    listNode *ln = listIndex(modules, defrag_module_position);
+    listNode *ln = defrag_module_node;
     while (ln != NULL) {
         if (getMonotonicUs() >= endtime) return true;
 
@@ -15641,9 +15650,8 @@ bool moduleDefragGlobals(monotime endtime) {
             if (defrag_module_cursor != 0) continue; /* more work on this module */
         }
         /* This module is done (or has no callback): advance and start the next one at cursor 0. */
-        defrag_module_position++;
+        ln = defrag_module_node = ln->next;
         defrag_module_cursor = 0;
-        ln = ln->next;
     }
     return false;
 }

@@ -5880,6 +5880,14 @@ void clusterSendMFStart(clusterNode *node) {
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
 
+/* Returns the failover timeout, the max time we have to send votes and wait
+ * for replies: MAX(NODE_TIMEOUT*2,2000) milliseconds. */
+static mstime_t clusterGetFailoverAuthTimeout(void) {
+    mstime_t auth_timeout = server.cluster_node_timeout * 2;
+    if (auth_timeout < CLUSTER_OPERATION_TIMEOUT) auth_timeout = CLUSTER_OPERATION_TIMEOUT;
+    return auth_timeout;
+}
+
 /* Vote for the node asking for our vote if there are the conditions. */
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     clusterNode *primary = node->replicaof;
@@ -5990,12 +5998,20 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
               (unsigned long long)server.cluster->currentEpoch);
 
     /* If we are a replica voting for a sibling, yield: give up our own
-     * election, unless we already asked for votes, so that the replicas don't
-     * keep splitting the votes. Marking the election as sent makes it expire
-     * and retry later as usual. */
-    if (nodeIsReplica(myself) && myself->replicaof == primary && !server.cluster->failover_auth_sent) {
-        server.cluster->failover_auth_time = mstime();
+     * election, unless we already asked for votes in an election that is
+     * still running, so that the replicas don't keep splitting the votes. An
+     * earlier election, won or expired, leaves failover_auth_sent set, so it
+     * is checked together with the auth timeout. Marking the election as sent
+     * makes it expire and retry later as usual. The vote counts are reset, so
+     * that the counts of an earlier election can't be taken as a win. */
+    mstime_t now = mstime();
+    int election_running = server.cluster->failover_auth_sent &&
+                           now - server.cluster->failover_auth_time <= clusterGetFailoverAuthTimeout();
+    if (nodeIsReplica(myself) && myself->replicaof == primary && !election_running) {
+        server.cluster->failover_auth_time = now;
         server.cluster->failover_auth_sent = 1;
+        server.cluster->failover_auth_count = 0;
+        server.cluster->failover_auth_nack_count = 0;
     }
 }
 
@@ -6287,8 +6303,7 @@ void clusterHandleReplicaFailover(void) {
      * Timeout is MAX(NODE_TIMEOUT*2,2000) milliseconds.
      * Retry is two times the Timeout.
      */
-    auth_timeout = server.cluster_node_timeout * 2;
-    if (auth_timeout < CLUSTER_OPERATION_TIMEOUT) auth_timeout = CLUSTER_OPERATION_TIMEOUT;
+    auth_timeout = clusterGetFailoverAuthTimeout();
     auth_retry_time = auth_timeout * 2;
 
     /* Use a failover delay relative to node timeout: 500 for the default node

@@ -154,6 +154,9 @@ static void markSlotMigrationIndexDirty(void) {
     slot_migration_index.dirty = true;
 }
 
+/* Rebuilds the index from server.cluster->slot_migration_jobs if a job was
+ * added, freed, or changed state since the last rebuild. Every lookup that
+ * reads the index calls this first. */
 static void refreshSlotMigrationIndex(void) {
     if (!slot_migration_index.dirty) return;
     slot_migration_index.dirty = false;

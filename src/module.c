@@ -8652,6 +8652,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
         mstime_t now = mstime();
         if (timeout_ms > LLONG_MAX - now) {
             c->bstate->module_blocked_handle = NULL;
+            bc->client = NULL;
             addReplyError(c, "timeout is out of range"); /* 'timeout_ms+now' would overflow */
             return bc;
         }
@@ -8664,9 +8665,11 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                : "Blocking module command called from transaction");
     } else if (ctx->flags & VALKEYMODULE_CTX_BLOCKED_REPLY) {
         c->bstate->module_blocked_handle = NULL;
+        bc->client = NULL;
         addReplyError(c, "Blocking module command called from a Reply callback context");
     } else if (!auth_reply_callback && clientHasModuleAuthInProgress(c)) {
         c->bstate->module_blocked_handle = NULL;
+        bc->client = NULL;
         addReplyError(c, "Clients undergoing module based authentication can only be blocked on auth");
     } else {
         if (keys) {

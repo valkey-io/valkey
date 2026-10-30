@@ -7,6 +7,30 @@ proc get_no_writes_function_code {args} {
 }
 
 start_server {tags {"scripting"}} {
+    # This test must run on a fresh server before any FUNCTION LOAD has
+    # executed, so it lives in its own start_server block.
+    test {FUNCTION - NUL byte in shebang engine name does not crash on first function load} {
+        # sdsnsplitargs decodes \xNN in quoted strings, so "lua\x00zz" produces
+        # an sds with a NUL at position 3. Without the fix, the per-engine
+        # stats entry is stored under that 6-byte key. libraryLink() looks it
+        # up under the registered engine name "LUA", gets NULL, and fires
+        # serverAssert(stats). The bug only manifests on the very first
+        # FUNCTION LOAD after startup, before any earlier load has created the
+        # "LUA" stats entry. Store a key before the attempt; if the server
+        # crashes the connection drops and the read below returns empty.
+        r set pre_crash_sentinel alive
+        catch {
+            r function load "#!\"lua\\x00zz\" name=nultest\nserver.register_function('nulfunc', function(KEYS, ARGV) return 1 end)"
+        }
+        # If the server crashed the connection may be dead; catch the read
+        # error and leave sentinel empty so the assert below fires gracefully.
+        set sentinel {}
+        catch {set sentinel [r get pre_crash_sentinel]}
+        assert_equal $sentinel alive
+    }
+}
+
+start_server {tags {"scripting"}} {
     test {FUNCTION - Basic usage} {
         r function load [get_function_code LUA test test {return 'hello'}]
         r fcall test 0
@@ -39,6 +63,7 @@ start_server {tags {"scripting"}} {
         } e
         set _ $e
     } {*Library names can only contain letters, numbers, or underscores(_)*}
+
 
     test {FUNCTION - Create library with unexisting engine} {
         catch {

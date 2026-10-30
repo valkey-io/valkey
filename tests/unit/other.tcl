@@ -131,6 +131,11 @@ start_server {tags {"other"}} {
         assert {![dict exists $info alias]}
     }
 
+    test {CONFIG INFO includes default field} {
+        set info [lindex [r CONFIG INFO maxmemory-policy] 0]
+        assert_equal [dict get $info default] "noeviction"
+    }
+
     test {CONFIG INFO ordering is consistent across calls} {
         # Get initial ordering
         set info1 [r CONFIG INFO a*]

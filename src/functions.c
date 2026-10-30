@@ -798,6 +798,10 @@ void functionRestoreCommand(client *c) {
         return;
     }
 
+    size_t timeout = LOAD_TIMEOUT_MS;
+    if (mustObeyClient(c)) {
+        timeout = 0;
+    }
     functionsLibCtx *functions_lib_ctx = functionsLibCtxCreate();
     rioInitWithBuffer(&payload, data);
 
@@ -816,7 +820,7 @@ void functionRestoreCommand(client *c) {
             err = sdsnew("given type is not a function");
             goto load_error;
         }
-        if (rdbFunctionLoad(&payload, rdbver, functions_lib_ctx, RDBFLAGS_NONE, &err) != C_OK) {
+        if (rdbFunctionLoad(&payload, rdbver, functions_lib_ctx, RDBFLAGS_NONE, timeout, &err) != C_OK) {
             if (!err) {
                 err = sdsnew("failed loading the given functions payload");
             }

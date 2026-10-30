@@ -2709,7 +2709,12 @@ static int parseOptions(int argc, char **argv) {
             config.hotkeys_count = HOTKEYS_COUNT;
         } else if (!strcmp(argv[i], "--hotkeys-count") && !lastarg) {
             config.hotkeys = 1;
-            config.hotkeys_count = atoi(argv[++i]);
+            int count = atoi(argv[++i]);
+            if (count <= 0) {
+                fprintf(stderr, "Invalid hotkeys count. Must be a positive integer.\n");
+                exit(1);
+            }
+            config.hotkeys_count = count;
         } else if (!strcmp(argv[i], "--eval") && !lastarg) {
             config.eval = argv[++i];
         } else if (!strcmp(argv[i], "--ldb")) {

@@ -4605,7 +4605,21 @@ static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct
         debugServerAssert(*slot == -1 &&
                           !(*read_flags & READ_FLAGS_CROSSSLOT) &&
                           !(*read_flags & READ_FLAGS_NO_KEYS));
-        *slot = clusterSlotByCommand(*cmd, argv, argc, read_flags);
+        /* Module commands that use the getkeys-api or getchannels-api
+         * dispatch key extraction into a module callback, which opens and
+         * closes a module execution unit (enterExecutionUnit /
+         * exitExecutionUnit + postExecutionUnitOperations). That machinery
+         * is single-threaded and main-thread-only: it mutates the non-atomic
+         * server.execution_nesting counter and flushes shared propagation
+         * state. This function can run on an I/O thread (see
+         * ioThreadReadQueryFromClient), so defer the slot computation for
+         * these commands to the main thread in processCommand(). */
+        if ((*cmd)->flags & (CMD_MODULE_GETKEYS | CMD_MODULE_GETCHANNELS)) {
+            /* Leave *slot at -1 with no NO_KEYS/CROSSSLOT flags;
+             * processCommand() will compute it on the main thread. */
+        } else {
+            *slot = clusterSlotByCommand(*cmd, argv, argc, read_flags);
+        }
     }
 }
 
@@ -4783,6 +4797,15 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
+    /* Module commands using getkeys-api/getchannels-api had their slot
+     * computation deferred from prepareCommandGeneric() (which may run on
+     * an I/O thread) to here, on the main thread, because their key
+     * extraction runs a module callback inside an execution unit. */
+    if (server.cluster_enabled && c->slot == -1 &&
+        !(c->read_flags & (READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT)) &&
+        (c->cmd->flags & (CMD_MODULE_GETKEYS | CMD_MODULE_GETCHANNELS))) {
+        c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+    }
     int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
     if (server.cluster_enabled && !obey_client && !is_keyless) {
         int error_code;

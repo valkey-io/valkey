@@ -79,7 +79,7 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     return (entry_b.stat > entry_a.stat) - (entry_b.stat < entry_a.stat);
 }
 
-static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
+static int collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
     int i = 0;
 
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
@@ -90,6 +90,7 @@ static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType o
         }
     }
     qsort(slot_stats, i, sizeof(slotStatForSort), (desc) ? slotStatForSortDescCmp : slotStatForSortAscCmp);
+    return i;
 }
 
 static void addReplySlotStat(client *c, int slot) {
@@ -123,8 +124,7 @@ static void addReplySlotsRange(client *c, unsigned char *assigned_slots, int sta
     }
 }
 
-static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], long limit) {
-    int num_slots_assigned = getMyShardSlotCount();
+static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], int num_slots_assigned, long limit) {
     int len = min(limit, num_slots_assigned);
     addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
 
@@ -194,8 +194,8 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
  * Response is ordered based on the sort result. */
 static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int desc) {
     slotStatForSort slot_stats[CLUSTER_SLOTS];
-    collectAndSortSlotStats(slot_stats, order_by, desc);
-    addReplySortedSlotStats(c, slot_stats, limit);
+    int num_slots_assigned = collectAndSortSlotStats(slot_stats, order_by, desc);
+    addReplySortedSlotStats(c, slot_stats, num_slots_assigned, limit);
 }
 
 /* Resets applicable slot statistics. */

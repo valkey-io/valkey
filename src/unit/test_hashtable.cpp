@@ -293,6 +293,49 @@ TEST_F(HashtableTest, empty_buckets_rehashing) {
     hashtableRelease(ht);
 }
 
+TEST_F(HashtableTest, sample_entries_finishes_shrink) {
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+    hashtableSetCanAbortShrink(false);
+    long j;
+    long keep = 0;
+    size_t keep_bucket = 0;
+
+    for (j = 0; j < 1000; j++) {
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+    while (hashtableIsRehashing(ht)) {
+        ASSERT_FALSE(hashtableAdd(ht, (void *)0));
+    }
+
+    /* Keep the entry from the highest bucket index so one rehash step can't
+     * finish the shrink. */
+    size_t mask = hashtableBuckets(ht) - 1;
+    for (j = 0; j < 1000; j++) {
+        const void *key = (void *)j;
+        uint64_t hash = hashtableGenHashFunction((const char *)&key, sizeof(key));
+        if ((hash & mask) > keep_bucket) {
+            keep_bucket = hash & mask;
+            keep = j;
+        }
+    }
+
+    hashtablePauseAutoShrink(ht);
+    for (j = 0; j < 1000; j++) {
+        if (j == keep) continue;
+        ASSERT_TRUE(hashtableDelete(ht, (void *)j));
+    }
+    hashtableResumeAutoShrink(ht);
+    ASSERT_EQ(hashtableGetRehashingIndex(ht), 0);
+
+    /* The scan covers the whole old table, so the sample rehashes all of it. */
+    void *sample;
+    ASSERT_EQ(hashtableSampleEntries(ht, &sample, 1), 1u);
+    ASSERT_FALSE(hashtableIsRehashing(ht));
+
+    hashtableRelease(ht);
+}
+
 TEST_F(HashtableTest, shrink_rehashing_abort) {
     hashtableType type = {0};
     hashtable *ht = hashtableCreate(&type);

@@ -3581,6 +3581,25 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         r debug hashtable-can-abort-shrink 1
     }
 
+    test {ZSET resize test - random sampling finishes a large shrink} {
+        if {[s arch_bits] != 64} {
+            skip "This is only for 64-bit platforms"
+        }
+        r del myzset
+        set elements {}
+        for {set i 0} {$i < 20000} {incr i} {
+            lappend elements $i $i
+        }
+        r zadd myzset {*}$elements
+        r zremrangebyrank myzset 6 -1
+        assert_match "*rehashing index: 0\n*" [r debug htstats-key myzset full]
+
+        # Each pick scans all 4096 old buckets, so the picks must rehash as
+        # much as they scan, not one step each.
+        r zrandmember myzset -100
+        assert_match "*rehashing index: -1\n*" [r debug htstats-key myzset full]
+    }
+
     test {ZSET resize test - shrink rehashing can be abort if the new hashtable is too full} {
         if {[s arch_bits] != 64} {
             skip "This is only for 64-bit platforms"

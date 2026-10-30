@@ -4463,8 +4463,12 @@ void clusterReadHandler(connection *conn) {
     clusterMsg *hdr;
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
+    size_t totread = 0;
 
-    while (1) { /* Read as long as there is data to read. */
+    /* Bounded like clusterWriteHandler(), so a peer that keeps the socket
+     * readable cannot hold the main thread. The rest is read on the next
+     * event. */
+    while (totread < NET_MAX_WRITES_PER_EVENT) {
         rcvbuflen = link->rcvbuf_len;
         if (rcvbuflen < RCVBUF_MIN_READ_LEN) {
             /* First, obtain the first 16 bytes to get the full message
@@ -4522,6 +4526,7 @@ void clusterReadHandler(connection *conn) {
             link->rcvbuf_len += nread;
             hdr = (clusterMsg *)link->rcvbuf;
             rcvbuflen += nread;
+            totread += nread;
         }
 
         /* Total length obtained? Process this packet. */

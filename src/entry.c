@@ -57,7 +57,7 @@
  *     Identified by: Does not have embedded value, value is an sds, referenced by pointer.
  *
  *
- * Type 4: Value is an stringRef, referenced by pointer
+ * Type 4: Value is a stringRef, referenced by pointer
  *     With this type, the field is embedded, and the value is a stringRef, referenced by pointer.  Extra
  *     bits in the sdshdr8(+) are used to encode aux flags which indicate the presence of a value by
  *     pointer.  An aux bit may indicate the presence of an optional expiration.  Note that the

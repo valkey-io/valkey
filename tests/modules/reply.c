@@ -72,7 +72,7 @@ int rw_array(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     long long integer;
     if (ValkeyModule_StringToLongLong(argv[1], &integer) != VALKEYMODULE_OK)
-        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as a integer");
+        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as an integer");
 
     ValkeyModule_ReplyWithArray(ctx, integer);
     for (int i = 0; i < integer; ++i) {
@@ -87,7 +87,7 @@ int rw_map(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     long long integer;
     if (ValkeyModule_StringToLongLong(argv[1], &integer) != VALKEYMODULE_OK)
-        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as a integer");
+        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as an integer");
 
     ValkeyModule_ReplyWithMap(ctx, integer);
     for (int i = 0; i < integer; ++i) {
@@ -103,7 +103,7 @@ int rw_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     long long integer;
     if (ValkeyModule_StringToLongLong(argv[1], &integer) != VALKEYMODULE_OK)
-        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as a integer");
+        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as an integer");
 
     ValkeyModule_ReplyWithSet(ctx, integer);
     for (int i = 0; i < integer; ++i) {
@@ -118,7 +118,7 @@ int rw_attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     long long integer;
     if (ValkeyModule_StringToLongLong(argv[1], &integer) != VALKEYMODULE_OK)
-        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as a integer");
+        return ValkeyModule_ReplyWithError(ctx, "Arg cannot be parsed as an integer");
 
     if (ValkeyModule_ReplyWithAttribute(ctx, integer) != VALKEYMODULE_OK) {
         return ValkeyModule_ReplyWithError(ctx, "Attributes aren't supported by RESP 2");

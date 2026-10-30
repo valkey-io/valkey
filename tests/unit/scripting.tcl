@@ -1052,6 +1052,12 @@ start_server {tags {"scripting"}} {
         r del scriptkey:wt
     }
 
+    test {server.log() keeps a multi-line message in one log record} {
+        set loglines [count_log_lines 0]
+        run_script {redis.log(redis.LOG_WARNING, 'before\r\nafter')} 0
+        verify_log_message 0 "*<lua> before  after*" $loglines
+    } {} {external:skip}
+
     test {Correct handling of reused argv (issue #1939)} {
         run_script {
               for i = 0, 10 do

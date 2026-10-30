@@ -833,6 +833,14 @@ start_server {tags {"acl external:skip"}} {
         assert {[llength [r ACL LOG]] == 0}
     }
 
+    test {ACLLOG - zero max length does not leak refused script keys} {
+        set before [s used_memory]
+        r AUTH antirez foo
+        r EVAL {for i = 1, 200 do server.pcall('set', ARGV[1], '1') end} 0 [string repeat x 100000]
+        r AUTH default ""
+        assert_lessthan [expr {[s used_memory] - $before}] 5000000
+    }
+
     test {ACL LOG entries are limited to a maximum amount} {
         r ACL LOG RESET
         r CONFIG SET acllog-max-len 5

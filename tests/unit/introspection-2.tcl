@@ -135,6 +135,19 @@ start_server {tags {"introspection"}} {
         assert_morethan [r command count] 0
     }
 
+    test {COMMAND DOCS does not mark hash field counts as keys} {
+        foreach command {
+            hexpireat hexpiretime hgetdel hgetex hpersist hpexpire
+            hpexpireat hpexpiretime hpttl hsetex httl
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set fields [lindex [dict get $docs arguments] end]
+            set numfields [lindex [dict get $fields arguments] 0]
+            assert_equal numfields [dict get $numfields name]
+            assert_equal 0 [dict exists $numfields key_spec_index]
+        }
+    }
+
     test {COMMAND GETKEYS GET} {
         assert_equal {key} [r command getkeys get key]
     }

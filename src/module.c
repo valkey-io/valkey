@@ -5160,6 +5160,8 @@ int VM_ZsetRem(ValkeyModuleKey *key, ValkeyModuleString *ele, int *deleted) {
  * * There is no such element 'ele' in the sorted set.
  * * The key is not a sorted set.
  * * The key is an open empty key.
+ *
+ * 'score' may be NULL to only test whether 'ele' exists.
  */
 int VM_ZsetScore(ValkeyModuleKey *key, ValkeyModuleString *ele, double *score) {
     if (key->value == NULL) return VALKEYMODULE_ERR;

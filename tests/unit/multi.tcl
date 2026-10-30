@@ -1196,3 +1196,39 @@ start_cluster 1 0 {tags {"external:skip cluster needs:debug"} overrides {appendo
         assert_equal [R 0 GET k1] "b"
     }
 }
+
+start_server {tags {"multi repl external:skip"}} {
+    set primary [srv 0 client]
+    start_server {} {
+        set replica [srv 0 client]
+        $replica replicaof [srv -1 host] [srv -1 port]
+        wait_for_sync $replica
+
+        test {Replica dirties every client WATCHing an expired key the primary overwrote} {
+            $primary set x v1 px 500
+            wait_for_ofs_sync $primary $replica
+
+            # Hold back the primary's write until the key has expired on the replica.
+            $replica client pause 100000 write
+            $primary set x v2
+            wait_for_condition 50 20 {[$replica exists x] == 0} else {
+                fail "x did not expire on the replica"
+            }
+
+            set rd1 [valkey_client]
+            set rd2 [valkey_client]
+            $rd1 watch x
+            $rd2 watch x
+            $replica client unpause
+            wait_for_ofs_sync $primary $replica
+
+            $rd1 multi
+            $rd1 get x
+            $rd2 multi
+            $rd2 get x
+            assert_equal {{} {}} [list [$rd1 exec] [$rd2 exec]]
+            $rd1 close
+            $rd2 close
+        }
+    }
+}

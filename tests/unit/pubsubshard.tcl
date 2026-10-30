@@ -141,6 +141,50 @@ start_server {tags {"pubsubshard external:skip"}} {
 
         $rd close
     }
+
+    test "SPUBLISH reaches a matching PSUBSCRIBE pattern" {
+        set rd1 [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd1 {news.*}]
+
+        # matching channel: pattern subscriber counted and delivered a pmessage
+        assert_equal 1 [r SPUBLISH news.tech hello]
+        assert_equal {pmessage news.* news.tech hello} [$rd1 read]
+
+        # non-matching channel: not delivered, not counted
+        assert_equal 0 [r SPUBLISH sports.today hi]
+
+        punsubscribe $rd1 {news.*}
+        $rd1 close
+    }
+
+    test "SPUBLISH delivers to BOTH an exact SSUBSCRIBE and a matching pattern" {
+        set rd_exact [valkey_deferring_client]
+        set rd_pat   [valkey_deferring_client]
+
+        assert_equal {1} [ssubscribe $rd_exact {foo}]
+        assert_equal {1} [psubscribe $rd_pat {f*}]
+
+        # one exact shard subscriber + one pattern subscriber = 2 receivers
+        assert_equal 2 [r SPUBLISH foo bar]
+        assert_equal {smessage foo bar}    [$rd_exact read]
+        assert_equal {pmessage f* foo bar} [$rd_pat read]
+
+        sunsubscribe $rd_exact {foo}
+        punsubscribe $rd_pat {f*}
+        $rd_exact close
+        $rd_pat close
+    }
+
+    test "PUNSUBSCRIBE stops SPUBLISH pattern delivery" {
+        set rd1 [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd1 {news.*}]
+        assert_equal 1 [r SPUBLISH news.tech hello]
+        assert_equal {pmessage news.* news.tech hello} [$rd1 read]
+
+        punsubscribe $rd1 {news.*}
+        assert_equal 0 [r SPUBLISH news.tech hello]
+        $rd1 close
+    }
 }
 
 start_server {tags {"pubsubshard external:skip"}} {

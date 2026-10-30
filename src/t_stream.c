@@ -670,9 +670,9 @@ typedef struct {
     /* XADD + XTRIM common options */
     int trim_strategy;         /* TRIM_STRATEGY_* */
     int trim_strategy_arg_idx; /* Index of the count in MAXLEN/MINID, for rewriting. */
-    int limit_arg_idx;         /* Index of the LIMIT token in argv if it was given,
-                                * 0 otherwise. Used to strip the redundant LIMIT
-                                * option when rewriting the command for propagation. */
+    int limit_arg_idx;         /* Index of the first LIMIT token in argv if it was
+                                * given, 0 otherwise. Used to strip the redundant LIMIT
+                                * options when rewriting the command for propagation. */
     int approx_trim;           /* If 1 only delete whole radix tree nodes, so
                                 * the trim argument is not applied verbatim. */
     long long limit;           /* Maximum amount of entries to trim. If 0, no limitation
@@ -972,8 +972,9 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
                 return -1;
             }
             limit_given = 1;
-            args->limit_arg_idx = i; /* Remember LIMIT position so the rewrite path
-                                      * can drop the two-arg LIMIT option entirely. */
+            /* Remember the first LIMIT position so the rewrite path can drop
+             * every two-arg LIMIT option, since LIMIT may be repeated. */
+            if (!args->limit_arg_idx) args->limit_arg_idx = i;
             i++;
         } else if (xadd && !strcasecmp(opt, "nomkstream")) {
             args->no_mkstream = 1;
@@ -2089,6 +2090,27 @@ void streamRewriteStripLimit(client *c, int limit_idx) {
     decrRefCount(limit_val);
 }
 
+/* LIMIT may be repeated, so drop every "LIMIT <count>" in argv[limit_idx..end),
+ * where limit_idx is the first LIMIT token and 'end' is one past the last option
+ * argument. Every option argument was parsed as a keyword, '~', '=', an integer or a
+ * stream ID, so a "LIMIT" string among them can only be a LIMIT token. The rewritten
+ * trim argument may be integer encoded, hence the sdsEncodedObject() check.
+ * Returns the number of arguments removed. */
+static int streamRewriteStripAllLimits(client *c, int limit_idx, int end) {
+    int removed = 0;
+    int j = limit_idx;
+    while (j < end - removed) {
+        robj *o = c->argv[j];
+        if (sdsEncodedObject(o) && !strcasecmp(objectGetVal(o), "limit")) {
+            streamRewriteStripLimit(c, j);
+            removed += 2;
+        } else {
+            j++;
+        }
+    }
+    return removed;
+}
+
 /* XADD key [(MAXLEN [~|=] <count> | MINID [~|=] <id>) [LIMIT <entries>]] [NOMKSTREAM] <ID or *> [field value] [field
  * value] ... */
 void xaddCommand(client *c) {
@@ -2168,8 +2190,7 @@ void xaddCommand(client *c) {
 
             if (parsed_args.limit_arg_idx) {
                 serverAssert(parsed_args.limit_arg_idx < idpos);
-                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
-                idpos -= 2;
+                idpos -= streamRewriteStripAllLimits(c, parsed_args.limit_arg_idx, idpos);
             }
         }
     }
@@ -4039,7 +4060,7 @@ void xtrimCommand(client *c) {
             streamRewriteTrimArgument(c, s, parsed_args.trim_strategy, parsed_args.trim_strategy_arg_idx);
 
             if (parsed_args.limit_arg_idx) {
-                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
+                streamRewriteStripAllLimits(c, parsed_args.limit_arg_idx, c->argc);
             }
         }
 

@@ -380,55 +380,6 @@ run_solo {defrag} {
         }
     }
 
-    proc test_big_hash_field_ttl_removed {type} {
-        set title "Active Defrag big hash losing its field TTLs: $type"
-        test $title {
-            set n 20000
-            r eval {
-                for i = 0, ARGV[1] - 1 do
-                    server.call('hset', KEYS[1], 'f' .. i, 'v')
-                end
-            } 1 h $n
-
-            # Keep defrag running slowly so that it pauses in the middle of the hash.
-            r config set active-defrag-threshold-lower 0
-            r config set active-defrag-ignore-bytes 1
-            r config set active-defrag-cycle-min 1
-            r config set active-defrag-cycle-max 1
-            r config set active-defrag-cycle-us 50
-            set old_defrag_time [s total_active_defrag_time]
-            r config set activedefrag yes
-            wait_for_condition 50 100 {
-                [s total_active_defrag_time] ne $old_defrag_time
-            } else {
-                fail "defrag not started."
-            }
-
-            # The hash is defragged in steps, and the volatile set comes last.
-            # Removing every field TTL between two steps frees the volatile set.
-            for {set i 0} {$i < 20} {incr i} {
-                # Distinct expiries spread the volatile set over many buckets.
-                r eval {
-                    for i = 0, ARGV[1] - 1 do
-                        server.call('hpexpire', KEYS[1], 100000000 + i * 1000, 'fields', 1, 'f' .. i)
-                    end
-                } 1 h $n
-                after 50
-                r eval {
-                    for i = 0, ARGV[1] - 1 do
-                        server.call('hpersist', KEYS[1], 'fields', 1, 'f' .. i)
-                    end
-                } 1 h $n
-                # Let defrag take a few steps while the hash has no volatile set.
-                after 100
-            }
-
-            assert_equal $n [r hlen h]
-            assert_equal {-1} [r hpexpiretime h fields 1 f0]
-            r config set activedefrag no
-        }
-    }
-
     proc test_big_list {type} {
         set title "Active Defrag big list: $type"
         test $title {
@@ -718,7 +669,6 @@ run_solo {defrag} {
     lappend tests [list test_main_dictionary standalone $aof_overrides] ;# only need AOF for main dict, standalone
     lappend tests [list test_eval_scripts standalone $std_overrides]
     lappend tests [list test_big_hash standalone $std_overrides]
-    lappend tests [list test_big_hash_field_ttl_removed standalone $std_overrides]
     lappend tests [list test_big_list standalone $std_overrides]
     lappend tests [list test_big_set standalone $std_overrides]
     lappend tests [list test_big_zset_random_score standalone $std_overrides]

@@ -809,6 +809,35 @@ start_server {tags {"zset"}} {
             assert_error "*not*float*" {r zrangestore "{fooz}dest" fooz ( +inf BYSCORE}
         }
 
+        test "ZSET score range bounds with an embedded NUL are rejected - $encoding" {
+            r del fooz "{fooz}dest"
+            r zadd fooz 1 a 2 b 3 c 4 d 5 e
+            assert_encoding $encoding fooz
+            # Each bound starts with a valid number, but the bytes after the NUL
+            # are part of the argument and must not be ignored (ZADD rejects the
+            # same bytes as a score).
+            foreach bound [list "1\x00x" "(1\x00x" "5\x00junk" "(5\x00" "1\x00" "\x00" "(\x00"] {
+                assert_error "*not*float*" {r zrangebyscore fooz $bound 5}
+                assert_error "*not*float*" {r zrangebyscore fooz 1 $bound}
+                assert_error "*not*float*" {r zrevrangebyscore fooz 5 $bound}
+                assert_error "*not*float*" {r zrevrangebyscore fooz $bound 1}
+                assert_error "*not*float*" {r zrange fooz $bound 5 byscore}
+                assert_error "*not*float*" {r zrange fooz 1 $bound byscore}
+                assert_error "*not*float*" {r zcount fooz $bound 5}
+                assert_error "*not*float*" {r zcount fooz 1 $bound}
+                assert_error "*not*float*" {r zremrangebyscore fooz $bound 5}
+                assert_error "*not*float*" {r zremrangebyscore fooz 1 $bound}
+                # Keep both keys in one slot so cluster mode reaches score validation.
+                assert_error "*not*float*" {r zrangestore "{fooz}dest" fooz $bound 5 byscore}
+                assert_error "*not*float*" {r zrangestore "{fooz}dest" fooz 1 $bound byscore}
+            }
+            # Nothing was removed or stored, and ordinary bounds still work.
+            assert_equal 5 [r zcard fooz]
+            assert_equal 0 [r exists "{fooz}dest"]
+            assert_equal {a b c} [r zrangebyscore fooz 1 3]
+            assert_equal 4 [r zcount fooz (1 5]
+        }
+
         test "ZCOUNT/ZRANGEBYSCORE hex and leading-whitespace bounds - $encoding" {
             create_default_zset
             assert_equal 3 [r zcount zset 0x0 0x3]
@@ -985,6 +1014,57 @@ start_server {tags {"zset"}} {
             assert_equal {} [r zrevrangebylex zset - -]
             assert_equal {} [r zrangebylex zset + \[c LIMIT 1 2]
             assert_equal {} [r zrevrangebylex zset - \[c LIMIT 1 2]
+        }
+
+        test "ZSET lex range bounds - and + with an embedded NUL are rejected - $encoding" {
+            r del lexz "{lexz}dest"
+            r zadd lexz 0 a 0 b 0 c
+            assert_encoding $encoding lexz
+            # "-x" is rejected, so "-" or "+" followed by a NUL and more bytes
+            # must be too: the bytes after the NUL are part of the argument.
+            foreach bound [list "-\u0000x" "-\u0000" "+\u0000x" "+\u0000" "+\u0000junk" "\u0000"] {
+                assert_error "*not valid string range*" {r zrangebylex lexz $bound +}
+                assert_error "*not valid string range*" {r zrangebylex lexz - $bound}
+                assert_error "*not valid string range*" {r zrevrangebylex lexz + $bound}
+                assert_error "*not valid string range*" {r zrevrangebylex lexz $bound -}
+                assert_error "*not valid string range*" {r zrange lexz $bound + bylex}
+                assert_error "*not valid string range*" {r zrange lexz - $bound bylex}
+                assert_error "*not valid string range*" {r zlexcount lexz $bound +}
+                assert_error "*not valid string range*" {r zlexcount lexz - $bound}
+                assert_error "*not valid string range*" {r zremrangebylex lexz $bound +}
+                assert_error "*not valid string range*" {r zremrangebylex lexz - $bound}
+                # Keep both keys in one slot so cluster mode reaches lex validation.
+                assert_error "*not valid string range*" {r zrangestore "{lexz}dest" lexz $bound + bylex}
+                assert_error "*not valid string range*" {r zrangestore "{lexz}dest" lexz - $bound bylex}
+            }
+            # Nothing was removed or stored, and ordinary bounds still work.
+            assert_equal 3 [r zcard lexz]
+            assert_equal 0 [r exists "{lexz}dest"]
+            assert_equal {a b c} [r zrangebylex lexz - +]
+            assert_equal 2 [r zlexcount lexz (a +]
+        }
+
+        test "ZSET lex range bounds with a bracket or paren prefix keep embedded NUL bytes - $encoding" {
+            # Lex members are binary-safe, so a NUL after the "[" or "(" prefix
+            # is part of the bound and must not be rejected.
+            r del lexz "{lexz}dest"
+            r zadd lexz 0 a 0 "a\u0000b" 0 "a\u0000c" 0 b
+            assert_encoding $encoding lexz
+            set ab "a\u0000b"
+            set ac "a\u0000c"
+            assert_equal [list $ab $ac b] [r zrangebylex lexz "\[a\u0000b" +]
+            assert_equal [list $ac b] [r zrangebylex lexz "(a\u0000b" +]
+            assert_equal [list a $ab] [r zrangebylex lexz - "\[a\u0000b"]
+            assert_equal [list a] [r zrangebylex lexz - "(a\u0000b"]
+            # "a" sorts before "a\0", which sorts before "a\0b".
+            assert_equal [list $ab $ac b] [r zrangebylex lexz "\[a\u0000" +]
+            assert_equal [list $ac $ab] [r zrevrangebylex lexz "\[a\u0000c" "\[a\u0000b"]
+            assert_equal [list $ab $ac] [r zrange lexz "\[a\u0000b" "\[a\u0000c" bylex]
+            assert_equal 3 [r zlexcount lexz "\[a\u0000" +]
+            assert_equal 2 [r zlexcount lexz "\[a\u0000b" "\[a\u0000c"]
+            assert_equal 2 [r zrangestore "{lexz}dest" lexz "\[a\u0000b" "\[a\u0000c" bylex]
+            assert_equal 2 [r zremrangebylex lexz "\[a\u0000b" "\[a\u0000c"]
+            assert_equal {a b} [r zrange lexz 0 -1]
         }
 
         test "ZRANGEBYLEX with LIMIT - $encoding" {

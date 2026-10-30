@@ -1737,3 +1737,39 @@ start_server {tags {"repl external:skip cluster:skip"}} {
         }
     }
 }
+
+# fake_redis_node doesn't support TLS and expects the exact non-cluster handshake.
+start_server {tags {"repl external:skip cluster:skip tls:skip"}} {
+    test "Replica rejects a +CONTINUE reply to PSYNC when there is no cached primary" {
+        # Keep the REPLCONF capa line sent by the replica predictable.
+        r config set dual-channel-replication-enabled no
+
+        # A fake primary that completes the handshake and then answers the
+        # full resynchronization request (PSYNC ? -1) with +CONTINUE.
+        set tclsh [info nameofexecutable]
+        set script "tests/helpers/fake_redis_node.tcl"
+        set fake_port [find_available_port $::baseport $::portcount]
+        set fake_pid [exec $tclsh $script $fake_port \
+                "PING" "+PONG" \
+                "REPLCONF listening-port [srv 0 port]" "+OK" \
+                "REPLCONF capa eof capa psync2" "+OK" \
+                "REPLCONF version [s valkey_version]" "+OK" \
+                "PSYNC ? -1" "+CONTINUE" &]
+        wait_for_condition 50 50 {
+            [catch {close [socket "127.0.0.1" $fake_port]}] == 0
+        } else {
+            fail "Failed to start fake primary"
+        }
+
+        set loglines [count_log_lines 0]
+        r replicaof 127.0.0.1 $fake_port
+        wait_for_log_messages 0 {"*Primary replied +CONTINUE to a full resynchronization request*"} $loglines 50 100
+
+        # The replica must survive and stay disconnected from the primary.
+        assert_equal "PONG" [r ping]
+        assert_equal "down" [s master_link_status]
+
+        r replicaof no one
+        catch {exec kill -9 $fake_pid}
+    }
+}

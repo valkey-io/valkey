@@ -1,5 +1,5 @@
 # Check the manual failover
-start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} {
+start_cluster 5 5 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -20,8 +20,6 @@ test "Instance #5 synced with the master" {
         fail "Instance #5 master link status is not up"
     }
 }
-
-set current_epoch [CI 1 cluster_current_epoch]
 
 set numkeys 50000
 set numops 10000
@@ -56,7 +54,7 @@ test "Send CLUSTER FAILOVER to #5, during load" {
 
 test "Wait for failover" {
     wait_for_condition 1000 50 {
-        [CI 1 cluster_current_epoch] > $current_epoch
+        [s -5 role] eq {master}
     } else {
         fail "No failover detected"
     }
@@ -94,7 +92,7 @@ test "Instance #0 gets converted into a slave" {
 } ;# start_cluster
 
 ## Check that manual failover does not happen if we can't talk with the master.
-start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} {
+start_cluster 5 5 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -122,7 +120,9 @@ test "Make instance #0 unreachable without killing it" {
 }
 
 test "Send CLUSTER FAILOVER to instance #5" {
-    R 5 cluster failover
+    # With Raft, the reply only comes when the failover is done, so don't wait for it.
+    set rd [valkey_deferring_client -5]
+    $rd cluster failover
 }
 
 test "Instance #5 is still a slave after some time (no failover)" {
@@ -133,12 +133,14 @@ test "Instance #5 is still a slave after some time (no failover)" {
 test "Wait for instance #0 to return back alive" {
     R 0 deferred 0
     assert {[R 0 read] eq {OK}}
+    catch {$rd read}
+    $rd close
 }
 
 } ;# start_cluster
 
 ## Check with "force" failover happens anyway.
-start_cluster 5 10 {tags {external:skip cluster cluster-raft:skip}} {
+start_cluster 5 10 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -182,6 +184,71 @@ test "Wait for instance #0 to return back alive" {
     assert {[R 0 read] eq {OK}}
 }
 
+} ;# start_cluster
+
+## Check that a manual failover waits for the primary to pause writes, and that
+## no acknowledged write is lost. The primary is not the Raft leader, so the
+## failover can be committed while the primary is unreachable.
+start_cluster 5 5 {tags {external:skip cluster}} {
+    test "Manual failover does not lose acknowledged writes when the primary is slow" {
+        wait_for_cluster_state ok
+
+        # Pick a primary that is not the Raft leader (any primary with legacy cluster).
+        set leader [CI 0 cluster_raft_leader]
+        for {set p 0} {$p < 5} {incr p} {
+            if {[R $p cluster myid] ne $leader} break
+        }
+        set r [expr {$p + 5}]
+        assert_equal [srv -$p port] [s -$r master_port]
+        wait_for_condition 1000 50 {
+            [s -$r master_link_status] eq {up}
+        } else {
+            fail "Replica link status is not up"
+        }
+        for {set i 0} {$i < 1000} {incr i} {
+            if {![catch {R $p exists "key$i"}]} break
+        }
+        set key "key$i"
+        R $p set $key 0
+        wait_for_ofs_sync [srv -$p client] [srv -$r client]
+
+        # Create the clients first: their initial SELECT would block on a sleeping server.
+        set sleeper [valkey_deferring_client -$p]
+        set writer [valkey_deferring_client -$p]
+        set failover [valkey_deferring_client -$r]
+
+        # Make the primary unreachable, queue writes to it, and start a failover.
+        $sleeper debug sleep 2
+        after 100
+        set numops 100
+        for {set i 0} {$i < $numops} {incr i} {
+            $writer incr $key
+        }
+        $failover cluster failover
+
+        # No failover while the primary can't pause writes.
+        after 1000
+        assert_equal slave [s -$r role]
+
+        assert_equal OK [$sleeper read]
+        set acked 0
+        for {set i 0} {$i < $numops} {incr i} {
+            if {![catch {$writer read} reply]} {
+                set acked $reply
+            }
+        }
+        catch {$failover read}
+        wait_for_condition 1000 50 {
+            [s -$r role] eq {master} && [s -$p role] eq {slave}
+        } else {
+            fail "No failover"
+        }
+        assert_equal $acked [R $r get $key]
+
+        $sleeper close
+        $writer close
+        $failover close
+    }
 } ;# start_cluster
 
 start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {

@@ -76,8 +76,13 @@ PROPOSE <entry>
 
 FAILOVER_PREPARE
     Sent by a replica to its primary to request a coordinated failover.
-    The primary pauses writes so the replica can catch up. Not a raft
-    log entry — just a direct message over the cluster link.
+    The primary pauses writes and replies with FAILOVER_PAUSED. Not a
+    raft log entry — just a direct message over the cluster link.
+
+FAILOVER_PAUSED <offset>
+    Reply to FAILOVER_PREPARE. Carries the primary's replication offset
+    after pausing writes. The replica proposes FAILOVER only after its
+    own replication offset reaches this offset.
 
 REPL_OFFSETS <node-id> <offset> [<node-id> <offset> ...]
     Sent by the leader to propagate replication offsets. Broadcast

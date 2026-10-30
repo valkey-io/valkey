@@ -2725,6 +2725,12 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount)  {
     return totlen;
 }
 
+/* Peer values are persisted to nodes.conf, so ignore strings that its
+ * loader would reject. */
+static char *getLoadableStringExtension(char *value) {
+    return isValidAuxString(value, strlen(value)) ? value : NULL;
+}
+
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. */
 void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
@@ -2739,10 +2745,10 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         uint16_t type = ntohs(ext->type);
         if (type == CLUSTERMSG_EXT_TYPE_HOSTNAME) {
             clusterMsgPingExtHostname *hostname_ext = (clusterMsgPingExtHostname *) &(ext->ext[0].hostname);
-            ext_hostname = hostname_ext->hostname;
+            ext_hostname = getLoadableStringExtension(hostname_ext->hostname);
     } else if (type == CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME) {
             clusterMsgPingExtHumanNodename *humannodename_ext = (clusterMsgPingExtHumanNodename *) &(ext->ext[0].human_nodename);
-            ext_humannodename = humannodename_ext->human_nodename;
+            ext_humannodename = getLoadableStringExtension(humannodename_ext->human_nodename);
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);

@@ -675,6 +675,17 @@ int test_malloc_api(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* nmemb * size wraps to 2, so a correct calloc must fail rather than return 2 bytes. */
+int test_trycalloc_overflow(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    void *p = ValkeyModule_TryCalloc(SIZE_MAX / 2 + 2, 2);
+    int failed = p == NULL;
+    ValkeyModule_Free(p);
+    return ValkeyModule_ReplyWithBool(ctx, failed);
+}
+
 int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     /* Static check of the ClusterKeySlot + ClusterCanonicalKeyNameInSlot
      * round-trip for all slots. */
@@ -772,6 +783,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.clear_n_events", test_clear_n_events,"", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.malloc_api", test_malloc_api,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.trycalloc_overflow", test_trycalloc_overflow, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.keyslot", test_keyslot, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;

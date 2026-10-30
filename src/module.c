@@ -577,18 +577,25 @@ void *VM_TryAlloc(size_t bytes) {
     return ztrymalloc_usable(bytes, NULL);
 }
 
+/* Returns nmemb * size, or SIZE_MAX if that overflows, which the allocator
+ * always rejects. */
+static size_t moduleCallocSize(size_t nmemb, size_t size) {
+    if (size && nmemb > SIZE_MAX / size) return SIZE_MAX;
+    return nmemb * size;
+}
+
 /* Use like calloc(). Memory allocated with this function is reported in
  * INFO memory, used for keys eviction according to maxmemory settings
  * and in general is taken into account as memory allocated by the server.
  * You should avoid using calloc() directly. */
 void *VM_Calloc(size_t nmemb, size_t size) {
-    return zcalloc_usable(nmemb * size, NULL);
+    return zcalloc_usable(moduleCallocSize(nmemb, size), NULL);
 }
 
 /* Similar to VM_Calloc, but returns NULL in case of allocation failure, instead
  * of panicking. */
 void *VM_TryCalloc(size_t nmemb, size_t size) {
-    return ztrycalloc_usable(nmemb * size, NULL);
+    return ztrycalloc_usable(moduleCallocSize(nmemb, size), NULL);
 }
 
 /* Use like realloc() for memory obtained with ValkeyModule_Alloc(). */

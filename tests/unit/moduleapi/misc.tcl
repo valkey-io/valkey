@@ -591,6 +591,10 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert_equal {OK} [r test.malloc_api 0]
     }
 
+    test "TryCalloc fails when nmemb * size overflows" {
+        assert_equal 1 [r test.trycalloc_overflow]
+    }
+
     test "Cluster keyslot" {
         assert_equal 12182 [r test.keyslot foo]
     }

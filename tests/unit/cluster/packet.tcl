@@ -167,6 +167,67 @@ proc create_cluster_publish_packet {sender_name sender_port sender_cport channel
     return $packet
 }
 
+# Create a clusterbus PING packet carrying a single string extension.
+proc create_cluster_ping_packet_with_ext {sender_name sender_port sender_cport ext_type ext_value} {
+    set packet [create_cluster_meet_packet $sender_name $sender_port $sender_cport 0 1 4]
+    # type (uint16_t) - PING
+    set packet [string replace $packet 12 13 [binary format S 0]]
+
+    # Extension: length (uint32_t), type (uint16_t), unused (uint16_t), then the
+    # NUL-terminated value padded to eight bytes.
+    set datalen [expr {(([string length $ext_value] + 1 + 7) / 8) * 8}]
+    append packet [binary format ISS [expr {8 + $datalen}] $ext_type 0]
+    append packet $ext_value [string repeat "\x00" [expr {$datalen - [string length $ext_value]}]]
+
+    set packet [string replace $packet 4 7 [binary format I [string length $packet]]]
+    return $packet
+}
+
+# Send a forged PING to node 0 and wait until it has been received.
+proc send_forged_ping {packet cluster_port} {
+    set pings [CI 0 cluster_stats_messages_ping_received]
+    set sock [socket 127.0.0.1 $cluster_port]
+    fconfigure $sock -translation binary -buffering none -blocking 1
+    puts -nonewline $sock $packet
+    flush $sock
+    close $sock
+    wait_for_condition 1000 10 {
+        [CI 0 cluster_stats_messages_ping_received] > $pings
+    } else {
+        fail "Forged PING was never received"
+    }
+}
+
+start_cluster 2 0 {tags {external:skip cluster tls:skip}} {
+    test "Ping extension values that nodes.conf cannot load are ignored" {
+        set sender [R 1 cluster myid]
+        set sender_port [srv -1 port]
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        set nodes_conf [cluster_nodes_conf_path 0]
+
+        # Keep the real node 1 from overwriting the forged values.
+        pause_process [srv -1 pid]
+
+        # A valid value is applied, so the forged packets are processed.
+        send_forged_ping [create_cluster_ping_packet_with_ext $sender $sender_port [expr {$sender_port + 10000}] \
+            0 "valid-host"] $cluster_port
+        wait_for_condition 1000 10 {
+            [file_has_pattern $nodes_conf valid-host]
+        } else {
+            fail "Forged hostname was never applied"
+        }
+
+        # Hostname, human nodename, client IPv4, client IPv6, availability zone.
+        foreach {ext_type ext_value} {0 "forged\nhost" 1 "forged\nname" 4 "forged" 5 "forged" 8 "forged\naz"} {
+            send_forged_ping [create_cluster_ping_packet_with_ext $sender $sender_port [expr {$sender_port + 10000}] \
+                $ext_type $ext_value] $cluster_port
+            assert_equal 0 [file_has_pattern $nodes_conf forged]
+        }
+
+        resume_process [srv -1 pid]
+    }
+}
+
 start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     test "Forged PUBLISH packet with wrapped length does not crash the server" {
         set base_port [srv 0 port]

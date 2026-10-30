@@ -118,12 +118,12 @@ static int appendReplCompressionCapabilities(char **argv, size_t *lens, size_t a
     }
 }
 
-/* The whole-stream compression codec of the on-disk RDB (dump.rdb) format, i.e.
- * the codec that frames the entire RDB and is therefore what a disk-based full
- * sync sends verbatim. Derived from the configured rdbcompression codec, mapping
- * LZF to ALGO_NONE: LZF is a per-string codec inside a plain RDB envelope, not a
- * whole-stream frame. Any future whole-stream codec (e.g. zstd) flows through
- * unchanged. Ungated by replica capability, since it describes the file itself. */
+/* The whole-stream compression codec of this server's own RDB files, i.e. the
+ * codec that frames the entire RDB. Derived from the configured rdbcompression
+ * codec, mapping LZF to ALGO_NONE: LZF is a per-string codec inside a plain RDB
+ * envelope, not a whole-stream frame. A replica receiving a full sync to disk
+ * transcodes the payload into this codec, so the file it stores follows its own
+ * rdbcompression setting regardless of the wire codec. */
 static compressionAlgo rdbStreamCompressionAlgorithm(void) {
     compressionAlgo algo = rdbCompressionAlgorithm(server.rdb_compression);
     return algo == ALGO_LZF ? ALGO_NONE : algo;
@@ -457,10 +457,11 @@ static inline client *lookupRdbClientByID(uint64_t id) {
 /* Decide which RDB version to send to a replica. */
 int replicaRdbVersion(client *replica) {
     if (!(replica->repl_data->replica_capa & REPLICA_CAPA_EOF)) {
-        /* The replica doesn't have CAPA EOF, so we need to use disk-based
-         * replication, but we don't want to write an old RDB version to disk,
-         * because it can be reused for disk-based full sync to other replicas,
-         * so we force the latest RDB version. */
+        /* The replica doesn't have CAPA EOF, so it can only be served a
+         * disk-based full sync, which writes this server's replication RDB
+         * file. Use the latest RDB version: an older format is only needed to
+         * stream directly to a replica, and there is no reason to downgrade the
+         * file for it. */
         return RDB_VERSION;
     }
     /* Search the version map backwards to select the highest RDB version the
@@ -1274,63 +1275,82 @@ need_full_resync:
     return C_ERR;
 }
 
-/* The whole-stream codec a replica receives for a full sync. An EOF-capable
- * replica can be served diskless, so it gets its negotiated wire codec (the
- * strongest that repl-compression permits and it can decode); a replica without
- * EOF can only receive a disk-based sync, so it gets the on-disk rdbcompression
- * codec if it can decode it (a non-EOF replica that cannot is rejected earlier in
- * syncCommand). Cohort grouping, the disk-round attach filter, the in-flight join
- * gate, the diskless-round filter (rdb.c), and the disk-vs-diskless decision all
- * use this, so every path agrees on the codec a given replica actually gets. */
+/* The whole-stream codec a replica receives for a full sync: the strongest codec
+ * that repl-compression permits and that the replica advertised it can decode, or
+ * ALGO_NONE (a plain RDB, with per-string LZF still governed by rdbcompression)
+ * when it advertises no compression capability. This is the codec of the payload
+ * a replica gets, whether it arrives over a socket or through the replication
+ * RDB file; whether the payload goes to a socket or through a file follows
+ * repl-diskless-sync and EOF capability only. */
 compressionAlgo replSelectFullSyncCompression(int replica_capa) {
-    if (replica_capa & REPLICA_CAPA_EOF) return replicaNegotiatedCompressionAlgorithm(replica_capa);
-    compressionAlgo disk_algo = rdbStreamCompressionAlgorithm();
-    return replicaAcceptsCompressionAlgorithm(replica_capa, disk_algo) ? disk_algo : ALGO_NONE;
+    return replicaNegotiatedCompressionAlgorithm(replica_capa);
 }
 
 /* Whether a replica waiting for a full sync belongs to the cohort described by the
  * given requirements, RDB version and codec, i.e. whether it can share that sync.
- * Replicas that don't match are served by a separate one. */
+ * A round is written in a single codec, so only replicas that negotiated exactly
+ * that codec join it and the others keep waiting for a round of their own. This
+ * keeps a replica that cannot decode compression from downgrading the round: it
+ * is served by a separate plaintext round instead. */
 bool isReplicaInCohort(client *replica, int req, int rdbver, compressionAlgo compr) {
-    return replica->repl_data->replica_req == req &&
-           replicaRdbVersion(replica) == rdbver &&
+    return replica->repl_data->replica_req == req && replicaRdbVersion(replica) == rdbver &&
            replSelectFullSyncCompression(replica->repl_data->replica_capa) == compr;
+}
+
+/* Bitwise AND of the capabilities of the replicas waiting for the round described
+ * by the given requirements, RDB version and codec, i.e. what every replica of the
+ * round supports. Returns 0 when no waiting replica matches. */
+static int replicasInRoundCapabilities(int req, int rdbver, compressionAlgo compr) {
+    listIter li;
+    listNode *ln;
+    int capa = 0;
+    int found = 0;
+
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (replica->repl_data->repl_state != REPLICA_STATE_WAIT_BGSAVE_START) continue;
+        if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
+        capa = found ? (capa & replica->repl_data->replica_capa) : replica->repl_data->replica_capa;
+        found = 1;
+    }
+    return capa;
 }
 
 /* Start a BGSAVE for replication goals, which is, selecting the disk or
  * socket target depending on the configuration.
  *
- * The mincapa argument is the bitwise AND among all the replicas capabilities
- * of the replicas waiting for this BGSAVE, so represents the replica capabilities
- * all the replicas support. Can be tested via REPLICA_CAPA_* macros.
- *
- * The rdbver argument is the RDB version to use. It should be calculated based
- * on what the replicas reported using REPLCONF VERSION.
+ * The req argument is the cohort's replica requirements, the rdbver argument the
+ * RDB version to use, calculated on what the replicas reported using REPLCONF
+ * VERSION, and the compr argument the whole-stream codec of the round, calculated
+ * over the cohort that is about to be served.
  *
  * Side effect, other than starting a BGSAVE: the replicas in WAIT_START state
  * are handled, by preparing them for a full sync if the BGSAVE was successfully
  * started, or sending them an error and dropping them from the list of replicas.
  *
  * Returns C_OK on success or C_ERR otherwise. */
-int startBgsaveForReplication(int mincapa, int req, int rdbver) {
+int startBgsaveForReplication(int req, int rdbver, compressionAlgo compr) {
     int socket_target = 0;
     const char *fail_msg = NULL;
-    compressionAlgo sync_compression_algo = replSelectFullSyncCompression(mincapa);
     listIter li;
     listNode *ln;
 
-    /* A disk-based sync sends dump.rdb verbatim, so a cohort that needs anything else
-     * falls back to diskless, which keeps the file on disk reusable for the cohorts
-     * that can be served from it. */
-    if ((req & REPLICA_REQ_RDB_MASK) || rdbver != RDB_VERSION ||
-        sync_compression_algo != rdbStreamCompressionAlgorithm()) {
-        if (!(mincapa & REPLICA_CAPA_EOF)) {
-            fail_msg = "Replica without EOF capability can't be served a diskless full sync";
-            goto error;
-        }
+    /* Derive the aggregate capability from the replicas that will ride this round
+     * rather than from a single caller's view: an immediate start after a new
+     * replica arrives knows only that replica's capabilities, while others may
+     * already be waiting for the same round. */
+    int mincapa = replicasInRoundCapabilities(req, rdbver, compr);
+
+    /* Whether a full sync goes to sockets or through a file strictly follows
+     * repl-diskless-sync: a replica that can read an EOF-marked stream is served
+     * over a socket when diskless sync is enabled and from repl-rdbfilename
+     * otherwise, with no implicit transport switch. A replica without EOF
+     * capability can never be served over a socket. Filtered RDBs are generated
+     * on the fly and can't replace the file, so they always use a socket
+     * (syncCommand already rejects filtered replicas without EOF). */
+    if ((req & REPLICA_REQ_RDB_MASK) || ((mincapa & REPLICA_CAPA_EOF) && server.repl_diskless_sync)) {
         socket_target = 1;
-    } else {
-        socket_target = (mincapa & REPLICA_CAPA_EOF) && server.repl_diskless_sync;
     }
 
     /* Only do rdbSave* when rsiptr is not NULL;
@@ -1345,32 +1365,39 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s using: %s, compression: %s",
               socket_target ? "replicas sockets" : "disk",
               (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync",
-              compressionAlgoName(sync_compression_algo));
+              compressionAlgoName(compr));
 
     if (socket_target) {
-        if (rdbSaveToReplicasSockets(req, rdbver, sync_compression_algo, rsiptr) == C_ERR) {
+        if (rdbSaveToReplicasSockets(req, rdbver, compr, rsiptr) == C_ERR) {
             fail_msg = "Can't start the child process for a diskless full sync";
             goto error;
         }
     } else {
-        /* The forked child reads this global to pick the sync codec. A disk-based
-         * sync is only chosen when the wire codec equals the on-disk one, so
-         * dump.rdb is written in, and sent verbatim as, that format. */
-        server.rdb_child_sync_algo = sync_compression_algo;
+        /* The forked child reads these globals to write the replication RDB file
+         * in the round's format. A disk-based round serves the whole cohort from
+         * that file verbatim, so every replica in it can decode this codec and
+         * RDB version. The file is separate from dbfilename so that a full sync
+         * never overwrites the snapshot used for persistence and backups. */
+        server.rdb_child_sync_algo = compr;
+        server.rdb_child_rdbver = rdbver;
         /* Keep the page cache since it'll get used soon */
-        if (rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE) == C_ERR) {
+        if (rdbSaveBackground(req, server.repl_rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE) == C_ERR) {
             fail_msg = "Can't start the child process for a disk-based full sync";
             goto error;
         }
+        /* Only the parent reads this flag, on save completion, so set it after
+         * the fork actually started: an early rdbSaveBackground() failure must
+         * not make an unrelated running child look like a replication save. */
+        server.rdb_child_for_replication = 1;
     }
     if (server.debug_pause_after_fork) debugPauseProcess();
 
     /* If the target is socket, rdbSaveToReplicasSockets() already setup the replicas
-     * for a full resync. For a disk target do it now, and remember that dump.rdb was
-     * generated for replication so that we can later delete the file if needed. Note
-     * that we don't set the flag if the feature is disabled; otherwise, it would never
-     * be cleared: the file is not deleted. This way if the user enables it later with
-     * CONFIG SET, we are fine. */
+     * for a full resync. For a disk target do it now, and remember that the sync RDB
+     * was generated for replication so that we can later delete the file if needed.
+     * Note that we don't set the flag if the feature is disabled; otherwise, it would
+     * never be cleared: the file is not deleted. This way if the user enables it later
+     * with CONFIG SET, we are fine. */
     if (!socket_target) {
         if (server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
         listRewind(server.replicas, &li);
@@ -1378,7 +1405,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
             client *replica = ln->value;
 
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
-                if (!isReplicaInCohort(replica, req, rdbver, sync_compression_algo)) continue;
+                if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
                 replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
             }
         }
@@ -1397,7 +1424,7 @@ error:
         client *replica = ln->value;
 
         if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
-            if (!isReplicaInCohort(replica, req, rdbver, sync_compression_algo)) continue;
+            if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
             replica->repl_data->repl_state = REPL_STATE_NONE;
             replica->flag.replica = 0;
             listDelNode(server.replicas, ln);
@@ -1529,12 +1556,6 @@ void syncCommand(client *c) {
 
     /* Full resynchronization. */
 
-    if (!(c->repl_data->replica_capa & REPLICA_CAPA_EOF) &&
-        !replicaAcceptsCompressionAlgorithm(c->repl_data->replica_capa, rdbStreamCompressionAlgorithm())) {
-        addReplyError(c, "Replica without EOF capability cannot full sync while rdbcompression uses a whole-stream codec");
-        return;
-    }
-
     server.stat_sync_full++;
 
     /* Set up the replica as one waiting for BGSAVE to start. The following code
@@ -1578,16 +1599,18 @@ void syncCommand(client *c) {
                 break;
         }
         /* To attach this replica, we check that it has at least all the
-         * capabilities of the replica that triggered the current BGSAVE and its
-         * exact requirements. Compression capabilities are handled separately:
-         * a replica may join the in-progress disk-based save only when its own
-         * negotiated wire codec equals the codec the save is being written in
-         * (server.rdb_child_sync_algo), since the file is sent verbatim. The
-         * compression capability bits are masked out of the superset check so
-         * that check concerns only the non-compression capabilities. */
+         * capabilities of the replica that triggered the current BGSAVE, its
+         * exact requirements and RDB version, and that its negotiated wire codec
+         * equals the codec the save is being written in
+         * (server.rdb_child_sync_algo), since the file is sent verbatim.
+         * Compression capability bits are masked out of the superset check so that
+         * check concerns only the non-compression capabilities. A replica that
+         * negotiated another codec can't reuse the in-progress file, so it waits
+         * for the next BGSAVE, which will then serve it alone. */
         int trigger_capa = ln ? (replica->repl_data->replica_capa & ~REPLICA_CAPA_COMPRESSION_MASK) : 0;
         if (ln && ((c->repl_data->replica_capa & trigger_capa) == trigger_capa) &&
             c->repl_data->replica_req == replica->repl_data->replica_req &&
+            replicaRdbVersion(c) == server.rdb_child_rdbver &&
             replSelectFullSyncCompression(c->repl_data->replica_capa) == server.rdb_child_sync_algo) {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
@@ -1616,12 +1639,13 @@ void syncCommand(client *c) {
              * few seconds to wait for more replicas to arrive. */
             serverLog(LL_NOTICE, "Delay next BGSAVE for diskless SYNC");
         } else {
-            /* We don't have a BGSAVE in progress, let's start one. Diskless
-             * or disk-based mode is determined by replica's capacity. */
+            /* We don't have a BGSAVE in progress, let's start one. Whether it
+             * targets the replicas' sockets or the disk is decided from
+             * repl-diskless-sync and the cohort's capabilities. */
             if (!hasActiveChildProcess()) {
-                startBgsaveForReplication(c->repl_data->replica_capa,
-                                          c->repl_data->replica_req,
-                                          replicaRdbVersion(c));
+                startBgsaveForReplication(c->repl_data->replica_req,
+                                          replicaRdbVersion(c),
+                                          replSelectFullSyncCompression(c->repl_data->replica_capa));
             } else {
                 serverLog(LL_NOTICE, "No BGSAVE in progress, but another BG operation is active. "
                                      "BGSAVE for replication delayed");
@@ -2038,11 +2062,11 @@ void removeRDBUsedToSyncReplicas(void) {
         }
         if (delrdb) {
             struct stat sb;
-            if (lstat(server.rdb_filename, &sb) != -1) {
+            if (lstat(server.repl_rdb_filename, &sb) != -1) {
                 RDBGeneratedByReplication = 0;
                 serverLog(LL_NOTICE, "Removing the RDB file used to feed replicas "
                                      "in a persistence-less instance");
-                bg_unlink(server.rdb_filename);
+                bg_unlink(server.repl_rdb_filename);
             }
         }
     }
@@ -2436,7 +2460,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
                 }
                 replica->repl_data->repl_start_cmd_stream_on_ack = 1;
             } else {
-                repldbfd = open(server.rdb_filename, O_RDONLY);
+                repldbfd = open(server.repl_rdb_filename, O_RDONLY);
                 if (repldbfd == -1) {
                     freeClientAsync(replica);
                     serverLog(LL_WARNING, "SYNC failed. Can't open DB after BGSAVE: %s", strerror(errno));
@@ -2949,8 +2973,9 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
 
 int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
-    /* Make sure the new file (also used for persistence) is fully synced
-     * (not covered by earlier calls to rdb_fsync_range). */
+    /* Make sure the new file is fully synced (not covered by earlier calls to
+     * rdb_fsync_range). It is the replication RDB, not the snapshot used for
+     * persistence, so dbfilename stays untouched by a full sync. */
     if (fsync(server.repl_transfer_fd) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to sync the temp DB to disk in "
@@ -2960,12 +2985,12 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     }
 
     /* Rename rdb like renaming rewrite aof asynchronously. */
-    int old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
-    if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
+    int old_rdb_fd = open(server.repl_rdb_filename, O_RDONLY | O_NONBLOCK);
+    if (rename(server.repl_transfer_tmpfile, server.repl_rdb_filename) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to rename the temp DB into %s in "
                   "PRIMARY <-> REPLICA synchronization: %s",
-                  server.rdb_filename, strerror(errno));
+                  server.repl_rdb_filename, strerror(errno));
         if (old_rdb_fd != -1) close(old_rdb_fd);
         return C_ERR;
     }
@@ -2973,11 +2998,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 0);
 
     /* Sync the directory to ensure rename is persisted */
-    if (fsyncFileDir(server.rdb_filename) == -1) {
+    if (fsyncFileDir(server.repl_rdb_filename) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to sync DB directory %s in "
                   "PRIMARY <-> REPLICA synchronization: %s",
-                  server.rdb_filename, strerror(errno));
+                  server.repl_rdb_filename, strerror(errno));
         return C_ERR;
     }
 
@@ -2988,7 +3013,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
      * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-    int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
+    int retval = rdbLoad(server.repl_rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
 
     if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
@@ -2997,7 +3022,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                                  "the primary. This replica has persistence "
                                  "disabled");
-            bg_unlink(server.rdb_filename);
+            bg_unlink(server.repl_rdb_filename);
         }
 
         /* If RDB failed compatibility check, we did not load the new data set or flush our old data. */
@@ -3023,7 +3048,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                              "the primary. This replica has persistence "
                              "disabled");
-        bg_unlink(server.rdb_filename);
+        bg_unlink(server.repl_rdb_filename);
     }
 
     zfree(server.repl_transfer_tmpfile);
@@ -6031,7 +6056,7 @@ void replicationCron(void) {
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
 }
 
-int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out) {
+int shouldStartChildReplication(int *req_out, int *rdbver_out, compressionAlgo *compr_out) {
     /* We should start a BGSAVE good for replication if we have replicas in
      * WAIT_BGSAVE_START state.
      *
@@ -6041,43 +6066,46 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
     if (!hasActiveSaveOrChild()) {
         time_t idle, max_idle = 0;
         int replicas_waiting = 0;
-        int mincapa = 0;
         int rdbver = 0;
         int req = 0;
         compressionAlgo compr = ALGO_NONE;
-        int first = 1;
         listNode *ln;
         listIter li;
 
+        /* Pick the requirements, RDB version and codec of the round from the first
+         * waiting replica. Only replicas that match all three join that round; a
+         * replica that negotiated a different codec waits for a round of its own,
+         * so a replica without compression capability never downgrades the round
+         * for the replicas that have one. */
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
-            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
-                compressionAlgo replica_compr = replSelectFullSyncCompression(replica->repl_data->replica_capa);
-                if (first) {
-                    /* Get first replica's requirements */
-                    req = replica->repl_data->replica_req;
-                    rdbver = replicaRdbVersion(replica);
-                    compr = replica_compr;
-                } else if (!isReplicaInCohort(replica, req, rdbver, compr)) {
-                    /* Skip replicas that don't match */
-                    continue;
-                }
-                idle = server.unixtime - replica->last_interaction;
-                if (idle > max_idle) max_idle = idle;
-                replicas_waiting++;
-                mincapa = first ? replica->repl_data->replica_capa : (mincapa & replica->repl_data->replica_capa);
-                first = 0;
-            }
+            if (replica->repl_data->repl_state != REPLICA_STATE_WAIT_BGSAVE_START) continue;
+            req = replica->repl_data->replica_req;
+            rdbver = replicaRdbVersion(replica);
+            compr = replSelectFullSyncCompression(replica->repl_data->replica_capa);
+            break;
+        }
+
+        /* Count the members of the round and how long the oldest one has been
+         * waiting. */
+        listRewind(server.replicas, &li);
+        while ((ln = listNext(&li))) {
+            client *replica = ln->value;
+            if (replica->repl_data->repl_state != REPLICA_STATE_WAIT_BGSAVE_START) continue;
+            if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
+            idle = server.unixtime - replica->last_interaction;
+            if (idle > max_idle) max_idle = idle;
+            replicas_waiting++;
         }
 
         if (replicas_waiting && (!server.repl_diskless_sync ||
                                  (server.repl_diskless_sync_max_replicas > 0 &&
                                   replicas_waiting >= server.repl_diskless_sync_max_replicas) ||
                                  max_idle >= server.repl_diskless_sync_delay)) {
-            if (mincapa_out) *mincapa_out = mincapa;
             if (req_out) *req_out = req;
             if (rdbver_out) *rdbver_out = rdbver;
+            if (compr_out) *compr_out = compr;
             return 1;
         }
     }
@@ -6086,15 +6114,15 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
 }
 
 void replicationStartPendingFork(void) {
-    int mincapa = -1;
     int req = -1;
     int rdbver = -1;
+    compressionAlgo compr = ALGO_NONE;
 
-    if (shouldStartChildReplication(&mincapa, &req, &rdbver)) {
+    if (shouldStartChildReplication(&req, &rdbver, &compr)) {
         /* Start the BGSAVE. The called function may start a
          * BGSAVE with socket target or disk target depending on the
          * configuration and replicas capabilities and requirements. */
-        startBgsaveForReplication(mincapa, req, rdbver);
+        startBgsaveForReplication(req, rdbver, compr);
     }
 }
 

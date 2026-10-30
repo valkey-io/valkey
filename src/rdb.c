@@ -1707,9 +1707,13 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     int saved_errno;
     char *err_op; /* For a detailed log */
     compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
-    /* Replication full sync uses the codec selected before the child was forked. */
+    int rdbver = RDB_VERSION;
+    /* Replication full sync uses the codec and RDB version selected before the
+     * child was forked. The file is sent verbatim to the round's replicas, so it
+     * must be written in exactly the format they negotiated. */
     if (rdbflags & RDBFLAGS_REPLICATION) {
         compression_algo = server.rdb_child_sync_algo;
+        rdbver = server.rdb_child_rdbver;
     }
 
     FILE *fp = fopen(filename, "w");
@@ -1732,7 +1736,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
         if (!(rdbflags & RDBFLAGS_KEEP_CACHE)) rioSetReclaimCache(&rdb, 1);
     }
 
-    if (rdbSaveRio(compression_algo, req, RDB_VERSION, &rdb, &error, rdbflags, rsi) == C_ERR) {
+    if (rdbSaveRio(compression_algo, req, rdbver, &rdb, &error, rdbflags, rsi) == C_ERR) {
         errno = error;
         err_op = "rdbSaveRio";
         goto werr;
@@ -1861,11 +1865,31 @@ int rdbStartBgsave(int bgsave_type) {
     }
 }
 
+/* A replication disk save writes its own file instead of dbfilename, so it must
+ * not change what INFO and the stop-writes-on-bgsave-error gate report about
+ * persistence. Capture the metrics it would overwrite before forking and put
+ * them back when it ends. The dirty counter and LASTSAVE are not captured:
+ * rdbRecordEndMetrics() leaves them alone for such saves, while restoring the
+ * captured values would also drop the changes that arrived during the save. */
+static void rdbCapturePersistenceMetrics(void) {
+    server.rdb_child_prev_metrics.lastbgsave_status = server.lastbgsave_status;
+    server.rdb_child_prev_metrics.lastbgsave_type = server.lastbgsave_type;
+    server.rdb_child_prev_metrics.lastbgsave_try = server.lastbgsave_try;
+}
+
+static void rdbRestorePersistenceMetrics(void) {
+    server.lastbgsave_status = server.rdb_child_prev_metrics.lastbgsave_status;
+    server.lastbgsave_type = server.rdb_child_prev_metrics.lastbgsave_type;
+    server.lastbgsave_try = server.rdb_child_prev_metrics.lastbgsave_try;
+}
+
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     pid_t childpid;
+    int for_replication = (rdbflags & RDBFLAGS_REPLICATION) != 0;
 
     if (hasActiveChildProcess()) return C_ERR;
     server.stat_rdb_saves++;
+    if (for_replication) rdbCapturePersistenceMetrics();
 
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
@@ -1885,9 +1909,13 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     } else {
         /* Parent */
         if (childpid == -1) {
-            server.rdb_child_sync_algo = ALGO_NONE; /* Roll back the caller's sync-algo assignment. */
+            server.rdb_child_sync_algo = ALGO_NONE; /* Roll back the caller's assignments. */
+            server.rdb_child_rdbver = RDB_VERSION;
             server.lastbgsave_status = C_ERR;
             server.lastbgsave_try = time(NULL);
+            /* No child, so no completion handler will put the persistence
+             * metrics back. */
+            if (for_replication) rdbRestorePersistenceMetrics();
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
             return C_ERR;
         }
@@ -4236,6 +4264,9 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
          * triggering an error condition. */
         if (bysignal != SIGUSR1) rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORK, C_ERR, save_end);
     }
+    /* A replication save writes its own file, so it is not a persistence save:
+     * put back the metrics captured when it started, whatever the outcome. */
+    if (server.rdb_child_for_replication) rdbRestorePersistenceMetrics();
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.
@@ -4278,9 +4309,11 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
 
     rdbClearSaveState(save_end);
     server.rdb_child_sync_algo = ALGO_NONE;
+    server.rdb_child_rdbver = RDB_VERSION;
+    server.rdb_child_for_replication = 0;
 
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
-     * (the first stage of SYNC is a bulk transfer of dump.rdb) */
+     * (the first stage of SYNC is a bulk transfer of repl-rdbfilename) */
     updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
 }
 
@@ -4730,7 +4763,13 @@ void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end) {
     server.lastbgsave_status = status;
     server.lastbgsave_type = bgsave_type;
     if (status == C_OK) {
-        server.dirty = server.dirty - server.dirty_before_bgsave;
-        server.lastsave = save_end;
+        /* A replication save writes repl-rdbfilename, not dbfilename, so it
+         * doesn't make the persistence snapshot any fresher: leave the dirty
+         * counter and the last save time alone so the configured save points
+         * still trigger a snapshot. */
+        if (!server.rdb_child_for_replication) {
+            server.dirty = server.dirty - server.dirty_before_bgsave;
+            server.lastsave = save_end;
+        }
     }
 }

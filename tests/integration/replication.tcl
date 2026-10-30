@@ -1931,23 +1931,23 @@ start_server {tags {"repl external:skip"}} {
         $primary set primary_key primary_value
 
         test {Replica keep the old data if RDB file save fails in disk-based replication} {
-            # Create a folder called 'dump.rdb' to trigger temp-rdb rename failure
+            # Create a folder called 'repl-dump.rdb' to trigger temp-rdb rename failure
             # and it will cause RDB file save to fail at the rename.
-            set dump_rdb [file join [lindex [$replica config get dir] 1] dump.rdb]
-            if {[file exists $dump_rdb]} { exec rm -f $dump_rdb }
-            exec mkdir -p $dump_rdb
+            set repl_rdb [server_repl_rdb_path $replica]
+            if {[file exists $repl_rdb]} { exec rm -f $repl_rdb }
+            exec mkdir -p $repl_rdb
 
             $replica replicaof $primary_host $primary_port
 
             # Waiting for the rename to fail.
-            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into dump.rdb*"} 0 1000 10
+            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into repl-dump.rdb*"} 0 1000 10
 
             # Make sure the replica has not completed sync and keep the old data.
             assert_equal {} [$replica get primary_key]
             assert_equal {replica_value} [$replica get replica_key]
 
             # Remove the test folder and make the rename success
-            exec rm -rf $dump_rdb
+            exec rm -rf $repl_rdb
             wait_for_condition 500 100 {
                 [$replica get primary_key] == {primary_value} &&
                 [$replica get replica_key] == {}
@@ -1956,6 +1956,143 @@ start_server {tags {"repl external:skip"}} {
                 puts [$replica keys *]
                 fail "Replication failed."
             }
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
+    set primary [srv 0 client]
+    set primary_dump [server_rdb_path $primary]
+    set primary_repl_rdb [server_repl_rdb_path $primary]
+
+    $primary config set save ""
+    $primary config set repl-diskless-sync no
+    $primary config set repl-diskless-sync-delay 0
+    $primary set primary_key primary_value
+
+    # Fake persistence snapshots to detect any full sync clobbering them.
+    set fp [open $primary_dump w]
+    puts $fp "primary-persistence-snapshot"
+    close $fp
+
+    start_server {overrides {save ""}} {
+        set replica [srv 0 client]
+        set replica_dump [server_rdb_path $replica]
+        set replica_repl_rdb [server_repl_rdb_path $replica]
+
+        set fp [open $replica_dump w]
+        puts $fp "replica-persistence-snapshot"
+        close $fp
+
+        test {Disk-based full sync uses repl-rdbfilename and leaves dbfilename untouched} {
+            set lastsave_before [status $primary rdb_last_save_time]
+            set changes_before [status $primary rdb_changes_since_last_save]
+            set bgsave_status_before [status $primary rdb_last_bgsave_status]
+            set bgsave_type_before [status $primary rdb_last_bgsave_type]
+
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            wait_done_loading $replica
+
+            assert_equal {primary_value} [$replica get primary_key]
+
+            # Both sides keep the RDB used for the full sync by default.
+            assert {[file exists $primary_repl_rdb]}
+            assert {[file exists $replica_repl_rdb]}
+
+            # The persistence snapshot is not the replication RDB.
+            set fp [open $primary_dump r]
+            assert_equal "primary-persistence-snapshot" [string trim [read $fp]]
+            close $fp
+            set fp [open $replica_dump r]
+            assert_equal "replica-persistence-snapshot" [string trim [read $fp]]
+            close $fp
+
+            # Since the save did not refresh dbfilename, it must not count as a
+            # persistence point: LASTSAVE and the dirty counter stay put, so the
+            # configured save points still trigger a real snapshot.
+            assert_equal $lastsave_before [status $primary rdb_last_save_time]
+            assert_equal $changes_before [status $primary rdb_changes_since_last_save]
+            # The last-bgsave metrics describe the persistence save, so the full
+            # sync doesn't report itself as one.
+            assert_equal $bgsave_status_before [status $primary rdb_last_bgsave_status]
+            assert_equal $bgsave_type_before [status $primary rdb_last_bgsave_type]
+        }
+    }
+}
+
+# A replication save must not decide whether the last persistence save succeeded:
+# it writes its own file, so it can neither clear the error left by a failed
+# dbfilename save (which gates writes under stop-writes-on-bgsave-error) nor
+# report itself as the last bgsave.
+start_server {tags {"repl external:skip needs:debug"}} {
+    set primary [srv 0 client]
+
+    $primary config set save ""
+    $primary config set repl-diskless-sync no
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set bgsave-default-method fork
+    $primary set primary_key primary_value
+
+    # Force a persistence bgsave to fail, leaving an error status behind.
+    $primary config set rdb-key-save-delay 10000000
+    $primary debug populate 1000
+    $primary bgsave
+    wait_for_condition 50 100 {
+        [status $primary rdb_bgsave_in_progress] == 1
+    } else {
+        fail "bgsave didn't start"
+    }
+    catch {exec kill -9 [get_child_pid 0]}
+    $primary config set rdb-key-save-delay 0
+    waitForBgsave $primary
+    assert_equal {err} [status $primary rdb_last_bgsave_status]
+
+    start_server {overrides {save ""}} {
+        set replica [srv 0 client]
+
+        test {A full sync preserves the failed status of the last persistence bgsave} {
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            wait_done_loading $replica
+
+            assert_equal {primary_value} [$replica get primary_key]
+            assert_equal {err} [status $primary rdb_last_bgsave_status]
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
+    set primary [srv 0 client]
+    set primary_dump [server_rdb_path $primary]
+
+    $primary config set save ""
+    $primary config set repl-diskless-sync no
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set rdb-del-sync-files yes
+    $primary set primary_key primary_value
+
+    start_server {overrides {save "" rdb-del-sync-files yes}} {
+        set replica [srv 0 client]
+        set replica_dump [server_rdb_path $replica]
+
+        test {rdb-del-sync-files removes the replication RDB but not dbfilename} {
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            wait_done_loading $replica
+
+            assert_equal {primary_value} [$replica get primary_key]
+
+            wait_for_condition 50 100 {
+                ![file exists [server_repl_rdb_path $primary]] &&
+                ![file exists [server_repl_rdb_path $replica]]
+            } else {
+                fail "replication RDB files were not removed"
+            }
+
+            # The persistence snapshots are untouched.
+            assert_equal 0 [file exists $primary_dump]
+            assert_equal 0 [file exists $replica_dump]
         }
     }
 }

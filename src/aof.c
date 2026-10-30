@@ -1011,7 +1011,7 @@ int startAppendOnly(void) {
     return C_OK;
 }
 
-/* Try to restart AOF after replica full sync by adopting `server.rdb_filename`
+/* Try to restart AOF after replica full sync by adopting `server.repl_rdb_filename`
  * as the new BASE file (RDB preamble mode), avoiding a redundant AOFRW.
  * Returns C_OK on success; on C_ERR caller should fallback to
  * restartAOFAfterSYNC(). */
@@ -1038,8 +1038,8 @@ int restartAOFWithSyncRdb(void) {
     serverAssert(new_base_filename != NULL);
     new_base_filepath = makePath(server.aof_dirname, new_base_filename);
 
-    if (rename(server.rdb_filename, new_base_filepath) == -1) {
-        serverLog(LL_WARNING, "Error trying to rename the RDB file %s into %s: %s", server.rdb_filename,
+    if (rename(server.repl_rdb_filename, new_base_filepath) == -1) {
+        serverLog(LL_WARNING, "Error trying to rename the RDB file %s into %s: %s", server.repl_rdb_filename,
                   new_base_filepath, strerror(errno));
         goto cleanup;
     }
@@ -1107,11 +1107,11 @@ int restartAOFWithSyncRdb(void) {
 
 cleanup:
     if (rdbfile_renamed) {
-        if (rename(new_base_filepath, server.rdb_filename) == -1) {
+        if (rename(new_base_filepath, server.repl_rdb_filename) == -1) {
             serverLog(LL_WARNING,
                       "Failed to rename AOF base back to RDB file %s: %s. "
                       "Orphan file may remain at %s",
-                      server.rdb_filename, strerror(errno), new_base_filepath);
+                      server.repl_rdb_filename, strerror(errno), new_base_filepath);
         } else {
             rdbfile_renamed = 0;
         }
@@ -1123,7 +1123,7 @@ cleanup:
         if (rdbfile_renamed) {
             bg_unlink(new_base_filepath);
         } else {
-            bg_unlink(server.rdb_filename);
+            bg_unlink(server.repl_rdb_filename);
         }
     }
     if (newfd != -1) close(newfd);

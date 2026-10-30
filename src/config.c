@@ -2537,11 +2537,11 @@ static int isValidClusterConfigFile(char *val, const char **err) {
 
 static int isValidDBfilename(char *val, const char **err) {
     if (!strcmp(val, "")) {
-        *err = "dbfilename can't be empty";
+        *err = "RDB filename can't be empty";
         return 0;
     }
     if (!pathIsBaseName(val)) {
-        *err = "dbfilename can't be a path, just a filename";
+        *err = "RDB filename can't be a path, just a filename";
         return 0;
     }
     return 1;
@@ -3513,6 +3513,7 @@ standardConfig static_configs[] = {
     createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.syslog_ident, SERVER_NAME, NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.rdb_filename, "dump.rdb", isValidDBfilename, NULL),
+    createStringConfig("repl-rdbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.repl_rdb_filename, "repl-dump.rdb", isValidDBfilename, NULL),
     createStringConfig("appendfilename", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.aof_filename, "appendonly.aof", isValidAOFfilename, NULL),
     createStringConfig("appenddirname", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.aof_dirname, "appendonlydir", isValidAOFdirname, NULL),
     createStringConfig("server-cpulist", "server_cpulist", IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.server_cpulist, NULL, NULL, NULL),

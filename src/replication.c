@@ -1852,7 +1852,19 @@ void replconfCommand(client *c) {
             return;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-only")) {
             /* REPLCONF RDB-ONLY is used to identify the client only wants
-             * RDB snapshot without replication buffer. */
+             * RDB snapshot without replication buffer.
+             *
+             * It only makes sense during the pre-PSYNC handshake, when it
+             * selects how the upcoming full sync is served. Once the client
+             * has become a replica we must reject it: flipping repl_rdbonly on
+             * an online replica that is waiting to start its command stream
+             * makes the next REPLCONF ACK hit the
+             * serverAssert(!(replica->flag.repl_rdbonly)) in
+             * replicaStartCommandStream() and abort the primary. */
+            if (c->flag.replica) {
+                addReplyError(c, "REPLCONF RDB-ONLY can't be set after synchronization has started");
+                return;
+            }
             long rdb_only = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &rdb_only, NULL) != C_OK) return;
             if (rdb_only == 1)

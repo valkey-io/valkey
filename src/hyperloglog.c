@@ -647,7 +647,7 @@ static int hllSparseToDense(robj *o) {
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
-            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+            if (p + 1 >= end || (runlen + idx) > HLL_REGISTERS) { /* Truncated or overflow. */
                 valid = 0;
                 break;
             }
@@ -759,7 +759,8 @@ static int hllSparseSet(robj *o, long index, uint8_t count) {
     if (span == 0 || p >= end) return -1; /* Invalid format. */
 
     next = HLL_SPARSE_IS_XZERO(p) ? p + 2 : p + 1;
-    if (next >= end) next = NULL;
+    if (next > end) return -1; /* Truncated XZERO. */
+    if (next == end) next = NULL;
 
     /* Cache current opcode type to avoid using the macro again and
      * again for something that will not change.
@@ -981,7 +982,7 @@ static void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int 
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
-            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+            if (p + 1 >= end || (runlen + idx) > HLL_REGISTERS) { /* Truncated or overflow. */
                 valid = 0;
                 break;
             }
@@ -1382,7 +1383,7 @@ static int hllMerge(uint8_t *max, robj *hll) {
                 p++;
             } else if (HLL_SPARSE_IS_XZERO(p)) {
                 runlen = HLL_SPARSE_XZERO_LEN(p);
-                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                if (p + 1 >= end || (runlen + i) > HLL_REGISTERS) { /* Truncated or overflow. */
                     valid = 0;
                     break;
                 }

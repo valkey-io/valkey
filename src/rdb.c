@@ -2576,6 +2576,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     } else if (rdbtype == RDB_TYPE_PATH_HASH) {
         uint64_t path_count = rdbLoadLen(rdb, NULL);
         if (path_count == RDB_LENERR) return NULL;
+        if (path_count == 0) goto emptykey;
         o = createPathHashObject();
         pathHashObject *path_hash = objectGetVal(o);
 

@@ -8615,7 +8615,12 @@ void clusterCommandSetSlot(client *c) {
             }
         }
 
-        if (num_eligible_replicas != 0) {
+        if (num_eligible_replicas != 0 && c->flag.deny_blocking) {
+            /* The client cannot block (MULTI, scripts), so it cannot wait for
+             * the acks. Apply the change now and replicate it afterwards, the
+             * way WAIT returns immediately for such clients. */
+            forceCommandPropagation(c, PROPAGATE_REPL);
+        } else if (num_eligible_replicas != 0) {
             forceCommandPropagation(c, PROPAGATE_REPL);
             /* We are a primary and this is the first time we see this `SETSLOT`
              * command. Force-replicate the command to all of our replicas

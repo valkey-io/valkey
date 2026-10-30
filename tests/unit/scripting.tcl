@@ -1822,6 +1822,23 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         assert_match {*<value>*somearg*} [r read]
         reconnect
     }
+
+    test {Test scripting debug deleting a breakpoint keeps the remaining ones} {
+        r script debug sync
+        r eval "local a = 1\nlocal b = 2\nlocal c = 3\nlocal d = 4\nlocal e = 5\nlocal f = 6\nreturn a" 0
+        r break 2
+        r break 4
+        r break 6
+        assert_equal {Breakpoint removed.} [lindex [r break -2] 0]
+        set bps [r break]
+        assert_equal {2 breakpoints set:} [lindex $bps 0]
+        assert_match {*#4 *} [lindex $bps 1]
+        assert_match {*#6 *} [lindex $bps 2]
+        assert_equal {Breakpoint removed.} [lindex [r break -6] 0]
+        assert_equal {Breakpoint removed.} [lindex [r break -4] 0]
+        assert_equal {No breakpoints set. Use 'b <line>' to add one.} [lindex [r break] 0]
+        reconnect
+    }
 }
 
 start_server {tags {"scripting external:skip"}} {

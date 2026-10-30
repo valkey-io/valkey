@@ -1,5 +1,5 @@
 # One XADD with one huge 5GB field
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 run_solo {violations} {
 start_server [list overrides [list save ""] ] {
     test {XADD one huge field} {
@@ -17,7 +17,7 @@ start_server [list overrides [list save ""] ] {
 
 # One XADD with one huge (exactly nearly) 4GB field
 # This uncovers the overflow in lpEncodeGetType
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 start_server [list overrides [list save ""] ] {
     test {XADD one huge field - 1} {
         r config set proto-max-bulk-len 10000000000 ;#10gb
@@ -45,7 +45,7 @@ start_server [list overrides [list save ""] ] {
 }
 
 # Add over 4GB to a single stream listpack (one XADD command)
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 start_server [list overrides [list save ""] ] {
     test {single XADD big fields} {
         r write "*23\r\n\$4\r\nXADD\r\n\$1\r\nS\r\n\$1\r\n*\r\n"
@@ -58,6 +58,22 @@ start_server [list overrides [list save ""] ] {
         assert_match {*too large*} $err
         r xlen S
     } {0} {large-memory}
+}
+
+# A refused XADD must not create the key, since nothing is propagated
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {XADD over the size limit does not create the key} {
+        # Two 512MiB values plus the field names are just over the 1GiB limit
+        r write "*7\r\n\$4\r\nXADD\r\n\$1\r\nS\r\n\$1\r\n*\r\n"
+        for {set j 0} {$j<2} {incr j} {
+            r write "\$1\r\n$j\r\n"
+            write_big_bulk 536870912 "" yes
+        }
+        r flush
+        catch {r read} err
+        assert_match {*too large*} $err
+        r exists S
+    } {0}
 }
 
 # Gradually add big hash fields using repeated HSET calls

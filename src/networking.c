@@ -1431,7 +1431,12 @@ void disconnectSlaves(void) {
     listNode *ln;
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
-        freeClient((client*)ln->value);
+        client *slave = (client*)ln->value;
+        /* The slave may be the client running this command. */
+        if (slave == server.current_client)
+            freeClientAsync(slave);
+        else
+            freeClient(slave);
     }
 }
 

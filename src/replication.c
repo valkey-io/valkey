@@ -3012,7 +3012,14 @@ void replicationSetMaster(char *ip, int port) {
 
     sdsfree(server.masterhost);
     server.masterhost = NULL;
-    if (server.master) {
+    if (server.master && server.master == server.current_client) {
+        /* The master is running this command, so it is still in use until the
+         * command returns. Detach it from the master role so that freeing it
+         * then neither caches it nor resets the replication state. */
+        server.master->flags &= ~CLIENT_MASTER;
+        freeClientAsync(server.master);
+        server.master = NULL;
+    } else if (server.master) {
         freeClient(server.master);
     }
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
@@ -3071,7 +3078,16 @@ void replicationUnsetMaster(void) {
      * replicationHandleMasterDisconnection which can attempt to re-connect. */
     sdsfree(server.masterhost);
     server.masterhost = NULL;
-    if (server.master) freeClient(server.master);
+    if (server.master && server.master == server.current_client) {
+        /* The master is running this command, so it is still in use until the
+         * command returns. Detach it from the master role so that freeing it
+         * then neither caches it nor resets the replication state. */
+        server.master->flags &= ~CLIENT_MASTER;
+        freeClientAsync(server.master);
+        server.master = NULL;
+    } else if (server.master) {
+        freeClient(server.master);
+    }
     replicationDiscardCachedMaster();
     cancelReplicationHandshake(0);
     /* When a slave is turned into a master, the current replication ID

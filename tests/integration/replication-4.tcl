@@ -293,3 +293,39 @@ start_server {tags {"repl external:skip"}} {
         }
     }
 }
+
+start_server {tags {"repl external:skip needs:debug"} overrides {save {}}} {
+    start_server {overrides {save {}}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test {Replica survives REPLICAOF NO ONE sent by its primary} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            $primary debug replicate replicaof no one
+            wait_for_condition 50 100 {
+                [s 0 role] eq {master}
+            } else {
+                fail "Replica did not become a primary"
+            }
+            assert_equal {PONG} [$replica ping]
+        }
+
+        test {Replica survives REPLICAOF NO ONE sent by its own replica} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            set sub_replica [attach_to_replication_stream]
+            puts -nonewline $sub_replica "*3\r\n\$9\r\nREPLICAOF\r\n\$2\r\nNO\r\n\$3\r\nONE\r\n"
+            flush $sub_replica
+            wait_for_condition 50 100 {
+                [s 0 role] eq {master}
+            } else {
+                fail "Replica did not become a primary"
+            }
+            assert_equal {PONG} [$replica ping]
+            close $sub_replica
+        }
+    }
+}

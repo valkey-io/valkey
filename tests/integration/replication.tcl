@@ -1701,6 +1701,7 @@ test {replica can handle EINTR if use diskless load} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $replica config set repl-diskless-load on-empty-db
+            $replica config set repl-timeout 2
             # Construct EINTR error by using the built in watchdog
             $replica config set watchdog-period 200
             # Block replica in read()
@@ -1714,13 +1715,24 @@ test {replica can handle EINTR if use diskless load} {
             set res [wait_for_log_messages -1 {"*Loading DB in memory*"} 0 200 10]
             set loglines [lindex $res 1]
 
-            # Wait till we see the watchdog log line AFTER the loading started
-            wait_for_log_messages -1 {"*WATCHDOG TIMER EXPIRED*"} $loglines 200 10
+            # Pause the primary so the replica is blocked in read() when the
+            # watchdog SIGALRM fires, making that read() fail with EINTR.
+            pause_process [srv 0 pid]
+            set res [wait_for_log_messages -1 {"*WATCHDOG TIMER EXPIRED*"} $loglines 200 10]
+            set loglines [lindex $res 1]
+            resume_process [srv 0 pid]
 
             # Make sure we're still loading, and that there was just one full sync attempt
-            assert ![log_file_matches [srv -1 stdout] "*Reconnecting to MASTER*"]
+            assert ![log_file_matches [srv -1 stdout] "*Reconnecting to PRIMARY*"]
             assert_equal 1 [s 0 sync_full]
             assert_equal 1 [s -1 loading]
+
+            # Stall the transfer again: the replica must time out after
+            # repl-timeout instead of retrying forever on a stale EINTR. The
+            # primary is stopped, so only the read timeout can end the load.
+            pause_process [srv 0 pid]
+            wait_for_log_messages -1 {"*Failed trying to load the PRIMARY synchronization DB from socket*"} $loglines 500 10
+            resume_process [srv 0 pid]
         }
     }
 } {} {external:skip}

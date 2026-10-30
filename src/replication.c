@@ -4104,6 +4104,12 @@ int replicaProcessPsyncReply(connection *conn) {
             sdsfree(reply);
             return PSYNC_CONTINUE;
         }
+        /* We sent PSYNC ? -1, so there is no cached primary to continue from. */
+        if (server.cached_primary == NULL) {
+            serverLog(LL_WARNING, "Primary replied +CONTINUE to a full resynchronization request, will try later.");
+            sdsfree(reply);
+            return PSYNC_TRY_LATER;
+        }
         /* Partial resync was accepted. */
         serverLog(LL_NOTICE, "Successful partial resynchronization with primary.");
 

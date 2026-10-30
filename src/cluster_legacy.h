@@ -250,6 +250,7 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
     CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
     CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY,
+    CLUSTERMSG_EXT_TYPE_COUNT,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */

@@ -3625,6 +3625,26 @@ static uint32_t getReplicaPriorityExtSize(void) {
     return getAlignedPingExtSize(sizeof(clusterMsgPingExtReplicaPriority));
 }
 
+/* Return the minimum encoded size for an extension type. A zero return means
+ * a known extension type is missing from the switch. Unknown extensions only
+ * require the common header to preserve forward compatibility. */
+static uint32_t getMinimumPingExtSize(uint16_t type) {
+    switch (type) {
+    case CLUSTERMSG_EXT_TYPE_HOSTNAME: return getAlignedPingExtSize(sizeof(clusterMsgPingExtHostname));
+    case CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME: return getAlignedPingExtSize(sizeof(clusterMsgPingExtHumanNodename));
+    case CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE: return getForgottenNodeExtSize();
+    case CLUSTERMSG_EXT_TYPE_SHARDID: return getShardIdPingExtSize();
+    case CLUSTERMSG_EXT_TYPE_CLIENT_IPV4: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientIpV4));
+    case CLUSTERMSG_EXT_TYPE_CLIENT_IPV6: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientIpV6));
+    case CLUSTERMSG_EXT_TYPE_CLIENT_PORT: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientPort));
+    case CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientTlsPort));
+    case CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE:
+        return getAlignedPingExtSize(sizeof(clusterMsgPingExtAvailabilityZone));
+    case CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY: return getReplicaPriorityExtSize();
+    default: return type < CLUSTERMSG_EXT_TYPE_COUNT ? 0 : sizeof(clusterMsgPingExt);
+    }
+}
+
 static void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t length) {
     ext->type = htons(type);
     ext->length = htonl(length);
@@ -4024,6 +4044,13 @@ int clusterIsValidPacket(clusterLink *link) {
             return 0;
         }
 
+        if (!(msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) && extensions != 0) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with %d extensions but no extension data flag",
+                      clusterGetMessageTypeString(type), extensions);
+            return 0;
+        }
+
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
         if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
@@ -4044,6 +4071,19 @@ int clusterIsValidPacket(clusterLink *link) {
                               clusterGetMessageTypeString(type), (int)extlen);
                     return 0;
                 }
+                uint16_t ext_type = ntohs(ext->type);
+                uint32_t min_extlen = getMinimumPingExtSize(ext_type);
+                if (min_extlen == 0) {
+                    serverLog(LL_WARNING, "Received invalid %s packet with unhandled extension type %d",
+                              clusterGetMessageTypeString(type), (int)ext_type);
+                    return 0;
+                }
+                if (extlen < min_extlen) {
+                    serverLog(LL_WARNING,
+                              "Received invalid %s packet with extension type %d that is %d bytes but requires at least %d",
+                              clusterGetMessageTypeString(type), (int)ext_type, (int)extlen, (int)min_extlen);
+                    return 0;
+                }
                 /* Similar check to earlier, but we want to make sure the extension length is valid
                  * this time. */
                 if ((totlen - explen) < extlen) {
@@ -4051,6 +4091,20 @@ int clusterIsValidPacket(clusterLink *link) {
                               "Received invalid %s packet with extension data that exceeds "
                               "total packet length (%lld)",
                               clusterGetMessageTypeString(type), (unsigned long long)totlen);
+                    return 0;
+                }
+                bool is_string_ext = ext_type == CLUSTERMSG_EXT_TYPE_HOSTNAME ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV4 ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV6 ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE;
+                /* String extensions are consumed as C strings. Make sure those reads
+                 * cannot continue past the declared extension. */
+                if (is_string_ext &&
+                    (extlen <= sizeof(clusterMsgPingExt) ||
+                     memchr((char *)ext + sizeof(clusterMsgPingExt), '\0', extlen - sizeof(clusterMsgPingExt)) == NULL)) {
+                    serverLog(LL_WARNING, "Received invalid %s packet with unterminated string extension type %d",
+                              clusterGetMessageTypeString(type), (int)ext_type);
                     return 0;
                 }
                 explen += extlen;

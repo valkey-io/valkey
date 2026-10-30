@@ -265,6 +265,27 @@ tags {"benchmark network external:skip logreqres:skip"} {
             file delete $csv_file
         }
 
+        test {benchmark: dataset CSV with a lone quote as the last field} {
+            # The opening and closing quote checks both match the same byte,
+            # which must not be stripped as a quoted empty value.
+            set csv_data "id,content\n1,\"\n"
+            set csv_file [tmpfile "lone_quote.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ \"__field:content__\""]
+            common_bench_setup $cmd
+
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            foreach key $keys {
+                assert_equal "\"" [r get $key]
+            }
+            file delete $csv_file
+        }
+
         test {benchmark: dataset CSV with field placeholders} {
             # Create test CSV dataset
             set csv_data "title,content,author\nTest Title 1,Test Content 1,Author 1\nTest Title 2,Test Content 2,Author 2"

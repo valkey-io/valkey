@@ -519,6 +519,14 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match "*is not a valid number*" $error
         }
 
+        test {benchmark: function_load with more functions than fit in the script buffer} {
+            set cmd [valkeybenchmark $master_host $master_port "-n 1 -c 1 -t function_load --num-functions 20000"]
+            catch { exec {*}$cmd 2>@1 } output
+            # The server rejects the script for exceeding Lua's 200 local variable limit.
+            # Getting that reply means the benchmark generated and sent it without crashing.
+            assert_match "*Error from server*" $output
+        }
+
         test {benchmark: -r with large keyspace generates keys above 2^31} {
             set cmd [valkeybenchmark $master_host $master_port "-r 999999999999 -n 100 -t set"]
             common_bench_setup $cmd

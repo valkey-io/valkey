@@ -496,13 +496,40 @@ run_solo {defrag} {
                     $rd xadd k$j * field1 $val field2 $val
                     if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
+
+                # Add consumer groups that hold owned and disowned (XNACK'd)
+                # PEL entries, so defrag covers both PEL trees. Half of the
+                # m-keys are deleted below, the rest survive.
+                set m [expr {$n / 10}]
+                for {set j 0} {$j < $m} {incr j} {
+                    $rd xadd m$j 1-0 field1 $val field2 $val
+                    $rd xadd m$j 2-0 field1 $val field2 $val
+                    $rd xgroup create m$j g 0
+                    $rd xreadgroup group g alice count 1 streams m$j ">"
+                    $rd xnack m$j g fail ids 1 2-0 retrycount 3 force
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
+                }
             } fragment {
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd del k$j
                     if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
+                for {set j 0} {$j < $m} {incr j 2} {
+                    $rd del m$j
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
+                }
                 $rd close
             }
+
+            # The digest check above only covers stream entries, not consumer
+            # groups. Verify the PEL state of a surviving key directly: one
+            # entry owned by alice, one disowned with its count intact.
+            set pend [r xpending m1 g - + 10]
+            assert_equal 2 [llength $pend]
+            assert_equal 1-0 [lindex $pend 0 0]
+            assert_equal alice [lindex $pend 0 1]
+            assert_equal 1 [lindex $pend 0 3]
+            assert_equal {2-0 {} -1 3} [lindex $pend 1]
         }
     }
 

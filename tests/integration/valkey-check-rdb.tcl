@@ -10,6 +10,13 @@ tags {"check-rdb external:skip logreqres:skip"} {
         assert_match {*\[offset ???\] \\o/ RDB looks OK! \\o/*} $result
     }
 
+    test {Check --output without a file name prints usage} {
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings.rdb --output
+        } result
+        assert_match {Usage: *} $result
+    }
+
     test {Check foreign RDB without unknown data} {
         catch {
             exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings-rdb12.rdb

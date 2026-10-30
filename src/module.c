@@ -15177,6 +15177,24 @@ void moduleCommand(client *c) {
     }
 }
 
+/* Key lookup and lazy expiry can invoke these hooks, including native-type
+ * destructors for a wrong-type key. Scripting-engine registration alone does
+ * not permit reentry during an atomic built-in command. */
+bool moduleMayRunDuringKeyLookup(void) {
+    if ((moduleKeyspaceSubscribers && listLength(moduleKeyspaceSubscribers)) ||
+        (ValkeyModule_EventListeners && listLength(ValkeyModule_EventListeners)))
+        return true;
+    if (!modules) return false;
+    listIter iter;
+    listNode *node;
+    listRewind(modules, &iter);
+    while ((node = listNext(&iter))) {
+        ValkeyModule *module = listNodeValue(node);
+        if (listLength(module->types)) return true;
+    }
+    return false;
+}
+
 /* Return the number of registered modules. */
 size_t moduleCount(void) {
     return listLength(modules);

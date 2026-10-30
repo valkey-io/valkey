@@ -500,4 +500,35 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex [r config get commandlog-request-larger-than] 1] -1
         assert_equal [lindex [r config get commandlog-reply-larger-than] 1] -1
     } {} {external:skip}
+
+    test {COMMANDLOG - batched MGET logs logical replies beyond 4 GiB exactly} {
+        set old_logging [lindex [r config get commandlog-reply-larger-than] 1]
+        set old_limits [lindex [r config get client-output-buffer-limit] 1]
+        set old_threads [lindex [r config get io-threads] 1]
+        set old_copy_threads [lindex [r config get min-io-threads-avoid-copy-reply] 1]
+        r config set io-threads 1
+        r config set min-io-threads-avoid-copy-reply 1
+        r config set client-output-buffer-limit {normal 0 0 0}
+        r config set commandlog-reply-larger-than 4294967296
+        set value_length [expr {16*1024*1024}]
+        r set log_wide_key [string repeat w $value_length]
+        r commandlog reset large-reply
+        set rd [valkey_deferring_client]
+        $rd mget {*}[lrepeat 300 log_wide_key]
+        $rd flush
+        wait_for_condition 50 100 {
+            [r commandlog len large-reply] == 1
+        } else {
+            fail "Batched MGET did not log its reply above 4 GiB"
+        }
+        set entry [lindex [r commandlog get 1 large-reply] 0]
+        set logical [expr {6 + 300*($value_length + [string length $value_length] + 5)}]
+        assert_equal $logical [lindex $entry 2]
+        $rd close
+        r del log_wide_key
+        r config set commandlog-reply-larger-than $old_logging
+        r config set client-output-buffer-limit $old_limits
+        r config set io-threads $old_threads
+        r config set min-io-threads-avoid-copy-reply $old_copy_threads
+    } {OK} {external:skip}
 }

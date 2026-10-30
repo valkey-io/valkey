@@ -61,6 +61,13 @@ long long getAofDurableOffset(void) {
     if (!isAofReplyBlockingEnabled()) {
         return server.primary_repl_offset;
     }
+    /* While the initial rewrite after CONFIG SET appendonly yes runs, fsyncs go
+     * to an INCR file the manifest does not reference yet, so nothing new is
+     * durable until the rewrite completes. Hold at what was already released,
+     * like beforeSleep() holds fsynced_reploff for WAITAOF. */
+    if (server.aof_state == AOF_WAIT_REWRITE) {
+        return server.reply_blocking.previous_acked_offset;
+    }
     if (server.reply_blocking.aof_paused) {
         return server.reply_blocking.aof_paused_offset;
     }

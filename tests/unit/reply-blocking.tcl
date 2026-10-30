@@ -1817,6 +1817,36 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
     }
 }
 
+start_server {tags {"repl durability external:skip"} overrides {appendonly no appendfsync always bio-aof-offload-enabled yes save ""}} {
+    test "Replies are held while the initial AOF rewrite after enabling appendonly runs" {
+        # Until the rewrite completes, fsyncs go to an INCR file the manifest
+        # does not reference yet, so a write is not durable before then.
+        r debug populate 1000
+        r config set rdb-key-save-delay 2000
+        r config set appendonly yes
+        assert_equal 1 [getInfoProperty [r info persistence] aof_rewrite_in_progress]
+
+        set rd [valkey_deferring_client]
+        $rd set rewrite:key v
+        after 300
+        assert_equal 1 [getInfoProperty [r info persistence] aof_rewrite_in_progress]
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        assert_equal "" [read $fd]
+        fconfigure $fd -blocking 1
+
+        # The child keeps the delay it forked with (~2s for 1000 keys).
+        wait_for_condition 100 100 {
+            [getInfoProperty [r info persistence] aof_rewrite_in_progress] == 0
+        } else {
+            fail "AOF rewrite did not finish"
+        }
+        assert_equal OK [$rd read]
+        $rd close
+        r config set rdb-key-save-delay 0
+    }
+}
+
 start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
     test "Enabling reply blocking at runtime initializes fake clients created earlier" {
         # A Lua write pools a module temp client with no reply-blocking state.

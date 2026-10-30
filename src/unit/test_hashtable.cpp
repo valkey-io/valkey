@@ -220,7 +220,7 @@ TEST_F(HashtableTest, add_find_delete_avoid_resize) {
 }
 
 TEST_F(HashtableTest, instant_rehashing) {
-    long count = 200;
+    long count = 16384;
 
     /* A set of longs, i.e. pointer-sized values. */
     hashtableType type = {};
@@ -232,6 +232,13 @@ TEST_F(HashtableTest, instant_rehashing) {
     for (j = 0; j < count; j++) {
         ASSERT_TRUE(hashtableAdd(ht, (void *)j));
         ASSERT_FALSE(hashtableIsRehashing(ht));
+    }
+
+    /* The default hash must remain consistent when rehashing integer entries. */
+    for (j = 0; j < count; j++) {
+        void *found = nullptr;
+        ASSERT_TRUE(hashtableFind(ht, (void *)j, &found));
+        ASSERT_EQ(found, (void *)j);
     }
 
     /* Delete and check that rehashing is never ongoing. */

@@ -69,12 +69,19 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         r set x foo
         set lru [r test.getlru x]
         assert { $lru <= 1000 }
+        # The idle time passed to and returned by the module API is in
+        # milliseconds, while OBJECT IDLETIME reports seconds.
         set was_set [r test.setlru x 100000]
         assert { $was_set == 1 }
         set idle [r object idletime x]
-        assert { $idle >= 100 }
+        assert_range $idle 100 110
         set lru [r test.getlru x]
-        assert { $lru >= 100000 }
+        assert_range $lru 100000 110000
+        assert_equal 0 [r test.setlru x -1]
+        # An idle time above 2^32 milliseconds (~49.7 days) must not wrap.
+        assert_equal 1 [r test.setlru x 5000000000]
+        assert_range [r object idletime x] 5000000 5000010
+        assert_range [r test.getlru x] 5000000000 5000010000
         r config set maxmemory-policy allkeys-lfu
         set lru [r test.getlru x]
         assert { $lru == -1 }

@@ -191,7 +191,7 @@ start_server {tags {"introspection"}} {
         # when numkeys in result > 0
         # we need a command that the final number of keys is not known in the first call to getKeysPrepareResult
         # before the fix in that case data of old buffer was not copied to the new result buffer
-        # causing all previous keys (numkeys) data to be uninitialize
+        # causing all previous keys (numkeys) data to be uninitialized
         assert_equal $all_keys_with_target [r command getkeys ZUNIONSTORE target $numkeys {*}$all_keys]
     }
 

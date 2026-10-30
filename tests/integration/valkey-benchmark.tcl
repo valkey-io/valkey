@@ -217,7 +217,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             common_bench_setup $cmd
             assert_match  {*calls=100,*} [cmdstat set]
             
-            # Each command is handled separately regardness of pipelining
+            # Each command is handled separately regardless of pipelining
             assert_equal  {keys=100} [regexp -inline {keys=[\d]*} [r info keyspace]]
 
             # randomly check some keys

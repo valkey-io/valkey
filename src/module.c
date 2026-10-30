@@ -10600,9 +10600,9 @@ static void moduleFreeAuthenticatedClients(ValkeyModule *module) {
 
 /* Creates an ACL user that the module can use to authenticate a client.
  * After obtaining the user, the module should set what such user can do
- * using the VM_SetUserACL() function. Once configured, the user
+ * using the VM_SetModuleUserACL() function. Once configured, the user
  * can be used in order to authenticate a connection, with the specified
- * ACL rules, using the ValkeyModule_AuthClientWithUser() function.
+ * ACL rules, using the ValkeyModule_AuthenticateClientWithUser() function.
  *
  * Note that:
  *
@@ -11284,7 +11284,7 @@ void *VM_DictPrevC(ValkeyModuleDictIter *di, size_t *keylen, void **dataptr) {
     return di->ri.key;
 }
 
-/* Like ValkeyModuleNextC(), but instead of returning an internally allocated
+/* Like ValkeyModule_DictNextC(), but instead of returning an internally allocated
  * buffer and key length, it returns directly a module string object allocated
  * in the specified context 'ctx' (that may be NULL exactly like for the main
  * API ValkeyModule_CreateString).
@@ -11318,7 +11318,7 @@ ValkeyModuleString *VM_DictPrev(ValkeyModuleCtx *ctx, ValkeyModuleDictIter *di, 
  * in the loop, as we iterate elements, we can also check if we are still
  * on range.
  *
- * The function return VALKEYMODULE_ERR if the iterator reached the
+ * The function returns VALKEYMODULE_ERR if the iterator reached the
  * end of elements condition as well. */
 int VM_DictCompareC(ValkeyModuleDictIter *di, const char *op, void *key, size_t keylen) {
     if (raxEOF(&di->ri)) return VALKEYMODULE_ERR;

@@ -510,7 +510,7 @@ struct _clusterNode {
     clusterLink *inbound_link;               /* TCP/IP link accepted from this node */
     rax *fail_reports;                       /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                     /* Boolean indicating the cached node health.
-                                                Update with updateAndCountChangedNodeHealth(). */
+                                                Update with detectAndUpdateCachedNodeHealth(). */
     unsigned int replica_priority;           /* Replica priority used for auto failover ranking. */
     voterElectionState voter_election_state; /* The state of the node in the current failover election. */
 };

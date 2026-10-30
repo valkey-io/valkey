@@ -377,7 +377,7 @@ start_server {
         r XADD mystream 666 key value
         r XDEL mystream 666
 
-        # Pass a ID smaller than stream's last_id, released on timeout.
+        # Pass an ID smaller than stream's last_id, released on timeout.
         $rd XREAD BLOCK 10 STREAMS mystream 665
         assert_equal [$rd read] {}
 
@@ -856,7 +856,7 @@ start_server {
         # Target grp2 acks the message, dropping it from grp2's PEL.
         r XACK testxadstream grp2 1-0
 
-        # grp2 no longer has 1-0 pending, so reply -1 and dont modify anything.
+        # grp2 no longer has 1-0 pending, so reply -1 and don't modify anything.
         set ids [r XACKDEL testxadstream grp2 ACKED IDS 1 1-0]
         assert_equal 1 [llength $ids]
         assert_equal -1 [lindex $ids 0]

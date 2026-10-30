@@ -898,7 +898,7 @@ updated:
      * may not be optimal: adjacent VAL opcodes can sometimes be merged into
      * a single one. */
     p = prev ? prev : sparse;
-    int scanlen = 5; /* Scan up to 5 upcodes starting from prev. */
+    int scanlen = 5; /* Scan up to 5 opcodes starting from prev. */
     while (p < end && scanlen--) {
         if (HLL_SPARSE_IS_XZERO(p)) {
             p += 2;

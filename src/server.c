@@ -3550,7 +3550,7 @@ void detectWriteFirstkeyOnlyCommand(struct serverCommand *c) {
 
 /* Recursively populate the command structure.
  *
- * On success, the function return C_OK. Otherwise, C_ERR is returned and we won't
+ * On success, the function returns C_OK. Otherwise, C_ERR is returned and we won't
  * add this command in the commands dict. */
 int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_SENTINEL, it exists in sentinel. */
@@ -5404,7 +5404,7 @@ sds writeCommandsGetDiskErrorMessage(int error_code) {
 }
 
 /* The PING command. It works in a different way if the client is in
- * in Pub/Sub mode. */
+ * Pub/Sub mode. */
 void pingCommand(client *c) {
     /* The command takes zero or one arguments. */
     if (c->argc > 2) {

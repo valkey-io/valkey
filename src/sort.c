@@ -110,7 +110,7 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     memcpy(k, spat, prefixlen);
     memcpy(k + prefixlen, ssub, sublen);
     memcpy(k + prefixlen + sublen, p + 1, postfixlen);
-    decrRefCount(subst); /* Incremented by decodeObject() */
+    decrRefCount(subst); /* Incremented by getDecodedObject() */
 
     /* Lookup substituted key */
     o = lookupKeyRead(db, keyobj);
@@ -574,7 +574,7 @@ void sortCommandGeneric(client *c, int readonly) {
                         if (!val) val = createStringObject("", 0);
 
                         /* listTypePush does an incrRefCount, so we should take care
-                         * care of the incremented refcount caused by either
+                         * of the incremented refcount caused by either
                          * lookupKeyByPattern or createStringObject("",0) */
                         listTypePush(sobj, val, LIST_TAIL);
                         decrRefCount(val);

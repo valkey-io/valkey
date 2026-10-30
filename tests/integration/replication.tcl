@@ -1047,7 +1047,7 @@ test {diskless loading short read} {
     }
 } {} {external:skip}
 
-# get current stime and utime metrics for a thread (since it's creation)
+# get current stime and utime metrics for a thread (since its creation)
 proc get_cpu_metrics { statfile } {
     if { [ catch {
         set fid   [ open $statfile r ]

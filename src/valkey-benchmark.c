@@ -2358,6 +2358,9 @@ char *generateFunctionScript(uint32_t num_functions, int with_keys) {
                      "server.register_function('foo%u', foo%u)\n",
                      num_functions,
                      num_functions);
+        if (n < 0 || (size_t)n >= buffer_len - written) {
+            break;
+        }
         written += n;
 
         num_functions--;

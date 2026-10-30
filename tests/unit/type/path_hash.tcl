@@ -220,6 +220,25 @@ start_server {tags {pathhash}} {
         assert_equal {keep:a keep:b keep:c} [lindex [r phscan tree 0 count 100] 1]
     }
 
+    test {PHDELPREFIX does not copy a long shared prefix once per path} {
+        if {[string match {*jemalloc*} [s mem_allocator]]} {
+            r del tree
+            # The index stores the shared prefix once, so the key is small.
+            set prefix [string repeat x 131072]
+            set assignments {}
+            for {set i 0} {$i < 256} {incr i} {
+                lappend assignments $prefix[binary format c $i] fields 1 f v
+            }
+            assert_equal OK [r phmset tree {*}$assignments]
+            r debug mallctl-str thread.peak.reset VOID
+            set before [r debug mallctl thread.peak.read]
+            assert_equal 256 [r phdelprefix tree x]
+            set after [r debug mallctl thread.peak.read]
+            # Copying every path would raise the peak by 32 MB.
+            assert_lessthan [expr {$after - $before}] 4000000
+        }
+    } {} {needs:debug}
+
     test {Path Hash write commands account server dirty by logical mutations} {
         r del dirty-tree
         r del empty-dirty-tree

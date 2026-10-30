@@ -45,12 +45,6 @@
 #include <errno.h>
 #include <time.h>
 
-/* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
-extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
-#define ValkeyModule_ReplyRaw VM_ReplyRaw
-
 #define LUA_CMD_OBJCACHE_SIZE 32
 #define LUA_CMD_OBJCACHE_MAX_LEN 64
 
@@ -1421,8 +1415,8 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
 
 /* server.log() */
 static int luaLogCommand(lua_State *lua) {
+    /* There is no run context when called from a library body during FUNCTION LOAD. */
     luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
 
     int j, argc = lua_gettop(lua);
     int level;
@@ -1458,6 +1452,12 @@ static int luaLogCommand(lua_State *lua) {
         }
     }
 
+    /* The legacy log format writes the message verbatim, so a line break
+     * would let the script start a record without the module tag. */
+    for (char *p = log; p && *p; p++) {
+        if (*p == '\r' || *p == '\n') *p = ' ';
+    }
+
     const char *level_str = NULL;
     switch (level) {
     case LL_DEBUG: level_str = "debug"; break;
@@ -1467,7 +1467,7 @@ static int luaLogCommand(lua_State *lua) {
     default: ValkeyModule_Assert(0);
     }
 
-    ValkeyModule_Log(rctx->module_ctx, level_str, "%s", log);
+    ValkeyModule_Log(rctx ? rctx->module_ctx : NULL, level_str, "%s", log);
     ValkeyModule_Free(log);
     return 0;
 }

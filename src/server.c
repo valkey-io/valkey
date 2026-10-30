@@ -385,7 +385,7 @@ void dictHashtableDestructor(void *val) {
 
 /* Returns 1 when keys match */
 int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
+    size_t l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
@@ -1699,10 +1699,16 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
-    if (hasActiveChildProcess() || scriptingEngineDebuggerPendingChildren()) {
+    int had_child = hasActiveChildProcess();
+    if (had_child || scriptingEngineDebuggerPendingChildren()) {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
-    } else if (!isSaveInProgress()) {
+    }
+
+    /* Forked script debugging sessions are not the active child, and an idle
+     * one can live indefinitely, so they must not postpone the save points and
+     * the automatic AOF rewrite. */
+    if (!had_child && !hasActiveSaveOrChild()) {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now. */
         for (j = 0; j < server.saveparamslen; j++) {

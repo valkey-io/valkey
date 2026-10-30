@@ -1232,7 +1232,10 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                             wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1 1
                         }]} {
                             wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 2 replicas still up*"} $loglines 1 1
-                            wait_for_log_messages -2 {"*Connection with replica * lost.*"} $loglines 1 1
+                            # A replica that gets SIGTERM while loading defers the shutdown,
+                            # so it can outlive the RDB child. Some wait might be needed before
+                            # expecting the primary to notice the dropped connection.
+                            wait_for_log_messages -2 {"*Connection with replica * lost.*"} $loglines 200 100
                         }
                     }
                     if {$all_drop == "timeout"} {
@@ -2096,6 +2099,37 @@ test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and m
             $replica config set replica-serve-stale-data $stale
             assert_error {NOMASTERLINK*} {$replica psync ? -1}
             assert_error {NOMASTERLINK*} {$replica sync}
+        }
+    }
+}
+
+# The fake primary only speaks plain TCP.
+if {!$::tls} {
+    tags {"repl external:skip"} {
+        test "Replica survives +CONTINUE reply to PSYNC without a cached primary" {
+            set port [find_available_port $::baseport $::portcount]
+            set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                         $port /dev/null 0 "" +CONTINUE &]
+            wait_for_condition 50 50 {
+                [ping_server 127.0.0.1 $port]
+            } else {
+                fail "Failed to start fake primary"
+            }
+
+            # Starting as a replica with no RDB leaves no cached primary, so the
+            # replica sends PSYNC ? -1. REPLICAOF on a primary would cache itself.
+            start_server [list overrides [list replicaof "127.0.0.1 $port"]] {
+                set replica [srv 0 client]
+
+                # The fake primary exits once the replica drops the link.
+                wait_for_condition 50 100 {
+                    [catch {exec kill -0 $pid}]
+                } else {
+                    catch {exec kill $pid}
+                    fail "Replica did not drop the link after +CONTINUE"
+                }
+                assert_equal PONG [$replica ping]
+            }
         }
     }
 }

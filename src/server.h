@@ -3535,6 +3535,7 @@ void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
+int rewriteSelectDbRio(rio *aof, int db_num);
 
 /* Child info */
 void openChildInfoPipe(void);

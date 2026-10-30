@@ -519,6 +519,12 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match "*is not a valid number*" $error
         }
 
+        test {benchmark: --precision 0 does not crash} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get --precision 0"]
+            common_bench_setup $cmd
+            default_set_get_checks
+        }
+
         test {benchmark: -r with large keyspace generates keys above 2^31} {
             set cmd [valkeybenchmark $master_host $master_port "-r 999999999999 -n 100 -t set"]
             common_bench_setup $cmd

@@ -1934,7 +1934,7 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--precision")) {
             if (lastarg) goto invalid;
             config.precision = atoi(argv[++i]);
-            if (config.precision < 0) config.precision = DEFAULT_LATENCY_PRECISION;
+            if (config.precision < 1) config.precision = DEFAULT_LATENCY_PRECISION;
             if (config.precision > MAX_LATENCY_PRECISION) config.precision = MAX_LATENCY_PRECISION;
         } else if (!strcmp(argv[i], "--threads")) {
             if (lastarg) goto invalid;

@@ -27,6 +27,8 @@ void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
 size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt);
 unsigned long fbtreeHeight(const fbtreeIndex *fbt);
+/* Number of leaf nodes currently allocated. */
+unsigned long fbtreeNumLeaves(fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
 void fbtreeResetIterator(fbtreeIterator *iterator);
 fbtreeIndex *fbtreeIteratorGetIndex(fbtreeIterator *iterator);

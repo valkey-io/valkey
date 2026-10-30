@@ -255,7 +255,7 @@ proc wait_for_ofs_sync {r1 r2} {
 
 proc wait_done_loading r {
     wait_for_condition 50 100 {
-        [catch {$r ping} e] == 0
+        [catch {{*}$r ping} e] == 0
     } else {
         fail "Loading DB is taking too much time."
     }
@@ -528,6 +528,7 @@ proc formatCommand {args} {
 }
 
 proc csvdump r {
+    wait_done_loading $r
     set o {}
     if {$::singledb} {
         set maxdb 1
@@ -1252,7 +1253,7 @@ proc get_nonloopback_addr {} {
 }
 
 proc get_nonloopback_client {} {
-    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
+    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls {-servername localhost}]
 }
 
 # The following functions and variables are used only when running large-memory

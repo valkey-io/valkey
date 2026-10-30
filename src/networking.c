@@ -4576,6 +4576,9 @@ int canParseCommand(client *c) {
     /* Don't parse a command if the client is in the middle of something. */
     if (c->flag.blocked || c->flag.unblocked) return 0;
 
+    /* A client deferred after exceeding the pipeline limit is resumed only by deferredPipelineTimeProc(). */
+    if (c->flag.pipeline_deferred) return 0;
+
     /* Don't process more buffers from clients that have already pending
      * commands to execute in c->argv. */
     if (c->flag.pending_command) return 0;

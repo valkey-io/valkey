@@ -30,6 +30,11 @@ start_server {tags {"introspection"}} {
         assert {[r object idletime foo] >= 2}
     }
 
+    test {OBJECT introspection commands return null for missing keys} {
+        assert_equal {} [r object idletime missing]
+        assert_equal {} [r object refcount missing]
+    }
+
     proc test_touch_alters_access_time {} {
         r set foo bar
         r set script_foo bar

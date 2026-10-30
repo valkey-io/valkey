@@ -2296,3 +2296,39 @@ int test_quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUINT32MAX(int a
 #endif
     return 0;
 }
+
+/* _quicklistNodeAllowMerge() stored the merged-node byte count in an
+ * unsigned int before comparing it to the fill limit.  When node a has sz
+ * just below UINT32_MAX and node b adds enough bytes to push the sum past
+ * UINT32_MAX, the 32-bit addition wraps to a small value that passes the
+ * size-limit check, incorrectly permitting the merge and causing lpMerge()
+ * to abort on its own UINT32_MAX assertion. */
+int test_quicklistMergeSizeOverflowRejected(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    TEST("merge size overflow rejected");
+
+    /* On 32-bit, size_t is 32 bits and can't hold a value near UINT32_MAX;
+     * the 4 GiB scenario is unreachable there. */
+    if (sizeof(size_t) < 8) return 0;
+
+    /* Construct two fake packed nodes whose combined size exceeds UINT32_MAX.
+     * No actual listpack data is needed; only the sz field is consulted by
+     * _quicklistNodeAllowMerge(). */
+    quicklistNode *a = quicklistCreateNode();
+    quicklistNode *b = quicklistCreateNode();
+
+    /* a->sz just below UINT32_MAX; adding b->sz overflows a 32-bit sum. */
+    a->sz = (size_t)4294967200U; /* 0xFFFFFFA0 */
+    b->sz = 200;
+    /* Sanity: the sum really does overflow uint32. */
+    TEST_ASSERT(a->sz + b->sz > (size_t)UINT32_MAX);
+
+    /* fill=-2 caps node size at 8192 bytes; a 4+ GiB merged node exceeds that. */
+    TEST_ASSERT(_quicklistNodeAllowMerge(a, b, -2) == 0);
+
+    zfree(a);
+    zfree(b);
+    return 0;
+}

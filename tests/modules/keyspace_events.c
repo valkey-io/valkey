@@ -323,6 +323,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     }
 
+    /* This module only reacts to notifications, so it can safely be used with
+     * atomic slot migration (exercised by the cluster module tests). */
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
+
     loaded_event_log = ValkeyModule_CreateDict(ctx);
     module_event_log = ValkeyModule_CreateDict(ctx);
 

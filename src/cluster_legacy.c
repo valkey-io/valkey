@@ -3281,6 +3281,11 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     uint16_t dirty_slots[CLUSTER_SLOTS];
     int dirty_slots_count = 0;
     int delete_dirty_slots = 0;
+    /* Bitmap of dirty slots that were being exported via atomic slot migration
+     * at the time of the topology update. We must capture this before
+     * clusterUpdateSlotExportsOnOwnershipChange() finishes the jobs below. */
+    unsigned char dirty_slots_exporting[CLUSTER_SLOTS / 8];
+    memset(dirty_slots_exporting, 0, sizeof(dirty_slots_exporting));
 
     /* Handle importing/exporting slots which have topology updates. */
     int exporting_slots_count = 0;
@@ -3353,12 +3358,14 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
                 /* Was this slot mine, and still contains keys? Mark it as
                  * a dirty slot. */
+                bool is_exporting = clusterIsSlotExporting(j);
                 if (server.cluster->slots[j] == myself && countKeysInSlot(j) && sender != myself) {
                     dirty_slots[dirty_slots_count] = j;
                     dirty_slots_count++;
+                    if (is_exporting) bitmapSetBit(dirty_slots_exporting, j);
                 }
 
-                if (clusterIsSlotExporting(j)) exporting_slots_count++;
+                if (is_exporting) exporting_slots_count++;
 
                 if (clusterIsSlotImporting(j)) importing_slots_count++;
 
@@ -3574,7 +3581,12 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         for (int j = 0; j < dirty_slots_count; j++) {
             serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
                       myself->name, humanNodename(myself), myself->shard_id);
-            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false);
+            /* If the dirty slot was being exported via atomic slot migration,
+             * propagate a single CLUSTER FLUSHSLOT instead of one DEL/UNLINK
+             * per key. Slots lost for any other reason (e.g. operator SETSLOT,
+             * legacy migration or forced takeover) keep per-key propagation. */
+            bool propagate_as_flushslot = bitmapTestBit(dirty_slots_exporting, dirty_slots[j]);
+            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false, propagate_as_flushslot);
         }
     }
 }
@@ -7557,7 +7569,7 @@ int verifyClusterConfigWithData(void) {
                           in->name, humanNodename(in), in->shard_id, j,
                           slot_owner->name, humanNodename(slot_owner), slot_owner->shard_id);
             }
-            delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
+            delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false, false);
         }
     }
     if (update_config) {
@@ -8230,9 +8242,49 @@ void removeChannelsInSlot(unsigned int slot) {
     pubsubShardUnsubscribeAllChannelsInSlot(slot);
 }
 
+/* Helper function to propagate the CLUSTER FLUSHSLOT command to replicas and AOF during ASM. */
+static void propagateFlushSlot(unsigned int hashslot, int lazy) {
+    robj *argv[4];
+    int argc = 3;
+    argv[0] = shared.cluster;
+    argv[1] = createStringObject("FLUSHSLOT", 9);
+    argv[2] = createStringObjectFromLongLong(hashslot);
+    if (lazy) {
+        argv[3] = createStringObject("ASYNC", 5);
+        argc = 4;
+    }
+
+    /* CLUSTER FLUSHSLOT is database agnostic, so use dbid -1 to avoid
+     * emitting an unnecessary SELECT in the replication stream / AOF. */
+    enterExecutionUnit(1, 0);
+    alsoPropagate(-1, argv, argc, PROPAGATE_REPL | PROPAGATE_AOF, hashslot);
+    exitExecutionUnit();
+    postExecutionUnitOperations();
+
+    decrRefCount(argv[1]);
+    decrRefCount(argv[2]);
+    if (lazy) decrRefCount(argv[3]);
+}
+
 /* Remove all the keys in the specified hash slot.
- * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event) {
+ * The number of removed items is returned.
+ *
+ * If 'propagate_del' is set, the deletion is propagated to replicas and AOF.
+ * When 'propagate_as_flushslot' is also set (atomic slot migration cleanup),
+ * a single CLUSTER FLUSHSLOT is propagated instead of one DEL/UNLINK per key.
+ *
+ * The slot's hash tables (keys, expires and keys with volatile items) are
+ * detached from every database up front and replaced with fresh (empty) ones.
+ * The per-key notifications are then fired by iterating the detached tables.
+ * This has two important properties:
+ *  - Any keys created in the slot by module callbacks while we are notifying,
+ *    in any database, land in the new tables and are neither re-iterated nor
+ *    deleted. Since CLUSTER FLUSHSLOT was propagated before those writes, they
+ *    also survive on replicas and in the AOF.
+ *  - No transient per-key snapshot is needed, so the memory overhead is O(1)
+ *    regardless of the slot size, and the detached tables can be released in
+ *    the background when 'lazy' is set. */
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event, bool propagate_as_flushslot) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
@@ -8241,24 +8293,57 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     unsigned int j = 0;
     int before_execution_nesting = server.execution_nesting;
 
+    /* Propagate CLUSTER FLUSHSLOT upfront before deleting keys on the primary.
+     * Any keys recreated by module callbacks during notification handling will
+     * be propagated after FLUSHSLOT and safely survive on both primary and replicas. */
+    if (propagate_del && propagate_as_flushslot) {
+        propagateFlushSlot(hashslot, lazy);
+    }
+
+    /* Detach the slot's hash tables from the kvstores of *every* database
+     * before firing any notification. From this point on the keys are no
+     * longer reachable from the database. Doing this in a separate pass is
+     * required: a module callback fired for a key in db i may write into the
+     * same slot of another db j, and that write must land in a fresh table
+     * rather than in a table we are about to release. */
+    hashtable **old_keys = zcalloc(sizeof(hashtable *) * server.dbnum);
+    hashtable **old_expires = zcalloc(sizeof(hashtable *) * server.dbnum);
+    hashtable **old_volatile = zcalloc(sizeof(hashtable *) * server.dbnum);
     for (int i = 0; i < server.dbnum; i++) {
-        kvstoreHashtableIterator *kvs_di = NULL;
-        void *next;
         serverDb *db = server.db[i];
         if (db == NULL) continue;
-        kvs_di = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE);
-        while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-            robj *valkey = next;
-            enterExecutionUnit(1, 0);
-            sds sdskey = objectGetKey(valkey);
+        old_keys[i] = kvstoreDetachHashtable(db->keys, hashslot);
+        old_expires[i] = kvstoreDetachHashtable(db->expires, hashslot);
+        old_volatile[i] = kvstoreDetachHashtable(db->keys_with_volatile_items, hashslot);
+    }
+
+    for (int i = 0; i < server.dbnum; i++) {
+        serverDb *db = server.db[i];
+        if (db == NULL) continue;
+
+        if (!old_keys[i]) {
+            if (old_expires[i]) hashtableRelease(old_expires[i]);
+            if (old_volatile[i]) hashtableRelease(old_volatile[i]);
+            continue;
+        }
+
+        /* Fire the per-key notifications. The values remain owned by the
+         * detached 'old_keys' table and are released together with it below. */
+        hashtableIterator di;
+        hashtableInitIterator(&di, old_keys[i], HASHTABLE_ITER_SAFE);
+        void *next;
+        while (hashtableNext(&di, &next)) {
+            robj *val = next;
+            sds sdskey = objectGetKey(val);
             robj *key = createStringObject(sdskey, sdslen(sdskey));
-            if (lazy) {
-                dbAsyncDelete(db, key);
-            } else {
-                dbSyncDelete(db, key);
-            }
+
+            enterExecutionUnit(1, 0);
+            /* Tells the module that the key has been unlinked from the database. */
+            moduleNotifyKeyUnlink(key, val, db->id, DB_FLAG_KEY_DELETED);
+            /* Unblock any module clients or clients using a blocking XREADGROUP */
+            signalDeletedKeyAsReady(db, key, val->type);
             // if is command, skip del propagate
-            if (propagate_del) propagateDeletion(db, key, lazy, hashslot);
+            if (propagate_del && !propagate_as_flushslot) propagateDeletion(db, key, lazy, hashslot);
             signalModifiedKey(NULL, db, key);
             if (send_del_event) {
                 /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
@@ -8275,8 +8360,22 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             j++;
             server.dirty++;
         }
-        kvstoreReleaseHashtableIterator(kvs_di);
+        hashtableCleanupIterator(&di);
+
+        /* Release the detached tables. The 'old_keys' table owns the values and
+         * frees them through its entry destructor; the expires and volatile
+         * items tables only hold references to the same objects. */
+        if (lazy) {
+            freeSlotHashtablesAsync(old_keys[i], old_expires[i], old_volatile[i]);
+        } else {
+            hashtableRelease(old_keys[i]);
+            if (old_expires[i]) hashtableRelease(old_expires[i]);
+            if (old_volatile[i]) hashtableRelease(old_volatile[i]);
+        }
     }
+    zfree(old_keys);
+    zfree(old_expires);
+    zfree(old_volatile);
 
     /* The slot's keys have been removed locally (flushed or migrated away), so
      * drop their hot-key state too. Sampling was suppressed during the loop via

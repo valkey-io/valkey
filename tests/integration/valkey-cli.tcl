@@ -614,6 +614,10 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_error "*tag not match*" {run_cli_with_input_pipe X "echo foo" set key wrong_tag}
     }
 
+    test "Option --hotkeys-count rejects a negative count" {
+        assert_error "*Invalid hotkeys count*" {run_cli --hotkeys-count -1}
+    }
+
     test "DUMP RESTORE with -x option" {
         set cmdline [valkeycli [srv host] [srv port]]
 

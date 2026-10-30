@@ -1967,15 +1967,55 @@ int rewriteListObject(rio *r, robj *key, robj *o) {
     return 1;
 }
 
+static int rioWriteSaddexMember(rio *r, robj *key, mstime_t expiry, const char *str, size_t len, int64_t llval) {
+    return rioWriteBulkCount(r, '*', 7) && rioWriteBulkString(r, "SADDEX", 6) && rioWriteBulkObject(r, key) &&
+           rioWriteBulkString(r, "PXAT", 4) && rioWriteBulkLongLong(r, expiry) &&
+           rioWriteBulkString(r, "MEMBERS", 7) && rioWriteBulkLongLong(r, 1) &&
+           (str ? rioWriteBulkString(r, str, len) : rioWriteBulkLongLong(r, llval));
+}
+
 /* Emit the commands needed to rebuild a set object.
  * The function returns 0 on error, 1 on success. */
 int rewriteSetObject(rio *r, robj *key, robj *o) {
-    long long count = 0, items = setTypeSize(o);
-    setTypeIterator *si = setTypeInitIterator(o);
+    /* setTypeSize() counts expired-unremoved members, which setTypeNext() skips. */
+    long long count = 0, items = setTypeSize(o) - setTypeVolatileCount(o);
+    bool volatile_set = setTypeHasVolatileMembers(o);
+    setTypeIterator *si;
     char *str;
     size_t len;
     int64_t llval;
+
+    if (volatile_set && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        vsetIterator iter;
+        smember *member;
+        setTypeInitVolatileIterator(o, &iter);
+        while (vsetNext(&iter, (void **)&member)) {
+            mstime_t expiry = smemberGetExpiry(member);
+            if (!rioWriteSaddexMember(r, key, expiry, member, sdslen(member), 0)) {
+                vsetResetIterator(&iter);
+                return 0;
+            }
+        }
+        vsetResetIterator(&iter);
+    } else if (volatile_set) {
+        setTypeIgnoreTTL(o, true);
+        si = setTypeInitIterator(o);
+        while (setTypeNext(si, &str, &len, &llval) != -1) {
+            mstime_t expiry = setTypeCurrentExpiry(si, str);
+            if (expiry == EXPIRY_NONE) continue;
+            if (!rioWriteSaddexMember(r, key, expiry, str, len, llval)) {
+                setTypeReleaseIterator(si);
+                setTypeIgnoreTTL(o, false);
+                return 0;
+            }
+        }
+        setTypeReleaseIterator(si);
+        setTypeIgnoreTTL(o, false);
+    }
+
+    si = setTypeInitIterator(o);
     while (setTypeNext(si, &str, &len, &llval) != -1) {
+        if (volatile_set && setTypeCurrentExpiry(si, str) != EXPIRY_NONE) continue;
         if (count == 0) {
             int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items) || !rioWriteBulkString(r, "SADD", 4) ||

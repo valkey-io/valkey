@@ -171,12 +171,6 @@ static dictType sdsrefToPtrDictType = {
     .entryDestructor = zfree};
 
 
-/* Wrap decrRefCount() so that it can be used as a callback requiring void. */
-static void decrRefCountVoid(void *o) {
-    decrRefCount(o);
-}
-
-
 /* Concatenate argc/argv into a command string for debugging. */
 static sds createSdsFromClientArgv(int argc, robj **argv) {
     sds cmd = sdsempty();
@@ -2239,7 +2233,7 @@ void bgIteration_init(void) {
 
     curCmdMissingKeys = listCreate();
     serverAssert(curCmdMissingKeys != NULL);
-    listSetFreeMethod(curCmdMissingKeys, decrRefCountVoid);
+    listSetFreeMethod(curCmdMissingKeys, dictObjectDestructor);
 
     bufferedReplicationBytes = 0;
 

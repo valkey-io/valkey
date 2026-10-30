@@ -1072,7 +1072,7 @@ void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err
              */
             if (sdslen(ds.cbuf) > 1 << 20) {
                 *err = createStringObject(max_buffer_error, strlen(max_buffer_error));
-                return;
+                break;
             }
         }
 

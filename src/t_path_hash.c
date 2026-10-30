@@ -389,8 +389,11 @@ void phdelCommand(client *c) {
         decrRefCount(removed);
     }
     if (deleted) {
+        bool keyremoved = raxSize(path_hash->index) == 0;
+        if (keyremoved) dbDelete(c->db, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -569,12 +572,10 @@ void phdelprefixCommand(client *c) {
     if (prefix_len == 0) {
         long long deleted = raxSize(path_hash->index);
         if (deleted) {
-            rax *empty = raxNew();
-            raxFreeWithCallback(path_hash->index, freePathHashPayload);
-            path_hash->index = empty;
-            path_hash->num_fields = 0;
+            dbDelete(c->db, c->argv[1]);
             signalModifiedKey(c, c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
             server.dirty += deleted;
         }
         addReplyLongLong(c, deleted);
@@ -608,8 +609,11 @@ void phdelprefixCommand(client *c) {
         deleted += chunk_len;
     }
     if (deleted) {
+        bool keyremoved = raxSize(path_hash->index) == 0;
+        if (keyremoved) dbDelete(c->db, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdelprefix", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -767,19 +771,6 @@ void phcardCommand(client *c) {
 int rewritePathHashObject(rio *r, robj *key, robj *o) {
     pathHashObject *path_hash = objectGetVal(o);
     raxIterator paths;
-
-    if (raxSize(path_hash->index) == 0) {
-        /* As with XADD MAXLEN 0 for an empty stream, create a temporary
-         * logical path and remove it again to reconstruct an empty path hash. */
-        if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "PHSET", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkString(r, "FIELDS", 6) || !rioWriteBulkLongLong(r, 1) ||
-            !rioWriteBulkString(r, "", 0) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkCount(r, '*', 3) || !rioWriteBulkString(r, "PHDEL", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0))
-            return 0;
-        return 1;
-    }
 
     raxStart(&paths, path_hash->index);
     raxSeek(&paths, "^", NULL, 0);

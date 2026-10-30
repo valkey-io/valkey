@@ -50,6 +50,8 @@ extern "C" {
 #define GEO_LAT_MAX 85.05112878
 #define GEO_LONG_MIN -180
 #define GEO_LONG_MAX 180
+#define GEO_PATH_MIN_POINTS 2
+#define GEO_PATH_MAX_POINTS 256
 
 typedef enum {
     GEOHASH_NORTH = 0,
@@ -92,8 +94,16 @@ typedef struct {
 #define CIRCULAR_TYPE 1
 #define RECTANGLE_TYPE 2
 #define POLYGON_TYPE 3
+#define PATH_TYPE 4
+
+/* Distance type for PATH searches */
+#define GEO_DIST_NONE 0     /* no distance needed, enables early exit */
+#define GEO_DIST_NEAREST 1  /* perpendicular distance to nearest segment */
+#define GEO_DIST_PATHDIST 2 /* along-path distance from first vertex */
+
 typedef struct {
     int type;          /* search type */
+    int dist_type;     /* GEO_DIST_NEAREST or GEO_DIST_PATHDIST (PATH_TYPE only) */
     double xy[2];      /* search center point, xy[0]: lon, xy[1]: lat */
     double conversion; /* km: 1000 */
     double bounds[4];  /* bounds[0]: min_lon, bounds[1]: min_lat
@@ -106,10 +116,19 @@ typedef struct {
             double height;
             double width;
         } r;
+        /* POLYGON_TYPE */
         struct {
             int num_vertices;
             double (*points)[2];
         } polygon;
+        /* PATH_TYPE */
+        struct {
+            int num_points;          /* number of waypoints in the path */
+            double (*points)[2];     /* array of [lon, lat] waypoints */
+            double width;            /* corridor half-width: max perpendicular distance from path */
+            double (*seg_bboxes)[4]; /* per-segment expanded bboxes [min_lon, min_lat, max_lon, max_lat] */
+            double *seg_lengths;     /* pre-computed Haversine length per segment (for WITHPATHDIST) */
+        } path;
     } t;
 } GeoShape;
 

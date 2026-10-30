@@ -1915,6 +1915,9 @@ struct valkeyServer {
     int child_type;                    /* Type of current child */
     _Atomic(int) module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
     _Atomic(int) module_gil_acquired;  /* Indicates if the main thread has the GIL acquired. */
+
+    /* Number of GIL acquisitions by the main event loop. */
+    _Atomic(uint64_t) module_gil_main_acquisitions;
     /* Networking */
     int port;                              /* TCP listening port */
     int tls_port;                          /* TLS listening port */

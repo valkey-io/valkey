@@ -179,6 +179,29 @@ start_server {tags {"modules acl"}} {
         assert_equal [r acl DRYRUN j2 aclcheck.module.command.aclcategories.read.only.category] OK
     }
 
+    r acl setuser default on nopass resetkeys ~allowed:* &* +@all alldbs
+
+    test {test module check acl for command with wrong arity} {
+        # EVAL: KEYNUM key spec resolving numkeys at argv[2], but argc is only 2.
+        catch {r aclcheck.rm_call.check.cmd eval body} e
+        assert_match {*invalid arguments*} $e
+
+        # Same shape, keys start at argv[2]: ZUNIONSTORE <dst> <numkeys> ...
+        catch {r aclcheck.rm_call.check.cmd zunionstore dst} e
+        assert_match {*invalid arguments*} $e
+
+        # Keys start at argv[1], so it takes argc == 1 to run out of arguments.
+        catch {r aclcheck.rm_call.check.cmd sintercard} e
+        assert_match {*invalid arguments*} $e
+    }
+
+    test {test module comprehensive acl check for command with wrong arity} {
+        catch {r aclcheck.check.permissions 0 eval body} e
+        assert_match {*invalid arguments*} $e
+    }
+
+    r acl setuser default on nopass ~* &* +@all alldbs
+
     test {Unload the module - aclcheck} {
         assert_equal {OK} [r module unload aclcheck]
     }

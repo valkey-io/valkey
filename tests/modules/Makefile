@@ -73,7 +73,8 @@ TEST_MODULES = \
     helloscripting.so \
     unsupported_features.so \
     deferred_reply.so \
-    pausetest.so
+    pausetest.so \
+    unloadrefuse.so
 
 .PHONY: all
 

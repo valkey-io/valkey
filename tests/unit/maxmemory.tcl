@@ -589,6 +589,7 @@ start_server {tags {"maxmemory" "external:skip"}} {
         r del foo 
         r set foo a
         assert {[r object freq foo] == 5}
+        assert_equal {} [r object freq missing]
     }
 }
 

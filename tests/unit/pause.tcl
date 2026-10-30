@@ -410,6 +410,32 @@ start_server {tags {"pause network"}} {
             }
             r get foo2
         } {bar2}
+
+        test "Busy script ending while the replica's postponed primary is paused" {
+            r client pause 100000 write
+            $master set foo3 bar3
+            wait_for_condition 50 100 {
+                [s slave_read_repl_offset] == [status $master master_repl_offset]
+            } else {
+                fail "Replica did not read the write."
+            }
+
+            r config set busy-reply-threshold 10
+            set rd [valkey_deferring_client]
+            $rd eval_ro {while true do end} 0
+            wait_for_condition 50 100 {
+                [catch {r ping} e] == 1
+            } else {
+                fail "Script did not become busy."
+            }
+            r script kill
+            catch {$rd read}
+            $rd close
+
+            assert_equal PONG [r ping]
+            r client unpause
+            r config set busy-reply-threshold 5000
+        }
     }
 
     test "Test the randomkey command will not cause the server to get into an infinite loop during the client pause write" {

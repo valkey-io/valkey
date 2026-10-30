@@ -334,6 +334,7 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
         set packet [create_cluster_meet_packet \
             $sender_node_id $base_port $cluster_port 0 1 4]
         append packet [binary format I 8]
+        # 10 is the first value beyond the currently known extension types.
         append packet [binary format S 10]
         append packet [binary format S 0]
         set packet [string replace $packet 4 7 [binary format I [string length $packet]]]

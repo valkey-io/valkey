@@ -3625,8 +3625,9 @@ static uint32_t getReplicaPriorityExtSize(void) {
     return getAlignedPingExtSize(sizeof(clusterMsgPingExtReplicaPriority));
 }
 
-/* Return the minimum encoded size for an extension type. Unknown extensions
- * only require the common header to preserve forward compatibility. */
+/* Return the minimum encoded size for an extension type. A zero return means
+ * a known extension type is missing from the switch. Unknown extensions only
+ * require the common header to preserve forward compatibility. */
 static uint32_t getMinimumPingExtSize(uint16_t type) {
     switch (type) {
     case CLUSTERMSG_EXT_TYPE_HOSTNAME: return getAlignedPingExtSize(sizeof(clusterMsgPingExtHostname));
@@ -3640,7 +3641,7 @@ static uint32_t getMinimumPingExtSize(uint16_t type) {
     case CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE:
         return getAlignedPingExtSize(sizeof(clusterMsgPingExtAvailabilityZone));
     case CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY: return getReplicaPriorityExtSize();
-    default: return sizeof(clusterMsgPingExt);
+    default: return type < CLUSTERMSG_EXT_TYPE_COUNT ? 0 : sizeof(clusterMsgPingExt);
     }
 }
 
@@ -4072,6 +4073,11 @@ int clusterIsValidPacket(clusterLink *link) {
                 }
                 uint16_t ext_type = ntohs(ext->type);
                 uint32_t min_extlen = getMinimumPingExtSize(ext_type);
+                if (min_extlen == 0) {
+                    serverLog(LL_WARNING, "Received invalid %s packet with unhandled extension type %d",
+                              clusterGetMessageTypeString(type), (int)ext_type);
+                    return 0;
+                }
                 if (extlen < min_extlen) {
                     serverLog(LL_WARNING,
                               "Received invalid %s packet with extension type %d that is %d bytes but requires at least %d",

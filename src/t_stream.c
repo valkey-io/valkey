@@ -1606,9 +1606,10 @@ void streamPropagateGroupID(client *c, robj *key, streamCG *group, robj *groupna
     decrRefCount(argv[6]);
 }
 
-/* We need this when we want to propagate creation of consumer that was created
- * by XREADGROUP with the NOACK option. In that case, the only way to create
- * the consumer at the replica is by using XGROUP CREATECONSUMER (see issue #7140)
+/* We need this when we want to propagate creation of a consumer that was
+ * created by XREADGROUP, XCLAIM or XAUTOCLAIM without an XCLAIM naming it
+ * (NOACK, empty delivery/claim; see issue #7140). In that case the only way
+ * to create the consumer at the replica is by using XGROUP CREATECONSUMER:
  *
  *  XGROUP CREATECONSUMER <key> <groupname> <consumername>
  */
@@ -2440,7 +2441,8 @@ void xreadCommand(client *c) {
         streamID *gt = ids + i; /* ID must be greater than this. */
         int modified_stream = 0;
         int serve_synchronously = 0;
-        int serve_history = 0;                                      /* True for XREADGROUP with ID != ">". */
+        int serve_history = 0; /* True for XREADGROUP with ID != ">". */
+        int consumer_created = 0;
         streamConsumer *consumer = NULL;                            /* Unused if XREAD */
         streamPropInfo spi = {c->argv[streams_arg + i], groupname}; /* Unused if XREAD */
 
@@ -2468,7 +2470,7 @@ void xreadCommand(client *c) {
             if (consumer == NULL) {
                 consumer = streamCreateConsumer(groups[i], objectGetVal(consumername), c->argv[streams_arg + i], c->db->id,
                                                 SCC_DEFAULT);
-                if (noack) streamPropagateConsumerCreation(c, spi.keyname, spi.groupname, consumer->name);
+                consumer_created = 1;
                 modified_stream = 1;
             }
             consumer->seen_time = commandTimeSnapshot();
@@ -2482,6 +2484,7 @@ void xreadCommand(client *c) {
             }
         }
 
+        size_t delivered = 0;
         if (serve_synchronously) {
             arraylen++;
             if (arraylen == 1) arraylen_ptr = addReplyDeferredLen(c);
@@ -2499,11 +2502,15 @@ void xreadCommand(client *c) {
             int flags = 0;
             if (noack) flags |= STREAM_RWR_NOACK;
             if (serve_history) flags |= STREAM_RWR_HISTORY;
-            size_t delivered = streamReplyWithRange(c, s, &start, NULL, count, 0, groups ? groups[i] : NULL, consumer, flags, &spi);
+            delivered = streamReplyWithRange(c, s, &start, NULL, count, 0, groups ? groups[i] : NULL, consumer, flags, &spi);
             if (groups && delivered > 0) {
                 server.dirty++;
                 modified_stream = 1;
             }
+        }
+
+        if (consumer_created && (noack || delivered == 0)) {
+            streamPropagateConsumerCreation(c, spi.keyname, spi.groupname, consumer->name);
         }
 
         if (modified_stream) signalModifiedKey(c, c->db, c->argv[streams_arg + i]);
@@ -3338,8 +3345,10 @@ void xclaimCommand(client *c) {
 
     /* Do the actual claiming. */
     streamConsumer *consumer = streamLookupConsumer(group, objectGetVal(c->argv[3]));
+    int consumer_created = 0;
     if (consumer == NULL) {
         consumer = streamCreateConsumer(group, objectGetVal(c->argv[3]), c->argv[1], c->db->id, SCC_DEFAULT);
+        consumer_created = 1;
         modified = 1;
     }
     consumer->seen_time = commandTimeSnapshot();
@@ -3438,6 +3447,8 @@ void xclaimCommand(client *c) {
         server.dirty++;
         modified = 1;
     }
+    if (consumer_created && arraylen == 0)
+        streamPropagateConsumerCreation(c, c->argv[1], c->argv[2], consumer->name);
     if (modified) signalModifiedKey(c, c->db, c->argv[1]);
     setDeferredArrayLen(c, arraylenptr, arraylen);
     preventCommandPropagation(c);
@@ -3523,8 +3534,10 @@ void xautoclaimCommand(client *c) {
 
     /* Do the actual claiming. */
     streamConsumer *consumer = streamLookupConsumer(group, objectGetVal(c->argv[3]));
+    int consumer_created = 0;
     if (consumer == NULL) {
         consumer = streamCreateConsumer(group, objectGetVal(c->argv[3]), c->argv[1], c->db->id, SCC_DEFAULT);
+        consumer_created = 1;
         modified = 1;
     }
     consumer->seen_time = commandTimeSnapshot();
@@ -3632,6 +3645,8 @@ void xautoclaimCommand(client *c) {
     }
     zfree(deleted_ids);
 
+    if (consumer_created && arraylen == 0)
+        streamPropagateConsumerCreation(c, c->argv[1], c->argv[2], consumer->name);
     preventCommandPropagation(c);
 }
 

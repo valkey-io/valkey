@@ -1150,6 +1150,37 @@ start_server {
             assert_equal $n_consumers 3
             $rd close
         }
+
+        test {Empty XREADGROUP/XCLAIM/XAUTOCLAIM consumers persist after AOF load} {
+            r del mystream
+            r XADD mystream 1-0 f v
+            r XGROUP CREATE mystream mygroup $
+
+            r XREADGROUP GROUP mygroup c1 COUNT 10 STREAMS mystream >
+            r XCLAIM mystream mygroup c2 0 1-0
+            r XAUTOCLAIM mystream mygroup c3 0 0-0
+
+            r XADD mystream 2-0 f v
+            r XADD mystream 3-0 f v
+            r XREADGROUP GROUP mygroup c1 STREAMS mystream >
+            r XDEL mystream 2-0 3-0
+            assert_equal {} [r XCLAIM mystream mygroup c4 0 2-0]
+            assert_equal {0-0 {} 3-0} [r XAUTOCLAIM mystream mygroup c5 0 0-0]
+
+            set names {}
+            foreach c [r xinfo consumers mystream mygroup] {
+                lappend names [lindex $c 1]
+            }
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
+
+            r debug loadaof
+
+            set names {}
+            foreach c [r xinfo consumers mystream mygroup] {
+                lappend names [lindex $c 1]
+            }
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
+        }
     }
 
     test {Consumer group read counter and lag in empty streams} {
@@ -1571,6 +1602,44 @@ start_server {
             set group [lindex [dict get $reply groups] 0]
             assert_equal [dict get $group entries-read] 3
             assert_equal [dict get $group lag] 0
+        }
+
+        test {Empty XREADGROUP/XCLAIM/XAUTOCLAIM consumers are propagated to replica} {
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replication not started."
+            }
+
+            $master DEL mystream
+            $master XADD mystream 1-0 f v
+            $master XGROUP CREATE mystream mygroup $
+            wait_for_ofs_sync $master $replica
+
+            $master XREADGROUP GROUP mygroup c1 COUNT 10 STREAMS mystream >
+            $master XCLAIM mystream mygroup c2 0 1-0
+            $master XAUTOCLAIM mystream mygroup c3 0 0-0
+
+            $master XADD mystream 2-0 f v
+            $master XADD mystream 3-0 f v
+            $master XREADGROUP GROUP mygroup c1 STREAMS mystream >
+            $master XDEL mystream 2-0 3-0
+            assert_equal {} [$master XCLAIM mystream mygroup c4 0 2-0]
+            assert_equal {0-0 {} 3-0} [$master XAUTOCLAIM mystream mygroup c5 0 0-0]
+            wait_for_ofs_sync $master $replica
+
+            set names {}
+            foreach c [$master xinfo consumers mystream mygroup] {
+                lappend names [lindex $c 1]
+            }
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
+
+            set names {}
+            foreach c [$replica xinfo consumers mystream mygroup] {
+                lappend names [lindex $c 1]
+            }
+            assert_equal [lsort $names] {c1 c2 c3 c4 c5}
         }
     }
 

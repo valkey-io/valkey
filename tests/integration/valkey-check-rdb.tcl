@@ -45,6 +45,16 @@ tags {"check-rdb external:skip logreqres:skip"} {
         assert_match {*\[offset ??\] Unknown object type 150 in RDB file with future version 987*} $result
         assert_no_match {*RDB looks OK*} $result
     }
+
+    test {Check RDB stats when the highest selected DB has no keys} {
+        # SELECTDB 2, EOF, zero checksum.
+        set rdb [tmpfile empty-last-db.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe02ff0000000000000000]
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result
+        assert_match {*db.2.type.string.keys.total:0*} $result
+    }
 }
 
 tags {"check-rdb network external:skip logreqres:skip"} {

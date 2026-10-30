@@ -2066,6 +2066,18 @@ test {CONFIG REWRITE handles large unsigned memory config values} {
     }
 } {} {external:skip}
 
+test {CONFIG REWRITE keeps a replicaof host with a newline on one line} {
+    start_server {tags {"introspection"}} {
+        set host "127.0.0.1 1\nmaxmemory 1234567\n#"
+        r replicaof $host 1
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get replicaof] 1] "$host 1"
+    }
+} {} {external:skip}
+
 test {SIGNED MEMORY CONFIG allows negative number} {
     start_server {tags {"introspection"}} {
         r config set slot-migration-max-failover-repl-bytes -1

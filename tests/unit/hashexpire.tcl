@@ -5696,3 +5696,78 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
         }
     }
 }
+
+start_server {tags {"hashexpire defrag external:skip"} overrides {save ""}} {
+    # Defrag regardless of fragmentation, at a fixed CPU share, in short bursts.
+    # A defrag step is much slower in sanitizer builds, so 1% would take
+    # minutes there.
+    r config set active-defrag-threshold-lower 0
+    r config set active-defrag-ignore-bytes 1
+    r config set active-defrag-cycle-min 10
+    r config set active-defrag-cycle-max 10
+    r config set active-defrag-cycle-us 50
+
+    # Active defrag can't be enabled if the server was built without it.
+    catch {r config set activedefrag yes}
+    if {[r config get activedefrag] eq "activedefrag yes"} {
+        # Defrag counts a key hit or miss for every step it takes on a big key.
+        proc defrag_steps {info} {
+            expr {[getInfoProperty $info active_defrag_key_hits] +
+                  [getInfoProperty $info active_defrag_key_misses]}
+        }
+
+        test {Active defrag of a big hash that loses its field TTLs} {
+            set n 5000
+            r eval {
+                for i = 0, ARGV[1] - 1 do
+                    server.call('hset', KEYS[1], 'f' .. i, 'v')
+                end
+            } 1 h $n
+
+            # Defrag scans the hashtable first, one step per bucket (about n/5
+            # steps), and then the volatile set. Expiries 10 seconds apart give
+            # every field its own volatile set bucket, so that scan takes n
+            # steps. From n/2 to n steps after the TTLs are set, defrag is in
+            # the volatile set. MULTI reads the step count in the same instant
+            # as the TTLs change, and we retry if the poll overshot.
+            set in_vset 0
+            for {set i 0} {$i < 10 && !$in_vset} {incr i} {
+                r multi
+                r eval {
+                    for i = 0, ARGV[1] - 1 do
+                        server.call('hpexpire', KEYS[1], 100000000 + i * 10000, 'fields', 1, 'f' .. i)
+                    end
+                } 1 h $n
+                r info stats
+                set start [defrag_steps [lindex [r exec] 1]]
+                # Poll often: without sanitizers, defrag runs n/2 steps in a few ms.
+                wait_for_condition 30000 1 {
+                    [defrag_steps [r info stats]] >= $start + $n / 2
+                } else {
+                    fail "active defrag made no progress"
+                }
+
+                # Removing every field TTL frees the volatile set.
+                r multi
+                r eval {
+                    for i = 0, ARGV[1] - 1 do
+                        server.call('hpersist', KEYS[1], 'fields', 1, 'f' .. i)
+                    end
+                } 1 h $n
+                r info stats
+                set in_vset [expr {[defrag_steps [lindex [r exec] 1]] < $start + $n}]
+            }
+            assert_equal 1 $in_vset
+
+            # The next step finds no volatile set.
+            set start [defrag_steps [r info stats]]
+            wait_for_condition 6000 10 {
+                [defrag_steps [r info stats]] > $start + 10
+            } else {
+                fail "active defrag made no progress"
+            }
+            assert_equal $n [r hlen h]
+            assert_equal {-1} [r hpexpiretime h fields 1 f0]
+        }
+    }
+}

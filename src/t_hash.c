@@ -3199,6 +3199,9 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
     } else {
         /* We're already defraging volatile set. */
         vset *vset = hashTypeGetVolatileSet(ob);
+        /* The last volatile field may have been removed since the previous step,
+         * which frees the volatile set. */
+        if (!vset) return 0;
         vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc);
         if (vset_cursor->cursor == 0) {
             /* We're done with this hash object. */

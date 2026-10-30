@@ -189,6 +189,94 @@ proc do_node_restart {idx} {
     }
 }
 
+# Exercise migration lookups and export propagation with retained history.
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+    set target1 [R 1 CLUSTER MYID]
+    set target2 [R 2 CLUSTER MYID]
+    set key0 "{06S}:history"
+    set key1 "{Qi}:history"
+
+    test "Migration history: cancelled jobs release their slots" {
+        assert_equal OK [R 0 SET $key0 before]
+        set_debug_prevent_pause 1
+        for {set i 0} {$i < 3} {incr i} {
+            assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $target1]
+            set job [get_job_name 0 0]
+            wait_for_migration_field 0 $job state waiting-to-pause
+            assert_error {*I am already migrating slot 0*} {
+                R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $target2
+            }
+            assert_error {*Slot export in progress*} {R 0 CLUSTER SETSLOT 1 STABLE}
+            assert_error {*Slot import in progress*} {R 1 CLUSTER SETSLOT 1 STABLE}
+            assert_equal OK [R 0 CLUSTER CANCELSLOTMIGRATIONS]
+            wait_for_migration_field 0 $job state cancelled
+            wait_for_migration_field 1 $job state failed
+            wait_for_countkeysinslot 1 0 0
+            assert_equal OK [R 0 CLUSTER SETSLOT 1 STABLE]
+            assert_equal OK [R 1 CLUSTER SETSLOT 1 STABLE]
+        }
+        assert_equal 3 [llength [R 0 CLUSTER GETSLOTMIGRATIONS]]
+        assert_equal before [R 0 GET $key0]
+        set_debug_prevent_pause 0
+    }
+
+    test "Migration history: concurrent exports propagate writes after cancellation" {
+        set_debug_prevent_pause 1
+        assert_equal OK [R 0 SET $key1 before]
+        assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $target1 SLOTSRANGE 1 1 NODE $target2]
+        set job0 [get_job_name 0 0]
+        set job1 [get_job_name 0 1]
+        wait_for_migration_field 0 $job0 state waiting-to-pause
+        wait_for_migration_field 0 $job1 state waiting-to-pause
+
+        # Both snapshots have finished. These changes must use the live export
+        # streams even though the job list also contains cancelled exports.
+        assert_equal OK [R 0 SET $key0 after]
+        assert_equal 1 [R 0 DEL $key1]
+        assert_equal OK [R 0 SET "{Qi}:new" new]
+        assert_equal OK [R 0 SET "{06S}:deleted" transient]
+        assert_equal 1 [R 0 DEL "{06S}:deleted"]
+        set_debug_prevent_pause 0
+        wait_for_migration 1 0
+        wait_for_migration 2 1
+        wait_for_migration_field 0 $job0 state success
+        wait_for_migration_field 0 $job1 state success
+        wait_for_migration_field 1 $job0 state success
+        wait_for_migration_field 2 $job1 state success
+        assert_equal after [R 1 GET $key0]
+        assert_equal 0 [R 1 EXISTS "{06S}:deleted"]
+        assert_equal 0 [R 2 EXISTS $key1]
+        assert_equal new [R 2 GET "{Qi}:new"]
+        assert_equal 5 [llength [R 0 CLUSTER GETSLOTMIGRATIONS]]
+        assert_equal OK [R 0 CLUSTER SETSLOT 2 STABLE]
+        assert_equal OK [R 1 CLUSTER SETSLOT 2 STABLE]
+        assert_equal OK [R 2 CLUSTER SETSLOT 2 STABLE]
+    }
+
+    test "Migration history: pruning finished jobs allows new exports" {
+        foreach node {0 1 2} {
+            R $node CONFIG SET cluster-slot-migration-log-max-len 0
+            wait_for_condition 100 50 {
+                [llength [R $node CLUSTER GETSLOTMIGRATIONS]] == 0
+            } else {
+                fail "Finished migrations were not pruned on node $node"
+            }
+            R $node CONFIG SET cluster-slot-migration-log-max-len 1000
+        }
+        set source [R 0 CLUSTER MYID]
+        set_debug_prevent_pause 1
+        assert_equal OK [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $source]
+        set job [get_job_name 1 0]
+        wait_for_migration_field 1 $job state waiting-to-pause
+        assert_equal OK [R 1 SET $key0 returned]
+        set_debug_prevent_pause 0
+        wait_for_migration 0 0
+        wait_for_migration_field 1 $job state success
+        wait_for_migration_field 0 $job state success
+        assert_equal returned [R 0 GET $key0]
+    }
+}
+
 # Disable replica migration to prevent empty nodes from joining other shards.
 start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 

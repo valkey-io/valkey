@@ -942,6 +942,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
         } else if (!strcmp(argv[i], "--stats")) {
             rdbCheckStats = 1;
         } else if (!strcmp(argv[i], "--output")) {
+            if (lastarg) goto checkRdbUsage;
             rdbstate.stats_output = zstrdup(argv[i + 1]);
             rdbCheckOutput = 1;
             i++;

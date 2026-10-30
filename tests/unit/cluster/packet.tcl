@@ -167,6 +167,36 @@ proc create_cluster_publish_packet {sender_name sender_port sender_cport channel
     return $packet
 }
 
+# Create a cluster-bus PING containing a FORGOTTEN_NODE extension.
+proc create_cluster_forgotten_node_packet {sender_name sender_port sender_cport forgotten_node_name} {
+    set CLUSTERMSG_TYPE_PING 0
+    set CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE 2
+    set CLUSTERMSG_FLAG0_EXT_DATA 4
+    set CLUSTERMSG_EXT_HEADER_LEN 8
+    set CLUSTERMSG_EXT_FORGOTTEN_NODE_LEN 48
+
+    set packet [create_cluster_meet_packet \
+        $sender_name $sender_port $sender_cport 0 1 $CLUSTERMSG_FLAG0_EXT_DATA]
+    set packet [string replace $packet 12 13 [binary format S $CLUSTERMSG_TYPE_PING]]
+
+    set extension_len [expr {$CLUSTERMSG_EXT_HEADER_LEN + $CLUSTERMSG_EXT_FORGOTTEN_NODE_LEN}]
+    append packet [binary format I $extension_len]
+    append packet [binary format S $CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE]
+    append packet [binary format S 0]
+    append packet $forgotten_node_name
+    append packet [binary format W 60]
+
+    set packet [string replace $packet 4 7 [binary format I [string length $packet]]]
+    return $packet
+}
+
+proc cluster_bus_socket_is_closed {sock} {
+    if {[catch {read $sock}]} {
+        return 1
+    }
+    return [eof $sock]
+}
+
 start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     test "Forged PUBLISH packet with wrapped length does not crash the server" {
         set base_port [srv 0 port]
@@ -210,6 +240,38 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
 
         unsubscribe $rd {attacker-channel}
         $rd close
+    }
+}
+
+start_cluster 2 0 {tags {external:skip cluster tls:skip}} {
+    test "A node cannot forget itself through a PING extension" {
+        set sender_node_id [R 1 cluster myid]
+        set receiver_cluster_port [expr {[srv 0 port] + 10000}]
+        set sender_port [srv -1 port]
+        set ping_received [CI 0 cluster_stats_messages_ping_received]
+        set packet [create_cluster_forgotten_node_packet \
+            $sender_node_id $sender_port [expr {$sender_port + 10000}] $sender_node_id]
+
+        set sock [socket 127.0.0.1 $receiver_cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 1
+        puts -nonewline $sock $packet
+        flush $sock
+        fconfigure $sock -blocking 0
+
+        wait_for_condition 1000 10 {
+            [CI 0 cluster_stats_messages_ping_received] > $ping_received
+        } else {
+            fail "Forged PING packet was never processed"
+        }
+        wait_for_condition 1000 10 {
+            [cluster_bus_socket_is_closed $sock]
+        } else {
+            fail "Link remained open after a self-forget PING extension"
+        }
+        catch {close $sock}
+
+        assert_equal "PONG" [R 0 ping]
+        assert_match "*$sender_node_id*" [R 0 cluster nodes]
     }
 }
 

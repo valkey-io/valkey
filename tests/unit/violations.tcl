@@ -1,6 +1,6 @@
 # One XADD with one huge >4GiB field (reduced from 5GB for CI memory limits)
 # Must exceed 2^32 to require more than 32 bits to address
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 run_solo {violations} {
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {XADD one huge field} {
@@ -18,7 +18,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # One XADD with one huge (exactly nearly) 4GB field
 # This uncovers the overflow in lpEncodeGetType
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {XADD one huge field - 1} {
         r config set proto-max-bulk-len 10000000000 ;#10gb
@@ -47,7 +47,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
 }
 
 # Add over 4GB to a single stream listpack (one XADD command)
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {single XADD big fields} {
         r write "*23\r\n\$4\r\nXADD\r\n\$1\r\nS\r\n\$1\r\n*\r\n"
@@ -59,6 +59,22 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         catch {r read} err
         assert_match {*too large*} $err
         r xlen S
+    } {0}
+}
+
+# A refused XADD must not create the key, since nothing is propagated
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {XADD over the size limit does not create the key} {
+        # Two 512MiB values plus the field names are just over the 1GiB limit
+        r write "*7\r\n\$4\r\nXADD\r\n\$1\r\nS\r\n\$1\r\n*\r\n"
+        for {set j 0} {$j<2} {incr j} {
+            r write "\$1\r\n$j\r\n"
+            write_big_bulk 536870912 "" yes
+        }
+        r flush
+        catch {r read} err
+        assert_match {*too large*} $err
+        r exists S
     } {0}
 }
 

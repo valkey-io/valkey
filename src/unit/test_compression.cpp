@@ -862,7 +862,9 @@ TEST(CompressionTest, lz4UncompressedFramesRoundTrip) {
                                               payload_len, &frames);
     EXPECT_EQ(decoded_len, (ssize_t)payload_len);
     EXPECT_EQ(frames, (int)UNCOMPRESSED_FEED_PHASE_COUNT);
-    if (decoded_len == (ssize_t)payload_len) EXPECT_EQ(memcmp(decoded, payload, payload_len), 0);
+    if (decoded_len == (ssize_t)payload_len) {
+        EXPECT_EQ(memcmp(decoded, payload, payload_len), 0);
+    }
 
     /* A stream cut inside the last frame, here before its content checksum,
      * must not decode as complete. */

@@ -1,0 +1,28 @@
+{
+    "VALIDATE": {
+        "summary": "Validates the syntax of an external .acl file without applying changes.",
+        "since": "1.0.0",
+        "group": "server",
+        "arity": 3,
+        "container": "ACL",
+        "function": "aclCommand",
+        "arguments": [
+            {
+                "name": "filename",
+                "type": "string"
+            }
+        ],
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "FAST",
+            "STALE"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "FAST"
+        ]
+    }
+}

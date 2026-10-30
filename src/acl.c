@@ -3088,7 +3088,7 @@ static void ACLRemapSurvivingRoleMembers(rax *old_roles) {
  * At the end of the process, if no errors were found in the whole file then
  * NULL is returned. Otherwise, an SDS string describing in a single line
  * a description of all the issues found is returned. */
-static sds ACLLoadFromFile(const char *filename) {
+static sds ACLLoadFromFile(const char *filename, bool validate_only) {
     FILE *fp;
     char buf[1024];
 
@@ -3283,8 +3283,10 @@ static sds ACLLoadFromFile(const char *filename) {
 
     sdsfreesplitres(lines, totlines);
 
-    /* Check if we found errors and react accordingly. */
-    if (sdslen(errors) == 0) {
+    /* Commit changes only if no errors were found and we are not in validation-only mode.
+     * If errors exist, or if validate_only is true, we fall through to the else block
+     * to safely roll back the temporary users tree. */
+    if (sdslen(errors) == 0 && !validate_only) {
         /* The default user pointer is referenced in different places: instead
          * of replacing such occurrences it is much simpler to copy the new
          * default user configuration in the old one. */
@@ -3340,10 +3342,19 @@ static sds ACLLoadFromFile(const char *filename) {
         sdsfree(errors);
         return NULL;
     } else {
+        /* This block handles two states:
+         * 1. No errors, but validate_only is true (Clean exit without committing)
+         * 2. Errors detected (Abort and revert back to old rules) */
         raxFreeWithCallback(Users, ACLFreeUserVoid);
         raxFreeWithCallback(Roles, ACLFreeUserVoid);
         Users = old_users;
         Roles = old_roles;
+
+        if (sdslen(errors) == 0) {
+            sdsfree(errors);
+            return NULL;
+        }
+
         errors =
             sdscat(errors, "WARNING: ACL errors detected, no change to the previously active ACL rules was performed");
         return errors;
@@ -3485,7 +3496,7 @@ void ACLLoadUsersAtStartup(void) {
     }
 
     if (server.acl_filename[0] != '\0') {
-        sds errors = ACLLoadFromFile(server.acl_filename);
+        sds errors = ACLLoadFromFile(server.acl_filename, false);
         if (errors) {
             serverLog(LL_WARNING, "Aborting %s startup because of ACL errors: %s", SERVER_TITLE, errors);
             sdsfree(errors);
@@ -3982,7 +3993,7 @@ void aclCommand(client *c) {
                          "set) in order to store users in the configuration.");
         return;
     } else if (!strcasecmp(sub, "load") && c->argc == 2) {
-        sds errors = ACLLoadFromFile(server.acl_filename);
+        sds errors = ACLLoadFromFile(server.acl_filename, false);
         if (errors == NULL) {
             addReply(c, shared.ok);
         } else {
@@ -3997,6 +4008,25 @@ void aclCommand(client *c) {
                              "Please check the server logs for more "
                              "information");
         }
+    } else if (!strcasecmp(sub, "validate") && c->argc == 3) {
+        /* Extract the specific file path the client passed as an argument */
+        sds filename = objectGetVal(c->argv[2]);
+
+        if (filename == NULL || sdslen(filename) == 0) {
+            addReplyError(c, "ERR Error loading ACLs, opening file '': No such file or directory");
+            return;
+        }
+
+        /* Validate the input file path instead of the global server production file */
+        sds errors = ACLLoadFromFile(filename, true);
+        if (errors == NULL) {
+            addReply(c, shared.ok);
+        } else {
+            /* Return the compiled syntax/parsing errors back to the test runner */
+            addReplyError(c, errors);
+            sdsfree(errors);
+        }
+        return;
     } else if (!strcasecmp(sub, "cat") && c->argc == 2) {
         void *dl = addReplyDeferredLen(c);
         int j;

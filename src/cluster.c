@@ -1493,7 +1493,7 @@ static int checkSlotAssignmentsOrReply(client *c, slotRange *ranges, int numrang
 static int filterOwnedSlotRanges(slotRange **ranges_p, int numranges) {
     slotRange *ranges = *ranges_p;
     clusterNode *me = getMyClusterNode();
-    int owned = 0;
+    int owned = 0, n = 0;
     for (int i = 0; i < numranges; i++) {
         for (int s = ranges[i].start_slot; s <= ranges[i].end_slot; s++) {
             if (getNodeBySlot(s) == me) owned++;
@@ -1502,24 +1502,18 @@ static int filterOwnedSlotRanges(slotRange **ranges_p, int numranges) {
     if (owned == 0) return 0;
 
     slotRange *out = zmalloc(sizeof(*out) * owned);
-    int n = 0, in_range = 0;
     for (int i = 0; i < numranges; i++) {
         for (int s = ranges[i].start_slot; s <= ranges[i].end_slot; s++) {
-            if (getNodeBySlot(s) != me) {
-                if (in_range) {
-                    n++;
-                    in_range = 0;
-                }
-                continue;
-            }
-            if (!in_range) {
+            if (getNodeBySlot(s) != me) continue;
+            if (n && s == out[n - 1].end_slot + 1)
+                out[n - 1].end_slot = s;
+            else {
                 out[n].start_slot = s;
-                in_range = 1;
+                out[n].end_slot = s;
+                n++;
             }
-            out[n].end_slot = s;
         }
     }
-    if (in_range) n++;
     zfree(ranges);
     *ranges_p = out;
     return n;

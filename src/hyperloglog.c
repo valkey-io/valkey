@@ -436,7 +436,7 @@ static int simd_enabled = 1;
  * It was modified in order to provide the same result in
  * big and little endian archs (endian neutral). */
 VALKEY_NO_SANITIZE("alignment")
-static uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
+static uint64_t MurmurHash64A(const void *key, size_t len, unsigned int seed) {
     const uint64_t m = 0xc6a4a7935bd1e995;
     const int r = 47;
     uint64_t h = seed ^ (len * m);

@@ -78,6 +78,17 @@ test "SENTINEL SIMULATE-FAILURE HELP list supported flags" {
     assert_equal {crash-after-election crash-after-promotion} $res
 }
 
+test "SENTINEL SIMULATE-FAILURE command metadata" {
+    set docs [dict get [S 0 COMMAND DOCS sentinel|simulate-failure] sentinel|simulate-failure]
+    set mode [lindex [dict get $docs arguments] 0]
+    assert_equal {multiple} [dict get $mode flags]
+
+    set modes [dict get $mode arguments]
+    foreach {index token} {0 CRASH-AFTER-ELECTION 1 CRASH-AFTER-PROMOTION 2 HELP} {
+        assert_equal $token [dict get [lindex $modes $index] token]
+    }
+}
+
 test "Basic failover works if the primary is down" {
     # Explicitly forbid the FAILOVER command to ensure backward compatibility with
     # ACLs that were documented for Valkey < 9.0

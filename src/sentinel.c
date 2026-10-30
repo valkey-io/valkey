@@ -4799,6 +4799,23 @@ int sentinelFailoverTo(sentinelValkeyInstance *ri, const sentinelAddr *addr, mst
     return C_OK;
 }
 
+/* Return true if the instance was started without a configuration file, as
+ * reported by the config_file field in the cached INFO output. In that case
+ * CONFIG REWRITE is guaranteed to fail, so it is not worth sending it.
+ *
+ * When the INFO output is not available (ri->info is NULL) or the field is
+ * not found, false is returned and the current behavior of sending the
+ * command is retained. */
+static int sentinelInstanceHasNoConfigFile(sentinelValkeyInstance *ri) {
+    const char *config_file;
+
+    if (ri->info == NULL) return 0;
+    config_file = strstr(ri->info, "\nconfig_file:");
+    if (config_file == NULL) return 0;
+    config_file += strlen("\nconfig_file:");
+    return *config_file == '\r' || *config_file == '\n';
+}
+
 /* Kill all existing client connections (because the role of the server switched during
  * failover) and unblock new clients. Additionally, send CONFIG REWRITE command
  * in order to store the new configuration on disk when possible (that is,
@@ -4826,11 +4843,13 @@ int sentinelKillClients(sentinelValkeyInstance *ri) {
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = valkeyAsyncCommand(ri->link->cc,
-                                sentinelDiscardReplyCallback, ri, "%s REWRITE",
-                                sentinelInstanceMapCommand(ri, "CONFIG"));
-    if (retval == C_ERR) return retval;
-    ri->link->pending_commands++;
+    if (!sentinelInstanceHasNoConfigFile(ri)) {
+        retval = valkeyAsyncCommand(ri->link->cc,
+                                    sentinelDiscardReplyCallback, ri, "%s REWRITE",
+                                    sentinelInstanceMapCommand(ri, "CONFIG"));
+        if (retval == C_ERR) return retval;
+        ri->link->pending_commands++;
+    }
 
     for (int type = 0; type < 2; type++) {
         retval = valkeyAsyncCommand(ri->link->cc,
@@ -4910,10 +4929,12 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
-                                sentinelInstanceMapCommand(ri, "CONFIG"));
-    if (retval == C_ERR) return retval;
-    ri->link->pending_commands++;
+    if (!sentinelInstanceHasNoConfigFile(ri)) {
+        retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
+                                    sentinelInstanceMapCommand(ri, "CONFIG"));
+        if (retval == C_ERR) return retval;
+        ri->link->pending_commands++;
+    }
 
     /* CLIENT KILL TYPE <type> is only supported starting from Redis OSS 2.8.12,
      * however sending it to an instance not understanding this command is not

@@ -4918,7 +4918,7 @@ ValkeyModuleString *VM_ListGet(ValkeyModuleKey *key, long index) {
  * - EDOM if the index is not a valid index in the list.
  */
 int VM_ListSet(ValkeyModuleKey *key, long index, ValkeyModuleString *value) {
-    if (!value) {
+    if (!key || !value) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
     }
@@ -4949,23 +4949,26 @@ int VM_ListSet(ValkeyModuleKey *key, long index, ValkeyModuleString *value) {
  * returned and `errno` is set as follows:
  *
  * - EINVAL if key or value is NULL.
- * - ENOTSUP if the key of another type than list.
+ * - ENOTSUP if the key is of another type than list, or if it is empty and
+ *   the index is not 0 or -1.
  * - EBADF if the key is not opened for writing.
  * - EDOM if the index is not a valid index in the list.
  */
 int VM_ListInsert(ValkeyModuleKey *key, long index, ValkeyModuleString *value) {
-    if (!value) {
+    if (!key || !value) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
-    } else if (key != NULL && key->value == NULL && (index == 0 || index == -1)) {
+    } else if (key->value == NULL && (index == 0 || index == -1)) {
         /* Insert in empty key => push. */
         return VM_ListPush(key, VALKEYMODULE_LIST_TAIL, value);
-    } else if (key != NULL && key->value != NULL && objectGetType(key->value) == OBJ_LIST &&
-               (index == (long)listTypeLength(key->value) || index == -1)) {
+    } else if (key->value == NULL || objectGetType(key->value) != OBJ_LIST) {
+        /* Empty key with any other index, or a key of another type. */
+        errno = ENOTSUP;
+        return VALKEYMODULE_ERR;
+    } else if (index == (long)listTypeLength(key->value) || index == -1) {
         /* Insert after the last element => push tail. */
         return VM_ListPush(key, VALKEYMODULE_LIST_TAIL, value);
-    } else if (key != NULL && key->value != NULL && objectGetType(key->value) == OBJ_LIST &&
-               (index == 0 || index == -(long)listTypeLength(key->value) - 1)) {
+    } else if (index == 0 || index == -(long)listTypeLength(key->value) - 1) {
         /* Insert before the first element => push head. */
         return VM_ListPush(key, VALKEYMODULE_LIST_HEAD, value);
     }

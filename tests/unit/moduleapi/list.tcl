@@ -42,6 +42,48 @@ start_server {tags {"modules"}} {
         assert_equal 0 [r exists k]
     }
 
+    test {Module list insert on an empty or non-list key} {
+        r del k
+        assert_error {WRONGTYPE*} {r list.insert k 1 foo}
+        assert_error {WRONGTYPE*} {r list.insert k -2 foo}
+        assert_equal 0 [r exists k]
+
+        r set k bar
+        assert_error {WRONGTYPE*} {r list.insert k 0 foo}
+        assert_error {WRONGTYPE*} {r list.insert k 1 foo}
+        assert_error {WRONGTYPE*} {r list.insert k -1 foo}
+        assert_equal bar [r get k]
+
+        # A value above list-max-listpack-size (8kb by default) must not
+        # trigger a list encoding conversion of the hash's listpack.
+        r del k
+        r hset k f v
+        assert_error {WRONGTYPE*} {r list.insert k 1 [string repeat x 9000]}
+        assert_encoding listpack k
+        assert_equal v [r hget k f]
+
+        # Index 0 and -1 on an empty key create the list; an out-of-range
+        # index on an existing list is still rejected with EDOM.
+        r del k
+        assert_equal OK [r list.insert k 0 foo]
+        assert_equal {foo} [r list.getall k]
+        assert_error {ERR index out*} {r list.insert k 2 bar}
+        assert_error {ERR index out*} {r list.insert k -3 bar}
+        r del k
+        assert_equal OK [r list.insert k -1 foo]
+        assert_equal {foo} [r list.getall k]
+    }
+
+    test {Module list get on a nonexistent key} {
+        r del nonexistent
+        assert_error {ERR invalid argument*} {r list.get nonexistent 0}
+    }
+
+    test {Module list insert and set with a NULL key} {
+        assert_equal OK [r list.nullkey 1 foo]
+        assert_equal OK [r list.nullkey 0 foo]
+    }
+
     test {Module list iteration} {
         r del k
         r rpush k x y z

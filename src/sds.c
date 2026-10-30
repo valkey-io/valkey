@@ -1056,6 +1056,8 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
     }
 
     while (!done) {
+        /* -1 means no output byte this step. Source bytes are read as
+         * unsigned char so that 0xFF does not collide with it. */
         int new_char = -1;
         if (inq) {
             if (!*p) {
@@ -1071,14 +1073,14 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
                 case 't': new_char = '\t'; break;
                 case 'b': new_char = '\b'; break;
                 case 'a': new_char = '\a'; break;
-                default: new_char = (*(p + 1)); break;
+                default: new_char = (unsigned char)*(p + 1); break;
                 }
                 p += 2;
             } else if (*p == '"') {
                 inq = 0;
                 p++;
             } else {
-                new_char = *p;
+                new_char = (unsigned char)*p;
                 p++;
             }
         } else if (insq) {
@@ -1092,7 +1094,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
                 insq = 0;
                 p++;
             } else {
-                new_char = *p;
+                new_char = (unsigned char)*p;
                 p++;
             }
         } else {
@@ -1104,7 +1106,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             case '\0': done = 1; break;
             case '"': inq = 1; break;
             case '\'': insq = 1; break;
-            default: new_char = *p; break;
+            default: new_char = (unsigned char)*p; break;
             }
             if (*p != '\0') {
                 p++;

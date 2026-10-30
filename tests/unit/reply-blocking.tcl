@@ -1745,6 +1745,78 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
     } undefined {logreqres:skip} ;# The client is closed mid-EXEC, so its EXEC reply is truncated in the req-res log.
 }
 
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes repl-diskless-load disabled}} {
+    set node [srv 0 client]
+    start_server {tags {"repl"}} {
+        set other [srv 0 client]
+        set other_host [srv 0 host]
+        set other_port [srv 0 port]
+
+        # Read on a fresh connection and fail if the reply does not arrive.
+        proc assert_read_not_held {client db cmd expected} {
+            set rd [valkey_deferring_client -1]
+            $rd select $db
+            assert_equal OK [$rd read]
+            $rd {*}$cmd
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set got ""
+            wait_for_condition 50 20 {
+                [string length [append got [read $fd]]] > 0
+            } else {
+                fconfigure $fd -blocking 1
+                $rd close
+                fail "'$cmd' in db $db was held after the full sync"
+            }
+            fconfigure $fd -blocking 1
+            assert_equal $expected $got
+            $rd close
+        }
+
+        test "Tracking of not-yet-durable writes does not survive a full sync" {
+            # Push this node's offset well past the other node's, so the stale
+            # offsets would stay ahead of the new history after the resync.
+            for {set i 0} {$i < 200} {incr i} {
+                $node set rb:filler:$i [string repeat x 1000]
+            }
+
+            $node debug reply-blocking-pause aof
+            set rd_key [valkey_deferring_client -1]
+            $rd_key select 9
+            assert_equal OK [$rd_key read]
+            $rd_key set rb:stale v
+            set rd_db [valkey_deferring_client -1]
+            $rd_db select 10
+            assert_equal OK [$rd_db read]
+            $rd_db flushdb
+            wait_for_condition 50 100 {
+                [getInfoProperty [$node info debug] reply_blocking_clients_waiting_ack] == 2
+            } else {
+                fail "writes were not held"
+            }
+
+            # Demote: a full, disk-based sync replaces the dataset.
+            $node replicaof $other_host $other_port
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$node info replication]]
+            } else {
+                fail "full sync did not complete"
+            }
+            catch {$rd_key read}
+            catch {$rd_db read}
+            $rd_key close
+            $rd_db close
+            $node debug reply-blocking-resume aof
+
+            # Promote again. Nothing from the old dataset may hold reads.
+            $node replicaof no one
+            assert_equal 0 [getInfoProperty [$node info debug] reply_blocking_uncommitted_keys]
+            assert_read_not_held $node 9 {get rb:stale} "\$-1\r\n"
+            assert_read_not_held $node 10 {get rb:other} "\$-1\r\n"
+        }
+    }
+}
+
 start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
     test "Enabling reply blocking at runtime initializes fake clients created earlier" {
         # A Lua write pools a module temp client with no reply-blocking state.

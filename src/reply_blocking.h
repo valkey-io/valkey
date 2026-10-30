@@ -180,6 +180,7 @@ void replyBlockingReset(void);
 void replyBlockingClientInit(struct client *c);
 void replyBlockingClientReset(struct client *c);
 void replyBlockingClearPrimaryState(void);
+void replyBlockingClearDatasetState(void);
 
 /* Command processing hooks for offset and COB tracking */
 void recordReplOffsetBaseline(client *c);

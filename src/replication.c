@@ -2762,6 +2762,10 @@ void replicationAttachToNewPrimary(void) {
 
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
+
+    /* The dataset is being replaced, so nothing tracked as not yet durable in
+     * the old one can still hold reads after a later promotion. */
+    replyBlockingClearDatasetState();
 }
 
 
@@ -5528,6 +5532,10 @@ void replicationResurrectCachedPrimary(connection *conn) {
     server.primary = server.cached_primary;
     server.cached_primary = NULL;
     server.primary->conn = conn;
+
+    /* The PSYNC succeeded, so the writes this node tracked as not yet durable
+     * are part of the new primary's history. */
+    replyBlockingClearDatasetState();
 
     establishPrimaryConnection();
     /* Re-add to the list of clients. */

@@ -853,6 +853,20 @@ static void replyBlockingResetPrimaryState(bool is_free_clients_needed) {
     postCommitTaskEmptyLists();
 }
 
+/* Drop the tracking of not-yet-durable writes: uncommitted keys, dirty
+ * databases and the function store offset. They describe a history this node
+ * may not keep, so they are not cleared at demotion (the replica cap kept those
+ * writes from any replica, so whether they survive is not known yet). Instead
+ * they are cleared once it is: when a full sync replaces the dataset, and when
+ * a PSYNC succeeds, which makes them part of the new primary's history. Left
+ * in place, they would hold reads after a re-promotion until the new history
+ * passed the old offsets. */
+void replyBlockingClearDatasetState(void) {
+    clearAllUncommittedKeys();
+    server.reply_blocking.func_store_blocking_offset = -1;
+    server.reply_blocking.processed_func_write_in_transaction = false;
+}
+
 /* Clear the reply-blocking attributes specific to the primary.
  * Invoked when a primary node becomes a replica. */
 void replyBlockingClearPrimaryState(void) {

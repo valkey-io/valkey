@@ -1737,3 +1737,68 @@ start_server {tags {"repl external:skip cluster:skip"}} {
         }
     }
 }
+
+proc fake_primary_read_command {sock} {
+    set line [gets $sock]
+    if {[eof $sock]} {return {}}
+    set argc [string range [string trim $line] 1 end]
+    set argv {}
+    for {set i 0} {$i < $argc} {incr i} {
+        set len [string range [string trim [gets $sock]] 1 end]
+        lappend argv [read $sock $len]
+        read $sock 2
+    }
+    return $argv
+}
+
+# Accept handler of a fake primary: completes the replication handshake, sends
+# psync_reply as the whole PSYNC reply, stores the PSYNC arguments in
+# ::fake_primary_psync_args and closes the connection.
+proc fake_primary_accept {psync_reply sock host port} {
+    catch {
+        fconfigure $sock -translation binary
+        while {[llength [set argv [fake_primary_read_command $sock]]] > 0} {
+            set cmd [string toupper [lindex $argv 0]]
+            if {$cmd eq "PING"} {
+                puts -nonewline $sock "+PONG\r\n"
+            } elseif {$cmd eq "PSYNC"} {
+                puts -nonewline $sock "$psync_reply\r\n"
+            } else {
+                puts -nonewline $sock "+OK\r\n"
+            }
+            flush $sock
+            if {$cmd eq "PSYNC"} {
+                set ::fake_primary_psync_args [lrange $argv 1 end]
+                break
+            }
+        }
+    }
+    catch {close $sock}
+}
+
+if {!$::tls} { ;# The fake primary doesn't support TLS
+test {Replica rejects a +CONTINUE reply to PSYNC when there is no cached primary} {
+    unset -nocomplain ::fake_primary_psync_args
+    set listener [socket -server [list fake_primary_accept "+CONTINUE"] -myaddr 127.0.0.1 0]
+    set fake_port [lindex [fconfigure $listener -sockname] 2]
+
+    # A server that starts as a replica with no dataset has no cached primary,
+    # so it requests a full resynchronization with PSYNC ? -1.
+    start_server [list tags {"repl"} overrides [list replicaof "127.0.0.1 $fake_port"]] {
+        set timer [after 60000 {set ::fake_primary_psync_args timeout}]
+        if {![info exists ::fake_primary_psync_args]} {
+            vwait ::fake_primary_psync_args
+        }
+        after cancel $timer
+        close $listener
+        assert_equal $::fake_primary_psync_args {? -1}
+
+        wait_for_log_messages 0 {"*Primary replied +CONTINUE to a full resynchronization request*"} 0 50 100
+
+        # The replica is still alive and keeps trying to sync.
+        assert_equal [r ping] {PONG}
+        assert_equal [s role] {slave}
+        assert_equal [s master_link_status] {down}
+    }
+} {} {external:skip}
+}

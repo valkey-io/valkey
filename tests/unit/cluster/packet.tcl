@@ -277,3 +277,34 @@ start_cluster 10 0 {tags {external:skip cluster tls:skip}} {
         assert_lessthan_equal $count 10
     }
 }
+
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "MEET from an unknown sender does not add the nodes in its gossip" {
+        set base_port [srv 0 port]
+        set cluster_port [expr {$base_port + 10000}]
+        set gossip_id "abcdef1234567890abcdef1234567890abcdef12"
+
+        set packet [create_cluster_meet_packet \
+            "fakenode1234567890fakenode1234567890fake" $base_port $cluster_port 1]
+
+        # A single clusterMsgDataGossip entry for a primary we have never seen.
+        append packet $gossip_id
+        append packet [binary format II 0 0]                ;# ping_sent, pong_received
+        append packet [string range "127.0.0.1[string repeat "\x00" 46]" 0 45]
+        append packet [binary format SSSSS 1 10001 1 0 0]   ;# port, cport, flags, pport, notused1
+        set packet [string replace $packet 4 7 [binary format I [string length $packet]]]
+
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 1
+        puts -nonewline $sock $packet
+        flush $sock
+
+        # The PONG reply is sent after the gossip is processed.
+        set hdr [read $sock 16]
+        binary scan $hdr @12Su type
+        assert_equal 1 $type
+        close $sock
+
+        assert_no_match "*$gossip_id*" [R 0 cluster nodes]
+    }
+}

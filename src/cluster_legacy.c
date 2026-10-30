@@ -3008,7 +3008,9 @@ int verifyGossipSectionNodeIds(clusterMsgDataGossip *g, uint16_t count) {
 int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip *)hdr->data.ping.gossip;
-    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+    /* A node still in handshake has a random name and is not known yet, so it
+     * must not be trusted to introduce new nodes. */
+    clusterNode *sender = link->node && !nodeInHandshake(link->node) ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
 
     /* Abort if the gossip contains invalid node IDs to avoid adding incorrect information to
      * the nodes dictionary. An invalid ID indicates memory corruption on the sender side. */
@@ -4351,8 +4353,7 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* If this is a MEET packet from an unknown node, we still process
-                 * the gossip section here since we have to trust the sender because
-                 * of the message type. */
+                 * the gossip section here, but only to update nodes we already know. */
                 if (!clusterProcessGossipSection(msg, link)) return 0;
             } else if (sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
                 /* The MEET packet is from a known node, after the handshake timeout, so the sender

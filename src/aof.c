@@ -1524,6 +1524,37 @@ struct client *createAOFClient(void) {
     return c;
 }
 
+/* A crash or power loss can leave the end of an AOF filled with zero bytes:
+ * the file size was persisted but the data written after the last fsync was
+ * not. Returns the offset at which a run of zero bytes that extends to the end
+ * of the file starts, or -1 if the file doesn't end with a zero byte (a valid
+ * AOF command always ends with CRLF) or it can't be read. The file position
+ * of fp is restored before returning. */
+static off_t aofGetZeroPaddingOffset(FILE *fp) {
+    char buf[4096];
+    struct valkey_stat sb;
+    off_t ret = -1, pos = ftello(fp);
+
+    if (pos == -1 || valkey_fstat(fileno(fp), &sb) == -1) return -1;
+    off_t end = sb.st_size;
+    while (end > 0) {
+        size_t chunk = end < (off_t)sizeof(buf) ? (size_t)end : sizeof(buf);
+        if (fseeko(fp, end - chunk, SEEK_SET) == -1 || fread(buf, chunk, 1, fp) != 1) {
+            ret = -1;
+            break;
+        }
+        size_t i = chunk;
+        while (i > 0 && buf[i - 1] == '\0') i--;
+        ret = end - chunk + i;
+        if (i > 0) break; /* Found the last non-zero byte. */
+        end -= chunk;
+    }
+    if (ret == sb.st_size) ret = -1;
+    clearerr(fp);
+    if (fseeko(fp, pos, SEEK_SET) == -1) return -1;
+    return ret;
+}
+
 /* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
  * otherwise, one of the following is returned:
  * AOF_OPEN_ERR: Failed to open the AOF file.
@@ -1538,6 +1569,7 @@ int loadSingleAppendOnlyFile(char *filename) {
     off_t valid_up_to = 0;        /* Offset of latest well-formed command loaded. */
     off_t valid_before_multi = 0; /* Offset before MULTI command loaded. */
     off_t last_progress_report_size = 0;
+    off_t zero_padding_offset = -1; /* Offset of the zero bytes ending the file. */
     int ret = AOF_OK;
 
     sds aof_filepath = makePath(server.aof_dirname, filename);
@@ -1609,6 +1641,13 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
     }
 
+    /* If the AOF part in REPL format ends with zero padding, treat the start of
+     * the padding as the end of the file: a command that runs into it was cut
+     * off, just like a command at the end of a short file. Zeros inside an RDB
+     * part are left to the RDB loader. */
+    zero_padding_offset = aofGetZeroPaddingOffset(fp);
+    if (zero_padding_offset != -1 && zero_padding_offset < ftello(fp)) zero_padding_offset = -1;
+
     /* Read the actual AOF file, in REPL format, command by command. */
     while (1) {
         int argc, j;
@@ -1633,6 +1672,7 @@ int loadSingleAppendOnlyFile(char *filename) {
                 goto readerr;
             }
         }
+        if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
         if (buf[0] == '#') continue; /* Skip annotations */
         if (buf[0] != '*') goto fmterr;
         if (buf[1] == '\0') goto readerr;
@@ -1676,6 +1716,13 @@ int loadSingleAppendOnlyFile(char *filename) {
                 freeClientArgv(fakeClient);
                 goto readerr;
             }
+        }
+
+        /* A command that reaches into the zero padding was not completely
+         * written. Don't execute it, it may contain zeros instead of data. */
+        if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) {
+            freeClientArgv(fakeClient);
+            goto zeropad;
         }
 
         /* Command lookup */
@@ -1732,6 +1779,15 @@ readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
         ret = AOF_FAILED;
         goto cleanup;
     }
+    if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
+    goto uxeof;
+
+zeropad: /* The parser reached the zero padding at the end of the file, handle it as a short read. */
+    if (valkey_fstat(fileno(fp), &sb) != -1) {
+        serverLog(LL_WARNING, "!!! Warning: AOF %s ends with %lld zero bytes, probably left by a crash !!!", filename,
+                  (long long)(sb.st_size - zero_padding_offset));
+    }
+    /* fall through to uxeof. */
 
 uxeof: /* Unexpected AOF end of file. */
     if (fakeClient->flag.multi) {
@@ -1770,6 +1826,7 @@ uxeof: /* Unexpected AOF end of file. */
     goto cleanup;
 
 fmterr: /* Format error. */
+    if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
     serverLog(LL_WARNING,
               "Bad file format reading the append only file %s: "
               "make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>",

@@ -4997,7 +4997,12 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
          * have the replication history of the shard it is joining, clearing the
          * cached primary is necessary to ensure proper replication behavior. */
         server.primary->flag.dont_cache_primary = full_sync_required;
-        freeClient(server.primary);
+        /* The primary may be the client running this command, which is still
+         * in use until the command returns. */
+        if (server.primary == server.current_client)
+            freeClientAsync(server.primary);
+        else
+            freeClient(server.primary);
     }
 
     /* Setting primary_host only after the call to freeClient since it calls
@@ -5057,7 +5062,14 @@ void replicationUnsetPrimary(void) {
      * replicationHandlePrimaryDisconnection which can attempt to re-connect. */
     sdsfree(server.primary_host);
     server.primary_host = NULL;
-    if (server.primary) freeClient(server.primary);
+    if (server.primary && server.primary == server.current_client) {
+        /* The primary is running this command, so it is still in use until the
+         * command returns. Free it then instead of caching it. */
+        server.primary->flag.dont_cache_primary = 1;
+        freeClientAsync(server.primary);
+    } else if (server.primary) {
+        freeClient(server.primary);
+    }
     replicationDiscardCachedPrimary();
     cancelReplicationHandshake(0);
     /* When a replica is turned into a primary, the current replication ID

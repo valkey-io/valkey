@@ -1292,6 +1292,25 @@ start_server {tags {"scripting"}} {
     } {*Script attempted to access nonexistent global variable 'print'*}
 }
 
+start_server {tags {"scripting"}} {
+    foreach flush {FLUSHALL FLUSHDB} {
+        test "Script - $flush ASYNC frees the old keyspace after the script" {
+            wait_lazyfree_done r
+            r config resetstat
+            set info [run_script {
+                redis.call('set', KEYS[1], 'bar')
+                redis.call(ARGV[1], 'async')
+                local start = os.clock()
+                while os.clock() - start < 0.1 do end
+                return redis.call('info', 'memory')
+            } 1 foo $flush]
+            assert_match "*lazyfreed_objects:0\r*" $info
+            wait_lazyfree_done r
+            assert_equal 1 [s lazyfreed_objects]
+        }
+    }
+}
+
 start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - JSON string encoding a string larger than 2GB} {
         run_script {

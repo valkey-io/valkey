@@ -681,6 +681,28 @@ tags "modules" {
             }
         }
     }
+
+    test {Module command FLUSHALL ASYNC frees the old keyspace after the command} {
+        start_server [list overrides [list loadmodule "$testmodule"]] {
+            set repl [attach_to_replication_stream]
+
+            set info [r propagate-test.set-flushall-async foo bar]
+            assert_match "*lazyfreed_objects:0\r*" $info
+            wait_lazyfree_done r
+            # foo, and the counter this module INCRs on every keyspace event.
+            assert_equal 2 [s lazyfreed_objects]
+
+            assert_replication_stream $repl {
+                {multi}
+                {select *}
+                {incr notifications}
+                {set foo bar}
+                {flushall ASYNC}
+                {exec}
+            }
+            close_replication_stream $repl
+        }
+    }
 }
 
 

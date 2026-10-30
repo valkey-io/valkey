@@ -4053,6 +4053,8 @@ void emptyDbAsync(serverDb *db);
 size_t lazyfreeGetPendingObjectsCount(void);
 size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
+bool lazyfreeHasPendingDatabaseFrees(void);
+void lazyfreeDrainPendingDatabaseFrees(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
 void freePendingReplDataBufAsync(list *pending_repl_data_blocks);

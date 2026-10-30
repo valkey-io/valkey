@@ -520,6 +520,51 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             $r2 close
             wait_for_watched_clients_count 0
         }
+
+        test {clients: monitoring clients} {
+            assert_equal [s monitoring_clients] 0
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
+
+            # Start monitoring on first client
+            $rd1 monitor
+            assert_equal {OK} [$rd1 read]
+            assert_equal [s monitoring_clients] 1
+
+            # Calling MONITOR again on an already monitoring client is a no-op
+            $rd1 monitor
+            assert_equal [s monitoring_clients] 1
+
+            # Start monitoring on second client
+            $rd2 monitor
+            assert_equal {OK} [$rd2 read]
+            assert_equal [s monitoring_clients] 2
+
+            # Exiting MONITOR mode via RESET decrements monitoring_clients
+            $rd1 reset
+            while {[$rd1 read] ne "RESET"} {}
+            assert_equal [s monitoring_clients] 1
+
+            # Re-entering MONITOR mode after RESET increments monitoring_clients
+            $rd1 monitor
+            assert_equal {OK} [$rd1 read]
+            assert_equal [s monitoring_clients] 2
+
+            # Disconnecting monitoring clients decrements monitoring_clients
+            $rd1 close
+            wait_for_condition 100 50 {
+                [s monitoring_clients] == 1
+            } else {
+                fail "monitoring_clients did not decrement to 1 after first client closed"
+            }
+
+            $rd2 close
+            wait_for_condition 100 50 {
+                [s monitoring_clients] == 0
+            } else {
+                fail "monitoring_clients did not clear to 0 after second client closed"
+            }
+        }
     }
 }
 

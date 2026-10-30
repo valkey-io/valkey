@@ -210,7 +210,7 @@ TEST_F(SyncReplicationTest, ClientInitAndReset) {
     initReplyBlockingForTest();
     client *c = (client *)zcalloc(sizeof(client));
     c->reply_blocking_state.blocked_responses = nullptr;
-    c->reply_blocking_state.reply_blocked = 0;
+    c->reply_blocking_state.waiting_ack_node = nullptr;
     c->reply_blocking_state.current_command_repl_offset = 0;
 
     /* Disabled — should be a no-op */

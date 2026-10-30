@@ -151,15 +151,10 @@ static void trackCommandPreExecutionPosition(struct client *c) {
 /* If the client is currently waiting for reply-blocking acknowledgement,
  * mark it unblocked and reset the client flags. */
 static int unblockClientWaitingAck(struct client *c) {
-    if (c->reply_blocking_state.reply_blocked) {
-        listNode *node = listSearchKey(server.reply_blocking.clients_waiting_ack, c);
-        if (node != NULL) {
-            listDelNode(server.reply_blocking.clients_waiting_ack, node);
-            c->reply_blocking_state.reply_blocked = 0;
-            return 1;
-        }
-    }
-    return 0;
+    if (c->reply_blocking_state.waiting_ack_node == NULL) return 0;
+    listDelNode(server.reply_blocking.clients_waiting_ack, c->reply_blocking_state.waiting_ack_node);
+    c->reply_blocking_state.waiting_ack_node = NULL;
+    return 1;
 }
 
 // Initialize the reply-blocking client attributes when client is created.
@@ -179,9 +174,9 @@ void replyBlockingClientInit(client *c) {
 
 // Reset the client reply-blocking attributes during a client clean-up.
 void replyBlockingClientReset(client *c) {
-    /* reply_blocked is set iff the client is on clients_waiting_ack. */
-    debugServerAssert(!c->reply_blocking_state.reply_blocked ||
-                      listSearchKey(server.reply_blocking.clients_waiting_ack, c) != NULL);
+    /* waiting_ack_node is set iff the client is on clients_waiting_ack. */
+    debugServerAssert(c->reply_blocking_state.waiting_ack_node == NULL ||
+                      listNodeValue(c->reply_blocking_state.waiting_ack_node) == c);
     if (unblockClientWaitingAck(c)) {
         server.reply_blocking.clients_disconnected_before_unblocking++;
     }
@@ -404,9 +399,9 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
         serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d",
                   blockingReplOffset, c->cmd->declared_name, (c->cmd->flags & CMD_WRITE) ? 1 : 0);
         blockLastResponseIfExist(c, blockingReplOffset);
-        if (!c->reply_blocking_state.reply_blocked) {
+        if (c->reply_blocking_state.waiting_ack_node == NULL) {
             listAddNodeTail(server.reply_blocking.clients_waiting_ack, c);
-            c->reply_blocking_state.reply_blocked = 1;
+            c->reply_blocking_state.waiting_ack_node = listLast(server.reply_blocking.clients_waiting_ack);
             server.reply_blocking.clients_blocked++;
         }
     }
@@ -840,7 +835,7 @@ static void freeClientsWaitingAck(reply_blocking_t *rb_state) {
     listRewind(rb_state->clients_waiting_ack, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        c->reply_blocking_state.reply_blocked = 0;
+        c->reply_blocking_state.waiting_ack_node = NULL;
         rb_state->clients_disconnected_before_unblocking++;
         freeClientAsync(c);
     }

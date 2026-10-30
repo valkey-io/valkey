@@ -167,9 +167,10 @@ typedef struct clientReplyBlockingState {
     /* The list of async notification tasks that reference this client */
     struct list *pending_notify_tasks;
 
-    /* This client is waiting for reply-blocking providers to acknowledge
-     * the write before its response can be sent. */
-    uint64_t reply_blocked : 1;
+    /* This client's node in clients_waiting_ack while it waits for a write to
+     * be acknowledged before its response can be sent, else NULL. Kept so the
+     * client leaves the list in O(1). */
+    struct listNode *waiting_ack_node;
     uint64_t reply_blocking_flags;
 } clientReplyBlockingState;
 

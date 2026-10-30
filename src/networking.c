@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "latency_e2e.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "cluster_migrateslots.h"
@@ -332,6 +333,14 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     return server.min_string_size_copy_avoid_threaded && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid_threaded;
 }
 
+/* Record a write for end-to-end latency. */
+static inline void latencyE2eClientWrite(client *c) {
+    if (server.latency_tracking_enable_e2e && c->nwritten > 0 && c->latency_e2e) {
+        c->latency_e2e->cur_write_time = getMonotonicUs();
+        if (inMainThread()) latencyE2eFinalize(c);
+    }
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -433,6 +442,7 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
+    c->latency_e2e = NULL;
     return c;
 }
 
@@ -2521,6 +2531,7 @@ int freeClient(client *c) {
     if (c->cob_trend) trendCalculator_free(c->cob_trend);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
+    zfree(c->latency_e2e);
     zfree(c);
     return 1;
 }
@@ -3525,6 +3536,7 @@ int postWriteToClient(client *c) {
     server.stat_total_writes_processed++;
     if (getClientType(c) != CLIENT_TYPE_REPLICA) {
         _postWriteToClient(c);
+        latencyE2ePostClientWrite(c);
     } else {
         postWriteToReplica(c);
     }
@@ -3576,6 +3588,7 @@ int writeToClient(client *c) {
         writeToReplica(c);
     } else {
         _writeToClient(c);
+        latencyE2eClientWrite(c);
     }
 
     return postWriteToClient(c);
@@ -4737,6 +4750,9 @@ int processInputBuffer(client *c) {
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
             prepareCommandQueue(c);
+            if (server.latency_tracking_enable_e2e && (c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
+                latencyE2eInitialize(c);
+            }
             popped_from_queue = false;
         } else {
             popped_from_queue = true;
@@ -4851,6 +4867,9 @@ static bool readToQueryBuf(client *c) {
     if (c->nread <= 0) {
         return false;
     }
+
+    /* IO-thread reads were already stamped when dispatched. */
+    if (inMainThread() && server.latency_tracking_enable_e2e) latencyE2eRecordReadEvent(c);
 
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
@@ -7162,6 +7181,11 @@ int processClientIOReadsDone(client *c) {
         return needs_post_read_update;
     }
 
+    /* A command parsed by the IO thread starts a new batch, its command queue was empty. */
+    if (server.latency_tracking_enable_e2e && (c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
+        latencyE2eInitialize(c);
+    }
+
     if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
         parseResult res = handleParseResults(c);
         /* On parse error - stop here. */
@@ -7315,6 +7339,7 @@ void ioThreadWriteToClient(client *c) {
         writeToReplica(c);
     } else {
         _writeToClient(c);
+        latencyE2eClientWrite(c);
     }
 
     c->io_write_state = CLIENT_COMPLETED_IO;

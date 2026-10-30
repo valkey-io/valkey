@@ -530,6 +530,7 @@ ENGINE_SERVER_OBJ = \
     cluster_slot_stats.o \
     commandlog.o \
     commands.o \
+    latency_e2e.o \
     compression.o \
     compression_lz4.o \
     compression_zstd.o \

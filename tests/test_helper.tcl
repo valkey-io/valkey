@@ -41,6 +41,7 @@ set ::all_tests {
     unit/latency-monitor
     integration/block-repl
     integration/replication
+    integration/replication-continue
     integration/cross-version-replication
     integration/replication-2
     integration/replication-3

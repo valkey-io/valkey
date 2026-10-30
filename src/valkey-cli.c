@@ -2172,13 +2172,20 @@ static int cliReadReply(int output_raw_strings) {
     valkeyReply *reply;
     sds out = NULL;
     int output = 1;
+    int status;
 
     if (config.last_reply) {
         freeReplyObject(config.last_reply);
         config.last_reply = NULL;
     }
 
-    if (valkeyGetReply(context, &_reply) != VALKEY_OK) {
+    /* libvalkey returns a RESP3 attribute as its own reply, ahead of the reply
+     * it describes. Attributes are not part of the reply, so skip them. */
+    while ((status = valkeyGetReply(context, &_reply)) == VALKEY_OK &&
+           ((valkeyReply *)_reply)->type == VALKEY_REPLY_ATTR) {
+        freeReplyObject(_reply);
+    }
+    if (status != VALKEY_OK) {
         if (config.blocking_state_aborted) {
             config.blocking_state_aborted = 0;
             config.monitor_mode = 0;

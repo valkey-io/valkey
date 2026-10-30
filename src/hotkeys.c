@@ -75,11 +75,11 @@ void hotkeysPurgeDb(int dbid) {
 /* Note: RENAME / MOVE / SWAPDB are intentionally NOT re-attributed. An entry is
  * keyed by (key name, db), so after one of these commands a tracked entry keeps
  * its old identity and may briefly be reported under the pre-command name/db.
- * This is accepted for simplicity: the stale entry is harmless and ages out
- * with the window — it stops accruing new hits immediately and disappears once
- * the window rotates (from the live window on the next rotation, from the
- * frozen snapshot one rotation later), so it lingers at most for the reporting
- * window. */
+ * This is accepted for simplicity: the stale entry stops accruing new hits
+ * immediately and then ages out, leaving the live window on the next rotation
+ * and the frozen snapshot — which is what HOTKEYS GET reads — one rotation after
+ * that. It can therefore still be reported for up to roughly two reporting
+ * windows. */
 
 /* ===========================================================================
  * Per-access detection hook

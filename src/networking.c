@@ -3520,12 +3520,14 @@ int postWriteToClient(client *c) {
         postWriteToReplica(c);
     }
 
-    if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
-        if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
-            serverLog(LL_VERBOSE, "Error writing to client: %s", connGetLastError(c->conn));
-            freeClientAsync(c);
-            return C_ERR;
-        }
+    /* connWritev() can report a partial write while leaving the connection in
+     * an error state (e.g. TLS issues one SSL_write() per iovec and returns the
+     * bytes sent before the one that failed), in which case
+     * WRITE_FLAGS_WRITE_ERROR is not set. Check the connection state directly. */
+    if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
+        serverLog(LL_VERBOSE, "Error writing to client: %s", connGetLastError(c->conn));
+        freeClientAsync(c);
+        return C_ERR;
     }
     if (c->nwritten > 0) {
         c->net_output_bytes += c->nwritten;

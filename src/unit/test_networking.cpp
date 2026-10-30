@@ -948,3 +948,54 @@ TEST_F(NetworkingTest, TestSetDeferredReplyNextMergeGuardsIoLastWritten) {
         freeReplyOffloadClient(c);
     }
 }
+
+/* connWritev() reports a partial write but the connection fails on the rest.
+ * Since more than NET_MAX_WRITES_PER_EVENT bytes were written, writevToClient()
+ * doesn't write again and WRITE_FLAGS_WRITE_ERROR stays unset. The client must
+ * still be freed. */
+TEST_F(NetworkingTest, TestWriteToClientPartialWritevThenConnError) {
+    list *saved_clients_to_close = server.clients_to_close;
+    server.clients_to_close = listCreate();
+    /* Logging isn't set up in unit tests, skip the LL_VERBOSE write error log. */
+    int saved_verbosity = server.verbosity;
+    server.verbosity = LL_WARNING;
+
+    client *c = createTestClient();
+    fakeConnection *fake_conn = connCreateFake(2 * NET_MAX_WRITES_PER_EVENT);
+    fake_conn->conn.state = CONN_STATE_CONNECTED;
+    fake_conn->conn.private_data = c;
+    c->conn = (connection *)fake_conn;
+
+    /* Two reply blocks that both make it into the same writev call: the first
+     * one is just under NET_MAX_WRITES_PER_EVENT, so the second one is added
+     * to the iov array as well. */
+    size_t first_len = NET_MAX_WRITES_PER_EVENT - 16;
+    size_t second_len = 64;
+    clientReplyBlock *first = makePlainReplyBlock(first_len, first_len, 'A');
+    clientReplyBlock *second = makePlainReplyBlock(second_len, second_len, 'B');
+    listAddNodeTail(c->reply, first);
+    listAddNodeTail(c->reply, second);
+    c->reply_bytes = first->size + second->size;
+
+    /* The connection breaks in the middle of the second block, after more than
+     * NET_MAX_WRITES_PER_EVENT bytes have already been written. */
+    size_t fail_after = NET_MAX_WRITES_PER_EVENT + 16;
+    fake_conn->writev_fail_after = fail_after;
+
+    /* Use EXPECT_* (not ASSERT_*) so that the cleanup below, which restores
+     * the global server state, always runs. */
+    EXPECT_EQ(writeToClient(c), C_ERR);
+    EXPECT_EQ(fake_conn->written, fail_after);
+    EXPECT_EQ(connGetState(c->conn), CONN_STATE_ERROR);
+    EXPECT_TRUE(c->flag.close_asap);
+    EXPECT_EQ(listLength(server.clients_to_close), 1u);
+    if (listLength(server.clients_to_close) == 1) {
+        EXPECT_EQ(listNodeValue(listFirst(server.clients_to_close)), c);
+    }
+
+    listRelease(server.clients_to_close);
+    server.clients_to_close = saved_clients_to_close;
+    server.verbosity = saved_verbosity;
+    connFreeFake(fake_conn);
+    freeReplyOffloadClient(c);
+}

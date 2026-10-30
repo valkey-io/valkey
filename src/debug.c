@@ -557,6 +557,9 @@ void debugCommand(client *c) {
             "    Protect a client from being freed, forcing deferred close.",
             "FORCE-TLS-WRITE-ERROR <0|1>",
             "    Force TLS write error for testing.",
+            "TLS-WRITEV-FAIL-LAST-IOV <0|1>",
+            "    Fail the last iovec of the next TLS writev that has already written more than",
+            "    NET_MAX_WRITES_PER_EVENT bytes, as if the peer reset the connection (one-shot).",
             "BIO-DRAIN <type>",
             "    Wait for the specified bio job queue to become empty.",
             NULL};
@@ -1163,6 +1166,19 @@ void debugCommand(client *c) {
             return;
         }
         server.debug_force_tls_write_error = val;
+        addReply(c, shared.ok);
+#else
+        addReplyError(c, "TLS is not enabled");
+#endif
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "tls-writev-fail-last-iov") && c->argc == 3) {
+#ifdef USE_OPENSSL
+        long val;
+        if (getLongFromObjectOrReply(c, c->argv[2], &val, NULL) != C_OK) return;
+        if (val < 0 || val > 1) {
+            addReplyError(c, "Value must be 0 or 1");
+            return;
+        }
+        server.debug_tls_writev_fail_last_iov = val;
         addReply(c, shared.ok);
 #else
         addReplyError(c, "TLS is not enabled");

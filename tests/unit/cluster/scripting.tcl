@@ -96,4 +96,9 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     test "Calling cluster shards in scripts is OK" {
         assert_equal [lsort [r 0 cluster shards]] [lsort [r 0 eval "return redis.call('cluster', 'shards')" 0]]
     }
+
+    test "Cross-slot command in a script does not break later script calls" {
+        assert_error "ERR Command 'mget' in script attempted to access keys that don't hash to the same slot*" {r 0 eval "return redis.call('mget', 'foo', 'bar')" 0}
+        assert_equal PONG [r 0 eval "return redis.call('ping')" 0]
+    }
 }

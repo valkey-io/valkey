@@ -119,8 +119,19 @@ proc failback {primary} {
     } else {
         fail "node $primary_id is still flagged as failing by some node"
     }
-    assert_equal {OK} [R $primary cluster failover]
-    wait_for_role $primary master
+    # A primary that has not yet processed $primary's demotion, or that got a
+    # stale primary claim from it, refuses its vote ("it is a primary node").
+    # The manual failover then times out without retrying, so retry it here.
+    for {set attempt 1} {$attempt <= 3} {incr attempt} {
+        if {[get_cluster_role $primary] eq "master"} break
+        assert_equal {OK} [R $primary cluster failover]
+        wait_for_condition 100 100 {
+            [get_cluster_role $primary] eq "master"
+        } else {
+            # Not elected within 10 s; the next attempt starts a new failover.
+        }
+    }
+    assert_equal master [get_cluster_role $primary]
 }
 
 # Restore the layout the tests assume.

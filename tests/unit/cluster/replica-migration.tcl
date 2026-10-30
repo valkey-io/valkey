@@ -508,3 +508,79 @@ start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}}
         resume_process [srv -2 pid]
     }
 } ;# start_cluster
+
+# Replica migration when the smallest-ID replica has failed (#4969).
+# Primary 0 has replicas 3, 4, 5; primary 1 has replica 6; primary 2 has replica 7.
+# Primary 2's only replica (7) and primary 0's smallest-ID replica are paused.
+# Primary 0 still has 2 working replicas and can spare one with migration barrier 1.
+# Verify that another live replica migrates to primary 2 even though the smallest-ID replica failed.
+proc repl_mig_replica_allocation {primaries replicas} {
+    set p0 [R 0 CLUSTER MYID]
+    set p1 [R 1 CLUSTER MYID]
+    set p2 [R 2 CLUSTER MYID]
+    R 3 CLUSTER REPLICATE $p0
+    R 4 CLUSTER REPLICATE $p0
+    R 5 CLUSTER REPLICATE $p0
+    R 6 CLUSTER REPLICATE $p1
+    R 7 CLUSTER REPLICATE $p2
+}
+
+proc repl_mig_lowest_id {idxs} {
+    set best -1
+    set best_id ""
+    foreach i $idxs {
+        set id [R $i CLUSTER MYID]
+        if {$best == -1 || [string compare $id $best_id] < 0} {
+            set best $i
+            set best_id $id
+        }
+    }
+    return $best
+}
+
+proc repl_mig_connected_replicas {primary} {
+    return [llength [lindex [R $primary role] 2]]
+}
+
+proc repl_mig_migrated {victim} {
+    set p2_port [srv -2 port]
+    foreach i {3 4 5} {
+        if {$i == $victim} continue
+        set role [R $i role]
+        if {[lindex $role 0] eq "slave" && [lindex $role 2] == $p2_port} {
+            return 1
+        }
+    }
+    return 0
+}
+
+proc repl_mig_run {seconds} {
+    set victim [repl_mig_lowest_id {3 4 5}]
+    wait_for_condition 100 100 {
+        [repl_mig_connected_replicas 0] == 3 && [repl_mig_connected_replicas 2] == 1
+    } else {
+        fail "replicas did not connect before the test"
+    }
+    set victim_pid [s -$victim process_id]
+    set orphan_pid [s -7 process_id]
+    pause_process $victim_pid
+    pause_process $orphan_pid
+
+    set migrated 0
+    for {set k 0} {$k < [expr {$seconds * 10}]} {incr k} {
+        if {[repl_mig_migrated $victim]} {
+            set migrated 1
+            break
+        }
+        after 100
+    }
+    resume_process $victim_pid
+    resume_process $orphan_pid
+    return $migrated
+}
+
+start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 1 cluster-allow-replica-migration yes}} {
+    test "Replica migration: a failed or pfail smallest-ID replica does not block migration" {
+        assert_equal 1 [repl_mig_run 15]
+    }
+} continuous_slot_allocation repl_mig_replica_allocation

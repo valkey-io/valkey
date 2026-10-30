@@ -287,7 +287,7 @@ void dictDictDestructor(dict *d, void *val) {
 }
 
 int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
-    int l1, l2;
+    size_t l1, l2;
     UNUSED(d);
 
     l1 = sdslen((sds)key1);

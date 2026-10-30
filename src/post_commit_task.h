@@ -39,6 +39,7 @@ void executeDeferredTasksForAck(long long consensus_ack_offset);
 /* Move pending tasks (registered during command execution before the
  * replication offset was known) to the official tasks list, setting
  * their offset to server.primary_repl_offset. */
+void executeAllDeferredTasks(bool include_keyspace_events);
 bool hasPendingDeferredTasks(void);
 void certifyPendingDeferredTasks(void);
 

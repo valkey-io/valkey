@@ -848,16 +848,34 @@ static void freeClientsWaitingAck(reply_blocking_t *rb_state) {
 }
 
 // Reset primary state for the reply-blocking subsystem.
-static void replyBlockingResetPrimaryState(bool is_free_clients_needed) {
-    if (listLength(server.reply_blocking.clients_waiting_ack) > 0) {
-        if (is_free_clients_needed) {
-            freeClientsWaitingAck(&server.reply_blocking);
-        } else {
-            unblockResponsesWithAckOffset(&server.reply_blocking, LLONG_MAX);
-        }
-        serverAssert(listLength(server.reply_blocking.clients_waiting_ack) == 0);
+/* Make everything written so far durable before it is released. A forced
+ * flush waits for an in-flight BIO write+fsync and writes the rest of the AOF
+ * buffer; the fsync covers modes that would otherwise defer it (everysec).
+ * With AOF off, stopAppendOnly() has already flushed and fsynced. */
+static void syncAofBeforeRelease(void) {
+    if (server.aof_state == AOF_OFF || server.aof_fd == -1) return;
+    flushAppendOnlyFile(1);
+    if (valkey_fsync(server.aof_fd) == -1) {
+        serverLog(LL_WARNING, "Failed to fsync the AOF before releasing held replies: %s", strerror(errno));
     }
-    postCommitTaskEmptyLists();
+}
+
+/* Stop tracking durability on this primary. Turning the feature off releases
+ * held replies and runs every deferred task once the AOF is synced. On
+ * demotion the held writes may not survive: clients waiting for them are
+ * disconnected and their keyspace events dropped, but invalidations are still
+ * sent, since a spurious one is harmless and a missed one leaves a client's
+ * cache stale. */
+static void replyBlockingResetPrimaryState(bool is_free_clients_needed) {
+    if (is_free_clients_needed) {
+        executeAllDeferredTasks(false);
+        freeClientsWaitingAck(&server.reply_blocking);
+    } else {
+        syncAofBeforeRelease();
+        unblockResponsesWithAckOffset(&server.reply_blocking, LLONG_MAX);
+        executeAllDeferredTasks(true);
+    }
+    serverAssert(listLength(server.reply_blocking.clients_waiting_ack) == 0);
 }
 
 /* Drop the tracking of not-yet-durable writes: uncommitted keys, dirty

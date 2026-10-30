@@ -281,6 +281,17 @@ void executeDeferredTasksForAck(const long long consensus_ack_offset) {
     rb_state->in_post_commit_task_execution = prev_in_post_commit_task_execution;
 }
 
+/* Run every deferred task now, pending ones included, then drop the rest.
+ * Used when reply blocking stops tracking durability for this node, so no ack
+ * would ever run them. Keyspace events are only published when
+ * include_keyspace_events is set: on demotion the writes may not survive. */
+void executeAllDeferredTasks(bool include_keyspace_events) {
+    certifyPendingDeferredTasks();
+    if (!include_keyspace_events) listEmpty(server.reply_blocking.tasks_waiting_ack[POST_COMMIT_KEYSPACE_NOTIFY_TASK]);
+    executeDeferredTasksForAck(LLONG_MAX);
+    postCommitTaskEmptyLists();
+}
+
 // True when tasks registered in the current execution unit wait for an offset.
 bool hasPendingDeferredTasks(void) {
     for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {

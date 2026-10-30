@@ -1847,6 +1847,90 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly no ap
     }
 }
 
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes notify-keyspace-events KEA}} {
+    # A tracking client caches the key, a subscriber listens for its events, and a
+    # writer modifies it with the AOF paused and then disconnects, so nothing but
+    # the deferred tasks can deliver the invalidation and the event.
+    proc setup_deferred_tasks {key} {
+        set tracker [valkey_deferring_client]
+        $tracker HELLO 3
+        $tracker read
+        $tracker CLIENT TRACKING on
+        $tracker read
+        r set $key original
+        $tracker GET $key
+        assert_equal original [$tracker read]
+
+        set sub [valkey_deferring_client]
+        $sub subscribe __keyspace@9__:$key
+        $sub read
+
+        r DEBUG reply-blocking-pause aof
+        set writer [valkey_deferring_client]
+        $writer set $key modified
+        wait_for_condition 50 100 {
+            [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack] == 1
+        } else {
+            fail "write was not held"
+        }
+        $writer close
+        wait_for_condition 50 100 {
+            [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack] == 0
+        } else {
+            fail "writer was not freed"
+        }
+        return [list $tracker $sub]
+    }
+
+    # True if the client receives a message matching pattern within ~1s.
+    proc received {client pattern} {
+        set fd [$client channel]
+        fconfigure $fd -blocking 0
+        set got ""
+        for {set i 0} {$i < 50} {incr i} {
+            append got [read $fd]
+            if {[string match $pattern $got]} break
+            after 20
+        }
+        fconfigure $fd -blocking 1
+        return [string match $pattern $got]
+    }
+
+    foreach {name disable enable} {
+        "appendfsync everysec" {config set appendfsync everysec} {config set appendfsync always}
+        "bio-aof-offload-enabled no" {config set bio-aof-offload-enabled no} {config set bio-aof-offload-enabled yes}
+    } {
+        test "Turning reply blocking off ($name) delivers deferred invalidations and events" {
+            lassign [setup_deferred_tasks rb:task:off] tracker sub
+            assert_equal 0 [received $tracker *rb:task:off*]
+
+            r {*}$disable
+            assert_equal 1 [received $tracker *invalidate*rb:task:off*]
+            assert_equal 1 [received $sub *message*rb:task:off*set*]
+
+            $tracker close
+            $sub close
+            r DEBUG reply-blocking-resume aof
+            r {*}$enable
+        }
+    }
+
+    test "Demotion delivers deferred invalidations and drops events for writes not known durable" {
+        lassign [setup_deferred_tasks rb:task:demote] tracker sub
+
+        r replicaof 127.0.0.1 1
+        # A spurious invalidation is harmless; a stale cache is not.
+        assert_equal 1 [received $tracker *invalidate*rb:task:demote*]
+        # The write may not survive, so its event is not published.
+        assert_equal 0 [received $sub *message*rb:task:demote*set*]
+
+        r replicaof no one
+        r DEBUG reply-blocking-resume aof
+        $tracker close
+        $sub close
+    }
+}
+
 start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
     test "Enabling reply blocking at runtime initializes fake clients created earlier" {
         # A Lua write pools a module temp client with no reply-blocking state.

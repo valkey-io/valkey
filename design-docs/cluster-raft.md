@@ -165,24 +165,6 @@ SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <ta
     needed to catch the case where a slot migration races against a
     failover that invalidated the shard's topology.
 
-    CLUSTER DELSLOTS / DELSLOTSRANGE on Raft only unassign slots this
-    node currently owns. Sent to a non-owner, the command is a no-op
-    that still replies OK. That matches gossip's end state: gossip
-    DELSLOTS on a non-owner only clears that node's local view, and the
-    real owner re-gossips it back, so the cluster is unchanged. A Raft
-    SLOT_CHANGE with target=NULL is cluster-wide and deletes the owner's
-    keys, so a command sent to the wrong node must not be able to
-    destroy data. Unassigned slots still error with "Slot %d is already
-    unassigned". A range that spans slots owned by different nodes
-    proposes only the slots owned by the receiver; if none remain, the
-    node replies OK without blocking.
-
-    Applying a SLOT_CHANGE that assigns a slot to this node's shard
-    clears leftover IMPORTING (ownership reached us via the log, not
-    via SETSLOT NODE sent to this node). If the slot left our shard,
-    leftover MIGRATING is cleared too. SETSLOT NODE to the current
-    owner is a no-op so it does not wipe an in-progress migration.
-
 SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
     primary means promote to primary. It carries two epochs because it

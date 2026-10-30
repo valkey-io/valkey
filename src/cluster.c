@@ -1489,36 +1489,6 @@ static int checkSlotAssignmentsOrReply(client *c, slotRange *ranges, int numrang
     return C_OK;
 }
 
-/* Raft DELSLOTS: keep only slots owned by this node. Return 0 if none remain. */
-static int filterOwnedSlotRanges(slotRange **ranges_p, int numranges) {
-    slotRange *ranges = *ranges_p;
-    clusterNode *me = getMyClusterNode();
-    int owned = 0, n = 0;
-    for (int i = 0; i < numranges; i++) {
-        for (int s = ranges[i].start_slot; s <= ranges[i].end_slot; s++) {
-            if (getNodeBySlot(s) == me) owned++;
-        }
-    }
-    if (owned == 0) return 0;
-
-    slotRange *out = zmalloc(sizeof(*out) * owned);
-    for (int i = 0; i < numranges; i++) {
-        for (int s = ranges[i].start_slot; s <= ranges[i].end_slot; s++) {
-            if (getNodeBySlot(s) != me) continue;
-            if (n && s == out[n - 1].end_slot + 1)
-                out[n - 1].end_slot = s;
-            else {
-                out[n].start_slot = s;
-                out[n].end_slot = s;
-                n++;
-            }
-        }
-    }
-    zfree(ranges);
-    *ranges_p = out;
-    return n;
-}
-
 /* clusterParseSetSlotCommand validates the arguments of the CLUSTER SETSLOT command,
  * extracts the target slot number (slot_out), and determines the target node (node_out)
  * if applicable. It also calculates a timeout value (timeout_out) based on an optional
@@ -1902,14 +1872,6 @@ void clusterCommand(client *c) {
             zfree(ranges);
             return;
         }
-        if (del && server.cluster_protocol == CLUSTER_PROTOCOL_RAFT) {
-            numslots = filterOwnedSlotRanges(&ranges, numslots);
-            if (numslots == 0) {
-                zfree(ranges);
-                addReply(c, shared.ok);
-                return;
-            }
-        }
         /* Propose the slot change. The reply is deferred to the callback,
          * which is called after the change is applied. */
         void *h = blockClientAsync(c);
@@ -1956,14 +1918,6 @@ void clusterCommand(client *c) {
         if (checkSlotAssignmentsOrReply(c, ranges, numranges, del) == C_ERR) {
             zfree(ranges);
             return;
-        }
-        if (del && server.cluster_protocol == CLUSTER_PROTOCOL_RAFT) {
-            numranges = filterOwnedSlotRanges(&ranges, numranges);
-            if (numranges == 0) {
-                zfree(ranges);
-                addReply(c, shared.ok);
-                return;
-            }
         }
         /* Propose the slot change. The reply is deferred to the callback,
          * which is called after the change is applied.

@@ -3293,6 +3293,8 @@ static sds ACLLoadFromFile(const char *filename) {
             new_default = ACLCreateDefaultUser();
         }
 
+        /* The default user is special since after the copy its old and new rules are the same object. */
+        ACLKillPubsubClientsIfNeeded(new_default, DefaultUser);
         ACLCopyUser(DefaultUser, new_default);
         ACLFreeUser(new_default);
         raxInsert(Users, (unsigned char *)"default", 7, DefaultUser, NULL);

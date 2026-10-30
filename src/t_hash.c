@@ -1874,8 +1874,13 @@ void hsetexCommand(client *c) {
     } else if (need_rewrite_argv) {
         /* We use new_argv for rewrite */
         new_argv = zmalloc(sizeof(robj *) * c->argc);
+        /* Keep the key as is: it may be named like a flag. */
+        new_argv[0] = shared.hsetex;
+        new_argv[1] = c->argv[1];
+        incrRefCount(c->argv[1]);
+        new_argc = 2;
         // Copy optional args (skip NX/XX/FNX/FXX)
-        for (int i = 0; i < fields_index; i++) {
+        for (int i = 2; i < fields_index; i++) {
             if (strcasecmp(objectGetVal(c->argv[i]), "NX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "XX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "FNX") &&

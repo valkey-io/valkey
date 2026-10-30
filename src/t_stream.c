@@ -3217,8 +3217,8 @@ void xpendingCommand(client *c) {
  * 4. FORCE:
  *      Creates the pending message entry in the PEL even if certain
  *      specified IDs are not already in the PEL assigned to a different
- *      client. However the message must be exist in the stream; otherwise,
- *      the IDs of nonexistent messages are ignored.
+ *      client. The message must exist in the stream, except AOF/slot
+ *      replay of FORCE JUSTID which may restore a deleted ID.
  *
  * 5. JUSTID:
  *      Return just an array of IDs of messages successfully claimed,
@@ -3355,9 +3355,10 @@ void xclaimCommand(client *c) {
         void *result = NULL;
         raxFind(group->pel, buf, sizeof(buf), &result);
         streamNACK *nack = result;
+        int exists = streamEntryExists(objectGetVal(o), &id);
 
-        /* Item must exist for us to transfer it to another consumer. */
-        if (!streamEntryExists(objectGetVal(o), &id)) {
+        /* Drop PEL entries whose stream item is gone, except AOF/slot replay. */
+        if (!exists) {
             /* Clear this entry from the PEL, it no longer exists */
             if (nack != NULL) {
                 /* Propagate this change (we are going to delete the NACK). */
@@ -3369,15 +3370,12 @@ void xclaimCommand(client *c) {
                 raxRemove(group->pel, buf, sizeof(buf), NULL);
                 raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
                 streamFreeNACK(nack);
+                continue;
             }
-            continue;
+            if (!(force && justid && mustObeyClient(c))) continue;
         }
 
-        /* If FORCE is passed, let's check if at least the entry
-         * exists in the Stream. In such case, we'll create a new
-         * entry in the PEL from scratch, so that XCLAIM can also
-         * be used to create entries in the PEL. Useful for AOF
-         * and replication of consumer groups. */
+        /* FORCE: create a PEL entry from scratch (AOF/replication). */
         if (force && nack == NULL) {
             /* Create the NACK. */
             nack = streamCreateNACK(NULL);
@@ -3419,6 +3417,7 @@ void xclaimCommand(client *c) {
             if (justid) {
                 addReplyStreamID(c, &id);
             } else {
+                serverAssert(exists);
                 serverAssert(streamReplyWithRange(c, objectGetVal(o), &id, &id, 1, 0, NULL, NULL, STREAM_RWR_RAWENTRIES, NULL) ==
                              1);
             }

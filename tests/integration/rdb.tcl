@@ -492,6 +492,44 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+start_server {overrides {forkless-infrastructure-enabled yes save "" appendonly yes}} {
+    test "forkless save survives writes queued before the first replicated write of a script or EXEC" {
+        waitForBgrewriteaof r
+        r config set bgsave-default-method forkless
+        r debug populate 1000
+        r config set rdb-key-save-delay 100000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        # An AOF-only write is queued before the first write that reaches the replication stream.
+        r eval {
+            server.set_repl(server.REPL_AOF)
+            server.call('set', 'a', '1')
+            server.set_repl(server.REPL_ALL)
+            server.call('set', 'b', '1')
+        } 0
+        assert_equal [r ping] "PONG"
+
+        # EXEC IFNE expires the key, queueing an UNLINK before the transaction runs.
+        r debug set-active-expire 0
+        r set c 1 px 1
+        after 10
+        r multi
+        r set d 1
+        r exec ifne c 2
+        assert_equal [r ping] "PONG"
+
+        r debug set-active-expire 1
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal [s rdb_last_bgsave_status] ok
+    } {} {needs:debug}
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         

@@ -509,6 +509,74 @@ void rpushxCommand(client *c) {
     pushGenericCommand(c, LIST_TAIL, 1);
 }
 
+/* Implements the generic list push-if operation for LPUSHIF/RPUSHIF.
+ *
+ * Pushes <newvalue> to the head (LPUSHIF) or tail (RPUSHIF) only when the
+ * element currently at that position is equal (EQ) or not equal (NE) to
+ * <expected>. Replies with the new list length when the element is pushed,
+ * or 0 when the key does not exist or the condition is not satisfied. */
+void pushIfGenericCommand(client *c, int where) {
+    robj *o;
+    int flag_eq = 1;
+
+    if (c->argc != 5) {
+        addReplyErrorArity(c);
+        return;
+    }
+
+    /* The comparison flag is either EQ or NE. */
+    if (!strcasecmp(objectGetVal(c->argv[2]), "ne")) {
+        flag_eq = 0;
+    } else if (strcasecmp(objectGetVal(c->argv[2]), "eq")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_LIST)) return;
+    if (!o) {
+        /* A missing key has no element to compare against, so the element
+         * is never pushed. */
+        addReply(c, shared.czero);
+        return;
+    }
+
+    /* Peek the element at the operated end and compare it with the
+     * expected value. */
+    int index = (where == LIST_HEAD) ? 0 : -1;
+    int matched = 0;
+    listTypeIterator *iter = listTypeInitIterator(o, index, LIST_TAIL);
+    listTypeEntry entry;
+    if (listTypeNext(iter, &entry)) {
+        int equal = listTypeEqual(&entry, c->argv[3]);
+        matched = flag_eq ? equal : !equal;
+    }
+    listTypeReleaseIterator(iter);
+
+    if (!matched) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    listTypeTryConversionAppend(o, c->argv, 4, 4, NULL, NULL);
+    listTypePush(o, c->argv[4], where);
+    signalModifiedKey(c, c->db, c->argv[1]);
+    char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
+    notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
+    server.dirty++;
+    addReplyLongLong(c, listTypeLength(o));
+}
+
+/* LPUSHIF <key> (EQ|NE) <expected> <newvalue> */
+void lpushifCommand(client *c) {
+    pushIfGenericCommand(c, LIST_HEAD);
+}
+
+/* RPUSHIF <key> (EQ|NE) <expected> <newvalue> */
+void rpushifCommand(client *c) {
+    pushIfGenericCommand(c, LIST_TAIL);
+}
+
 /* LINSERT <key> (BEFORE|AFTER) <pivot> <element> */
 void linsertCommand(client *c) {
     int where;
@@ -848,6 +916,66 @@ void lpopCommand(client *c) {
 /* RPOP <key> [count] */
 void rpopCommand(client *c) {
     popGenericCommand(c, LIST_TAIL);
+}
+
+/* Implements the generic list pop-if operation for LPOPIF/RPOPIF.
+ *
+ * Pops a single element from the head (LPOPIF) or tail (RPOPIF) only when
+ * the element at that position is equal (EQ) or not equal (NE) to <value>.
+ * Replies with nil when the key does not exist, the popped element when the
+ * condition holds, or 0 otherwise. */
+void popIfGenericCommand(client *c, int where) {
+    robj *o;
+    int flag_eq = 1;
+
+    if (c->argc != 4) {
+        addReplyErrorArity(c);
+        return;
+    }
+
+    /* The comparison flag is either EQ or NE. */
+    if (!strcasecmp(objectGetVal(c->argv[2]), "ne")) {
+        flag_eq = 0;
+    } else if (strcasecmp(objectGetVal(c->argv[2]), "eq")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    o = lookupKeyWriteOrReply(c, c->argv[1], shared.null[c->resp]);
+    if (o == NULL || checkType(c, o, OBJ_LIST)) return;
+
+    /* Peek the element at the operated end and compare it with the
+     * expected value. */
+    int index = (where == LIST_HEAD) ? 0 : -1;
+    int matched = 0;
+    listTypeIterator *iter = listTypeInitIterator(o, index, LIST_TAIL);
+    listTypeEntry entry;
+    if (listTypeNext(iter, &entry)) {
+        int equal = listTypeEqual(&entry, c->argv[3]);
+        matched = flag_eq ? equal : !equal;
+    }
+    listTypeReleaseIterator(iter);
+
+    if (!matched) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    robj *value = listTypePop(o, where);
+    listElementsRemoved(c, c->argv[1], where, o, 1, NULL);
+    serverAssert(value != NULL);
+    addReplyBulk(c, value);
+    decrRefCount(value);
+}
+
+/* LPOPIF <key> (EQ|NE) <value> */
+void lpopifCommand(client *c) {
+    popIfGenericCommand(c, LIST_HEAD);
+}
+
+/* RPOPIF <key> (EQ|NE) <value> */
+void rpopifCommand(client *c) {
+    popIfGenericCommand(c, LIST_TAIL);
 }
 
 /* LRANGE <key> <start> <stop> */

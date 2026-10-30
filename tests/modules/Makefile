@@ -39,6 +39,7 @@ TEST_MODULES = \
     datatype.so \
     datatype2.so \
     auth.so \
+    replicationauth.so \
     keyspace_events.so \
     block_keyspace_notification.so \
     blockedclient.so \

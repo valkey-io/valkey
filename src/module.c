@@ -256,6 +256,7 @@ struct ValkeyModuleKey {
 struct ValkeyModuleBlockedClient;
 typedef int (*ValkeyModuleCmdFunc)(ValkeyModuleCtx *ctx, void **argv, int argc);
 typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx, void *username, void *password, ValkeyModuleString **err);
+typedef moduleReplicationCredentialsCallback ValkeyModuleReplicationCredentialsCallback;
 typedef void (*ValkeyModuleDisconnectFunc)(ValkeyModuleCtx *ctx, struct ValkeyModuleBlockedClient *bc);
 
 /* This struct holds the information about a command registered by a module.*/
@@ -2490,6 +2491,8 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->options = 0;
     module->info_cb = 0;
     module->defrag_cb = 0;
+    module->replication_credentials_cb = NULL;
+    module->in_replication_credentials_cb = 0;
     module->loadmod = NULL;
     module->num_commands_with_acl_categories = 0;
     module->onload = 1;
@@ -8748,6 +8751,72 @@ void VM_RegisterAuthCallback(ValkeyModuleCtx *ctx, ValkeyModuleAuthCallback cb) 
     listAddNodeHead(moduleAuthCallbacks, auth_ctx);
 }
 
+/* Register a callback that supplies fresh credentials for outgoing replication
+ * connections, instead of the primaryuser / primaryauth configuration. This API
+ * must be called from ValkeyModule_OnLoad with a non-NULL callback. A module can
+ * register one callback; if multiple loaded modules register one, the most
+ * recently loaded module is used. Unloading it exposes the previous provider.
+ *
+ * The callback runs synchronously on the main thread for every replication
+ * authentication handshake, including the RDB connection in dual-channel mode:
+ *
+ *     int credentials(ValkeyModuleCtx *ctx, ValkeyModuleString **username,
+ *                     ValkeyModuleString **password);
+ *
+ * Return VALKEYMODULE_OK and set *password (which may be an empty string).
+ * Leave *username NULL to authenticate as the default user. Strings are
+ * borrowed: the server copies them before freeing the callback context. A
+ * provider may return its own persistent strings or use AutoMemory to create
+ * temporary strings in ctx. The server does not take ownership of persistent
+ * strings. The callback must not block, unload its own module, or change
+ * replication state (REPLICAOF, CLUSTER REPLICATE, CLUSTER RESET). Providers
+ * should refresh tokens in advance and return the current token here.
+ *
+ * VALKEYMODULE_ERR or a missing password aborts the connection attempt without
+ * falling back to configured credentials. No provider means configured
+ * credentials are used as before. Existing connections are not reauthenticated.
+ * Returns VALKEYMODULE_ERR for an invalid registration context or NULL callback.
+ */
+int VM_RegisterReplicationCredentialsCallback(ValkeyModuleCtx *ctx,
+                                              ValkeyModuleReplicationCredentialsCallback cb) {
+    if (!ctx->module || !ctx->module->onload || !cb) return VALKEYMODULE_ERR;
+    ctx->module->replication_credentials_cb = cb;
+    return VALKEYMODULE_OK;
+}
+
+/* Resolve the latest loaded provider and copy its credentials into owned SDSs.
+ * Return C_OK with two NULL outputs when no provider exists. Otherwise return
+ * C_OK with a password, or C_ERR if the provider fails or omits its password.
+ * The caller frees non-NULL outputs; context-owned strings are copied first. */
+int moduleGetReplicationCredentials(sds *username, sds *password) {
+    *username = *password = NULL;
+    listIter iter;
+    listNode *node;
+    listRewindTail(modules, &iter);
+    while ((node = listNext(&iter))) {
+        ValkeyModule *module = listNodeValue(node);
+        if (!module->replication_credentials_cb) continue;
+        ValkeyModuleCtx ctx;
+        moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+        ValkeyModuleString *user = NULL, *pass = NULL;
+        module->in_replication_credentials_cb++;
+        int result = module->replication_credentials_cb(&ctx, &user, &pass);
+        if (result == VALKEYMODULE_OK && pass) {
+            size_t len;
+            const char *value = VM_StringPtrLen(pass, &len);
+            *password = sdsnewlen(value, len);
+            if (user) {
+                value = VM_StringPtrLen(user, &len);
+                *username = sdsnewlen(value, len);
+            }
+        }
+        moduleFreeContext(&ctx);
+        module->in_replication_credentials_cb--;
+        return result == VALKEYMODULE_OK && *password ? C_OK : C_ERR;
+    }
+    return C_OK;
+}
+
 /* Helper function to invoke the free private data callback of a Module blocked client. */
 void moduleInvokeFreePrivDataCallback(client *c, ValkeyModuleBlockedClient *bc) {
     if (bc->privdata && bc->free_privdata) {
@@ -14084,6 +14153,10 @@ int moduleLoadStatic(const char *module_name, void **module_argv, int module_arg
 }
 
 static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
+    if (module->in_replication_credentials_cb) {
+        *errmsg = "the module is executing a replication credentials callback";
+        return C_ERR;
+    }
     if (listLength(module->types)) {
         *errmsg = "the module exports one or more module-side data "
                   "types, can't unload";
@@ -16070,6 +16143,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterEnumConfig);
     REGISTER_API(LoadConfigs);
     REGISTER_API(RegisterAuthCallback);
+    REGISTER_API(RegisterReplicationCredentialsCallback);
     REGISTER_API(RdbStreamCreateFromFile);
     REGISTER_API(RdbStreamFree);
     REGISTER_API(RdbLoad);

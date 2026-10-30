@@ -2305,6 +2305,8 @@ struct valkeyServer {
     int repl_syncio_timeout;              /* Timeout for synchronous I/O calls */
     int repl_state;                       /* Replication status if the instance is a replica */
     int repl_rdb_channel_state;           /* State of the replica's rdb channel during dual-channel-replication */
+    int repl_auth_sent;                   /* AUTH was sent on the current main-channel handshake. */
+    int repl_rdb_auth_sent;               /* AUTH was sent on the current RDB-channel handshake. */
     off_t repl_transfer_size;             /* Size of RDB to read from primary during sync. */
     off_t repl_transfer_read;             /* Amount of RDB read from primary during sync. */
     off_t repl_transfer_last_fsync_off;   /* Offset when we fsync-ed last time. */

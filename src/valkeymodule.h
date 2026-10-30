@@ -1548,6 +1548,14 @@ typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx,
                                         ValkeyModuleString *username,
                                         ValkeyModuleString *password,
                                         ValkeyModuleString **err);
+/* Provide credentials for one outgoing replication authentication handshake.
+ * Return VALKEYMODULE_OK with a borrowed password and optional username, or
+ * VALKEYMODULE_ERR to abort. The server copies outputs before freeing ctx;
+ * use AutoMemory for temporary strings and refresh tokens outside this call.
+ * Do not change replication state from this callback. */
+typedef int (*ValkeyModuleReplicationCredentialsCallback)(ValkeyModuleCtx *ctx,
+                                                          ValkeyModuleString **username,
+                                                          ValkeyModuleString **password);
 
 typedef struct ValkeyModuleTypeMethods {
     uint64_t version;
@@ -1993,6 +2001,11 @@ VALKEYMODULE_API int (*ValkeyModule_DictCompare)(ValkeyModuleDictIter *di,
 VALKEYMODULE_API int (*ValkeyModule_RegisterInfoFunc)(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RegisterAuthCallback)(ValkeyModuleCtx *ctx,
                                                            ValkeyModuleAuthCallback cb) VALKEYMODULE_ATTR;
+/* Register an OnLoad-only credential provider; return VALKEYMODULE_ERR for
+ * a NULL callback or invalid context. The latest loaded provider takes priority
+ * over static auth; provider failures abort the attempt without static fallback. */
+VALKEYMODULE_API int (*ValkeyModule_RegisterReplicationCredentialsCallback)(ValkeyModuleCtx *ctx,
+                                                                            ValkeyModuleReplicationCredentialsCallback cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoAddSection)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoBeginDictField)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_InfoEndDictField)(ValkeyModuleInfoCtx *ctx) VALKEYMODULE_ATTR;
@@ -2591,6 +2604,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(DictCompareC);
     VALKEYMODULE_GET_API(RegisterInfoFunc);
     VALKEYMODULE_GET_API(RegisterAuthCallback);
+    VALKEYMODULE_GET_API(RegisterReplicationCredentialsCallback);
     VALKEYMODULE_GET_API(InfoAddSection);
     VALKEYMODULE_GET_API(InfoBeginDictField);
     VALKEYMODULE_GET_API(InfoEndDictField);

@@ -213,8 +213,9 @@ typedef struct {
     char leader[CLUSTER_NAMELEN]; /* All zeros = unknown */
 
     /* Manual failover state (on the replica side) */
-    mstime_t mf_end; /* Timeout for manual failover, 0 = not in progress */
-    void *mf_ctx;    /* blockedAsyncHandle for the CLUSTER FAILOVER client */
+    mstime_t mf_end;             /* Timeout for manual failover, 0 = not in progress */
+    long long mf_primary_offset; /* Primary's offset after pausing, -1 = not received yet */
+    void *mf_ctx;                /* blockedAsyncHandle for the CLUSTER FAILOVER client */
     void (*mf_callback)(void *ctx, const char *error);
 
     /* Automatic failover state (on the replica side) */
@@ -2446,9 +2447,8 @@ static void clusterRaftCron(void) {
             rs->mf_end = 0;
             rs->mf_ctx = NULL;
             rs->mf_callback = NULL;
-        } else if (nodeIsReplica(myself) && myself->replicaof &&
-                   replicationGetReplicaOffset() == server.primary_repl_offset &&
-                   server.primary_repl_offset > 0) {
+        } else if (nodeIsReplica(myself) && myself->replicaof && rs->mf_primary_offset != -1 &&
+                   replicationGetReplicaOffset() == rs->mf_primary_offset) {
             clusterNode *primary = myself->replicaof;
             uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
             sds entry = sdsnew("FAILOVER ");
@@ -2785,6 +2785,19 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
                          PAUSE_ACTIONS_CLIENT_WRITE_SET);
             serverLog(LL_NOTICE, "Manual failover requested by replica %.40s, pausing writes.",
                       link->node->name);
+            /* Tell the replica the offset at which writes were paused, so it
+             * knows when it has received all of the primary's writes. */
+            sds msg = wireNewMsg("FAILOVER_PAUSED");
+            msg = sdscatfmt(msg, " %I", server.primary_repl_offset);
+            msg = wireFinishMsg(msg);
+            clusterRaftSendMsg(link, msg);
+        }
+    } else if (!strcasecmp(argv[0], "FAILOVER_PAUSED") && argc >= 2) {
+        /* Replica side: the primary paused writes at this offset. */
+        clusterRaftState *rs = RAFT_STATE();
+        if (rs->mf_end && nodeIsReplica(myself) && link->node && link->node == myself->replicaof) {
+            rs->mf_primary_offset = strtoll(argv[1], NULL, 10);
+            serverLog(LL_NOTICE, "Primary paused writes at offset %lld for manual failover.", rs->mf_primary_offset);
         }
     } else if (!strcasecmp(argv[0], "REPL_OFFSETS") && argc >= 3) {
         /* Leader broadcasts replication offsets for a set of nodes.
@@ -3837,15 +3850,16 @@ static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callb
             if (callback) callback(ctx, "manual failover already in progress");
             return;
         }
-        rs->mf_end = monotonicMs() + server.cluster_mf_timeout;
-        rs->mf_ctx = ctx;
-        rs->mf_callback = callback;
-
-        /* Send FAILOVER_PREPARE to the primary. */
         if (!primary->link) {
             if (callback) callback(ctx, "no link to primary");
             return;
         }
+        rs->mf_end = monotonicMs() + server.cluster_mf_timeout;
+        rs->mf_primary_offset = -1;
+        rs->mf_ctx = ctx;
+        rs->mf_callback = callback;
+
+        /* Send FAILOVER_PREPARE to the primary. */
         sds msg = wireNewMsg("FAILOVER_PREPARE");
         msg = wireFinishMsg(msg);
         clusterRaftSendMsg(primary->link, msg);

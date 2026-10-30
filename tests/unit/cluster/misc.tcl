@@ -130,3 +130,17 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
         wait_for_cluster_state ok
     }
 }
+
+start_cluster 2 1 {tags {external:skip cluster needs:debug}} {
+    test "Replica survives CLUSTER REPLICATE sent by its primary" {
+        wait_for_cluster_state ok
+        set new_primary_id [R 1 CLUSTER MYID]
+        R 0 DEBUG REPLICATE CLUSTER REPLICATE $new_primary_id
+        wait_for_condition 100 100 {
+            [dict get [cluster_get_myself 2] slaveof] eq $new_primary_id
+        } else {
+            fail "Replica did not switch to the new primary"
+        }
+        assert_equal {PONG} [R 2 PING]
+    }
+}

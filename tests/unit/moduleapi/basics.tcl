@@ -7,6 +7,11 @@ start_server {tags {"modules"}} {
         r test.basics
     } {ALL TESTS PASSED}
 
+    test {RM_CallReplyAttributeElement returns attribute key and value} {
+        r hello 2
+        r test.callresp3attribute
+    } {OK}
+
     test {test rm_call auto mode} {
         r hello 2
         set reply [r test.rmcallautomode]

@@ -217,9 +217,9 @@ static void callReplyAttribute(ReplyParser *parser, void *ctx, size_t len, const
     /* Continue parsing the attribute reply */
     rep->attribute->len = len;
     rep->attribute->type = VALKEYMODULE_REPLY_ATTRIBUTE;
+    rep->attribute->private_data = rep->private_data;
     callReplyParseCollection(parser, rep->attribute, len, proto, 2);
     rep->attribute->flags |= REPLY_FLAG_PARSED | REPLY_FLAG_RESP3;
-    rep->attribute->private_data = rep->private_data;
 
     /* Continue parsing the reply */
     parseReply(parser, rep);
@@ -497,7 +497,7 @@ CallReply *callReplyGetAttribute(CallReply *rep) {
  * explicitly or used after CallReply itself is freed.
  */
 int callReplyGetAttributeElement(CallReply *rep, size_t idx, CallReply **key, CallReply **val) {
-    return callReplyGetMapElementInternal(rep, idx, key, val, VALKEYMODULE_REPLY_MAP);
+    return callReplyGetMapElementInternal(rep, idx, key, val, VALKEYMODULE_REPLY_ATTRIBUTE);
 }
 
 /* Return a big number reply value. Applicable to:

@@ -94,3 +94,74 @@ start_cluster 3 4 {tags {external:skip cluster}} {
 start_cluster 3 4 {tags {external:skip cluster}} {
     test_auto_failover "sigterm" 10
 }
+
+proc test_shutdown_prefers_failover_enabled {how {all_nofailover 0}} {
+    test "Shutdown prefers failover-enabled replicas - $how - all nofailover: $all_nofailover" {
+        set primary [srv 0 client]
+        set preferred [srv -3 client]
+        set fallback [srv -6 client]
+        set preferred_id [$preferred cluster myid]
+        set fallback_id [$fallback cluster myid]
+        set promoted -3
+        set retained -6
+
+        $primary config set shutdown-timeout 0
+        if {$how eq "sigterm"} {
+            $primary config set shutdown-on-sigterm failover
+        }
+        $fallback config set cluster-replica-no-failover yes
+        if {$all_nofailover} {
+            $preferred config set cluster-replica-no-failover yes
+            set promoted -6
+            set retained -3
+        }
+        wait_for_condition 1000 50 {
+            [cluster_has_flag [cluster_get_node_by_id 0 $fallback_id] nofailover] &&
+            (!$all_nofailover ||
+             [cluster_has_flag [cluster_get_node_by_id 0 $preferred_id] nofailover])
+        } else {
+            fail "Primary did not receive the nofailover flags"
+        }
+
+        # Reconnect the nofailover replica last so the old selection would pick it.
+        wait_replica_acked_ofs $primary $preferred [srv -3 host] [srv -3 port]
+        $fallback client kill type master
+        wait_for_condition 1000 50 {
+            [s -6 master_link_status] eq "up"
+        } else {
+            fail "Nofailover replica did not reconnect"
+        }
+        $primary incr key_991803
+        wait_replica_acked_ofs $primary $preferred [srv -3 host] [srv -3 port]
+        wait_replica_acked_ofs $primary $fallback [srv -6 host] [srv -6 port]
+        $primary config set repl-ping-replica-period 3600
+        wait_for_condition 1000 50 {
+            [check_replica_acked_ofs $primary [srv -3 host] [srv -3 port]] &&
+            [check_replica_acked_ofs $primary [srv -6 host] [srv -6 port]]
+        } else {
+            fail "Replicas did not acknowledge the final offset"
+        }
+
+        shutdown_how 0 $how
+        wait_for_condition 1000 50 {
+            [s $promoted role] eq "master"
+        } else {
+            fail "Expected replica was not promoted"
+        }
+        verify_log_message $promoted "*Forced failover primary request accepted*" 0
+        assert_equal "slave" [s $retained role]
+        assert_equal 0 [count_log_message $retained "*Forced failover primary request accepted*"]
+    }
+}
+
+start_cluster 3 4 {tags {external:skip cluster}} {
+    test_shutdown_prefers_failover_enabled shutdown
+}
+
+start_cluster 3 4 {tags {external:skip cluster}} {
+    test_shutdown_prefers_failover_enabled sigterm
+}
+
+start_cluster 3 4 {tags {external:skip cluster}} {
+    test_shutdown_prefers_failover_enabled shutdown 1
+}

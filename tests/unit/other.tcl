@@ -491,6 +491,12 @@ start_server {tags {"other"}} {
         assert_error {*unknown subcommand*} {r CONFIG GET_XX}
     }
 
+    test "DEBUG SLOTMIGRATION with missing arguments does not crash" {
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION}
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION PREVENT-PAUSE}
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
+
     test "Extended Redis Compatibility config" {
         # This config is added in Valkey 8.0, shall be deprecated and have no
         # effect in 9.x and be deleted in 10.0.

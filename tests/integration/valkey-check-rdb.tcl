@@ -10,6 +10,13 @@ tags {"check-rdb external:skip logreqres:skip"} {
         assert_match {*\[offset ???\] \\o/ RDB looks OK! \\o/*} $result
     }
 
+    test {Check --output without a file name prints usage} {
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings.rdb --output
+        } result
+        assert_match {Usage: *} $result
+    }
+
     test {Check foreign RDB without unknown data} {
         catch {
             exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings-rdb12.rdb
@@ -44,6 +51,16 @@ tags {"check-rdb external:skip logreqres:skip"} {
         assert_match {*--- RDB ERROR DETECTED ---*} $result
         assert_match {*\[offset ??\] Unknown object type 150 in RDB file with future version 987*} $result
         assert_no_match {*RDB looks OK*} $result
+    }
+
+    test {Check RDB stats when the highest selected DB has no keys} {
+        # SELECTDB 2, EOF, zero checksum.
+        set rdb [tmpfile empty-last-db.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe02ff0000000000000000]
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result
+        assert_match {*db.2.type.string.keys.total:0*} $result
     }
 }
 

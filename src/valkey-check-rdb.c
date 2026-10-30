@@ -744,6 +744,14 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if (selected_dbid > rdbstate.databases) {
                 rdbstate.databases = dbid;
             }
+            /* The stats report covers every selected DB, including ones with no keys. */
+            if (rdbCheckStats) {
+                int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
+                if (max_stats_num > rdbstate.stats_num) {
+                    rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
+                    rdbstate.stats_num = max_stats_num;
+                }
+            }
 
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
@@ -822,7 +830,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         } else if (type == RDB_OPCODE_FUNCTION2) {
             sds err = NULL;
             rdbstate.doing = RDB_CHECK_DOING_READ_FUNCTIONS;
-            if (rdbFunctionLoad(rdb, rdbver, NULL, 0, &err) != C_OK) {
+            if (rdbFunctionLoad(rdb, rdbver, NULL, 0, 0, &err) != C_OK) {
                 rdbCheckError("Failed loading library, %s", err);
                 sdsfree(err);
                 goto err;
@@ -853,15 +861,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
         if ((val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, NULL, RDBFLAGS_NONE, 0)) == NULL) goto eoferr;
-        if (rdbCheckStats) {
-            int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
-            if (max_stats_num > rdbstate.stats_num) {
-                rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
-                rdbstate.stats_num = max_stats_num;
-            }
-
-            computeDatasetProfile(selected_dbid, key, val, expiretime);
-        }
+        if (rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now) rdbstate.already_expired++;
         if (expiretime != -1) rdbstate.expires++;
@@ -942,6 +942,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
         } else if (!strcmp(argv[i], "--stats")) {
             rdbCheckStats = 1;
         } else if (!strcmp(argv[i], "--output")) {
+            if (lastarg) goto checkRdbUsage;
             rdbstate.stats_output = zstrdup(argv[i + 1]);
             rdbCheckOutput = 1;
             i++;

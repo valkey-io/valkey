@@ -2172,13 +2172,20 @@ static int cliReadReply(int output_raw_strings) {
     valkeyReply *reply;
     sds out = NULL;
     int output = 1;
+    int status;
 
     if (config.last_reply) {
         freeReplyObject(config.last_reply);
         config.last_reply = NULL;
     }
 
-    if (valkeyGetReply(context, &_reply) != VALKEY_OK) {
+    /* libvalkey returns a RESP3 attribute as its own reply, ahead of the reply
+     * it describes. Attributes are not part of the reply, so skip them. */
+    while ((status = valkeyGetReply(context, &_reply)) == VALKEY_OK &&
+           ((valkeyReply *)_reply)->type == VALKEY_REPLY_ATTR) {
+        freeReplyObject(_reply);
+    }
+    if (status != VALKEY_OK) {
         if (config.blocking_state_aborted) {
             config.blocking_state_aborted = 0;
             config.monitor_mode = 0;
@@ -2709,7 +2716,12 @@ static int parseOptions(int argc, char **argv) {
             config.hotkeys_count = HOTKEYS_COUNT;
         } else if (!strcmp(argv[i], "--hotkeys-count") && !lastarg) {
             config.hotkeys = 1;
-            config.hotkeys_count = atoi(argv[++i]);
+            int count = atoi(argv[++i]);
+            if (count <= 0) {
+                fprintf(stderr, "Invalid hotkeys count. Must be a positive integer.\n");
+                exit(1);
+            }
+            config.hotkeys_count = count;
         } else if (!strcmp(argv[i], "--eval") && !lastarg) {
             config.eval = argv[++i];
         } else if (!strcmp(argv[i], "--ldb")) {

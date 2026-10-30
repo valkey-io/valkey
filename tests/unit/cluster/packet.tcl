@@ -167,6 +167,67 @@ proc create_cluster_publish_packet {sender_name sender_port sender_cport channel
     return $packet
 }
 
+# Create a clusterbus PING packet carrying a single string extension.
+proc create_cluster_ping_packet_with_ext {sender_name sender_port sender_cport ext_type ext_value} {
+    set packet [create_cluster_meet_packet $sender_name $sender_port $sender_cport 0 1 4]
+    # type (uint16_t) - PING
+    set packet [string replace $packet 12 13 [binary format S 0]]
+
+    # Extension: length (uint32_t), type (uint16_t), unused (uint16_t), then the
+    # NUL-terminated value padded to eight bytes.
+    set datalen [expr {(([string length $ext_value] + 1 + 7) / 8) * 8}]
+    append packet [binary format ISS [expr {8 + $datalen}] $ext_type 0]
+    append packet $ext_value [string repeat "\x00" [expr {$datalen - [string length $ext_value]}]]
+
+    set packet [string replace $packet 4 7 [binary format I [string length $packet]]]
+    return $packet
+}
+
+# Send a forged PING to node 0 and wait until it has been received.
+proc send_forged_ping {packet cluster_port} {
+    set pings [CI 0 cluster_stats_messages_ping_received]
+    set sock [socket 127.0.0.1 $cluster_port]
+    fconfigure $sock -translation binary -buffering none -blocking 1
+    puts -nonewline $sock $packet
+    flush $sock
+    close $sock
+    wait_for_condition 1000 10 {
+        [CI 0 cluster_stats_messages_ping_received] > $pings
+    } else {
+        fail "Forged PING was never received"
+    }
+}
+
+start_cluster 2 0 {tags {external:skip cluster tls:skip}} {
+    test "Ping extension values that nodes.conf cannot load are ignored" {
+        set sender [R 1 cluster myid]
+        set sender_port [srv -1 port]
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        set nodes_conf [cluster_nodes_conf_path 0]
+
+        # Keep the real node 1 from overwriting the forged values.
+        pause_process [srv -1 pid]
+
+        # A valid value is applied, so the forged packets are processed.
+        send_forged_ping [create_cluster_ping_packet_with_ext $sender $sender_port [expr {$sender_port + 10000}] \
+            0 "valid-host"] $cluster_port
+        wait_for_condition 1000 10 {
+            [file_has_pattern $nodes_conf valid-host]
+        } else {
+            fail "Forged hostname was never applied"
+        }
+
+        # Hostname, human nodename, client IPv4, client IPv6, availability zone.
+        foreach {ext_type ext_value} {0 "forged\nhost" 1 "forged\nname" 4 "forged" 5 "forged" 8 "forged\naz"} {
+            send_forged_ping [create_cluster_ping_packet_with_ext $sender $sender_port [expr {$sender_port + 10000}] \
+                $ext_type $ext_value] $cluster_port
+            assert_equal 0 [file_has_pattern $nodes_conf forged]
+        }
+
+        resume_process [srv -1 pid]
+    }
+}
+
 start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     test "Forged PUBLISH packet with wrapped length does not crash the server" {
         set base_port [srv 0 port]
@@ -243,6 +304,43 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     }
 }
 
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "A cluster bus peer with a read backlog does not starve clients" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        set pid [srv 0 pid]
+
+        # Header-only PINGs with protocol version 0. Each is counted and then
+        # dropped, leaving the link open.
+        set ping "RCmb[binary format ISSS 2256 0 0 0][string repeat "\x00" 2242]"
+        set count 1000
+
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 0
+        set rd [valkey_deferring_client]
+
+        # Queue the PINGs and then a client command while the node is stopped,
+        # so both are readable on the first event loop after it resumes.
+        pause_process $pid
+        puts -nonewline $sock [string repeat $ping $count]
+        $rd cluster info
+        resume_process $pid
+
+        regexp {cluster_stats_messages_ping_received:(\d+)} [$rd read] -> seen
+        assert_lessthan $seen $count
+
+        # Send whatever did not fit in the kernel buffers.
+        fconfigure $sock -blocking 1
+        flush $sock
+        wait_for_condition 1000 10 {
+            [CI 0 cluster_stats_messages_ping_received] == $count
+        } else {
+            fail "PINGs were never all received"
+        }
+        $rd close
+        close $sock
+    }
+}
+
 start_cluster 10 0 {tags {external:skip cluster tls:skip}} {
     test "Gossip count scales with higher percentage of `cluster-message-gossip-perc`" {
         R 0 config set cluster-message-gossip-perc 80
@@ -275,5 +373,36 @@ start_cluster 10 0 {tags {external:skip cluster tls:skip}} {
         # of 1-2 entries.
         assert_morethan_equal $count 5
         assert_lessthan_equal $count 10
+    }
+}
+
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "MEET from an unknown sender does not add the nodes in its gossip" {
+        set base_port [srv 0 port]
+        set cluster_port [expr {$base_port + 10000}]
+        set gossip_id "abcdef1234567890abcdef1234567890abcdef12"
+
+        set packet [create_cluster_meet_packet \
+            "fakenode1234567890fakenode1234567890fake" $base_port $cluster_port 1]
+
+        # A single clusterMsgDataGossip entry for a primary we have never seen.
+        append packet $gossip_id
+        append packet [binary format II 0 0]                ;# ping_sent, pong_received
+        append packet [string range "127.0.0.1[string repeat "\x00" 46]" 0 45]
+        append packet [binary format SSSSS 1 10001 1 0 0]   ;# port, cport, flags, pport, notused1
+        set packet [string replace $packet 4 7 [binary format I [string length $packet]]]
+
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 1
+        puts -nonewline $sock $packet
+        flush $sock
+
+        # The PONG reply is sent after the gossip is processed.
+        set hdr [read $sock 16]
+        binary scan $hdr @12Su type
+        assert_equal 1 $type
+        close $sock
+
+        assert_no_match "*$gossip_id*" [R 0 cluster nodes]
     }
 }

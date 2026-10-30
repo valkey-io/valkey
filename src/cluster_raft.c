@@ -3293,9 +3293,55 @@ static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
     zfree(sc);
 }
 
+/* Compact `in` to slots owned by this node. Does not free `in`.
+ * *out is newly allocated, or NULL if none remain. */
+static int raftOwnedDelSlotRanges(slotRange *in, int numranges, slotRange **out) {
+    clusterNode *me = getMyClusterNode();
+    int owned = 0, n = 0;
+    for (int i = 0; i < numranges; i++) {
+        for (int s = in[i].start_slot; s <= in[i].end_slot; s++) {
+            if (getNodeBySlot(s) == me) owned++;
+        }
+    }
+    if (owned == 0) {
+        *out = NULL;
+        return 0;
+    }
+
+    slotRange *ranges = zmalloc(sizeof(*ranges) * owned);
+    for (int i = 0; i < numranges; i++) {
+        for (int s = in[i].start_slot; s <= in[i].end_slot; s++) {
+            if (getNodeBySlot(s) != me) continue;
+            if (n && s == ranges[n - 1].end_slot + 1)
+                ranges[n - 1].end_slot = s;
+            else {
+                ranges[n].start_slot = s;
+                ranges[n].end_slot = s;
+                n++;
+            }
+        }
+    }
+    *out = ranges;
+    return n;
+}
+
 /* Invoked for slot assignments and slot migrations (ADDSLOTS, SETSLOT, etc.) */
 static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterRaftState *rs = RAFT_STATE();
+    slotRange *filtered = NULL;
+
+    /* DELSLOTS is target=NULL. Only unassign slots we own: a SLOT_CHANGE
+     * with target=NULL is cluster-wide and deletes the owner's keys.
+     * Non-owner becomes a no-op OK (gossip's end state). Mixed ranges
+     * keep only locally owned slots. */
+    if (target == NULL) {
+        numranges = raftOwnedDelSlotRanges(ranges, numranges, &filtered);
+        if (numranges == 0) {
+            if (callback) callback(ctx, NULL);
+            return;
+        }
+        ranges = filtered;
+    }
 
     /* Singleton with empty log: apply locally without proposing.
      * The entries will be proposed when the first node joins. */
@@ -3314,6 +3360,7 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
         rs->todo_update_slot_coverage = 1;
         rs->todo_invalidate_slots_cache = 1;
         if (callback) callback(ctx, NULL);
+        zfree(filtered);
         return;
     }
 
@@ -3345,6 +3392,7 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     sc->target = target;
     clusterRaftPropose(entry, sc, &clusterRaftSlotChangeApplyCallback);
     sdsfree(entry);
+    zfree(filtered);
 }
 
 /* Apply (or validate) a SLOT_CHANGE entry.
@@ -3384,18 +3432,40 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
             start = end = atoi(argv[i]);
         }
         for (int j = start; j <= end; j++) {
-            if (info.target_node == myself || server.cluster->slots[j] == myself)
-                RAFT_STATE()->todo_save_config = 1;
+            clusterNode *old_owner = server.cluster->slots[j];
+            clusterNode *my_primary = clusterNodeGetPrimary(myself);
+
             if (info.target_node) {
-                if (server.cluster->slots[j] == myself && info.target_node != myself) {
+                /* Same owner: do not touch migrating/importing. */
+                if (old_owner == info.target_node) continue;
+
+                if (old_owner == myself && info.target_node != myself) {
                     serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
                               j, myself->name);
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
                 }
-                if (server.cluster->slots[j]) clusterDelSlot(j);
+
+                /* Target is this shard, not necessarily myself. */
+                if (info.target_node == my_primary && getImportingSlotSource(j)) {
+                    setImportingSlotSource(j, NULL);
+                    RAFT_STATE()->todo_save_config = 1;
+                }
+
+                /* Clear migrating only if the slot left our shard. */
+                if (getMigratingSlotDest(j) && old_owner &&
+                    !memcmp(old_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) &&
+                    memcmp(info.target_node->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
+                    setMigratingSlotDest(j, NULL);
+                    RAFT_STATE()->todo_save_config = 1;
+                }
+
+                if (info.target_node == myself || old_owner == myself)
+                    RAFT_STATE()->todo_save_config = 1;
+                if (old_owner) clusterDelSlot(j);
                 clusterAddSlot(info.target_node, j);
             } else {
-                if (server.cluster->slots[j] == myself) {
+                if (old_owner == myself) {
+                    RAFT_STATE()->todo_save_config = 1;
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
                 }
                 clusterDelSlot(j);

@@ -7,9 +7,7 @@
 
 source tests/support/cluster_util.tcl
 
-# cluster-raft:skip because valkey-cli --cluster fix uses MULTI internally,
-# which is not supported for cluster mutation commands in raft mode.
-start_cluster 2 0 {tags {external:skip cluster cluster-raft:skip}} {
+start_cluster 2 0 {tags {external:skip cluster}} {
 
 config_set_all_nodes cluster-allow-replica-migration no
 
@@ -42,6 +40,33 @@ test "Half init migration in 'migrating' is fixable" {
 test "Half init migration in 'importing' is fixable" {
     assert_equal {OK} [$nodeto(link) cluster setslot 609 importing $nodefrom(id)]
     fix_cluster $nodefrom(addr)
+    assert_equal "xyz" [$cluster get aga]
+}
+
+test "Uncovered slot is reassigned by cluster fix" {
+    reset_cluster
+    assert_equal 1 [$nodefrom(link) del aga]
+    assert_equal {OK} [$nodefrom(link) cluster delslots 609]
+    fix_cluster $nodefrom(addr)
+    assert_equal {OK} [$cluster set aga xyz]
+    assert_equal "xyz" [$cluster get aga]
+    reset_cluster
+}
+
+test "SETSLOT NODE to the current owner keeps migrating state" {
+    reset_cluster
+    assert_equal {OK} [$nodefrom(link) cluster setslot 609 migrating $nodeto(id)]
+    assert {[string first "\[609->-$nodeto(id)\]" [$nodefrom(link) cluster nodes]] >= 0}
+    assert_equal {OK} [$nodeto(link) cluster setslot 609 node $nodefrom(id)]
+    assert {[string first "\[609->-$nodeto(id)\]" [$nodefrom(link) cluster nodes]] >= 0}
+    assert_equal {OK} [$nodefrom(link) cluster setslot 609 stable]
+}
+
+test "DELSLOTS from a non-owner does not unassign the slot or delete keys" {
+    reset_cluster
+    $cluster set aga xyz
+    assert_equal {OK} [$nodeto(link) cluster delslots 609]
+    wait_for_cluster_propagation
     assert_equal "xyz" [$cluster get aga]
 }
 
@@ -86,6 +111,12 @@ test "Move key back" {
 test "Half-finish importing" {
     # Now we half finish 'importing' node
     assert_equal {OK} [$nodeto(link) cluster setslot 609 node $nodeto(id)]
+    wait_for_condition 1000 50 {
+        [string first "\[609-<-" [$nodeto(link) cluster nodes]] < 0 &&
+        [string first "\[609->-" [$nodefrom(link) cluster nodes]] < 0
+    } else {
+        fail "Leftover IMPORTING/MIGRATING was not cleared after ownership change"
+    }
     fix_cluster $nodefrom(addr)
     assert_equal "xyz" [$cluster get aga]
 }

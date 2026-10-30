@@ -804,4 +804,52 @@ tags {"aof cluster external:skip singledb"} {
         }
         clean_aof_persistence $aof_dirpath
     }
+
+    # Older versions accepted a negative stream ID part and wrapped it, and
+    # an explicit XADD ID is propagated as given. Such a record must still
+    # load from an existing AOF, although clients now get an error.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand xadd s 1--18446744073709551615 f v]
+        append_to_aof [formatCommand xgroup create s g 0]
+        append_to_aof [formatCommand xreadgroup group g c1 streams s >]
+        append_to_aof [formatCommand xclaim s g c2 0 1--18446744073709551615]
+        append_to_aof [formatCommand eval {return server.call('xadd', 's2', '1--18446744073709551615', 'f', 'v')} 0]
+    }
+
+    create_aof_manifest $aof_dirpath $aof_manifest_file {
+        append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+    }
+
+    start_server_aof [list dir $server_path] {
+        test "AOF with a legacy negative stream ID sequence loads" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal {{1-1 {f v}}} [$client xrange s - +]
+            assert_equal {{1-1 c2}} [lmap e [$client xpending s g - + 10] {lrange $e 0 1}]
+            assert_equal {{1-1 {f v}}} [$client xrange s2 - +]
+            assert_error "*Invalid stream ID*" {$client xadd s 2--1 f v}
+            assert_error "*Invalid stream ID*" {$client eval {return server.call('xadd', 's', '3--1', 'f', 'v')} 0}
+        }
+        clean_aof_persistence $aof_dirpath
+    }
+
+    # A plain negative number was rejected by older versions as well, so such
+    # a record is not wrapped either; the error is ignored like any other.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand xadd s 1--3 f v]
+        append_to_aof [formatCommand xadd s 1-1 f v]
+    }
+
+    create_aof_manifest $aof_dirpath $aof_manifest_file {
+        append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+    }
+
+    start_server_aof [list dir $server_path propagation-error-behavior ignore] {
+        test "AOF with a plain negative stream ID sequence does not wrap it" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal {{1-1 {f v}}} [$client xrange s - +]
+        }
+        clean_aof_persistence $aof_dirpath
+    }
 }

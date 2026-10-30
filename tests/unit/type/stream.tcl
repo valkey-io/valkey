@@ -1645,6 +1645,13 @@ start_server {
         assert_equal [r XRANGE x - +] {{2577343934890-18446744073709551615 {f v}} {2577343934891-0 {f2 v2}}}
     }
 
+    test {XADD rejects negative sequence numbers} {
+        r del x
+        assert_error "*Invalid stream ID*" {r XADD x 1--1 f v}
+        assert_error "*Invalid stream ID*" {r XADD x 1--18446744073709551615 f v}
+        assert_equal 0 [r exists x]
+    }
+
     test {XTRIM with MAXLEN option basic test} {
         r DEL mystream
         for {set j 0} {$j < 1000} {incr j} {

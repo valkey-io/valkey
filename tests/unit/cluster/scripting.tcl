@@ -71,6 +71,20 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_equal 0 [r 0 cluster COUNTKEYSINSLOT 5061] ;# bar slot
     }
 
+    test {Scripts in a transaction do not change the slot of later commands} {
+        r 0 flushall
+        r 0 multi
+        # The first script leaves the slot at -1, so the second one is free
+        # to touch {b} and leave its slot behind for the SET.
+        r 0 eval {return redis.call('ping')} 0
+        r 0 eval {#!lua
+            return redis.call('get', '{b}x')
+        } 0
+        r 0 set "{a}x" v
+        assert_error "*Script attempted to access keys that do not hash to the same slot*" {r 0 exec}
+        assert_equal v [r 0 get "{a}x"]
+    }
+
     test "Function no-cluster flag" {
         R 0 function load {#!lua name=test
             server.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-cluster'}}

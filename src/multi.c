@@ -313,7 +313,7 @@ static int checkExecConditions(client *c) {
 void execCommand(client *c) {
     int j;
     robj **orig_argv;
-    int orig_argc, orig_argv_len;
+    int orig_argc, orig_argv_len, orig_slot;
     struct serverCommand *orig_cmd;
 
     if (!c->flag.multi) {
@@ -366,6 +366,7 @@ void execCommand(client *c) {
     orig_argv_len = c->argv_len;
     orig_argc = c->argc;
     orig_cmd = c->cmd;
+    orig_slot = c->slot;
     c->mstate->transaction_db_id = c->db->id;
     addReplyArrayLen(c, c->mstate->count);
     for (j = 0; j < c->mstate->count; j++) {
@@ -373,6 +374,9 @@ void execCommand(client *c) {
         c->argv = c->mstate->commands[j].argv;
         c->argv_len = c->mstate->commands[j].argv_len;
         c->cmd = c->realcmd = c->mstate->commands[j].cmd;
+        /* A script overwrites the caller's slot with the slot of the last
+         * command it called, so each command starts from the transaction's slot. */
+        c->slot = orig_slot;
 
         /* ACL permissions are also checked at the time of execution in case
          * they were changed after the commands were queued. */

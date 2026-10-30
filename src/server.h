@@ -2523,6 +2523,7 @@ struct valkeyServer {
     /* cpu affinity */
     char *server_cpulist;         /* cpu affinity list of server main/io thread. */
     char *bio_cpulist;            /* cpu affinity list of bio thread. */
+    int bio_pool_threads;         /* Number of bio threads for BIO_USER_WORK jobs. */
     char *aof_rewrite_cpulist;    /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist;         /* cpu affinity list of bgsave process. */
     char *slot_migration_cpulist; /* cpu affinity list of slot migration process. */

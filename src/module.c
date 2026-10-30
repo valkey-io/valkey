@@ -7237,7 +7237,7 @@ cleanup:
  * * ENOTSUP: No ACL user for the specified module context
  * * EACCES: Command cannot be executed, according to ACL rules
  * * ENOSPC: Write or deny-oom command is not allowed, e.g. when writes
-   *         are paused (CLIENT PAUSE, failover)
+ *         are paused (CLIENT PAUSE, failover)
  * * ESPIPE: Command not allowed on script mode
  */
 int VM_CallArgv(ValkeyModuleCtx *ctx,

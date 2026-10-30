@@ -399,24 +399,23 @@ void phdelCommand(client *c) {
 
 static int pathHashParseMatchOptions(client *c,
                                      int start,
-                                     int plural_length,
-                                     int allow_limits,
                                      pathHashReplyMode *reply_mode,
                                      pathHashValueMode *value_mode,
                                      robj ***fields,
                                      long *numfields,
                                      long *count,
-                                     long *maxpathlen) {
+                                     long *maxpathlen,
+                                     bool *exclude_self) {
     *reply_mode = PATH_HASH_REPLY_PATH;
     *value_mode = PATH_HASH_VALUES_NONE;
     *fields = NULL;
     *numfields = 0;
+    *exclude_self = false;
     *count = -1;
     *maxpathlen = -1;
     for (int i = start; i < c->argc;) {
         char *arg = objectGetVal(c->argv[i]);
-        if ((!plural_length && !strcasecmp(arg, "length")) ||
-            (plural_length && !strcasecmp(arg, "lengths"))) {
+        if (!strcasecmp(arg, "lengths")) {
             if (*reply_mode == PATH_HASH_REPLY_LENGTH) goto syntax;
             *reply_mode = PATH_HASH_REPLY_LENGTH;
             i++;
@@ -434,12 +433,16 @@ static int pathHashParseMatchOptions(client *c,
             *numfields = field_count;
             *fields = c->argv + i + 2;
             i += 2 + field_count;
-        } else if (allow_limits && !strcasecmp(arg, "count")) {
+        } else if (!strcasecmp(arg, "count")) {
             if (*count != -1 || i + 1 >= c->argc) goto syntax;
             if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, count, NULL) != C_OK)
                 return C_ERR;
             i += 2;
-        } else if (allow_limits && !strcasecmp(arg, "maxpathlen")) {
+        } else if (!strcasecmp(arg, "excludeself")) {
+            if (*exclude_self) goto syntax;
+            *exclude_self = true;
+            i++;
+        } else if (!strcasecmp(arg, "maxpathlen")) {
             if (*maxpathlen != -1 || i + 1 >= c->argc) goto syntax;
             if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 0, LONG_MAX, maxpathlen, NULL) != C_OK)
                 return C_ERR;
@@ -453,37 +456,6 @@ static int pathHashParseMatchOptions(client *c,
 syntax:
     addReplyErrorObject(c, shared.syntaxerr);
     return C_ERR;
-}
-
-void phlongestCommand(client *c) {
-    pathHashReplyMode reply_mode;
-    pathHashValueMode value_mode;
-    robj **fields;
-    long numfields;
-    long count, maxpathlen;
-    if (pathHashParseMatchOptions(c, 3, 0, 0, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen) !=
-        C_OK)
-        return;
-
-    robj *o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_PATH_HASH)) return;
-    if (o == NULL) {
-        addReplyNull(c);
-        return;
-    }
-    pathHashObject *path_hash = objectGetVal(o);
-    sds query = objectGetVal(c->argv[2]);
-    size_t matched_len;
-    void *payload;
-    if (!raxFindLongestPrefix(path_hash->index,
-                              (unsigned char *)query,
-                              sdslen(query),
-                              &matched_len,
-                              &payload)) {
-        addReplyNull(c);
-        return;
-    }
-    pathHashReplyMatch(c, c->argv[2], matched_len, payload, reply_mode, value_mode, fields, numfields);
 }
 
 static int pathHashCollectMatch(size_t path_len, void *data, void *context) {
@@ -514,7 +486,8 @@ void phprefixesCommand(client *c) {
     robj **fields;
     long numfields;
     long count, maxpathlen;
-    if (pathHashParseMatchOptions(c, 3, 1, 1, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen) !=
+    bool exclude_self;
+    if (pathHashParseMatchOptions(c, 3, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen, &exclude_self) !=
         C_OK)
         return;
 
@@ -534,10 +507,18 @@ void phprefixesCommand(client *c) {
         .limit = count == -1 ? SIZE_MAX : (size_t)count,
         .max_path_len = maxpathlen == -1 ? SIZE_MAX : (size_t)maxpathlen,
     };
+    if (exclude_self) {
+        /* A strict prefix of an empty query cannot exist. Avoid underflow. */
+        if (sdslen(query) == 0) {
+            addReply(c, shared.emptyarray);
+            return;
+        }
+        if (matches.max_path_len >= sdslen(query)) matches.max_path_len = sdslen(query) - 1;
+    }
     raxForEachPrefix(path_hash->index, (unsigned char *)query, sdslen(query), pathHashCollectMatch, &matches);
     addReplyArrayLen(c, matches.len);
     for (size_t i = 0; i < matches.len; i++) {
-        size_t index = (matches.head + i) % matches.cap;
+        size_t index = (matches.head + matches.len - 1 - i) % matches.cap;
         pathHashReplyMatch(c,
                            c->argv[2],
                            matches.items[index].path_len,

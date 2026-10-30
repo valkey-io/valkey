@@ -70,45 +70,72 @@ start_server {tags {pathhash}} {
         assert_equal 0 [r phexists missing ab]
     }
 
-    test {PHLONGEST handles root, compressed edges, lengths, values, and field filters} {
+    test {PHPREFIXES COUNT 1 replaces longest-prefix lookup} {
         r del tree
         r phset tree {} fields 1 root root-value
         r phset tree a fields 1 f v-a
         r phset tree abc fields 2 f1 v1 f2 v2
         r phset tree abcdef fields 1 f deep
-        assert_equal abc [r phlongest tree abczzz]
-        assert_equal 3 [r phlongest tree abczzz length]
-        assert_equal [list abc [list v1 {} v2]] [r phlongest tree abczzz fields 3 f1 missing f2]
-        set withvalues [r phlongest tree abczzz withvalues]
-        assert_equal abc [lindex $withvalues 0]
-        set payload [dict create {*}[lindex $withvalues 1]]
-        assert_equal v1 [dict get $payload f1]
-        assert_equal v2 [dict get $payload f2]
-        assert_equal {} [r phlongest tree zzz]
-        assert_equal 0 [r phlongest tree zzz length]
-        assert_equal {} [r phlongest missing anything]
-    }
-
-    test {PHLONGEST replies null when no stored path prefixes the query} {
+        assert_equal {abc} [r phprefixes tree abczzz count 1]
+        assert_equal {3} [r phprefixes tree abczzz lengths count 1]
+        assert_equal [list [list abc [list v1 {} v2]]] \
+            [r phprefixes tree abczzz fields 3 f1 missing f2 count 1]
+        set match [lindex [r phprefixes tree abczzz withvalues count 1] 0]
+        assert_equal abc [lindex $match 0]
+        assert_equal {f1 v1 f2 v2} [lsort -stride 2 [lindex $match 1]]
+        assert_equal [list {}] [r phprefixes tree zzz count 1]
+        assert_equal {0} [r phprefixes tree zzz lengths count 1]
+        assert_equal {} [r phprefixes missing anything count 1]
         r del tree
         r phset tree abc fields 1 f v
-        set nullres {$-1}
-        if {$::force_resp3} {
-            set nullres {_}
+        assert_equal {} [r phprefixes tree zzz count 1]
+        assert_equal {{}} [r command info phlongest]
+    }
+
+    test {PHPREFIXES EXCLUDESELF paginates strict ancestors and handles root and limits} {
+        r del tree
+        foreach path {{} a ab abc abcd} {r phset tree $path fields 1 f $path}
+        assert_equal {abcd abc} [r phprefixes tree abcdef count 2]
+        assert_equal {ab a} [r phprefixes tree abc excludeself count 2]
+        assert_equal [list {}] [r phprefixes tree a excludeself count 2]
+        assert_equal {} [r phprefixes tree {} excludeself]
+        assert_equal {2 1 0} [r phprefixes tree abc lengths excludeself maxpathlen 2]
+        assert_equal {2 1 0} [r phprefixes tree abc lengths excludeself maxpathlen 3]
+        assert_equal {3 2} [r phprefixes tree abcdef lengths excludeself maxpathlen 3 count 2]
+        # The boundary need not be stored, including after concurrent deletion.
+        r phdel tree abc
+        assert_equal {ab a} [r phprefixes tree abc excludeself count 2]
+        assert_error ERR*syntax* {r phprefixes tree abc excludeself excludeself}
+        assert_error ERR*syntax* {r phprefixes missing abc excludeself excludeself}
+        assert_error ERR*syntax* {r phprefixes tree abc exclusive}
+        set path [binary format H* 00ff]
+        r phset tree $path fields 1 f binary
+        r phset tree "${path}x" fields 1 f child
+        assert_equal {2 0} [r phprefixes tree "${path}x" lengths excludeself]
+        assert_equal [list [list 2 [list binary {} binary]]] \
+            [r phprefixes tree "${path}x" lengths fields 3 f missing f count 1 excludeself]
+    }
+
+    test {PHPREFIXES COUNT pagination matches the full ancestor list} {
+        r del tree
+        foreach path {{} a ab abc abcd abcde abcdef} {r phset tree $path fields 1 f $path}
+        foreach query {abcdef abcdefgh z {}} {
+            set full [r phprefixes tree $query]
+            set boundary $query
+            set options {}
+            set paths {}
+            set pages 0
+            while 1 {
+                set page [r phprefixes tree $boundary count 2 {*}$options]
+                if {[llength $page] == 0} break
+                assert {[llength $page] <= 2}
+                lappend paths {*}$page
+                set boundary [lindex $page end]
+                set options {excludeself}
+                assert {[incr pages] < 10}
+            }
+            assert_equal $full $paths
         }
-        r readraw 1
-        r deferred 1
-        r phlongest tree zzz
-        assert_equal [r read] $nullres
-        r phlongest tree zzz length
-        assert_equal [r read] $nullres
-        r readraw 0
-        r deferred 0
-        # A stored empty root path is a real match of length 0, which the client
-        # renders exactly like the null reply above.
-        r phset tree {} fields 1 root v
-        assert_equal {} [r phlongest tree zzz]
-        assert_equal 0 [r phlongest tree zzz length]
     }
 
     test {PHPREFIXES orders ancestors and applies MAXPATHLEN before deepest COUNT} {
@@ -116,12 +143,28 @@ start_server {tags {pathhash}} {
         foreach path {{} a ab abc abcd} {
             r phset tree $path fields 1 f "value:$path"
         }
-        assert_equal {0 1 2 3 4} [r phprefixes tree abcde lengths]
-        assert_equal {2 3} [r phprefixes tree abcde lengths count 2 maxpathlen 3]
-        assert_equal [list [list 2 [list value:ab]] [list 3 [list value:abc]]] \
+        assert_equal {4 3 2 1 0} [r phprefixes tree abcde lengths]
+        assert_equal {3 2} [r phprefixes tree abcde lengths count 2 maxpathlen 3]
+        assert_equal [list [list 3 [list value:abc]] [list 2 [list value:ab]]] \
             [r phprefixes tree abcde lengths fields 1 f count 2 maxpathlen 3]
         assert_equal [list {}] [r phprefixes tree zzz maxpathlen 0]
         assert_equal [list {}] [r phprefixes tree zzz]
+    }
+
+    test {PHPREFIXES descending COUNT handles wrapped and growing match buffers} {
+        r del buffer-tree
+        set expected {}
+        for {set i 0} {$i < 40} {incr i} {
+            set path [string repeat a $i]
+            r phset buffer-tree $path fields 1 f $i
+            set expected [linsert $expected 0 $i]
+        }
+        set query [string repeat a 40]
+        foreach count {1 2 7 8 9 16 32 40 41} {
+            assert_equal [lrange $expected 0 [expr {$count - 1}]] \
+                [r phprefixes buffer-tree $query lengths count $count]
+        }
+        assert_equal {20 19 18} [r phprefixes buffer-tree $query lengths count 3 maxpathlen 20]
     }
 
     test {PHPREFIXES validates COUNT and MAXPATHLEN against the server long range} {
@@ -132,7 +175,7 @@ start_server {tags {pathhash}} {
         }
         set long_max [expr {(1 << ([s arch_bits] - 1)) - 1}]
         foreach option {count maxpathlen} {
-            assert_equal {0 1 2} [r phprefixes tree abc lengths $option $long_max]
+            assert_equal {2 1 0} [r phprefixes tree abc lengths $option $long_max]
             foreach value [list -1 [expr {$long_max + 1}] 9223372036854775808] {
                 foreach key {tree missing} {
                     assert_error ERR*range* {r phprefixes $key abc $option $value}
@@ -146,7 +189,7 @@ start_server {tags {pathhash}} {
                 if {$value > $long_max} {
                     assert_error ERR*range* {r phprefixes tree abc $option $value}
                 } else {
-                    assert_equal {0 1 2} [r phprefixes tree abc lengths $option $value]
+                    assert_equal {2 1 0} [r phprefixes tree abc lengths $option $value]
                 }
             }
             assert_error ERR*syntax* {r phprefixes tree abc $option 1 $option 2}
@@ -156,7 +199,7 @@ start_server {tags {pathhash}} {
         assert_error ERR*syntax* {r phprefixes tree abc maxlen 1}
         assert_equal {2} [r phprefixes tree abc lengths count 1]
         assert_equal {0} [r phprefixes tree abc lengths maxpathlen 0]
-        assert_equal {0 1 2} [r phprefixes tree abc lengths]
+        assert_equal {2 1 0} [r phprefixes tree abc lengths]
         assert_equal PONG [r ping]
     }
 
@@ -170,8 +213,8 @@ start_server {tags {pathhash}} {
         foreach path [list {} $p0 $p1 $p2 $sibling] {
             r phset tree $path fields 1 f "value:$path"
         }
-        assert_equal {0 1 2 4} [r phprefixes tree $query lengths]
-        assert_equal 4 [r phlongest tree $query length]
+        assert_equal {4 2 1 0} [r phprefixes tree $query lengths]
+        assert_equal {4} [r phprefixes tree $query lengths count 1]
         assert_equal 2 [r phdelprefix tree $p1]
         assert_equal [list {} $p0 $sibling] [lindex [r phscan tree 0 count 100] 1]
     }
@@ -318,7 +361,6 @@ start_server {tags {pathhash}} {
             {phgetall not-pathhash p}
             {phexists not-pathhash p}
             {phdel not-pathhash p}
-            {phlongest not-pathhash p}
             {phprefixes not-pathhash p}
             {phdelprefix not-pathhash p}
             {phscan not-pathhash 0}
@@ -344,9 +386,6 @@ start_server {tags {pathhash}} {
         assert_error ERR*syntax* {r phmget tree p fields 2 f}
         assert_error ERR*syntax* {r phmget tree p fields 1 f broken}
         assert_equal 0 [r exists tree]
-        assert_error ERR*syntax* {r phlongest tree p withvalues fields 1 f}
-        assert_error ERR*syntax* {r phlongest tree p lengths}
-        assert_error ERR*range* {r phlongest tree p fields 0}
         assert_error ERR*syntax* {r phprefixes tree p length}
         assert_error ERR*range* {r phprefixes tree p fields 0}
         assert_error ERR*value*out*range* {r phprefixes tree p count 0}
@@ -358,7 +397,7 @@ start_server {tags {pathhash}} {
     }
 
     test {Path Hash commands are registered with the PH prefix} {
-        set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
+        set commands {phcard phdel phdelprefix phexists phget phgetall phmget phmset phprefixes phscan phset}
         assert_equal $commands [lsort [r command list filterby aclcat pathhash]]
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
@@ -410,7 +449,7 @@ start_server {tags {pathhash}} {
         assert_equal $scan [r scan 0 type PATHHASH count 100]
         assert_error {*unknown type name*} {r scan 0 type radix}
         r hello 3
-        assert_equal {1 2} [r phprefixes tree abc lengths]
+        assert_equal {2 1} [r phprefixes tree abc lengths]
         assert_equal [list two] [r phget tree ab f]
         r hello 2
     }
@@ -446,21 +485,14 @@ start_server {tags {pathhash}} {
                 {phgetall tree a} $payload \
                 {phgetall tree missing} [list $empty] \
                 {phgetall missing a} [list $empty] \
-                {phlongest tree a} [list {$1} a] \
-                {phlongest tree a length} [list {:1}] \
                 {phprefixes tree a} [list {*1} {$1} a] \
                 {phprefixes tree a lengths count 1 maxpathlen 1} [list {*1} {:1}] \
                 {phscan tree 0 count 1} [list {*2} {$1} 0 {*1} {$1} a] \
-                {phlongest tree a withvalues} $match \
-                {phlongest tree a length withvalues} [concat [list {*2} {:1}] $payload] \
                 {phprefixes tree a withvalues} [concat [list {*1}] $match] \
                 {phprefixes tree a lengths withvalues} [concat [list {*1} {*2} {:1}] $payload] \
                 {phscan tree 0 withvalues} [concat [list {*2} {$1} 0 {*1}] $match] \
-                {phlongest tree a fields 1 f1} [list {*2} {$1} a {*1} {$2} v1] \
                 {phprefixes tree a fields 1 f1} [list {*1} {*2} {$1} a {*1} {$2} v1] \
-                {phlongest tree a fields 2 f1 missing} $fields \
                 {phprefixes tree a fields 2 f1 missing} [concat [list {*1}] $fields] \
-                {phlongest tree z withvalues} [list $null] \
                 {phprefixes tree z withvalues} [list {*0}] \
                 {phscan missing 0 withvalues} [list {*2} {$1} 0 {*0}]] {
                 r {*}$command

@@ -962,28 +962,6 @@ size_t raxForEachPrefix(rax *rax,
     return matches;
 }
 
-typedef struct raxLongestPrefixContext {
-    size_t matched_len;
-    void *value;
-} raxLongestPrefixContext;
-
-static int raxRememberLongestPrefix(size_t key_len, void *data, void *context) {
-    raxLongestPrefixContext *longest = context;
-    longest->matched_len = key_len;
-    longest->value = data;
-    return 1;
-}
-
-/* Find the deepest stored key that is an ancestor of the query. */
-int raxFindLongestPrefix(rax *rax, unsigned char *s, size_t len, size_t *matched_len, void **value) {
-    raxLongestPrefixContext longest = {0, NULL};
-    size_t matches = raxForEachPrefix(rax, s, len, raxRememberLongestPrefix, &longest);
-    if (matches == 0) return 0;
-    if (matched_len) *matched_len = longest.matched_len;
-    if (value) *value = longest.value;
-    return 1;
-}
-
 /* Return the memory address where the 'parent' node stores the specified
  * 'child' pointer, so that the caller can update the pointer with another
  * one if needed. The function assumes it will find a match; otherwise, the

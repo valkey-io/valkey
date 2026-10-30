@@ -83,35 +83,48 @@ contribution meets the quality bar of the project.
 
 ## How to provide a patch or a new feature
 
-1. If it is a major feature or a semantical change, please don't start coding
-straight away: if your feature is not a conceptual fit you'll lose a lot of
-time writing the code without any reason. Start by creating an issue at Github with the
-description of, exactly, what you want to accomplish and why. Use cases are important for
-features to be accepted. Here you can see if there is consensus about your idea.
+While developing code, make sure to refer to our [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md),
+which includes documentation about various best practices for writing Valkey code.
 
-2. If in step 1 you get an acknowledgment from the project leaders, use the following
-procedure to submit a patch:
-    1. Fork Valkey on GitHub ([HOWTO](https://docs.github.com/en/github/getting-started-with-github/fork-a-repo))
-    1. Create a topic branch (`git checkout -b my_branch`)
-    1. Make the needed changes and commit with a DCO. (`git commit -s`)
-    1. Push to your branch (`git push origin my_branch`)
-    1. Initiate a pull request on GitHub ([HOWTO](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request))
-    1. Done :)
+### Submitting a patch
 
-3. Keep in mind that we are very overloaded, so issues and PRs sometimes wait
+If your change is conceptually simple, like a bug fix or a small feature, you
+can open a pull request directly. For a large feature, start with
+[Large features](#large-features) before writing any code.
+
+To submit a patch:
+
+1. Fork Valkey on GitHub ([HOWTO](https://docs.github.com/en/github/getting-started-with-github/fork-a-repo)).
+1. Create a branch (`git checkout -b my_branch`).
+1. Make your changes and commit them with a DCO (`git commit -s`).
+1. Push the branch to your fork (`git push origin my_branch`).
+1. Open a pull request against `unstable` ([HOWTO](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request)).
+   If it fixes an existing issue, write "Fixes #xyz" in the pull request
+   description, where xyz is the issue number.
+
+Automated review runs before a maintainer reviews the pull request. Please
+address or reply to its comments.
+
+### Large features
+
+If the feature is large, changing many systems in Valkey or introducing new
+classes of commands or data types, please don't start coding straight away.
+Start by creating an issue on GitHub with a description of what you want to
+accomplish and why. Focus on the end user experience, and leave out low-level
+technical details unless they affect it. Use cases are important for features
+to be accepted. Some large features also need a design document, which follows
+the process in [design-docs/README.md](design-docs/README.md). The project
+maintainers will let you know if that step is necessary.
+
+Once you get an acknowledgment from the project maintainers, submit a patch using the
+procedure in [Submitting a patch](#submitting-a-patch).
+
+Keep in mind that we are very overloaded, so issues and PRs sometimes wait
 for a *very* long time. However this is not a lack of interest, as the project
 gets more and more users, we find ourselves in a constant need to prioritize
 certain issues/PRs over others. If you think your issue/PR is very important
 try to popularize it, have other users commenting and sharing their point of
 view, and so forth. This helps.
-
-4. While developing code, make sure to refer to our [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md),
-which includes documentation about various best practices for writing Valkey code.
-
-5. For minor fixes, open a pull request on GitHub.
-
-To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
-in the pull request description, where xyz is the issue number.
 
 ## Code formatting with clang-format
 

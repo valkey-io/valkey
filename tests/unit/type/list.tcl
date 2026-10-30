@@ -440,6 +440,35 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         r ping
     } {PONG} {large-memory}
 
+    test {Test LINSERT doesn't merge quicklist nodes whose total size exceeds 4GB} {
+        # The merged size of two adjacent packed nodes must not be truncated
+        # to 32 bits. If it were, a sum slightly above UINT32_MAX would wrap
+        # to a small value that passes the node size limit, and the merge
+        # would then hit the UINT32_MAX assertion in lpMerge().
+        r flushdb
+        # Allow elements just below 4GB to be stored in packed nodes.
+        r debug quicklist-packed-threshold 4293918720 ;# 4gb-1mb, the max allowed
+        set big_len 4293000000
+        set mid_len 1971296
+        r write "*3\r\n\$5\r\nRPUSH\r\n\$3\r\nlst\r\n"
+        write_big_bulk $big_len
+        r write "*3\r\n\$5\r\nRPUSH\r\n\$3\r\nlst\r\n"
+        write_big_bulk $mid_len
+        r rpush lst [string repeat a 3000] [string repeat c 3000]
+        # now: [x...(~4gb)] [x...(~2mb)] [a... c...]
+        #         node0        node1       node2
+        # The size of node0 plus the size of node1 is 4025 bytes above 4GB.
+        # Inserting in the middle of node2, which is full, splits it and then
+        # tries to merge the surrounding nodes, including node0 and node1.
+        assert_equal 5 [r linsert lst after [string repeat a 3000] [string repeat b 3000]]
+        assert_equal 5 [r llen lst]
+        assert_equal [list [string repeat a 3000] [string repeat b 3000] [string repeat c 3000]] [r lrange lst 2 -1]
+        assert_equal [read_big_bulk {r lpop lst}] $big_len
+        assert_equal [string length [r lpop lst]] $mid_len
+        r debug quicklist-packed-threshold 0
+        r ping
+    } {PONG} {large-memory needs:debug}
+
     test {Test LMOVE on plain nodes over 4GB} {
        r flushdb
        r RPUSH lst2{t} "aa"

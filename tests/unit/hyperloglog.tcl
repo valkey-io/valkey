@@ -24,6 +24,14 @@ start_server {tags {"hll large-memory"}} {
         assert_error {*INVALIDOBJ*} {r pfmerge fail_target hll_overflow hll_merge_source}
         assert_error {*INVALIDOBJ*} {r pfadd hll_overflow foo}
     }
+
+    test {PFADD with an element of 2^31 bytes} {
+        r config set proto-max-bulk-len 10000000000 ;#10gb
+        r config set client-query-buffer-limit 10000000000 ;#10gb
+        r write "*3\r\n\$5\r\nPFADD\r\n\$7\r\nhll_big\r\n"
+        assert_equal 1 [write_big_bulk 2147483648]
+        assert_equal PONG [r ping]
+    }
 }
 
 start_server {tags {"hll"}} {

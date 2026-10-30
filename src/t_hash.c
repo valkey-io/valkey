@@ -3169,7 +3169,10 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
     } volaSetIter;
     static struct volatileSetCursor *vset_cursor = NULL;
 
-    vset_cursor = (struct volatileSetCursor *)cursor;
+    /* The deferred defrag cursor is shared by all types. If the key was
+     * replaced by this hash mid-scan, the cursor is another scanner's number,
+     * not our address, so start over. */
+    vset_cursor = (cursor == (size_t)&volaSetIter) ? &volaSetIter : NULL;
 
     if (!vset_cursor) {
         /* New object scan */

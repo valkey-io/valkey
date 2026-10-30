@@ -387,6 +387,116 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
+# Build a clusterbus PING with primary flag, explicit currentEpoch and
+# configEpoch, and a shard id extension. Layout follows
+# create_cluster_meet_packet in packet.tcl.
+proc create_stale_primary_ping {sender_name sender_port sender_cport current_epoch config_epoch shard_id} {
+    set CLUSTER_NAMELEN 40
+    set CLUSTER_SLOTS 16384
+    set NET_IP_STR_LEN 46
+    set CLUSTERMSG_TYPE_PING 0
+    set CLUSTERMSG_EXT_TYPE_SHARDID 3
+
+    set packet "RCmb"
+    append packet [binary format I 0]
+    append packet [binary format S 1]
+    append packet [binary format S $sender_port]
+    append packet [binary format S $CLUSTERMSG_TYPE_PING]
+    append packet [binary format S 0]
+    append packet [binary format W $current_epoch]
+    append packet [binary format W $config_epoch]
+    append packet [binary format W 0]
+    set sender_padded [string range "${sender_name}[string repeat "\x00" $CLUSTER_NAMELEN]" 0 [expr {$CLUSTER_NAMELEN - 1}]]
+    append packet $sender_padded
+    append packet [string repeat "\x00" [expr {$CLUSTER_SLOTS / 8}]]
+    append packet [string repeat "\x00" $CLUSTER_NAMELEN]
+    append packet [string repeat "\x00" $NET_IP_STR_LEN]
+    # One extension, and the EXT_DATA message flag (1 << 2).
+    append packet [binary format S 1]
+    append packet [string repeat "\x00" 30]
+    append packet [binary format S 0]
+    append packet [binary format S $sender_cport]
+    # Primary flag (CLUSTER_NODE_PRIMARY), state CLUSTER_OK, mflags.
+    append packet [binary format S 1]
+    append packet [binary format c 0]
+    append packet [binary format ccc 4 0 0]
+
+    # Shard id extension: length (uint32), type (uint16), unused (uint16),
+    # then the NUL-terminated shard id padded to eight bytes.
+    set datalen [expr {(([string length $shard_id] + 1 + 7) / 8) * 8}]
+    append packet [binary format ISS [expr {8 + $datalen}] $CLUSTERMSG_EXT_TYPE_SHARDID 0]
+    append packet $shard_id [string repeat "\x00" [expr {$datalen - [string length $shard_id]}]]
+
+    set totlen [string length $packet]
+    set packet [string replace $packet 4 7 [binary format I $totlen]]
+    return $packet
+}
+
+# Regression test for a stale primary claim in an empty target shard. The
+# observer R3 records R6 as a replica of R7, then receives a forged primary claim
+# from R6 that carries R6's pre-failover configEpoch. R6 then wins the failback,
+# and R3 must end up with slot 609 migrating to R6. R6's own replica claims can
+# reach R3 before the failback and undo the forged flip, so a single run can pass
+# without the fix. Repeat on a fresh cluster.
+for {set ::iter 1} {$::iter <= 5} {incr ::iter} {
+    start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
+
+        set R0_id [R 0 CLUSTER MYID]
+        set R3_id [R 3 CLUSTER MYID]
+
+        create_empty_shard 6 7
+        set R6_id [R 6 CLUSTER MYID]
+        set R7_id [R 7 CLUSTER MYID]
+
+        test "Stale primary claim from a demoted replica does not leave migration target behind (iteration $::iter)" {
+            # Start the migration of slot 609 from R0 to the empty shard R6.
+            assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+            assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
+            wait_for_slot_state 0 "\[609->-$R6_id\]"
+            wait_for_slot_state 3 "\[609->-$R6_id\]"
+
+            # R6's configEpoch before the failover. R7 gets a higher one.
+            set E6 [dict get [cluster_get_myself 6] config_epoch]
+            set shard_id [R 6 cluster myshardid]
+
+            # Promote R7 by failing R6. R6 comes back as a replica of R7.
+            fail_server 6 7
+            set E7 [dict get [cluster_get_myself 7] config_epoch]
+            assert {$E7 > $E6}
+            wait_for_slot_state 0 "\[609->-$R7_id\]"
+            wait_for_slot_state 3 "\[609->-$R7_id\]"
+
+            # Observer state: R3 records R6 as a replica of R7.
+            wait_for_condition 100 100 {
+                [cluster_node_is_replica_of 3 $R6_id $R7_id]
+            } else {
+                fail "R3 never recorded R6 as a replica of R7"
+            }
+
+            # Forged primary claim from R6 with its pre-failover configEpoch.
+            set pings [CI 3 cluster_stats_messages_ping_received]
+            set packet [create_stale_primary_ping $R6_id [srv -6 port] \
+                [expr {[srv -6 port] + 10000}] $E6 $E6 $shard_id]
+            set sock [socket 127.0.0.1 [expr {[srv -3 port] + 10000}]]
+            fconfigure $sock -translation binary -buffering none -blocking 1
+            puts -nonewline $sock $packet
+            flush $sock
+            close $sock
+            wait_for_condition 1000 10 {
+                [CI 3 cluster_stats_messages_ping_received] > $pings
+            } else {
+                fail "Forged PING was never received"
+            }
+
+            # R6 wins the failback at an epoch above R7's.
+            failback 6
+
+            # Outcome only: R3 ends with slot 609 migrating to R6.
+            wait_for_slot_state 3 "\[609->-$R6_id\]"
+        }
+    }
+}
+
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set R0_id [R 0 CLUSTER MYID]

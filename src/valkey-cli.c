@@ -5046,6 +5046,7 @@ static int clusterManagerSetSlotOwnerRaft(clusterManagerNode *owner, int slot, i
     if (!clusterManagerDelSlot(owner, slot, 1)) return 0;
     if (!clusterManagerAddSlot(owner, slot)) return 0;
     if (do_clear && !clusterManagerClearSlotStatus(owner, slot)) return 0;
+    if (!clusterManagerBumpEpoch(owner)) return 0;
     return 1;
 }
 
@@ -6497,7 +6498,8 @@ static int clusterManagerFixOpenSlot(int slot) {
     sds migrating_str = sdsempty();
     sds importing_str = sdsempty();
     clusterManagerNode *owner = NULL; /* The obvious slot owner if any. */
-    int is_raft = cluster_manager.protocol == CLUSTER_MANAGER_PROTOCOL_RAFT;
+    clusterManagerNode *config_owner = NULL;
+    int config_owners = 0;
 
     /* Iterate all the nodes, looking for potential owners of this slot. */
     listIter li;
@@ -6508,7 +6510,8 @@ static int clusterManagerFixOpenSlot(int slot) {
         if (n->flags & CLUSTER_MANAGER_FLAG_REPLICA) continue;
         if (n->slots[slot]) {
             listAddNodeTail(owners, n);
-            if (is_raft) owner = n;
+            config_owners++;
+            config_owner = n;
         } else {
             valkeyReply *r = CLUSTER_MANAGER_COMMAND(n, "CLUSTER COUNTKEYSINSLOT %d", slot);
             success = clusterManagerCheckValkeyReply(n, r, NULL);
@@ -6523,9 +6526,11 @@ static int clusterManagerFixOpenSlot(int slot) {
         }
     }
 
-    /* If we have only a single potential owner for this slot,
-     * set it as "owner". */
-    if (listLength(owners) == 1) owner = listFirst(owners)->value;
+    /* Prefer the unique config owner over nodes that only hold keys. */
+    if (config_owners == 1)
+        owner = config_owner;
+    else if (listLength(owners) == 1)
+        owner = listFirst(owners)->value;
 
     /* Scan the list of nodes again, in order to populate the
      * list of nodes in importing or migrating state for
@@ -6626,12 +6631,8 @@ static int clusterManagerFixOpenSlot(int slot) {
         while ((ln = listNext(&li)) != NULL) {
             clusterManagerNode *n = ln->value;
             if (n == owner) continue;
-            /* Raft has no per-node slot ownership to remove. DELSLOTS here
-             * would unassign the slot everywhere and delete the owner's keys. */
-            if (!is_raft) {
-                success = clusterManagerDelSlot(n, slot, 1);
-                if (!success) goto cleanup;
-            }
+            success = clusterManagerDelSlot(n, slot, 1);
+            if (!success) goto cleanup;
             n->slots[slot] = 0;
             /* Assign the slot to the owner in the node 'n' configuration.' */
             success = clusterManagerSetSlot(n, owner, slot, "node", NULL);
@@ -6671,15 +6672,7 @@ static int clusterManagerFixOpenSlot(int slot) {
         listRewind(importing, &li);
         while ((ln = listNext(&li)) != NULL) {
             clusterManagerNode *n = ln->value;
-            if (n == owner) {
-                /* A Raft ownership change may reach the importing node before
-                 * SETSLOT NODE is sent there to clear its node-local state. */
-                if (is_raft) {
-                    success = clusterManagerClearSlotStatus(n, slot);
-                    if (!success) goto cleanup;
-                }
-                continue;
-            }
+            if (n == owner) continue;
             success = clusterManagerMoveSlot(n, owner, slot, move_opts, NULL);
             if (!success) goto cleanup;
             clusterManagerLogInfo(">>> Setting %d as STABLE in "

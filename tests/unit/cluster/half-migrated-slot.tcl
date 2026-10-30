@@ -53,22 +53,21 @@ test "Uncovered slot is reassigned by cluster fix" {
     reset_cluster
 }
 
-if {$::cluster_raft} {
-test "Raft fix preserves keys when the importing node has more keys than the owner" {
-    assert_equal {OK} [$cluster set {{aga}moved} moved]
-    assert_equal {OK} [$cluster set {{aga}remaining} remaining]
-    assert_equal {OK} [$nodefrom(link) cluster setslot 609 migrating $nodeto(id)]
-    assert_equal {OK} [$nodeto(link) cluster setslot 609 importing $nodefrom(id)]
-    assert_equal {OK} [$nodefrom(link) migrate $nodeto(host) $nodeto(port) "" 0 10000 keys aga {{aga}moved}]
-    assert_equal 1 [$nodefrom(link) cluster countkeysinslot 609]
-    assert_equal 2 [$nodeto(link) cluster countkeysinslot 609]
-    fix_cluster $nodefrom(addr)
-    assert_equal "xyz" [$cluster get aga]
-    assert_equal "moved" [$cluster get {{aga}moved}]
-    assert_equal "remaining" [$cluster get {{aga}remaining}]
+test "SETSLOT NODE to the current owner keeps migrating state" {
     reset_cluster
-    assert_equal 2 [$nodefrom(link) del {{aga}moved} {{aga}remaining}]
+    assert_equal {OK} [$nodefrom(link) cluster setslot 609 migrating $nodeto(id)]
+    assert {[string first "\[609->-$nodeto(id)\]" [$nodefrom(link) cluster nodes]] >= 0}
+    assert_equal {OK} [$nodeto(link) cluster setslot 609 node $nodefrom(id)]
+    assert {[string first "\[609->-$nodeto(id)\]" [$nodefrom(link) cluster nodes]] >= 0}
+    assert_equal {OK} [$nodefrom(link) cluster setslot 609 stable]
 }
+
+test "DELSLOTS from a non-owner does not unassign the slot or delete keys" {
+    reset_cluster
+    $cluster set aga xyz
+    assert_equal {OK} [$nodeto(link) cluster delslots 609]
+    wait_for_cluster_propagation
+    assert_equal "xyz" [$cluster get aga]
 }
 
 test "Init migration and move key" {
@@ -112,6 +111,12 @@ test "Move key back" {
 test "Half-finish importing" {
     # Now we half finish 'importing' node
     assert_equal {OK} [$nodeto(link) cluster setslot 609 node $nodeto(id)]
+    wait_for_condition 1000 50 {
+        [string first "\[609-<-" [$nodeto(link) cluster nodes]] < 0 &&
+        [string first "\[609->-" [$nodefrom(link) cluster nodes]] < 0
+    } else {
+        fail "Leftover IMPORTING/MIGRATING was not cleared after ownership change"
+    }
     fix_cluster $nodefrom(addr)
     assert_equal "xyz" [$cluster get aga]
 }

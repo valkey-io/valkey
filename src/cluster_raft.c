@@ -3384,18 +3384,40 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
             start = end = atoi(argv[i]);
         }
         for (int j = start; j <= end; j++) {
-            if (info.target_node == myself || server.cluster->slots[j] == myself)
-                RAFT_STATE()->todo_save_config = 1;
+            clusterNode *old_owner = server.cluster->slots[j];
+            clusterNode *my_primary = clusterNodeGetPrimary(myself);
+
             if (info.target_node) {
-                if (server.cluster->slots[j] == myself && info.target_node != myself) {
+                /* Same owner: do not touch migrating/importing. */
+                if (old_owner == info.target_node) continue;
+
+                if (old_owner == myself && info.target_node != myself) {
                     serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
                               j, myself->name);
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
                 }
-                if (server.cluster->slots[j]) clusterDelSlot(j);
+
+                /* Target is this shard, not necessarily myself. */
+                if (info.target_node == my_primary && getImportingSlotSource(j)) {
+                    setImportingSlotSource(j, NULL);
+                    RAFT_STATE()->todo_save_config = 1;
+                }
+
+                /* Clear migrating only if the slot left our shard. */
+                if (getMigratingSlotDest(j) && old_owner &&
+                    !memcmp(old_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) &&
+                    memcmp(info.target_node->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
+                    setMigratingSlotDest(j, NULL);
+                    RAFT_STATE()->todo_save_config = 1;
+                }
+
+                if (info.target_node == myself || old_owner == myself)
+                    RAFT_STATE()->todo_save_config = 1;
+                if (old_owner) clusterDelSlot(j);
                 clusterAddSlot(info.target_node, j);
             } else {
-                if (server.cluster->slots[j] == myself) {
+                if (old_owner == myself) {
+                    RAFT_STATE()->todo_save_config = 1;
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
                 }
                 clusterDelSlot(j);

@@ -2661,9 +2661,6 @@ void replicationAttachToNewPrimary(void) {
     serverAssert(server.primary == NULL);
     replicationDiscardCachedPrimary();
 
-    /* Cancel any in progress imports (we will now use the primary's) */
-    clusterCleanSlotImportsOnFullSync();
-
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
 }

@@ -80,6 +80,60 @@ proc test_auto_failover {how shutdown_timeout} {
 }
 
 start_cluster 3 4 {tags {external:skip cluster}} {
+    test "Failover on shutdown prefers in-sync non-NOFAILOVER replica" {
+        set primary [srv 0 client]
+        set replica1 [srv -3 client]
+        set replica1_host [srv -3 host]
+        set replica1_port [srv -3 port]
+        set replica2 [srv -6 client]
+        set replica2_host [srv -6 host]
+        set replica2_port [srv -6 port]
+
+        $replica1 config set cluster-replica-no-failover yes
+        $replica2 config set cluster-replica-no-failover no
+
+        for {set i 0} {$i < 5} {incr i} {
+            $primary incr key_nofailover_pref
+        }
+        wait_for_ofs_sync $primary $replica1
+        wait_for_ofs_sync $primary $replica2
+        wait_replica_acked_ofs $primary $replica1 $replica1_host $replica1_port
+        wait_replica_acked_ofs $primary $replica2 $replica2_host $replica2_port
+
+        shutdown_how 0 "shutdown"
+
+        wait_for_condition 1000 50 {
+            [s -6 role] eq {master}
+        } else {
+            fail "Replica 2 (non-NOFAILOVER) was not promoted over NOFAILOVER replica 1"
+        }
+    }
+
+    test "Failover on shutdown falls back to NOFAILOVER replica if all in-sync replicas have NOFAILOVER" {
+        set primary [srv -6 client]
+        set replica1 [srv -3 client]
+        set replica1_host [srv -3 host]
+        set replica1_port [srv -3 port]
+
+        $replica1 config set cluster-replica-no-failover yes
+
+        for {set i 0} {$i < 5} {incr i} {
+            $primary incr key_nofailover_fallback
+        }
+        wait_for_ofs_sync $primary $replica1
+        wait_replica_acked_ofs $primary $replica1 $replica1_host $replica1_port
+
+        shutdown_how 6 "shutdown"
+
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "Replica 1 was not promoted as fallback"
+        }
+    }
+}
+
+start_cluster 3 4 {tags {external:skip cluster}} {
     test_auto_failover "shutdown" 0
 }
 

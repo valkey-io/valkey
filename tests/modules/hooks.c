@@ -289,6 +289,21 @@ void configChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t su
     LogStringEvent(ctx, "config-change-first", ei->config_names[0]);
 }
 
+void pubsubSubscriptionDeltaCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
+{
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(sub);
+
+    ValkeyModulePubSubSubscriptionDelta *pd = data;
+    size_t len;
+    const char *channel = ValkeyModule_StringPtrLen(pd->channel, &len);
+    char keyname[128];
+    snprintf(keyname, sizeof(keyname), "pubsub-%s-%.*s", pd->sharded ? "shard" : "channel", (int)len, channel);
+    LogNumericEvent(ctx, keyname, pd->new_subscribers);
+    snprintf(keyname, sizeof(keyname), "pubsub-%s-%.*s-old", pd->sharded ? "shard" : "channel", (int)len, channel);
+    LogNumericEvent(ctx, keyname, pd->old_subscribers);
+}
+
 void keyInfoCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
     VALKEYMODULE_NOT_USED(e);
@@ -532,6 +547,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     ValkeyModule_SubscribeToServerEvent(ctx,
         ValkeyModuleEvent_AtomicSlotMigration, atomicSlotMigrationCallback);
+
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_PubSubSubscriptionDelta, pubsubSubscriptionDeltaCallback);
 
     event_log = ValkeyModule_CreateDict(ctx);
     removed_event_log = ValkeyModule_CreateDict(ctx);

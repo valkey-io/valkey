@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "key_memory_delta.h"
 #include "endianconv.h"
 #include "stream.h"
 
@@ -2436,6 +2437,8 @@ void xreadCommand(client *c) {
     for (int i = 0; i < streams_count; i++) {
         robj *o = lookupKeyRead(c->db, c->argv[streams_arg + i]);
         if (o == NULL) continue;
+        /* Looked up for reading, but XREADGROUP may modify it below. */
+        if (groups) keyMemoryDeltaTrackValue(c->db, o);
         stream *s = objectGetVal(o);
         streamID *gt = ids + i; /* ID must be greater than this. */
         int modified_stream = 0;
@@ -2959,6 +2962,8 @@ void xackCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
+    /* Looked up for reading, but may be modified below. */
+    keyMemoryDeltaTrackValue(c->db, o);
 
     /* Start parsing the IDs, so that we abort ASAP if there is a syntax
      * error: the return value of this command cannot be an error in case
@@ -3259,6 +3264,8 @@ void xclaimCommand(client *c) {
                             (char *)objectGetVal(c->argv[1]), (char *)objectGetVal(c->argv[2]));
         return;
     }
+    /* Looked up for reading, but may be modified below. */
+    keyMemoryDeltaTrackValue(c->db, o);
 
     if (getLongLongFromObjectOrReply(c, c->argv[4], &minidle, "Invalid min-idle-time argument for XCLAIM") != C_OK)
         return;
@@ -3514,6 +3521,8 @@ void xautoclaimCommand(client *c) {
                             (char *)objectGetVal(c->argv[2]));
         return;
     }
+    /* Looked up for reading, but may be modified below. */
+    keyMemoryDeltaTrackValue(c->db, o);
 
     streamID *deleted_ids = ztrymalloc(count * sizeof(streamID));
     if (!deleted_ids) {

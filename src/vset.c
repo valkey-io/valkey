@@ -1374,34 +1374,42 @@ static bool removeEntryFromRaxBucket(vsetBucket *rax_bucket, vsetGetExpiryFunc g
     return removed;
 }
 
-static inline bool shrinkRaxBucketIfPossible(vsetBucket **target, vsetGetExpiryFunc getExpiry) {
-    rax *expiry_buckets = vsetBucketRax(*target);
-    if (raxSize(expiry_buckets) == 1) {
-        raxIterator it;
-        raxStart(&it, expiry_buckets);
-        assert(raxSeek(&it, "^", NULL, 0));
-        assert(raxNext(&it));
-        vsetBucket *bucket = it.data;
-        int bucket_type = vsetBucketType(bucket);
-        raxStop(&it);
-        /* We will not convert hashtable to our only bucket since we will lose the ability to scan the items in a sorted way.
-         * We will also not shrink when we have a full vector, since it might immediately be repopulated.  */
-        if (bucket_type == VSET_BUCKET_SINGLE ||
-            (bucket_type == VSET_BUCKET_VECTOR && pvLen(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE)) {
-            if (bucket_type == VSET_BUCKET_VECTOR) {
-                pVector *pv = vsetBucketVector(bucket);
-                /* first lets sort the vector. we cannot set the target bucket as unsorted vector bucket */
-                vsetSetExpiryGetter(getExpiry);
-                pvSort(pv, vsetCompareEntries);
-                vsetUnsetExpiryGetter();
-            }
-            /* lets make our bucket to be the only left bucket */
-            *target = bucket;
-            raxFree(expiry_buckets);
-            return true;
-        }
+/* Returns true if the RAX has a single bucket that can replace it, see
+ * shrinkRaxBucketIfPossible(). If 'only' is not NULL, it is set to that bucket. */
+static inline bool canShrinkRaxBucket(rax *expiry_buckets, vsetBucket **only) {
+    if (raxSize(expiry_buckets) != 1) return false;
+    raxIterator it;
+    raxStart(&it, expiry_buckets);
+    assert(raxSeek(&it, "^", NULL, 0));
+    assert(raxNext(&it));
+    vsetBucket *bucket = it.data;
+    int bucket_type = vsetBucketType(bucket);
+    raxStop(&it);
+    /* We will not convert hashtable to our only bucket since we will lose the ability to scan the items in a sorted way.
+     * We will also not shrink when we have a full vector, since it might immediately be repopulated.  */
+    if (bucket_type == VSET_BUCKET_SINGLE ||
+        (bucket_type == VSET_BUCKET_VECTOR && pvLen(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE)) {
+        if (only) *only = bucket;
+        return true;
     }
     return false;
+}
+
+static inline bool shrinkRaxBucketIfPossible(vsetBucket **target, vsetGetExpiryFunc getExpiry) {
+    rax *expiry_buckets = vsetBucketRax(*target);
+    vsetBucket *bucket;
+    if (!canShrinkRaxBucket(expiry_buckets, &bucket)) return false;
+    if (vsetBucketType(bucket) == VSET_BUCKET_VECTOR) {
+        pVector *pv = vsetBucketVector(bucket);
+        /* first lets sort the vector. we cannot set the target bucket as unsorted vector bucket */
+        vsetSetExpiryGetter(getExpiry);
+        pvSort(pv, vsetCompareEntries);
+        vsetUnsetExpiryGetter();
+    }
+    /* lets make our bucket to be the only left bucket */
+    *target = bucket;
+    raxFree(expiry_buckets);
+    return true;
 }
 
 static inline vsetBucket *removeFromBucket_RAX(vsetGetExpiryFunc getExpiry, vsetBucket *target, void *entry, long long expiry, bool *removed) {
@@ -2092,6 +2100,20 @@ size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc 
     return removed;
 }
 
+/* Returns true if vsetRemoveExpired() may change the set at time 'now'. It
+ * removes entries once the earliest one is due, as estimated by
+ * vsetEstimatedEarliestExpiry(): that's the expiry of the first entry of a
+ * single or (sorted) vector bucket, and the end of the time window of the first
+ * bucket of a RAX, past which all its entries are expired. But even when none
+ * is due, it replaces a RAX left with a single bucket by that bucket, see
+ * shrinkRaxBucketIfPossible(). */
+bool vsetMayChangeOnRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) {
+    if (vsetIsEmpty(set)) return false;
+    if (vsetBucketType(set->bucket) == VSET_BUCKET_RAX && canShrinkRaxBucket(vsetBucketRax(set->bucket), NULL))
+        return true;
+    return vsetEstimatedEarliestExpiry(set, getExpiry) <= now;
+}
+
 /* vsetEstimatedEarliestExpiry - Estimate the earliest expiration time in a volatile set.
  *
  * Parameters:
@@ -2509,6 +2531,17 @@ static int defragRaxNode(raxNode **noderef) {
         return 1;
     }
     return 0;
+}
+
+/* Returns true if defragmenting the set with vsetScanDefrag(), or updating the
+ * entries it tracks after the defragmentation moved them, may change its memory
+ * usage. Single, vector and RAX allocations are moved as they are, but the
+ * hashtable buckets of a RAX are pointer sets: an update deletes and re-adds
+ * the moved entry, which may chain or unchain buckets and resize the table, and
+ * vsetScanDefrag() resumes their paused shrinking. The RAX isn't walked to find
+ * such buckets, so that this takes constant time. */
+bool vsetMayChangeOnDefrag(vset *set) {
+    return vsetBucketType(set->bucket) == VSET_BUCKET_RAX;
 }
 
 size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *)) {

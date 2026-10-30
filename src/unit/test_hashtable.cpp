@@ -258,6 +258,7 @@ TEST_F(HashtableTest, empty_buckets_rehashing) {
     while (hashtableIsRehashing(ht)) {
         ASSERT_FALSE(hashtableAdd(ht, (void *)0));
     }
+    ASSERT_FALSE(hashtableNeedsShrink(ht));
 
     /* Keep the entry from the highest bucket index so shrink rehashing doesn't
      * complete too early with randomized hash seeds and start a second resize. */
@@ -278,9 +279,13 @@ TEST_F(HashtableTest, empty_buckets_rehashing) {
         if (j == keep) continue;
         ASSERT_TRUE(hashtableDelete(ht, (void *)j));
     }
+    ASSERT_FALSE(hashtableIsRehashing(ht));
+    ASSERT_TRUE(hashtableNeedsShrink(ht));
     hashtableResumeAutoShrink(ht);
     ASSERT_EQ(hashtableSize(ht), 1u);
     ASSERT_EQ(hashtableGetRehashingIndex(ht), 0);
+    ASSERT_TRUE(hashtableIsRehashing(ht));
+    ASSERT_FALSE(hashtableNeedsShrink(ht));
 
     /* Add elements to trigger rehashing, a rehash step will rehash a maximum of 10 buckets. */
     for (j = 0; j < 10; j++) {

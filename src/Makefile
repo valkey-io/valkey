@@ -561,6 +561,7 @@ ENGINE_SERVER_OBJ = \
     hyperloglog.o \
     intset.o \
     io_threads.o \
+    key_memory_delta.o \
     kvstore.o \
     latency.o \
     lazyfree.o \

@@ -31,11 +31,6 @@ typedef struct pathHashMatchList {
     size_t max_path_len;
 } pathHashMatchList;
 
-typedef struct pathHashScanEntry {
-    sds path;
-    robj *payload;
-} pathHashScanEntry;
-
 #define PATH_HASH_DELETE_CHUNK_SIZE 256
 #define PATH_HASH_DELETE_CHUNK_BYTES (64 * 1024)
 
@@ -665,28 +660,60 @@ static sds pathHashEncodeCursor(const unsigned char *path, size_t len) {
     return cursor;
 }
 
-void phscanCommand(client *c) {
-    int withvalues = 0;
-    int count_seen = 0;
-    long count = 10;
-    robj *prefix_arg = NULL;
-    for (int i = 3; i < c->argc;) {
+/* Validate both scan commands before looking up the key or path. */
+static int pathHashParseScanOptions(client *c, int start, int paths, scanOptions *opts, robj **prefix) {
+    *opts = (scanOptions){.count = 10, .type = LLONG_MAX, .input_slot = -1, .match_slot = -1};
+    *prefix = NULL;
+    int count_seen = 0, filter_seen = 0;
+    for (int i = start; i < c->argc; i += 2) {
         char *arg = objectGetVal(c->argv[i]);
-        if (!strcasecmp(arg, "prefix") && i + 1 < c->argc && prefix_arg == NULL) {
-            prefix_arg = c->argv[i + 1];
-            i += 2;
-        } else if (!strcasecmp(arg, "count") && i + 1 < c->argc && !count_seen) {
-            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, &count, NULL) != C_OK) return;
+        if (i + 1 >= c->argc) goto syntax;
+        if (!strcasecmp(arg, "count") && !count_seen) {
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, &opts->count, NULL) != C_OK)
+                return C_ERR;
             count_seen = 1;
-            i += 2;
-        } else if (!strcasecmp(arg, "withvalues") && !withvalues) {
-            withvalues = 1;
-            i++;
+        } else if (!strcasecmp(arg, paths ? "prefix" : "match") && !filter_seen) {
+            filter_seen = 1;
+            if (paths) {
+                *prefix = c->argv[i + 1];
+            } else {
+                opts->pat = objectGetVal(c->argv[i + 1]);
+                opts->patlen = sdslen(opts->pat);
+                opts->use_pattern = !(opts->patlen == 1 && opts->pat[0] == '*');
+            }
         } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
+            goto syntax;
         }
     }
+    return C_OK;
+syntax:
+    addReplyErrorObject(c, shared.syntaxerr);
+    return C_ERR;
+}
+
+/* Scan only the field map of an exact path, using the Hash scan cursor. */
+void phscanCommand(client *c) {
+    unsigned long long cursor;
+    if (parseScanCursorOrReply(c, objectGetVal(c->argv[3]), &cursor) != C_OK) return;
+    scanOptions opts;
+    robj *prefix;
+    if (pathHashParseScanOptions(c, 4, 0, &opts, &prefix) != C_OK) return;
+
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
+    if (payload == NULL) {
+        addReply(c, shared.emptyscan);
+        return;
+    }
+    scanGenericCommandWithOptions(c, payload, cursor, &opts, NULL);
+}
+
+void phpathscanCommand(client *c) {
+    scanOptions opts;
+    robj *prefix_arg;
+    if (pathHashParseScanOptions(c, 3, 1, &opts, &prefix_arg) != C_OK) return;
+    long count = opts.count;
 
     int initial;
     sds previous = pathHashDecodeCursor(c, c->argv[2], &initial);
@@ -723,7 +750,7 @@ void phscanCommand(client *c) {
     else
         raxSeek(&iter, "^", NULL, 0);
 
-    pathHashScanEntry *entries = NULL;
+    sds *entries = NULL;
     size_t returned = 0, cap = 0;
     while (returned < (size_t)count && raxNext(&iter)) {
         if (prefix && !pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) break;
@@ -732,8 +759,7 @@ void phscanCommand(client *c) {
             if (cap > (size_t)count) cap = count;
             entries = zrealloc(entries, cap * sizeof(*entries));
         }
-        entries[returned].path = sdsnewlen(iter.key, iter.key_len);
-        entries[returned].payload = iter.data;
+        entries[returned] = sdsnewlen(iter.key, iter.key_len);
         returned++;
     }
     /* Stopping exactly at COUNT does not mean there is more to scan, so look
@@ -742,8 +768,8 @@ void phscanCommand(client *c) {
     int has_more = 0;
     if (returned == (size_t)count && raxNext(&iter))
         has_more = !prefix || pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len);
-    sds next_cursor = has_more ? pathHashEncodeCursor((unsigned char *)entries[returned - 1].path,
-                                                      sdslen(entries[returned - 1].path))
+    sds next_cursor = has_more ? pathHashEncodeCursor((unsigned char *)entries[returned - 1],
+                                                      sdslen(entries[returned - 1]))
                                : sdsnew("0");
     raxStop(&iter);
     sdsfree(previous);
@@ -752,10 +778,8 @@ void phscanCommand(client *c) {
     addReplyBulkSds(c, next_cursor);
     addReplyArrayLen(c, returned);
     for (size_t i = 0; i < returned; i++) {
-        if (withvalues) addReplyArrayLen(c, 2);
-        addReplyBulkCBuffer(c, entries[i].path, sdslen(entries[i].path));
-        if (withvalues) pathHashReplyPayload(c, entries[i].payload);
-        sdsfree(entries[i].path);
+        addReplyBulkCBuffer(c, entries[i], sdslen(entries[i]));
+        sdsfree(entries[i]);
     }
     zfree(entries);
 }

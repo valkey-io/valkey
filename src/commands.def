@@ -2218,19 +2218,29 @@ keySpec EXPIRE_Keyspecs[1] = {
 };
 #endif
 
+/* EXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG EXPIRE_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* EXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG EXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
 /* EXPIRE condition argument table */
 struct COMMAND_ARG EXPIRE_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXPIRE_condition_xx_comparison_Subargs},
 };
 
 /* EXPIRE argument table */
 struct COMMAND_ARG EXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=EXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIRE_condition_Subargs},
 };
 
 /********** EXPIREAT ********************/
@@ -2254,19 +2264,29 @@ keySpec EXPIREAT_Keyspecs[1] = {
 };
 #endif
 
+/* EXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG EXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* EXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG EXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
 /* EXPIREAT condition argument table */
 struct COMMAND_ARG EXPIREAT_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXPIREAT_condition_xx_comparison_Subargs},
 };
 
 /* EXPIREAT argument table */
 struct COMMAND_ARG EXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-seconds",ARG_TYPE_UNIX_TIME,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=EXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIREAT_condition_Subargs},
 };
 
 /********** EXPIRETIME ********************/
@@ -2596,19 +2616,29 @@ keySpec PEXPIRE_Keyspecs[1] = {
 };
 #endif
 
+/* PEXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG PEXPIRE_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* PEXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG PEXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
 /* PEXPIRE condition argument table */
 struct COMMAND_ARG PEXPIRE_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=PEXPIRE_condition_xx_comparison_Subargs},
 };
 
 /* PEXPIRE argument table */
 struct COMMAND_ARG PEXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("milliseconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=PEXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIRE_condition_Subargs},
 };
 
 /********** PEXPIREAT ********************/
@@ -2632,19 +2662,29 @@ keySpec PEXPIREAT_Keyspecs[1] = {
 };
 #endif
 
+/* PEXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG PEXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* PEXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG PEXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
 /* PEXPIREAT condition argument table */
 struct COMMAND_ARG PEXPIREAT_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=PEXPIREAT_condition_xx_comparison_Subargs},
 };
 
 /* PEXPIREAT argument table */
 struct COMMAND_ARG PEXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-milliseconds",ARG_TYPE_UNIX_TIME,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=PEXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIREAT_condition_Subargs},
 };
 
 /********** PEXPIRETIME ********************/
@@ -3724,12 +3764,22 @@ keySpec HEXPIRE_Keyspecs[1] = {
 };
 #endif
 
+/* HEXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG HEXPIRE_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* HEXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG HEXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
 /* HEXPIRE condition argument table */
 struct COMMAND_ARG HEXPIRE_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIRE_condition_xx_comparison_Subargs},
 };
 
 /* HEXPIRE fields argument table */
@@ -3742,7 +3792,7 @@ struct COMMAND_ARG HEXPIRE_fields_Subargs[] = {
 struct COMMAND_ARG HEXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,4,NULL),.subargs=HEXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIRE_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIRE_fields_Subargs},
 };
 
@@ -3765,12 +3815,22 @@ keySpec HEXPIREAT_Keyspecs[1] = {
 };
 #endif
 
+/* HEXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG HEXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* HEXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG HEXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
 /* HEXPIREAT condition argument table */
 struct COMMAND_ARG HEXPIREAT_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIREAT_condition_xx_comparison_Subargs},
 };
 
 /* HEXPIREAT fields argument table */
@@ -3783,7 +3843,7 @@ struct COMMAND_ARG HEXPIREAT_fields_Subargs[] = {
 struct COMMAND_ARG HEXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-seconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=HEXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIREAT_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIREAT_fields_Subargs},
 };
 
@@ -4149,12 +4209,22 @@ keySpec HPEXPIRE_Keyspecs[1] = {
 };
 #endif
 
+/* HPEXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG HPEXPIRE_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* HPEXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG HPEXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
 /* HPEXPIRE condition argument table */
 struct COMMAND_ARG HPEXPIRE_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIRE_condition_xx_comparison_Subargs},
 };
 
 /* HPEXPIRE fields argument table */
@@ -4167,7 +4237,7 @@ struct COMMAND_ARG HPEXPIRE_fields_Subargs[] = {
 struct COMMAND_ARG HPEXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("milliseconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=HPEXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIRE_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIRE_fields_Subargs},
 };
 
@@ -4190,12 +4260,22 @@ keySpec HPEXPIREAT_Keyspecs[1] = {
 };
 #endif
 
+/* HPEXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG HPEXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* HPEXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG HPEXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
 /* HPEXPIREAT condition argument table */
 struct COMMAND_ARG HPEXPIREAT_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIREAT_condition_xx_comparison_Subargs},
 };
 
 /* HPEXPIREAT fields argument table */
@@ -4208,7 +4288,7 @@ struct COMMAND_ARG HPEXPIREAT_fields_Subargs[] = {
 struct COMMAND_ARG HPEXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-milliseconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=HPEXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIREAT_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIREAT_fields_Subargs},
 };
 

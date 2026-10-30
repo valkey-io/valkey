@@ -2112,6 +2112,14 @@ void xaddCommand(client *c) {
         return;
     }
 
+    /* Same for elements streamAppendItem would refuse as too large. */
+    size_t totelelen = 0;
+    for (int j = field_pos; j < c->argc; j++) totelelen += sdslen(objectGetVal(c->argv[j]));
+    if (totelelen > STREAM_LISTPACK_MAX_SIZE) {
+        addReplyError(c, "Elements are too large to be stored");
+        return;
+    }
+
     /* Lookup the stream at key. */
     robj *o;
     stream *s;

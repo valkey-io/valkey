@@ -628,6 +628,26 @@ start_server {tags {"expire"}} {
             }
         }
 
+        test {MSETEX and HSETEX with a repeated expire option are replicated with the last one} {
+            $primary msetex 1 foo18 bar ex 100 ex 200
+            $primary msetex 1 foo19 bar px 100000 px 200000
+            $primary msetex 1 foo20 bar exat [expr [clock seconds]+100] exat [expr [clock seconds]+200]
+            $primary hsetex foo21 ex 100 ex 200 fields 1 f v
+            $primary hsetex foo22 px 100000 px 200000 fields 1 f v
+            $primary hsetex foo23 exat [expr [clock seconds]+100] exat [expr [clock seconds]+200] fields 1 f v
+            # Keys and values named like the option
+            $primary msetex 1 ex ex ex 100 ex 200
+            $primary hsetex px px 100000 px 200000 fields 1 f v
+            wait_for_ofs_sync $primary $replica
+
+            foreach key {foo18 foo19 foo20 ex} {
+                assert_equal [$primary pexpiretime $key] [$replica pexpiretime $key]
+            }
+            foreach key {foo21 foo22 foo23 px} {
+                assert_equal [$primary hpexpiretime $key FIELDS 1 f] [$replica hpexpiretime $key FIELDS 1 f]
+            }
+        }
+
         test {expired key which is created in writable replicas should be deleted by active expiry} {
             $primary flushall
             $replica config set replica-read-only no

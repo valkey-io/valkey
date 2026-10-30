@@ -2497,6 +2497,8 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[0] = 50.0; /* p50 */
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
+    server.latency_tracking_info_percentiles_labels = NULL;
+    createLatencyTrackingInfoPercentilesLabels();
 
     server.tls_server_cert_expire_time = 0;
     server.tls_server_alt_cert_expire_time = 0;
@@ -6228,19 +6230,93 @@ void bytesToHuman(char *s, size_t size, unsigned long long n) {
     }
 }
 
-/* Fill percentile distribution of latencies. */
-sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram) {
-    info = sdscatfmt(info, "latency_percentiles_usec_%s:", histogram_name);
+/* Free the labels before changing the percentile configuration and its length. */
+void freeLatencyTrackingInfoPercentilesLabels(void) {
+    sds *labels = server.latency_tracking_info_percentiles_labels;
+    if (!labels) return;
+    for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) sdsfree(labels[j]);
+    zfree(labels);
+    server.latency_tracking_info_percentiles_labels = NULL;
+}
+
+/* Create the "p<percentile>=" labels after parsing the percentile configuration.
+ * Existing labels must be freed before changing the configuration and its length. */
+void createLatencyTrackingInfoPercentilesLabels(void) {
+    serverAssert(server.latency_tracking_info_percentiles_labels == NULL);
+    sds *labels = NULL;
+    if (server.latency_tracking_info_percentiles_len)
+        labels = zmalloc(sizeof(sds) * server.latency_tracking_info_percentiles_len);
     for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {
         char fbuf[128];
         size_t len = snprintf(fbuf, sizeof(fbuf), "%f", server.latency_tracking_info_percentiles[j]);
-        trimDoubleString(fbuf, len);
-        info = sdscatprintf(info, "p%s=%.3f", fbuf,
-                            ((double)hdr_value_at_percentile(histogram, server.latency_tracking_info_percentiles[j])) /
-                                1000.0f);
+        len = trimDoubleString(fbuf, len);
+        labels[j] = sdscatlen(sdscatlen(sdsnewlen("p", 1), fbuf, len), "=", 1);
+    }
+    server.latency_tracking_info_percentiles_labels = labels;
+}
+
+/* Returns the largest counts index whose value is <= 'value'.
+ * hdr_value_at_index() grows with the index, so a binary search works. */
+static int32_t latencyHistogramIndexOf(const struct hdr_histogram *h, int64_t value) {
+    int32_t lo = 0, hi = h->counts_len - 1;
+    while (lo < hi) {
+        int32_t mid = lo + (hi - lo + 1) / 2;
+        if (hdr_value_at_index(h, mid) <= value)
+            lo = mid;
+        else
+            hi = mid - 1;
+    }
+    return lo;
+}
+
+/* Same result as hdr_value_at_percentile(), which walks the counts from
+ * index 0 on every call. All counts outside [min_idx, max_idx] are zero, so
+ * start at min_idx, and return max_idx directly when the percentile falls in
+ * the highest recorded bucket (e.g. p99.9 is often a single slow call). */
+static int64_t latencyValueAtPercentile(const struct hdr_histogram *h,
+                                        double percentile,
+                                        int32_t min_idx,
+                                        int32_t max_idx) {
+    double requested = percentile < 100.0 ? percentile : 100.0;
+    int64_t count_at_percentile = (int64_t)(((requested / 100) * h->total_count) + 0.5);
+    if (count_at_percentile < 1) count_at_percentile = 1;
+
+    int32_t idx = max_idx;
+    if (count_at_percentile <= h->total_count - h->counts[max_idx]) {
+        int64_t count_to_idx = 0;
+        for (idx = min_idx; idx < max_idx; idx++) {
+            count_to_idx += h->counts[idx];
+            if (count_to_idx >= count_at_percentile) break;
+        }
+    }
+    int64_t value = hdr_value_at_index(h, idx);
+    if (percentile == 0.0) return hdr_lowest_equivalent_value(h, value);
+    return hdr_next_non_equivalent_value(h, value) - 1;
+}
+
+/* Fill percentile distribution of latencies. */
+sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram) {
+    /* hdr_min() instead of min_value, which does not track recorded zeros. */
+    int32_t min_idx = latencyHistogramIndexOf(histogram, hdr_min(histogram));
+    int32_t max_idx = latencyHistogramIndexOf(histogram, histogram->max_value);
+    info = sdscatfmt(info, "latency_percentiles_usec_%s:", histogram_name);
+    for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {
+        /* Print the nanosecond value in microseconds with three decimals.
+         * Same output as "%.3f" of value / 1000.0, without the slow float formatting. */
+        long long value =
+            latencyValueAtPercentile(histogram, server.latency_tracking_info_percentiles[j], min_idx, max_idx);
+        char buf[LONG_STR_SIZE + 4];
+        int len = ll2string(buf, sizeof(buf), value / 1000);
+        int frac = value % 1000;
+        buf[len++] = '.';
+        buf[len++] = '0' + frac / 100;
+        buf[len++] = '0' + frac / 10 % 10;
+        buf[len++] = '0' + frac % 10;
+        info = sdscatsds(info, server.latency_tracking_info_percentiles_labels[j]);
+        info = sdscatlen(info, buf, len);
         if (j != server.latency_tracking_info_percentiles_len - 1) info = sdscatlen(info, ",", 1);
     }
-    info = sdscatprintf(info, "\r\n");
+    info = sdscatlen(info, "\r\n", 2);
     return info;
 }
 

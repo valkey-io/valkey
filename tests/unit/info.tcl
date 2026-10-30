@@ -37,12 +37,22 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_match [r config get latency-tracking-info-percentiles] {latency-tracking-info-percentiles {0 50 100}}
             assert_match {*p0=*,p50=*,p100=*} [latency_percentiles_usec set]
             assert_match {*p0=*,p50=*,p100=*} [latency_percentiles_usec get]
+            r CONFIG SET latency-tracking-info-percentiles "25.0 75.0"
+            assert_match {p25=*,p75=*} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles ""
+            assert_equal {} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles "99.9"
+            assert_match {p99.9=*} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles "0 25 50 75 100"
+            assert_match {p0=*,p25=*,p50=*,p75=*,p100=*} [latency_percentiles_usec set]
             r config resetstat
             assert_match {} [latency_percentiles_usec set]
         }
 
         test {latencystats: bad configure percentiles} {
             r config resetstat
+            r SET a b
+            set oldlatencyline [latency_percentiles_usec set]
             set configlatencyline [r config get latency-tracking-info-percentiles]
             catch {r CONFIG SET latency-tracking-info-percentiles "10.0 50.0 a"} e
             assert_match {ERR CONFIG SET failed*} $e
@@ -52,8 +62,43 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_match {ERR CONFIG SET failed*} $e
             assert_equal [s total_error_replies] 2
             assert_match [r config get latency-tracking-info-percentiles] $configlatencyline
+            assert_equal $oldlatencyline [latency_percentiles_usec set]
             r config resetstat
             assert_match {} [errorstat ERR]
+        }
+
+        test {latencystats: restore empty percentiles after invalid configuration} {
+            r CONFIG SET latency-tracking-info-percentiles ""
+            r SET a b
+            assert_error {ERR CONFIG SET failed*} {
+                r CONFIG SET latency-tracking-info-percentiles "10 50 invalid"
+            }
+            assert_equal {latency-tracking-info-percentiles {}} [r CONFIG GET latency-tracking-info-percentiles]
+            assert_equal {} [latency_percentiles_usec set]
+            r CONFIG SET latency-tracking-info-percentiles "50 99 99.9"
+            assert_match {p50=*,p99=*,p99.9=*} [latency_percentiles_usec set]
+            r config resetstat
+        }
+
+        test {latencystats: restore percentiles after another CONFIG SET option fails} {
+            set originalpercentiles [lindex [r CONFIG GET latency-tracking-info-percentiles] 1]
+            set oldhz [r CONFIG GET hz]
+            r SET a b
+            foreach oldpercentiles {{} {50} {0 25 50 75 100}} {
+                r CONFIG SET latency-tracking-info-percentiles $oldpercentiles
+                set oldconfig [r CONFIG GET latency-tracking-info-percentiles]
+                set oldlatencyline [latency_percentiles_usec set]
+                foreach newpercentiles {{} {99.9} {10 50 90}} {
+                    assert_error {ERR CONFIG SET failed*hz*} {
+                        r CONFIG SET latency-tracking-info-percentiles $newpercentiles hz invalid
+                    }
+                    assert_equal $oldconfig [r CONFIG GET latency-tracking-info-percentiles]
+                    assert_equal $oldlatencyline [latency_percentiles_usec set]
+                    assert_equal $oldhz [r CONFIG GET hz]
+                }
+            }
+            r CONFIG SET latency-tracking-info-percentiles $originalpercentiles
+            r config resetstat
         }
 
         test {latencystats: blocking commands} {
@@ -93,6 +138,9 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             r SET k v
             set latencystatline_debug [latency_percentiles_usec debug]
             set latencystatline_set [latency_percentiles_usec set]
+            # Values are microseconds with exactly three decimals.
+            assert {[regexp {^p50=[0-9]+\.[0-9]{3}$} $latencystatline_debug]}
+            assert {[regexp {^p50=[0-9]+\.[0-9]{3}$} $latencystatline_set]}
             regexp "p50=(.+\..+)" $latencystatline_debug -> p50_debug
             regexp "p50=(.+\..+)" $latencystatline_set -> p50_set
             assert {$p50_debug >= 50000}

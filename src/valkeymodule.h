@@ -2111,6 +2111,9 @@ VALKEYMODULE_API void (*ValkeyModule_ThreadSafeContextUnlock)(ValkeyModuleCtx *c
 VALKEYMODULE_API int (*ValkeyModule_SubscribeToKeyspaceEvents)(ValkeyModuleCtx *ctx,
                                                                int types,
                                                                ValkeyModuleNotificationFunc cb) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_UnsubscribeFromKeyspaceEvents)(ValkeyModuleCtx *ctx,
+                                                                   int types,
+                                                                   ValkeyModuleNotificationFunc cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_AddPostNotificationJob)(ValkeyModuleCtx *ctx,
                                                             ValkeyModulePostNotificationJobFunc callback,
                                                             void *pd,
@@ -2653,6 +2656,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(BlockedClientMeasureTimeEnd);
     VALKEYMODULE_GET_API(SetDisconnectCallback);
     VALKEYMODULE_GET_API(SubscribeToKeyspaceEvents);
+    VALKEYMODULE_GET_API(UnsubscribeFromKeyspaceEvents);
     VALKEYMODULE_GET_API(AddPostNotificationJob);
     VALKEYMODULE_GET_API(NotifyKeyspaceEvent);
     VALKEYMODULE_GET_API(GetNotifyKeyspaceEvents);

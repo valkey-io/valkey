@@ -20,8 +20,8 @@
  *    - Allows producer to batch jobs
  */
 
-#ifndef __QUEUES_H__
-#define __QUEUES_H__
+#ifndef VALKEY_QUEUES_H
+#define VALKEY_QUEUES_H
 
 #include <stdint.h>
 #include <stdbool.h>

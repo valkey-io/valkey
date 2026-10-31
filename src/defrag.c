@@ -938,6 +938,9 @@ static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privda
     static defragKeysCtx ctx; // STATIC - this persists
     if (endtime == 0) {
         ctx.dbid = dbid;
+        /* Drop keys left over from a previous DbKeys stage that was aborted. */
+        if (defrag_later) listEmpty(defrag_later);
+        defrag_later_cursor = 0;
         // Don't return yet.  Call the helper with endtime==0 below.
     }
     serverAssert(ctx.dbid == dbid);
@@ -994,6 +997,15 @@ static doneStatus defragModuleGlobals(monotime endtime, void *target, void *priv
     if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
     moduleDefragGlobals();
     return DEFRAG_DONE;
+}
+
+
+/* The tracking table's structure is private to tracking.c, which provides
+ * the actual incremental defrag walker; this stage just drives it. */
+static doneStatus defragStageTrackingTable(monotime endtime, void *target, void *privdata) {
+    UNUSED(target);
+    UNUSED(privdata);
+    return defragTrackingTable(endtime) ? DEFRAG_DONE : DEFRAG_NOT_DONE;
 }
 
 
@@ -1246,6 +1258,7 @@ static void beginDefragCycle(void) {
 
     addDefragStage(defragLuaScripts, NULL, NULL);
     addDefragStage(defragModuleGlobals, NULL, NULL);
+    addDefragStage(defragStageTrackingTable, NULL, NULL);
 
     defrag.current_stage = NULL;
     defrag.start_cycle = getMonotonicUs();

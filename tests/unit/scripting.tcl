@@ -1052,6 +1052,12 @@ start_server {tags {"scripting"}} {
         r del scriptkey:wt
     }
 
+    test {server.log() keeps a multi-line message in one log record} {
+        set loglines [count_log_lines 0]
+        run_script {redis.log(redis.LOG_WARNING, 'before\r\nafter')} 0
+        verify_log_message 0 "*<lua> before  after*" $loglines
+    } {} {external:skip}
+
     test {Correct handling of reused argv (issue #1939)} {
         run_script {
               for i = 0, 10 do
@@ -1721,6 +1727,26 @@ start_server {tags {"scripting external:skip"}} {
         r script debug sync
         r eval {return 'hello'} 0
         r eval {return 'hello'} 0
+    }
+}
+
+start_server {tags {"scripting external:skip tls:skip"}} {
+    test {Forked scripting debug session does not suspend save points} {
+        set rd [valkey_deferring_client]
+        $rd script debug yes
+        assert_equal OK [$rd read]
+        $rd eval {return 'hello'} 0
+        assert_match {*Stopped at*} [$rd read]
+
+        r config set save "1 1"
+        r set foo bar
+        wait_for_condition 50 100 {
+            [s rdb_changes_since_last_save] == 0
+        } else {
+            fail "Save point did not fire while a forked debug session was open"
+        }
+        $rd close
+        r config set save ""
     }
 }
 

@@ -853,7 +853,7 @@ distclean: clean
 .PHONY: distclean
 
 test: $(ALL_BUILD_PREREQUISITES)
-	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
+	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest $(TEST_OPTIONS))
 
 test-unit:
 	@(cd unit && $(MAKE) test-unit)
@@ -863,20 +863,20 @@ $(ENGINE_UNIT_GTESTS): $(ENGINE_LIB_NAME)
 	@(cd unit && $(MAKE) $(ENGINE_UNIT_GTESTS))
 
 test-modules: $(SERVER_NAME)
-	@(cd ..; ./runtest-moduleapi)
+	@(cd ..; ./runtest-moduleapi $(TEST_OPTIONS))
 
 test-sentinel: $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME)
-	@(cd ..; ./runtest-sentinel)
+	@(cd ..; ./runtest-sentinel $(TEST_OPTIONS))
 
 test-cluster: $(SERVER_NAME) $(ENGINE_CLI_NAME)
-	@(cd ..; ./runtest-cluster)
+	@(cd ..; ./runtest-cluster $(TEST_OPTIONS))
 
 check: test
 
 lcov:
 	@lcov --version
 	$(MAKE) gcov
-	@(set -e; cd ..; ./runtest)
+	@(set -e; cd ..; ./runtest $(TEST_OPTIONS))
 	$(MAKE) test-unit COVERAGE=1 COVERAGE_CFLAGS="-fprofile-arcs -ftest-coverage"
 	@geninfo -o valkey.info .
 	@genhtml --legend -o lcov-html valkey.info

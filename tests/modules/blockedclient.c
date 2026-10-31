@@ -13,10 +13,10 @@
 #define UNUSED(V) ((void) V)
 
 /* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
+extern int moduleCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 extern int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle);
 extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
+#define ValkeyModule_CallArgv moduleCallArgv
 #define ValkeyModule_CallArgvAbort VM_CallArgvAbort
 #define ValkeyModule_ReplyRaw VM_ReplyRaw
 
@@ -903,6 +903,7 @@ int do_fake_bg_true(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argc);
 
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
+    if (!bc) return ValkeyModule_ReplyWithError(ctx, "block failed");
     ValkeyModuleCtx *bctx = ValkeyModule_GetThreadSafeContext(bc);
 
     ValkeyModule_ReplyWithBool(bctx, 1);

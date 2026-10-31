@@ -448,6 +448,32 @@ proc test_scan {type} {
         assert {$first_score != 0}
     }
 
+    foreach enc {listpack btree} {
+        test "{$type} ZSCAN scores match ZSCORE with encoding $enc" {
+            r del mykey
+            r zadd mykey 0.1 a 123456789012345678 b 5e-324 c 1e300 d
+            if {$enc eq {btree}} {
+                for {set j 0} {$j < 200} {incr j} {
+                    r zadd mykey $j m:$j
+                }
+            }
+            assert_encoding $enc mykey
+            set cur 0
+            set res {}
+            while 1 {
+                set reply [r zscan mykey $cur]
+                set cur [lindex $reply 0]
+                lappend res {*}[lindex $reply 1]
+                if {$cur == 0} break
+            }
+            assert_equal [r zcard mykey] [dict size $res]
+            dict for {member score} $res {
+                assert_equal [r zscore mykey $member] $score
+            }
+            assert_equal 0.1 [dict get $res a]
+        }
+    }
+
     test "{$type} SCAN regression test for issue #4906" {
         for {set k 0} {$k < 100} {incr k} {
             r del set

@@ -772,6 +772,10 @@ static void clientDone(client c) {
  * as reply objects. Everything else is still parsed, but is represented by a
  * shared placeholder instead of a tree of allocations that is freed right away. */
 static valkeyReply skippedReply;
+/* RESP3 push messages (e.g. tracking invalidations) keep their type, which
+ * libvalkey uses to route them to the push callback instead of returning them
+ * as command replies. */
+static valkeyReply skippedPushReply = {.type = VALKEY_REPLY_PUSH};
 
 static void *createSkippedString(const valkeyReadTask *task, char *str, size_t len) {
     if (task->parent != NULL || task->type != VALKEY_REPLY_ERROR) return &skippedReply;
@@ -785,8 +789,8 @@ static void *createSkippedString(const valkeyReadTask *task, char *str, size_t l
 }
 
 static void *createSkippedArray(const valkeyReadTask *task, size_t elements) {
-    UNUSED(task);
     UNUSED(elements);
+    if (task->parent == NULL && task->type == VALKEY_REPLY_PUSH) return &skippedPushReply;
     return &skippedReply;
 }
 
@@ -816,10 +820,17 @@ static void *createSkippedBool(const valkeyReadTask *task, int bval) {
 }
 
 static void freeBenchmarkReply(void *reply) {
-    if (reply == &skippedReply) return;
+    if (reply == &skippedReply || reply == &skippedPushReply) return;
     valkeyReply *r = reply;
     zfree(r->str);
     zfree(r);
+}
+
+/* Replaces libvalkey's default push callback, which would free the reply with
+ * freeReplyObject(). */
+static void discardPushReply(void *privdata, void *reply) {
+    UNUSED(privdata);
+    freeBenchmarkReply(reply);
 }
 
 static valkeyReplyObjectFunctions benchmarkReplyFunctions = {
@@ -1164,6 +1175,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
     c->context->reader->fn = &benchmarkReplyFunctions;
+    valkeySetPushCallback(c->context, discardPushReply);
 
     /* Build the request buffer:
      * Queue N requests accordingly to the pipeline size, or simply clone

@@ -458,11 +458,19 @@ proc test_scan {type} {
                 }
             }
             assert_encoding $enc mykey
-            set res [lindex [r zscan mykey 0 COUNT 1000] 1]
-            foreach {member score} $res {
+            set cur 0
+            set res {}
+            while 1 {
+                set reply [r zscan mykey $cur]
+                set cur [lindex $reply 0]
+                lappend res {*}[lindex $reply 1]
+                if {$cur == 0} break
+            }
+            assert_equal [r zcard mykey] [dict size $res]
+            dict for {member score} $res {
                 assert_equal [r zscore mykey $member] $score
             }
-            assert_equal [r zscore mykey a] 0.1
+            assert_equal 0.1 [dict get $res a]
         }
     }
 

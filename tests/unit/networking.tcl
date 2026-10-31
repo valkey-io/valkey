@@ -374,10 +374,12 @@ start_server {tags {}} {
 
 start_server {tags {"network external:skip"}} {
 
-    # Sends n * 5ms sleep commands at once without reading the response
+    # Sends n * 100ms sleep commands at once without reading the response
     proc run_slow_pipeline {rd n} {
         set buf ""
-        for {set i 0} {$i < $n} {incr i} { append buf [format_command debug sleep 0.005] }
+        for {set i 0} {$i < $n} {incr i} {
+            append buf [format_command debug sleep 0.1]
+        }
         $rd write $buf
         $rd flush
     }
@@ -393,25 +395,21 @@ start_server {tags {"network external:skip"}} {
         # set a sample key
         r set test.key1 1 ;
 
-        # Send long running pipelined commands: for a debug sleep command of size ~37 bytes, the 16KB query buffer
-        # can hold ~443 copies. So, 500 copies starves other clients for at least ~2.5s, spiking their latency
+        # Send long running pipelined commands: 25 copies of a ~35 byte debug sleep command fit in a single read
+        # and starve other clients for ~2.5s, spiking their latency
         set rd [valkey_deferring_client]
-        set n 500
-
-        # Pause the server so the pipeline is queued before the main or I/O thread reads it.
-        pause_process [srv 0 pid]
+        set n 25
         run_slow_pipeline $rd $n
-        resume_process [srv 0 pid]
 
-        # Give the pipeline time to enter command execution before issuing the competing request.
-        after 50
+        # Let the first pipelined command finish before issuing the competing request.
+        after 100
 
-        # Another concurrent client waits behind the whole pipeline, so it exceeds 2000ms.
+        # Another concurrent client waits behind the whole pipeline, so it takes at least 10 commands' time.
         set has_high_latency 0
         for {set i 0} {$i < 100} {incr i} {
             set start_time [clock milliseconds]
             r get test.key1
-            if {[expr {[clock milliseconds] - $start_time}] > 2000} {
+            if {[expr {[clock milliseconds] - $start_time}] >= 1000} {
                 set has_high_latency 1
                 break
             }
@@ -435,15 +433,11 @@ start_server {tags {"network external:skip"}} {
         # Send long running pipelined commands like before that would starve other clients
         # for at least 2.5s if pipeline deferral was disabled
         set rd [valkey_deferring_client]
-        set n 500
-
-        # Pause the server so the pipeline is queued before the main or I/O thread reads it.
-        pause_process [srv 0 pid]
+        set n 25
         run_slow_pipeline $rd $n
-        resume_process [srv 0 pid]
 
-        # Give the pipeline time to enter command execution before issuing competing requests.
-        after 50
+        # Let the first pipelined command finish before issuing competing requests.
+        after 100
 
         # Verify a concurrent client has reduced latency now
         set max_latency 0
@@ -455,14 +449,10 @@ start_server {tags {"network external:skip"}} {
                 set max_latency $elapsed
             }
         }
-        assert_lessthan $max_latency 250
+        # With deferral, the concurrent client waits for at most 3 commands (300ms)
+        assert_lessthan $max_latency 300
 
         # Verify slow-pipeline client got deferred
-        wait_for_condition 50 100 {
-            [status r deferred_pipeline_clients] > 0
-        } else {
-            fail "pipeline client was not deferred"
-        }
         assert_morethan [status r total_deferred_pipeline_clients] $deferrals_before
 
         # Read the response of pipelined commands

@@ -1513,6 +1513,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
     int j, cardinality = 0;
     int diff_algo = 1;
     int sameset = 0;
+    size_t max_setsize = 0;
 
     for (j = 0; j < setnum; j++) {
         robj *setobj = lookupKeyRead(c->db, setkeys[j]);
@@ -1545,6 +1546,15 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         if (j > 0 && sets[0] == sets[j]) {
             sameset = 1;
         }
+        if (setTypeSize(setobj) > max_setsize) max_setsize = setTypeSize(setobj);
+    }
+
+    /* A union has at least as many elements as its largest input set. When that is
+     * more than an intset or a listpack can hold, the result ends up as a hashtable
+     * anyway, so start with one instead of filling a listpack first. */
+    if (op == SET_OP_UNION &&
+        max_setsize > max(intsetMaxEntries(), server.set_max_listpack_entries)) {
+        dstset_encoding = OBJ_ENCODING_HASHTABLE;
     }
 
     /* Select what DIFF algorithm to use.

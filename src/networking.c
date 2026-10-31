@@ -162,6 +162,7 @@ static int parseMultibulk(client *c,
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 _Thread_local sds thread_shared_qb = NULL;
+static bool isDeferredPipelineProcRunning = false;
 
 /* fork() only preserves the calling thread's TLS. Keep a process-wide reference
  * to each thread's shared query buffer so allocations owned by vanished worker
@@ -2237,6 +2238,15 @@ void disconnectReplicas(void) {
     }
 }
 
+/* Removes a deferred client from the deferred pipeline clients queue, clearing its deferred state */
+static void removeDeferredPipelineClient(client *c) {
+    if (!c->flag.pipeline_deferred) return;
+
+    listDelNode(server.deferred_pipeline_clients, c->deferred_pipeline_node);
+    c->flag.pipeline_deferred = 0;
+    c->deferred_pipeline_node = NULL;
+}
+
 /* Remove the specified client from global lists where the client could
  * be referenced, not including the Pub/Sub channels.
  * This is used by freeClient() and replicationCachePrimary(). */
@@ -2327,6 +2337,9 @@ void unlinkClient(client *c) {
         listDelNode(server.unblocked_clients, ln);
         c->flag.unblocked = 0;
     }
+
+    /* Remove the client from the queue of deferred pipeline clients */
+    removeDeferredPipelineClient(c);
 
     /* Clear the tracking status. */
     if (c->flag.tracking) disableTracking(c);
@@ -4563,6 +4576,9 @@ int canParseCommand(client *c) {
     /* Don't parse a command if the client is in the middle of something. */
     if (c->flag.blocked || c->flag.unblocked) return 0;
 
+    /* A client deferred after exceeding the pipeline limit is resumed only by deferredPipelineTimeProc(). */
+    if (c->flag.pipeline_deferred) return 0;
+
     /* Don't process more buffers from clients that have already pending
      * commands to execute in c->argv. */
     if (c->flag.pending_command) return 0;
@@ -4622,6 +4638,55 @@ void discardCommandQueue(client *c) {
     zfree(queue->cmds);
     queue->cmds = NULL;
     queue->off = queue->len = queue->cap = 0;
+}
+
+/* Deferred pipeline resume timer that dequeues a client from deferred-pipeline clients and
+ * resumes processing its input buffer.
+ * Note: process one client per timer invocation to keep the event loop spinning
+ * faster, thus improving the server's responsiveness and average latency. */
+static long long deferredPipelineTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(eventLoop);
+    UNUSED(id);
+    UNUSED(clientData);
+
+    if (listLength(server.deferred_pipeline_clients) == 0) {
+        isDeferredPipelineProcRunning = false;
+        /* Stop the timer when there are no deferred clients left */
+        return AE_NOMORE;
+    }
+
+    /* Dequeue the client at the head of the deferral queue and queue it to be
+     * reprocessed in beforeSleep() where the read-handler will be re-installed */
+    list *queue = server.deferred_pipeline_clients;
+    listNode *ln = listFirst(queue);
+    client *c = listNodeValue(ln);
+    removeDeferredPipelineClient(c);
+    queueClientForReprocessing(c);
+
+    /* Keep the timer running to drain the rest of the queue. */
+    return 0;
+}
+
+/* Queues a client to be processed later via timer callback and pauses processing of its new read events
+ * until it's removed from the deferred pipeline */
+static void deferPipelineClient(client *c) {
+    serverAssert(!c->flag.pipeline_deferred);
+
+    /* Enqueue at the tail and cache the node for O(1) removal. */
+    list *queue = server.deferred_pipeline_clients;
+    listAddNodeTail(queue, c);
+    c->flag.pipeline_deferred = 1;
+    c->deferred_pipeline_node = listLast(queue);
+    server.stat_total_deferred_pipeline_clients++;
+
+    /* Unregister fd from event loop's read events to avoid fetching next 16KB of query, while
+     * current query buffer is not fully processed */
+    connSetReadHandler(c->conn, NULL);
+
+    if (!isDeferredPipelineProcRunning) {
+        isDeferredPipelineProcRunning = true;
+        aeCreateTimeEvent(server.el, 0, deferredPipelineTimeProc, NULL, NULL);
+    }
 }
 
 /* Returns the number of keys in the the incr_states array after adding keys. */
@@ -4722,6 +4787,7 @@ static void prefetchCommandQueueKeys(client *c) {
 }
 
 int processInputBuffer(client *c) {
+    monotime startTime = getMonotonicUs();
     /* Parse the query buffer and/or execute already parsed commands. */
     while ((c->querybuf && c->qb_pos < sdslen(c->querybuf)) ||
            c->cmd_queue.off < c->cmd_queue.len) {
@@ -4731,6 +4797,14 @@ int processInputBuffer(client *c) {
 
         c->read_flags = isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
         c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
+
+        if (getClientType(c) == CLIENT_TYPE_NORMAL) {
+            if (server.pipelined_limit_us > 0 &&
+                elapsedUs(startTime) >= server.pipelined_limit_us) {
+                deferPipelineClient(c);
+                break;
+            }
+        }
 
         bool popped_from_queue;
         /* If commands are queued up, pop from the queue first */

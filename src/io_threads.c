@@ -269,6 +269,10 @@ void IOThreadsAfterSleep(int numevents) {
 
         pthread_mutex_lock(&io_threads_mutex[tid]);
         server.active_io_threads_num--;
+        if (server.active_io_threads_num == 1) {
+            memset(&server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME], 0,
+                   sizeof(server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME]));
+        }
         serverLog(LL_DEBUG, "IO threads decreased from %zu to %d", active, server.active_io_threads_num);
     }
 }

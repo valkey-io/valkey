@@ -335,7 +335,6 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
     }
 }
 
-
 start_server {tags {}} {
     test {MGET with 343+ empty RAW strings does not overflow the iov prefix buffer} {
         # writevToClient sizes its per-call prefix array as iovmax/3+1,
@@ -384,82 +383,59 @@ start_server {tags {"network external:skip"}} {
         $rd flush
     }
 
-    # Lifetime deferral count before the tests
-    set deferrals_before [status r total_deferred_pipeline_clients]
+    # Set sample key
+    r set test.key1 1
 
-    test {Slow pipeline commands without time limit starve other clients} {
+    foreach {pipelined_limit_us test_name} {
+        0      {Slow pipelined commands without time limit starve other clients}
+        100000 {Slow pipelined commands with time limit do not starve other clients}
+    } {
+        set deferrals_before [status r total_deferred_pipeline_clients]
 
-        # Disable deferral
-        r config set pipelined-limit-us 0
+        test $test_name {
+            r config set pipelined-limit-us $pipelined_limit_us
 
-        # set a sample key
-        r set test.key1 1 ;
+            # Send 25 slow commands pipelined
+            set rd [valkey_deferring_client]
+            set n 25
+            run_slow_pipeline $rd $n
 
-        # Send long running pipelined commands: 25 copies of a ~35 byte debug sleep command fit in a single read
-        # and starve other clients for ~2.5s, spiking their latency
-        set rd [valkey_deferring_client]
-        set n 25
-        run_slow_pipeline $rd $n
+            # Let the pipeline start executing before sending competing commands.
+            after 100
 
-        # Let the first pipelined command finish before issuing the competing request.
-        after 100
+            set max_latency 0
 
-        # Another concurrent client waits behind the whole pipeline, so it takes at least 10 commands' time.
-        set has_high_latency 0
-        for {set i 0} {$i < 100} {incr i} {
-            set start_time [clock milliseconds]
-            r get test.key1
-            if {[expr {[clock milliseconds] - $start_time}] >= 1000} {
-                set has_high_latency 1
-                break
+            # Send GET commands via another client
+            for {set i 0} {$i < 40} {incr i} {
+                set start_time [clock milliseconds]
+                assert_equal {1} [r get test.key1]
+                set elapsed [expr {[clock milliseconds] - $start_time}]
+                if {$elapsed > $max_latency} {
+                    set max_latency $elapsed
+                }
             }
-        }
-        assert_equal 1 $has_high_latency
 
-        # Read every reply of the pipelined commands
-        for {set i 0} {$i < $n} {incr i} { $rd read }
-        $rd close
-
-        # Verify no client was deferred for the entire pipeline
-        assert_equal 0 [status r deferred_pipeline_clients]
-        assert_equal $deferrals_before [status r total_deferred_pipeline_clients]
-    }
-
-    test {Slow pipeline commands with time limit are deferred} {
-
-        # Set time-limit to defer the client after >7ms is spent in one pass
-        r config set pipelined-limit-us 7000
-
-        # Send long running pipelined commands like before that would starve other clients
-        # for at least 2.5s if pipeline deferral was disabled
-        set rd [valkey_deferring_client]
-        set n 25
-        run_slow_pipeline $rd $n
-
-        # Let the first pipelined command finish before issuing competing requests.
-        after 100
-
-        # Verify a concurrent client has reduced latency now
-        set max_latency 0
-        for {set i 0} {$i < 40} {incr i} {
-            set start_time [clock milliseconds]
-            assert_equal {1} [r get test.key1]
-            set elapsed [expr {[clock milliseconds] - $start_time}]
-            if {$elapsed > $max_latency} {
-                set max_latency $elapsed
+            if {$pipelined_limit_us == 0} {
+                # Without a pipeline time limit, the concurrent client waits for at least 10 commands (1000ms)
+                # depending on the amount of data read from socket.
+                assert_morethan_equal $max_latency 1000
+                assert_equal $deferrals_before [status r total_deferred_pipeline_clients]
+            } else {
+                # The GET can wait for one pipeline command before it is processed and another
+                # before its reply is written, plus one command for timing and scheduling jitter.
+                assert_lessthan $max_latency 300
+                assert_morethan [status r total_deferred_pipeline_clients] $deferrals_before
             }
+
+            # Read every reply from the pipelined commands.
+            for {set i 0} {$i < $n} {incr i} {
+                $rd read
+            }
+            $rd close
+
+            # Without a pipeline time limit, the count stays at zero. With a
+            # pipeline time limit, it returns to zero after the pipeline drains.
+            assert_equal 0 [status r deferred_pipeline_clients]
         }
-        # With deferral, the concurrent client waits for at most 3 commands (300ms)
-        assert_lessthan $max_latency 300
-
-        # Verify slow-pipeline client got deferred
-        assert_morethan [status r total_deferred_pipeline_clients] $deferrals_before
-
-        # Read the response of pipelined commands
-        for {set i 0} {$i < $n} {incr i} { $rd read }
-        $rd close
-
-        # Verify no client remains deferred once the pipeline drains
-        assert_equal 0 [status r deferred_pipeline_clients]
     }
 }

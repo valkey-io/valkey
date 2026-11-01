@@ -940,10 +940,7 @@ start_server {tags {"geo"}} {
 }
 
 start_server {tags {"geo"}} {
-    set original_max [lindex [r config get zset-max-listpack-entries] 1]
     foreach {encoding max_entries} {listpack 128 btree 0} {
-        r config set zset-max-listpack-entries $max_entries
-
         # Members get farther from the search center in list order, so ASC
         # returns them in this order. The first three cover a binary member,
         # an integer-encoded listpack member and a long member.
@@ -952,6 +949,7 @@ start_server {tags {"geo"}} {
         for {set i 0} {$i < 20} {incr i} {lappend members "m:$i"}
 
         test "GEOSEARCH replies with members - $encoding" {
+            test_config_set r zset-max-listpack-entries $max_entries
             geo_add_members pts{t} $members
             assert_encoding $encoding pts{t}
 
@@ -974,6 +972,7 @@ start_server {tags {"geo"}} {
         }
 
         test "GEOSEARCHSTORE stores members - $encoding" {
+            test_config_set r zset-max-listpack-entries $max_entries
             geo_add_members pts{t} $members
             r del dst{t}
 
@@ -993,6 +992,7 @@ start_server {tags {"geo"}} {
         }
 
         test "GEOSEARCHSTORE with the same source and destination key - $encoding" {
+            test_config_set r zset-max-listpack-entries $max_entries
             geo_add_members pts{t} $members
             set scores {}
             foreach m [lrange $members 0 4] { lappend scores [r zscore pts{t} $m] }
@@ -1010,5 +1010,4 @@ start_server {tags {"geo"}} {
             assert_equal $members [r zrange pts{t} 0 -1]
         }
     }
-    r config set zset-max-listpack-entries $original_max
 }

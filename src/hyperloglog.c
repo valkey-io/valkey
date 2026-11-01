@@ -569,10 +569,14 @@ static void hllDenseRegHisto(uint8_t *registers, int *reghisto) {
              * registers 0-7 and bytes 6-11 hold registers 8-15. Both 64 bit
              * words stay within the 12 bytes: the second one starts at byte 4
              * and is shifted down by 16 bits. */
-            uint64_t a = (uint64_t)r[0] | (uint64_t)r[1] << 8 | (uint64_t)r[2] << 16 | (uint64_t)r[3] << 24 |
-                         (uint64_t)r[4] << 32 | (uint64_t)r[5] << 40 | (uint64_t)r[6] << 48 | (uint64_t)r[7] << 56;
-            uint64_t b = (uint64_t)r[4] | (uint64_t)r[5] << 8 | (uint64_t)r[6] << 16 | (uint64_t)r[7] << 24 |
-                         (uint64_t)r[8] << 32 | (uint64_t)r[9] << 40 | (uint64_t)r[10] << 48 | (uint64_t)r[11] << 56;
+            uint64_t a = (uint64_t)r[0] | (uint64_t)r[1] << 8 |
+                         (uint64_t)r[2] << 16 | (uint64_t)r[3] << 24 |
+                         (uint64_t)r[4] << 32 | (uint64_t)r[5] << 40 |
+                         (uint64_t)r[6] << 48 | (uint64_t)r[7] << 56;
+            uint64_t b = (uint64_t)r[4] | (uint64_t)r[5] << 8 |
+                         (uint64_t)r[6] << 16 | (uint64_t)r[7] << 24 |
+                         (uint64_t)r[8] << 32 | (uint64_t)r[9] << 40 |
+                         (uint64_t)r[10] << 48 | (uint64_t)r[11] << 56;
             b >>= 16;
 
             h0[a & 63]++;

@@ -1533,7 +1533,9 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          *
          * If all sets are all OBJ_ENCODING_INTSET encoding or 'dstkey' is not null, keep 'dstset'
          * OBJ_ENCODING_INTSET encoding when initialize. Otherwise, it is not efficient to create the 'dstset'
-         * from intset and then convert to listpack or hashtable.
+         * from intset and then convert to listpack or hashtable. The exception is a union whose largest
+         * input set is bigger than both an intset and a listpack can hold: the result can only end up as
+         * a hashtable, so it starts as one, see below.
          *
          * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable default encoding,
          * the hashtable is more efficient when find and compare than the listpack. The corresponding
@@ -1546,12 +1548,11 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         if (j > 0 && sets[0] == sets[j]) {
             sameset = 1;
         }
-        if (setTypeSize(setobj) > max_setsize) max_setsize = setTypeSize(setobj);
+        size_t setsize = setTypeSize(setobj);
+        if (setsize > max_setsize) max_setsize = setsize;
     }
 
-    /* A union has at least as many elements as its largest input set. When that is
-     * more than an intset or a listpack can hold, the result ends up as a hashtable
-     * anyway, so start with one instead of filling a listpack first. */
+    /* A union has at least as many elements as its largest input set. */
     if (op == SET_OP_UNION &&
         max_setsize > max(intsetMaxEntries(), server.set_max_listpack_entries)) {
         dstset_encoding = OBJ_ENCODING_HASHTABLE;
@@ -1596,6 +1597,8 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         dstset = createIntsetObject();
     } else {
         dstset = createSetObject();
+        /* The union has at least as many elements as its largest input set. */
+        if (op == SET_OP_UNION) hashtableExpand(objectGetVal(dstset), max_setsize);
     }
 
     if (op == SET_OP_UNION) {

@@ -1796,6 +1796,18 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         assert_match {*<value>*somearg*} [r read]
         reconnect
     }
+
+    test {Test scripting debug command larger than one read} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        # The debugger reads 1024 bytes at a time, so this command arrives in two reads.
+        set arg [string repeat x 1020]
+        r write "*2\r\n\$5\r\nprint\r\n\$1020\r\n$arg\r\n"
+        r flush
+        r read
+        reconnect
+        assert_equal [r ping] {PONG}
+    }
 }
 
 start_server {tags {"scripting external:skip"}} {

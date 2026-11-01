@@ -1174,6 +1174,8 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     c->thread_id = thread_id;
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
+    /* Replies read on this context may be the shared placeholders above, so they
+     * must be released with freeBenchmarkReply(), never freeReplyObject(). */
     c->context->reader->fn = &benchmarkReplyFunctions;
     valkeySetPushCallback(c->context, discardPushReply);
 

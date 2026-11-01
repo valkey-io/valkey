@@ -1230,6 +1230,7 @@ void pfaddCommand(client *c) {
     robj *o = lookupKeyWrite(c->db,c->argv[1]);
     struct hllhdr *hdr;
     int updated = 0, j;
+    int invalid = 0;
 
     if (o == NULL) {
         /* Create the key with a string value of the exact length to
@@ -1251,9 +1252,21 @@ void pfaddCommand(client *c) {
             updated++;
             break;
         case -1:
-            addReplyError(c,invalid_hll_err);
-            return;
+            invalid = 1;
+            break;
         }
+        if (invalid) break;
+    }
+    if (invalid && updated) {
+        /* The elements before argv[j] were already applied in place. Propagate
+         * only those, so replicas and the AOF reach the same value without
+         * replaying the error. */
+        robj **argv = zmalloc(sizeof(robj *) * j);
+        for (int k = 0; k < j; k++) {
+            argv[k] = c->argv[k];
+            incrRefCount(argv[k]);
+        }
+        replaceClientCommandVector(c, j, argv);
     }
     hdr = o->ptr;
     if (updated) {
@@ -1262,7 +1275,10 @@ void pfaddCommand(client *c) {
         server.dirty += updated;
         HLL_INVALIDATE_CACHE(hdr);
     }
-    addReply(c, updated ? shared.cone : shared.czero);
+    if (invalid)
+        addReplyError(c, invalid_hll_err);
+    else
+        addReply(c, updated ? shared.cone : shared.czero);
 }
 
 /* PFCOUNT var -> approximated cardinality of set. */

@@ -29,7 +29,6 @@
  */
 
 #include "geo.h"
-#include "ordered_index.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
@@ -54,11 +53,12 @@ unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
 void geoArrayInit(geoArray *ga) {
     ga->buckets = MAX_GEO_ARRAY_BUFFER;
     ga->used = 0;
+    ga->item_refs = 0;
     ga->array = ga->arraybuf;
 }
 
 /* Add and populate with data a new entry to the geoArray. */
-geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, char *member) {
+geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score) {
     if (ga->used == ga->buckets) {
         ga->buckets = ga->buckets * 2;
         if (ga->array == ga->arraybuf) {
@@ -72,7 +72,6 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, ch
     gp->longitude = xy[0];
     gp->latitude = xy[1];
     gp->dist = dist;
-    gp->member = member;
     gp->score = score;
     ga->used++;
     return gp;
@@ -81,9 +80,21 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, ch
 /* Clean a geoArray inited with geoArrayInit(). */
 void geoArrayCleanup(geoArray *ga) {
     size_t i;
-    for (i = 0; i < ga->used; i++) sdsfree(ga->array[i].member);
+    if (!ga->item_refs) {
+        for (i = 0; i < ga->used; i++) sdsfree(ga->array[i].member.str);
+    }
     if (ga->array != ga->arraybuf) {
         zfree(ga->array);
+    }
+}
+
+/* Get the member name of a geoPoint in the geoArray. */
+static void geoPointGetMember(const geoArray *ga, const geoPoint *gp, const char **ele, size_t *len) {
+    if (ga->item_refs) {
+        orderedIndexItemGetElement(gp->member.item, ele, len);
+    } else {
+        *ele = gp->member.str;
+        *len = sdslen(gp->member.str);
     }
 }
 
@@ -299,8 +310,8 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             vstr = lpGetValue(eptr, &vlen, &vlong);
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                char *member = (vstr == NULL) ? sdsfromlonglong(vlong) : sdsnewlen(vstr, vlen);
-                geoArrayAppend(ga, xy, distance, score, member);
+                geoPoint *gp = geoArrayAppend(ga, xy, distance, score);
+                gp->member.str = (vstr == NULL) ? sdsfromlonglong(vlong) : sdsnewlen(vstr, vlen);
             }
             if (ga->used && limit && ga->used >= limit) break;
             zzlNext(zl, &eptr, &sptr);
@@ -311,6 +322,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         orderedIndexInitIterator(&iter, zs->oi);
         orderedIndexSeekToScoreRange(&iter, range.min, range.max, range.minex, range.maxex, 0);
         OrderedIndexItem *ln;
+        ga->item_refs = 1;
 
         while ((ln = orderedIndexNext(&iter)) != NULL) {
             double xy[2];
@@ -320,10 +332,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             if (!zsetScoreLteMax(score, &range)) break;
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                const char *ele;
-                size_t ele_len;
-                orderedIndexItemGetElement(ln, &ele, &ele_len);
-                geoArrayAppend(ga, xy, distance, score, sdsnewlen(ele, ele_len));
+                geoArrayAppend(ga, xy, distance, score)->member.item = ln;
             }
             if (ga->used && limit && ga->used >= limit) break;
         }
@@ -808,8 +817,10 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
              * itself. */
             if (option_length) addReplyArrayLen(c, option_length + 1);
 
-            addReplyBulkSds(c, gp->member);
-            gp->member = NULL;
+            const char *ele;
+            size_t elelen;
+            geoPointGetMember(&ga, gp, &ele, &elelen);
+            addReplyBulkCBuffer(c, ele, elelen);
 
             if (withdist) addReplyDoubleDistance(c, gp->dist);
 
@@ -838,14 +849,14 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             geoPoint *gp = ga.array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
             double score = storedist ? gp->dist : gp->score;
-            size_t elelen = sdslen(gp->member);
+            const char *ele;
+            size_t elelen;
+            geoPointGetMember(&ga, gp, &ele, &elelen);
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = orderedIndexInsert(zs->oi, score, gp->member, elelen);
+            znode = orderedIndexInsert(zs->oi, score, ele, elelen);
             serverAssert(hashtableAdd(zs->ht, znode));
-            sdsfree(gp->member);
-            gp->member = NULL;
         }
 
         if (returned_items) {

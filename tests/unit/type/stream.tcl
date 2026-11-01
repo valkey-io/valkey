@@ -1676,6 +1676,54 @@ start_server {
         assert_equal "0-0" [dict get $reply recorded-first-entry-id]
     }
 
+    test {XTRIM that removes every entry keeps the stream metadata} {
+        r config set stream-node-max-entries 3
+        foreach trim {
+            {MINID 10-0} {MINID 11-0} {MINID = 11-0} {MINID ~ 11-0} {MINID ~ 11-0 LIMIT 0} {MINID ~ 11-0 LIMIT 9}
+            {MAXLEN 0} {MAXLEN ~ 0} {MAXLEN ~ 0 LIMIT 9}
+        } {
+            r DEL mystream
+            for {set j 1} {$j <= 10} {incr j} {
+                r XADD mystream $j-0 f v
+            }
+            # The highest ID stays recorded as last-generated-id after XDEL, so
+            # MINID 10-0 removes every entry while not being above last_id.
+            r XDEL mystream 10-0
+            assert_equal 9 [r XTRIM mystream {*}$trim]
+            set reply [r XINFO STREAM mystream]
+            assert_equal 0 [dict get $reply length]
+            assert_equal 0 [dict get $reply radix-tree-keys]
+            assert_equal "10-0" [dict get $reply last-generated-id]
+            assert_equal "10-0" [dict get $reply max-deleted-entry-id]
+            assert_equal 10 [dict get $reply entries-added]
+            assert_equal "0-0" [dict get $reply recorded-first-entry-id]
+            assert_error {*equal or smaller*} {r XADD mystream 10-0 f v}
+            assert_equal "10-1" [r XADD mystream 10-* f v]
+        }
+        r config set stream-node-max-entries 100
+    }
+
+    test {XTRIM MINID equal to the last ID, or LIMIT below the length, keeps entries} {
+        r config set stream-node-max-entries 3
+        r DEL mystream
+        for {set j 1} {$j <= 10} {incr j} {
+            r XADD mystream $j-0 f v
+        }
+        assert_equal 9 [r XTRIM mystream MINID 10-0]
+        assert_equal {{10-0 {f v}}} [r XRANGE mystream - +]
+
+        r DEL mystream
+        for {set j 1} {$j <= 10} {incr j} {
+            r XADD mystream $j-0 f v
+        }
+        # Only whole nodes of 3 entries fit within the limit.
+        assert_equal 6 [r XTRIM mystream MINID ~ 11-0 LIMIT 8]
+        assert_equal 4 [r XLEN mystream]
+        assert_equal 3 [r XTRIM mystream MAXLEN ~ 0 LIMIT 3]
+        assert_equal 1 [r XLEN mystream]
+        r config set stream-node-max-entries 100
+    }
+
     test {XADD with LIMIT consecutive calls} {
         r del mystream
         r config set stream-node-max-entries 10
@@ -1850,6 +1898,18 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
         r debug loadaof
         r XADD mystream * xitem v
         assert {[r xlen mystream] == 72}
+    }
+}
+
+start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 10}} {
+    test {XTRIM with ~ MINID removing every entry can propagate correctly} {
+        for {set j 1} {$j <= 100} {incr j} {
+            r XADD mystream $j-0 xitem v
+        }
+        assert_equal 100 [r XTRIM mystream MINID ~ 101-0 LIMIT 0]
+        r debug loadaof
+        assert_equal 0 [r XLEN mystream]
+        assert_equal "100-0" [dict get [r XINFO STREAM mystream] last-generated-id]
     }
 }
 

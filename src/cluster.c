@@ -1000,7 +1000,7 @@ int clusterxSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int 
         if (slot == -1) {
             slot = keyslot;
         } else if (keyslot != slot) {
-            if (strcasecmp(cmd->declared_name, "brpop") == 0 || strcasecmp(cmd->declared_name, "blpop") == 0) {
+            if (cmd->proc == blpopCommand || cmd->proc == brpopCommand) {
                 /* BRPOP/BLPOP keys may hash to different slots, those slots are served by the same node
                  * requires reading server.cluster->slots, which is not safe from I/O threads.
                  * Keep the first key's slot and defer the same-node check to the main thread (see clusterxGetNodeByQuery). */
@@ -1143,8 +1143,7 @@ clusterNode *clusterxGetNodeByQuery(client *c, int *error_code) {
      * error). To do so we set the importing/migrating state and
      * increment a counter for every missing key. */
     if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
-        if (c->cmd && (strcasecmp(c->cmd->declared_name, "brpop") == 0 ||
-            strcasecmp(c->cmd->declared_name, "blpop") == 0)) {
+        if (c->cmd && (c->cmd->proc == blpopCommand || c->cmd->proc == brpopCommand)) {
             /* BRPOP/BLPOP may access keys from different slots on the same node,
              * need to check each key's slot importing or migrating status. */
             int is_migrating_node = (n == clusterNodeGetPrimary(myself));
@@ -1759,8 +1758,7 @@ int clusterxRedirectBlockedClientIfNeeded(client *c) {
         /* BRPOP/BLPOP may block on keys that hash to different slots, as long as those slots are served by the same node.
          * In that case c->slot only stores the first key's slot, so we must inspect every blocked key and redirect the
          * client as soon as any of them is no longer served by this node or being imported. */
-        int is_brpop_blpop = c->cmd && (strcasecmp(c->cmd->declared_name, "brpop") == 0 ||
-            strcasecmp(c->cmd->declared_name, "blpop") == 0);
+        int is_brpop_blpop = c->cmd && (c->cmd->proc == brpopCommand || c->cmd->proc == blpopCommand);
         di = dictGetIterator(c->bstate->keys);
         while ((de = dictNext(di)) != NULL) {
             robj *key = dictGetKey(de);

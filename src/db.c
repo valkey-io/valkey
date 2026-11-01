@@ -263,9 +263,8 @@ int clusterxGetCachedKeySlot(sds key) {
      * so we must always recompute the slot for commands coming from the primary or AOF.
      */
     client *c = server.current_client;
-    const char *cmd_name = (c && c->cmd) ? c->cmd->declared_name : NULL;
-    int is_blocking_pop =
-        cmd_name && cmd_name[0] == 'b' && (!strcasecmp(cmd_name, "brpop") || !strcasecmp(cmd_name, "blpop"));
+    serverCommandProc *proc = (c && c->cmd) ? c->cmd->proc : NULL;
+    const int is_blocking_pop = proc == brpopCommand || proc == blpopCommand;
     if (!is_blocking_pop) {
         if (c && c->slot >= 0 && c->flag.executing_command && !mustObeyClient(c) && c->cmd &&
             !(c->cmd->flags & (CMD_MODULE | CMD_TOUCHES_ARBITRARY_KEYS))) {

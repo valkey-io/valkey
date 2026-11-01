@@ -2,7 +2,6 @@
 #define __GEO_H__
 
 #include "server.h"
-#include "ordered_index.h"
 
 #define MAX_GEO_ARRAY_BUFFER 8
 
@@ -17,7 +16,7 @@ typedef struct geoPoint {
      * B+tree item, which stays valid until the reply or store is done. */
     union {
         sds str;
-        OrderedIndexItem *item;
+        struct OrderedIndexItem *item;
     } member;
 } geoPoint;
 

@@ -134,6 +134,15 @@ set regression_vectors {
 }
 set rv_idx 0
 
+proc geo_add_members {key members} {
+    r del $key
+    set i 0
+    foreach m $members {
+        r geoadd $key [expr {13.0 + $i * 0.001}] 38.0 $m
+        incr i
+    }
+}
+
 start_server {tags {"geo"}} {
     test {GEO with wrong type src key} {
         r set src{t} wrong_type
@@ -941,15 +950,6 @@ start_server {tags {"geo"}} {
         set members [list "bin\x00ary" 12345 $long_member]
         for {set i 0} {$i < 20} {incr i} {lappend members "m:$i"}
 
-        proc geo_add_members {key members} {
-            r del $key
-            set i 0
-            foreach m $members {
-                r geoadd $key [expr {13.0 + $i * 0.001}] 38.0 $m
-                incr i
-            }
-        }
-
         test "GEOSEARCH replies with members - $encoding" {
             geo_add_members pts{t} $members
             assert_encoding $encoding pts{t}
@@ -968,6 +968,8 @@ start_server {tags {"geo"}} {
             assert_equal "bin\x00ary" [lindex $res 0 0]
             assert_equal 12345 [lindex $res 1 0]
             assert_equal [r zscore pts{t} 12345] [lindex $res 1 2]
+            assert_range [lindex $res 0 1] 0 0.001
+            assert_equal [r geopos pts{t} 12345] [list [lindex $res 1 3]]
         }
 
         test "GEOSEARCHSTORE stores members - $encoding" {
@@ -1007,5 +1009,4 @@ start_server {tags {"geo"}} {
             assert_equal $members [r zrange pts{t} 0 -1]
         }
     }
-    r config set zset-max-listpack-entries 128
 }

@@ -29,6 +29,7 @@
  */
 
 #include "geo.h"
+#include "ordered_index.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
@@ -73,6 +74,7 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score) {
     gp->latitude = xy[1];
     gp->dist = dist;
     gp->score = score;
+    gp->member.str = NULL; /* Set by the caller. */
     ga->used++;
     return gp;
 }

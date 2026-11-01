@@ -584,6 +584,11 @@ int updateIOThreads(const char **err) {
     for (int i = 1; i < server.active_io_threads_num; i++) {
         pthread_mutex_lock(&io_threads_mutex[i]);
     }
+    if (server.active_io_threads_num > 1) {
+        /* Not sampled while workers run; a stale ring re-ignites on the next loop. */
+        memset(&server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME], 0,
+               sizeof(server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME]));
+    }
     server.active_io_threads_num = 1;
 
     if (server.io_threads_num > prev_threads_num) {

@@ -398,14 +398,65 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
-        test {INCREX BYINT without expire propagates verbatim} {
-            # BYINT-only increments are deterministic, so unlike BYFLOAT they
-            # don't need rewriting to SET for replication safety.
+        test {INCREX BYINT without expire propagates as SET with KEEPTTL} {
             r -1 del foo
             set repl [attach_to_replication_stream]
             r -1 increx foo byint 5
             assert_replication_stream $repl {
-                {increx foo byint 5}
+                {set foo 5 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX with PERSIST propagates as SET} {
+            r -1 set foo 1 ex 100
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 persist
+            assert_replication_stream $repl {
+                {set foo 6}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX declined bounds operation does not propagate} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 10
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX ENX with existing TTL propagates as SET with KEEPTTL} {
+            r -1 set foo 1 ex 500
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ex 100 enx
+            assert_replication_stream $repl {
+                {set foo 6 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX SATURATE propagates the clamped value} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 12 saturate
+            assert_replication_stream $repl {
+                {set foo 12 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX applied-increment errors do not propagate} {
+            r -1 set foo 9223372036854775807
+            set repl [attach_to_replication_stream]
+            catch {r -1 increx foo byint -5 ubound -9223372036854775808 saturate} err
+            assert_match "*applied increment would overflow*" $err
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
             }
             close_replication_stream $repl
         }
@@ -587,7 +638,7 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
             # to the slave.
             after 5000
 
-            # Stop the ability of the slave to process data by sendig
+            # Stop the ability of the slave to process data by sending
             # a script that will put it in BUSY state.
             $slave eval {for i=1,3000000000 do end} 0
 
@@ -1181,7 +1232,10 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                             wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1 1
                         }]} {
                             wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 2 replicas still up*"} $loglines 1 1
-                            wait_for_log_messages -2 {"*Connection with replica * lost.*"} $loglines 1 1
+                            # A replica that gets SIGTERM while loading defers the shutdown,
+                            # so it can outlive the RDB child. Some wait might be needed before
+                            # expecting the primary to notice the dropped connection.
+                            wait_for_log_messages -2 {"*Connection with replica * lost.*"} $loglines 200 100
                         }
                     }
                     if {$all_drop == "timeout"} {
@@ -1744,6 +1798,31 @@ start_server {tags {"repl" "external:skip"}} {
         waitForBgsave r
     }
 
+    foreach hide {no yes} {
+        test "Error sent to replica is logged with hide-user-data-from-log $hide" {
+            r config set hide-user-data-from-log $hide
+            set rd [valkey_deferring_client]
+            set lines [count_log_lines 0]
+
+            $rd psync replicationid -1
+            assert_match {FULLRESYNC * *} [$rd read]
+            $rd notacommand secretvalue
+            catch {$rd read} e
+            assert_equal "PONG" [r ping]
+
+            if {$hide} {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: '\\*redacted\\*'*" $lines
+                verify_no_log_message 0 "*secretvalue*" $lines
+            } else {
+                verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *secretvalue*" $lines
+            }
+
+            $rd close
+            waitForBgsave r
+        }
+    }
+    r config set hide-user-data-from-log no
+
     test "PSYNC with wrong offset should throw error" {
         # It used to accept the FULL SYNC, but also replied with an error.
         assert_error {ERR value is not an integer or out of range} {r psync replicationid offset_str}
@@ -2020,6 +2099,37 @@ test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and m
             $replica config set replica-serve-stale-data $stale
             assert_error {NOMASTERLINK*} {$replica psync ? -1}
             assert_error {NOMASTERLINK*} {$replica sync}
+        }
+    }
+}
+
+# The fake primary only speaks plain TCP.
+if {!$::tls} {
+    tags {"repl external:skip"} {
+        test "Replica survives +CONTINUE reply to PSYNC without a cached primary" {
+            set port [find_available_port $::baseport $::portcount]
+            set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                         $port /dev/null 0 "" +CONTINUE &]
+            wait_for_condition 50 50 {
+                [ping_server 127.0.0.1 $port]
+            } else {
+                fail "Failed to start fake primary"
+            }
+
+            # Starting as a replica with no RDB leaves no cached primary, so the
+            # replica sends PSYNC ? -1. REPLICAOF on a primary would cache itself.
+            start_server [list overrides [list replicaof "127.0.0.1 $port"]] {
+                set replica [srv 0 client]
+
+                # The fake primary exits once the replica drops the link.
+                wait_for_condition 50 100 {
+                    [catch {exec kill -0 $pid}]
+                } else {
+                    catch {exec kill $pid}
+                    fail "Replica did not drop the link after +CONTINUE"
+                }
+                assert_equal PONG [$replica ping]
+            }
         }
     }
 }

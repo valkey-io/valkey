@@ -320,7 +320,7 @@ start_server {tags {"other"}} {
 
         # Reload and check
         waitForBgrewriteaof r
-        # We need to wait two seconds to avoid false positives here, otherwise
+        # We need to wait two seconds to avoid false positives here; otherwise,
         # the DEBUG LOADAOF command may read a partial file.
         # Another solution would be to set the fsync policy to no, since this
         # prevents write() to be delayed by the completion of fsync().
@@ -490,6 +490,12 @@ start_server {tags {"other"}} {
         assert_error {*unknown command*} {r CONFIG|GET GET_XX}
         assert_error {*unknown subcommand*} {r CONFIG GET_XX}
     }
+
+    test "DEBUG SLOTMIGRATION with missing arguments does not crash" {
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION}
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION PREVENT-PAUSE}
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
 
     test "Extended Redis Compatibility config" {
         # This config is added in Valkey 8.0, shall be deprecated and have no

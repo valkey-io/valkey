@@ -1027,7 +1027,7 @@ static void fillBucketHole(hashtable *ht, bucket *b, int pos_in_bucket, int tabl
 }
 
 /* When entries are deleted while rehashing is paused, they leave empty holes in
- * the buckets. This functions attempts to fill the holes by moving entries from
+ * the buckets. This function attempts to fill the holes by moving entries from
  * the end of the bucket chain to fill the holes and free any empty buckets in
  * the end of the chain. */
 static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_index) {
@@ -2351,15 +2351,17 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
+            if (iter->hashtable->tables[0] == NULL) {
+                /* Empty hashtable. We're done. Check this before pausing,
+                 * since cleanup never resumes an iterator that is still in
+                 * its initial position. */
+                break;
+            }
             if (isSafe(iter)) {
                 hashtablePauseRehashing(iter->hashtable);
                 iter->last_seen_size = iter->hashtable->used[iter->table];
             } else {
                 iter->fingerprint = hashtableFingerprint(iter->hashtable);
-            }
-            if (iter->hashtable->tables[0] == NULL) {
-                /* Empty hashtable. We're done. */
-                break;
             }
             iter->index = 0;
             /* Skip already rehashed buckets. */

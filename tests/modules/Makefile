@@ -16,11 +16,11 @@ ifeq ($(uname_S),Linux)
     CC = gcc
 endif
 
-# OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
+# Link with the compiler driver on macOS so libSystem is resolved from the
+# active SDK; raw ld can't parse newer SDKs' libSystem.tbd stubs.
 ifeq ($(uname_S),Darwin)
-ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
-LIBS = -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lsystem
-endif
+    # CFLAGS may select a non-native architecture and must reach the driver.
+    LD = $(CC) $(CFLAGS)
 endif
 
 TEST_MODULES = \

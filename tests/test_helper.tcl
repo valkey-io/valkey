@@ -1131,7 +1131,7 @@ proc is_mptcp_available {} {
 }
 
 # With the parallel test running multiple server instances at the same time
-# we need a fast enough computer, otherwise a lot of tests may generate
+# we need a fast enough computer; otherwise, a lot of tests may generate
 # false positives.
 # If the computer is too slow we revert the sequential test without any
 # parallelism, that is, clients == 1.

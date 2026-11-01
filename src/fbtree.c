@@ -1,5 +1,5 @@
 /* Feature B-Tree: a cache-optimized B+tree for sorted binary strings.
- * This is a general-purpose data structure - zset-specific logic is in zset_fbtree_adapter.c */
+ * This is a general-purpose data structure - zset-specific logic is in ordered_index.c */
 
 #include <stddef.h>
 #include <stdarg.h>

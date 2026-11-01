@@ -71,5 +71,41 @@ start_server {tags {"modules"} overrides {{save ""}}} {
             assert {[getInfoProperty $info defragtest_global_attempts] > 10000}
             assert_equal 0 [getInfoProperty $info defragtest_global_wrong_cursor]
         }
+
+        # The next DbKeys stage must not look up a deferred key that FLUSHDB ASYNC removed.
+        test {Module defrag: FLUSHDB ASYNC while a deferred key is defragged} {
+            # db 9 (the harness default) is scanned right after db 0; keep it empty.
+            r flushdb
+            r frag.resetstats
+            r frag.stall 1
+
+            # bigkey is too big to defrag inline, so it is deferred; the stall keeps defrag on it.
+            r select 0
+            r frag.create bigkey 10000 100 0
+            wait_for_condition 50 100 {
+                [getInfoProperty [r info defragtest_stats] defragtest_datatype_attempts] > 0
+            } else {
+                fail "defrag never reached the deferred key"
+            }
+
+            # Flush while defrag is stuck on bigkey, resetting the counters in the same step.
+            r multi
+            r config resetstat
+            r frag.resetstats
+            r flushdb async
+            r exec
+
+            # The globals stage runs after db 9 is scanned. All dbs are empty, so any key hit
+            # or miss is a lookup of the flushed bigkey.
+            wait_for_condition 50 100 {
+                [getInfoProperty [r info defragtest_stats] defragtest_global_attempts] > 0
+            } else {
+                fail "defrag did not get past the flushed db"
+            }
+            assert_equal 0 [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
+
+            r frag.stall 0
+            r select 9
+        }
     }
 }

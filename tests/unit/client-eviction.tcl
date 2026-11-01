@@ -258,7 +258,7 @@ start_server {} {
 
         # Append tracking prefixes until list maxes out maxmemory clients and causes client eviction
         # Combine more prefixes in each command to speed up the test. Because we did not actually count
-        # the memory usage of all prefixes, see getClientMemoryUsage, so we can not use larger prefixes
+        # the memory usage of all prefixes, see getClientMemoryUsage, so we cannot use larger prefixes
         # to speed up the test here.
         catch {
             for {set j 0} {$j < $temp_maxmemory_clients} {incr j} {

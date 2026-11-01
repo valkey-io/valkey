@@ -72,6 +72,62 @@ start_server {tags {"modules"}} {
         assert_error "ERR Write command*" {r test.call_argv set mykey myvalue}
     }
 
+    test "CallArgv is synchronous and rejects ALLOW_BLOCK without executing" {
+        assert_equal {OK 0 1} [r test.call_argv_status {} ping]
+        assert_equal {OK 0 1} [r test.call_argv_status {} blpop missing-list 0]
+        foreach flags {K KN EK EKT EKN EKR DK} {
+            assert_equal {ERR EBADF 0} [r test.call_argv_status $flags set not-executed 1]
+            assert_equal 0 [r exists not-executed]
+        }
+    }
+
+    test "CallArgv rejects unsupported reply handlers versions before executing" {
+        foreach flags {0 2 E0 E2 K0 K2 EK0 EK2} {
+            assert_equal {ERR EBADF 0} [r test.call_argv_status $flags set invalid-version 1]
+            assert_equal 0 [r exists invalid-version]
+        }
+        assert_equal {OK 0 1} [r test.call_argv_status {} ping]
+        assert_equal {OK 0 0} [r test.call_argv_status N ping]
+    }
+
+    test "CallArgv rejects unknown flags and malformed arguments regardless of ERRORS_AS_REPLIES" {
+        foreach flags {U EU DU H EH J Z EZ DZ Q EQ DQ} {
+            assert_equal {ERR EBADF 0} [r test.call_argv_status $flags set malformed-call 1]
+            assert_equal 0 [r exists malformed-call]
+        }
+    }
+
+    test "CallArgv wrong arity respects ERRORS_AS_REPLIES" {
+        assert_equal {ERR EINVAL 1} [r test.call_argv_status {} set]
+        foreach flags {E ET} {
+            assert_equal {OK EINVAL 1} [r test.call_argv_status $flags set]
+            assert_equal {OK ENOENT 1} [r test.call_argv_status $flags no-such-command]
+        }
+    }
+
+    test "CallArgv DRY_RUN implies ERRORS_AS_REPLIES before validation and execution" {
+        foreach flags {D DT} {
+            assert_equal {OK EINVAL 1} [r test.call_argv_status $flags set]
+        }
+        assert_equal {OK EINVAL 0} [r test.call_argv_status DN set]
+        assert_match "-ERR wrong number*" [r test.call_argv_status DR set]
+        assert_equal {ERR EBADF 0} [r test.call_argv_status DK set dry-run-key value]
+        assert_equal {ERR EBADF 0} [r test.call_argv_status D0 set dry-run-key value]
+        foreach flags {D DT DR} {
+            assert_equal {OK 0 0} [r test.call_argv_status $flags set dry-run-key value]
+        }
+        assert_equal 0 [r exists dry-run-key]
+    }
+
+    test "CallArgv status replies when the raw callback did not run" {
+        assert_equal {OK 0 0} [r test.call_argv_status RN ping]
+        assert_equal {OK 0 0} [r test.call_argv_status RT ping]
+        assert_equal {OK EINVAL 1} [r test.call_argv_status RET set]
+        assert_equal {ERR EBADF 0} [r test.call_argv_status R0 ping]
+        assert_equal {ERR EBADF 0} [r test.call_argv_status RK ping]
+        assert_equal "+PONG\r\n" [r test.call_argv_status R ping]
+    }
+
     test "Test CallArgvRaw" {
         set reply [r test.call_argv_raw ping hello]
         assert_equal "\$5\r\nhello\r\n" $reply
@@ -112,5 +168,49 @@ start_server {tags {"modules external:skip"} overrides {requirepass mypass enabl
 
         r auth mypass
         assert_error "ERR *MODULE command not allowed*" {r module load $testmodule}
+    }
+}
+
+start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
+    r module load $testmodule forkless
+
+    test "CallArgv infrastructure blocking respects ERRORS_AS_REPLIES without deferred writes" {
+        r set held-key original
+        r config set rdb-key-save-delay 2000000
+        r bgsave
+        wait_for_condition 100 10 {
+            [getInfoProperty [r info debug] forkless_current_item_ms] > 0
+        } else {
+            fail "Forkless save did not acquire the key"
+        }
+        assert_equal forkless [s rdb_current_bgsave_type]
+
+        foreach flags {{} N} {
+            assert_equal {ERR EAGAIN 0} [r test.call_argv_status $flags set held-key changed]
+        }
+        foreach flags {E ET} {
+            assert_equal {OK EAGAIN 1} [r test.call_argv_status $flags set held-key changed]
+        }
+        assert_equal {OK EAGAIN 0} [r test.call_argv_status EN set held-key changed]
+        assert_equal "-INUSE Key is being processed\r\n" \
+            [r test.call_argv_status ER set held-key changed]
+        assert_equal original [r get held-key]
+
+        waitForBgsave r
+        assert_equal original [r get held-key]
+        assert_equal {OK 0 1} [r test.call_argv_status {} set held-key changed]
+        assert_equal changed [r get held-key]
+    }
+
+    test "Lua uses public CallArgv synchronously with an undeclared key during forkless save" {
+        r bgsave
+        wait_for_condition 100 10 {
+            [getInfoProperty [r info debug] forkless_current_item_ms] > 0
+        } else {
+            fail "Forkless save did not acquire the key"
+        }
+        assert_equal OK [r eval {return redis.call('SET', 'held-key', 'from-lua')} 0]
+        assert_equal from-lua [r get held-key]
+        waitForBgsave r
     }
 }

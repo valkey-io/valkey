@@ -557,46 +557,44 @@ static void hllDenseRegHisto(uint8_t *registers, int *reghisto) {
      * with other values by modifying the defines, but for our target value
      * we take a faster path with unrolled loops. */
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
+        /* Most registers hold one of a few values, so incrementing a single
+         * histogram makes each increment wait on the previous store to the
+         * same counter. Spread the increments over four histograms and add
+         * them up at the end. */
+        int h1[64] = {0}, h2[64] = {0}, h3[64] = {0};
+        int *h0 = reghisto;
         uint8_t *r = registers;
-        unsigned long r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15;
         for (j = 0; j < 1024; j++) {
-            /* Handle 16 registers per iteration. */
-            r0 = r[0] & 63;
-            r1 = (r[0] >> 6 | r[1] << 2) & 63;
-            r2 = (r[1] >> 4 | r[2] << 4) & 63;
-            r3 = (r[2] >> 2) & 63;
-            r4 = r[3] & 63;
-            r5 = (r[3] >> 6 | r[4] << 2) & 63;
-            r6 = (r[4] >> 4 | r[5] << 4) & 63;
-            r7 = (r[5] >> 2) & 63;
-            r8 = r[6] & 63;
-            r9 = (r[6] >> 6 | r[7] << 2) & 63;
-            r10 = (r[7] >> 4 | r[8] << 4) & 63;
-            r11 = (r[8] >> 2) & 63;
-            r12 = r[9] & 63;
-            r13 = (r[9] >> 6 | r[10] << 2) & 63;
-            r14 = (r[10] >> 4 | r[11] << 4) & 63;
-            r15 = (r[11] >> 2) & 63;
+            /* Handle 16 registers (12 bytes) per iteration. Bytes 0-5 hold
+             * registers 0-7 and bytes 6-11 hold registers 8-15. Both 64 bit
+             * words stay within the 12 bytes: the second one starts at byte 4
+             * and is shifted down by 16 bits. */
+            uint64_t a = (uint64_t)r[0] | (uint64_t)r[1] << 8 | (uint64_t)r[2] << 16 | (uint64_t)r[3] << 24 |
+                         (uint64_t)r[4] << 32 | (uint64_t)r[5] << 40 | (uint64_t)r[6] << 48 | (uint64_t)r[7] << 56;
+            uint64_t b = (uint64_t)r[4] | (uint64_t)r[5] << 8 | (uint64_t)r[6] << 16 | (uint64_t)r[7] << 24 |
+                         (uint64_t)r[8] << 32 | (uint64_t)r[9] << 40 | (uint64_t)r[10] << 48 | (uint64_t)r[11] << 56;
+            b >>= 16;
 
-            reghisto[r0]++;
-            reghisto[r1]++;
-            reghisto[r2]++;
-            reghisto[r3]++;
-            reghisto[r4]++;
-            reghisto[r5]++;
-            reghisto[r6]++;
-            reghisto[r7]++;
-            reghisto[r8]++;
-            reghisto[r9]++;
-            reghisto[r10]++;
-            reghisto[r11]++;
-            reghisto[r12]++;
-            reghisto[r13]++;
-            reghisto[r14]++;
-            reghisto[r15]++;
+            h0[a & 63]++;
+            h1[(a >> 6) & 63]++;
+            h2[(a >> 12) & 63]++;
+            h3[(a >> 18) & 63]++;
+            h0[(a >> 24) & 63]++;
+            h1[(a >> 30) & 63]++;
+            h2[(a >> 36) & 63]++;
+            h3[(a >> 42) & 63]++;
+            h0[b & 63]++;
+            h1[(b >> 6) & 63]++;
+            h2[(b >> 12) & 63]++;
+            h3[(b >> 18) & 63]++;
+            h0[(b >> 24) & 63]++;
+            h1[(b >> 30) & 63]++;
+            h2[(b >> 36) & 63]++;
+            h3[(b >> 42) & 63]++;
 
             r += 12;
         }
+        for (j = 0; j < 64; j++) reghisto[j] += h1[j] + h2[j] + h3[j];
     } else {
         for (j = 0; j < HLL_REGISTERS; j++) {
             unsigned long reg;
@@ -1014,24 +1012,32 @@ static void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int 
 static void hllRawRegHisto(uint8_t *registers, int *reghisto) {
     uint64_t *word = (uint64_t *)registers;
     uint8_t *bytes;
+    /* Four histograms and a separate zero count, so that back to back
+     * increments of the same counter don't wait on each other. See
+     * hllDenseRegHisto(). */
+    int h1[64] = {0}, h2[64] = {0}, h3[64] = {0};
+    int *h0 = reghisto;
+    int zeros = 0;
     int j;
 
     for (j = 0; j < HLL_REGISTERS / 8; j++) {
         if (*word == 0) {
-            reghisto[0] += 8;
+            zeros += 8;
         } else {
             bytes = (uint8_t *)word;
-            reghisto[bytes[0]]++;
-            reghisto[bytes[1]]++;
-            reghisto[bytes[2]]++;
-            reghisto[bytes[3]]++;
-            reghisto[bytes[4]]++;
-            reghisto[bytes[5]]++;
-            reghisto[bytes[6]]++;
-            reghisto[bytes[7]]++;
+            h0[bytes[0]]++;
+            h1[bytes[1]]++;
+            h2[bytes[2]]++;
+            h3[bytes[3]]++;
+            h0[bytes[4]]++;
+            h1[bytes[5]]++;
+            h2[bytes[6]]++;
+            h3[bytes[7]]++;
         }
         word++;
     }
+    reghisto[0] += zeros;
+    for (j = 0; j < 64; j++) reghisto[j] += h1[j] + h2[j] + h3[j];
 }
 
 /* Helper function sigma as defined in

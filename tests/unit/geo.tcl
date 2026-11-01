@@ -940,6 +940,7 @@ start_server {tags {"geo"}} {
 }
 
 start_server {tags {"geo"}} {
+    set original_max [lindex [r config get zset-max-listpack-entries] 1]
     foreach {encoding max_entries} {listpack 128 btree 0} {
         r config set zset-max-listpack-entries $max_entries
 
@@ -1009,4 +1010,5 @@ start_server {tags {"geo"}} {
             assert_equal $members [r zrange pts{t} 0 -1]
         }
     }
+    r config set zset-max-listpack-entries $original_max
 }

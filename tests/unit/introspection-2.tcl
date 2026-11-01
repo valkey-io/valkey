@@ -135,6 +135,20 @@ start_server {tags {"introspection"}} {
         assert_morethan [r command count] 0
     }
 
+    test {COMMAND DOCS marks sorted-set numeric arguments as doubles} {
+        foreach {command argument_index} {
+            zincrby 1
+            zinter 2
+            zinterstore 3
+            zunion 2
+            zunionstore 3
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set argument [lindex [dict get $docs arguments] $argument_index]
+            assert_equal double [dict get $argument type]
+        }
+    }
+
     test {COMMAND GETKEYS GET} {
         assert_equal {key} [r command getkeys get key]
     }

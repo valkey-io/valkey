@@ -348,6 +348,9 @@ start_server {tags {"hll"}} {
                         1 {set reg [expr {rand() < 0.05 ? [randomInt 64] : 0}]}
                         2 {set reg [expr {$base + [randomInt 4]}]}
                     }
+                    # Keep the first register at zero. Without any zero
+                    # register, high values make the estimate overflow.
+                    if {$i == 0 && $j == 0} {set reg 0}
                     set v [expr {$v | ($reg << (6 * $j))}]
                 }
                 lappend bytes [expr {$v & 255}] [expr {($v >> 8) & 255}] [expr {$v >> 16}]

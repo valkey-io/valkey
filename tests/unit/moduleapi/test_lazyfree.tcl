@@ -61,4 +61,35 @@ start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes bg
         r debug reload nosave
         assert_equal [r dbsize] 0
     } {} {needs:debug}
+
+    test "DEBUG RELOAD is refused while a forkless bgsave is still closing its file" {
+        for {set i 0} {$i < 100} {incr i} {
+            r lazyfreelink.insert lazykey $i
+        }
+        r lazyfreelink.holdfree 1
+        r unlink lazykey
+
+        r set marker before
+        set loglines [count_log_lines 0]
+        r bgsave
+        wait_for_log_messages 0 {"*created background thread to perform snapshot file close and rename*"} $loglines 50 100
+
+        # The save is still in progress until its snapshot is renamed. A
+        # synchronous save now would be renamed over with the older snapshot.
+        r set marker after
+        assert_error "ERR Background save already in progress" {r debug reload}
+        assert_equal [r get marker] after
+
+        r lazyfreelink.holdfree 0
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "forkless bgsave did not finish"
+        }
+        assert_equal [s rdb_last_bgsave_status] "ok"
+
+        # dump.rdb holds the bgsave snapshot.
+        r debug reload nosave
+        assert_equal [r get marker] before
+    } {} {needs:debug}
 }

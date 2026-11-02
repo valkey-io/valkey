@@ -14,6 +14,16 @@ proc getlru {key} {
 }
 
 start_server {tags {"introspection"}} {
+    test {COMMAND DOCS does not mark hash field counts as keys} {
+        foreach command {hexpireat hexpiretime hgetex hpersist hpexpire hpexpireat hpexpiretime hpttl hsetex httl} {
+            set docs [dict get [r command docs $command] $command]
+            set fields [lindex [dict get $docs arguments] end]
+            set numfields [lindex [dict get $fields arguments] 0]
+            assert_equal numfields [dict get $numfields name]
+            assert_equal 0 [dict exists $numfields key_spec_index]
+        }
+    }
+
     test {The microsecond part of the TIME command will not overflow} {
         set now [r time]
         set microseconds [lindex $now 1]

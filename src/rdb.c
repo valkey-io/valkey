@@ -4681,9 +4681,9 @@ void bgsaveCommand(client *c) {
                 serverLog(LL_NOTICE, "Background saving (forkless) will be aborted due to user request");
                 forklessSaveCancel();
                 addReplyStatus(c, "Background saving cancelled");
-            } else if (server.rdb_bgsave_scheduled != RDB_BGSAVE_TYPE_NONE) {
+            } else if (server.rdb_bgsave_scheduled) {
                 serverLog(LL_NOTICE, "Scheduled background saving will be cancelled due to user request");
-                server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+                server.rdb_bgsave_scheduled = 0;
                 addReplyStatus(c, "Scheduled background saving cancelled");
             } else {
                 addReplyError(c, "Background saving is currently not in progress or scheduled");
@@ -4695,8 +4695,6 @@ void bgsaveCommand(client *c) {
         }
     }
 
-    int chosen_save_type = resolveBgsaveType();
-
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 
@@ -4704,7 +4702,8 @@ void bgsaveCommand(client *c) {
         addReplyError(c, "Background save already in progress");
     } else if (hasActiveChildProcess() || server.in_exec) {
         if (schedule || server.in_exec) {
-            server.rdb_bgsave_scheduled = chosen_save_type;
+            /* The save method is chosen when the scheduled save starts. */
+            server.rdb_bgsave_scheduled = 1;
             if (schedule) {
                 serverLog(LL_NOTICE, "Background saving scheduled due to user request");
             } else {
@@ -4716,7 +4715,7 @@ void bgsaveCommand(client *c) {
                              "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                              "possible.");
         }
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
+    } else if (resolveBgsaveType() == RDB_BGSAVE_TYPE_FORKLESS) {
         if (forklessSaveToDisk(server.rdb_filename) == C_OK) {
             addReplyStatus(c, "Background saving started");
         } else {

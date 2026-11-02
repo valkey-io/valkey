@@ -1811,7 +1811,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * because we want to give priority to RDB savings for replication. */
     if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
-        if (rdbStartBgsave(server.rdb_bgsave_scheduled) == C_OK) server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+        if (rdbStartBgsave(resolveBgsaveType()) == C_OK) server.rdb_bgsave_scheduled = 0;
     }
 
     /* TLS auto-reload if enabled (only when TLS is built-in). */
@@ -3199,7 +3199,7 @@ void initServer(void) {
     server.rdb_pipe_numconns_writing = 0;
     server.rdb_pipe_buff = NULL;
     server.rdb_pipe_bufflen = 0;
-    server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+    server.rdb_bgsave_scheduled = 0;
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;

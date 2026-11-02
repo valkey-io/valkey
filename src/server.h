@@ -2202,7 +2202,7 @@ struct valkeyServer {
     time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;            /* Time used by last RDB save run. */
     time_t rdb_save_time_start;           /* Current RDB save start time. */
-    rdbBgsaveType rdb_bgsave_scheduled;   /* BGSAVE when possible if non-zero. */
+    int rdb_bgsave_scheduled;             /* BGSAVE when possible if true. */
     rdbWriteTarget rdb_write_target;      /* Type of save by active child. */
     rdbBgsaveType cur_bgsave_type;        /* Current bgsave type. */
     rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */

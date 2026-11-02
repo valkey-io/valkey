@@ -1590,7 +1590,9 @@ void rewriteConfigReplicaOfOption(standardConfig *config, const char *name, stru
         rewriteConfigMarkAsProcessed(state, name);
         return;
     }
-    line = sdscatprintf(sdsempty(), "%s %s %d", name, server.primary_host, server.primary_port);
+    line = sdscatfmt(sdsempty(), "%s ", name);
+    line = sdscatrepr(line, server.primary_host, strlen(server.primary_host));
+    line = sdscatfmt(line, " %i", server.primary_port);
     rewriteConfigRewriteLine(state, name, line, 1);
 }
 

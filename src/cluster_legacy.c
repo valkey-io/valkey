@@ -71,6 +71,7 @@ void clusterReadHandler(connection *conn);
 void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
+void clusterProcessFailoverAuthAck(clusterNode *sender);
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request);
 void clusterSendFailoverNack(clusterNode *node, uint64_t request_epoch, uint8_t reason);
 static const char *clusterNackReasonString(uint8_t reason);
@@ -1566,7 +1567,6 @@ void clusterInit(void) {
     server.cluster->fail_reason = CLUSTER_FAIL_NONE;
     server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
-    server.cluster->size_fail = 0;
     server.cluster->todo_before_sleep = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
@@ -1575,7 +1575,6 @@ void clusterInit(void) {
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->failover_auth_time = 0;
     server.cluster->failover_auth_count = 0;
-    server.cluster->failover_auth_nack_count = 0;
     server.cluster->failover_auth_rank = 0;
     server.cluster->failover_auth_sent = 0;
     server.cluster->failover_failed_primary_rank = 0;
@@ -2180,6 +2179,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     node->replica_priority = 0;
+    node->voter_election_state = VOTER_CAN_RESPOND;
     return node;
 }
 
@@ -2770,6 +2770,9 @@ int clusterBlacklistExists(char *nodeid, size_t len) {
 void markNodeAsFailing(clusterNode *node) {
     /* Mark the node as FAIL. */
     node->flags |= CLUSTER_NODE_FAIL;
+    if (node->voter_election_state == VOTER_CAN_RESPOND) {
+        node->voter_election_state = VOTER_FAILED_WITHOUT_RESPONSE;
+    }
     node->fail_time = mstime();
     /* Remove the PFAIL flag. */
     node->flags &= ~CLUSTER_NODE_PFAIL;
@@ -2848,6 +2851,9 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   humanNodename(node), nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) {
+            node->voter_election_state = VOTER_CAN_RESPOND;
+        }
         if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -2863,6 +2869,9 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
             node->name, humanNodename(node));
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) {
+            node->voter_election_state = VOTER_CAN_RESPOND;
+        }
         if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -2999,7 +3008,9 @@ int verifyGossipSectionNodeIds(clusterMsgDataGossip *g, uint16_t count) {
 int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip *)hdr->data.ping.gossip;
-    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+    /* A node still in handshake has a random name and is not known yet, so it
+     * must not be trusted to introduce new nodes. */
+    clusterNode *sender = link->node && !nodeInHandshake(link->node) ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
 
     /* Abort if the gossip contains invalid node IDs to avoid adding incorrect information to
      * the nodes dictionary. An invalid ID indicates memory corruption on the sender side. */
@@ -3743,6 +3754,17 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     return totlen;
 }
 
+/* Values received from peers are persisted to nodes.conf, so ignore any that
+ * clusterLoadConfig() would reject. */
+static char *getLoadableStringExtension(char *value) {
+    return isValidAuxString(value, strlen(value)) ? value : NULL;
+}
+
+static char *getLoadableIpExtension(char *value, int af) {
+    struct in6_addr addr;
+    return inet_pton(af, value, &addr) == 1 ? value : NULL;
+}
+
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. Returns 1 if the link is still valid after
  * processing, or 0 if the link was freed due to invalid data. */
@@ -3764,19 +3786,19 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         uint16_t type = ntohs(ext->type);
         if (type == CLUSTERMSG_EXT_TYPE_HOSTNAME) {
             clusterMsgPingExtHostname *hostname_ext = (clusterMsgPingExtHostname *)&(ext->ext[0].hostname);
-            ext_hostname = hostname_ext->hostname;
+            ext_hostname = getLoadableStringExtension(hostname_ext->hostname);
         } else if (type == CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME) {
             clusterMsgPingExtHumanNodename *humannodename_ext =
                 (clusterMsgPingExtHumanNodename *)&(ext->ext[0].human_nodename);
-            ext_humannodename = humannodename_ext->human_nodename;
+            ext_humannodename = getLoadableStringExtension(humannodename_ext->human_nodename);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV4) {
             clusterMsgPingExtClientIpV4 *clientipv4_ext =
                 (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].announce_client_ipv4);
-            ext_clientipv4 = clientipv4_ext->announce_client_ipv4;
+            ext_clientipv4 = getLoadableIpExtension(clientipv4_ext->announce_client_ipv4, AF_INET);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV6) {
             clusterMsgPingExtClientIpV6 *clientipv6_ext =
                 (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
-            ext_clientipv6 = clientipv6_ext->announce_client_ipv6;
+            ext_clientipv6 = getLoadableIpExtension(clientipv6_ext->announce_client_ipv6, AF_INET6);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_PORT) {
             clusterMsgPingExtClientPort *clientport_ext =
                 (clusterMsgPingExtClientPort *)&(ext->ext[0].announce_client_port);
@@ -3806,7 +3828,7 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE) {
             clusterMsgPingExtAvailabilityZone *availability_zone_ext =
                 (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
-            ext_availability_zone = availability_zone_ext->availability_zone;
+            ext_availability_zone = getLoadableStringExtension(availability_zone_ext->availability_zone);
         } else if (type == CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY) {
             clusterMsgPingExtReplicaPriority *priority_ext = (clusterMsgPingExtReplicaPriority *)&(ext->ext[0].replica_priority);
             ext_replica_priority = ntohl(priority_ext->replica_priority);
@@ -4342,8 +4364,7 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* If this is a MEET packet from an unknown node, we still process
-                 * the gossip section here since we have to trust the sender because
-                 * of the message type. */
+                 * the gossip section here, but only to update nodes we already know. */
                 if (!clusterProcessGossipSection(msg, link)) return 0;
             } else if (sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
                 /* The MEET packet is from a known node, after the handshake timeout, so the sender
@@ -4768,13 +4789,7 @@ int clusterProcessPacket(clusterLink *link) {
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
         if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
-            server.cluster->failover_auth_count++;
-            serverLog(LL_NOTICE, "Failover auth ACK from %.40s (%s) for epoch %llu (ACKs %d, quorum %d)",
-                      sender->name, humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
-                      server.cluster->failover_auth_count, (server.cluster->size / 2) + 1);
-            /* Maybe we reached a quorum here, set a flag to make sure
-             * we check ASAP. */
-            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            clusterProcessFailoverAuthAck(sender);
         }
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
         if (!sender) return 1; /* We don't know that node. */
@@ -5098,6 +5113,7 @@ void clusterReadHandler(connection *conn) {
     clusterMsgHeader *hdr;
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
+    size_t totread = 0;
 
     /* A worker read job is still in flight or its completion hasn't been
      * consumed yet. Do not touch the framed packets or rcvbuf from the main
@@ -5111,7 +5127,10 @@ void clusterReadHandler(connection *conn) {
      * queue full), fall back to the synchronous path below. */
     if (trySendClusterReadToIOThreads(link) == C_OK) return;
 
-    while (1) { /* Read as long as there is data to read. */
+    /* Bounded like clusterWriteHandler(), so a peer that keeps the socket
+     * readable cannot hold the main thread. The rest is read on the next
+     * event. */
+    while (totread < NET_MAX_WRITES_PER_EVENT) {
         rcvbuflen = link->rcvbuf_len;
         if (rcvbuflen < RCVBUF_MIN_READ_LEN) {
             /* First, obtain the first 16 bytes to get the full message
@@ -5170,6 +5189,7 @@ void clusterReadHandler(connection *conn) {
             link->rcvbuf_len += nread;
             hdr = (clusterMsgHeader *)link->rcvbuf;
             rcvbuflen += nread;
+            totread += nread;
         }
 
         /* Total length obtained? Process this packet. */
@@ -5523,7 +5543,17 @@ void clusterBroadcastPong(int target) {
     dictReleaseIterator(di);
 }
 
-/* Create a PUBLISH message block.
+int clusterPublishMessageLengthValid(robj *channel, robj *message) {
+    size_t channel_len = stringObjectLen(channel);
+    size_t message_len = stringObjectLen(message);
+    size_t max_payload_len = (size_t)UINT32_MAX - offsetof(clusterMsgSendBlock, data) - CLUSTERMSG_MIN_LEN -
+                             offsetof(clusterMsgDataPublish, bulk_data);
+
+    return channel_len <= max_payload_len && message_len <= max_payload_len - channel_len;
+}
+
+/* Create a PUBLISH message block, or return NULL if it exceeds the supported
+ * cluster bus publish size.
  *
  * Sanitizer suppression: In clusterMsgDataPublish, sizeof(bulk_data) is 8.
  * As all the struct is used as a buffer, when more than 8 bytes are copied into
@@ -5531,15 +5561,15 @@ void clusterBroadcastPong(int target) {
  * positive in this context. */
 VALKEY_NO_SANITIZE("bounds")
 clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, int is_light, int is_sharded) {
-    uint32_t channel_len, message_len;
     uint16_t type = is_sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH;
+
+    if (!clusterPublishMessageLengthValid(channel, message)) return NULL;
 
     channel = getDecodedObject(channel);
     message = getDecodedObject(message);
-    channel_len = sdslen(objectGetVal(channel));
-    message_len = sdslen(objectGetVal(message));
+    size_t channel_len = sdslen(objectGetVal(channel));
+    size_t message_len = sdslen(objectGetVal(message));
     size_t msglen;
-
     if (is_light) {
         /* We set the MSB for message that needs to sent using light header */
         type |= CLUSTERMSG_LIGHT;
@@ -5558,10 +5588,10 @@ clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, 
         clusterMsg *hdr = getMessageFromSendBlock(msgblock);
         hdr_data_msg = &hdr->data.publish.msg;
     }
-    hdr_data_msg->channel_len = htonl(channel_len);
-    hdr_data_msg->message_len = htonl(message_len);
-    memcpy(hdr_data_msg->bulk_data, objectGetVal(channel), sdslen(objectGetVal(channel)));
-    memcpy(hdr_data_msg->bulk_data + sdslen(objectGetVal(channel)), objectGetVal(message), sdslen(objectGetVal(message)));
+    hdr_data_msg->channel_len = htonl((uint32_t)channel_len);
+    hdr_data_msg->message_len = htonl((uint32_t)message_len);
+    memcpy(hdr_data_msg->bulk_data, objectGetVal(channel), channel_len);
+    memcpy(hdr_data_msg->bulk_data + channel_len, objectGetVal(message), message_len);
 
     decrRefCount(channel);
     decrRefCount(message);
@@ -5720,6 +5750,7 @@ int clusterSendModuleMessageToTarget(const char *target,
 void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
     clusterMsgSendBlock *msgblock, *msgblock_light;
     msgblock_light = clusterCreatePublishMsgBlock(channel, message, 1, sharded);
+    if (msgblock_light == NULL) return;
     /* We will only create msgblock with normal hdr if there are any nodes that do not support light hdr */
     msgblock = NULL;
     ClusterNodeIterator iter;
@@ -5950,6 +5981,43 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
               (unsigned long long)server.cluster->currentEpoch);
 }
 
+/* Forget the responses of the previous election. Called when we send a new
+ * FAILOVER_AUTH_REQUEST, so every reply we count from then on belongs to the
+ * election we are now running. */
+static void clusterResetFailoverAuthResponses(void) {
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        node->voter_election_state = nodeFailed(node) ? VOTER_FAILED_WITHOUT_RESPONSE : VOTER_CAN_RESPOND;
+    }
+    dictReleaseIterator(di);
+}
+
+/* Handle a FAILOVER_AUTH_ACK from a voter. */
+void clusterProcessFailoverAuthAck(clusterNode *sender) {
+    /* Only count a vote while the request it answers is outstanding, as the
+     * NACK path already does. After a fast-fail reset the retry keeps the old
+     * failover_auth_epoch until its own request goes out, so a straggling ACK
+     * for the abandoned election would otherwise be counted in that gap and
+     * carried into the next epoch as a vote that was never cast there. */
+    if (!server.cluster->failover_auth_time || !server.cluster->failover_auth_sent) return;
+
+    /* Exclude voters that already responded. A voter we marked FAIL can still
+     * reach us and vote (partial netsplit); its vote counts. */
+    if (sender->voter_election_state == VOTER_ACKED || sender->voter_election_state == VOTER_NACKED) return;
+
+    sender->voter_election_state = VOTER_ACKED;
+    server.cluster->failover_auth_count++;
+    serverLog(LL_NOTICE, "Failover auth ACK from %.40s (%s) for epoch %llu (ACKs %d, quorum %d)", sender->name,
+              humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
+              server.cluster->failover_auth_count, (server.cluster->size / 2) + 1);
+    /* Maybe we reached a quorum here, set a flag to make sure
+     * we check ASAP. */
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+}
+
 /* Returns non-zero if a voter rejecting us for this reason is telling us
  * something a new election can act on:
  * - ALREADY_VOTED: It already spent its vote on another replica in this epoch.
@@ -5967,12 +6035,8 @@ static int clusterNackIsPerRoundReason(uint8_t reason) {
 
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
-    /* Ignore NACKs from FAIL nodes to avoid double-counting: FAIL nodes are
-     * already accounted for in size_fail, and they will never ACK, so including
-     * their NACK would undercount achievable votes. */
-    if (nodeFailed(sender)) {
-        return;
-    }
+    /* Exclude ineligible voters */
+    if (sender->voter_election_state != VOTER_CAN_RESPOND) return;
 
     /* Ignore NACKs that a new epoch cannot fix: those voters answer the next
      * request the same way, so counting them only resets the election over and
@@ -5989,32 +6053,37 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
         return;
     }
 
-    server.cluster->failover_auth_nack_count++;
-
-    /* A voter that NACKed us in this epoch will not change its mind, so the
-     * upper bound on the votes we can still collect is the voters that have
-     * not NACKed, minus FAIL voters that will never reply (they count towards
-     * size but neither ACK nor NACK). Fast-fail once that bound drops below
-     * the quorum we need to win.. */
-    int needed_quorum = (server.cluster->size / 2) + 1;
-    int max_possible_acks = server.cluster->size - server.cluster->size_fail - server.cluster->failover_auth_nack_count;
-    serverLog(LL_NOTICE, "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d, quorum %d)",
+    sender->voter_election_state = VOTER_NACKED;
+    serverLog(LL_NOTICE, "Failover auth NACK [%s] from %.40s (%s) for epoch %llu",
               clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
-              humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
-              server.cluster->failover_auth_nack_count, needed_quorum);
-    if (max_possible_acks < needed_quorum) {
-        serverLog(LL_NOTICE,
-                  "Failover election for epoch %llu cannot reach quorum %d (NACKs %d, dead voters %d). "
-                  "Resetting the election since we cannot win an election without quorum.",
-                  (unsigned long long)server.cluster->failover_auth_epoch, needed_quorum,
-                  server.cluster->failover_auth_nack_count, server.cluster->size_fail);
-        server.cluster->failover_auth_time = 0;
-        /* Maybe we could start a new election, set a flag here to make sure
-         * we check as soon as possible, instead of waiting for a cron. */
-        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
-    }
+              humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch);
+    /* clusterUpdateState tallies the voter states and fast-fails the election
+     * if quorum is no longer reachable. */
+    clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
 }
 
+/* Called by clusterUpdateState once a voter NACKed our current election, with
+ * the number of voting primaries in the NACKED and FAILED_WITHOUT_RESPONSE
+ * states. The ACKs we can still end up with are the ACKED and CAN_RESPOND
+ * voters, that is size minus those two. Reset the election once they cannot
+ * reach quorum. */
+static void clusterFailoverAbortIfQuorumUnreachable(int nacked, int failed_without_response) {
+    if (!server.cluster->failover_auth_time || !server.cluster->failover_auth_sent) return;
+
+    int needed_quorum = (server.cluster->size / 2) + 1;
+    int max_possible_acks = server.cluster->size - nacked - failed_without_response;
+    if (max_possible_acks >= needed_quorum) return;
+
+    serverLog(LL_NOTICE,
+              "Failover election for epoch %llu cannot reach quorum %d (ACKs %d, NACKs %d, dead voters %d). "
+              "Resetting the election since we cannot win an election without quorum.",
+              (unsigned long long)server.cluster->failover_auth_epoch, needed_quorum,
+              server.cluster->failover_auth_count, nacked, failed_without_response);
+    server.cluster->failover_auth_time = 0;
+    /* Maybe we could start a new election, set a flag here to make sure
+     * we check as soon as possible, instead of waiting for a cron. */
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+}
 /* This function returns the "rank" of this instance, a replica, in the context
  * of its primary-replicas ring. The rank of the replica is given by the number of
  * other replicas for the same primary that have a better replication offset
@@ -6343,7 +6412,6 @@ void clusterHandleReplicaFailover(void) {
                                              (delay ? random() % delay : 0); /* Random delay between 0 and the fixed delay. */
         if (server.debug_cluster_failover_delay >= 0) server.cluster->failover_auth_time = now + delay;
         server.cluster->failover_auth_count = 0;
-        server.cluster->failover_auth_nack_count = 0;
         server.cluster->failover_auth_sent = 0;
         server.cluster->failover_auth_rank = clusterGetReplicaRank();
         /* We add another delay that is proportional to the replica rank.
@@ -6468,6 +6536,7 @@ void clusterHandleReplicaFailover(void) {
         server.cluster->failover_auth_epoch = server.cluster->currentEpoch;
         serverLog(LL_NOTICE, "Starting a failover election for epoch %llu, node config epoch is %llu",
                   (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
+        clusterResetFailoverAuthResponses();
         clusterRequestFailoverAuth();
         server.cluster->failover_auth_sent = 1;
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
@@ -7033,16 +7102,15 @@ void clusterCron(void) {
  * handlers, or to perform potentially expansive tasks that we need to do
  * a single time before replying to clients. */
 void clusterBeforeSleep(void) {
+    /* Update the cluster state first. It may abort a failover election and
+     * request a retry, which is then handled below in the same pass. */
+    if (server.cluster->todo_before_sleep & CLUSTER_TODO_UPDATE_STATE) clusterUpdateState();
+
     int flags = server.cluster->todo_before_sleep;
 
     /* Reset our flags (not strictly needed since every single function
      * called for flags set should be able to clear its flag). */
     server.cluster->todo_before_sleep = 0;
-
-    /* Update the cluster state. We handle this flag first so that if we happen
-     * to also have a failover flag, we can check the state first (and log the
-     * state) before attempting the failover. */
-    if (flags & CLUSTER_TODO_UPDATE_STATE) clusterUpdateState();
 
     if (flags & CLUSTER_TODO_HANDLE_MANUALFAILOVER) {
         /* Handle manual failover as soon as possible so that won't have a 100ms
@@ -7348,25 +7416,30 @@ void clusterUpdateState(void) {
      * serving at least a single slot.
      *
      * At the same time count the number of reachable primaries having
-     * at least one slot. */
+     * at least one slot, and the voters in the NACKED and
+     * FAILED_WITHOUT_RESPONSE states of our current election. */
+    int nacked = 0, failed_without_response = 0;
     {
         dictIterator *di;
         dictEntry *de;
 
         server.cluster->size = 0;
-        server.cluster->size_fail = 0;
         di = dictGetSafeIterator(server.cluster->nodes);
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
 
             if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
-                if (node->flags & CLUSTER_NODE_FAIL) server.cluster->size_fail++;
+                if (node->voter_election_state == VOTER_NACKED) nacked++;
+                if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) failed_without_response++;
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
             }
         }
         dictReleaseIterator(di);
     }
+    /* FAIL voters alone never reset the election: a retry starts with the same
+     * FAIL voters, so it would be reset again as soon as its request goes out. */
+    if (nacked > 0) clusterFailoverAbortIfQuorumUnreachable(nacked, failed_without_response);
 
     /* If we are in a minority partition, change the cluster state
      * to FAIL. */
@@ -8559,7 +8632,12 @@ void clusterCommandSetSlot(client *c) {
             }
         }
 
-        if (num_eligible_replicas != 0) {
+        if (num_eligible_replicas != 0 && c->flag.deny_blocking) {
+            /* The client cannot block (MULTI, scripts), so it cannot wait for
+             * the acks. Apply the change now and replicate it afterwards, the
+             * way WAIT returns immediately for such clients. */
+            forceCommandPropagation(c, PROPAGATE_REPL);
+        } else if (num_eligible_replicas != 0) {
             forceCommandPropagation(c, PROPAGATE_REPL);
             /* We are a primary and this is the first time we see this `SETSLOT`
              * command. Force-replicate the command to all of our replicas

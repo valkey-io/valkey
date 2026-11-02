@@ -677,6 +677,7 @@ proc start_server {options {code undefined}} {
         # for availability. Other test clients may grab the port before we
         # are able to do it for example.
         if {$port_busy} {
+            set previous_ready_count 0
             puts "Port $port was already busy, trying another port..."
             set port [find_available_port $::baseport $::portcount]
             if {$::tls} {

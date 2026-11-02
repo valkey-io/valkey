@@ -1770,6 +1770,35 @@ start_server {tags {"hashexpire"}} {
 
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
+
+    test {MEMORY USAGE counts expired but unreaped hash fields} {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        # One small live field and 99 large fields that expire right away.
+        # With active expiry off nothing is reclaimed, so the large fields
+        # still occupy memory. If the size estimate sampled only live fields
+        # it would extrapolate the small one across the whole table and
+        # report a few hundred bytes for a ~100KB hash.
+        r del memusagehfe
+        r hset memusagehfe live v
+        set value [string repeat x 1000]
+        for {set i 1} {$i <= 99} {incr i} {
+            r hset memusagehfe f$i $value
+        }
+        assert_encoding hashtable memusagehfe
+        set fields {}
+        for {set i 1} {$i <= 99} {incr i} {
+            lappend fields f$i
+        }
+        assert_equal 99 [llength [r hpexpire memusagehfe 1 fields 99 {*}$fields]]
+        after 5
+        assert_equal 100 [r hlen memusagehfe]
+        assert_equal {} [r hget memusagehfe f1]
+
+        assert_morethan [r memory usage memusagehfe samples 0] 99000
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
     r config set hash-max-listpack-entries $original_max
 
     test {HGETALL skips expired fields} {

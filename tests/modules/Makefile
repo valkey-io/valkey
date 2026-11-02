@@ -48,6 +48,7 @@ TEST_MODULES = \
     test_lazyfree.so \
     timer.so \
     defragtest.so \
+    defragunload.so \
     keyspecs.so \
     hash.so \
     hash_stringref.so \

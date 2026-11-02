@@ -48,12 +48,26 @@ static mpscQueue io_shared_outbox[JOB_PRIORITY_COUNT] = {0};
 // Main -> IO (Thread-Specific) for tasks that must run on specific IO thread where IO threads check their private inbox before the shared queue
 static spscQueue io_private_inbox[IO_THREADS_MAX_NUM] = {0};
 static size_t io_jobs_submitted;
-static _Atomic(size_t) io_jobs_finished;
+/* Every IO thread adds to io_jobs_finished after each busy loop iteration. The wrapper gives
+ * it a cache line of its own, so those updates don't invalidate the line holding the
+ * main-thread-only state next to it (e.g. io_jobs_submitted). */
+typedef struct {
+    _Alignas(CACHE_LINE_SIZE) _Atomic(size_t) value;
+} io_jobs_finished_counter;
+static_assert(sizeof(io_jobs_finished_counter) == CACHE_LINE_SIZE, "io_jobs_finished must occupy exactly one cache line");
+static io_jobs_finished_counter io_jobs_finished;
 static size_t cluster_io_pending_responses;
 static int io_threads_initialized = 0;
 /* Set during process exit to stop worker response retries. */
 static _Atomic int io_threads_exiting = 0;
-_Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
+/* Each IO thread adds to its own slot on every busy loop iteration, so each slot gets a cache
+ * line of its own to keep one thread's update from invalidating its neighbours' slots
+ * (false sharing). Only INFO reads these. */
+typedef struct {
+    _Alignas(CACHE_LINE_SIZE) _Atomic long long value;
+} io_thread_active_time;
+static_assert(sizeof(io_thread_active_time) == CACHE_LINE_SIZE, "each used_active_time_io_thread slot must occupy exactly one cache line");
+static io_thread_active_time used_active_time_io_thread[IO_THREADS_MAX_NUM];
 
 /* Job Types for Tagged Pointers
  * We use the lower 3 bits of the pointer to store the job type.
@@ -97,7 +111,7 @@ void commitIOJobs(void) {
 
 /* Jobs sent but not yet processed by IO threads. */
 static size_t getPendingIOThreadsJobs(void) {
-    return io_jobs_submitted - atomic_load_explicit(&io_jobs_finished, memory_order_acquire);
+    return io_jobs_submitted - atomic_load_explicit(&io_jobs_finished.value, memory_order_acquire);
 }
 
 /* Read/write jobs awaiting response from IO threads. */
@@ -381,7 +395,7 @@ static void *IOThreadMain(void *myid) {
         monotime prev_work_start_time = work_start_time;
         work_start_time = getMonotonicUs();
         if (processed != 0) {
-            atomic_fetch_add_explicit(&used_active_time_io_thread[id],
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id].value,
                                       work_start_time - prev_work_start_time,
                                       memory_order_relaxed);
         }
@@ -421,7 +435,7 @@ static void *IOThreadMain(void *myid) {
         }
 
         if (processed) {
-            atomic_fetch_add_explicit(&io_jobs_finished, processed, memory_order_release);
+            atomic_fetch_add_explicit(&io_jobs_finished.value, processed, memory_order_release);
         }
 
         /* If both queues were empty (no processing done), wait for signal. */
@@ -444,7 +458,7 @@ static void *IOThreadMain(void *myid) {
 }
 
 long long getIOThreadActiveTimeMicroseconds(int id) {
-    return atomic_load_explicit(&used_active_time_io_thread[id], memory_order_relaxed);
+    return atomic_load_explicit(&used_active_time_io_thread[id].value, memory_order_relaxed);
 }
 
 static void createIOThread(int id) {
@@ -515,7 +529,7 @@ static void shutdownIOThread(int id) {
             }
             drained += batch_count;
         }
-        if (drained) atomic_fetch_add_explicit(&io_jobs_finished, drained, memory_order_release);
+        if (drained) atomic_fetch_add_explicit(&io_jobs_finished.value, drained, memory_order_release);
     }
 
     spscFree(&io_private_inbox[id]);
@@ -598,7 +612,7 @@ void initIOThreads(int prev_threads_num) {
             mpscInit(&io_shared_outbox[p], IO_MPSC_QUEUE_SIZE);
         }
         io_jobs_submitted = 0;
-        atomic_init(&io_jobs_finished, 0);
+        atomic_init(&io_jobs_finished.value, 0);
         cluster_io_pending_responses = 0;
         prefetchCommandsBatchInit();
         io_threads_initialized = 1;
@@ -623,7 +637,7 @@ void testOnlyInitIOThreadQueues(void) {
         io_thread_ticket[p] = (mpscTicket){0};
     }
     io_jobs_submitted = 0;
-    atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
+    atomic_store_explicit(&io_jobs_finished.value, 0, memory_order_relaxed);
     cluster_io_pending_responses = 0;
 }
 
@@ -638,7 +652,7 @@ void testOnlyFreeIOThreadQueues(void) {
         io_thread_ticket[p] = (mpscTicket){0};
     }
     io_jobs_submitted = 0;
-    atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
+    atomic_store_explicit(&io_jobs_finished.value, 0, memory_order_relaxed);
     cluster_io_pending_responses = 0;
 }
 
@@ -656,6 +670,19 @@ void testOnlyFillIOThreadInbox(void) {
  * or completed dispatch leaves no response outstanding. */
 size_t testOnlyGetClusterIOPendingResponses(void) {
     return cluster_io_pending_responses;
+}
+
+/* Addresses of the IO thread counters, so unit tests can check their cache line layout. */
+const void *testOnlyGetIOThreadActiveTimeSlot(int id) {
+    return &used_active_time_io_thread[id].value;
+}
+
+const void *testOnlyGetIOJobsFinishedCounter(void) {
+    return &io_jobs_finished.value;
+}
+
+const void *testOnlyGetIOJobsSubmittedCounter(void) {
+    return &io_jobs_submitted;
 }
 
 /* This function attempts to offload the client's read to an I/O thread.

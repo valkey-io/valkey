@@ -421,6 +421,78 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+    # Regression tests for https://github.com/valkey-io/valkey/issues/4604 (item 3).
+    #
+    # During a forkless (consistent) bgsave, an early iterated key, removed from the main
+    # dictionary, was not handled properly and resulted in a crash.  A single RENAME is enough to
+    # reproduce.  These paths only exist for forkless (consistent) iteration; fork-mode bgsave is
+    # unaffected, so the tests target forkless only.
+    test "forkless save survives RENAME over an existing key" {
+        r flushall
+        r config set bgsave-default-method forkless
+        r config set rdb-key-save-delay 0
+
+        # Populate keys that are part of the snapshot.  The iterator has not yet reached them when
+        # we mutate them mid-save, so they get expedited into early_iterate_entries.
+        r debug populate 100000
+
+        # Hold the forkless save open so the rename happens mid-iteration.
+        r config set rdb-key-save-delay 10000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        # RENAME an existing snapshot key over another existing snapshot key: at the dbEntry level
+        # delete(dst) + delete(src) + add(new).
+        set before [r get key:1]
+        r rename key:1 key:2
+        assert_equal [r get key:2] $before
+        assert_equal [r exists key:1] 0
+
+        # Server must still be alive and the save must complete cleanly.
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal [r ping] "PONG"
+    } {} {needs:debug}
+
+    test "forkless save survives PEXPIRE after a collection key is emptied" {
+        r flushall
+        r config set bgsave-default-method forkless
+        r config set rdb-key-save-delay 0
+        r debug populate 100000
+        # 22-char key: the set's dbEntry is 48 bytes, the same jemalloc bin as a
+        # populate string once an expire is attached to it.
+        r sadd set:000000000000000000 m
+
+        r config set rdb-key-save-delay 10000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        # Emptying the set deletes it via SREM (not DEL), so its dbEntry pointer
+        # used to stay in early_iterate_entries after the free. Give the iterator
+        # time to hand the entry back so the free actually happens.
+        r srem set:000000000000000000 m
+        after 100
+        # PEXPIRE reallocates key:10's dbEntry; jemalloc returns the freed address.
+        r pexpire key:10 10000000
+        r persist key:11
+        r setex key:12 1000 newval
+        assert_equal [r get key:12] "newval"
+
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal [r ping] "PONG"
+    } {} {needs:debug}
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         
         # Populate database with complex dataset
@@ -817,6 +889,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Populate database with all data types
         createComplexDatasetForVerification r 20
+        set keys [r keys *]
+
+        # Add filler keys that are never deleted, so the save still has
+        # work left after every key above has been deleted (and therefore
+        # already serialized).
+        createComplexDatasetForVerification r 200 "filler_"
+        set filler_count [expr {[r dbsize] - [llength $keys]}]
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
@@ -828,14 +907,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not start"
         }
         
-        # Delete all keys in the database
-        set keys [r keys *]
+        # Delete all non-filler keys
         foreach key $keys {
             r del $key
         }
         
-        # Verify all keys deleted and save still in progress
-        assert_equal [r dbsize] 0
+        # Verify all non-filler keys deleted and save still in progress
+        assert_equal [r dbsize] $filler_count
         assert_equal [s rdb_bgsave_in_progress] 1
         
         # Speed up and complete save
@@ -844,16 +922,19 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Reload from RDB and verify ORIGINAL keys still exist
         catch {r debug reload nosave}
-        for {set i 0} {$i < 20} {incr i} {
-            assert_equal [r get before_$i] "value_before_$i"
-            assert_equal [r get int_$i] [expr {42 + $i}]
-            assert_equal [r lrange lst_$i 0 -1] [list "L1" "L2" "R1" "R2"]
-            assert_equal [lsort [r smembers set_$i]] [list "B1" "B2"]
-            assert_equal [r zscore zset_$i "Z1"] 1
-            assert_equal [r hget hash_$i "H1"] "a"
-            assert_equal [r pfcount hll_$i] 1
-            assert_equal [r zcard geo_$i] 1
-            assert_equal [r zcard geo_set_$i] 1
+        assert_equal [r dbsize] [expr {[llength $keys] + $filler_count}]
+        foreach {prefix count} {"" 20 "filler_" 200} {
+            for {set i 0} {$i < $count} {incr i} {
+                assert_equal [r get ${prefix}before_$i] "value_before_$i"
+                assert_equal [r get ${prefix}int_$i] [expr {42 + $i}]
+                assert_equal [r lrange ${prefix}lst_$i 0 -1] [list "L1" "L2" "R1" "R2"]
+                assert_equal [lsort [r smembers ${prefix}set_$i]] [list "B1" "B2"]
+                assert_equal [r zscore ${prefix}zset_$i "Z1"] 1
+                assert_equal [r hget ${prefix}hash_$i "H1"] "a"
+                assert_equal [r pfcount ${prefix}hll_$i] 1
+                assert_equal [r zcard ${prefix}geo_$i] 1
+                assert_equal [r zcard ${prefix}geo_set_$i] 1
+            }
         }
     } {} {needs:debug}
 }
@@ -1819,6 +1900,48 @@ test {Server refuses to start with bgsave-default-method forkless and no forkles
 test {Server starts with bgsave-default-method before forkless-infrastructure-enabled yes} {
     start_server {overrides {bgsave-default-method forkless forkless-infrastructure-enabled yes save ""}} {
         assert_equal [lindex [r config get bgsave-default-method] 1] "forkless"
+    }
+}
+
+start_server {overrides {save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    start_server {overrides {
+        bgsave-default-method forkless
+        forkless-infrastructure-enabled yes
+        repl-diskless-load swapdb
+    }} {
+        set replica [srv 0 client]
+
+        # Regression test for a use-after-free in fullScanIteratorGetEntries: a
+        # swapdb-mode full sync frees the replica's old keyspace while a forkless
+        # save's background iterator still holds live references into it. Fixed by
+        # tearing down iterators in swapMainDbWithTempDb() before the free.
+        #
+        # A large replica keyspace against a tiny primary keeps the save reading
+        # at full speed while the small RDB loads and swaps. The crash needs the
+        # save's background thread to be actively reading an entry at the moment
+        # the swap frees the keyspace; rdb-key-save-delay is intentionally not used
+        # here, as it makes the save sleep between keys, so at the swap it is idle
+        # rather than reading.
+        test {forkless save during swapdb full sync does not use-after-free} {
+            $primary debug populate 100
+            $replica debug populate 1000000
+            $replica bgsave
+            # The save must be in progress when the swap happens.
+            wait_for_condition 50 10 {
+                [s 0 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "forkless save did not start"
+            }
+
+            $replica replicaof $primary_host $primary_port
+
+            wait_for_sync $replica
+            assert_equal [$replica dbsize] [$primary dbsize]
+        } {} {needs:debug}
     }
 }
 

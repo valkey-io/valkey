@@ -1512,7 +1512,7 @@ void checkChildrenDone(void) {
                       "child_type: %s, child_pid = %d",
                       strerror(errno), strChildType(server.child_type), (int)server.child_pid);
         } else if (pid == server.child_pid) {
-            if (!bysignal && exitcode == 0) receiveChildInfo();
+            receiveChildInfo();
             if (server.child_type == CHILD_TYPE_RDB) {
                 backgroundSaveDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_AOF) {
@@ -2974,6 +2974,10 @@ void resetServerStats(void) {
     }
     server.stat_aof_rewrites = 0;
     server.stat_rdb_saves = 0;
+    server.repl_rdb_metrics.snapshots = 0;
+    server.repl_rdb_metrics.failures = 0;
+    server.repl_rdb_metrics.cancellations = 0;
+    server.repl_rdb_metrics.start_failures = 0;
     server.stat_aofrw_consecutive_failures = 0;
     server.stat_net_input_bytes = 0;
     server.stat_net_output_bytes = 0;
@@ -3204,6 +3208,8 @@ void initServer(void) {
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;
     server.rdb_save_time_start = -1;
+    memset(&server.repl_rdb_metrics, 0, sizeof(server.repl_rdb_metrics));
+    server.repl_rdb_metrics.last_time_ms = -1;
     server.rdb_last_load_keys_expired = 0;
     server.rdb_last_load_keys_loaded = 0;
     server.dirty = 0;
@@ -6778,13 +6784,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "current_save_keys_processed:%zu\r\n", server.stat_current_save_keys_processed,
                 "current_save_keys_total:%zu\r\n", server.stat_current_save_keys_total,
                 "rdb_changes_since_last_save:%lld\r\n", server.dirty,
-                "rdb_bgsave_in_progress:%d\r\n", isSaveInProgress(),
+                "rdb_bgsave_in_progress:%d\r\n", isPersistenceSaveInProgress(),
                 "rdb_current_bgsave_type:%s\r\n", current_bgsave_type,
                 "rdb_last_bgsave_type:%s\r\n", last_bgsave_type,
                 "rdb_last_save_time:%jd\r\n", (intmax_t)server.lastsave,
                 "rdb_last_bgsave_status:%s\r\n", (server.lastbgsave_status == C_OK) ? "ok" : "err",
                 "rdb_last_bgsave_time_sec:%jd\r\n", (intmax_t)server.rdb_save_time_last,
-                "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)(isSaveInProgress() ? time(NULL) - server.rdb_save_time_start : -1),
+                "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)(isPersistenceSaveInProgress() ? time(NULL) - server.rdb_save_time_start : -1),
                 "rdb_saves:%lld\r\n", server.stat_rdb_saves,
                 "rdb_last_cow_size:%zu\r\n", server.stat_rdb_cow_bytes,
                 "rdb_last_load_keys_expired:%lld\r\n", server.rdb_last_load_keys_expired,
@@ -6946,6 +6952,54 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             "# Replication\r\n"
                             "role:%s\r\n",
                             server.primary_host == NULL ? "master" : "slave");
+        replicationRdbMetrics *repl_rdb = &server.repl_rdb_metrics;
+        rdbSnapshotMetrics *current = &repl_rdb->current;
+        rdbSnapshotMetrics *last = &repl_rdb->last;
+        int repl_rdb_in_progress = server.child_type == CHILD_TYPE_RDB && server.rdb_child_for_replication;
+        const char *current_target = current->target == RDB_WRITE_TARGET_DISK ? "disk" : current->target == RDB_WRITE_TARGET_SOCKET ? "socket"
+                                                                                                                                    : "none";
+        const char *last_target = last->target == RDB_WRITE_TARGET_DISK ? "disk" : last->target == RDB_WRITE_TARGET_SOCKET ? "socket"
+                                                                                                                           : "none";
+        const char *last_status;
+        switch (repl_rdb->last_status) {
+        case REPL_RDB_STATUS_OK: last_status = "ok"; break;
+        case REPL_RDB_STATUS_ERR: last_status = "err"; break;
+        case REPL_RDB_STATUS_CANCELLED: last_status = "cancelled"; break;
+        default: last_status = "none"; break;
+        }
+        double keys_perc = current->keys_total ? (double)current->keys_processed / current->keys_total * 100 : 0;
+        info = sdscatprintf(
+            info,
+            FMTARGS(
+                "repl_rdb_in_progress:%d\r\n", repl_rdb_in_progress,
+                "repl_rdb_current_target:%s\r\n", current_target,
+                "repl_rdb_current_time_ms:%lld\r\n", repl_rdb_in_progress ? (long long)elapsedMs(current->start_time) : -1,
+                "repl_rdb_current_keys_processed:%zu\r\n", current->keys_processed,
+                "repl_rdb_current_keys_total:%zu\r\n", current->keys_total,
+                "repl_rdb_current_keys_perc:%.2f\r\n", keys_perc,
+                "repl_rdb_current_cow_size:%zu\r\n", current->cow_size,
+                "repl_rdb_current_cow_peak:%zu\r\n", current->cow_peak,
+                "repl_rdb_current_cow_size_age:%lu\r\n", current->cow_updated ? (unsigned long)elapsedMs(current->cow_updated) / 1000 : 0,
+                "repl_rdb_current_sample_available:%d\r\n", current->sample_available,
+                "repl_rdb_current_compression:%s\r\n", compressionAlgoName(current->compression),
+                "repl_rdb_current_rdb_version:%d\r\n", current->rdb_version,
+                "repl_rdb_current_filter:%d\r\n", current->req & REPLICA_REQ_RDB_MASK,
+                "repl_rdb_current_dual_channel:%d\r\n", (current->req & REPLICA_REQ_RDB_CHANNEL) != 0,
+                "repl_rdb_last_status:%s\r\n", last_status,
+                "repl_rdb_last_time_ms:%lld\r\n", repl_rdb->last_time_ms,
+                "repl_rdb_last_target:%s\r\n", last_target,
+                "repl_rdb_last_keys_processed:%zu\r\n", last->keys_processed,
+                "repl_rdb_last_keys_total:%zu\r\n", last->keys_total,
+                "repl_rdb_last_cow_size:%zu\r\n", last->cow_peak,
+                "repl_rdb_last_sample_available:%d\r\n", last->sample_available,
+                "repl_rdb_last_compression:%s\r\n", compressionAlgoName(last->compression),
+                "repl_rdb_last_rdb_version:%d\r\n", last->rdb_version,
+                "repl_rdb_last_filter:%d\r\n", last->req & REPLICA_REQ_RDB_MASK,
+                "repl_rdb_last_dual_channel:%d\r\n", (last->req & REPLICA_REQ_RDB_CHANNEL) != 0,
+                "repl_rdb_snapshots:%lld\r\n", repl_rdb->snapshots,
+                "repl_rdb_failures:%lld\r\n", repl_rdb->failures,
+                "repl_rdb_cancellations:%lld\r\n", repl_rdb->cancellations,
+                "repl_rdb_start_failures:%lld\r\n", repl_rdb->start_failures));
         if (server.primary_host) {
             long long replica_repl_offset = 1;
             long long replica_read_repl_offset = 1;
@@ -7602,12 +7656,17 @@ int serverFork(int purpose) {
         if (isMutuallyExclusiveChildType(purpose)) {
             server.child_pid = childpid;
             server.child_type = purpose;
-            server.stat_current_cow_peak = 0;
-            server.stat_current_cow_bytes = 0;
-            server.stat_current_cow_updated = 0;
-            server.stat_current_save_keys_processed = 0;
-            server.stat_module_progress = 0;
-            server.stat_current_save_keys_total = dbTotalServerKeyCount();
+            if (purpose == CHILD_TYPE_RDB && server.rdb_child_for_replication) {
+                server.repl_rdb_metrics.current.start_time = getMonotonicUs();
+                server.repl_rdb_metrics.snapshots++;
+            } else {
+                server.stat_current_cow_peak = 0;
+                server.stat_current_cow_bytes = 0;
+                server.stat_current_cow_updated = 0;
+                server.stat_current_save_keys_processed = 0;
+                server.stat_module_progress = 0;
+                server.stat_current_save_keys_total = purpose == CHILD_TYPE_RDB ? rdbSnapshotKeyCount(REPLICA_REQ_NONE) : (size_t)dbTotalServerKeyCount();
+            }
         }
 
         updateDictResizePolicy();

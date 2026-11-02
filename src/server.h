@@ -1856,11 +1856,43 @@ typedef struct {
 typedef enum childInfoType {
     CHILD_INFO_TYPE_CURRENT_INFO,
     CHILD_INFO_TYPE_AOF_COW_SIZE,
-    CHILD_INFO_TYPE_RDB_COW_SIZE,
+    CHILD_INFO_TYPE_RDB_INFO,
     CHILD_INFO_TYPE_MODULE_COW_SIZE,
     CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE,
     CHILD_INFO_TYPE_REPL_OUTPUT_BYTES
 } childInfoType;
+
+typedef enum {
+    REPL_RDB_STATUS_NONE,
+    REPL_RDB_STATUS_OK,
+    REPL_RDB_STATUS_ERR,
+    REPL_RDB_STATUS_CANCELLED
+} replicationRdbStatus;
+
+typedef struct {
+    monotime start_time;
+    rdbWriteTarget target;
+    compressionAlgo compression;
+    int rdb_version;
+    int req;
+    size_t keys_processed;
+    size_t keys_total;
+    size_t cow_size;
+    size_t cow_peak;
+    monotime cow_updated;
+    int sample_available;
+} rdbSnapshotMetrics;
+
+typedef struct {
+    rdbSnapshotMetrics current;
+    rdbSnapshotMetrics last;
+    replicationRdbStatus last_status;
+    long long last_time_ms;
+    long long snapshots;
+    long long failures;
+    long long cancellations;
+    long long start_failures;
+} replicationRdbMetrics;
 
 struct valkeyServer {
     /* General */
@@ -2239,6 +2271,7 @@ struct valkeyServer {
     int shutdown_on_sigterm; /* Shutdown flags configured for SIGTERM. */
 
     /* Replication (primary) */
+    replicationRdbMetrics repl_rdb_metrics;
     char replid[CONFIG_RUN_ID_SIZE + 1];        /* My current replication ID. */
     char replid2[CONFIG_RUN_ID_SIZE + 1];       /* replid inherited from primary*/
     long long primary_repl_offset;              /* My current replication offset */

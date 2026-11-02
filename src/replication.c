@@ -1411,6 +1411,7 @@ int startBgsaveForReplication(int req, int rdbver, compressionAlgo compr) {
     return C_OK;
 
 error:
+    server.repl_rdb_metrics.start_failures++;
     /* Remove the replicas of this cohort waiting for a full resynchronization from
      * the list of replicas, inform them with an error about what happened, close the
      * connection ASAP. The other cohorts are served by their own rounds. */

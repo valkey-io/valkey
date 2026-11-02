@@ -91,7 +91,6 @@ static void *forklessSaveProcessor(void *arg) {
 
         case BGITERATOR_ITEM_DBENTRY:
             if ((err = writeSelectDb(saveInfo, item->dbid)) == C_ERR) break;
-            items++;
 
             robj key;
             initStaticStringObject(key, objectGetKey(item->u.dbe.de));
@@ -101,6 +100,8 @@ static void *forklessSaveProcessor(void *arg) {
             if (rdbSaveKeyValuePair(&saveInfo->save_rio, &key, o, expire, item->dbid, RDB_VERSION) == -1) {
                 serverLog(LL_WARNING, "forkless-save: error writing KV pair");
                 err = C_ERR;
+            } else {
+                items++;
             }
             break;
         default:
@@ -132,6 +133,7 @@ static void *forklessSaveProcessor(void *arg) {
     serverLog(LL_NOTICE, "forkless-save: background processor finished. %ld items processed. %s",
               items, message);
 
+    atomic_store_explicit(&server.stat_current_save_keys_processed, items, memory_order_relaxed);
     saveInfo->err_code = err;
     bgIteratorClose(saveInfo->iterator);
     return NULL;

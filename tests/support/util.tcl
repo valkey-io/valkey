@@ -192,6 +192,14 @@ proc waitForBgsave r {
     }
 }
 
+proc waitForReplicationRdb r {
+    wait_for_condition 1000 50 {
+        [status $r repl_rdb_in_progress] eq 0
+    } else {
+        fail "Replication RDB child did not finish"
+    }
+}
+
 proc waitForBgrewriteaof r {
     while 1 {
         if {[status $r aof_rewrite_in_progress] eq 1} {

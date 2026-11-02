@@ -316,7 +316,7 @@ start_server {tags {"repl rdb-compression external:skip"} overrides {save ""}} {
         $rd readraw 1
         assert_match "+FULLRESYNC *" [$rd psync ? -1]
 
-        waitForBgsave r
+        waitForReplicationRdb r
         wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*compression: none*"} $loglines 50 100
         # The disk-based round wrote the replication RDB file in the negotiated
         # (uncompressed) codec, not in rdbcompression.

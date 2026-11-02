@@ -1594,9 +1594,11 @@ static int rdbSaveRioInternal(int req, int rdbver, rio *rdb, int *error, int rdb
     }
 
     if (rdbWriteFooter(rdb, req) == C_ERR) goto werr;
+    if (server.in_fork_child) server.stat_current_save_keys_processed = key_counter;
     return C_OK;
 
 werr:
+    if (server.in_fork_child) server.stat_current_save_keys_processed = key_counter;
     if (error) *error = errno;
     return C_ERR;
 }
@@ -1835,6 +1837,38 @@ int isSaveInProgress(void) {
     return isForkBgsaveInProgress() || isForklessSaveInProgress();
 }
 
+int isPersistenceSaveInProgress(void) {
+    return isSaveInProgress() && server.rdb_write_target == RDB_WRITE_TARGET_DISK && !server.rdb_child_for_replication;
+}
+
+size_t rdbSnapshotKeyCount(int req) {
+    if (req & REPLICA_REQ_RDB_EXCLUDE_DATA) return 0;
+    size_t total = 0;
+    for (int j = 0; j < server.dbnum; j++) {
+        if (!server.db[j]) continue;
+        total += kvstoreSize(server.db[j]->keys) + kvstoreImportingSize(server.db[j]->keys);
+    }
+    return total;
+}
+
+static void rdbPrepareReplicationMetrics(int req, rdbWriteTarget target, int rdbver, compressionAlgo compression) {
+    server.rdb_child_for_replication = 1;
+    server.rdb_write_target = target;
+    server.repl_rdb_metrics.current = (rdbSnapshotMetrics){
+        .target = target,
+        .compression = compression,
+        .rdb_version = rdbver,
+        .req = req,
+        .keys_total = rdbSnapshotKeyCount(req),
+    };
+}
+
+static void rdbClearReplicationState(void) {
+    memset(&server.repl_rdb_metrics.current, 0, sizeof(server.repl_rdb_metrics.current));
+    server.rdb_child_for_replication = 0;
+    server.rdb_write_target = RDB_WRITE_TARGET_NONE;
+}
+
 /* Choose the background save method based on configuration. Returns forkless
  * only when it is configured, the infrastructure is enabled, and every loaded
  * module can handle a forkless save. Otherwise fall back to a fork-based save
@@ -1879,11 +1913,16 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     pid_t childpid;
     int for_replication = (rdbflags & RDBFLAGS_REPLICATION) != 0;
 
-    if (hasActiveChildProcess()) return C_ERR;
-    if (!for_replication) server.stat_rdb_saves++;
+    if (hasActiveSaveOrChild()) return C_ERR;
+    if (for_replication) {
+        rdbPrepareReplicationMetrics(req, RDB_WRITE_TARGET_DISK, server.rdb_child_rdbver, server.rdb_child_sync_algo);
+    } else {
+        server.stat_rdb_saves++;
+    }
 
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
+        server.stat_current_save_keys_processed = 0;
 
         /* Child */
         if (strstr(server.exec_argv[0], "redis-server") != NULL) {
@@ -1893,16 +1932,16 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
         }
         serverSetCpuAffinity(server.bgsave_cpulist);
         retval = rdbSave(req, filename, rsi, rdbflags);
-        if (retval == C_OK) {
-            sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
-        }
+        sendChildInfoGeneric(CHILD_INFO_TYPE_RDB_INFO, server.stat_current_save_keys_processed, 0, -1, "RDB");
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
         if (childpid == -1) {
             server.rdb_child_sync_algo = ALGO_NONE; /* Roll back the caller's assignments. */
             server.rdb_child_rdbver = RDB_VERSION;
-            if (!for_replication) {
+            if (for_replication) {
+                rdbClearReplicationState();
+            } else {
                 server.lastbgsave_status = C_ERR;
                 server.lastbgsave_try = time(NULL);
             }
@@ -1910,12 +1949,7 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
             return C_ERR;
         }
         serverLog(LL_NOTICE, "Background saving started by pid %ld", (long)childpid);
-        server.rdb_child_for_replication = for_replication;
-        if (for_replication) {
-            rdbStartSaveState(RDB_BGSAVE_TYPE_FORK, RDB_WRITE_TARGET_DISK);
-        } else {
-            rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK);
-        }
+        if (!for_replication) rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK);
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -4294,6 +4328,20 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
 void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     int type = server.rdb_write_target;
     time_t save_end = time(NULL);
+    if (server.rdb_child_for_replication) {
+        replicationRdbMetrics *metrics = &server.repl_rdb_metrics;
+        metrics->last = metrics->current;
+        metrics->last_time_ms = elapsedMs(metrics->current.start_time);
+        if (bysignal == SIGUSR1) {
+            metrics->last_status = REPL_RDB_STATUS_CANCELLED;
+            metrics->cancellations++;
+        } else if (bysignal || exitcode != 0) {
+            metrics->last_status = REPL_RDB_STATUS_ERR;
+            metrics->failures++;
+        } else {
+            metrics->last_status = REPL_RDB_STATUS_OK;
+        }
+    }
 
     switch (server.rdb_write_target) {
     case RDB_WRITE_TARGET_DISK: backgroundSaveDoneHandlerDisk(exitcode, bysignal, save_end); break;
@@ -4301,10 +4349,12 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     default: serverPanic("Unknown RDB child type."); break;
     }
 
-    rdbClearSaveState(save_end);
+    if (server.rdb_child_for_replication)
+        rdbClearReplicationState();
+    else
+        rdbClearSaveState(save_end);
     server.rdb_child_sync_algo = ALGO_NONE;
     server.rdb_child_rdbver = RDB_VERSION;
-    server.rdb_child_for_replication = 0;
 
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of repl-rdbfilename) */
@@ -4337,7 +4387,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
     int pipefds[2], rdb_pipe_write = -1, safe_to_exit_pipe = -1;
     int dual_channel = (req & REPLICA_REQ_RDB_CHANNEL);
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveSaveOrChild()) return C_ERR;
     serverAssert(server.rdb_pipe_read == -1 && server.rdb_child_exit_pipe == -1);
 
     /* Even if the previous fork child exited, don't start a new one until we
@@ -4358,6 +4408,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         if (anetPipe(pipefds, 0, 0) == -1) {
             close(rdb_pipe_write);
             close(server.rdb_pipe_read);
+            server.rdb_pipe_read = -1;
             return C_ERR;
         }
         safe_to_exit_pipe = pipefds[0];          /* read end */
@@ -4408,11 +4459,13 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
             skip_rdb_checksum = 0;
     }
 
+    rdbPrepareReplicationMetrics(req, RDB_WRITE_TARGET_SOCKET, rdbver, compr);
     /* Create the child process. */
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         /* Child */
         int retval, dummy;
         rio rdb;
+        server.stat_current_save_keys_processed = 0;
         if (dual_channel) {
             rioInitWithConnset(&rdb, conns, connsnum);
         } else {
@@ -4434,9 +4487,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         retval = rdbSaveRioWithEOFMark(req, rdbver, &rdb, NULL, rsi, compr);
         if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
 
-        if (retval == C_OK) {
-            sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
-        }
+        sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, server.stat_current_save_keys_processed, "RDB");
         if (dual_channel) {
             /* Bytes actually written across all replica sockets: correct whether
              * or not compressed, and reported on both success and failure so a
@@ -4454,10 +4505,12 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
          * to read anything, just get the error when the pipe is closed. */
         if (!dual_channel) dummy = read(safe_to_exit_pipe, pipefds, 1);
         UNUSED(dummy);
+        sendChildInfoGeneric(CHILD_INFO_TYPE_RDB_INFO, server.stat_current_save_keys_processed, 0, -1, "RDB");
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
         if (childpid == -1) {
+            rdbClearReplicationState();
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
 
             /* Undo the state change. The caller will perform cleanup on
@@ -4474,6 +4527,8 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
                 close(rdb_pipe_write);
                 close(server.rdb_pipe_read);
                 close(server.rdb_child_exit_pipe);
+                server.rdb_pipe_read = -1;
+                server.rdb_child_exit_pipe = -1;
             }
             zfree(conns);
             if (dual_channel) {
@@ -4488,8 +4543,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
                       dual_channel ? "direct socket to replica" : "pipe through parent process",
                       skip_rdb_checksum ? " while skipping RDB checksum for this transfer" : "");
 
-            server.rdb_child_for_replication = 1;
-            rdbStartSaveState(RDB_BGSAVE_TYPE_FORK, RDB_WRITE_TARGET_SOCKET);
             if (dual_channel) {
                 /* For dual channel sync, the main process no longer requires these RDB connections. */
                 zfree(conns);
@@ -4740,12 +4793,9 @@ void rdbRecordStartMetrics(int bgsave_type) {
     rdbStartSaveState(bgsave_type, RDB_WRITE_TARGET_DISK);
 }
 
-/* Reset save timing and target state. Called after any background save or
- * transfer completes, regardless of whether it was a persistence event. */
 void rdbClearSaveState(time_t save_end) {
-    if (!server.rdb_child_for_replication) {
-        server.rdb_save_time_last = save_end - server.rdb_save_time_start;
-    }
+    serverAssert(!server.rdb_child_for_replication);
+    server.rdb_save_time_last = save_end - server.rdb_save_time_start;
     server.rdb_save_time_start = -1;
     server.rdb_write_target = RDB_WRITE_TARGET_NONE;
     server.cur_bgsave_type = RDB_BGSAVE_TYPE_NONE;
@@ -4756,6 +4806,7 @@ void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end) {
     server.lastbgsave_status = status;
     server.lastbgsave_type = bgsave_type;
     if (status == C_OK) {
+        server.stat_rdb_cow_bytes = bgsave_type == RDB_BGSAVE_TYPE_FORK ? server.stat_current_cow_peak : 0;
         server.dirty = server.dirty - server.dirty_before_bgsave;
         server.lastsave = save_end;
     }

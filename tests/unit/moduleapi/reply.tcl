@@ -146,6 +146,22 @@ start_server {tags {"modules"}} {
         r hello 2
     }
 
+    test "Script server.call keeps error replies nested in aggregates as elements" {
+        set script {
+            local r = server.call('rw.nested_error')
+            return {r[1]['err'], r[2][1]['err'], r[3][1], r[3][2]['err'], r[3][3], r[3][4], r[5]['err']}
+        }
+        assert_equal {{ERR first} {ERR second} k {ERR third} k2 1 {ERR fifth}} [r eval $script 0]
+
+        set script {
+            server.setresp(3)
+            local r = server.call('rw.nested_error')
+            local m = r[3]['map']
+            return {r[1]['err'], r[2][1]['err'], m['k']['err'], m['k2'], r[5]['err']}
+        }
+        assert_equal {{ERR first} {ERR second} {ERR third} 1 {ERR fifth}} [r eval $script 0]
+    }
+
     test "Unload the module - replywith" {
         assert_equal {OK} [r module unload replywith]
     }

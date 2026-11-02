@@ -2959,11 +2959,11 @@ TEST_F(OrderedIndexTest, UpdateScoreChurnKeepsLeavesBounded) {
             items[i] = orderedIndexInsert(oi, (double)i, b, (size_t)n);
         }
 
-        unsigned int seed = 100000;
+        uint32_t seed = 100000;
         orderedIndexSetCompactionAllowed(!parked);
         for (int u = 0; u < UPDATES; u++) {
-            int i = rand_r(&seed) % N;
-            double score = (double)(rand_r(&seed) % 1000000);
+            int i = test_rand_range(&seed, 0, N - 1);
+            double score = (double)test_rand_range(&seed, 0, 999999);
             items[i] = orderedIndexUpdateScore(oi, items[i], score);
         }
         orderedIndexSetCompactionAllowed(1);

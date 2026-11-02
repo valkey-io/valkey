@@ -2063,6 +2063,209 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         $rd exec
     }
 
+    test "MGET of a lazily expired key and a dirty key is held" {
+        rb_prepare {
+            r debug set-active-expire 0
+            r set k1 v
+            r pexpire k1 1
+            r set k2 old
+            after 10
+        }
+        set w [rb_client]
+        $w set k2 dirty
+        rb_assert_held $w 1
+        # Lazily expiring k1 propagates a DEL, which used to skip the read check.
+        set rd [rb_client]
+        $rd mget k1 k2
+        rb_assert_held $rd 2
+        # Control: a read of a clean key is not held.
+        set c [rb_client]
+        $c get k3
+        assert_equal "\$-1\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal "*2\r\n\$-1\r\n\$5\r\ndirty\r\n" [rb_raw_reply $rd]
+        r debug set-active-expire 1
+    }
+
+    test "MULTI/EXEC: SET then GET of the same key holds EXEC and later readers" {
+        rb_prepare {}
+        set rd [rb_client]
+        rb_queue $rd {set mk v} {get mk}
+        rb_assert_held $rd 1
+        set r2 [rb_client]
+        $r2 get mk
+        rb_assert_held $r2 2
+
+        rb_resume
+        assert_equal "*2\r\n+OK\r\n\$1\r\nv\r\n" [rb_raw_reply $rd]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $r2]
+    }
+
+    test "MULTI/EXEC: keys written in a transaction hold reads in later commands" {
+        rb_prepare {r set clean c}
+        set rd [rb_client]
+        rb_queue $rd {set tk1 v} {incr tk2}
+        rb_assert_held $rd 1
+        set r1 [rb_client]
+        $r1 get tk1
+        rb_assert_held $r1 2
+        set r2 [rb_client]
+        $r2 get tk2
+        rb_assert_held $r2 3
+        set c [rb_client]
+        $c get clean
+        assert_equal "\$1\r\nc\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "*2\r\n+OK\r\n:1\r\n" [rb_raw_reply $rd]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $r1]
+        assert_equal "\$1\r\n1\r\n" [rb_raw_reply $r2]
+    }
+
+    test "MULTI/EXEC: SWAPDB holds reads in both databases" {
+        rb_prepare {
+            r set a v9
+            r select 10
+            r set a v10
+            r select 11
+            r set other o
+            r select 9
+        }
+        set rd [rb_client]
+        rb_queue $rd {set before x} {swapdb 9 10} {set after y}
+        rb_assert_held $rd 1
+        set r9 [rb_client]
+        $r9 get a
+        rb_assert_held $r9 2
+        set r10 [rb_client 10]
+        $r10 get a
+        rb_assert_held $r10 3
+        # 'before' was written in db 9, then moved to db 10 by the swap.
+        set rbefore [rb_client 10]
+        $rbefore get before
+        rb_assert_held $rbefore 4
+        set c [rb_client 11]
+        $c get other
+        assert_equal "\$1\r\no\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "*3\r\n+OK\r\n+OK\r\n+OK\r\n" [rb_raw_reply $rd]
+        assert_equal "\$3\r\nv10\r\n" [rb_raw_reply $r9]
+        assert_equal "\$2\r\nv9\r\n" [rb_raw_reply $r10]
+        assert_equal "\$1\r\nx\r\n" [rb_raw_reply $rbefore]
+
+        # Once durable, neither database stays dirty.
+        r DEBUG reply-blocking-pause aof
+        set r9 [rb_client]
+        $r9 get a
+        assert_equal "\$3\r\nv10\r\n" [rb_raw_reply $r9]
+        set r10 [rb_client 10]
+        $r10 get a
+        assert_equal "\$2\r\nv9\r\n" [rb_raw_reply $r10]
+    }
+
+    test "MULTI/EXEC: FLUSHALL holds reads in every database" {
+        rb_prepare {
+            r set x 1
+            r select 10
+            r set y 1
+            r select 9
+        }
+        set rd [rb_client]
+        rb_queue $rd {set pre 1} {flushall} {set post 1}
+        rb_assert_held $rd 1
+        set rx [rb_client]
+        $rx get x
+        rb_assert_held $rx 2
+        set ry [rb_client 10]
+        $ry get y
+        rb_assert_held $ry 3
+        set rp [rb_client]
+        $rp get post
+        rb_assert_held $rp 4
+
+        rb_resume
+        assert_equal "*3\r\n+OK\r\n+OK\r\n+OK\r\n" [rb_raw_reply $rd]
+        assert_equal "\$-1\r\n" [rb_raw_reply $rx]
+        assert_equal "\$-1\r\n" [rb_raw_reply $ry]
+        assert_equal "\$1\r\n1\r\n" [rb_raw_reply $rp]
+
+        # Once durable, no database stays dirty.
+        r DEBUG reply-blocking-pause aof
+        set c [rb_client 10]
+        $c get y
+        assert_equal "\$-1\r\n" [rb_raw_reply $c]
+    }
+
+    test "MULTI/EXEC: lazy expiry inside a transaction holds EXEC and later readers" {
+        rb_prepare {
+            r debug set-active-expire 0
+            r set e1 v
+            r pexpire e1 1
+            r set e2 clean
+            after 10
+        }
+        set rd [rb_client]
+        rb_queue $rd {get e1} {get e2}
+        rb_assert_held $rd 1
+        set re [rb_client]
+        $re exists e1
+        rb_assert_held $re 2
+
+        rb_resume
+        assert_equal "*2\r\n\$-1\r\n\$5\r\nclean\r\n" [rb_raw_reply $rd]
+        assert_equal ":0\r\n" [rb_raw_reply $re]
+        r debug set-active-expire 1
+    }
+
+    test "EVAL: keys built inside the script, not declared in KEYS, are tracked" {
+        rb_prepare {}
+        set rd [rb_client]
+        $rd eval {redis.call('set', ARGV[1], 'v'); redis.call('set', 'lit:' .. ARGV[1], 'w'); return 1} 0 evk
+        rb_assert_held $rd 1
+        set r1 [rb_client]
+        $r1 get evk
+        rb_assert_held $r1 2
+        set r2 [rb_client]
+        $r2 get lit:evk
+        rb_assert_held $r2 3
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $rd]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $r1]
+        assert_equal "\$1\r\nw\r\n" [rb_raw_reply $r2]
+    }
+
+    test "RENAME and RENAMENX hold reads of both source and destination" {
+        rb_prepare {
+            r set src v
+            r set src2 v2
+        }
+        set a [rb_client]
+        $a rename src dst
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b renamenx src2 dst2
+        rb_assert_held $b 2
+        set n 2
+        set readers {}
+        foreach k {src dst src2 dst2} {
+            set c [rb_client]
+            $c exists $k
+            rb_assert_held $c [incr n]
+            lappend readers $c
+        }
+
+        rb_resume
+        assert_equal "+OK\r\n" [rb_raw_reply $a]
+        assert_equal ":1\r\n" [rb_raw_reply $b]
+        foreach c $readers expected [list ":0\r\n" ":1\r\n" ":0\r\n" ":1\r\n"] {
+            assert_equal $expected [rb_raw_reply $c]
+        }
+    }
+
     test "COPY to another database holds reads of the destination, also when it fails" {
         rb_prepare {
             r set cs v
@@ -2120,6 +2323,20 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         assert_equal ":0\r\n" [rb_raw_reply $f]
     }
 
+    test "SORT ... STORE holds reads of the destination" {
+        rb_prepare {r rpush l 3 1 2}
+        set a [rb_client]
+        $a sort l store out
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b lrange out 0 -1
+        rb_assert_held $b 2
+
+        rb_resume
+        assert_equal ":3\r\n" [rb_raw_reply $a]
+        assert_equal "*3\r\n\$1\r\n1\r\n\$1\r\n2\r\n\$1\r\n3\r\n" [rb_raw_reply $b]
+    }
+
     test "SORT ... BY/GET reading a dirty key outside the key specs is held" {
         rb_prepare {
             r rpush l2 1 2
@@ -2172,5 +2389,168 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         assert_equal "*1\r\n\$1\r\nx\r\n" [rb_raw_reply $c]
     }
 
+    test "A key evicted by maxmemory holds later reads until the eviction is durable" {
+        rb_prepare {r set ev [string repeat x 200000]}
+        r config set maxmemory-policy allkeys-random
+        set before [s evicted_keys]
+        r config set maxmemory [expr {[s used_memory] - 100000}]
+        wait_for_condition 50 20 {
+            [s evicted_keys] > $before
+        } else {
+            fail "key was not evicted"
+        }
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
+        set rd [rb_client]
+        $rd get ev
+        rb_assert_held $rd 1
+
+        rb_resume
+        assert_equal "\$-1\r\n" [rb_raw_reply $rd]
+    }
+
+    test "HMGET of a lazily expired field and a dirty field is held" {
+        rb_prepare {
+            r debug set-active-expire 0
+            r hset h f1 v1 f2 old
+            r hpexpire h 200 fields 1 f1
+        }
+        set w [rb_client]
+        $w hset h f2 dirty
+        rb_assert_held $w 1
+        after 250
+        set rd [rb_client]
+        $rd hmget h f1 f2
+        rb_assert_held $rd 2
+
+        rb_resume
+        assert_equal ":0\r\n" [rb_raw_reply $w]
+        assert_equal "*2\r\n\$-1\r\n\$5\r\ndirty\r\n" [rb_raw_reply $rd]
+        r debug set-active-expire 1
+    }
+
+    test "SET ... GET, GETDEL and GETEX hold the writer and later readers" {
+        rb_prepare {
+            r set g1 old
+            r set g2 v
+            r set g3 v
+            r set g4 v
+        }
+        set a [rb_client]
+        $a set g1 new get
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b getdel g2
+        rb_assert_held $b 2
+        set c [rb_client]
+        $c getex g3 ex 100
+        rb_assert_held $c 3
+        set r1 [rb_client]
+        $r1 get g1
+        rb_assert_held $r1 4
+        set r2 [rb_client]
+        $r2 exists g2
+        rb_assert_held $r2 5
+        set r3 [rb_client]
+        $r3 ttl g3
+        rb_assert_held $r3 6
+        # Control: GETEX without options writes nothing and g4 is clean.
+        set d [rb_client]
+        $d getex g4
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $d]
+
+        rb_resume
+        assert_equal "\$3\r\nold\r\n" [rb_raw_reply $a]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $b]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $c]
+        assert_equal "\$3\r\nnew\r\n" [rb_raw_reply $r1]
+        assert_equal ":0\r\n" [rb_raw_reply $r2]
+        assert_match ":*\r\n" [rb_raw_reply $r3]
+    }
+
+    test "DEL of a key whose deletion is not durable yet is held" {
+        rb_prepare {r set dk v}
+        set w [rb_client]
+        $w del dk
+        rb_assert_held $w 1
+        # Nothing is deleted or propagated and DEL never looks the key up, but
+        # its reply depends on the first DEL.
+        set a [rb_client]
+        $a del dk
+        rb_assert_held $a 2
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $w]
+        assert_equal ":0\r\n" [rb_raw_reply $a]
+    }
+
+    test "FUNCTION LOAD inside MULTI holds FCALL from another client" {
+        rb_prepare {r function flush}
+        set code "#!lua name=rbtest\nserver.register_function('rbfunc', function() return 'hi' end)"
+        set a [rb_client]
+        rb_queue $a [list function load $code]
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b fcall rbfunc 0
+        rb_assert_held $b 2
+
+        rb_resume
+        assert_equal "*1\r\n\$6\r\nrbtest\r\n" [rb_raw_reply $a]
+        assert_equal "\$2\r\nhi\r\n" [rb_raw_reply $b]
+
+        # Once durable, the function store is clean again.
+        r DEBUG reply-blocking-pause aof
+        set c [rb_client]
+        $c fcall rbfunc 0
+        assert_equal "\$2\r\nhi\r\n" [rb_raw_reply $c]
+        rb_resume
+        r function flush
+    }
+
+    test "Commands that read nothing dirty are not held while other data is dirty" {
+        rb_prepare {r set clean c}
+        set w [rb_client]
+        $w set dirty d
+        rb_assert_held $w 1
+
+        set c [rb_client]
+        $c eval_ro {return redis.call('get', KEYS[1])} 1 clean
+        assert_equal "\$1\r\nc\r\n" [rb_raw_reply $c]
+        # EVAL_RO is judged by what it reads, not by its declared keys.
+        $c eval_ro {return 1} 1 dirty
+        assert_equal ":1\r\n" [rb_raw_reply $c]
+        set oh [rb_client]
+        $oh object help
+        assert_match "*ENCODING*" [rb_raw_reply $oh]
+        $c ping
+        assert_equal "+PONG\r\n" [rb_raw_reply $c]
+        # PUBLISH propagates, but is not tracked for reply blocking.
+        $c publish rbchannel msg
+        assert_equal ":0\r\n" [rb_raw_reply $c]
+        $c get clean
+        assert_equal "\$1\r\nc\r\n" [rb_raw_reply $c]
+        assert_equal 1 [rb_waiting_ack]
+
+        # A read-only script reading the dirty key is held.
+        set e [rb_client]
+        $e eval_ro {return redis.call('get', KEYS[1])} 1 dirty
+        rb_assert_held $e 2
+
+        rb_resume
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal "\$1\r\nd\r\n" [rb_raw_reply $e]
+    }
+
     rb_resume
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    test "Shutdown with reply blocking enabled exits cleanly" {
+        # Module unload during shutdown runs post-execution-unit work after
+        # the reply-blocking state has been freed.
+        r set k v
+        catch {r shutdown nosave}
+        wait_for_log_messages 0 {"*ready to exit, bye bye*"} 0 100 50
+        verify_no_log_message 0 "*crashed by signal*" 0
+    }
 }

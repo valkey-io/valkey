@@ -165,7 +165,6 @@ static void handleClosingClients(forklessSaveInfo *saveInfo) {
     listRewind(saveInfo->u.repl.clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
-        waitForClientIO(c);
         int pending_close = c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed);
         int connset_error = c->conn && rioCheckType(&saveInfo->save_rio) == RIO_TYPE_CONNSET &&
                             rioConnsetConnErrno(&saveInfo->save_rio, c->conn);
@@ -1003,6 +1002,7 @@ int forklessSaveToSockets(int req, int rdbver) {
     listRewind(saveInfo->u.repl.clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
+        waitForClientIO(c);
         connSetReadHandler(c->conn, NULL);
         connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     }

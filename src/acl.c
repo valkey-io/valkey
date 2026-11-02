@@ -2115,7 +2115,7 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  * This function returns ACL_OK if the key matches at least one pattern that allows the requested
  * operations; otherwise, ACL_DENIED_KEY.
  */
-static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags, bool is_prefix) {
+static int ACLSelectorCheckKey(aclSelector *selector, const char *key, size_t keylen, int keyspec_flags, bool is_prefix) {
     /* The selector can access any key */
     if (selector->flags & SELECTOR_FLAG_ALLKEYS) return ACL_OK;
 
@@ -2187,7 +2187,7 @@ static int ACLSelectorHasUnrestrictedKeyAccess(aclSelector *selector, int flags)
  * Note that a plain channel name like in PUBLISH or SUBSCRIBE can be
  * matched against ACL channel patterns, but the pattern provided in PSUBSCRIBE
  * can only be matched as a literal against an ACL pattern (using plain string compare). */
-static int ACLCheckChannelAgainstList(list *reference, const char *channel, int channellen, int is_pattern) {
+static int ACLCheckChannelAgainstList(list *reference, const char *channel, size_t channellen, int is_pattern) {
     listIter li;
     listNode *ln;
 
@@ -2427,7 +2427,7 @@ static aclSelector *ACLSelectorIteratorNext(aclSelectorIterator *it) {
  * NOTE: The function performs no modification of the  user structure or the key;
  *       it only evaluates read-only selectors.
  */
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix) {
+int ACLUserCheckKeyPerm(user *u, const char *key, size_t keylen, int flags, bool is_prefix) {
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 

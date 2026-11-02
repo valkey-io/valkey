@@ -241,7 +241,7 @@ void dbAdd(serverDb *db, robj *key, robj **valref) {
 
 /* Returns which dict index should be used with kvstore for a given key, computed from the key itself. */
 int getKVStoreIndexForKey(sds key) {
-    return server.cluster_enabled ? (int)keyHashSlot(key, (int)sdslen(key)) : 0;
+    return server.cluster_enabled ? (int)keyHashSlot(key, sdslen(key)) : 0;
 }
 
 /* Same as getKVStoreIndexForKey(), but reuses the slot cached on the client rather than hashing the key.
@@ -270,10 +270,10 @@ int getCachedKeySlot(sds key) {
         server.current_client->cmd &&
         !(server.current_client->cmd->flags & (CMD_MODULE | CMD_TOUCHES_ARBITRARY_KEYS))) {
         debugServerAssertWithInfo(server.current_client, NULL,
-                                  (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
+                                  (int)keyHashSlot(key, sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
     }
-    int slot = keyHashSlot(key, (int)sdslen(key));
+    int slot = keyHashSlot(key, sdslen(key));
     /* For the case of commands from clients we must obey, getNodeByQuery() never gets called,
      * and thus c->slot never gets populated. That said, if this command ends up accessing
      * a key, we are able to backfill c->slot here, where the key's hash calculation is made. */
@@ -976,7 +976,8 @@ void randomkeyCommand(client *c) {
 
 void keysCommand(client *c) {
     sds pattern = objectGetVal(c->argv[1]);
-    int plen = sdslen(pattern), allkeys, pslot = -1;
+    size_t plen = sdslen(pattern);
+    int allkeys, pslot = -1;
     unsigned long numkeys = 0;
     void *replylen = addReplyDeferredLen(c);
     allkeys = (pattern[0] == '*' && plen == 1);

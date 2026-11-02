@@ -3853,7 +3853,7 @@ void phmsetCommand(client *c);
 void phgetCommand(client *c);
 void phmgetCommand(client *c);
 void phgetallCommand(client *c);
-void phexistsCommand(client *c);
+void phpathexistsCommand(client *c);
 void phdelCommand(client *c);
 void phlongestCommand(client *c);
 void phprefixesCommand(client *c);

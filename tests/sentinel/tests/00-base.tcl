@@ -144,6 +144,20 @@ test "ODOWN is not possible without N (quorum) Sentinels reports" {
 
 test "Failover is not possible without majority agreement" {
     set quorum [expr {$sentinels/2 + 1}]
+
+    # The previous test just restarted the primary. Sentinels can still show it
+    # as disconnected, and cross down-after right after we lower the quorum,
+    # which starts a real failover with every Sentinel alive. Wait until each
+    # one is connected and has had a recent PONG.
+    foreach_sentinel_id id {
+        wait_for_condition 1000 50 {
+            [dict get [S $id SENTINEL PRIMARY mymaster] flags] eq "master" &&
+            [dict get [S $id SENTINEL PRIMARY mymaster] last-ok-ping-reply] < 1000
+        } else {
+            fail "Sentinel $id does not see the primary as healthy"
+        }
+    }
+
     foreach_sentinel_id id {
         S $id SENTINEL SET mymaster quorum $quorum
     }

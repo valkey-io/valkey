@@ -136,6 +136,34 @@ start_server {tags {"other"}} {
         assert_equal [dict get $info default] "noeviction"
     }
 
+    test {CONFIG RESET restores the default} {
+        r CONFIG SET maxmemory-policy allkeys-lru
+        r CONFIG RESET maxmemory-policy
+        assert_equal [r CONFIG GET maxmemory-policy] {maxmemory-policy noeviction}
+    }
+
+    test {CONFIG RESET with multiple configs} {
+        r CONFIG SET maxmemory-policy allkeys-lru hz 50
+        r CONFIG RESET maxmemory-policy hz
+        assert_equal [r CONFIG GET maxmemory-policy] {maxmemory-policy noeviction}
+        assert_equal [r CONFIG GET hz] {hz 10}
+    }
+
+    test {CONFIG RESET refuses immutable configs and resets nothing} {
+        r CONFIG SET maxmemory-policy allkeys-lru
+        assert_error "*can't set immutable config*" {r CONFIG RESET maxmemory-policy databases}
+        assert_equal [r CONFIG GET maxmemory-policy] {maxmemory-policy allkeys-lru}
+        r CONFIG RESET maxmemory-policy
+    }
+
+    test {CONFIG RESET refuses special configs} {
+        assert_error "*can't reset special config*" {r CONFIG RESET save}
+    }
+
+    test {CONFIG RESET refuses unknown configs} {
+        assert_error "*Unknown option*'nonexistent'*" {r CONFIG RESET nonexistent}
+    }
+
     test {CONFIG INFO ordering is consistent across calls} {
         # Get initial ordering
         set info1 [r CONFIG INFO a*]

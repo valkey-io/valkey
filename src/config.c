@@ -3894,6 +3894,8 @@ void configHelpCommand(client *c) {
                           "    Return parameters matching the glob-like <pattern> and their values.",
                           "SET <directive> <value>",
                           "    Set the configuration <directive> to <value>.",
+                          "RESET <directive> [<directive> ...]",
+                          "    Reset the configuration <directive>(s) to their default values.",
                           "RESETSTAT",
                           "    Reset statistics reported by the INFO command.",
                           "REWRITE",
@@ -4017,6 +4019,71 @@ void configInfoCommand(client *c) {
         addConfigInfoReply(c, configs[i]);
     }
     zfree(configs);
+}
+
+/*-----------------------------------------------------------------------------
+ * CONFIG RESET
+ *----------------------------------------------------------------------------*/
+
+void configResetCommand(client *c) {
+    const char *errstr = NULL;
+    const char *invalid_arg_name = NULL;
+    const char *err_arg_name = NULL;
+    int config_count = c->argc - 2;
+    int i, j, deny_loading_error = 0;
+    standardConfig **reset_configs = zcalloc(sizeof(standardConfig *) * config_count);
+    const char **config_names = zcalloc(sizeof(char *) * config_count);
+    sds *default_values = zcalloc(sizeof(sds) * config_count);
+
+    for (i = 0; i < config_count; i++) {
+        sds name = objectGetVal(c->argv[2 + i]);
+        standardConfig *config = lookupConfig(name);
+        if (!config) {
+            invalid_arg_name = name;
+            goto err;
+        }
+
+        if (config->flags & IMMUTABLE_CONFIG ||
+            (config->flags & PROTECTED_CONFIG && !allowProtectedAction(server.enable_protected_configs, c))) {
+            errstr = (config->flags & IMMUTABLE_CONFIG) ? "can't set immutable config" : "can't set protected config";
+            err_arg_name = name;
+            goto err;
+        }
+
+        if (server.loading && config->flags & DENY_LOADING_CONFIG) {
+            deny_loading_error = 1;
+            goto err;
+        }
+
+        for (j = 0; j < i; j++) {
+            if (reset_configs[j] == config) {
+                errstr = "duplicate parameter";
+                err_arg_name = name;
+                goto err;
+            }
+        }
+
+        default_values[i] = configDefaultValue(config);
+        if (!default_values[i]) {
+            errstr = "can't reset special config";
+            err_arg_name = name;
+            goto err;
+        }
+        reset_configs[i] = config;
+        config_names[i] = config->name;
+    }
+
+    if (!performConfigSet(reset_configs, config_names, default_values, config_count, &errstr, &err_arg_name)) goto err;
+    addReply(c, shared.ok);
+    goto end;
+
+err:
+    addConfigSetErrorReply(c, "RESET", deny_loading_error, invalid_arg_name, errstr, err_arg_name);
+end:
+    for (i = 0; i < config_count; i++) sdsfree(default_values[i]);
+    zfree(reset_configs);
+    zfree(config_names);
+    zfree(default_values);
 }
 
 /*-----------------------------------------------------------------------------

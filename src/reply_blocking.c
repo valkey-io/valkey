@@ -727,12 +727,15 @@ void finalizeCommandReplyBlocking(client *c) {
         return;
     }
 
-    long long blocking_repl_offset = c->reply_blocking_state.current_command_repl_offset;
+    /* A command that is not tracked is never held, even if the offset moved
+     * while it ran (a REPLCONF ACK can finish a diskless sync). */
+    const bool tracked = clientEligibleForResponseTracking(c);
+    long long blocking_repl_offset = tracked ? c->reply_blocking_state.current_command_repl_offset : -1;
 
     /* A tracked command that propagated is held at the post-propagation offset,
      * not only CMD_WRITE ones: a read can propagate a lazy expiry DEL. Admin
      * commands are never tracked, so they are never held. */
-    if (server.primary_repl_offset > server.reply_blocking.pre_command_replication_offset && clientEligibleForResponseTracking(c) && c->cmd->proc != syncCommand && c->cmd->proc != clusterCommand && c->cmd->proc != shutdownCommand) {
+    if (server.primary_repl_offset > server.reply_blocking.pre_command_replication_offset && tracked && c->cmd->proc != syncCommand && c->cmd->proc != clusterCommand && c->cmd->proc != shutdownCommand) {
         blocking_repl_offset = server.primary_repl_offset;
     }
 
@@ -741,10 +744,6 @@ void finalizeCommandReplyBlocking(client *c) {
      * key's final offset is the current one. */
     if (blocking_repl_offset > server.primary_repl_offset) {
         blocking_repl_offset = server.primary_repl_offset;
-    }
-
-    if (blocking_repl_offset > server.reply_blocking.pre_command_replication_offset) {
-        serverAssert(clientEligibleForResponseTracking(c));
     }
 
     updateFuncStoreBlockingOffsetForWrite(server.primary_repl_offset);

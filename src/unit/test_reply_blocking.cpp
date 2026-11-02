@@ -893,6 +893,30 @@ TEST_F(FullReplyBlockingTest, KeyReadRaisesCurrentClientOffset) {
     decrRefCount(clean);
 }
 
+/* A command that is not tracked for reply blocking (an admin command such as
+ * REPLCONF) is never held, even when the offset moved while it ran. */
+TEST_F(FullReplyBlockingTest, UntrackedCommandIsNeverHeld) {
+    struct serverCommand admin_cmd = {};
+    admin_cmd.declared_name = (char *)"replconf";
+    admin_cmd.flags = CMD_ADMIN;
+    client *c = (client *)zcalloc(sizeof(client));
+    replyBlockingClientInit(c);
+    c->cmd = &admin_cmd;
+
+    server.reply_blocking.previous_acked_offset = 50;
+    server.primary_repl_offset = 100;
+    beginCommandReplyBlocking(c);
+    ASSERT_FALSE(c->reply_blocking_state.offset.recorded);
+    server.primary_repl_offset = 110;
+    c->reply_blocking_state.current_command_repl_offset = 110;
+    finalizeCommandReplyBlocking(c);
+    ASSERT_EQ(listLength(server.reply_blocking.clients_waiting_ack), 0u);
+    ASSERT_EQ(listLength(c->reply_blocking_state.blocked_responses), 0u);
+
+    replyBlockingClientReset(c);
+    zfree(c);
+}
+
 /* Note: test_exec_blocks_reply_and_tracks_dirty_keys from the C test suite
  * exercised the full end-to-end blocking/unblocking flow including
  * notifyReplyBlockingProgress with replica ack simulation. This requires

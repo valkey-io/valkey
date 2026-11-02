@@ -880,7 +880,7 @@ static int renderForklessRdbTail(forklessSaveInfo *saveInfo) {
  * backlog. From the iteration-done cut point on, live writes accumulate in the
  * shared backlog rather than being inlined into the RDB; the bytes are withheld
  * until the replica ACKs. */
-static void pinForklessCohortToBacklog(forklessSaveInfo *saveInfo) {
+static void pinForklessCohortToBacklog(void) {
     serverAssert(onServerMainThread());
 
     listNode *target_node = listLast(server.repl_buffer_blocks);
@@ -889,9 +889,12 @@ static void pinForklessCohortToBacklog(forklessSaveInfo *saveInfo) {
 
     listNode *ln;
     listIter li;
-    listRewind(saveInfo->u.repl.clients, &li);
+    /* Walk server.replicas rather then the save's client list, since the bg thread may still be
+     * removing replicas from the save's list. */
+    listRewind(server.replicas, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
+        if (!c->flag.forkless_managed) continue;
         if (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed)) continue;
         serverAssert(c->repl_data);
         ((replBufBlock *)listNodeValue(target_node))->refcount++;
@@ -930,7 +933,7 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
         serverLog(LL_WARNING, "forkless-save: error rendering RDB tail at iteration done");
     } else {
         /* Move the cohort onto the shared backlog for post-cut-point writes. */
-        pinForklessCohortToBacklog(saveInfo);
+        pinForklessCohortToBacklog();
     }
 
     /* The iterator is done inlining replication. from here,

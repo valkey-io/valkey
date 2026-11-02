@@ -60,14 +60,26 @@ start_server {tags {pathhash}} {
         assert_equal {} [r phgetall tree missing]
     }
 
-    test {PHEXISTS checks exact logical paths only} {
+    test {PHPATHEXISTS checks exact logical paths only} {
         r del tree
         r phmset tree ab fields 1 f one abcd fields 1 f two
-        assert_equal 0 [r phexists tree a]
-        assert_equal 1 [r phexists tree ab]
-        assert_equal 0 [r phexists tree abc]
-        assert_equal 1 [r phexists tree abcd]
-        assert_equal 0 [r phexists missing ab]
+        assert_equal 0 [r phpathexists tree a]
+        assert_equal 1 [r phpathexists tree ab]
+        assert_equal 0 [r phpathexists tree abc]
+        assert_equal 1 [r phpathexists tree abcd]
+        assert_equal 0 [r phpathexists missing ab]
+    }
+
+    test {PHPATHEXISTS supports root and binary paths and replaces PHEXISTS} {
+        r del tree
+        set path [binary format H* 0061ff]
+        r phset tree {} fields 1 f root
+        r phset tree $path fields 1 f binary
+        assert_equal 1 [r phpathexists tree {}]
+        assert_equal 1 [r phpathexists tree $path]
+        assert_equal 0 [r phpathexists tree [binary format H* 0061]]
+        assert_equal {{}} [r command info phexists]
+        assert_error {*unknown command*} {r phexists tree $path}
     }
 
     test {PHLONGEST handles root, compressed edges, lengths, values, and field filters} {
@@ -316,7 +328,7 @@ start_server {tags {pathhash}} {
             {phget not-pathhash p f}
             {phmget not-pathhash p fields 1 f}
             {phgetall not-pathhash p}
-            {phexists not-pathhash p}
+            {phpathexists not-pathhash p}
             {phdel not-pathhash p}
             {phlongest not-pathhash p}
             {phprefixes not-pathhash p}
@@ -358,7 +370,7 @@ start_server {tags {pathhash}} {
     }
 
     test {Path Hash commands are registered with the PH prefix} {
-        set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
+        set commands {phcard phdel phdelprefix phget phgetall phlongest phmget phmset phpathexists phprefixes phscan phset}
         assert_equal $commands [lsort [r command list filterby aclcat pathhash]]
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
@@ -396,7 +408,7 @@ start_server {tags {pathhash}} {
         assert {[lsearch -exact [r command list filterby aclcat pathhash] phset] >= 0}
         assert {[lsearch -exact [r acl cat pathhash] phprefixes] >= 0}
         assert {[lsearch -exact [r acl cat pathhash] phmset] >= 0}
-        assert {[lsearch -exact [r acl cat pathhash] phexists] >= 0}
+        assert {[lsearch -exact [r acl cat pathhash] phpathexists] >= 0}
         assert {[lsearch -exact [r command list filterby aclcat slow] phdel] >= 0}
         assert {[lsearch -exact [r command list filterby aclcat fast] phdel] < 0}
         r del tree

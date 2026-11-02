@@ -1833,8 +1833,10 @@ void dbSwapDataFields(serverDb *db1, serverDb *db2) {
     copyDbExpiry(db2, &aux);
 }
 
-void swapMainDbDataWithTempDb(serverDb **tempDb) {
-    for (int i = 0; i < server.dbnum; i++) {
+void swapMainDbDataWithTempDb(serverDb **tempDb, int dbid) {
+    int first = (dbid == -1) ? 0 : dbid;
+    int last = (dbid == -1) ? server.dbnum - 1 : dbid;
+    for (int i = first; i <= last; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
         if (server.db[i] == NULL) server.db[i] = createDatabase(i);

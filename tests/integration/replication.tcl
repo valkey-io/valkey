@@ -2348,7 +2348,9 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
 foreach primary_diskless {yes no} {
     foreach replica_load {disabled on-empty-db swapdb} {
         # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels the save.
-        foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}} {
+        foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}
+                            {1 {copy db1:3 db1:copy3 db 1}} {1 {copy db1:4 dst4 db 3 db 3}} {1 {move db1:5 7}}
+                            {1 {swapdb 2 3}}} {
             lassign $inline_cmd cmd_db cmd
             start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
                 set primary [srv 0 client]
@@ -2367,7 +2369,7 @@ foreach primary_diskless {yes no} {
                     set replica [srv 0 client]
                     $replica config set repl-diskless-load $replica_load
 
-                    test "[string toupper [lindex $cmd 0]] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
+                    test "[string toupper $cmd] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
                         set load1 [start_write_load $ph $pp 8]
                         set load2 [start_write_load $ph $pp 8]
                         $primary config set rdb-key-save-delay 100
@@ -2378,7 +2380,7 @@ foreach primary_diskless {yes no} {
                             fail "Forkless save didn't start"
                         }
                         $primary select $cmd_db
-                        catch {$primary {*}$cmd}
+                        assert_not_equal 0 [$primary {*}$cmd]
                         $primary select 0
                         assert_equal 1 [s -1 rdb_bgsave_in_progress]
                         $primary config set rdb-key-save-delay 0

@@ -31,7 +31,7 @@ start_server {tags {"modules"}} {
     }
 }
 
-start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes bgsave-default-method forkless save ""}} {
+start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
     r module load $testmodule forkless
 
     test "FLUSHALL cancels a forkless bgsave that is still closing its file" {

@@ -895,7 +895,7 @@ foreach repl {REPL_ALL REPL_AOF REPL_NONE} {
             r debug populate 500 db0
 
             r config set rdb-key-save-delay 10000
-            r config set bgsave-default-method forkless
+            r config set forkless-policy prefer-forkless
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 1
@@ -1995,7 +1995,7 @@ start_server {overrides {save ""}} {
     set primary_port [srv 0 port]
 
     start_server {overrides {
-        bgsave-default-method forkless
+        forkless-policy prefer-forkless
         forkless-infrastructure-enabled yes
         repl-diskless-load swapdb
     }} {

@@ -335,7 +335,9 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
     }
 }
 
-start_server {tags {}} {
+# logreqres:skip because enabling copy avoidance encodes the reply buffers,
+# which breaks the req-res logging mechanism (same as obuf-limits.tcl).
+start_server {tags {"logreqres:skip"}} {
     test {MGET with 343+ empty RAW strings does not overflow the iov prefix buffer} {
         # writevToClient sizes its per-call prefix array as iovmax/3+1,
         # assuming each bulk string costs 3 iov entries (prefix, data, CRLF).

@@ -219,6 +219,19 @@ start_server {tags {"introspection"}} {
         assert_equal {{key1{t} {OW update}} {key2{t} {OW update}}} [r command getkeysandflags msetex 2 key1{t} val1 key2{t} val2 nx]
     }
 
+    test {COMMAND DOCS does not mark hash field counts as keys} {
+        foreach command {
+            hexpireat hexpiretime hgetdel hgetex hpersist hpexpire
+            hpexpireat hpexpiretime hpttl hsetex httl
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set fields [lindex [dict get $docs arguments] end]
+            set numfields [lindex [dict get $fields arguments] 0]
+            assert_equal numfields [dict get $numfields name]
+            assert_equal 0 [dict exists $numfields key_spec_index]
+        }
+    }
+
     test "COMMAND LIST syntax error" {
         assert_error "ERR syntax error*" {r command list bad_arg}
         assert_error "ERR syntax error*" {r command list filterby bad_arg}

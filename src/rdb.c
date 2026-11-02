@@ -3667,8 +3667,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
  * message on failure.
  *
  * The lib_ctx argument is also optional. If NULL is given, only verify rdb
- * structure without performing the actual functions loading. */
-int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err) {
+ * structure without performing the actual functions loading.
+ *
+ * The timeout is in milliseconds, 0 means no limit. */
+int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, size_t timeout, sds *err) {
     UNUSED(ver);
     sds error = NULL;
     sds final_payload = NULL;
@@ -3681,7 +3683,7 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
     if (lib_ctx) {
         sds library_name = NULL;
         if (!(library_name =
-                  functionsCreateWithLibraryCtx(final_payload, rdbflags & RDBFLAGS_ALLOW_DUP, &error, lib_ctx, 0))) {
+                  functionsCreateWithLibraryCtx(final_payload, rdbflags & RDBFLAGS_ALLOW_DUP, &error, lib_ctx, timeout))) {
             if (!error) {
                 error = sdsnew("Failed creating the library");
             }
@@ -4122,7 +4124,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             exit(1);
         } else if (type == RDB_OPCODE_FUNCTION2) {
             sds err = NULL;
-            if (rdbFunctionLoad(rdb, rdbver, rdb_loading_ctx->functions_lib_ctx, rdbflags, &err) != C_OK) {
+            if (rdbFunctionLoad(rdb, rdbver, rdb_loading_ctx->functions_lib_ctx, rdbflags, 0, &err) != C_OK) {
                 serverLog(LL_WARNING, "Failed loading library, %s", err);
                 sdsfree(err);
                 goto eoferr;

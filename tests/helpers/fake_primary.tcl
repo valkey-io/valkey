@@ -3,15 +3,18 @@
 # +FULLRESYNC), announces a bulk transfer of ANNOUNCE_SIZE bytes, sends the
 # contents of PAYLOAD_FILE, then closes the connection and exits. When
 # STREAM_FILE is provided, its contents are sent after the RDB and the
-# connection stays open until the replica disconnects.
+# connection stays open until the replica disconnects. When PSYNC_REPLY is
+# provided, it is sent as the whole PSYNC reply instead of the full sync, and
+# the connection stays open until the replica disconnects.
 #
-# Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE ?STREAM_FILE? ?OFFSET?
+# Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE ?STREAM_FILE? ?PSYNC_REPLY? ?OFFSET?
 
 set port [lindex $argv 0]
 set payload_file [lindex $argv 1]
 set announce_size [lindex $argv 2]
 set stream_file [lindex $argv 3]
-set fullresync_offset [expr {$argc > 4 ? [lindex $argv 4] : 0}]
+set psync_reply [lindex $argv 4]
+set fullresync_offset [expr {$argc > 5 ? [lindex $argv 5] : 0}]
 
 set fd [open $payload_file r]
 fconfigure $fd -translation binary
@@ -30,7 +33,7 @@ if {$stream_file ne ""} {
 # once per command-name line keeps replies in step with pipelined commands;
 # RESP framing lines (*N, $N) and argument lines fall through unmatched.
 proc accept {sock host port} {
-    global payload announce_size stream_payload fullresync_offset done
+    global payload announce_size stream_payload psync_reply fullresync_offset done
     fconfigure $sock -translation binary -blocking 1
     set served 0
     catch {
@@ -42,6 +45,14 @@ proc accept {sock host port} {
             } elseif {$cmd eq "REPLCONF"} {
                 puts -nonewline $sock "+OK\r\n"
                 flush $sock
+            } elseif {$cmd eq "PSYNC" && $psync_reply ne ""} {
+                puts -nonewline $sock "$psync_reply\r\n"
+                flush $sock
+                while {![eof $sock]} {
+                    read $sock 4096
+                }
+                set served 1
+                break
             } elseif {$cmd eq "PSYNC"} {
                 puts -nonewline $sock "+FULLRESYNC [string repeat 0 40] $fullresync_offset\r\n"
                 puts -nonewline $sock "\$$announce_size\r\n"

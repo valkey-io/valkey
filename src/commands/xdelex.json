@@ -68,15 +68,15 @@
                 "token": "IDS",
                 "type": "block",
                 "arguments": [
-                {
-                    "name": "numids",
-                    "type": "integer"
-                },
-                {
-                    "name": "id",
-                    "type": "string",
-                    "multiple": true
-                }
+                    {
+                        "name": "numids",
+                        "type": "integer"
+                    },
+                    {
+                        "name": "id",
+                        "type": "string",
+                        "multiple": true
+                    }
                 ]
             }
         ],

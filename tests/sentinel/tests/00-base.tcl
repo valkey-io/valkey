@@ -1,6 +1,7 @@
 # Check the basic monitoring and failover capabilities.
 source "../tests/includes/start-init-tests.tcl"
 source "../tests/includes/init-tests.tcl"
+source "../../support/cli.tcl"
 
 foreach_sentinel_id id {
     S $id sentinel debug default-down-after 1000
@@ -35,7 +36,11 @@ test "Sentinel command flag infrastructure works correctly" {
 }
 
 test "SENTINEL HELP output the sentinel subcommand help" {
-    assert_match "*SENTINEL <subcommand> *" [S 0 SENTINEL HELP]
+    set help [S 0 SENTINEL HELP]
+    assert_match "*SENTINEL <subcommand> *" $help
+    assert {[string first \
+        {SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) [(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...]} \
+        $help] != -1}
 }
 
 test "SENTINEL MYID return the sentinel instance ID" {
@@ -76,6 +81,29 @@ test "SENTINEL SIMULATE-FAILURE HELP list supported flags" {
     set res [S 0 SENTINEL SIMULATE-FAILURE HELP]
     assert_morethan_equal [llength $res] 2
     assert_equal {crash-after-election crash-after-promotion} $res
+}
+
+test "SENTINEL SIMULATE-FAILURE command metadata" {
+    set docs [dict get [S 0 COMMAND DOCS sentinel|simulate-failure] sentinel|simulate-failure]
+    set mode [lindex [dict get $docs arguments] 0]
+    assert_equal {multiple} [dict get $mode flags]
+
+    set modes [dict get $mode arguments]
+    foreach {index token} {0 CRASH-AFTER-ELECTION 1 CRASH-AFTER-PROMOTION 2 HELP} {
+        assert_equal $token [dict get [lindex $modes $index] token]
+    }
+}
+
+test "SENTINEL SIMULATE-FAILURE valkey-cli hint" {
+    set cmd [list $::VALKEY_CLI_BIN \
+        -h [get_instance_attrib sentinel 0 host] \
+        -p [get_instance_attrib sentinel 0 port]]
+    lappend cmd {*}[valkeycli_tls_config "../.."]
+    lappend cmd --test_hint "SENTINEL SIMULATE-FAILURE "
+
+    assert_equal \
+        {CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP [CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP ...]} \
+        [exec {*}$cmd]
 }
 
 test "Basic failover works if the primary is down" {

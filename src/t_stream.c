@@ -53,7 +53,7 @@
  * will return NULL. */
 #define STREAM_LISTPACK_MAX_SIZE (1 << 30)
 
-void streamFreeCG(streamCG *cg);
+size_t streamFreeCG(streamCG *cg);
 void streamFreeCGVoid(void *cg);
 void streamFreeNACK(stream *s, streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c,
@@ -98,13 +98,14 @@ static unsigned char *streamShrinkLpToFit(stream *s, unsigned char *lp) {
  * a group. Each one adds the change in the rax allocated size. The NACKs are
  * accounted in streamCreateNACK() and streamFreeNACK().
  *
- * Every change to these raxes must go through these helpers. Code that builds
- * the groups with raw rax calls must call streamRecomputeCGroupsMemUsage() at
- * the end. With enable-debug-assert, streamMemUsage() checks the counter. */
+ * Every change to these raxes must go through these helpers, also when the
+ * groups are built from scratch (RDB load, streamDup). The only exception is
+ * defrag, which replaces values of existing keys and so does not change the
+ * rax size. With enable-debug-assert, streamMemUsage() checks the counter. */
 
 /* Insert into a consumer group rax. If the key exists, 'overwrite' replaces
  * its value (raxInsert), otherwise the rax is not changed (raxTryInsert). */
-static int streamCGRaxInsert(stream *s, rax *r, unsigned char *key, size_t len, void *data, int overwrite) {
+int streamCGRaxInsert(stream *s, rax *r, unsigned char *key, size_t len, void *data, int overwrite) {
     size_t before = raxAllocSize(r);
     int inserted = overwrite ? raxInsert(r, key, len, data, NULL) : raxTryInsert(r, key, len, data, NULL);
     s->cgroups_memory_bytes += raxAllocSize(r) - before;
@@ -137,13 +138,18 @@ static size_t streamNACKAllocSize(void) {
     return nack_alloc_size;
 }
 
-/* Allocated bytes of one consumer group: the struct, its PEL with the NACKs,
- * and its consumers. The NACKs cost O(1), but this walks the consumers, so it
- * is O(number of consumers). */
-static size_t streamCGMemUsage(streamCG *cg) {
-    size_t size = zmalloc_size(cg) + raxAllocSize(cg->pel) + raxAllocSize(cg->consumers);
-    size += raxSize(cg->pel) * streamNACKAllocSize();
+/* Allocated bytes of one consumer group without its consumers: the struct, its
+ * PEL with the NACKs, and its consumers rax. This is O(1). */
+static size_t streamCGBaseMemUsage(streamCG *cg) {
+    return zmalloc_size(cg) + raxAllocSize(cg->pel) + raxAllocSize(cg->consumers) +
+           raxSize(cg->pel) * streamNACKAllocSize();
+}
 
+/* Debug only, for the debugServerAssert() in streamMemUsage(). Allocated bytes
+ * of one consumer group, with its consumers. This walks the consumers, so it
+ * is O(number of consumers). */
+static size_t streamCGMemUsageDebug(streamCG *cg) {
+    size_t size = streamCGBaseMemUsage(cg);
     raxIterator ri;
     raxStart(&ri, cg->consumers);
     raxSeek(&ri, "^", NULL, 0);
@@ -152,20 +158,22 @@ static size_t streamCGMemUsage(streamCG *cg) {
     return size;
 }
 
-/* Compute by a full walk what stream->cgroups_memory_bytes should be. */
-static size_t streamCGroupsMemUsageSlow(const stream *s) {
+/* Debug only, for the debugServerAssert() in streamMemUsage(). Computes by a
+ * full walk what stream->cgroups_memory_bytes should be. */
+static size_t streamCGroupsMemUsageDebug(const stream *s) {
     if (s->cgroups == NULL) return 0;
     size_t size = 0;
     raxIterator ri;
     raxStart(&ri, s->cgroups);
     raxSeek(&ri, "^", NULL, 0);
-    while (raxNext(&ri)) size += streamCGMemUsage(ri.data);
+    while (raxNext(&ri)) size += streamCGMemUsageDebug(ri.data);
     raxStop(&ri);
     return size;
 }
 
-/* Compute by a full walk what stream->tracked_memory_bytes should be. */
-static size_t streamListpacksMemUsageSlow(const stream *s) {
+/* Debug only, for the debugServerAssert() in streamMemUsage(). Computes by a
+ * full walk what stream->tracked_memory_bytes should be. */
+static size_t streamListpacksMemUsageDebug(const stream *s) {
     size_t size = 0;
     raxIterator ri;
     raxStart(&ri, s->rax);
@@ -173,12 +181,6 @@ static size_t streamListpacksMemUsageSlow(const stream *s) {
     while (raxNext(&ri)) size += zmalloc_size(ri.data);
     raxStop(&ri);
     return size;
-}
-
-/* Set stream->cgroups_memory_bytes from a full walk. Used after code that
- * builds the consumer groups without the helpers above (RDB load, streamDup). */
-void streamRecomputeCGroupsMemUsage(stream *s) {
-    s->cgroups_memory_bytes = streamCGroupsMemUsageSlow(s);
 }
 
 /* Create a new stream data structure. */
@@ -211,8 +213,8 @@ void freeStream(stream *s) {
  * (tracked incrementally in tracked_memory_bytes), and the consumer groups
  * (the cgroups rax plus cgroups_memory_bytes). All terms are O(1). */
 size_t streamMemUsage(const stream *s) {
-    debugServerAssert(s->tracked_memory_bytes == streamListpacksMemUsageSlow(s));
-    debugServerAssert(s->cgroups_memory_bytes == streamCGroupsMemUsageSlow(s));
+    debugServerAssert(s->tracked_memory_bytes == streamListpacksMemUsageDebug(s));
+    debugServerAssert(s->cgroups_memory_bytes == streamCGroupsMemUsageDebug(s));
     size_t size = sizeof(*s) + raxAllocSize(s->rax) + s->tracked_memory_bytes;
     if (s->cgroups) size += raxAllocSize(s->cgroups) + s->cgroups_memory_bytes;
     return size;
@@ -347,7 +349,7 @@ robj *streamDup(robj *o) {
             streamNACK *new_nack = streamCreateNACK(new_s, NULL);
             new_nack->delivery_time = nack->delivery_time;
             new_nack->delivery_count = nack->delivery_count;
-            raxInsert(new_cg->pel, ri_cg_pel.key, sizeof(streamID), new_nack, NULL);
+            streamCGRaxInsert(new_s, new_cg->pel, ri_cg_pel.key, sizeof(streamID), new_nack, 1);
         }
         raxStop(&ri_cg_pel);
 
@@ -357,12 +359,9 @@ robj *streamDup(robj *o) {
         raxSeek(&ri_consumers, "^", NULL, 0);
         while (raxNext(&ri_consumers)) {
             streamConsumer *consumer = ri_consumers.data;
-            streamConsumer *new_consumer;
-            new_consumer = zmalloc(sizeof(*new_consumer));
-            new_consumer->name = sdsdup(consumer->name);
-            new_consumer->pel = raxNew();
-            raxInsert(new_cg->consumers, (unsigned char *)new_consumer->name, sdslen(new_consumer->name), new_consumer,
-                      NULL);
+            streamConsumer *new_consumer =
+                streamCreateConsumer(new_s, new_cg, consumer->name, NULL, 0, SCC_NO_NOTIFY | SCC_NO_DIRTIFY);
+            serverAssert(new_consumer != NULL);
             new_consumer->seen_time = consumer->seen_time;
             new_consumer->active_time = consumer->active_time;
 
@@ -378,15 +377,13 @@ robj *streamDup(robj *o) {
 
                 streamNACK *new_nack = result;
                 new_nack->consumer = new_consumer;
-                raxInsert(new_consumer->pel, ri_cpel.key, sizeof(streamID), new_nack, NULL);
+                streamCGRaxInsert(new_s, new_consumer->pel, ri_cpel.key, sizeof(streamID), new_nack, 1);
             }
             raxStop(&ri_cpel);
         }
         raxStop(&ri_consumers);
     }
     raxStop(&ri_cgroups);
-    /* The PELs and consumers above are built with raw rax calls. */
-    streamRecomputeCGroupsMemUsage(new_s);
     return sobj;
 }
 
@@ -2744,11 +2741,6 @@ void streamFreeConsumer(streamConsumer *sc) {
     zfree(sc);
 }
 
-/* Used for generic free functions. */
-static void streamFreeConsumerVoid(void *sc) {
-    streamFreeConsumer((streamConsumer *)sc);
-}
-
 /* Create a new consumer group in the context of the stream 's', having the
  * specified name, last server ID and reads counter. If a consumer group with
  * the same name already exists NULL is returned; otherwise, the pointer to the
@@ -2763,17 +2755,28 @@ streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, lo
     cg->last_id = *id;
     cg->entries_read = entries_read;
     raxInsert(s->cgroups, (unsigned char *)name, namelen, cg, NULL);
-    /* O(1), since the group is empty. The cgroups rax itself is read live in
+    /* The group has no consumers yet. The cgroups rax itself is read live in
      * streamMemUsage(). */
-    s->cgroups_memory_bytes += streamCGMemUsage(cg);
+    s->cgroups_memory_bytes += streamCGBaseMemUsage(cg);
     return cg;
 }
 
-/* Free a consumer group and all its associated data. */
-void streamFreeCG(streamCG *cg) {
+/* Free callback for the consumers rax: adds the bytes of the consumer to the
+ * size_t that 'privdata' points to, then frees the consumer. */
+static void streamFreeConsumerAndCount(void *sc, void *privdata) {
+    *(size_t *)privdata += streamConsumerMemUsage(sc);
+    streamFreeConsumer(sc);
+}
+
+/* Free a consumer group and all its associated data. Returns the bytes the
+ * group had in stream->cgroups_memory_bytes. The consumers are counted in the
+ * same walk that frees them. */
+size_t streamFreeCG(streamCG *cg) {
+    size_t size = streamCGBaseMemUsage(cg);
     raxFreeWithCallback(cg->pel, zfree);
-    raxFreeWithCallback(cg->consumers, streamFreeConsumerVoid);
+    raxFreeWithCallbackAndPrivdata(cg->consumers, streamFreeConsumerAndCount, &size);
     zfree(cg);
+    return size;
 }
 
 /* Used for generic free functions. */
@@ -2979,8 +2982,7 @@ void xgroupCommand(client *c) {
     } else if (!strcasecmp(opt, "DESTROY") && c->argc == 4) {
         if (cg) {
             raxRemove(s->cgroups, (unsigned char *)grpname, sdslen(grpname), NULL);
-            s->cgroups_memory_bytes -= streamCGMemUsage(cg);
-            streamFreeCG(cg);
+            s->cgroups_memory_bytes -= streamFreeCG(cg);
             signalModifiedKey(c, c->db, c->argv[2]);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-destroy", c->argv[2], c->db->id);

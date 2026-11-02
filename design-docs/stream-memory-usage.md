@@ -63,8 +63,9 @@ add the parts outside the rax.
   listpack gets extra memory at first. This is the real memory cost.
 - **One size for every NACK.** All NACKs have the same size, so we measure one
   NACK once and use that value everywhere.
-- **Full rebuild where it is cheap.** RDB load and `COPY` already touch every
-  item, so they compute counter 2 once at the end.
+- **No exceptions.** RDB load and `COPY` build the stream with the same
+  helpers, so they fill both counters while they add each item. No extra walk
+  is needed at the end.
 - **Self-check.** When `enable-debug-assert` is on (all tests), every
   `MEMORY USAGE` call also walks the whole stream and checks that both counters
   are right. A missed update makes the test fail at once.

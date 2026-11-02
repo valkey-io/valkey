@@ -118,7 +118,7 @@ struct client;
 stream *streamNew(void);
 void freeStream(stream *s);
 size_t streamMemUsage(const stream *s);
-void streamRecomputeCGroupsMemUsage(stream *s);
+int streamCGRaxInsert(stream *s, rax *r, unsigned char *key, size_t len, void *data, int overwrite);
 void streamTrackLpAdd(stream *s, unsigned char *lp);
 unsigned long streamLength(const robj *subject);
 size_t streamReplyWithRange(client *c,

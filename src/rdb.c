@@ -3169,7 +3169,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     decrRefCount(o);
                     return NULL;
                 }
-                if (!raxTryInsert(cgroup->pel, rawid, sizeof(rawid), nack, NULL)) {
+                if (!streamCGRaxInsert(s, cgroup->pel, rawid, sizeof(rawid), nack, 0)) {
                     rdbReportCorruptRDB("Duplicated global PEL entry "
                                         "loading stream consumer group");
                     streamFreeNACK(s, nack); /* Before decrRefCount frees 's'. */
@@ -3254,7 +3254,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                         return NULL;
                     }
                     nack->consumer = consumer;
-                    if (!raxTryInsert(consumer->pel, rawid, sizeof(rawid), nack, NULL)) {
+                    if (!streamCGRaxInsert(s, consumer->pel, rawid, sizeof(rawid), nack, 0)) {
                         rdbReportCorruptRDB("Duplicated consumer PEL entry "
                                             " loading a stream consumer "
                                             "group");
@@ -3279,8 +3279,6 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
             raxStop(&ri_cg_pel);
         }
-        /* The PELs above are filled with raw rax calls. */
-        streamRecomputeCGroupsMemUsage(s);
     } else if (rdbtype == RDB_TYPE_MODULE_PRE_GA) {
         rdbReportCorruptRDB("Pre-release module format not supported");
         return NULL;

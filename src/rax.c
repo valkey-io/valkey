@@ -1280,18 +1280,26 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
 
 /* This is the core of raxFree(): performs a depth-first scan of the
  * tree and releases all the nodes found. */
-void raxRecursiveFree(rax *rax, raxNode *n, void (*free_callback)(void *)) {
+/* Free 'n' and all its children. At most one of the two callbacks is set. */
+void raxRecursiveFree(rax *rax,
+                      raxNode *n,
+                      void (*free_callback)(void *),
+                      void (*free_callback_privdata)(void *, void *),
+                      void *privdata) {
     debugnode("free traversing", n);
     int numchildren = n->iscompr ? 1 : n->size;
     raxNode **cp = raxNodeLastChildPtr(n);
     while (numchildren--) {
         raxNode *child;
         memcpy(&child, cp, sizeof(child));
-        raxRecursiveFree(rax, child, free_callback);
+        raxRecursiveFree(rax, child, free_callback, free_callback_privdata, privdata);
         cp--;
     }
     debugnode("free depth-first", n);
-    if (free_callback && n->iskey && !n->isnull) free_callback(raxGetData(n));
+    if (n->iskey && !n->isnull) {
+        if (free_callback) free_callback(raxGetData(n));
+        if (free_callback_privdata) free_callback_privdata(raxGetData(n), privdata);
+    }
     rax_free(n);
     rax->numnodes--;
 }
@@ -1299,7 +1307,14 @@ void raxRecursiveFree(rax *rax, raxNode *n, void (*free_callback)(void *)) {
 /* Free a whole radix tree, calling the specified callback in order to
  * free the auxiliary data. */
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *)) {
-    raxRecursiveFree(rax, rax->head, free_callback);
+    raxRecursiveFree(rax, rax->head, free_callback, NULL, NULL);
+    assert(rax->numnodes == 0);
+    rax_free(rax);
+}
+
+/* Like raxFreeWithCallback(), but the callback also gets 'privdata'. */
+void raxFreeWithCallbackAndPrivdata(rax *rax, void (*free_callback)(void *data, void *privdata), void *privdata) {
+    raxRecursiveFree(rax, rax->head, NULL, free_callback, privdata);
     assert(rax->numnodes == 0);
     rax_free(rax);
 }

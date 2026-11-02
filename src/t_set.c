@@ -1548,8 +1548,10 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         if (j > 0 && sets[0] == sets[j]) {
             sameset = 1;
         }
-        size_t setsize = setTypeSize(setobj);
-        if (setsize > max_setsize) max_setsize = setsize;
+        if (op == SET_OP_UNION) {
+            size_t setsize = setTypeSize(setobj);
+            if (setsize > max_setsize) max_setsize = setsize;
+        }
     }
 
     /* A union has at least as many elements as its largest input set. */

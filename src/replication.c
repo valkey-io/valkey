@@ -5868,9 +5868,15 @@ void replicationCron(void) {
         cancelReplicationHandshake(1);
     }
 
-    /* Timed out primary when we are an already connected replica? */
-    if (server.primary_host && server.repl_state == REPL_STATE_CONNECTED &&
-        (time(NULL) - server.primary->last_interaction) > server.repl_timeout) {
+    /* Timed out primary when we are an already connected replica?
+     * While the primary link is blocked on a key held by a background
+     * iteration, its read handler is removed, so nothing can update
+     * last_interaction. The check is skipped until the link is unblocked.
+     * After the unblock, the client waits in server.unblocked_clients with
+     * flag.unblocked set until beforeSleep restores its read handler, so
+     * the check is skipped for that window too. */
+    if (server.primary_host && server.repl_state == REPL_STATE_CONNECTED && !isClientBlockedInUse(server.primary) &&
+        !server.primary->flag.unblocked && (time(NULL) - server.primary->last_interaction) > server.repl_timeout) {
         serverLog(LL_WARNING, "PRIMARY timeout: no data nor PING received...");
         freeClient(server.primary);
     }

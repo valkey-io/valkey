@@ -3717,6 +3717,19 @@ static size_t rdbRioReader(void *ctx, void *buf, size_t len) {
     return rioRead((rio *)ctx, buf, len);
 }
 
+/* Adapts rioRead to the readline_fn signature used by parseRespCommandFromReader:
+ * like fgets, reads up to and including '\n', one byte at a time. */
+static char *rdbRioReadLine(void *ctx, char *buf, int size) {
+    int pos = 0;
+    while (pos < size - 1) {
+        if (rioRead((rio *)ctx, buf + pos, 1) == 0) break;
+        if (buf[pos++] == '\n') break;
+    }
+    if (pos == 0) return NULL;
+    buf[pos] = '\0';
+    return buf;
+}
+
 /* Append dbid to the list unless it is already there: swapping a db twice
  * would undo the swap. */
 static void addInlineCommandDbId(int *dbids, int *count, int dbid) {
@@ -3845,7 +3858,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if (type == RDB_OPCODE_UPDATE) {
             robj **argv = NULL;
             int argc = 0;
-            respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdb, &argc, &argv);
+            respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdbRioReadLine, rdb, &argc, &argv);
             if (pr == RESP_PARSE_EOF) goto eoferr;
             if (pr == RESP_PARSE_FMTERR) goto inlinefmterr;
             if (pr == RESP_PARSE_OOM) goto inlineoomerr;

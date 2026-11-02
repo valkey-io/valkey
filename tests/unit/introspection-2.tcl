@@ -153,6 +153,23 @@ start_server {tags {"introspection"}} {
         assert_equal {key} [r command getkeys get key]
     }
 
+    test {COMMAND DOCS marks RESTORE eviction metadata as mutually exclusive} {
+        foreach command {restore restore-asking} {
+            set docs [dict get [r command docs $command] $command]
+            set eviction [lindex [dict get $docs arguments] 5]
+            assert_equal oneof [dict get $eviction type]
+            assert_equal {optional} [dict get $eviction flags]
+
+            set options [dict get $eviction arguments]
+            foreach {index token} {0 IDLETIME 1 FREQ} {
+                set option [lindex $options $index]
+                assert_equal integer [dict get $option type]
+                assert_equal $token [dict get $option token]
+                assert {![dict exists $option flags]}
+            }
+        }
+    }
+
     test {COMMAND GETKEYS EXEC} {
         assert_equal {} [r command getkeys exec]
         assert_equal {key} [r command getkeys exec ifeq key value]

@@ -644,7 +644,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
                     break;
                 }
             }
-            if (priority_pending) processed += aeProcessQoSEvents(eventLoop);
+            if (priority_pending || eventLoop->custompoll != NULL) processed += aeProcessQoSEvents(eventLoop);
         }
 
         /* Process normal file events */

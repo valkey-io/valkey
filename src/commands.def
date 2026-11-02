@@ -2218,19 +2218,29 @@ keySpec EXPIRE_Keyspecs[1] = {
 };
 #endif
 
+/* EXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG EXPIRE_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* EXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG EXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
 /* EXPIRE condition argument table */
 struct COMMAND_ARG EXPIRE_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXPIRE_condition_xx_comparison_Subargs},
 };
 
 /* EXPIRE argument table */
 struct COMMAND_ARG EXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=EXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIRE_condition_Subargs},
 };
 
 /********** EXPIREAT ********************/
@@ -2254,19 +2264,29 @@ keySpec EXPIREAT_Keyspecs[1] = {
 };
 #endif
 
+/* EXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG EXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* EXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG EXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
 /* EXPIREAT condition argument table */
 struct COMMAND_ARG EXPIREAT_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXPIREAT_condition_xx_comparison_Subargs},
 };
 
 /* EXPIREAT argument table */
 struct COMMAND_ARG EXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-seconds",ARG_TYPE_UNIX_TIME,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=EXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=EXPIREAT_condition_Subargs},
 };
 
 /********** EXPIRETIME ********************/
@@ -2596,19 +2616,29 @@ keySpec PEXPIRE_Keyspecs[1] = {
 };
 #endif
 
+/* PEXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG PEXPIRE_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* PEXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG PEXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
 /* PEXPIRE condition argument table */
 struct COMMAND_ARG PEXPIRE_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=PEXPIRE_condition_xx_comparison_Subargs},
 };
 
 /* PEXPIRE argument table */
 struct COMMAND_ARG PEXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("milliseconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=PEXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIRE_condition_Subargs},
 };
 
 /********** PEXPIREAT ********************/
@@ -2632,19 +2662,29 @@ keySpec PEXPIREAT_Keyspecs[1] = {
 };
 #endif
 
+/* PEXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG PEXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* PEXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG PEXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
 /* PEXPIREAT condition argument table */
 struct COMMAND_ARG PEXPIREAT_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=PEXPIREAT_condition_xx_comparison_Subargs},
 };
 
 /* PEXPIREAT argument table */
 struct COMMAND_ARG PEXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-milliseconds",ARG_TYPE_UNIX_TIME,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=PEXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=PEXPIREAT_condition_Subargs},
 };
 
 /********** PEXPIRETIME ********************/
@@ -2795,6 +2835,12 @@ keySpec RESTORE_Keyspecs[1] = {
 };
 #endif
 
+/* RESTORE eviction argument table */
+struct COMMAND_ARG RESTORE_eviction_Subargs[] = {
+{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+};
+
 /* RESTORE argument table */
 struct COMMAND_ARG RESTORE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
@@ -2802,8 +2848,7 @@ struct COMMAND_ARG RESTORE_Args[] = {
 {MAKE_ARG("serialized-value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"3.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("absttl",ARG_TYPE_PURE_TOKEN,-1,"ABSTTL",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("eviction",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RESTORE_eviction_Subargs},
 };
 
 /********** SCAN ********************/
@@ -3724,12 +3769,22 @@ keySpec HEXPIRE_Keyspecs[1] = {
 };
 #endif
 
+/* HEXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG HEXPIRE_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* HEXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG HEXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
 /* HEXPIRE condition argument table */
 struct COMMAND_ARG HEXPIRE_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIRE_condition_xx_comparison_Subargs},
 };
 
 /* HEXPIRE fields argument table */
@@ -3742,7 +3797,7 @@ struct COMMAND_ARG HEXPIRE_fields_Subargs[] = {
 struct COMMAND_ARG HEXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,4,NULL),.subargs=HEXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIRE_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIRE_fields_Subargs},
 };
 
@@ -3765,17 +3820,27 @@ keySpec HEXPIREAT_Keyspecs[1] = {
 };
 #endif
 
-/* HEXPIREAT condition argument table */
-struct COMMAND_ARG HEXPIREAT_condition_Subargs[] = {
-{MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+/* HEXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG HEXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
 {MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* HEXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG HEXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
+/* HEXPIREAT condition argument table */
+struct COMMAND_ARG HEXPIREAT_condition_Subargs[] = {
+{MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIREAT_condition_xx_comparison_Subargs},
+};
+
 /* HEXPIREAT fields argument table */
 struct COMMAND_ARG HEXPIREAT_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -3783,7 +3848,7 @@ struct COMMAND_ARG HEXPIREAT_fields_Subargs[] = {
 struct COMMAND_ARG HEXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-seconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=HEXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=HEXPIREAT_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIREAT_fields_Subargs},
 };
 
@@ -3808,7 +3873,7 @@ keySpec HEXPIRETIME_Keyspecs[1] = {
 
 /* HEXPIRETIME fields argument table */
 struct COMMAND_ARG HEXPIRETIME_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -3890,7 +3955,7 @@ keySpec HGETDEL_Keyspecs[1] = {
 
 /* HGETDEL fields argument table */
 struct COMMAND_ARG HGETDEL_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -3930,7 +3995,7 @@ struct COMMAND_ARG HGETEX_expiration_Subargs[] = {
 
 /* HGETEX fields argument table */
 struct COMMAND_ARG HGETEX_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4120,7 +4185,7 @@ keySpec HPERSIST_Keyspecs[1] = {
 
 /* HPERSIST fields argument table */
 struct COMMAND_ARG HPERSIST_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4149,17 +4214,27 @@ keySpec HPEXPIRE_Keyspecs[1] = {
 };
 #endif
 
-/* HPEXPIRE condition argument table */
-struct COMMAND_ARG HPEXPIRE_condition_Subargs[] = {
-{MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+/* HPEXPIRE condition xx_comparison comparison argument table */
+struct COMMAND_ARG HPEXPIRE_condition_xx_comparison_comparison_Subargs[] = {
 {MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* HPEXPIRE condition xx_comparison argument table */
+struct COMMAND_ARG HPEXPIRE_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIRE_condition_xx_comparison_comparison_Subargs},
+};
+
+/* HPEXPIRE condition argument table */
+struct COMMAND_ARG HPEXPIRE_condition_Subargs[] = {
+{MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIRE_condition_xx_comparison_Subargs},
+};
+
 /* HPEXPIRE fields argument table */
 struct COMMAND_ARG HPEXPIRE_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4167,7 +4242,7 @@ struct COMMAND_ARG HPEXPIRE_fields_Subargs[] = {
 struct COMMAND_ARG HPEXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("milliseconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=HPEXPIRE_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIRE_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIRE_fields_Subargs},
 };
 
@@ -4190,17 +4265,27 @@ keySpec HPEXPIREAT_Keyspecs[1] = {
 };
 #endif
 
-/* HPEXPIREAT condition argument table */
-struct COMMAND_ARG HPEXPIREAT_condition_Subargs[] = {
-{MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+/* HPEXPIREAT condition xx_comparison comparison argument table */
+struct COMMAND_ARG HPEXPIREAT_condition_xx_comparison_comparison_Subargs[] = {
 {MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* HPEXPIREAT condition xx_comparison argument table */
+struct COMMAND_ARG HPEXPIREAT_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIREAT_condition_xx_comparison_comparison_Subargs},
+};
+
+/* HPEXPIREAT condition argument table */
+struct COMMAND_ARG HPEXPIREAT_condition_Subargs[] = {
+{MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIREAT_condition_xx_comparison_Subargs},
+};
+
 /* HPEXPIREAT fields argument table */
 struct COMMAND_ARG HPEXPIREAT_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4208,7 +4293,7 @@ struct COMMAND_ARG HPEXPIREAT_fields_Subargs[] = {
 struct COMMAND_ARG HPEXPIREAT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("unix-time-milliseconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=HPEXPIREAT_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=HPEXPIREAT_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HPEXPIREAT_fields_Subargs},
 };
 
@@ -4233,7 +4318,7 @@ keySpec HPEXPIRETIME_Keyspecs[1] = {
 
 /* HPEXPIRETIME fields argument table */
 struct COMMAND_ARG HPEXPIRETIME_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4264,7 +4349,7 @@ keySpec HPTTL_Keyspecs[1] = {
 
 /* HPTTL fields argument table */
 struct COMMAND_ARG HPTTL_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4418,7 +4503,7 @@ struct COMMAND_ARG HSETEX_fields_data_Subargs[] = {
 
 /* HSETEX fields argument table */
 struct COMMAND_ARG HSETEX_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=HSETEX_fields_data_Subargs},
 };
 
@@ -4503,7 +4588,7 @@ keySpec HTTL_Keyspecs[1] = {
 
 /* HTTL fields argument table */
 struct COMMAND_ARG HTTL_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -5359,31 +5444,6 @@ struct COMMAND_ARG PHDELPREFIX_Args[] = {
 {MAKE_ARG("prefix",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
-/********** PHEXISTS ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* PHEXISTS history */
-#define PHEXISTS_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* PHEXISTS tips */
-#define PHEXISTS_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* PHEXISTS key specs */
-keySpec PHEXISTS_Keyspecs[1] = {
-{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
-};
-#endif
-
-/* PHEXISTS argument table */
-struct COMMAND_ARG PHEXISTS_Args[] = {
-{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-};
-
 /********** PHGET ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -5556,6 +5616,31 @@ struct COMMAND_ARG PHMSET_data_Subargs[] = {
 struct COMMAND_ARG PHMSET_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=PHMSET_data_Subargs},
+};
+
+/********** PHPATHEXISTS ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* PHPATHEXISTS history */
+#define PHPATHEXISTS_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* PHPATHEXISTS tips */
+#define PHPATHEXISTS_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* PHPATHEXISTS key specs */
+keySpec PHPATHEXISTS_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* PHPATHEXISTS argument table */
+struct COMMAND_ARG PHPATHEXISTS_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /********** PHPATHSCAN ********************/
@@ -7180,14 +7265,14 @@ struct COMMAND_ARG SENTINEL_SET_Args[] = {
 
 /* SENTINEL SIMULATE_FAILURE mode argument table */
 struct COMMAND_ARG SENTINEL_SIMULATE_FAILURE_mode_Subargs[] = {
-{MAKE_ARG("crash-after-election",ARG_TYPE_PURE_TOKEN,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("crash-after-promotion",ARG_TYPE_PURE_TOKEN,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("help",ARG_TYPE_PURE_TOKEN,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("crash-after-election",ARG_TYPE_PURE_TOKEN,-1,"CRASH-AFTER-ELECTION",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("crash-after-promotion",ARG_TYPE_PURE_TOKEN,-1,"CRASH-AFTER-PROMOTION",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("help",ARG_TYPE_PURE_TOKEN,-1,"HELP",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /* SENTINEL SIMULATE_FAILURE argument table */
 struct COMMAND_ARG SENTINEL_SIMULATE_FAILURE_Args[] = {
-{MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,3,NULL),.subargs=SENTINEL_SIMULATE_FAILURE_mode_Subargs},
+{MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,3,NULL),.subargs=SENTINEL_SIMULATE_FAILURE_mode_Subargs},
 };
 
 /********** SENTINEL SLAVES ********************/
@@ -9120,6 +9205,12 @@ keySpec RESTORE_ASKING_Keyspecs[1] = {
 };
 #endif
 
+/* RESTORE_ASKING eviction argument table */
+struct COMMAND_ARG RESTORE_ASKING_eviction_Subargs[] = {
+{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+};
+
 /* RESTORE_ASKING argument table */
 struct COMMAND_ARG RESTORE_ASKING_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
@@ -9127,8 +9218,7 @@ struct COMMAND_ARG RESTORE_ASKING_Args[] = {
 {MAKE_ARG("serialized-value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"3.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("absttl",ARG_TYPE_PURE_TOKEN,-1,"ABSTTL",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("eviction",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RESTORE_ASKING_eviction_Subargs},
 };
 
 /********** ROLE ********************/
@@ -10133,7 +10223,7 @@ keySpec ZINCRBY_Keyspecs[1] = {
 /* ZINCRBY argument table */
 struct COMMAND_ARG ZINCRBY_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("increment",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("increment",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("member",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
@@ -10167,7 +10257,7 @@ struct COMMAND_ARG ZINTER_aggregate_Subargs[] = {
 struct COMMAND_ARG ZINTER_Args[] = {
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZINTER_aggregate_Subargs},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
@@ -10229,7 +10319,7 @@ struct COMMAND_ARG ZINTERSTORE_Args[] = {
 {MAKE_ARG("destination",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZINTERSTORE_aggregate_Subargs},
 };
 
@@ -10914,7 +11004,7 @@ struct COMMAND_ARG ZUNION_aggregate_Subargs[] = {
 struct COMMAND_ARG ZUNION_Args[] = {
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZUNION_aggregate_Subargs},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
@@ -10950,7 +11040,7 @@ struct COMMAND_ARG ZUNIONSTORE_Args[] = {
 {MAKE_ARG("destination",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZUNIONSTORE_aggregate_Subargs},
 };
 
@@ -11006,14 +11096,18 @@ struct COMMAND_ARG XACKDEL_mode_Subargs[] = {
 {MAKE_ARG("acked",ARG_TYPE_PURE_TOKEN,-1,"ACKED",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* XACKDEL ids argument table */
+struct COMMAND_ARG XACKDEL_ids_Subargs[] = {
+{MAKE_ARG("numids",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
 /* XACKDEL argument table */
 struct COMMAND_ARG XACKDEL_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("group",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=XACKDEL_mode_Subargs},
-{MAKE_ARG("ids",ARG_TYPE_PURE_TOKEN,-1,"IDS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("numids",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("ids",ARG_TYPE_BLOCK,-1,"IDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XACKDEL_ids_Subargs},
 };
 
 /********** XADD ********************/
@@ -11202,13 +11296,17 @@ struct COMMAND_ARG XDELEX_mode_Subargs[] = {
 {MAKE_ARG("acked",ARG_TYPE_PURE_TOKEN,-1,"ACKED",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* XDELEX ids argument table */
+struct COMMAND_ARG XDELEX_ids_Subargs[] = {
+{MAKE_ARG("numids",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
 /* XDELEX argument table */
 struct COMMAND_ARG XDELEX_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=XDELEX_mode_Subargs},
-{MAKE_ARG("ids",ARG_TYPE_PURE_TOKEN,-1,"IDS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("numids",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("ids",ARG_TYPE_BLOCK,-1,"IDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=XDELEX_ids_Subargs},
 };
 
 /********** XGROUP CREATE ********************/
@@ -12743,7 +12841,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("randomkey","Returns a random key name from the database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RANDOMKEY_History,0,RANDOMKEY_Tips,3,randomkeyCommand,1,CMD_READONLY|CMD_TOUCHES_ARBITRARY_KEYS,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RANDOMKEY_Keyspecs,0,NULL,0)},
 {MAKE_CMD("rename","Renames a key and overwrites the destination.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RENAME_History,0,RENAME_Tips,0,renameCommand,3,CMD_WRITE,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RENAME_Keyspecs,2,NULL,2),.args=RENAME_Args},
 {MAKE_CMD("renamenx","Renames a key only when the target key name doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RENAMENX_History,1,RENAMENX_Tips,0,renamenxCommand,3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,NULL,RENAMENX_Keyspecs,2,NULL,2),.args=RENAMENX_Args},
-{MAKE_CMD("restore","Creates a key from the serialized representation of a value.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RESTORE_History,3,RESTORE_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_Keyspecs,1,NULL,7),.args=RESTORE_Args},
+{MAKE_CMD("restore","Creates a key from the serialized representation of a value.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RESTORE_History,3,RESTORE_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_Keyspecs,1,NULL,6),.args=RESTORE_Args},
 {MAKE_CMD("scan","Iterates over the key names in the database.","O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.","2.8.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SCAN_History,1,SCAN_Tips,3,scanCommand,-2,CMD_READONLY|CMD_TOUCHES_ARBITRARY_KEYS,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,SCAN_Keyspecs,0,NULL,4),.args=SCAN_Args},
 {MAKE_CMD("sort","Sorts the elements in a list, a set, or a sorted set, optionally storing the result.","O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SORT_History,0,SORT_Tips,0,sortCommand,-2,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_LIST|ACL_CATEGORY_SET|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,SORT_Keyspecs,3,sortGetKeys,7),.args=SORT_Args},
 {MAKE_CMD("sort_ro","Returns the sorted elements of a list, a set, or a sorted set.","O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).","7.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SORT_RO_History,0,SORT_RO_Tips,0,sortroCommand,-2,CMD_READONLY,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_LIST|ACL_CATEGORY_READ|ACL_CATEGORY_SET|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,SORT_RO_Keyspecs,2,sortROGetKeys,6),.args=SORT_RO_Args},
@@ -12826,12 +12924,12 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("phcard","Returns the number of logical paths in a path hash.","O(1).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHCARD_History,0,PHCARD_Tips,0,phcardCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHCARD_Keyspecs,1,NULL,1),.args=PHCARD_Args},
 {MAKE_CMD("phdel","Deletes fields or the complete payload at a path in a path hash.","O(L + F*U) when deleting specified fields, where L is the path length, F is the number of requested fields, and U is the payload field lookup cost. O(L + S) when deleting the complete payload, where S is the number of stored fields in the payload.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHDEL_History,0,PHDEL_Tips,0,phdelCommand,-3,CMD_WRITE,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,PHDEL_Keyspecs,1,NULL,3),.args=PHDEL_Args},
 {MAKE_CMD("phdelprefix","Deletes every stored path in a path hash below a prefix.","O(L + sum(P_i + F_i)), where L is the prefix length, P_i is the length of each matched path, and F_i is the number of fields in its payload.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHDELPREFIX_History,0,PHDELPREFIX_Tips,0,phdelprefixCommand,3,CMD_WRITE,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,PHDELPREFIX_Keyspecs,1,NULL,2),.args=PHDELPREFIX_Args},
-{MAKE_CMD("phexists","Tests whether an exact logical path exists in a path hash.","O(L), where L is the path length.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHEXISTS_History,0,PHEXISTS_Tips,0,phexistsCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHEXISTS_Keyspecs,1,NULL,2),.args=PHEXISTS_Args},
 {MAKE_CMD("phget","Returns one or more fields from an exact path in a path hash.","O(L + F*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHGET_History,0,PHGET_Tips,0,phgetCommand,-4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHGET_Keyspecs,1,NULL,3),.args=PHGET_Args},
 {MAKE_CMD("phgetall","Returns all field-value pairs at an exact path in a path hash.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHGETALL_History,0,PHGETALL_Tips,1,phgetallCommand,3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHGETALL_Keyspecs,1,NULL,2),.args=PHGETALL_Args},
 {MAKE_CMD("phlongest","Returns the longest stored path in a path hash that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHLONGEST_History,0,PHLONGEST_Tips,1,phlongestCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHLONGEST_Keyspecs,1,NULL,4),.args=PHLONGEST_Args},
 {MAKE_CMD("phmget","Returns fields from multiple exact paths in a path hash.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHMGET_History,0,PHMGET_Tips,0,phmgetCommand,-6,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHMGET_Keyspecs,1,NULL,2),.args=PHMGET_Args},
 {MAKE_CMD("phmset","Atomically sets fields across multiple paths in a path hash.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHMSET_History,0,PHMSET_Tips,0,phmsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,PHMSET_Keyspecs,1,NULL,2),.args=PHMSET_Args},
+{MAKE_CMD("phpathexists","Tests whether an exact logical path exists in a path hash.","O(L), where L is the path length.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPATHEXISTS_History,0,PHPATHEXISTS_Tips,0,phpathexistsCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHPATHEXISTS_Keyspecs,1,NULL,2),.args=PHPATHEXISTS_Args},
 {MAKE_CMD("phpathscan","Incrementally traverses paths in a path hash in lexicographic order.","O(L + C + O) per call.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPATHSCAN_History,0,PHPATHSCAN_Tips,0,phpathscanCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHPATHSCAN_Keyspecs,1,NULL,4),.args=PHPATHSCAN_Args},
 {MAKE_CMD("phprefixes","Returns every stored path in a path hash that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPREFIXES_History,0,PHPREFIXES_Tips,1,phprefixesCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHPREFIXES_Keyspecs,1,NULL,6),.args=PHPREFIXES_Args},
 {MAKE_CMD("phscan","Iterates over fields and values at an exact path in a path hash.","O(L) for the path lookup plus the cost of HSCAN on its field map; COUNT is a work hint, not a hard result limit.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHSCAN_History,0,PHSCAN_Tips,1,phscanCommand,-4,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHSCAN_Keyspecs,1,NULL,5),.args=PHSCAN_Args},
@@ -12880,7 +12978,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("psync","An internal command used in replication.",NULL,"2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,PSYNC_History,0,PSYNC_Tips,0,syncCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE|CMD_NO_MULTI|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,PSYNC_Keyspecs,0,NULL,2),.args=PSYNC_Args},
 {MAKE_CMD("replconf","An internal command for configuring the replication stream.","O(1)","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLCONF_History,0,REPLCONF_Tips,0,replconfCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLCONF_Keyspecs,0,NULL,0)},
 {MAKE_CMD("replicaof","Configures a server as replica of another, or promotes it to a primary.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLICAOF_History,0,REPLICAOF_Tips,0,replicaofCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLICAOF_Keyspecs,0,NULL,1),.args=REPLICAOF_Args},
-{MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_ASKING_Keyspecs,1,NULL,7),.args=RESTORE_ASKING_Args},
+{MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_ASKING_Keyspecs,1,NULL,6),.args=RESTORE_ASKING_Args},
 {MAKE_CMD("role","Returns the replication role.","O(1)","2.8.12",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ROLE_History,0,ROLE_Tips,0,roleCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_FAST,NULL,ROLE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("save","Synchronously saves the database(s) to disk.","O(N) where N is the total number of keys in all databases","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SAVE_History,0,SAVE_Tips,0,saveCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_NO_MULTI,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SAVE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("shutdown","Synchronously saves the database(s) to disk and shuts down the server.","O(N) when saving, where N is the total number of keys in all databases when saving data, otherwise O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SHUTDOWN_History,2,SHUTDOWN_Tips,0,shutdownCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_NO_MULTI|CMD_SENTINEL|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SHUTDOWN_Keyspecs,0,NULL,1),.args=SHUTDOWN_Args},
@@ -12945,12 +13043,12 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("zunionstore","Stores the union of multiple sorted sets in a key.","O(N)+O(M log(M)) with N being the sum of the sizes of the input sorted sets, and M being the number of elements in the resulting sorted set.","2.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZUNIONSTORE_History,0,ZUNIONSTORE_Tips,0,zunionstoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZUNIONSTORE_Keyspecs,2,zunionInterDiffStoreGetKeys,5),.args=ZUNIONSTORE_Args},
 /* stream */
 {MAKE_CMD("xack","Returns the number of messages that were successfully acknowledged by the consumer group member of a stream.","O(1) for each message ID processed.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XACK_History,0,XACK_Tips,0,xackCommand,-4,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XACK_Keyspecs,1,NULL,3),.args=XACK_Args},
-{MAKE_CMD("xackdel","Acknowledge and (if possible) delete stream message(s).","O(1) for each single item to delete in the stream, regardless of the stream size","9.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XACKDEL_History,0,XACKDEL_Tips,0,xackdelCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_WRITE|ACL_CATEGORY_STREAM,NULL,XACKDEL_Keyspecs,1,NULL,6),.args=XACKDEL_Args},
+{MAKE_CMD("xackdel","Acknowledge and (if possible) delete stream message(s).","O(1) for each single item to delete in the stream, regardless of the stream size","9.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XACKDEL_History,0,XACKDEL_Tips,0,xackdelCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_WRITE|ACL_CATEGORY_STREAM,NULL,XACKDEL_Keyspecs,1,NULL,4),.args=XACKDEL_Args},
 {MAKE_CMD("xadd","Appends a new message to a stream. Creates the key if it doesn't exist.","O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XADD_History,2,XADD_Tips,1,xaddCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XADD_Keyspecs,1,NULL,5),.args=XADD_Args},
 {MAKE_CMD("xautoclaim","Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to a consumer group member.","O(1) if COUNT is small.","6.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XAUTOCLAIM_History,1,XAUTOCLAIM_Tips,1,xautoclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XAUTOCLAIM_Keyspecs,1,NULL,7),.args=XAUTOCLAIM_Args},
 {MAKE_CMD("xclaim","Changes, or acquires, ownership of a message in a consumer group, as if the message was delivered to a consumer group member.","O(log N) with N being the number of messages in the PEL of the consumer group.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XCLAIM_History,0,XCLAIM_Tips,1,xclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XCLAIM_Keyspecs,1,NULL,11),.args=XCLAIM_Args},
 {MAKE_CMD("xdel","Returns the number of messages after removing them from a stream.","O(1) for each single item to delete in the stream, regardless of the stream size.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XDEL_History,0,XDEL_Tips,0,xdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XDEL_Keyspecs,1,NULL,2),.args=XDEL_Args},
-{MAKE_CMD("xdelex","Delete stream message(s) with extended options","O(1) for each single item to delete in the stream, regardless of the stream size","9.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XDELEX_History,0,XDELEX_Tips,0,xdelexCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_WRITE|ACL_CATEGORY_STREAM,NULL,XDELEX_Keyspecs,1,NULL,5),.args=XDELEX_Args},
+{MAKE_CMD("xdelex","Delete stream message(s) with extended options","O(1) for each single item to delete in the stream, regardless of the stream size","9.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XDELEX_History,0,XDELEX_Tips,0,xdelexCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_WRITE|ACL_CATEGORY_STREAM,NULL,XDELEX_Keyspecs,1,NULL,3),.args=XDELEX_Args},
 {MAKE_CMD("xgroup","A container for consumer groups commands.","Depends on subcommand.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XGROUP_History,0,XGROUP_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,XGROUP_Keyspecs,0,NULL,0),.subcommands=XGROUP_Subcommands},
 {MAKE_CMD("xinfo","A container for stream introspection commands.","Depends on subcommand.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XINFO_History,0,XINFO_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,XINFO_Keyspecs,0,NULL,0),.subcommands=XINFO_Subcommands},
 {MAKE_CMD("xlen","Returns the number of messages in a stream.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XLEN_History,0,XLEN_Tips,0,xlenCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_STREAM,NULL,XLEN_Keyspecs,1,NULL,1),.args=XLEN_Args},

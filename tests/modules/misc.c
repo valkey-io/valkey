@@ -9,9 +9,7 @@
 #define UNUSED(x) (void)(x)
 
 /* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
 #define ValkeyModule_ReplyRaw VM_ReplyRaw
 
 static int n_events = 0;
@@ -463,14 +461,30 @@ int test_rm_call_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     return VALKEYMODULE_OK;
 }
 
+/* Exercise script-mode validation without requesting error replies. */
+int test_call_script_mode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    const char *cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmd, "S");
+    int call_errno = errno;
+    const char *errno_name;
+    switch (call_errno) {
+    case 0: errno_name = "0"; break;
+    case ENOENT: errno_name = "ENOENT"; break;
+    case EINVAL: errno_name = "EINVAL"; break;
+    case ESPIPE: errno_name = "ESPIPE"; break;
+    default: errno_name = "UNKNOWN"; break;
+    }
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithSimpleString(ctx, reply ? "OK" : "ERR");
+    ValkeyModule_ReplyWithSimpleString(ctx, errno_name);
+    if (reply) ValkeyModule_FreeCallReply(reply);
+    return VALKEYMODULE_OK;
+}
+
 /* Reply handler used by VM_CallArgv wrappers: forwards the raw RESP reply to the client */
 static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
-    UNUSED(ctx);
-    if (proto_len == 0) {
-        /* DRY RUN FLAG case */
-        ValkeyModule_ReplyWithError(mctx, "NULL reply returned");
-        return 1;
-    }
+    if (ctx) *(int *)ctx = 1;
     ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     return 0;
 }
@@ -570,7 +584,9 @@ int test_vm_call_argv_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
     };
 
     /* argv[2] is the command name; pass argv+2 so it becomes argv[0] of the call */
-    if (ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, NULL) == VALKEYMODULE_ERR) {
+    int replied = 0;
+    int ret = ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, &replied);
+    if (ret == VALKEYMODULE_ERR || !replied) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }
     return VALKEYMODULE_OK;
@@ -733,7 +749,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.rm_call", test_rm_call,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_flags", test_rm_call_flags,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_flags", test_rm_call_flags, "allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.call_script_mode", test_call_script_mode, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.rm_call_replicate", test_rm_call_replicate,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;

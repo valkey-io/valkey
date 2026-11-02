@@ -3752,7 +3752,8 @@ void sentinelCommand(client *c) {
 "    Show a list of Sentinel instances for this primary and their state.",
 "SET <primary-name> <option> <value> [<option> <value> ...]",
 "    Set configuration parameters for certain primaries.",
-"SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
+"SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) "
+"[(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...]",
 "    Simulate a Sentinel crash.",
 NULL
         };
@@ -4028,7 +4029,8 @@ NULL
         dictReleaseIterator(di);
         if (primaries_local != sentinel.primaries) dictRelease(primaries_local);
     } else if (!strcasecmp(c->argv[1]->ptr, "simulate-failure")) {
-        /* SENTINEL SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP] */
+        /* SENTINEL SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP)
+         * [(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...] */
         int j;
 
         sentinel.simfailure_flags = SENTINEL_SIMFAILURE_NONE;

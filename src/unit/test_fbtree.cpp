@@ -5938,7 +5938,7 @@ TEST_F(FbtreeTest, DebugValidateDetectsBrokenLeafChain) {
     /* A back-pointer that does not return to its predecessor. */
     l2->prev = l0;
     ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
-    EXPECT_NE(strstr(errmsg, "does not point back"), nullptr) << "errmsg: " << errmsg;
+    EXPECT_NE(strstr(errmsg, "leaf chain"), nullptr) << "errmsg: " << errmsg;
     l2->prev = l1;
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
 
@@ -5952,7 +5952,7 @@ TEST_F(FbtreeTest, DebugValidateDetectsBrokenLeafChain) {
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
 
     /* Two adjacent leaves swapped: count and back-pointers stay consistent,
-     * so only the key-order check across links can see it. */
+     * so only the chain's order against the structural leaf order can see it. */
     l0->next = l2;
     l2->prev = l0;
     l2->next = l1;
@@ -5960,7 +5960,7 @@ TEST_F(FbtreeTest, DebugValidateDetectsBrokenLeafChain) {
     l1->next = l3;
     l3->prev = l1;
     ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
-    EXPECT_NE(strstr(errmsg, "keys decrease"), nullptr) << "errmsg: " << errmsg;
+    EXPECT_NE(strstr(errmsg, "leaf chain"), nullptr) << "errmsg: " << errmsg;
     l0->next = l1;
     l1->prev = l0;
     l1->next = l2;
@@ -5973,7 +5973,7 @@ TEST_F(FbtreeTest, DebugValidateDetectsBrokenLeafChain) {
     leafNode *saved_next = l2->next;
     l2->next = NULL;
     ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
-    EXPECT_NE(strstr(errmsg, "not the rightmost"), nullptr) << "errmsg: " << errmsg;
+    EXPECT_NE(strstr(errmsg, "leaf chain"), nullptr) << "errmsg: " << errmsg;
     l2->next = saved_next;
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
 
@@ -5982,5 +5982,38 @@ TEST_F(FbtreeTest, DebugValidateDetectsBrokenLeafChain) {
     ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
     EXPECT_NE(strstr(errmsg, "leftmost leaf has non-NULL prev"), nullptr) << "errmsg: " << errmsg;
     l0->prev = NULL;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+}
+
+/* When every leaf holds the same key, a chain that visits the leaves out of
+ * structural order (l0 -> l2 -> l1 -> l3) has the right count, consistent
+ * back-pointers and no key decreasing across any link. Only comparing the chain
+ * against the in-order leaf walk by identity can reject it. Left undetected,
+ * fbtreeSeekToRank() would land on one leaf while fbtreeNext() continues into a
+ * different one, so iteration and rank would disagree on which item is next. */
+TEST_F(FbtreeTest, DebugValidateDetectsPermutedEqualKeyLeafChain) {
+    char errmsg[256];
+    for (int i = 0; i < NODE_SIZE * 4 + 10; i++) insert("key");
+    ASSERT_GE(fbtreeNumLeaves(fbt), 5u);
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    leafNode *l0 = leafAt(fbt, 0), *l1 = leafAt(fbt, 1), *l2 = leafAt(fbt, 2), *l3 = leafAt(fbt, 3);
+    ASSERT_NE(l3, nullptr);
+    ASSERT_EQ(sdscmp(l0->values[l0->header.num_items - 1], l3->values[0]), 0) << "test needs equal keys across the permuted leaves";
+
+    l0->next = l2;
+    l2->prev = l0;
+    l2->next = l1;
+    l1->prev = l2;
+    l1->next = l3;
+    l3->prev = l1;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "leaf chain does not link"), nullptr) << "errmsg: " << errmsg;
+    l0->next = l1;
+    l1->prev = l0;
+    l1->next = l2;
+    l2->prev = l1;
+    l2->next = l3;
+    l3->prev = l2;
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
 }

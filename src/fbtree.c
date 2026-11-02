@@ -2585,6 +2585,19 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
 
         validateResult child_result = validateNode(child, depth + 1, verbose, err);
 
+        /* Validate the leaf chain link that crosses from the previous child's
+         * subtree into this one: the two boundary leaves must be each other's
+         * next/prev. Every pair of in-order adjacent leaves meets at exactly
+         * one inner node (their lowest common ancestor), so checking the link
+         * here pins the whole chain to the structural leaf order by identity.
+         * Key comparisons alone cannot: leaves holding equal keys may be
+         * permuted in the chain without any key going backwards. */
+        bool link_ok = true;
+        if (i > 0 && rightmost && child_result.leftmost_leaf) {
+            link_ok = (rightmost->next == child_result.leftmost_leaf &&
+                       child_result.leftmost_leaf->prev == rightmost);
+        }
+
         /* Track leftmost/rightmost leaves and the structural leaf count */
         if (i == 0) leftmost = child_result.leftmost_leaf;
         rightmost = child_result.rightmost_leaf;
@@ -2601,11 +2614,12 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
         if (!feature_ok) validateFail(err, "inner at depth %d child %d: feature bytes do not match anchor", depth, i);
         if (!size_ok) validateFail(err, "inner at depth %d child %d: stored subtree size %zu != actual %zu", depth, i, inner->child_sizes[i], child_result.size);
         if (!num_items_ok) validateFail(err, "inner at depth %d child %d: stored child num_items %u != actual %u", depth, i, (unsigned)inner->child_num_items[i], (unsigned)inner->children[i]->num_items);
+        if (!link_ok) validateFail(err, "inner at depth %d child %d: leaf chain does not link the previous child's rightmost leaf to this child's leftmost leaf", depth, i);
 
-        valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && num_items_ok && child_result.valid;
+        valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && num_items_ok && link_ok && child_result.valid;
         total_size += child_result.size;
 
-        if (verbose && (!prefix_ok || !anchor_ok || !feature_ok || !size_ok || !num_items_ok)) {
+        if (verbose && (!prefix_ok || !anchor_ok || !feature_ok || !size_ok || !num_items_ok || !link_ok)) {
             printIndent(depth);
             printf("   \033[31m");
             if (!prefix_ok) printf("prefix ");
@@ -2613,6 +2627,7 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
             if (!feature_ok) printf("feature ");
             if (!size_ok) printf("size(%zu!=%zu) ", inner->child_sizes[i], child_result.size);
             if (!num_items_ok) printf("num_items(%u!=%u) ", inner->child_num_items[i], inner->children[i]->num_items);
+            if (!link_ok) printf("leaf-link ");
             printf("FAIL\033[0m\n");
         }
     }
@@ -2684,7 +2699,9 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
      * predecessor, every next/prev pair is mutually consistent, keys never go
      * backwards across a link, and it ends at the rightmost leaf after visiting
      * exactly the leaves the tree owns. Any leaf reachable from the root but
-     * absent from the chain (or vice versa) shows up as a count mismatch. */
+     * absent from the chain (or vice versa) shows up as a count mismatch. The
+     * chain's order is pinned to the structural leaf order by identity in
+     * validateInner, at the inner node where each adjacent leaf pair meets. */
     bool chain_ok = true;
     if (actual_leftmost && actual_leftmost->prev != NULL) {
         chain_ok = false;

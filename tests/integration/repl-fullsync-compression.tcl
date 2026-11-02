@@ -9,13 +9,13 @@
 
 # --- helpers --------------------------------------------------------------
 
-proc rdb_is_compressed {client} {
-    set header [read_binary_file_prefix [server_repl_rdb_path $client] 3]
+proc rdb_is_compressed {primary} {
+    set header [read_binary_file_prefix [server_repl_rdb_path $primary] 3]
     return [expr {$header eq "VCS"}]
 }
 
-proc rdb_compression_codec {client} {
-    binary scan [read_binary_file_prefix [server_repl_rdb_path $client] 5] cu* bytes
+proc rdb_compression_codec {primary} {
+    binary scan [read_binary_file_prefix [server_repl_rdb_path $primary] 5] cu* bytes
     return [lindex $bytes 4]
 }
 
@@ -576,15 +576,15 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
 
 }
 
-# Transcode matrix: doing a disk-based load, the replica writes its replication
-# RDB file in its own rdbcompression codec, transcoding the received full-sync
+# Transcode matrix: doing a disk-based load, the replica writes dbfilename
+# in its own rdbcompression codec, transcoding the received full-sync
 # stream when the wire codec differs (verbatim / decode / encode / recode).
 # `framing` selects the receive path exercised: eof = diskless ($EOF-marked),
 # size = disk-based ($<len>). The file must end up in the `disk` codec and the data
 # must load (a bad recomputed CRC64 on a plaintext target would fail the load). A
 # non-empty save point keeps the file so its format can be inspected.
-proc assert_replica_dump {client codec} {
-    set path [server_repl_rdb_path $client]
+proc assert_replica_dump {replica codec} {
+    set path [server_rdb_path $replica]
     if {$codec eq "no"} {
         assert_equal "VALKEY" [string range [read_binary_file_prefix $path 6] 0 5]
     } else {
@@ -638,9 +638,9 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     # Verbatim disk-based: the replica copies the primary's RDB
                     # byte-for-byte (a re-encode would produce a different frame).
                     set primary_rdb [server_repl_rdb_path $primary]
-                    set replica_rdb [server_repl_rdb_path $replica]
+                    set replica_rdb [server_rdb_path $replica]
                     assert_equal 1 [files_are_identical $primary_rdb $replica_rdb] \
-                        "primary and replica replication RDB differ ([file size $primary_rdb] vs [file size $replica_rdb] bytes)"
+                        "primary replication RDB and replica dump differ ([file size $primary_rdb] vs [file size $replica_rdb] bytes)"
                 }
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal value [$replica get xcode:key]

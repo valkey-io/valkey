@@ -38,6 +38,7 @@
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "bio.h"
+#include "forkless.h"
 #include "functions.h"
 #include "connection.h"
 #include "module.h"
@@ -1385,10 +1386,6 @@ int startBgsaveForReplication(int req, int rdbver, compressionAlgo compr) {
             fail_msg = "Can't start the child process for a disk-based full sync";
             goto error;
         }
-        /* Only the parent reads this flag, on save completion, so set it after
-         * the fork actually started: an early rdbSaveBackground() failure must
-         * not make an unrelated running child look like a replication save. */
-        server.rdb_child_for_replication = 1;
     }
     if (server.debug_pause_after_fork) debugPauseProcess();
 
@@ -1690,17 +1687,11 @@ void freeClientReplicationData(client *c) {
     /* Primary/replica cleanup Case 1:
      * we lost the connection with a replica. */
     if (c->flag.replica) {
-        /* If there is no any other replica waiting dumping RDB finished, the
-         * current child process need not continue to dump RDB, then we kill it.
-         * So child process won't use more memory, and we also can fork a new
-         * child process asap to dump rdb for next full synchronization or bgsave.
-         * But we also need to check if users enable 'save' RDB, if enable, we
-         * should not remove directly since that means RDB is important for users
-         * to keep data safe and we may delay configured 'save' for full sync. */
-        if (server.saveparamslen == 0 && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
+        /* Replication saves never satisfy persistence save points. */
+        if (server.rdb_child_for_replication && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
             server.child_type == CHILD_TYPE_RDB && server.rdb_write_target == RDB_WRITE_TARGET_DISK &&
             anyOtherReplicaWaitRdb(c) == 0) {
-            serverLog(LL_NOTICE, "Background saving, persistence disabled, last replica dropped, killing fork child.");
+            serverLog(LL_NOTICE, "Background saving for replication, last replica dropped, killing fork child.");
             killRDBChild();
         }
         if (c->repl_data->repl_state == REPLICA_STATE_SEND_BULK) {
@@ -2027,11 +2018,22 @@ void replicaStartCommandStream(client *replica) {
     putClientInPendingWriteQueue(replica);
 }
 
-/* We call this function periodically to remove an RDB file that was
- * generated because of replication, in an instance that is otherwise
- * without any persistence. We don't want instances without persistence
- * to take RDB files around, this violates certain policies in certain
- * environments. */
+int rdbFilenamesInUse(void) {
+    if (isSaveInProgress() || RDBGeneratedByReplication || server.repl_state == REPL_STATE_TRANSFER ||
+        server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) return 1;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END ||
+            replica->repl_data->repl_state == REPLICA_STATE_SEND_BULK) return 1;
+    }
+    return 0;
+}
+
+/* The sync file is separate from dbfilename, so cleanup does not depend on persistence settings. */
 void removeRDBUsedToSyncReplicas(void) {
     /* If the feature is disabled, return ASAP but also clear the
      * RDBGeneratedByReplication flag in case it was set. Otherwise, if the
@@ -2044,7 +2046,9 @@ void removeRDBUsedToSyncReplicas(void) {
         return;
     }
 
-    if (allPersistenceDisabled() && RDBGeneratedByReplication) {
+    if (isSaveInProgress() && server.rdb_child_for_replication) return;
+
+    if (RDBGeneratedByReplication) {
         client *replica;
         listNode *ln;
         listIter li;
@@ -2062,10 +2066,9 @@ void removeRDBUsedToSyncReplicas(void) {
         }
         if (delrdb) {
             struct stat sb;
+            RDBGeneratedByReplication = 0;
             if (lstat(server.repl_rdb_filename, &sb) != -1) {
-                RDBGeneratedByReplication = 0;
-                serverLog(LL_NOTICE, "Removing the RDB file used to feed replicas "
-                                     "in a persistence-less instance");
+                serverLog(LL_NOTICE, "Removing the RDB file used to feed replicas");
                 bg_unlink(server.repl_rdb_filename);
             }
         }
@@ -2974,8 +2977,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
 int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     /* Make sure the new file is fully synced (not covered by earlier calls to
-     * rdb_fsync_range). It is the replication RDB, not the snapshot used for
-     * persistence, so dbfilename stays untouched by a full sync. */
+     * rdb_fsync_range). */
     if (fsync(server.repl_transfer_fd) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to sync the temp DB to disk in "
@@ -2985,12 +2987,12 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     }
 
     /* Rename rdb like renaming rewrite aof asynchronously. */
-    int old_rdb_fd = open(server.repl_rdb_filename, O_RDONLY | O_NONBLOCK);
-    if (rename(server.repl_transfer_tmpfile, server.repl_rdb_filename) == -1) {
+    int old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
+    if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to rename the temp DB into %s in "
                   "PRIMARY <-> REPLICA synchronization: %s",
-                  server.repl_rdb_filename, strerror(errno));
+                  server.rdb_filename, strerror(errno));
         if (old_rdb_fd != -1) close(old_rdb_fd);
         return C_ERR;
     }
@@ -2998,11 +3000,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 0);
 
     /* Sync the directory to ensure rename is persisted */
-    if (fsyncFileDir(server.repl_rdb_filename) == -1) {
+    if (fsyncFileDir(server.rdb_filename) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to sync DB directory %s in "
                   "PRIMARY <-> REPLICA synchronization: %s",
-                  server.repl_rdb_filename, strerror(errno));
+                  server.rdb_filename, strerror(errno));
         return C_ERR;
     }
 
@@ -3013,7 +3015,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
      * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-    int retval = rdbLoad(server.repl_rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
+    int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
 
     if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
@@ -3022,7 +3024,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                                  "the primary. This replica has persistence "
                                  "disabled");
-            bg_unlink(server.repl_rdb_filename);
+            bg_unlink(server.rdb_filename);
         }
 
         /* If RDB failed compatibility check, we did not load the new data set or flush our old data. */
@@ -3048,7 +3050,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                              "the primary. This replica has persistence "
                              "disabled");
-        bg_unlink(server.repl_rdb_filename);
+        bg_unlink(server.rdb_filename);
     }
 
     zfree(server.repl_transfer_tmpfile);
@@ -5810,6 +5812,12 @@ void handleBioThreadFinishedRDBDownload(void) {
 
     debugServerAssert(bio_save_state == REPL_BIO_DISK_SAVE_STATE_FINISHED);
 
+    /* Forkless completion can still rename its snapshot after the iterator has detached. */
+    if (isForklessSaveInProgress()) {
+        forklessSaveCancel();
+        return;
+    }
+
     /* Bio termination detected - we can get rid of the state vars */
     off_t bio_repl_transfer_size = server.bio_repl_transfer_size;
     off_t bio_repl_transfer_read = server.bio_repl_transfer_read;
@@ -6019,8 +6027,6 @@ void replicationCron(void) {
     /* Handle completion of RDB downloaded that was offloaded to a Bio thread */
     handleBioThreadFinishedRDBDownload();
 
-    /* Remove the RDB file used for replication if the server is not running
-     * with any persistence. */
     removeRDBUsedToSyncReplicas();
 
     /* Sanity check replication buffer, the first block of replication buffer blocks

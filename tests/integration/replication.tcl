@@ -1584,7 +1584,7 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                     fail "can't kill rdb child"
                 }
 
-                # If have save parameters, won't kill child
+                # Persistence save points do not need the replication child.
                 $master config set save "900 1"
                 $slave1 slaveof $master_host $master_port
                 $slave2 slaveof $master_host $master_port
@@ -1597,8 +1597,11 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 }
                 $slave1 slaveof no one
                 $slave2 slaveof no one
-                after 200
-                assert {[s 0 rdb_bgsave_in_progress] == 1}
+                wait_for_condition 100 10 {
+                    [s 0 rdb_bgsave_in_progress] eq 0
+                } else {
+                    fail "can't kill replication child with persistence enabled"
+                }
                 catch {$master shutdown nosave}
             }
         }
@@ -1928,16 +1931,15 @@ start_server {tags {"repl external:skip"}} {
         $primary set primary_key primary_value
 
         test {Replica keep the old data if RDB file save fails in disk-based replication} {
-            # Create a folder called 'repl-dump.rdb' to trigger temp-rdb rename failure
-            # and it will cause RDB file save to fail at the rename.
-            set repl_rdb [server_repl_rdb_path $replica]
+            # A directory at dbfilename forces the received RDB rename to fail.
+            set repl_rdb [server_rdb_path $replica]
             if {[file exists $repl_rdb]} { exec rm -f $repl_rdb }
             exec mkdir -p $repl_rdb
 
             $replica replicaof $primary_host $primary_port
 
             # Waiting for the rename to fail.
-            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into repl-dump.rdb*"} 0 1000 10
+            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into dump.rdb*"} 0 1000 10
 
             # Make sure the replica has not completed sync and keep the old data.
             assert_equal {} [$replica get primary_key]
@@ -1981,11 +1983,14 @@ start_server {tags {"repl external:skip"}} {
         puts $fp "replica-persistence-snapshot"
         close $fp
 
-        test {Disk-based full sync uses repl-rdbfilename and leaves dbfilename untouched} {
+        test {Disk full sync isolates the primary snapshot and refreshes the replica dump} {
             set lastsave_before [status $primary rdb_last_save_time]
             set changes_before [status $primary rdb_changes_since_last_save]
             set bgsave_status_before [status $primary rdb_last_bgsave_status]
             set bgsave_type_before [status $primary rdb_last_bgsave_type]
+            set bgsave_time_before [status $primary rdb_last_bgsave_time_sec]
+            set saves_before [status $primary rdb_saves]
+            set cow_before [status $primary rdb_last_cow_size]
 
             $replica replicaof [srv -1 host] [srv -1 port]
             wait_for_sync $replica
@@ -1993,17 +1998,14 @@ start_server {tags {"repl external:skip"}} {
 
             assert_equal {primary_value} [$replica get primary_key]
 
-            # Both sides keep the RDB used for the full sync by default.
             assert {[file exists $primary_repl_rdb]}
-            assert {[file exists $replica_repl_rdb]}
+            assert {[file exists $replica_dump]}
+            assert {![file exists $replica_repl_rdb]}
 
-            # The persistence snapshot is not the replication RDB.
             set fp [open $primary_dump r]
             assert_equal "primary-persistence-snapshot" [string trim [read $fp]]
             close $fp
-            set fp [open $replica_dump r]
-            assert_equal "replica-persistence-snapshot" [string trim [read $fp]]
-            close $fp
+            assert_match {*RDB looks OK!*} [exec src/valkey-check-rdb $replica_dump]
 
             # Since the save did not refresh dbfilename, it must not count as a
             # persistence point: LASTSAVE and the dirty counter stay put, so the
@@ -2014,6 +2016,22 @@ start_server {tags {"repl external:skip"}} {
             # sync doesn't report itself as one.
             assert_equal $bgsave_status_before [status $primary rdb_last_bgsave_status]
             assert_equal $bgsave_type_before [status $primary rdb_last_bgsave_type]
+            assert_equal $bgsave_time_before [status $primary rdb_last_bgsave_time_sec]
+            assert_equal $saves_before [status $primary rdb_saves]
+            assert_equal $cow_before [status $primary rdb_last_cow_size]
+            assert_equal -1 [status $primary rdb_current_bgsave_time_sec]
+        }
+
+        test {Replica recovers the received RDB and resumes PSYNC after a nosave restart} {
+            set fullsyncs [status $primary sync_full]
+            $replica config rewrite
+            restart_server 0 true false true nosave
+            set replica [srv 0 client]
+            wait_for_sync $replica
+            assert_equal primary_value [$replica get primary_key]
+            assert_equal $fullsyncs [status $primary sync_full]
+            assert {[status $primary sync_partial_ok] >= 1}
+            assert_equal 0 [status $replica rdb_saves]
         }
     }
 }
@@ -2059,6 +2077,125 @@ start_server {tags {"repl external:skip needs:debug"}} {
     }
 }
 
+start_server {tags {"repl external:skip needs:debug"} overrides {save "" repl-diskless-sync no repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    $primary set snapshot_key snapshot_value
+    $primary bgsave
+    waitForBgsave $primary
+    $primary set sync_key sync_value
+
+    start_server {overrides {save ""}} {
+        set replica [srv 0 client]
+        foreach failure {rename signal} {
+            test "Failed disk full sync preserves persistence metrics - $failure" {
+                $replica replicaof no one
+                $primary debug change-repl-id
+                set sync_path [server_repl_rdb_path $primary]
+                set before {}
+                foreach metric {rdb_last_save_time rdb_changes_since_last_save rdb_last_bgsave_status rdb_last_bgsave_type rdb_last_bgsave_time_sec rdb_saves rdb_last_cow_size} {
+                    dict set before $metric [status $primary $metric]
+                }
+                set loglines [count_log_lines -1]
+                if {$failure eq "rename"} {
+                    file mkdir $sync_path
+                } else {
+                    $primary config set rdb-key-save-delay 10000000
+                }
+                $replica replicaof [srv -1 host] [srv -1 port]
+                if {$failure eq "rename"} {
+                    wait_for_log_messages -1 {"*Error moving temp DB file*"} $loglines 100 100
+                } else {
+                    wait_for_condition 100 100 {
+                        [status $primary rdb_bgsave_in_progress] == 1
+                    } else {
+                        fail "disk full sync did not start"
+                    }
+                    assert {[status $primary rdb_current_bgsave_time_sec] >= 0}
+                    dict for {metric value} $before {
+                        assert_equal $value [status $primary $metric]
+                    }
+                    wait_for_condition 100 100 {
+                        [status $replica master_sync_in_progress] == 1
+                    } else {
+                        fail "replica did not enter transfer state"
+                    }
+                    foreach client [list $primary $replica] {
+                        set dbfilename [lindex [$client config get dbfilename] 1]
+                        set replfilename [lindex [$client config get repl-rdbfilename] 1]
+                        set timeout [lindex [$client config get timeout] 1]
+                        assert_equal OK [$client config set dbfilename $dbfilename repl-rdbfilename $replfilename]
+                        foreach option {dbfilename repl-rdbfilename} {
+                            assert_error {*RDB filenames cannot be changed*} {
+                                $client config set timeout 42 $option renamed.rdb
+                            }
+                            assert_equal $timeout [lindex [$client config get timeout] 1]
+                        }
+                        assert_error {*RDB filenames cannot be changed*} {
+                            $client config set dbfilename $replfilename repl-rdbfilename $dbfilename
+                        }
+                        assert_equal $dbfilename [lindex [$client config get dbfilename] 1]
+                        assert_equal $replfilename [lindex [$client config get repl-rdbfilename] 1]
+                    }
+                    exec kill -9 [get_child_pid -1]
+                    wait_for_log_messages -1 {"*Background saving terminated by signal*"} $loglines 100 100
+                }
+                $replica replicaof no one
+                $primary config set rdb-key-save-delay 0
+                waitForBgsave $primary
+                dict for {metric value} $before {
+                    assert_equal $value [status $primary $metric]
+                }
+                assert_equal -1 [status $primary rdb_current_bgsave_time_sec]
+                if {$failure eq "rename"} {
+                    file delete $sync_path
+                }
+            }
+        }
+    }
+}
+
+start_server {tags {"repl external:skip needs:debug"} overrides {save "" repl-diskless-sync no repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    $primary set primary_key primary_value
+
+    start_server {overrides {save "" forkless-infrastructure-enabled yes bgsave-default-method forkless repl-diskless-load disabled}} {
+        set replica [srv 0 client]
+        test {Disk full sync waits for forkless save finalization before replacing the replica dump} {
+            $replica debug populate 1000 old
+            $replica config set rdb-key-save-delay 100000
+            $replica bgsave
+            set saves_before [status $replica rdb_saves]
+            assert_equal forkless [status $replica rdb_current_bgsave_type]
+            $replica config set save {1 1}
+            wait_for_condition 50 100 {
+                [status $replica rdb_current_bgsave_time_sec] >= 3
+            } else {
+                fail "forkless save did not remain active"
+            }
+            foreach option {dbfilename repl-rdbfilename} {
+                assert_error {*RDB filenames cannot be changed*} {
+                    $replica config set $option renamed.rdb
+                }
+            }
+            set loglines [count_log_lines 0]
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            waitForBgsave $replica
+            $replica config set save "" rdb-key-save-delay 0
+            assert_equal $saves_before [status $replica rdb_saves]
+            wait_for_log_messages 0 {"*forkless-save: forkless save cancelled*"} $loglines 100 100
+            assert_equal primary_value [$replica get primary_key]
+            assert_equal 1 [$replica dbsize]
+            $replica replicaof no one
+            assert_equal OK [$replica debug reload nosave]
+            assert_equal primary_value [$replica get primary_key]
+            assert_equal 1 [$replica dbsize]
+            assert_equal OK [$replica config set dbfilename idle.rdb]
+            assert_equal OK [$replica config set dbfilename dump.rdb]
+        }
+    }
+}
+
 start_server {tags {"repl external:skip"}} {
     set primary [srv 0 client]
     set primary_dump [server_rdb_path $primary]
@@ -2073,7 +2210,7 @@ start_server {tags {"repl external:skip"}} {
         set replica [srv 0 client]
         set replica_dump [server_rdb_path $replica]
 
-        test {rdb-del-sync-files removes the replication RDB but not dbfilename} {
+        test {rdb-del-sync-files removes the primary sync RDB and the nonpersistent replica dump} {
             $replica replicaof [srv -1 host] [srv -1 port]
             wait_for_sync $replica
             wait_done_loading $replica
@@ -2082,7 +2219,7 @@ start_server {tags {"repl external:skip"}} {
 
             wait_for_condition 50 100 {
                 ![file exists [server_repl_rdb_path $primary]] &&
-                ![file exists [server_repl_rdb_path $replica]]
+                ![file exists $replica_dump]
             } else {
                 fail "replication RDB files were not removed"
             }
@@ -2094,11 +2231,72 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-# Verify that after a diskless (socket) replication sync, save metrics
-# are correctly reset and rdb_last_bgsave_time_sec is a plausible duration.
+start_server {tags {"repl external:skip needs:debug"} overrides {save {3600 1} rdb-del-sync-files yes repl-diskless-sync no repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    $primary debug populate 1000
+    $primary config set rdb-key-save-delay 100000
+
+    start_server {overrides {save ""}} {
+        set replica [srv 0 client]
+        test {Disk full sync is cancelled and cleaned up after the last replica disconnects with persistence enabled} {
+            set saves_before [status $primary rdb_saves]
+            set loglines [count_log_lines -1]
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_condition 100 100 {
+                [status $primary rdb_bgsave_in_progress] == 1
+            } else {
+                fail "disk full sync did not start"
+            }
+            $replica replicaof no one
+            wait_for_log_messages -1 {"*Background saving for replication, last replica dropped, killing fork child*"} $loglines 100 100
+            waitForBgsave $primary
+            $primary config set rdb-key-save-delay 0
+            wait_for_log_messages -1 {"*Background saving terminated*"} $loglines 100 100
+            assert_equal $saves_before [status $primary rdb_saves]
+            wait_for_condition 50 100 {
+                ![file exists [server_repl_rdb_path $primary]] &&
+                [llength [glob -nocomplain [file join [lindex [$primary config get dir] 1] temp-*.rdb]]] == 0
+            } else {
+                fail "abandoned replication RDB files were not removed"
+            }
+            wait_for_condition 50 100 {
+                [catch {$primary config set repl-rdbfilename idle.rdb}] == 0
+            } else {
+                fail "replication RDB cleanup did not release the filename"
+            }
+            assert_equal idle.rdb [lindex [$primary config get repl-rdbfilename] 1]
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"} overrides {save {3600 1} rdb-del-sync-files yes repl-diskless-sync no repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    $primary set snapshot_key snapshot_value
+    $primary save
+    $primary set sync_key sync_value
+
+    start_server {overrides {save {3600 1} rdb-del-sync-files yes}} {
+        set replica [srv 0 client]
+        test {Sync RDB cleanup respects separate primary and replica persistence roles} {
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            wait_done_loading $replica
+            wait_for_condition 50 100 {
+                ![file exists [server_repl_rdb_path $primary]]
+            } else {
+                fail "primary sync RDB was not removed with persistence enabled"
+            }
+            assert {[file exists [server_rdb_path $primary]]}
+            assert {[file exists [server_rdb_path $replica]]}
+            assert_equal sync_value [$replica get sync_key]
+            assert_equal 0 [status $replica rdb_saves]
+        }
+    }
+}
+
 start_server {tags {"repl external:skip"}} {
     start_server {} {
-        test {diskless sync: save metrics are plausible after socket transfer} {
+        test {diskless sync preserves persistence metrics after socket transfer} {
             set master [srv -1 client]
             set master_host [srv -1 host]
             set master_port [srv -1 port]
@@ -2110,6 +2308,9 @@ start_server {tags {"repl external:skip"}} {
             $replica config set save ""
 
             $master debug populate 100
+            set bgsave_time_before [status $master rdb_last_bgsave_time_sec]
+            set saves_before [status $master rdb_saves]
+            set cow_before [status $master rdb_last_cow_size]
 
             $replica replicaof $master_host $master_port
 
@@ -2119,10 +2320,11 @@ start_server {tags {"repl external:skip"}} {
                 fail "Replica didn't complete sync"
             }
 
-            # After diskless sync, master metrics should be sane
             set time_sec [$master info persistence]
-            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
-            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+            assert_equal $bgsave_time_before [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert_equal $saves_before [getInfoProperty $time_sec rdb_saves]
+            assert_equal $cow_before [getInfoProperty $time_sec rdb_last_cow_size]
+            assert_equal -1 [getInfoProperty $time_sec rdb_current_bgsave_time_sec]
 
             # Save state should be cleared
             assert_equal [getInfoProperty $time_sec rdb_bgsave_in_progress] "0"
@@ -2134,7 +2336,7 @@ start_server {tags {"repl external:skip"}} {
 
 start_server {tags {"repl external:skip"}} {
     start_server {} {
-        test {diskless sync: save metrics are plausible after failed socket transfer} {
+        test {diskless sync preserves persistence metrics after failed socket transfer} {
             set master [srv -1 client]
             set master_host [srv -1 host]
             set master_port [srv -1 port]
@@ -2147,6 +2349,9 @@ start_server {tags {"repl external:skip"}} {
 
             $master debug populate 1000
             $master config set rdb-key-save-delay 100000
+            set bgsave_time_before [status $master rdb_last_bgsave_time_sec]
+            set saves_before [status $master rdb_saves]
+            set cow_before [status $master rdb_last_cow_size]
 
             $replica replicaof $master_host $master_port
 
@@ -2167,10 +2372,11 @@ start_server {tags {"repl external:skip"}} {
                 fail "diskless bgsave didn't stop after replica disconnect"
             }
 
-            # Metrics should still be sane after failure
             set time_sec [$master info persistence]
-            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
-            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+            assert_equal $bgsave_time_before [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert_equal $saves_before [getInfoProperty $time_sec rdb_saves]
+            assert_equal $cow_before [getInfoProperty $time_sec rdb_last_cow_size]
+            assert_equal -1 [getInfoProperty $time_sec rdb_current_bgsave_time_sec]
             assert_equal [getInfoProperty $time_sec current_save_keys_processed] "0"
             assert_equal [getInfoProperty $time_sec current_save_keys_total] "0"
 

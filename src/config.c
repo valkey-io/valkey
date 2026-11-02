@@ -344,6 +344,14 @@ struct standardConfig {
 
 static dict *configs = NULL; /* Runtime config values */
 
+static int applyRdbFilenames(const char **err) {
+    if (!strcmp(server.rdb_filename, server.repl_rdb_filename)) {
+        *err = "dbfilename and repl-rdbfilename must be different";
+        return 0;
+    }
+    return 1;
+}
+
 /* Lookup a config by the provided sds string name, or return NULL
  * if the config does not exist */
 static standardConfig *lookupConfig(sds name) {
@@ -510,7 +518,7 @@ void loadServerConfigFromString(sds config) {
     sds *argv = NULL;
     int argc;
 
-    reading_config_file = 1;
+    reading_config_file++;
     lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
     for (i = 0; i < totlines; i++) {
@@ -666,6 +674,8 @@ void loadServerConfigFromString(sds config) {
         fclose(logfp);
     }
 
+    /* Included files may be overridden by the outer configuration or CLI options. */
+    if (reading_config_file == 1 && !applyRdbFilenames(&err)) goto loaderr;
     /* Sanity checks. */
     if (server.cluster_enabled && server.primary_host) {
         err = "replicaof directive not allowed in cluster mode";
@@ -682,7 +692,7 @@ void loadServerConfigFromString(sds config) {
     if (server.hz > CONFIG_MAX_HZ) server.hz = CONFIG_MAX_HZ;
 
     sdsfreesplitres(lines, totlines);
-    reading_config_file = 0;
+    reading_config_file--;
     return;
 
 loaderr:
@@ -2545,6 +2555,23 @@ static int isValidDBfilename(char *val, const char **err) {
     return 1;
 }
 
+static int isValidRdbFilenameChange(char *val, char *current, const char **err) {
+    if (!isValidDBfilename(val, err)) return 0;
+    if (!reading_config_file && strcmp(val, current) && rdbFilenamesInUse()) {
+        *err = "RDB filenames cannot be changed while an RDB save or transfer is in progress";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidPersistenceRdbFilename(char *val, const char **err) {
+    return isValidRdbFilenameChange(val, server.rdb_filename, err);
+}
+
+static int isValidReplicationRdbFilename(char *val, const char **err) {
+    return isValidRdbFilenameChange(val, server.repl_rdb_filename, err);
+}
+
 static int isValidAOFfilename(char *val, const char **err) {
     if (!strcmp(val, "")) {
         *err = "appendfilename can't be empty";
@@ -3510,8 +3537,8 @@ standardConfig static_configs[] = {
     createStringConfig("cluster-announce-hostname", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_hostname, NULL, isValidAnnouncedHostname, updateClusterHostname),
     createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.syslog_ident, SERVER_NAME, NULL, NULL),
-    createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.rdb_filename, "dump.rdb", isValidDBfilename, NULL),
-    createStringConfig("repl-rdbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.repl_rdb_filename, "repl-dump.rdb", isValidDBfilename, NULL),
+    createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.rdb_filename, "dump.rdb", isValidPersistenceRdbFilename, applyRdbFilenames),
+    createStringConfig("repl-rdbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.repl_rdb_filename, "repl-dump.rdb", isValidReplicationRdbFilename, applyRdbFilenames),
     createStringConfig("appendfilename", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.aof_filename, "appendonly.aof", isValidAOFfilename, NULL),
     createStringConfig("appenddirname", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.aof_dirname, "appendonlydir", isValidAOFdirname, NULL),
     createStringConfig("server-cpulist", "server_cpulist", IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.server_cpulist, NULL, NULL, NULL),

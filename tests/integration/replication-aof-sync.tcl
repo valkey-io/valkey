@@ -333,7 +333,7 @@ tags {"repl external:skip"} {
 
     # Test 6: Diskless sync with a stale sync RDB must NOT reuse it.
     # This verifies that disk_based_sync=0 prevents the optimization even
-    # when a leftover RDB file exists at the replication RDB path.
+    # when a leftover RDB file exists at dbfilename.
     test "Diskless sync with stale local RDB does not reuse it as AOF base" {
         start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-sync yes repl-diskless-sync-delay 0 save ""}} {
             set primary [srv 0 client]
@@ -348,13 +348,11 @@ tags {"repl external:skip"} {
                 set replica [srv 0 client]
                 set replica_log [srv 0 stdout]
 
-                # Create stale data and persist it, then place a copy at the
-                # replication RDB path so a stale sync RDB exists when the
-                # diskless sync completes.
+                # Create stale data and persist it at dbfilename so a stale RDB
+                # exists when the diskless sync completes.
                 $replica set stale_key stale_value
                 $replica bgsave
                 waitForBgsave $replica
-                file copy -force [server_rdb_path $replica] [server_repl_rdb_path $replica]
 
                 # Now do a diskless full sync
                 $replica replicaof $primary_host $primary_port

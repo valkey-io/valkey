@@ -113,8 +113,7 @@ proc server_rdb_path {client} {
     return [file join [lindex [$client config get dir] 1] [lindex [$client config get dbfilename] 1]]
 }
 
-# Path of the RDB file a server uses for full synchronization
-# (dir + repl-rdbfilename).
+# Path of the RDB file a server generates to feed replicas (dir + repl-rdbfilename).
 proc server_repl_rdb_path {client} {
     return [file join [lindex [$client config get dir] 1] [lindex [$client config get repl-rdbfilename] 1]]
 }

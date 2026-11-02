@@ -128,7 +128,7 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
     } else if (information_type == CHILD_INFO_TYPE_AOF_COW_SIZE) {
         server.stat_aof_cow_bytes = server.stat_current_cow_peak;
     } else if (information_type == CHILD_INFO_TYPE_RDB_COW_SIZE) {
-        server.stat_rdb_cow_bytes = server.stat_current_cow_peak;
+        if (!server.rdb_child_for_replication) server.stat_rdb_cow_bytes = server.stat_current_cow_peak;
     } else if (information_type == CHILD_INFO_TYPE_MODULE_COW_SIZE) {
         server.stat_module_cow_bytes = server.stat_current_cow_peak;
     } else if (information_type == CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE) {

@@ -554,26 +554,32 @@ void updateFuncStoreBlockingOffsetForWrite(long long blocking_repl_offset) {
     }
 }
 
-/*========================== Command offset calculation ===================== */
+/*========================== Read dependency tracking ======================= */
 
-/* Destination DB of a COPY command: the last DB option wins, defaulting to the
- * source DB. Mirrors the argument parsing in copyCommand; returns false when
- * copyCommand would reject the arguments. */
-static bool getCopyCommandDestDbId(client *c, int *dest_dbid) {
-    *dest_dbid = c->db->id;
-    for (int j = 3; j < c->argc; j++) {
-        if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) continue;
-        if (!strcasecmp(objectGetVal(c->argv[j]), "db") && j + 1 < c->argc) {
-            int dbid;
-            if (getIntFromObject(c->argv[j + 1], &dbid) != C_OK || dbid < 0 || dbid >= server.dbnum) return false;
-            *dest_dbid = dbid;
-            j++; /* Consume additional arg. */
-            continue;
-        }
-        return false;
+/* Raise the reply-blocking offset of the client command being executed when it
+ * looks up a key that is not durable yet. Called from lookupKey(), so it sees
+ * keys the command reads that are not in its key specs: SORT BY/GET patterns,
+ * keys opened by modules through the low-level key API, and the destination of
+ * COPY and MOVE in another database. Reads are attributed to
+ * server.current_client, the client whose command runs, also for nested
+ * script and module calls. Only commands tracked for reply blocking (with a
+ * recorded start position) are affected. */
+void replyBlockingTrackKeyRead(serverDb *db, robj *key) {
+    client *c = server.current_client;
+    if (c == NULL || !c->reply_blocking_state.offset.recorded || !isPrimaryReplyBlockingEnabled()) return;
+
+    const long long acked = server.reply_blocking.previous_acked_offset;
+    long long offset = db->dirty_repl_offset > acked ? db->dirty_repl_offset : -1;
+    if (hashtableSize(db->uncommitted_keys) > 0) {
+        long long key_offset = getUncommittedKeyOffset(objectGetVal(key), db, acked);
+        if (key_offset > offset) offset = key_offset;
     }
-    return true;
+    if (offset > c->reply_blocking_state.current_command_repl_offset) {
+        c->reply_blocking_state.current_command_repl_offset = offset;
+    }
 }
+
+/*========================== Command offset calculation ===================== */
 
 /* Process a single command that propagated something. The keys it modified are
  * tracked by signalModifiedKey(), so all that is left is the reply: hold it at
@@ -613,22 +619,6 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
             long long offset = getUncommittedKeyOffset(keystr, c->db, server.reply_blocking.previous_acked_offset);
             if (offset > blocking_repl_offset) {
                 blocking_repl_offset = offset;
-            }
-        }
-
-        // COPY/MOVE may target a different DB; check the destination key there too.
-        if (c->cmd->proc == moveCommand) {
-            int dest_dbid = -1;
-            if (getIntFromObject(c->argv[2], &dest_dbid) == C_OK && dest_dbid >= 0 && dest_dbid < server.dbnum &&
-                dest_dbid != c->db->id) {
-                long long offset = getUncommittedKeyOffset(objectGetVal(c->argv[1]), server.db[dest_dbid], server.reply_blocking.previous_acked_offset);
-                if (offset > blocking_repl_offset) blocking_repl_offset = offset;
-            }
-        } else if (c->cmd->proc == copyCommand) {
-            int dest_dbid;
-            if (getCopyCommandDestDbId(c, &dest_dbid) && dest_dbid != c->db->id) {
-                long long offset = getUncommittedKeyOffset(objectGetVal(c->argv[2]), server.db[dest_dbid], server.reply_blocking.previous_acked_offset);
-                if (offset > blocking_repl_offset) blocking_repl_offset = offset;
             }
         }
 

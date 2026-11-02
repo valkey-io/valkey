@@ -844,6 +844,55 @@ TEST_F(FullReplyBlockingTest, ModifiedKeyCarriesPlaceholderUntilStamped) {
     decrRefCount(key_obj);
 }
 
+/* A key looked up by the running command raises the reply offset of
+ * server.current_client to the key's or its database's uncommitted offset,
+ * but only for a tracked command and only while the offset is not durable. */
+TEST_F(FullReplyBlockingTest, KeyReadRaisesCurrentClientOffset) {
+    client *old_current_client = server.current_client;
+    client *c = (client *)zcalloc(sizeof(client));
+    replyBlockingClientInit(c);
+    robj *dirty = createStringObject("dirty", 5);
+    robj *clean = createStringObject("clean", 5);
+    server.reply_blocking.previous_acked_offset = 50;
+    server.primary_repl_offset = 100;
+    markKeyDirty(dirty, server.db[0]);
+
+    /* No client command running: nothing to attribute the read to. */
+    server.current_client = nullptr;
+    replyBlockingTrackKeyRead(server.db[0], dirty);
+
+    /* Not tracked for reply blocking (no recorded start position). */
+    server.current_client = c;
+    replyBlockingTrackKeyRead(server.db[0], dirty);
+    ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
+
+    c->reply_blocking_state.offset.recorded = true;
+    replyBlockingTrackKeyRead(server.db[0], clean);
+    ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
+    replyBlockingTrackKeyRead(server.db[0], dirty);
+    ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, 100);
+
+    /* A dirty database (FLUSHDB, SWAPDB) holds reads of any key in it. */
+    server.db[0]->dirty_repl_offset = 120;
+    replyBlockingTrackKeyRead(server.db[0], clean);
+    ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, 120);
+
+    /* Reads never lower the offset, and durable offsets don't raise it. */
+    replyBlockingTrackKeyRead(server.db[0], dirty);
+    ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, 120);
+    c->reply_blocking_state.current_command_repl_offset = -1;
+    server.reply_blocking.previous_acked_offset = 120;
+    replyBlockingTrackKeyRead(server.db[0], dirty);
+    replyBlockingTrackKeyRead(server.db[0], clean);
+    ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
+
+    server.current_client = old_current_client;
+    replyBlockingClientReset(c);
+    zfree(c);
+    decrRefCount(dirty);
+    decrRefCount(clean);
+}
+
 /* Note: test_exec_blocks_reply_and_tracks_dirty_keys from the C test suite
  * exercised the full end-to-end blocking/unblocking flow including
  * notifyReplyBlockingProgress with replica ack simulation. This requires

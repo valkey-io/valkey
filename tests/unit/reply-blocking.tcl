@@ -1980,3 +1980,197 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         assert_equal 0 [r hget h f]
     }
 }
+
+# ==================== Tracking edge cases ====================
+# Writes are tracked in signalModifiedKey() whatever their origin and stamped
+# with the replication offset once their execution unit has been propagated;
+# reads are tracked in lookupKey() and through the command's key specs. Each
+# test checks that a reply is held while the AOF provider is paused and is
+# released once it resumes. Replies are read raw (RESP2) with a deadline so a
+# reply that is wrongly held fails the test instead of hanging it.
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    proc rb_waiting_ack {} {
+        getInfoProperty [r info debug] reply_blocking_clients_waiting_ack
+    }
+
+    # Resume the provider and wait until every held reply is released and every
+    # uncommitted key is drained: a placeholder offset that was never stamped
+    # would stay behind and fail here.
+    proc rb_resume {} {
+        r DEBUG reply-blocking-resume aof
+        wait_for_condition 100 20 {
+            [r ping] eq {PONG} && [rb_waiting_ack] == 0 &&
+            [getInfoProperty [r info debug] reply_blocking_uncommitted_keys] == 0
+        } else {
+            fail "held replies or uncommitted keys were not released"
+        }
+    }
+
+    # Start from an empty, durable keyspace, run the setup body with the
+    # provider running, then pause the provider.
+    proc rb_prepare {body} {
+        rb_resume
+        r flushall
+        uplevel 1 $body
+        rb_resume
+        r DEBUG reply-blocking-pause aof
+    }
+
+    proc rb_client {{db 9}} {
+        set rd [valkey_deferring_client]
+        if {$db != 9} {
+            $rd select $db
+            assert_equal OK [$rd read]
+        }
+        return $rd
+    }
+
+    # Read whatever reply bytes arrive within the deadline, never blocking.
+    proc rb_raw_reply {rd {timeout_ms 2000}} {
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        set data ""
+        set deadline [expr {[clock milliseconds] + $timeout_ms}]
+        while {[clock milliseconds] < $deadline} {
+            append data [read $fd]
+            if {[string match "*\r\n" $data]} break
+            after 10
+        }
+        fconfigure $fd -blocking 1
+        return $data
+    }
+
+    # The command sent on rd is held: wait until n clients wait for the ack
+    # (so it has been processed), then check nothing was sent.
+    proc rb_assert_held {rd n} {
+        wait_for_condition 50 20 {
+            [rb_waiting_ack] >= $n
+        } else {
+            fail "reply was not held: [rb_raw_reply $rd 100]"
+        }
+        assert_equal "" [rb_raw_reply $rd 50]
+    }
+
+    # Send MULTI, queue each command, then EXEC (whose reply is not read).
+    proc rb_queue {rd args} {
+        $rd multi
+        assert_equal OK [$rd read]
+        foreach cmd $args {
+            $rd {*}$cmd
+            assert_equal QUEUED [$rd read]
+        }
+        $rd exec
+    }
+
+    test "COPY to another database holds reads of the destination, also when it fails" {
+        rb_prepare {
+            r set cs v
+            r set cs2 v2
+        }
+        set a [rb_client]
+        $a copy cs cd db 10
+        rb_assert_held $a 1
+        set b [rb_client 10]
+        $b get cd
+        rb_assert_held $b 2
+        # The destination of this COPY exists and is dirty: the COPY fails and
+        # propagates nothing, but its reply depends on that write.
+        set w [rb_client 10]
+        $w set cd2 dirty
+        rb_assert_held $w 3
+        set f [rb_client]
+        $f copy cs2 cd2 db 10
+        rb_assert_held $f 4
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $a]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $b]
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal ":0\r\n" [rb_raw_reply $f]
+    }
+
+    test "MOVE holds reads in both databases, also when it fails" {
+        rb_prepare {
+            r set mk v
+            r set mk2 v2
+        }
+        set a [rb_client]
+        $a move mk 10
+        rb_assert_held $a 1
+        set b [rb_client 10]
+        $b get mk
+        rb_assert_held $b 2
+        set c [rb_client]
+        $c exists mk
+        rb_assert_held $c 3
+        # The key exists, dirty, in the destination: the MOVE fails.
+        set w [rb_client 10]
+        $w set mk2 dirty
+        rb_assert_held $w 4
+        set f [rb_client]
+        $f move mk2 10
+        rb_assert_held $f 5
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $a]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $b]
+        assert_equal ":0\r\n" [rb_raw_reply $c]
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal ":0\r\n" [rb_raw_reply $f]
+    }
+
+    test "SORT ... BY/GET reading a dirty key outside the key specs is held" {
+        rb_prepare {
+            r rpush l2 1 2
+            r set obj_1 a
+            r set obj_2 b
+            r set wt_1 1
+            r set wt_2 2
+        }
+        set w [rb_client]
+        $w set obj_1 dirty
+        rb_assert_held $w 1
+        set g [rb_client]
+        $g sort l2 get obj_*
+        rb_assert_held $g 2
+        set w2 [rb_client]
+        $w2 set wt_2 0
+        rb_assert_held $w2 3
+        set by [rb_client]
+        $by sort l2 by wt_*
+        rb_assert_held $by 4
+        # Control: sorting the clean list alone is not held.
+        set c [rb_client]
+        $c sort l2
+        assert_equal "*2\r\n\$1\r\n1\r\n\$1\r\n2\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "*2\r\n\$5\r\ndirty\r\n\$1\r\nb\r\n" [rb_raw_reply $g]
+        assert_equal "*2\r\n\$1\r\n2\r\n\$1\r\n1\r\n" [rb_raw_reply $by]
+    }
+
+    test "A blocking command served by a later write is held, and so are reads of its destination" {
+        rb_prepare {}
+        set b [rb_client]
+        $b blmove bsrc bdst left right 0
+        wait_for_blocked_clients_count 1
+        set p [rb_client]
+        $p lpush bsrc x
+        rb_assert_held $p 1
+        # The BLMOVE runs inside an execution unit of its own and is finalized
+        # before its LMOVE is propagated, so it is held at the offset of the
+        # LPUSH it read, not at its own write.
+        rb_assert_held $b 2
+        set c [rb_client]
+        $c lrange bdst 0 -1
+        rb_assert_held $c 3
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $p]
+        assert_equal "\$1\r\nx\r\n" [rb_raw_reply $b]
+        assert_equal "*1\r\n\$1\r\nx\r\n" [rb_raw_reply $c]
+    }
+
+    rb_resume
+}

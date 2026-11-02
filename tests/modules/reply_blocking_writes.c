@@ -1,5 +1,5 @@
-/* Write commands that don't declare their keys, used by the reply-blocking
- * tests to check that keys are tracked by what is modified rather than by
+/* Commands that don't declare their keys, used by the reply-blocking tests to
+ * check that keys are tracked by what is modified or looked up rather than by
  * argv keyspecs. */
 
 #include "valkeymodule.h"
@@ -42,6 +42,21 @@ static int rbw_timerset(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+/* RBW.KEYGET key: GET through the low-level key API. */
+static int rbw_keyget(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    if (ValkeyModule_KeyType(key) != VALKEYMODULE_KEYTYPE_STRING) {
+        ValkeyModule_CloseKey(key);
+        return ValkeyModule_ReplyWithNull(ctx);
+    }
+    size_t len;
+    const char *val = ValkeyModule_StringDMA(key, &len, VALKEYMODULE_READ);
+    ValkeyModule_ReplyWithStringBuffer(ctx, val, len);
+    ValkeyModule_CloseKey(key);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -52,6 +67,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "rbw.keyset", rbw_keyset, "write", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "rbw.timerset", rbw_timerset, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "rbw.keyget", rbw_keyget, "readonly", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     return VALKEYMODULE_OK;
 }

@@ -186,6 +186,7 @@ void replyBlockingClearDatasetState(void);
 /* Command processing hooks for offset and COB tracking */
 void recordReplOffsetBaseline(client *c);
 void computeCommandBlockingOffset(client *c);
+void replyBlockingTrackKeyRead(struct serverDb *db, struct serverObject *key);
 void beginCommandReplyBlocking(client *c);
 void finalizeCommandReplyBlocking(client *c);
 void notifyReplyBlockingProgress(void);

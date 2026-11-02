@@ -1,6 +1,6 @@
-# Reply blocking must track every key a module modifies, not only the keys a
-# command declares through keyspecs. A read of such a key has to wait until
-# the write that produced it is durable.
+# Reply blocking must track every key a module modifies or reads, not only the
+# keys a command declares through keyspecs. A read of such a key has to wait
+# until the write that produced it is durable.
 
 set rbwmodule [file normalize tests/modules/reply_blocking_writes.so]
 
@@ -72,6 +72,24 @@ start_server {tags {"modules durability external:skip"} overrides {appendonly ye
             fail "write was not applied"
         }
         assert_read_held_until_resume {get rbw:keyset} v2 2
+        assert_equal OK [$writer read]
+        $writer close
+    }
+
+    test "Read through the low-level key API of a dirty key waits for durability" {
+        r set rbw:clean c
+        r debug reply-blocking-pause aof
+        set writer [valkey_deferring_client]
+        $writer set rbw:keyget dirty
+        wait_for_condition 50 100 {
+            [string match "*reply_blocking_clients_waiting_ack:1*" [r info debug]]
+        } else {
+            r debug reply-blocking-resume aof
+            fail "write was not held"
+        }
+        # Control: reading a clean key the same way is not held.
+        assert_equal c [r rbw.keyget rbw:clean]
+        assert_read_held_until_resume {rbw.keyget rbw:keyget} dirty 2
         assert_equal OK [$writer read]
         $writer close
     }

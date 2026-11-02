@@ -3775,7 +3775,7 @@ struct COMMAND_ARG HEXPIREAT_condition_Subargs[] = {
 
 /* HEXPIREAT fields argument table */
 struct COMMAND_ARG HEXPIREAT_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -3808,7 +3808,7 @@ keySpec HEXPIRETIME_Keyspecs[1] = {
 
 /* HEXPIRETIME fields argument table */
 struct COMMAND_ARG HEXPIRETIME_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -3890,7 +3890,7 @@ keySpec HGETDEL_Keyspecs[1] = {
 
 /* HGETDEL fields argument table */
 struct COMMAND_ARG HGETDEL_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -3930,7 +3930,7 @@ struct COMMAND_ARG HGETEX_expiration_Subargs[] = {
 
 /* HGETEX fields argument table */
 struct COMMAND_ARG HGETEX_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4120,7 +4120,7 @@ keySpec HPERSIST_Keyspecs[1] = {
 
 /* HPERSIST fields argument table */
 struct COMMAND_ARG HPERSIST_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4159,7 +4159,7 @@ struct COMMAND_ARG HPEXPIRE_condition_Subargs[] = {
 
 /* HPEXPIRE fields argument table */
 struct COMMAND_ARG HPEXPIRE_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4200,7 +4200,7 @@ struct COMMAND_ARG HPEXPIREAT_condition_Subargs[] = {
 
 /* HPEXPIREAT fields argument table */
 struct COMMAND_ARG HPEXPIREAT_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4233,7 +4233,7 @@ keySpec HPEXPIRETIME_Keyspecs[1] = {
 
 /* HPEXPIRETIME fields argument table */
 struct COMMAND_ARG HPEXPIRETIME_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4264,7 +4264,7 @@ keySpec HPTTL_Keyspecs[1] = {
 
 /* HPTTL fields argument table */
 struct COMMAND_ARG HPTTL_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
@@ -4418,7 +4418,7 @@ struct COMMAND_ARG HSETEX_fields_data_Subargs[] = {
 
 /* HSETEX fields argument table */
 struct COMMAND_ARG HSETEX_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=HSETEX_fields_data_Subargs},
 };
 
@@ -4503,7 +4503,7 @@ keySpec HTTL_Keyspecs[1] = {
 
 /* HTTL fields argument table */
 struct COMMAND_ARG HTTL_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 

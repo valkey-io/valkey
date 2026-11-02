@@ -1868,6 +1868,11 @@ int resolveBgsaveType(void) {
                               "module has not declared VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
         return RDB_BGSAVE_TYPE_FORK;
     }
+    /* A forkless save currently doesn't include slot import state or importing keys. */
+    if (clusterIsAnySlotImporting()) {
+        serverLog(LL_NOTICE, "Falling back to fork-based save: a slot import is in progress");
+        return RDB_BGSAVE_TYPE_FORK;
+    }
     return RDB_BGSAVE_TYPE_FORKLESS;
 }
 

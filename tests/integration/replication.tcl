@@ -2436,6 +2436,54 @@ foreach primary_diskless {yes no} {
     }
 }
 
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
+    set primary [srv 0 client]
+    $primary set big 0
+    $primary select 2
+    $primary debug populate 10000
+    $primary select 0
+
+    start_server {overrides {save {}}} {
+        set replica1 [srv 0 client]
+        set replica1_pid [srv 0 pid]
+
+        start_server {overrides {save {}}} {
+            set replica2 [srv 0 client]
+            set replica2_pid [srv 0 pid]
+
+            test "Forkless sync drops its replicas when the inline queue exceeds the output buffer limit" {
+                $primary config set client-output-buffer-limit "replica 1mb 0 0"
+                $primary config set repl-backlog-size 1mb
+                $primary config set rdb-key-save-delay 100
+                $primary config set repl-diskless-sync-delay 5
+                $primary config set repl-diskless-sync-max-replicas 2
+                $replica1 replicaof [srv -2 host] [srv -2 port]
+                $replica2 replicaof [srv -2 host] [srv -2 port]
+                wait_for_condition 100 100 {
+                    [s -2 rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "Forkless save didn't start"
+                }
+                pause_process $replica1_pid
+                pause_process $replica2_pid
+                for {set i 0} {$i < 100} {incr i} { $primary set big [string repeat x 100000] }
+                wait_for_condition 50 100 {
+                    [s -2 client_output_buffer_limit_disconnections] == 2
+                } else {
+                    fail "Primary didn't drop both replicas"
+                }
+                assert_equal 0 [s -2 total_forks]
+                resume_process $replica1_pid
+                resume_process $replica2_pid
+                $primary config set rdb-key-save-delay 0
+                $primary config set repl-diskless-sync-max-replicas 0
+                $primary config set client-output-buffer-limit "replica 256mb 64mb 60"
+                $primary config set repl-backlog-size 10mb
+            }
+        }
+    }
+}
+
 foreach kind {multi eval} {
     start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync-delay 0}} {
         set primary [srv 0 client]

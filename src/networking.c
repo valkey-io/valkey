@@ -33,6 +33,7 @@
 #include "cluster_migrateslots.h"
 #include "script.h"
 #include "forkless.h"
+#include "bgiteration.h"
 #include "intset.h"
 #include "sds.h"
 #include "fpconv_dtoa.h"
@@ -6706,7 +6707,12 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
         }
         /* A compressed batch keeps this cursor pinned until the staged output
          * drains, so repl_buf_size already represents all unsent data. */
-        return repl_buf_size + (repl_node_size * repl_node_num);
+        size_t usage = repl_buf_size + (repl_node_size * repl_node_num);
+        /* While a forkless sync scans, its queued inline writes are shared by
+         * all its replicas, like the backlog, so each replica is charged all. */
+        if (c->flag.forkless_managed && forklessIteratorOwnsIncomingReplication())
+            usage += bgIteration_memoryInuseForReplication();
+        return usage;
     }
 
     size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);

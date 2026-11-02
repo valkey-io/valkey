@@ -173,6 +173,15 @@ int rw_verbatim(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return RedisModule_ReplyWithVerbatimString(ctx, verbatim_str, verbatim_len);
 }
 
+/* Misuses the API: the postponed length is never set. */
+int rw_postponed_unmatched(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    return VALKEYMODULE_OK;
+}
+
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     REDISMODULE_NOT_USED(argv);
     REDISMODULE_NOT_USED(argc);
@@ -209,6 +218,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         return REDISMODULE_ERR;
     if (RedisModule_CreateCommand(ctx,"rw.verbatim",rw_verbatim,"",0,0,0) != REDISMODULE_OK)
         return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"rw.postponed_unmatched",rw_postponed_unmatched,"",0,0,0) != VALKEYMODULE_OK)
+        return VALKEYMODULE_ERR;
 
     return REDISMODULE_OK;
 }

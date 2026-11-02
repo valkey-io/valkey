@@ -1538,11 +1538,12 @@ typedef struct client {
 /* Forward declaration */
 bool isImportSlotMigrationJob(slotMigrationJob *job);
 
-/* Absolute postpone mask from client IO offload state (not artificial READ hold). */
+/* Absolute postpone mask from client IO offload state and forkless ownership (not artificial READ hold). */
 static inline int clientConnPostponeMaskFromIOState(client *c) {
     int mask = 0;
     if (c->io_read_state != CLIENT_IDLE) mask |= CONN_POSTPONE_READ;
     if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+    if (c->flag.forkless_managed) mask |= CONN_POSTPONE_WRITE;
     return mask;
 }
 

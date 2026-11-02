@@ -448,10 +448,12 @@ static void resumeRegularReplicaActivity(client *c) {
     connSetBlocking(c->conn, false);
 
     c->flag.forkless_managed = 0;
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     /* Since this is a replica client, re-register with priority */
     connSetReadHandler(c->conn, readQueryFromClient);
     connSetPrivateData(c->conn, c);
+    connUpdateState(c->conn);
 }
 
 static void resumeClientsAndFreeClientList(forklessSaveInfo *saveInfo, bool successful) {
@@ -1002,6 +1004,7 @@ int forklessSaveToSockets(int req, int rdbver) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         connSetReadHandler(c->conn, NULL);
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     }
 
     /* Create a timer to process abandoned clients from the bg thread.

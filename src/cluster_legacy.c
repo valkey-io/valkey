@@ -2837,11 +2837,27 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     clusterSendFail(node->name);
 }
 
+/* Collapse a sub-replica chain once its grand-primary is available. */
+static void clusterRepairSubReplicaChain(void) {
+    if (myself->replicaof == NULL) return;
+
+    clusterNode *old_primary = myself->replicaof;
+    clusterNode *grand_primary = old_primary->replicaof;
+    if (grand_primary == NULL || grand_primary == myself || nodeFailed(grand_primary)) return;
+
+    serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
+              grand_primary->name, old_primary->name);
+    clusterSetPrimary(grand_primary, 1, !areInSameShard(grand_primary, myself));
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
+                         CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+}
+
 /* This function is called only if a node is marked as FAIL, but we are able
  * to reach it again. It checks if there are the conditions to undo the FAIL
  * state. */
 void clearNodeFailureIfNeeded(clusterNode *node) {
     mstime_t now = mstime();
+    int failure_cleared = 0;
 
     serverAssert(nodeFailed(node));
 
@@ -2856,6 +2872,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         }
         if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
+        failure_cleared = 1;
     }
 
     /* If it is a primary and...
@@ -2874,7 +2891,11 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         }
         if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
+        failure_cleared = 1;
     }
+
+    if (failure_cleared && myself->replicaof && myself->replicaof->replicaof == node)
+        clusterRepairSubReplicaChain();
 }
 
 /* Return 1 if we already have a node in HANDSHAKE state matching the
@@ -4653,23 +4674,17 @@ int clusterProcessPacket(clusterLink *link) {
                      *
                      * Therefore, it's essential to delay any shard_id updates until after the replication
                      * relationship has been properly established and verified. */
-                    if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
-                        /* Safeguard against sub-replicas.
-                         *
-                         * A replica's primary can turn itself into a replica if its last slot
-                         * is removed. If no other node takes over the slot, there is nothing
-                         * else to trigger replica migration. In this case, they are not in the
-                         * same shard, so a full sync is required.
-                         *
-                         * Or a replica's primary can turn itself into a replica of its other
-                         * replica during a failover. In this case, they are in the same shard,
-                         * so we can try a psync. */
-                        serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
-                                  myself->replicaof->replicaof->name, myself->replicaof->name);
-                        clusterSetPrimary(myself->replicaof->replicaof, 1,
-                                          !areInSameShard(myself->replicaof->replicaof, myself));
-                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
-                                             CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+                    clusterNode *grand_primary = myself->replicaof ? myself->replicaof->replicaof : NULL;
+                    if (grand_primary && grand_primary != myself && nodeFailed(grand_primary)) {
+                        serverLog(LL_NOTICE,
+                                  "I'm a sub-replica, but node %.40s (%s) is failed. "
+                                  "Keeping my current primary %.40s (%s)",
+                                  grand_primary->name, humanNodename(grand_primary),
+                                  myself->replicaof->name, humanNodename(myself->replicaof));
+                    } else if (grand_primary && grand_primary != myself) {
+                        /* A primary can become a replica after losing its slots or
+                         * during failover. Collapse the resulting sub-replica chain. */
+                        clusterRepairSubReplicaChain();
                     }
 
                     /* Update the shard_id when a replica is connected to its

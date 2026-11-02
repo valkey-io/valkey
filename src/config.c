@@ -898,19 +898,115 @@ static dict *matchPatternsToConfigs(robj **patterns, int pattern_count) {
  * CONFIG SET implementation
  *----------------------------------------------------------------------------*/
 
+/* Sets each config to its new value, then runs the apply functions. If any set or apply
+ * fails, all configs are restored to their previous values. Returns 1 on success, or 0
+ * with errstr and err_arg_name set. Shared by CONFIG SET and CONFIG RESET. */
+static int performConfigSet(standardConfig **set_configs,
+                            const char **config_names,
+                            sds *new_values,
+                            int config_count,
+                            const char **errstr,
+                            const char **err_arg_name) {
+    list *module_configs_apply = listCreate();
+    sds *old_values = zcalloc(sizeof(sds *) * config_count);
+    apply_fn *apply_fns = zcalloc(sizeof(apply_fn) * config_count); /* TODO: make this a set for better performance */
+    int *config_map_fns = zmalloc(sizeof(int) * config_count);
+    int i, j, ret = 0;
+
+    /* Backup old values before setting new ones */
+    for (i = 0; i < config_count; i++) old_values[i] = set_configs[i]->interface.get(set_configs[i]);
+
+    /* Set all new values (don't apply yet) */
+    for (i = 0; i < config_count; i++) {
+        int res = performInterfaceSet(set_configs[i], new_values[i], errstr);
+        if (!res) {
+            restoreBackupConfig(set_configs, old_values, i + 1, NULL, NULL);
+            *err_arg_name = set_configs[i]->name;
+            goto end;
+        } else if (res == 1) {
+            /* A new value was set, if this config has an apply function then store it for execution later */
+            if (set_configs[i]->flags & MODULE_CONFIG) {
+                addModuleConfigApply(module_configs_apply, set_configs[i]->privdata);
+            } else if (set_configs[i]->interface.apply) {
+                /* Check if this apply function is already stored */
+                int exists = 0;
+                for (j = 0; apply_fns[j] != NULL && j <= i; j++) {
+                    if (apply_fns[j] == set_configs[i]->interface.apply) {
+                        exists = 1;
+                        break;
+                    }
+                }
+                /* Apply function not stored, store it */
+                if (!exists) {
+                    apply_fns[j] = set_configs[i]->interface.apply;
+                    config_map_fns[j] = i;
+                }
+            }
+        }
+    }
+
+    /* Apply all configs after being set */
+    for (i = 0; i < config_count && apply_fns[i] != NULL; i++) {
+        if (!apply_fns[i](errstr)) {
+            serverLog(
+                LL_WARNING,
+                "Failed applying new configuration. Possibly related to new %s setting. Restoring previous settings.",
+                set_configs[config_map_fns[i]]->name);
+            restoreBackupConfig(set_configs, old_values, config_count, apply_fns, NULL);
+            *err_arg_name = set_configs[config_map_fns[i]]->name;
+            goto end;
+        }
+    }
+    /* Apply all module configs that were set. */
+    if (!moduleConfigApplyConfig(module_configs_apply, errstr, err_arg_name)) {
+        serverLogRaw(LL_WARNING, "Failed applying new module configuration. Restoring previous settings.");
+        restoreBackupConfig(set_configs, old_values, config_count, apply_fns, module_configs_apply);
+        goto end;
+    }
+
+    ValkeyModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CONFIG, VALKEYMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
+    ret = 1;
+
+end:
+    for (i = 0; i < config_count; i++) sdsfree(old_values[i]);
+    zfree(old_values);
+    zfree(apply_fns);
+    zfree(config_map_fns);
+    listRelease(module_configs_apply);
+    return ret;
+}
+
+/* Replies with the error for a failed CONFIG SET or CONFIG RESET. */
+static void addConfigSetErrorReply(client *c,
+                                   const char *subcommand,
+                                   int deny_loading_error,
+                                   const char *invalid_arg_name,
+                                   const char *errstr,
+                                   const char *err_arg_name) {
+    if (deny_loading_error) {
+        /* We give the loading error precedence because it may be handled by clients differently, unlike a plain -ERR. */
+        addReplyErrorObject(c, shared.loadingerr);
+    } else if (invalid_arg_name) {
+        addReplyErrorFormat(c, "Unknown option or number of arguments for CONFIG %s - '%s'", subcommand,
+                            invalid_arg_name);
+    } else if (errstr) {
+        addReplyErrorFormat(c, "CONFIG %s failed (possibly related to argument '%s') - %s", subcommand, err_arg_name,
+                            errstr);
+    } else {
+        addReplyErrorFormat(c, "CONFIG %s failed (possibly related to argument '%s')", subcommand, err_arg_name);
+    }
+}
+
 void configSetCommand(client *c) {
     const char *errstr = NULL;
     const char *invalid_arg_name = NULL;
     const char *err_arg_name = NULL;
     standardConfig **set_configs; /* TODO: make this a dict for better performance */
-    list *module_configs_apply;
     const char **config_names;
     sds *new_values;
-    sds *old_values = NULL;
-    apply_fn *apply_fns; /* TODO: make this a set for better performance */
     int config_count, i, j;
     int invalid_args = 0, deny_loading_error = 0;
-    int *config_map_fns;
 
     /* Make sure we have an even number of arguments: conf-val pairs */
     if (c->argc & 1) {
@@ -919,13 +1015,9 @@ void configSetCommand(client *c) {
     }
     config_count = (c->argc - 2) / 2;
 
-    module_configs_apply = listCreate();
     set_configs = zcalloc(sizeof(standardConfig *) * config_count);
     config_names = zcalloc(sizeof(char *) * config_count);
     new_values = zmalloc(sizeof(sds *) * config_count);
-    old_values = zcalloc(sizeof(sds *) * config_count);
-    apply_fns = zcalloc(sizeof(apply_fn) * config_count);
-    config_map_fns = zmalloc(sizeof(int) * config_count);
 
     /* Find all relevant configs */
     for (i = 0; i < config_count; i++) {
@@ -981,84 +1073,15 @@ void configSetCommand(client *c) {
         new_values[i] = objectGetVal(c->argv[2 + i * 2 + 1]);
     }
 
-    if (invalid_args) goto err;
-
-    /* Backup old values before setting new ones */
-    for (i = 0; i < config_count; i++) old_values[i] = set_configs[i]->interface.get(set_configs[i]);
-
-    /* Set all new values (don't apply yet) */
-    for (i = 0; i < config_count; i++) {
-        int res = performInterfaceSet(set_configs[i], new_values[i], &errstr);
-        if (!res) {
-            restoreBackupConfig(set_configs, old_values, i + 1, NULL, NULL);
-            err_arg_name = set_configs[i]->name;
-            goto err;
-        } else if (res == 1) {
-            /* A new value was set, if this config has an apply function then store it for execution later */
-            if (set_configs[i]->flags & MODULE_CONFIG) {
-                addModuleConfigApply(module_configs_apply, set_configs[i]->privdata);
-            } else if (set_configs[i]->interface.apply) {
-                /* Check if this apply function is already stored */
-                int exists = 0;
-                for (j = 0; apply_fns[j] != NULL && j <= i; j++) {
-                    if (apply_fns[j] == set_configs[i]->interface.apply) {
-                        exists = 1;
-                        break;
-                    }
-                }
-                /* Apply function not stored, store it */
-                if (!exists) {
-                    apply_fns[j] = set_configs[i]->interface.apply;
-                    config_map_fns[j] = i;
-                }
-            }
-        }
-    }
-
-    /* Apply all configs after being set */
-    for (i = 0; i < config_count && apply_fns[i] != NULL; i++) {
-        if (!apply_fns[i](&errstr)) {
-            serverLog(
-                LL_WARNING,
-                "Failed applying new configuration. Possibly related to new %s setting. Restoring previous settings.",
-                set_configs[config_map_fns[i]]->name);
-            restoreBackupConfig(set_configs, old_values, config_count, apply_fns, NULL);
-            err_arg_name = set_configs[config_map_fns[i]]->name;
-            goto err;
-        }
-    }
-    /* Apply all module configs that were set. */
-    if (!moduleConfigApplyConfig(module_configs_apply, &errstr, &err_arg_name)) {
-        serverLogRaw(LL_WARNING, "Failed applying new module configuration. Restoring previous settings.");
-        restoreBackupConfig(set_configs, old_values, config_count, apply_fns, module_configs_apply);
-        goto err;
-    }
-
-    ValkeyModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
-    moduleFireServerEvent(VALKEYMODULE_EVENT_CONFIG, VALKEYMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
-    addReply(c, shared.ok);
-    goto end;
-
-err:
-    if (deny_loading_error) {
-        /* We give the loading error precedence because it may be handled by clients differently, unlike a plain -ERR. */
-        addReplyErrorObject(c, shared.loadingerr);
-    } else if (invalid_arg_name) {
-        addReplyErrorFormat(c, "Unknown option or number of arguments for CONFIG SET - '%s'", invalid_arg_name);
-    } else if (errstr) {
-        addReplyErrorFormat(c, "CONFIG SET failed (possibly related to argument '%s') - %s", err_arg_name, errstr);
+    if (invalid_args || !performConfigSet(set_configs, config_names, new_values, config_count, &errstr, &err_arg_name)) {
+        addConfigSetErrorReply(c, "SET", deny_loading_error, invalid_arg_name, errstr, err_arg_name);
     } else {
-        addReplyErrorFormat(c, "CONFIG SET failed (possibly related to argument '%s')", err_arg_name);
+        addReply(c, shared.ok);
     }
-end:
+
     zfree(set_configs);
     zfree(config_names);
     zfree(new_values);
-    for (i = 0; i < config_count; i++) sdsfree(old_values[i]);
-    zfree(old_values);
-    zfree(apply_fns);
-    zfree(config_map_fns);
-    listRelease(module_configs_apply);
 }
 
 /* Used by configGetCommand */

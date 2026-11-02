@@ -4141,7 +4141,7 @@ start_server {tags {"zset" "cluster:skip"}} {
     }
 }
 
-start_server {tags {"zset" "needs:debug" "needs:local-process"} overrides {save ""}} {
+start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
     # Members of equal length, so the sampled per-member estimate inside
     # MEMORY USAGE is exact and the command becomes a deterministic function
     # of member count and tree nodes once the hashtable is frozen.
@@ -4166,21 +4166,21 @@ start_server {tags {"zset" "needs:debug" "needs:local-process"} overrides {save 
 
     test {ZSET btree leaf compaction pauses while a child process exists} {
         r config set rdb-key-save-delay 1000000
-        r del z1 z2
+        r del z1{t} z2{t}
         set n 12000
 
         # Two keys with the same members, scores and insertion order share the
         # same hash seed, so their member hashtables stay byte-for-byte alike
         # through identical deletions. Any MEMORY USAGE difference between
         # them is tree nodes.
-        zset_fill_fixed z1 $n
-        zset_fill_fixed z2 $n
-        assert_encoding btree z1
-        assert_encoding btree z2
+        zset_fill_fixed z1{t} $n
+        zset_fill_fixed z2{t} $n
+        assert_encoding btree z1{t}
+        assert_encoding btree z2{t}
         r debug dict-resizing 0
-        assert_no_match "*Hash table 1 stats*" [r debug htstats-key z1]
-        assert_no_match "*Hash table 1 stats*" [r debug htstats-key z2]
-        assert_equal [r memory usage z1] [r memory usage z2]
+        assert_no_match "*Hash table 1 stats*" [r debug htstats-key z1{t}]
+        assert_no_match "*Hash table 1 stats*" [r debug htstats-key z2{t}]
+        assert_equal [r memory usage z1{t}] [r memory usage z2{t}]
 
         r bgsave
         wait_for_condition 10 100 {
@@ -4192,28 +4192,28 @@ start_server {tags {"zset" "needs:debug" "needs:local-process"} overrides {save 
         # With a child alive, remove two of every three members from z1.
         # Scattered in rank, so every leaf thins to about a third and none
         # empties. The gate must keep every leaf.
-        zset_remove_every z1 $n 3 1
-        zset_remove_every z1 $n 3 2
-        set m1 [r memory usage z1]
+        zset_remove_every z1{t} $n 3 1
+        zset_remove_every z1{t} $n 3 2
+        set m1 [r memory usage z1{t}]
 
         exec kill -9 [get_child_pid 0]
         waitForBgsave r
 
         # The same deletions on z2 with no child re-pack each bottom node as
         # it crosses the trigger, freeing around a hundred 512-byte leaves.
-        zset_remove_every z2 $n 3 1
-        zset_remove_every z2 $n 3 2
-        assert_equal [r zcard z1] [r zcard z2]
-        set m2 [r memory usage z2]
+        zset_remove_every z2{t} $n 3 1
+        zset_remove_every z2{t} $n 3 2
+        assert_equal [r zcard z1{t}] [r zcard z2{t}]
+        set m2 [r memory usage z2{t}]
         assert_morethan [expr {$m1 - $m2}] 8192
 
         # Compaction has resumed on z1 too: after the same further deletions
         # both trees have re-packed the same item counts and converge.
-        zset_remove_every z1 $n 6 0
-        zset_remove_every z2 $n 6 0
-        assert_equal [r zcard z1] [r zcard z2]
-        set m1b [r memory usage z1]
-        set m2b [r memory usage z2]
+        zset_remove_every z1{t} $n 6 0
+        zset_remove_every z2{t} $n 6 0
+        assert_equal [r zcard z1{t}] [r zcard z2{t}]
+        set m1b [r memory usage z1{t}]
+        set m2b [r memory usage z2{t}]
         assert_lessthan [expr {abs($m1b - $m2b)}] 4096
         assert_lessthan $m1b [expr {$m1 - 16384}]
 

@@ -38,6 +38,20 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
         }
 
+        test {benchmark: RESP3 push is not counted as a command reply} {
+            set marker [tmpfile benchmark-push-reply]
+            file delete -force $marker
+            set server [open [list | [info nameofexecutable] tests/support/benchmark-push-server.tcl $marker] r]
+            gets $server port
+            set cmd [valkeybenchmark 127.0.0.1 $port "-c 1 -n 1 -3 --enable-tracking PING"]
+            set result [catch {exec {*}$cmd 2>@1} output]
+            set reply_sent [file exists $marker]
+            catch {close $server}
+            file delete -force $marker
+            assert_equal 0 $result
+            assert_equal 1 $reply_sent
+        }
+
         test {benchmark: single request completes across write retries} {
             # TLS negotiation can make the first write return zero. Retrying
             # must not count the same request again and exhaust the -n limit.

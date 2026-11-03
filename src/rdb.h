@@ -209,6 +209,8 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbStartBgsave(int bgsave_type);
 int resolveBgsaveType(void);
+int isPersistenceSaveInProgress(void);
+size_t rdbSnapshotKeyCount(int req);
 int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
 int rdbSaveToFile(const char *filename);

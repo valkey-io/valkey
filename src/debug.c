@@ -1172,6 +1172,8 @@ void debugCommand(client *c) {
         const char *name = objectGetVal(c->argv[2]);
         if (!strcasecmp(name, "BIO_CLUSTER_SAVE")) {
             type = BIO_CLUSTER_SAVE;
+        } else if (!strcasecmp(name, "BIO_RDB_SAVE")) {
+            type = BIO_RDB_SAVE;
         } else {
             addReplySubcommandSyntaxError(c);
             return;

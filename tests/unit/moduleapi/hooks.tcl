@@ -321,6 +321,8 @@ tags "modules" {
             test {Test replica-online hook} {
                 assert_equal [r -1 hooks.event_count replica-online] 1
                 assert_equal [r -1 hooks.event_count replica-offline] 0
+                assert_equal 0 [r -1 hooks.event_last replica-online-bgsave]
+                assert_equal -1 [r -1 hooks.event_last replica-online-bgsave-time]
             }
 
             test {Test master link down hook} {

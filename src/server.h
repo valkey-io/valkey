@@ -1868,6 +1868,38 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_REPL_OUTPUT_BYTES
 } childInfoType;
 
+typedef enum {
+    REPL_RDB_STATUS_NONE,
+    REPL_RDB_STATUS_OK,
+    REPL_RDB_STATUS_ERR,
+    REPL_RDB_STATUS_CANCELLED
+} replicationRdbStatus;
+
+typedef struct {
+    monotime start_time;
+    rdbWriteTarget target;
+    compressionAlgo compression;
+    int rdb_version;
+    int req;
+    size_t keys_processed;
+    size_t keys_total;
+    size_t cow_size;
+    size_t cow_peak;
+    monotime cow_updated;
+    int sample_available;
+} rdbSnapshotMetrics;
+
+typedef struct {
+    rdbSnapshotMetrics current;
+    rdbSnapshotMetrics last;
+    replicationRdbStatus last_status;
+    long long last_time_ms;
+    long long snapshots;
+    long long failures;
+    long long cancellations;
+    long long start_failures;
+} replicationRdbMetrics;
+
 struct valkeyServer {
     /* General */
     pid_t pid;                                        /* Main process pid. */
@@ -2185,11 +2217,11 @@ struct valkeyServer {
     struct saveparam *saveparams;         /* Save points array for RDB */
     int saveparamslen;                    /* Number of saving points */
     char *rdb_filename;                   /* Name of RDB file */
+    char *repl_rdb_filename;              /* Name of the RDB file used to feed replicas */
     int rdb_compression;                  /* RDB compression mode */
     int repl_compression;                 /* Replication compression mode */
     int rdb_checksum;                     /* Use RDB checksum? */
-    int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
-                                             the instance does not use persistence. */
+    int rdb_del_sync_files;               /* Remove sync RDBs; received dbfilename only without persistence. */
     int forkless_infrastructure_enabled;  /* Enable forkless options support. */
     time_t lastsave;                      /* Unix time of last successful save */
     time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
@@ -2200,6 +2232,8 @@ struct valkeyServer {
     rdbBgsaveType cur_bgsave_type;        /* Current bgsave type. */
     rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */
     compressionAlgo rdb_child_sync_algo;  /* Streaming compression used by the active replication disk child. */
+    int rdb_child_rdbver;                 /* RDB version used by the active replication disk child. */
+    int rdb_child_for_replication;        /* Active child generates a full-sync RDB, not a persistence snapshot. */
     int lastbgsave_status;                /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */
@@ -2243,6 +2277,7 @@ struct valkeyServer {
     int shutdown_on_sigterm; /* Shutdown flags configured for SIGTERM. */
 
     /* Replication (primary) */
+    replicationRdbMetrics repl_rdb_metrics;
     char replid[CONFIG_RUN_ID_SIZE + 1];        /* My current replication ID. */
     char replid2[CONFIG_RUN_ID_SIZE + 1];       /* replid inherited from primary*/
     long long primary_repl_offset;              /* My current replication offset */
@@ -3432,6 +3467,7 @@ void feedReplicationBuffer(char *buf, size_t len);
 void freeReplicaReferencedReplBuffer(client *replica);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
 void updateReplicasWaitingBgsave(int bgsaveerr, int type);
+int rdbFilenamesInUse(void);
 void replicationCron(void);
 void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);

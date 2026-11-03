@@ -178,6 +178,17 @@ void replicationChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64
     char *keyname = (sub == VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE) ?
         "replica-online" : "replica-offline";
     LogNumericEvent(ctx, keyname, 0);
+    if (sub == VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE) {
+        ValkeyModuleServerInfoData *info =
+            ValkeyModule_GetServerInfo(ctx, "persistence");
+        LogNumericEvent(ctx, "replica-online-bgsave",
+                        ValkeyModule_ServerInfoGetFieldSigned(
+                            info, "rdb_bgsave_in_progress", NULL));
+        LogNumericEvent(ctx, "replica-online-bgsave-time",
+                        ValkeyModule_ServerInfoGetFieldSigned(
+                            info, "rdb_current_bgsave_time_sec", NULL));
+        ValkeyModule_FreeServerInfo(ctx, info);
+    }
 }
 
 void rasterLinkChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)

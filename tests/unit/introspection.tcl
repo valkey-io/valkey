@@ -1494,6 +1494,105 @@ start_server {tags {"introspection"}} {
         assert_equal [eval "r config set $backups"] "OK"
     }
 
+    test {CONFIG SET rejects equal RDB filenames from either option} {
+        set dbfilename [lindex [r config get dbfilename] 1]
+        set replfilename [lindex [r config get repl-rdbfilename] 1]
+        foreach {option value} [list dbfilename $replfilename repl-rdbfilename $dbfilename] {
+            assert_error {*dbfilename and repl-rdbfilename must be different*} {
+                r config set $option $value
+            }
+            assert_equal $dbfilename [lindex [r config get dbfilename] 1]
+            assert_equal $replfilename [lindex [r config get repl-rdbfilename] 1]
+        }
+    } {} {external:skip}
+
+    test {CONFIG SET rolls back a batch with equal RDB filenames} {
+        set dbfilename [lindex [r config get dbfilename] 1]
+        set replfilename [lindex [r config get repl-rdbfilename] 1]
+        set timeout [lindex [r config get timeout] 1]
+        foreach order {{dbfilename repl-rdbfilename} {repl-rdbfilename dbfilename}} {
+            assert_error {*dbfilename and repl-rdbfilename must be different*} {
+                r config set timeout 42 [lindex $order 0] shared.rdb [lindex $order 1] shared.rdb
+            }
+            assert_equal $dbfilename [lindex [r config get dbfilename] 1]
+            assert_equal $replfilename [lindex [r config get repl-rdbfilename] 1]
+            assert_equal $timeout [lindex [r config get timeout] 1]
+        }
+    } {} {external:skip}
+
+    test {CONFIG SET can atomically swap RDB filenames in either order} {
+        set dbfilename [lindex [r config get dbfilename] 1]
+        set replfilename [lindex [r config get repl-rdbfilename] 1]
+        assert_equal OK [r config set dbfilename $replfilename repl-rdbfilename $dbfilename]
+        assert_equal $replfilename [lindex [r config get dbfilename] 1]
+        assert_equal $dbfilename [lindex [r config get repl-rdbfilename] 1]
+        assert_equal OK [r config set repl-rdbfilename $replfilename dbfilename $dbfilename]
+        assert_equal $dbfilename [lindex [r config get dbfilename] 1]
+        assert_equal $replfilename [lindex [r config get repl-rdbfilename] 1]
+    } {} {external:skip}
+
+    test {Server rejects equal RDB filenames at startup} {
+        foreach args {{--dbfilename repl-dump.rdb} {--repl-rdbfilename dump.rdb}
+                      {--dbfilename shared.rdb --repl-rdbfilename shared.rdb}
+                      {--repl-rdbfilename shared.rdb --dbfilename shared.rdb}} {
+            assert_equal 1 [catch {exec $::VALKEY_SERVER_BIN {*}$args --port 0} err]
+            assert_match {*dbfilename and repl-rdbfilename must be different*} $err
+        }
+    } {} {external:skip}
+
+    test {Server validates final RDB filenames independent of directive order} {
+        foreach overrides {{dbfilename repl-dump.rdb repl-rdbfilename dump.rdb save ""}
+                           {repl-rdbfilename dump.rdb dbfilename repl-dump.rdb save ""}} {
+            start_server [list overrides $overrides] {
+                assert_equal repl-dump.rdb [lindex [r config get dbfilename] 1]
+                assert_equal dump.rdb [lindex [r config get repl-rdbfilename] 1]
+            }
+        }
+    } {} {external:skip}
+
+    test {Server validates included RDB filenames after outer configuration} {
+        set path [file normalize [tmpfile rdb-filenames.conf]]
+        set fp [open $path w]
+        puts $fp "dbfilename repl-dump.rdb"
+        close $fp
+
+        foreach depth {1 2} {
+            if {$depth == 2} {
+                set nested_path [file normalize [tmpfile rdb-filenames-include.conf]]
+                set fp [open $nested_path w]
+                puts $fp "include \"$path\""
+                close $fp
+                set path $nested_path
+            }
+            start_server [list config_lines [list include "\"$path\"" repl-rdbfilename other.rdb]] {
+                assert_equal repl-dump.rdb [lindex [r config get dbfilename] 1]
+                assert_equal other.rdb [lindex [r config get repl-rdbfilename] 1]
+            }
+        }
+    } {} {external:skip}
+
+    test {Server validates included RDB filenames after CLI overrides} {
+        set path [file normalize [tmpfile rdb-filenames.conf]]
+        set fp [open $path w]
+        puts $fp "dbfilename repl-dump.rdb"
+        close $fp
+
+        start_server [list config_lines [list include "\"$path\""] args {--repl-rdbfilename other.rdb}] {
+            assert_equal repl-dump.rdb [lindex [r config get dbfilename] 1]
+            assert_equal other.rdb [lindex [r config get repl-rdbfilename] 1]
+        }
+    } {} {external:skip}
+
+    test {Server rejects equal included RDB filenames without an override} {
+        set path [file normalize [tmpfile rdb-filenames.conf]]
+        set fp [open $path w]
+        puts $fp "dbfilename repl-dump.rdb"
+        close $fp
+
+        assert_equal 1 [catch {exec $::VALKEY_SERVER_BIN --include $path --port 0} err]
+        assert_match {*dbfilename and repl-rdbfilename must be different*} $err
+    } {} {external:skip}
+
     test {CONFIG SET rollback on set error} {
         # This test passes an invalid percent value to maxmemory-clients which should cause an
         # input verification failure during the "set" phase before trying to apply the

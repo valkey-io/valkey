@@ -40,7 +40,7 @@ start_server {} {
     $replica1 replicaof $master_host $master_port
     $replica2 replicaof $master_host $master_port
     wait_for_condition 50 100 {
-        ([s rdb_bgsave_in_progress] == 1) &&
+        ([s repl_rdb_in_progress] == 1) &&
         [lindex [$replica1 role] 3] eq {sync} &&
         [lindex [$replica2 role] 3] eq {sync}
     } else {
@@ -147,7 +147,7 @@ start_server {} {
         $replica2 replicaof $master_host $master_port
         # Make sure replica2 is waiting bgsave
         wait_for_condition 5000 100 {
-            ([s rdb_bgsave_in_progress] == 1) &&
+            ([s repl_rdb_in_progress] == 1) &&
             [lindex [$replica2 role] 3] eq {sync}
         } else {
             fail "fail to sync with replicas"
@@ -179,7 +179,7 @@ start_server {} {
         }
 
         # replica2 still waits for bgsave ending
-        assert {[s rdb_bgsave_in_progress] eq {1} && [lindex [$replica2 role] 3] eq {sync}}
+        assert {[s repl_rdb_in_progress] eq {1} && [lindex [$replica2 role] 3] eq {sync}}
         # master accepted replica1 partial resync
         if { $dualchannel == "yes" } {
             # 2 psync using main channel

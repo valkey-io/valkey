@@ -1551,9 +1551,10 @@ long long streamEstimateDistanceFromFirstEverEntry(stream *s, streamID *id) {
     return SCG_INVALID_ENTRIES_READ;
 }
 
-/* As a result of an explicit XCLAIM or XREADGROUP command, new entries
- * are created in the pending list of the stream and consumers. We need
- * to propagate this changes in the form of XCLAIM commands. */
+/* As a result of an explicit XCLAIM, XAUTOCLAIM or XREADGROUP command,
+ * entries are created, updated or removed in the pending list of the stream
+ * and consumers. We need to propagate these changes in the form of XCLAIM
+ * commands. */
 void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupname, robj *id, streamNACK *nack) {
     /* We need to generate an XCLAIM that will work in a idempotent fashion:
      *
@@ -1855,6 +1856,9 @@ size_t streamReplyWithRange(client *c,
  * group and consumer arguments, but with a range that is referring to already
  * delivered messages. In this case we just emit messages that are already
  * in the history of the consumer, fetching the IDs from its PEL.
+ *
+ * Every entry it emits that is still in the stream gets its delivery time and
+ * counter updated. If 'spi' is not NULL, the update is propagated as XCLAIM.
  *
  * Note that this function does not have a 'rev' argument because it's not
  * possible to iterate in reverse using a group. Basically this function

@@ -332,6 +332,20 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal \{\"K\\\\x00\\\\x01ey\":\"V\\\\x00\\\\x01alue\"\} [run_cli --quoted-json hgetall npkey]
     }
 
+    test_nontty_cli "Quoted JSON preserves escaped backslash runs" {
+        set slash [format %c 92]
+        set quote [format %c 34]
+        foreach count {0 1 2 7 8 15 16 17 31 32 33 63 64 65 127} {
+            set input "left[string repeat $slash $count]right"
+            r set quoted-json-input $input
+            set expected "${quote}left[string repeat $slash [expr {$count * 4}]]right${quote}"
+            assert_equal $expected [run_cli --quoted-json get quoted-json-input]
+        }
+        r set quoted-json-input "\x00\x01\xff"
+        set expected "${quote}${slash}${slash}x00${slash}${slash}x01${slash}${slash}xff${quote}"
+        assert_equal $expected [run_cli --quoted-json get quoted-json-input]
+    }
+
     test_nontty_cli "Status reply" {
         assert_equal "OK" [run_cli set key bar]
         assert_equal "bar" [r get key]

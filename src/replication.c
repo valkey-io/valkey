@@ -2957,8 +2957,6 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
-    /* A replication full sync is allowed to honor the inline-replication opcode;
-     * the loader gates that on RDBFLAGS_REPLICATION. */
     int flags = RDBFLAGS_REPLICATION;
     /* If we aren't using the swapdb method, then we want to empty the data before loading the rdb */
     if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) flags |= RDBFLAGS_EMPTY_DATA;

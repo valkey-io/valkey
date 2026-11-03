@@ -442,6 +442,40 @@ run_solo {defrag} {
         }
     }
 
+    proc test_volatile_set {type} {
+        set title "Active Defrag big set with member TTLs: $type"
+        test $title {
+            set n 200000
+            # A distinct deadline per member, so a permuted or rewritten expiry index
+            # cannot pass the survivor check below.
+            set expiry_base [expr {[clock milliseconds] + 100000000}]
+            perform_defrag_test $title populate {
+                set rd [valkey_deferring_client]
+                $rd client reply off
+                set val [string repeat A 300]
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd saddex myset PXAT [expr {$expiry_base + $j}] MEMBERS 1 m$j:$val
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
+                }
+            } fragment {
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd srem myset m$j:$val
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
+                }
+                $rd close
+            }
+            for {set i 1} {$i < $n} {incr i 1000} {
+                set batch {}
+                set expected {}
+                for {set j $i} {$j < $i + 1000} {incr j 2} {
+                    lappend batch m$j:$val
+                    lappend expected [expr {$expiry_base + $j}]
+                }
+                assert_equal $expected [r spexpiretime myset MEMBERS [llength $batch] {*}$batch]
+            }
+        }
+    }
+
     proc test_big_zset {type score} {
         set title "Active Defrag big zset: $type $score-score"
         test $title {
@@ -671,6 +705,7 @@ run_solo {defrag} {
     lappend tests [list test_big_hash standalone $std_overrides]
     lappend tests [list test_big_list standalone $std_overrides]
     lappend tests [list test_big_set standalone $std_overrides]
+    lappend tests [list test_volatile_set standalone $std_overrides]
     lappend tests [list test_big_zset_random_score standalone $std_overrides]
     lappend tests [list test_big_zset_fixed_score standalone $std_overrides]
     lappend tests [list test_stream standalone $std_overrides]
@@ -682,6 +717,7 @@ run_solo {defrag} {
     lappend tests [list test_big_hash cluster $std_overrides]
     lappend tests [list test_big_list cluster $std_overrides]
     lappend tests [list test_big_set cluster $std_overrides]
+    lappend tests [list test_volatile_set cluster $std_overrides]
     lappend tests [list test_big_zset_random_score cluster $std_overrides]
     lappend tests [list test_big_zset_fixed_score cluster $std_overrides]
     lappend tests [list test_stream cluster $std_overrides]

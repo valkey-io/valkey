@@ -1700,6 +1700,8 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
             val->ele = next;
             val->score = 1.0;
         } else if (op->encoding == OBJ_ENCODING_LISTPACK) {
+            while (it->lp.p != NULL && !setTypeListpackIsValidAt(it->lp.lp, it->lp.p))
+                it->lp.p = lpNext(it->lp.lp, it->lp.p);
             if (it->lp.p == NULL) return 0;
             val->estr = lpGetValue(it->lp.p, &val->elen, &val->ell);
             val->score = 1.0;
@@ -2056,6 +2058,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
     zset *dstzset = NULL;
     int withscores = 0;
     unsigned long cardinality = 0;
+    int volatile_source = 0;
     long limit = 0; /* Stop searching after reaching the limit. 0 means unlimited. */
 
     /* expect setnum input keys to be given */
@@ -2092,6 +2095,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
             src[i].subject = obj;
             src[i].type = obj->type;
             src[i].encoding = obj->encoding;
+            if (dstkey && obj->type == OBJ_SET && setTypeHasExpiredMembers(obj)) volatile_source = 1;
         } else {
             src[i].subject = NULL;
         }
@@ -2298,12 +2302,16 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                                 dstkey, c->db->id);
             addReplyLongLong(c, zsetLength(dstobj));
             server.dirty++;
+            if (volatile_source) propagateStoreAsEffects(c, dstkey, dstobj);
         } else {
             if (dbDelete(c->db, dstkey)) {
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
                 server.dirty++;
             }
+            /* The replica sees the hidden members as live, so an absent
+             * destination must be deleted there too. */
+            if (volatile_source) propagateStoreAsEffects(c, dstkey, NULL);
             addReply(c, shared.czero);
             decrRefCount(dstobj);
         }

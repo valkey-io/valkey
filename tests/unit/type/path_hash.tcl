@@ -823,11 +823,9 @@ start_server {tags {pathhash}} {
     } {} {needs:debug}
 
     test {Path Hash reload and RESTORE preserve mixed payloads around Listpack thresholds} {
-        set old_entries [lindex [r config get hash-max-listpack-entries] 1]
-        set old_value [lindex [r config get hash-max-listpack-value] 1]
-        r config set hash-max-listpack-value 64
+        test_config_set r hash-max-listpack-value 64
         foreach limit {0 4 512} {
-            r config set hash-max-listpack-entries $limit
+            test_config_set r hash-max-listpack-entries $limit
             r del threshold-tree threshold-restored
             set expected [dict create]
             foreach count [list [expr {max(1, $limit - 1)}] [expr {max(1, $limit)}] [expr {$limit + 1}]] {
@@ -865,11 +863,10 @@ start_server {tags {pathhash}} {
                 }
             }
         }
-        r config set hash-max-listpack-entries $old_entries
-        assert_equal OK [r config set hash-max-listpack-value $old_value]
     } {} {needs:debug}
 
     test {RESTORE rejects malformed path hash payloads without destabilizing the server} {
+        test_defer {r debug set-skip-checksum-validation 0}
         r debug set-skip-checksum-validation 1
 
         r del source
@@ -899,8 +896,7 @@ start_server {tags {pathhash}} {
 
         # Exercise early HashTable selection and cleanup of partially loaded
         # payloads as well as the default Listpack cases above.
-        set old_entries [lindex [r config get hash-max-listpack-entries] 1]
-        r config set hash-max-listpack-entries 0
+        test_config_set r hash-max-listpack-entries 0
         set truncated [string replace [r dump source] 11 end-10 {}]
         set oversized_count [string replace [r dump source] 4 4 "\x81\x00\x00\x00\x01\x00\x00\x00\x00"]
         foreach payload [list $empty_payload $duplicate_path $duplicate_field $truncated $oversized_count] {
@@ -908,8 +904,6 @@ start_server {tags {pathhash}} {
             assert_equal 0 [r exists corrupt]
             assert_equal PONG [r ping]
         }
-        r config set hash-max-listpack-entries $old_entries
-        assert_equal OK [r debug set-skip-checksum-validation 0]
     } {} {needs:debug}
 
     test {Large per-path payload promotes and survives RDB round trip} {

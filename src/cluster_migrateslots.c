@@ -134,8 +134,9 @@ static void clusterCleanupSlotMigrationLog(size_t max_len);
  * lets clusterFeedSlotExportJobs() visit only the exports in progress.
  *
  * The index is rebuilt from the job list on the first lookup after a job is
- * added, freed, or changes state. A job's type and slot ranges never change
- * after it is created, so no other event can change the index. */
+ * added, freed, or moves between finished and unfinished states. A job's type
+ * and slot ranges never change after it is created, so no other event can
+ * change the index. */
 static struct {
     bool dirty;
     /* Number of non-terminal export and import jobs. */
@@ -149,16 +150,78 @@ static struct {
 } slot_migration_index = {.dirty = true};
 
 /* Must be called after adding a job to server.cluster->slot_migration_jobs,
- * freeing a job, or changing a job's state. */
+ * freeing a job, or moving a job between finished and unfinished states. */
 static void markSlotMigrationIndexDirty(void) {
     slot_migration_index.dirty = true;
 }
 
+/* Keep job list insertion and index invalidation together. */
+static void slotMigrationJobListAdd(slotMigrationJob *job, bool at_head) {
+    if (at_head) {
+        listAddNodeHead(server.cluster->slot_migration_jobs, job);
+    } else {
+        listAddNodeTail(server.cluster->slot_migration_jobs, job);
+    }
+    markSlotMigrationIndexDirty();
+}
+
+/* Independently derive the expected index from the job list for debug checks.
+ * Do not refresh the cache here: a missed invalidation must remain visible.
+ * Compare export pointers without dereferencing potentially stale jobs. */
+static bool verifySlotMigrationIndex(void) {
+    serverAssert(!slot_migration_index.dirty);
+    int num_exports = 0, num_imports = 0;
+    bool slot_exporting[CLUSTER_SLOTS] = {0};
+    bool slot_importing[CLUSTER_SLOTS] = {0};
+    listNode *export_node = slot_migration_index.exports ? listFirst(slot_migration_index.exports) : NULL;
+
+    if (server.cluster && server.cluster->slot_migration_jobs) {
+        listIter li;
+        listNode *ln;
+        listRewind(server.cluster->slot_migration_jobs, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            slotMigrationJob *job = ln->value;
+            if (isSlotMigrationJobFinished(job)) continue;
+
+            bool *slots;
+            if (job->type == SLOT_MIGRATION_EXPORT) {
+                if (!export_node || export_node->value != job) return false;
+                export_node = listNextNode(export_node);
+                num_exports++;
+                slots = slot_exporting;
+            } else {
+                num_imports++;
+                slots = slot_importing;
+            }
+
+            listIter ri;
+            listNode *rn;
+            listRewind(job->slot_ranges, &ri);
+            while ((rn = listNext(&ri)) != NULL) {
+                slotRange *range = rn->value;
+                for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
+                    slots[slot] = true;
+                }
+            }
+        }
+    }
+
+    return export_node == NULL &&
+           num_exports == slot_migration_index.num_exports &&
+           num_imports == slot_migration_index.num_imports &&
+           memcmp(slot_exporting, slot_migration_index.slot_exporting, sizeof(slot_exporting)) == 0 &&
+           memcmp(slot_importing, slot_migration_index.slot_importing, sizeof(slot_importing)) == 0;
+}
+
 /* Rebuilds the index from server.cluster->slot_migration_jobs if a job was
- * added, freed, or changed state since the last rebuild. Every lookup that
- * reads the index calls this first. */
+ * added, freed, or moved between finished and unfinished states since the last
+ * rebuild. Every lookup that reads the index calls this first. With debug
+ * assertions enabled, check even a clean index to catch missed invalidation. */
 static void refreshSlotMigrationIndex(void) {
-    if (!slot_migration_index.dirty) return;
+    if (!slot_migration_index.dirty) {
+        debugServerAssert(verifySlotMigrationIndex());
+        return;
+    }
     slot_migration_index.dirty = false;
 
     memset(slot_migration_index.slot_exporting, 0, sizeof(slot_migration_index.slot_exporting));
@@ -170,7 +233,10 @@ static void refreshSlotMigrationIndex(void) {
     } else {
         slot_migration_index.exports = listCreate();
     }
-    if (!server.cluster || !server.cluster->slot_migration_jobs) return;
+    if (!server.cluster || !server.cluster->slot_migration_jobs) {
+        debugServerAssert(verifySlotMigrationIndex());
+        return;
+    }
 
     listIter li;
     listNode *ln;
@@ -199,6 +265,7 @@ static void refreshSlotMigrationIndex(void) {
             }
         }
     }
+    debugServerAssert(verifySlotMigrationIndex());
 }
 
 /* Create an empty list of slot ranges. */
@@ -501,8 +568,7 @@ int clusterRDBLoadSlotImport(rio *rdb) {
         listAddNodeTail(slot_ranges, slot_range);
     }
     slotMigrationJob *new_import = createSlotImportJob(NULL, NULL, objectGetVal(job_name), slot_ranges);
-    listAddNodeTail(server.cluster->slot_migration_jobs, new_import);
-    markSlotMigrationIndexDirty();
+    slotMigrationJobListAdd(new_import, false);
     decrRefCount(job_name);
     return C_OK;
 
@@ -723,8 +789,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
 
     slotMigrationJob *job = createSlotImportJob(c, source_node, name, slot_ranges);
     fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED);
-    listAddNodeHead(server.cluster->slot_migration_jobs, job);
-    markSlotMigrationIndexDirty();
+    slotMigrationJobListAdd(job, true);
 
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
@@ -918,6 +983,7 @@ slotMigrationJob *createSlotImportJob(client *c,
          * our primary node. If we full sync the entry will be removed. If we
          * are still a primary, or we end up being promoted, we still need this
          * tracking entry to know to broadcast FINISH to our replicas. */
+        /* The job is not in the job list yet, so no index invalidation is needed. */
         job->state = SLOT_IMPORT_OCCURRING_ON_PRIMARY;
         return job;
     }
@@ -926,6 +992,7 @@ slotMigrationJob *createSlotImportJob(client *c,
     memcpy(job->source_node_name, source_node->name, CLUSTER_NAMELEN);
     memcpy(job->target_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
 
+    /* The job is not in the job list yet, so no index invalidation is needed. */
     job->state = SLOT_IMPORT_WAIT_ACK;
     job->client = c;
     job->client->slot_migration_job = job;
@@ -1359,8 +1426,7 @@ void clusterCommandMigrateSlots(client *c) {
                                                server.hide_user_data_from_log);
     while ((ln = listNext(&li))) {
         slotMigrationJob *job = ln->value;
-        listAddNodeHead(server.cluster->slot_migration_jobs, job);
-        markSlotMigrationIndexDirty();
+        slotMigrationJobListAdd(job, true);
         serverLog(LL_NOTICE,
                   "Slot migration initiated through CLUSTER MIGRATESLOTS "
                   "command: %s (user request from '%s')",
@@ -1903,7 +1969,7 @@ void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot) {
     robj *selectcmd = NULL;
     while ((ln = listNext(&li))) {
         slotMigrationJob *job = (slotMigrationJob *)ln->value;
-        if (job->type != SLOT_MIGRATION_EXPORT) continue;
+        serverAssert(job->type == SLOT_MIGRATION_EXPORT);
         if (!job->client) continue;
         if (!isSlotMigrationJobInProgress(job) ||
             job->state < SLOT_EXPORT_SNAPSHOTTING) continue;
@@ -1922,6 +1988,7 @@ void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot) {
             addReplyBulk(job->client, argv[i]);
         }
     }
+    serverAssert(!slot_migration_index.dirty);
     if (selectcmd) {
         decrRefCount(selectcmd);
     }
@@ -2029,6 +2096,7 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
     job->last_update = job->ctime;
     job->last_ack = job->ctime;
     job->type = SLOT_MIGRATION_EXPORT;
+    /* The job is not in the job list yet, so no index invalidation is needed. */
     job->state = SLOT_EXPORT_CONNECTING;
     job->slot_ranges = slot_ranges;
     job->slot_ranges_str = representSlotRangeList(slot_ranges);
@@ -2438,8 +2506,9 @@ void updateSlotMigrationJobState(slotMigrationJob *job,
               slotMigrationJobStateToString(job->state),
               slotMigrationJobStateToString(state));
     job->last_update = server.unixtime;
+    bool was_finished = isSlotMigrationJobFinished(job);
     job->state = state;
-    markSlotMigrationIndexDirty();
+    if (was_finished != isSlotMigrationJobFinished(job)) markSlotMigrationIndexDirty();
 }
 
 void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job) {

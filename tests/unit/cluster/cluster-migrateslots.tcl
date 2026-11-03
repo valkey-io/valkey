@@ -184,8 +184,11 @@ proc do_node_restart {idx} {
     }
 }
 
+# Enable debug assertions in every cluster below to check the migration index
+# against the job list throughout the tests, including after restarts.
+
 # Exercise migration lookups and export propagation with retained history.
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
     set target1 [R 1 CLUSTER MYID]
     set target2 [R 2 CLUSTER MYID]
     set key0 "{06S}:history"
@@ -273,7 +276,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2515,7 +2518,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
     set 16383_slot_tag "{6ZJ}"
     set node0_id [R 0 CLUSTER MYID]
 
@@ -2551,7 +2554,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2607,7 +2610,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2673,7 +2676,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {enable-debug-assert yes appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2823,7 +2826,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} ove
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
@@ -2866,7 +2869,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
     test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
         set 16383_slot_tag "{6ZJ}"
 

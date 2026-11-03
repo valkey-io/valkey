@@ -201,7 +201,6 @@ int raxFindLongestPrefix(rax *rax, unsigned char *s, size_t len, size_t *matched
 size_t raxForEachPrefix(rax *rax, unsigned char *s, size_t len, raxPrefixCallback callback, void *context);
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
-void raxFreeWithCallbackAndPrivdata(rax *rax, void (*free_callback)(void *data, void *privdata), void *privdata);
 void raxStart(raxIterator *it, rax *rt);
 int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len);
 int raxNext(raxIterator *it);

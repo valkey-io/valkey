@@ -53,7 +53,7 @@
  * will return NULL. */
 #define STREAM_LISTPACK_MAX_SIZE (1 << 30)
 
-size_t streamFreeCG(streamCG *cg);
+void streamFreeCG(streamCG *cg);
 void streamFreeCGVoid(void *cg);
 void streamFreeNACK(stream *s, streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c,
@@ -145,10 +145,9 @@ static size_t streamCGBaseMemUsage(streamCG *cg) {
            raxSize(cg->pel) * streamNACKAllocSize();
 }
 
-/* Debug only, for the debugServerAssert() in streamMemUsage(). Allocated bytes
- * of one consumer group, with its consumers. This walks the consumers, so it
- * is O(number of consumers). */
-static size_t streamCGMemUsageDebug(streamCG *cg) {
+/* Allocated bytes of one consumer group, with its consumers. This walks the
+ * consumers, so it is O(number of consumers). */
+static size_t streamCGMemUsage(streamCG *cg) {
     size_t size = streamCGBaseMemUsage(cg);
     raxIterator ri;
     raxStart(&ri, cg->consumers);
@@ -166,7 +165,7 @@ static size_t streamCGroupsMemUsageDebug(const stream *s) {
     raxIterator ri;
     raxStart(&ri, s->cgroups);
     raxSeek(&ri, "^", NULL, 0);
-    while (raxNext(&ri)) size += streamCGMemUsageDebug(ri.data);
+    while (raxNext(&ri)) size += streamCGMemUsage(ri.data);
     raxStop(&ri);
     return size;
 }
@@ -2741,6 +2740,11 @@ void streamFreeConsumer(streamConsumer *sc) {
     zfree(sc);
 }
 
+/* Used for generic free functions. */
+static void streamFreeConsumerVoid(void *sc) {
+    streamFreeConsumer((streamConsumer *)sc);
+}
+
 /* Create a new consumer group in the context of the stream 's', having the
  * specified name, last server ID and reads counter. If a consumer group with
  * the same name already exists NULL is returned; otherwise, the pointer to the
@@ -2761,22 +2765,11 @@ streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, lo
     return cg;
 }
 
-/* Free callback for the consumers rax: adds the bytes of the consumer to the
- * size_t that 'privdata' points to, then frees the consumer. */
-static void streamFreeConsumerAndCount(void *sc, void *privdata) {
-    *(size_t *)privdata += streamConsumerMemUsage(sc);
-    streamFreeConsumer(sc);
-}
-
-/* Free a consumer group and all its associated data. Returns the bytes the
- * group had in stream->cgroups_memory_bytes. The consumers are counted in the
- * same walk that frees them. */
-size_t streamFreeCG(streamCG *cg) {
-    size_t size = streamCGBaseMemUsage(cg);
+/* Free a consumer group and all its associated data. */
+void streamFreeCG(streamCG *cg) {
     raxFreeWithCallback(cg->pel, zfree);
-    raxFreeWithCallbackAndPrivdata(cg->consumers, streamFreeConsumerAndCount, &size);
+    raxFreeWithCallback(cg->consumers, streamFreeConsumerVoid);
     zfree(cg);
-    return size;
 }
 
 /* Used for generic free functions. */
@@ -2982,7 +2975,8 @@ void xgroupCommand(client *c) {
     } else if (!strcasecmp(opt, "DESTROY") && c->argc == 4) {
         if (cg) {
             raxRemove(s->cgroups, (unsigned char *)grpname, sdslen(grpname), NULL);
-            s->cgroups_memory_bytes -= streamFreeCG(cg);
+            s->cgroups_memory_bytes -= streamCGMemUsage(cg);
+            streamFreeCG(cg);
             signalModifiedKey(c, c->db, c->argv[2]);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-destroy", c->argv[2], c->db->id);

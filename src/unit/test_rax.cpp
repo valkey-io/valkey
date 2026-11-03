@@ -60,17 +60,6 @@ typedef struct PrefixResult {
     size_t stop_after;
 } PrefixResult;
 
-typedef struct FreeResult {
-    size_t calls;
-    uintptr_t sum;
-} FreeResult;
-
-static void sumFreedData(void *data, void *privdata) {
-    FreeResult *result = (FreeResult *)privdata;
-    result->calls++;
-    result->sum += (uintptr_t)data;
-}
-
 static int collectPrefix(size_t key_len, void *data, void *context) {
     PrefixResult *result = (PrefixResult *)context;
     result->lengths[result->count] = key_len;
@@ -1153,22 +1142,4 @@ TEST_F(RaxTest, DISABLED_raxRecompressHugeKey) {
 
     zfree(large_key);
     raxFree(rt);
-}
-
-TEST_F(RaxTest, freeWithCallbackAndPrivdataVisitsEveryValue) {
-    rax *tree = raxNew();
-    uintptr_t expected_sum = 0;
-    for (uintptr_t j = 1; j <= 1000; j++) {
-        char key[32];
-        int len = snprintf(key, sizeof(key), "key:%lu", (unsigned long)j);
-        raxInsert(tree, (unsigned char *)key, len, (void *)j, NULL);
-        expected_sum += j;
-    }
-    /* A key with a NULL value must not reach the callback. */
-    raxInsert(tree, (unsigned char *)"null-value", 10, NULL, NULL);
-
-    FreeResult result = {0, 0};
-    raxFreeWithCallbackAndPrivdata(tree, sumFreedData, &result);
-    EXPECT_EQ(result.calls, 1000u);
-    EXPECT_EQ(result.sum, expected_sum);
 }

@@ -2297,6 +2297,7 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
         assert_equal 0 [s forkless_fallbacks_missing_inband_repl]
         close $replica
         waitForBgsave $primary
+        r config resetstat
     }
 
     test "Full sync without inline replication support counts its fork fallback reason" {

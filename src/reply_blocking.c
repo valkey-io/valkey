@@ -373,7 +373,10 @@ static void unblockFirstResponse(const client *c) {
 
 // Determines if we need to block on a given replication offset for a given client.
 static int isBlockingNeededForOffset(const client *c, const long long offset) {
-    if (offset == -1 || isAofReplyBlockingEnabled() == 0) {
+    /* An offset at or below the last acknowledged one is already durable.
+     * Holding at it would wait for the next ack to advance past it, i.e. for
+     * an unrelated write (e.g. a module write that propagated nothing). */
+    if (offset == -1 || offset <= server.reply_blocking.previous_acked_offset || isAofReplyBlockingEnabled() == 0) {
         return 0;
     }
 

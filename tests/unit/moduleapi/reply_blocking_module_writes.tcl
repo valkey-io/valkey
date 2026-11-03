@@ -93,4 +93,26 @@ start_server {tags {"modules durability external:skip"} overrides {appendonly ye
         assert_equal OK [$writer read]
         $writer close
     }
+
+    test "A module write that propagates nothing is not held" {
+        # Nothing reaches the AOF, so the replication offset doesn't move and
+        # there is nothing to wait for. The reply must not wait for an
+        # unrelated write to advance the acknowledged offset.
+        r set rbw:advance v
+        set rd [valkey_deferring_client]
+        $rd rbw.localset rbw:local v
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        set got ""
+        wait_for_condition 50 20 {
+            [string length [append got [read $fd]]] > 0
+        } else {
+            fconfigure $fd -blocking 1
+            $rd close
+            fail "reply of a write that propagated nothing was held"
+        }
+        fconfigure $fd -blocking 1
+        assert_equal "+OK\r\n" $got
+        $rd close
+    }
 }

@@ -2593,6 +2593,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             robj *payload = createHashObject();
+            /* Select the encoding upfront, as for ordinary Hash loading. Grow
+             * the table as fields are read rather than allocating based on an
+             * unvalidated field count from the RDB. */
+            if (field_count > server.hash_max_listpack_entries)
+                hashTypeConvert(payload, OBJ_ENCODING_HASHTABLE);
             if (!raxTryInsert(path_hash->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
                 rdbReportCorruptRDB("Duplicate pathhash path");
                 sdsfree(path);
@@ -2632,6 +2637,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 }
                 path_hash->num_fields++;
             }
+            if (objectGetEncoding(payload) == OBJ_ENCODING_LISTPACK)
+                objectSetVal(payload, lpShrinkToFit(objectGetVal(payload)));
         }
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST || rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
         if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;

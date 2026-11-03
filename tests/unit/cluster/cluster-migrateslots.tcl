@@ -3143,7 +3143,7 @@ start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set jobname [get_job_name 1 16383]
         wait_for_log_messages 0 {"*forkless save cancelled*"} $loglines 50 100
         R 0 config set rdb-key-save-delay 0
-        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: fork*"} $loglines 50 100
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: fork"} $loglines 50 100
         wait_for_condition 50 100 {
             [getInfoProperty [R 2 info replication] master_link_status] eq "up"
         } else {

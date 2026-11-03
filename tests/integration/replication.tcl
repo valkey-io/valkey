@@ -2231,6 +2231,72 @@ start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-ena
     }
 }
 
+start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    test "Functions-only full sync falls back to fork" {
+        set loglines [count_log_lines 0]
+        set forks [s total_forks]
+        set replica [socket [srv 0 host] [srv 0 port]]
+        fconfigure $replica -translation binary
+        foreach cmd {
+            {REPLCONF capa eof capa psync2 capa inband-repl}
+            {REPLCONF rdb-filter-only functions}
+        } {
+            puts -nonewline $replica "[join $cmd { }]\r\n"
+            flush $replica
+            assert_equal {+OK} [string trim [gets $replica]]
+        }
+        puts -nonewline $replica "PSYNC ? -1\r\n"
+        flush $replica
+        wait_for_log_messages 0 {"*Falling back to fork-based save for SYNC: cohort requested an RDB without keyspace data*"} $loglines 50 100
+        wait_for_condition 50 100 {
+            [s total_forks] > $forks
+        } else {
+            fail "Functions-only full sync didn't fork"
+        }
+        assert_equal 1 [s forkless_fallbacks_exclude_data]
+        assert_equal 0 [s forkless_fallbacks_missing_inband_repl]
+        assert_equal 0 [s forkless_fallbacks_compression]
+        assert_equal 0 [s forkless_fallbacks_module]
+        assert_equal 0 [s forkless_fallbacks_slot_import]
+        r config resetstat
+        assert_equal 0 [s forkless_fallbacks_exclude_data]
+        close $replica
+    }
+}
+
+start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0 repl-compression lz4}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test "Full sync without inline replication support counts its fork fallback reason" {
+        set loglines [count_log_lines 0]
+        set replica [socket $primary_host $primary_port]
+        fconfigure $replica -translation binary
+        puts -nonewline $replica "REPLCONF capa eof capa psync2\r\n"
+        flush $replica
+        assert_equal {+OK} [string trim [gets $replica]]
+        puts -nonewline $replica "PSYNC ? -1\r\n"
+        flush $replica
+        wait_for_log_messages 0 {"*Falling back to fork-based save for SYNC: replica does not support inline replication*"} $loglines 50 100
+        assert_equal 1 [s forkless_fallbacks_missing_inband_repl]
+        close $replica
+        waitForBgsave $primary
+    }
+
+    start_server {overrides {save {} repl-compression lz4}} {
+        set replica [srv 0 client]
+
+        test "Compressed full sync counts its fork fallback reason" {
+            set loglines [count_log_lines -1]
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            wait_for_log_messages -1 {"*Falling back to fork-based save for SYNC: cohort needs stream compression*"} $loglines 50 100
+            assert_equal 1 [s -1 forkless_fallbacks_compression]
+        }
+    }
+}
+
 # A replica running an older version does not advertise "inband-repl", so a
 # forkless-configured primary must fall back to a fork-based save. Requires an
 # old server binary (--other-server-path), otherwise skipped.
@@ -2253,6 +2319,7 @@ start_server {tags {"repl needs:other-server external:skip"} overrides {forkless
             assert_equal "val:499" [$replica get key:499]
             # Confirm the fallback to a fork-based save actually happened.
             wait_for_log_messages -1 {"*Falling back to fork-based save for SYNC: replica does not support inline replication*"} $loglines 100 100
+            assert_equal 1 [s -1 forkless_fallbacks_missing_inband_repl]
         }
     }
 }

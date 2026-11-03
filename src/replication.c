@@ -1373,10 +1373,13 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
         const char *reason = NULL;
         if (socket_target && (req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
+            server.stat_forkless_fallbacks_exclude_data++;
             reason = "cohort requested an RDB without keyspace data";
         } else if (socket_target && !(mincapa & REPLICA_CAPA_INBAND_REPL)) {
+            server.stat_forkless_fallbacks_missing_inband_repl++;
             reason = "replica does not support inline replication";
         } else if (sync_compression_algo != ALGO_NONE) {
+            server.stat_forkless_fallbacks_compression++;
             reason = "cohort needs stream compression";
         }
         if (reason != NULL) {

@@ -3125,6 +3125,7 @@ start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluste
         R 0 bgsave
         waitForBgsave [Rn 0]
         assert_equal fork [getInfoProperty [R 0 info persistence] rdb_last_bgsave_type]
+        assert_equal 1 [getInfoProperty [R 0 info stats] forkless_fallbacks_slot_import]
         R 1 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
         set_debug_prevent_pause 0

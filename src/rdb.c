@@ -1864,12 +1864,14 @@ int resolveBgsaveType(void) {
     serverAssert(server.forkless_infrastructure_enabled);
 
     if (!moduleAllModulesHandleForkless()) {
+        server.stat_forkless_fallbacks_module++;
         serverLog(LL_WARNING, "Falling back to fork-based save: forkless is configured but a loaded "
                               "module has not declared VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
         return RDB_BGSAVE_TYPE_FORK;
     }
     /* A forkless save currently doesn't include slot import state or importing keys. */
     if (clusterIsAnySlotImporting()) {
+        server.stat_forkless_fallbacks_slot_import++;
         serverLog(LL_NOTICE, "Falling back to fork-based save: a slot import is in progress");
         return RDB_BGSAVE_TYPE_FORK;
     }

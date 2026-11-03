@@ -719,13 +719,27 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
-    /* When the trim removes every entry, free the whole rax at once instead of
-     * removing node by node. Every ID is <= last_id, so with 'minid' above it
-     * the last ID of every node is below 'minid', and with MAXLEN 0 every node
-     * has to go: the loop below would remove all nodes, even with 'approx',
-     * unless 'limit' stops it early. */
-    int trim_all = (trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0) ||
-                   (trim_strategy == TRIM_STRATEGY_MINID && streamCompareID(&s->last_id, id) < 0);
+    if (s->length == 0) return 0;
+
+    /* Check each node's last ID, just as the normal trimming loop does.
+     * Restored streams can have a last_id below IDs in their nodes. */
+    int trim_all = trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0;
+    if (trim_strategy == TRIM_STRATEGY_MINID && streamCompareID(&s->last_id, id) < 0) {
+        raxIterator check;
+        raxStart(&check, s->rax);
+        raxSeek(&check, "^", NULL, 0);
+        trim_all = 1;
+        while (raxNext(&check)) {
+            streamID primary_id, node_last_id;
+            streamDecodeID(check.key, &primary_id);
+            lpGetEdgeStreamID(check.data, 0, &primary_id, &node_last_id);
+            if (streamCompareID(&node_last_id, id) >= 0) {
+                trim_all = 0;
+                break;
+            }
+        }
+        raxStop(&check);
+    }
     if (trim_all && (limit == 0 || s->length <= (uint64_t)limit)) {
         int64_t deleted = s->length;
         raxFreeWithCallback(s->rax, lpFreeVoid);

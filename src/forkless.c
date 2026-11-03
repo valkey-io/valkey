@@ -972,7 +972,7 @@ int forklessSaveToSockets(int req, int rdbver) {
     saveInfo->u.repl.req = req;
     saveInfo->u.repl.rdbver = rdbver;
 
-    /* Collect replicas in WAIT_BGSAVE_END state (already set up by startBgsaveForReplication) */
+    /* Collect matching replicas in WAIT_BGSAVE_END state (already set up by startBgsaveForReplication) */
     saveInfo->u.repl.clients = listCreate();
     sds client_ids = sdsempty();
     listNode *ln;
@@ -981,7 +981,8 @@ int forklessSaveToSockets(int req, int rdbver) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         serverAssert(c->repl_data);
-        if (c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
+        if (c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
+            isReplicaInCohort(c, req, rdbver, ALGO_NONE)) {
             client_ids = sdscatprintf(client_ids, " %s (client %llu)", replicationGetReplicaName(c),
                                       (unsigned long long)c->id);
             listAddNodeTail(saveInfo->u.repl.clients, c);

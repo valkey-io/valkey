@@ -1959,10 +1959,10 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-# Sender full-sync generation belongs to INFO replication, not persistence.
+# Full-sync save progress belongs to INFO replication; current CoW covers any fork.
 proc assert_fullsync_persistence_idle {primary} {
     set info [$primary info persistence]
-    foreach metric {rdb_bgsave_in_progress current_save_keys_processed current_save_keys_total current_cow_size current_cow_peak current_cow_size_age} {
+    foreach metric {rdb_bgsave_in_progress current_save_keys_processed current_save_keys_total} {
         assert_equal 0 [getInfoProperty $info $metric]
     }
     assert_equal 0.00 [getInfoProperty $info current_fork_perc]
@@ -2067,7 +2067,15 @@ foreach {target dualchannel diskless} {disk no no socket no yes socket yes yes} 
                     # Freeze generation so RESETSTAT cannot race with child exit.
                     set child_pid [get_child_pid -1]
                     pause_process $child_pid
-                    set info [$primary info replication]
+                    wait_for_condition 50 50 {
+                        [status $primary repl_rdb_current_cow_size_age] >= 1
+                    } else {
+                        fail "full-sync CoW sample did not age"
+                    }
+                    set info [$primary info all]
+                    foreach metric {cow_peak cow_size cow_size_age} {
+                        assert_equal [getInfoProperty $info repl_rdb_current_$metric] [getInfoProperty $info current_$metric]
+                    }
                     assert_equal $target [getInfoProperty $info repl_rdb_current_target]
                     assert_equal 128 [getInfoProperty $info repl_rdb_current_keys_total]
                     assert_equal [format %.2f [expr {100.0 * [getInfoProperty $info repl_rdb_current_keys_processed] / 128}]] [getInfoProperty $info repl_rdb_current_keys_perc]
@@ -2423,6 +2431,39 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" repl-di
             assert_equal OK [$replica config set dbfilename idle.rdb]
             assert_equal OK [$replica config set dbfilename dump.rdb]
         }
+
+        foreach method {fork forkless} {
+            test "Manual BGSAVE waits for completed BIO download - $method" {
+                $replica replicaof no one
+                $primary debug change-repl-id
+                $replica config set bgsave-default-method $method
+                set saves_before [status $replica rdb_saves]
+                set loglines [count_log_lines 0]
+                with_cleanup {
+                    $replica debug pause-cron 1
+                    $replica replicaof [srv -1 host] [srv -1 port]
+                    wait_for_log_messages 0 {"*Replica bio thread:*receiving*to disk*"} $loglines 100 50
+                    $replica debug bio-drain BIO_RDB_SAVE
+                    assert_equal 1 [status $replica master_sync_in_progress]
+                    assert_equal 0 [status $replica rdb_bgsave_in_progress]
+                    assert_error {ERR*} {$replica bgsave}
+                    assert_equal $saves_before [status $replica rdb_saves]
+                    assert_equal 0 [status $replica rdb_bgsave_in_progress]
+
+                    $replica debug pause-cron 0
+                    wait_for_sync $replica
+                    assert_equal primary_value [$replica get primary_key]
+                    assert_equal {Background saving started} [$replica bgsave]
+                    waitForBgsave $replica
+                    assert_equal $method [status $replica rdb_last_bgsave_type]
+                    assert_equal ok [status $replica rdb_last_bgsave_status]
+                } {
+                    $replica debug pause-cron 0
+                    $replica replicaof no one
+                    waitForBgsave $replica
+                }
+            }
+        }
     }
 }
 
@@ -2458,6 +2499,34 @@ start_server {tags {"repl external:skip"}} {
             assert_equal 0 [file exists $primary_dump]
             assert_equal 0 [file exists $replica_dump]
         }
+
+        test {Sync RDB cleanup retries failures and releases a missing file} {
+            $replica replicaof no one
+            $primary debug change-repl-id
+            set sync_path [server_repl_rdb_path $primary]
+            set loglines [count_log_lines -1]
+            file mkdir $sync_path
+            with_cleanup {
+                $replica replicaof [srv -1 host] [srv -1 port]
+                wait_for_log_messages -1 {"*Error moving temp DB file*"} $loglines 100 50
+                $replica replicaof no one
+                waitForReplicationRdb $primary
+                wait_for_log_messages -1 {"*Failed to remove the RDB file used to feed replicas*"} $loglines 100 50
+                assert_error {*RDB filenames cannot be changed*} {
+                    $primary config set repl-rdbfilename cleaned.rdb
+                }
+                assert {[file isdirectory $sync_path]}
+            } {
+                $replica replicaof no one
+                file delete $sync_path
+                wait_for_condition 50 100 {
+                    [catch {$primary config set repl-rdbfilename cleaned.rdb}] == 0
+                } else {
+                    fail "sync RDB cleanup did not release a missing file"
+                }
+            }
+            assert_equal cleaned.rdb [lindex [$primary config get repl-rdbfilename] 1]
+        } {} {needs:debug}
     }
 }
 

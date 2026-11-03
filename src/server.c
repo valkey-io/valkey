@@ -7656,15 +7656,16 @@ int serverFork(int purpose) {
         if (isMutuallyExclusiveChildType(purpose)) {
             server.child_pid = childpid;
             server.child_type = purpose;
+            server.stat_current_cow_peak = 0;
+            server.stat_current_cow_bytes = 0;
+            server.stat_current_cow_updated = 0;
+            server.stat_current_save_keys_processed = 0;
+            server.stat_module_progress = 0;
             if (purpose == CHILD_TYPE_RDB && server.rdb_child_for_replication) {
+                server.stat_current_save_keys_total = 0;
                 server.repl_rdb_metrics.current.start_time = getMonotonicUs();
                 server.repl_rdb_metrics.snapshots++;
             } else {
-                server.stat_current_cow_peak = 0;
-                server.stat_current_cow_bytes = 0;
-                server.stat_current_cow_updated = 0;
-                server.stat_current_save_keys_processed = 0;
-                server.stat_module_progress = 0;
                 server.stat_current_save_keys_total = purpose == CHILD_TYPE_RDB ? rdbSnapshotKeyCount(REPLICA_REQ_NONE) : (size_t)dbTotalServerKeyCount();
             }
         }

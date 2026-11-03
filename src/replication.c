@@ -2066,11 +2066,13 @@ void removeRDBUsedToSyncReplicas(void) {
             }
         }
         if (delrdb) {
-            struct stat sb;
-            RDBGeneratedByReplication = 0;
-            if (lstat(server.repl_rdb_filename, &sb) != -1) {
+            if (bg_unlink(server.repl_rdb_filename) == 0) {
+                RDBGeneratedByReplication = 0;
                 serverLog(LL_NOTICE, "Removing the RDB file used to feed replicas");
-                bg_unlink(server.repl_rdb_filename);
+            } else if (errno == ENOENT) {
+                RDBGeneratedByReplication = 0;
+            } else {
+                serverLog(LL_WARNING, "Failed to remove the RDB file used to feed replicas: %s", strerror(errno));
             }
         }
     }

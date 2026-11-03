@@ -118,6 +118,10 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, size_t repl_outp
 
 /* Update Child info. */
 void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, size_t repl_output_bytes, double progress) {
+    if (cow > server.stat_current_cow_peak) server.stat_current_cow_peak = cow;
+    server.stat_current_cow_bytes = cow;
+    server.stat_current_cow_updated = cow_updated;
+
     if (information_type == CHILD_INFO_TYPE_REPL_OUTPUT_BYTES)
         server.stat_net_repl_output_bytes += (long long)repl_output_bytes;
 
@@ -127,16 +131,11 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
         metrics->cow_size = cow;
         metrics->cow_updated = cow_updated;
         metrics->sample_available = 1;
-        if (information_type == CHILD_INFO_TYPE_CURRENT_INFO || information_type == CHILD_INFO_TYPE_RDB_INFO)
-            metrics->keys_processed = keys;
+        if (information_type == CHILD_INFO_TYPE_CURRENT_INFO) metrics->keys_processed = keys;
         return;
     }
 
-    if (cow > server.stat_current_cow_peak) server.stat_current_cow_peak = cow;
-
-    if (information_type == CHILD_INFO_TYPE_CURRENT_INFO || information_type == CHILD_INFO_TYPE_RDB_INFO) {
-        server.stat_current_cow_bytes = cow;
-        server.stat_current_cow_updated = cow_updated;
+    if (information_type == CHILD_INFO_TYPE_CURRENT_INFO) {
         server.stat_current_save_keys_processed = keys;
         if (progress != -1) server.stat_module_progress = progress;
     } else if (information_type == CHILD_INFO_TYPE_AOF_COW_SIZE) {

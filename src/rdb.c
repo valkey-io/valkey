@@ -1594,11 +1594,15 @@ static int rdbSaveRioInternal(int req, int rdbver, rio *rdb, int *error, int rdb
     }
 
     if (rdbWriteFooter(rdb, req) == C_ERR) goto werr;
-    if (server.in_fork_child) server.stat_current_save_keys_processed = key_counter;
+    if (server.in_fork_child == CHILD_TYPE_RDB) sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_counter, "RDB");
     return C_OK;
 
 werr:
-    if (server.in_fork_child) server.stat_current_save_keys_processed = key_counter;
+    if (server.in_fork_child == CHILD_TYPE_RDB) {
+        int saved_errno = errno;
+        sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, key_counter, "RDB");
+        errno = saved_errno;
+    }
     if (error) *error = errno;
     return C_ERR;
 }
@@ -1903,12 +1907,6 @@ int rdbStartBgsave(int bgsave_type) {
     }
 }
 
-static void rdbStartSaveState(int bgsave_type, int target) {
-    server.rdb_save_time_start = time(NULL);
-    server.rdb_write_target = target;
-    server.cur_bgsave_type = bgsave_type;
-}
-
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     pid_t childpid;
     int for_replication = (rdbflags & RDBFLAGS_REPLICATION) != 0;
@@ -1922,7 +1920,6 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
 
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
-        server.stat_current_save_keys_processed = 0;
 
         /* Child */
         if (strstr(server.exec_argv[0], "redis-server") != NULL) {
@@ -1932,7 +1929,7 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
         }
         serverSetCpuAffinity(server.bgsave_cpulist);
         retval = rdbSave(req, filename, rsi, rdbflags);
-        sendChildInfoGeneric(CHILD_INFO_TYPE_RDB_INFO, server.stat_current_save_keys_processed, 0, -1, "RDB");
+        sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
@@ -4465,7 +4462,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         /* Child */
         int retval, dummy;
         rio rdb;
-        server.stat_current_save_keys_processed = 0;
         if (dual_channel) {
             rioInitWithConnset(&rdb, conns, connsnum);
         } else {
@@ -4487,7 +4483,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         retval = rdbSaveRioWithEOFMark(req, rdbver, &rdb, NULL, rsi, compr);
         if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
 
-        sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, server.stat_current_save_keys_processed, "RDB");
         if (dual_channel) {
             /* Bytes actually written across all replica sockets: correct whether
              * or not compressed, and reported on both success and failure so a
@@ -4505,7 +4500,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
          * to read anything, just get the error when the pipe is closed. */
         if (!dual_channel) dummy = read(safe_to_exit_pipe, pipefds, 1);
         UNUSED(dummy);
-        sendChildInfoGeneric(CHILD_INFO_TYPE_RDB_INFO, server.stat_current_save_keys_processed, 0, -1, "RDB");
+        sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
@@ -4622,9 +4617,6 @@ void bgsaveCommand(client *c) {
 
     int chosen_save_type = resolveBgsaveType();
 
-    rdbSaveInfo rsi, *rsiptr;
-    rsiptr = rdbPopulateSaveInfo(&rsi);
-
     if (isSaveInProgress()) {
         addReplyError(c, "Background save already in progress");
     } else if (hasActiveChildProcess() || server.in_exec) {
@@ -4641,13 +4633,7 @@ void bgsaveCommand(client *c) {
                              "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                              "possible.");
         }
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
-        if (forklessSaveToDisk(server.rdb_filename) == C_OK) {
-            addReplyStatus(c, "Background saving started");
-        } else {
-            addReplyErrorObject(c, shared.err);
-        }
-    } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
+    } else if (rdbStartBgsave(chosen_save_type) == C_OK) {
         addReplyStatus(c, "Background saving started");
     } else {
         addReplyErrorObject(c, shared.err);
@@ -4790,7 +4776,9 @@ int rdbWriteFooter(rio *rdb, int req) {
 void rdbRecordStartMetrics(int bgsave_type) {
     server.dirty_before_bgsave = server.dirty;
     server.lastbgsave_try = time(NULL);
-    rdbStartSaveState(bgsave_type, RDB_WRITE_TARGET_DISK);
+    server.rdb_save_time_start = time(NULL);
+    server.rdb_write_target = RDB_WRITE_TARGET_DISK;
+    server.cur_bgsave_type = bgsave_type;
 }
 
 void rdbClearSaveState(time_t save_end) {

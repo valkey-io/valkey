@@ -1,7 +1,5 @@
 # Minimal RESP server for checking that benchmark ignores unsolicited pushes.
-set marker [lindex $argv 0]
 proc accept {channel address port} {
-    global marker
     fconfigure $channel -translation binary -buffering none
     while {[gets $channel header] >= 0} {
         set header [string trimright $header "\r"]
@@ -20,10 +18,8 @@ proc accept {channel address port} {
         } elseif {$command eq "HELLO"} {
             puts -nonewline $channel "%0\r\n"
         } elseif {$command eq "PING"} {
-            puts -nonewline $channel ">2\r\n\$10\r\ninvalidate\r\n*1\r\n\$3\r\nkey\r\n"
-            after 500
-            close [open $marker w]
-            catch {puts -nonewline $channel "+PONG\r\n"}
+            # The command's error must be processed after the unsolicited PUSH.
+            puts -nonewline $channel ">2\r\n\$10\r\ninvalidate\r\n*1\r\n\$3\r\nkey\r\n-ERR push-test-command-error\r\n"
             close $channel
             exit 0
         } else {

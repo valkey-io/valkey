@@ -39,17 +39,15 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: RESP3 push is not counted as a command reply} {
-            set marker [tmpfile benchmark-push-reply]
-            file delete -force $marker
-            set server [open [list | [info nameofexecutable] tests/support/benchmark-push-server.tcl $marker] r]
+            set server [open [list | [info nameofexecutable] tests/support/benchmark-push-server.tcl] r]
             gets $server port
-            set cmd [valkeybenchmark 127.0.0.1 $port "-c 1 -n 1 -3 --enable-tracking PING"]
+            # This mock uses plain TCP, even when the surrounding suite uses TLS.
+            set cmd [list $::VALKEY_BENCHMARK_BIN -h 127.0.0.1 -p $port -c 1 -n 1 -3 --enable-tracking PING]
             set result [catch {exec {*}$cmd 2>@1} output]
-            set reply_sent [file exists $marker]
             catch {close $server}
-            file delete -force $marker
-            assert_equal 0 $result
-            assert_equal 1 $reply_sent
+            # The PUSH must not finish the request before its error reply.
+            assert_equal 1 $result
+            assert_match {*push-test-command-error*} $output
         }
 
         test {benchmark: single request completes across write retries} {

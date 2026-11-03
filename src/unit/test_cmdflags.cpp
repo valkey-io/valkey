@@ -36,6 +36,17 @@ class CmdFlagsTest : public ::testing::Test {
                 hashtableRelease(c->subcommands_ht);
                 c->subcommands_ht = NULL;
             }
+            /* populateCommandTable() allocates the names, and overwrites them
+             * when it runs again. */
+            if (c->subcommands) {
+                for (struct serverCommand *sub = c->subcommands; sub->declared_name; sub++) {
+                    sdsfree(sub->fullname);
+                    sub->fullname = NULL;
+                }
+            }
+            sdsfree(c->fullname);
+            c->fullname = NULL;
+            c->current_name = NULL;
         }
         if (server.commands) hashtableRelease(server.commands);
         if (server.orig_commands) hashtableRelease(server.orig_commands);

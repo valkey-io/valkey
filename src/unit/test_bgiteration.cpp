@@ -317,6 +317,9 @@ class BgIterationTest : public ::testing::Test {
             zfree(server.db[i]);
         }
         zfree(server.db);
+        /* Other suites check server.db, for example objectSetMetadataSize(). */
+        server.db = NULL;
+        server.dbnum = 0;
 
         if (c != NULL) freeTestClient(c);
         EXPECT_EQ(server.in_call, 0); // make sure tests are handling this properly

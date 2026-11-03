@@ -1280,6 +1280,7 @@ typedef struct ClientFlags {
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
+    uint64_t pipeline_deferred : 1;        /* Deferred after exceeding the cumulative pipeline execution-time limit */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */
@@ -1497,6 +1498,7 @@ typedef struct client {
     size_t last_memory_usage;
     /* Fields after this point are less frequently used */
     listNode *client_list_node;        /* list node in client list */
+    listNode *deferred_pipeline_node;  /* Stores reference to the list node in the deferred pipeline queue for the current client */
     mstime_t buf_peak_last_reset_time; /* keeps the last time the buffer peak value was reset */
     size_t querybuf_peak;              /* Recent (100ms or more) peak of querybuf size. */
     dictEntry *cur_script;             /* Cached pointer to the dictEntry of the script being executed. */
@@ -1948,13 +1950,14 @@ struct valkeyServer {
     /* Stuff for client mem eviction */
     clientMemUsageBucket *client_mem_usage_buckets;
 
-    rax *clients_timeout_table; /* Radix tree for blocked clients timeouts. */
-    int execution_nesting;      /* Execution nesting level.
-                                 * e.g. call(), async module stuff (timers, events, etc.),
-                                 * cron stuff (active expire, eviction) */
-    rax *clients_index;         /* Active clients dictionary by client ID. */
-    uint32_t paused_actions;    /* Bitmask of actions that are currently paused */
-    list *postponed_clients;    /* List of postponed clients */
+    rax *clients_timeout_table;      /* Radix tree for blocked clients timeouts. */
+    int execution_nesting;           /* Execution nesting level.
+                                      * e.g. call(), async module stuff (timers, events, etc.),
+                                      * cron stuff (active expire, eviction) */
+    rax *clients_index;              /* Active clients dictionary by client ID. */
+    uint32_t paused_actions;         /* Bitmask of actions that are currently paused */
+    list *postponed_clients;         /* List of postponed clients */
+    list *deferred_pipeline_clients; /* List of clients with deferred pipelines */
     pause_event client_pause_per_purpose[NUM_PAUSE_PURPOSES];
     char neterr[ANET_ERR_LEN];                /* Error buffer for anet.c */
     dict *migrate_cached_sockets;             /* MIGRATE cached sockets */
@@ -1985,47 +1988,48 @@ struct valkeyServer {
     off_t loading_process_events_interval_bytes;
     time_t loading_process_events_interval_ms;
     /* Fields used only for stats */
-    time_t stat_starttime;                         /* Server start time */
-    long long stat_numcommands;                    /* Number of processed commands */
-    long long stat_numconnections;                 /* Number of connections received */
-    long long stat_expiredkeys;                    /* Number of expired keys */
-    long long stat_expiredfields;                  /* Number of expired hash fields */
-    double stat_expired_keys_stale_perc;           /* Percentage of keys probably expired */
-    double stat_expired_keys_with_vola_stale_perc; /* Percentage of keys probably expired */
-    long long stat_expired_time_cap_reached_count; /* Early expire cycle stops.*/
-    long long stat_expire_cycle_time_used;         /* Cumulative microseconds used. */
-    long long stat_evictedkeys;                    /* Number of evicted keys (maxmemory) */
-    long long stat_evictedclients;                 /* Number of evicted clients */
-    long long stat_evictedscripts;                 /* Number of evicted lua scripts. */
-    long long stat_total_eviction_exceeded_time;   /* Total time over the memory limit, unit us */
-    monotime stat_last_eviction_exceeded_time;     /* Timestamp of current eviction start, unit us */
-    long long stat_keyspace_hits;                  /* Number of successful lookups of keys */
-    long long stat_keyspace_misses;                /* Number of failed lookups of keys */
-    long long stat_active_defrag_hits;             /* number of allocations moved */
-    long long stat_active_defrag_misses;           /* number of allocations scanned but not moved */
-    long long stat_active_defrag_key_hits;         /* number of keys with moved allocations */
-    long long stat_active_defrag_key_misses;       /* number of keys scanned and not moved */
-    long long stat_active_defrag_scanned;          /* number of dictEntries scanned */
-    long long stat_total_active_defrag_time;       /* Total time memory fragmentation over the limit, unit us */
-    monotime stat_last_active_defrag_time;         /* Timestamp of current active defrag start */
-    size_t stat_peak_memory;                       /* Max used memory record */
-    long long stat_aof_rewrites;                   /* number of aof file rewrites performed */
-    long long stat_aofrw_consecutive_failures;     /* The number of consecutive failures of aofrw */
-    long long stat_rdb_saves;                      /* number of rdb saves performed */
-    long long stat_fork_time;                      /* Time needed to perform latest fork() */
-    double stat_fork_rate;                         /* Fork rate in GB/sec. */
-    long long stat_total_forks;                    /* Total count of fork. */
-    long long stat_rejected_conn;                  /* Clients rejected because of maxclients */
-    long long stat_rejected_priority_conn;         /* Prioritized clients rejected because of maxclients */
-    long long stat_num_active_priority_clients;    /* Number of active prioritized clients */
-    long long stat_sync_full;                      /* Number of full resyncs with replicas. */
-    long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
-    long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
-    commandlog commandlog[COMMANDLOG_TYPE_NUM];    /* Logs of commands. */
-    struct malloc_stats cron_malloc_stats;         /* sampled in serverCron(). */
-    long long stat_net_input_bytes;                /* Bytes read from network. */
-    long long stat_net_output_bytes;               /* Bytes written to network. */
-    long long stat_net_repl_input_bytes;           /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
+    time_t stat_starttime;                          /* Server start time */
+    long long stat_numcommands;                     /* Number of processed commands */
+    long long stat_numconnections;                  /* Number of connections received */
+    long long stat_expiredkeys;                     /* Number of expired keys */
+    long long stat_expiredfields;                   /* Number of expired hash fields */
+    double stat_expired_keys_stale_perc;            /* Percentage of keys probably expired */
+    double stat_expired_keys_with_vola_stale_perc;  /* Percentage of keys probably expired */
+    long long stat_expired_time_cap_reached_count;  /* Early expire cycle stops.*/
+    long long stat_expire_cycle_time_used;          /* Cumulative microseconds used. */
+    long long stat_evictedkeys;                     /* Number of evicted keys (maxmemory) */
+    long long stat_evictedclients;                  /* Number of evicted clients */
+    long long stat_evictedscripts;                  /* Number of evicted lua scripts. */
+    long long stat_total_eviction_exceeded_time;    /* Total time over the memory limit, unit us */
+    monotime stat_last_eviction_exceeded_time;      /* Timestamp of current eviction start, unit us */
+    long long stat_keyspace_hits;                   /* Number of successful lookups of keys */
+    long long stat_keyspace_misses;                 /* Number of failed lookups of keys */
+    long long stat_active_defrag_hits;              /* number of allocations moved */
+    long long stat_active_defrag_misses;            /* number of allocations scanned but not moved */
+    long long stat_active_defrag_key_hits;          /* number of keys with moved allocations */
+    long long stat_active_defrag_key_misses;        /* number of keys scanned and not moved */
+    long long stat_active_defrag_scanned;           /* number of dictEntries scanned */
+    long long stat_total_active_defrag_time;        /* Total time memory fragmentation over the limit, unit us */
+    monotime stat_last_active_defrag_time;          /* Timestamp of current active defrag start */
+    size_t stat_peak_memory;                        /* Max used memory record */
+    long long stat_aof_rewrites;                    /* number of aof file rewrites performed */
+    long long stat_aofrw_consecutive_failures;      /* The number of consecutive failures of aofrw */
+    long long stat_rdb_saves;                       /* number of rdb saves performed */
+    long long stat_fork_time;                       /* Time needed to perform latest fork() */
+    double stat_fork_rate;                          /* Fork rate in GB/sec. */
+    long long stat_total_forks;                     /* Total count of fork. */
+    long long stat_rejected_conn;                   /* Clients rejected because of maxclients */
+    long long stat_rejected_priority_conn;          /* Prioritized clients rejected because of maxclients */
+    long long stat_num_active_priority_clients;     /* Number of active prioritized clients */
+    long long stat_total_deferred_pipeline_clients; /* Total number of pipeline deferral events */
+    long long stat_sync_full;                       /* Number of full resyncs with replicas. */
+    long long stat_sync_partial_ok;                 /* Number of accepted PSYNC requests. */
+    long long stat_sync_partial_err;                /* Number of unaccepted PSYNC requests. */
+    commandlog commandlog[COMMANDLOG_TYPE_NUM];     /* Logs of commands. */
+    struct malloc_stats cron_malloc_stats;          /* sampled in serverCron(). */
+    long long stat_net_input_bytes;                 /* Bytes read from network. */
+    long long stat_net_output_bytes;                /* Bytes written to network. */
+    long long stat_net_repl_input_bytes;            /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
     /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
     long long stat_net_repl_output_bytes;
     long long stat_net_cluster_slot_import_bytes;       /* Bytes read from slot import sources. */
@@ -2111,6 +2115,7 @@ struct valkeyServer {
     unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from
                                                     within the main dict scan */
     size_t client_max_querybuf_len;              /* Limit for client query buffer length */
+    unsigned int pipelined_limit_us;             /* Cumulative execution-time limit for a client's pipelined commands per cycle */
     int config_databases;                        /* Total number of configured DBs in standalone */
     int config_databases_cluster;                /* Total number of configured DBs in cluster mode */
     int dbnum;                                   /* Total number of initialized DBs */

@@ -396,8 +396,10 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
      * hold at either. */
     if (!c->flag.close_asap && c->reply_blocking_state.offset.recorded &&
         isBlockingNeededForOffset(c, blockingReplOffset)) {
+        /* A MONITOR client held on another client's write has no command. */
         serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d",
-                  blockingReplOffset, c->cmd->declared_name, (c->cmd->flags & CMD_WRITE) ? 1 : 0);
+                  blockingReplOffset, c->cmd ? c->cmd->declared_name : "(none)",
+                  (c->cmd && (c->cmd->flags & CMD_WRITE)) ? 1 : 0);
         blockLastResponseIfExist(c, blockingReplOffset);
         if (c->reply_blocking_state.waiting_ack_node == NULL) {
             listAddNodeTail(server.reply_blocking.clients_waiting_ack, c);

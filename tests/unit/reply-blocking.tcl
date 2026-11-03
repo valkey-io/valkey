@@ -1931,6 +1931,20 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
     }
 }
 
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes loglevel debug}} {
+    test "A held write with a MONITOR client and debug logging does not crash" {
+        # The monitor is held on the write's offset too, and it has no command
+        # of its own, which the debug log of the hold must tolerate.
+        set mon [valkey_deferring_client]
+        $mon monitor
+        assert_equal OK [$mon read]
+        r set rb:monitor:debug v
+        assert_match {*rb:monitor:debug*} [$mon read]
+        assert_equal PONG [r ping]
+        $mon close
+    }
+}
+
 start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
     test "Enabling reply blocking at runtime initializes fake clients created earlier" {
         # A Lua write pools a module temp client with no reply-blocking state.

@@ -102,6 +102,25 @@ TEST_F(StreamListpackIntegrityTest, TestRejectsAllRecordsDeletedWithLiveHeader) 
     lpFree(lp);
 }
 
+TEST_F(StreamListpackIntegrityTest, TestTrimCleansEmptyNodeWithTombstones) {
+    stream *s = streamNew();
+    streamID node_id = {5, 0};
+    unsigned char key[16];
+    streamEncodeID(key, &node_id);
+    unsigned char *lp = buildTwoRecordStreamListpack(0, 2, 1, 1);
+    uint64_t valid_count = 0;
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 1);
+    ASSERT_EQ(valid_count, 0u);
+    ASSERT_EQ(raxInsert(s->rax, key, sizeof(key), lp, NULL), 1);
+    s->last_id = node_id;
+    ASSERT_EQ(raxSize(s->rax), 1u);
+
+    streamID minid = {6, 0};
+    ASSERT_EQ(streamTrimByID(s, minid, 0), 0);
+    ASSERT_EQ(raxSize(s->rax), 0u);
+    freeStream(s);
+}
+
 class StreamIdTest : public ::testing::Test {};
 
 TEST_F(StreamIdTest, TestStreamEncodeDecodeRoundtrip) {

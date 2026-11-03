@@ -719,7 +719,9 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
-    if (s->length == 0) return 0;
+    /* An empty radix tree needs no work. Retained nodes must still be
+     * examined by the normal MINID trim path. */
+    if (s->length == 0 && raxSize(s->rax) == 0) return 0;
 
     /* Check each node's last ID, just as the normal trimming loop does.
      * Restored streams can have a last_id below IDs in their nodes. */

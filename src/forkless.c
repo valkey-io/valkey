@@ -515,7 +515,15 @@ static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
     atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
     atomic_store_explicit(&server.stat_current_save_keys_total, 0, memory_order_relaxed);
 
-    serverAssert(saveInfo->u.file.temp_file == NULL);
+    if (saveInfo->write_target == RDB_WRITE_TARGET_DISK) {
+        serverAssert(saveInfo->u.file.temp_file == NULL);
+        serverAssert(saveInfo->u.file.final_file == NULL);
+    } else {
+        serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+        serverAssert(saveInfo->u.repl.clients == NULL);
+        serverAssert(saveInfo->u.repl.header_buf == NULL);
+        serverAssert(saveInfo->u.repl.footer_buf == NULL);
+    }
     zfree(saveInfo);
 }
 

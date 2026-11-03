@@ -5369,30 +5369,6 @@ struct COMMAND_ARG RPUSHX_Args[] = {
 {MAKE_ARG("element",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
-/********** PHCARD ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* PHCARD history */
-#define PHCARD_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* PHCARD tips */
-#define PHCARD_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* PHCARD key specs */
-keySpec PHCARD_Keyspecs[1] = {
-{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
-};
-#endif
-
-/* PHCARD argument table */
-struct COMMAND_ARG PHCARD_Args[] = {
-{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-};
-
 /********** PHDEL ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -5417,31 +5393,6 @@ struct COMMAND_ARG PHDEL_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
-};
-
-/********** PHDELPREFIX ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* PHDELPREFIX history */
-#define PHDELPREFIX_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* PHDELPREFIX tips */
-#define PHDELPREFIX_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* PHDELPREFIX key specs */
-keySpec PHDELPREFIX_Keyspecs[1] = {
-{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
-};
-#endif
-
-/* PHDELPREFIX argument table */
-struct COMMAND_ARG PHDELPREFIX_Args[] = {
-{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("prefix",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /********** PHGET ********************/
@@ -5575,6 +5526,57 @@ struct COMMAND_ARG PHMSET_data_Subargs[] = {
 struct COMMAND_ARG PHMSET_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=PHMSET_data_Subargs},
+};
+
+/********** PHPATHCOUNT ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* PHPATHCOUNT history */
+#define PHPATHCOUNT_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* PHPATHCOUNT tips */
+#define PHPATHCOUNT_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* PHPATHCOUNT key specs */
+keySpec PHPATHCOUNT_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* PHPATHCOUNT argument table */
+struct COMMAND_ARG PHPATHCOUNT_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("prefix",ARG_TYPE_STRING,-1,"PREFIX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+};
+
+/********** PHPATHDEL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* PHPATHDEL history */
+#define PHPATHDEL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* PHPATHDEL tips */
+#define PHPATHDEL_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* PHPATHDEL key specs */
+keySpec PHPATHDEL_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* PHPATHDEL argument table */
+struct COMMAND_ARG PHPATHDEL_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("withsubpaths",ARG_TYPE_PURE_TOKEN,-1,"WITHSUBPATHS",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** PHPATHEXISTS ********************/
@@ -12879,13 +12881,13 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("rpush","Appends one or more elements to a list. Creates the key if it doesn't exist.","O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPUSH_History,1,RPUSH_Tips,0,rpushCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,RPUSH_Keyspecs,1,NULL,2),.args=RPUSH_Args},
 {MAKE_CMD("rpushx","Appends one or more elements to a list only when the list exists.","O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.","2.2.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPUSHX_History,1,RPUSHX_Tips,0,rpushxCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,RPUSHX_Keyspecs,1,NULL,2),.args=RPUSHX_Args},
 /* pathhash */
-{MAKE_CMD("phcard","Returns the number of logical paths in a path hash.","O(1).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHCARD_History,0,PHCARD_Tips,0,phcardCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHCARD_Keyspecs,1,NULL,1),.args=PHCARD_Args},
-{MAKE_CMD("phdel","Deletes fields or the complete payload at a path in a path hash.","O(L + F*U) when deleting specified fields, where L is the path length, F is the number of requested fields, and U is the payload field lookup cost. O(L + S) when deleting the complete payload, where S is the number of stored fields in the payload.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHDEL_History,0,PHDEL_Tips,0,phdelCommand,-3,CMD_WRITE,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,PHDEL_Keyspecs,1,NULL,3),.args=PHDEL_Args},
-{MAKE_CMD("phdelprefix","Deletes every stored path in a path hash below a prefix.","O(L + sum(P_i + F_i)), where L is the prefix length, P_i is the length of each matched path, and F_i is the number of fields in its payload.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHDELPREFIX_History,0,PHDELPREFIX_Tips,0,phdelprefixCommand,3,CMD_WRITE,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,PHDELPREFIX_Keyspecs,1,NULL,2),.args=PHDELPREFIX_Args},
+{MAKE_CMD("phdel","Deletes fields or the complete payload at a path in a path hash. Deletes the key if the last path was removed.","O(L + F*U) when deleting specified fields, where L is the path length, F is the number of requested fields, and U is the payload field lookup cost. O(L + S) when deleting the complete payload, where S is the number of stored fields in the payload.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHDEL_History,0,PHDEL_Tips,0,phdelCommand,-3,CMD_WRITE,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,PHDEL_Keyspecs,1,NULL,3),.args=PHDEL_Args},
 {MAKE_CMD("phget","Returns one or more fields from an exact path in a path hash.","O(L + F*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHGET_History,0,PHGET_Tips,0,phgetCommand,-4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHGET_Keyspecs,1,NULL,3),.args=PHGET_Args},
 {MAKE_CMD("phgetall","Returns all field-value pairs at an exact path in a path hash.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHGETALL_History,0,PHGETALL_Tips,1,phgetallCommand,3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHGETALL_Keyspecs,1,NULL,2),.args=PHGETALL_Args},
 {MAKE_CMD("phmget","Returns fields from multiple exact paths in a path hash.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHMGET_History,0,PHMGET_Tips,0,phmgetCommand,-6,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHMGET_Keyspecs,1,NULL,2),.args=PHMGET_Args},
 {MAKE_CMD("phmset","Atomically sets fields across multiple paths in a path hash.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHMSET_History,0,PHMSET_Tips,0,phmsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,PHMSET_Keyspecs,1,NULL,2),.args=PHMSET_Args},
+{MAKE_CMD("phpathcount","Returns the number of paths in a path hash, optionally limited to a prefix.","O(1) without PREFIX or with an empty prefix; otherwise O(L + N), where L is the prefix length and N is the total size of matching paths.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPATHCOUNT_History,0,PHPATHCOUNT_Tips,0,phpathcountCommand,-2,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHPATHCOUNT_Keyspecs,1,NULL,2),.args=PHPATHCOUNT_Args},
+{MAKE_CMD("phpathdel","Deletes a path in a path hash, optionally including all paths with that byte prefix. Deletes the key if the last path was removed.","O(L + S) when deleting an exact path, where L is the path length and S is the number of fields in its payload. O(L + sum(P_i + F_i)) with WITHSUBPATHS, where P_i is the length of each matched path and F_i is the number of fields in its payload.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPATHDEL_History,0,PHPATHDEL_Tips,0,phpathdelCommand,-3,CMD_WRITE,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,PHPATHDEL_Keyspecs,1,NULL,3),.args=PHPATHDEL_Args},
 {MAKE_CMD("phpathexists","Tests whether an exact logical path exists in a path hash.","O(L), where L is the path length.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPATHEXISTS_History,0,PHPATHEXISTS_Tips,0,phpathexistsCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,PHPATHEXISTS_Keyspecs,1,NULL,2),.args=PHPATHEXISTS_Args},
 {MAKE_CMD("phpathscan","Incrementally traverses paths in a path hash in lexicographic order.","O(L + C + O) per call.","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPATHSCAN_History,0,PHPATHSCAN_Tips,0,phpathscanCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHPATHSCAN_Keyspecs,1,NULL,4),.args=PHPATHSCAN_Args},
 {MAKE_CMD("phprefixes","Returns stored ancestor prefixes of a query in a path hash, from longest to shortest.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"pathhash",COMMAND_GROUP_PATH_HASH,PHPREFIXES_History,0,PHPREFIXES_Tips,0,phprefixesCommand,-3,CMD_READONLY,ACL_CATEGORY_PATHHASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,PHPREFIXES_Keyspecs,1,NULL,7),.args=PHPREFIXES_Args},

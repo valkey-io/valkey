@@ -1892,14 +1892,14 @@ start_server {} {
 
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    test {forkless-policy can be set to forkless with forkless-infrastructure-enabled} {
+    test {forkless-policy can be set to prefer-forkless with forkless-infrastructure-enabled} {
         r config set forkless-policy prefer-forkless
         assert_equal [lindex [r config get forkless-policy] 1] "prefer-forkless"
     }
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
-    test {BGSAVE uses forkless when forkless-policy is forkless} {
+    test {BGSAVE uses forkless when forkless-policy is prefer-forkless} {
         r set key value
         set result [r bgsave]
         assert_match "*Background saving started*" $result
@@ -1909,7 +1909,7 @@ start_server {overrides {forkless-infrastructure-enabled yes forkless-policy pre
 }
 
 start_server {overrides {forkless-policy require-fork}} {
-    test {BGSAVE uses fork when forkless-policy is fork} {
+    test {BGSAVE uses fork when forkless-policy is require-fork} {
         r set key value
         set result [r bgsave]
         assert_match "*Background saving started*" $result
@@ -1924,7 +1924,7 @@ start_server {overrides {save ""}} {
         assert_error "*forkless-infrastructure-enabled yes*" {
             r config set forkless-policy prefer-forkless
         }
-        # The value is unchanged and remains fork.
+        # The value is unchanged and remains require-fork.
         assert_equal [lindex [r config get forkless-policy] 1] "require-fork"
     }
 }

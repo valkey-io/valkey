@@ -3880,6 +3880,7 @@ void freePathHashObject(robj *o);
 robj *pathHashTypeDup(robj *o);
 size_t pathHashTypeMemUsage(robj *o, size_t sample_size);
 void pathHashTypeDigest(unsigned char *digest, robj *o);
+size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len);
 int rewritePathHashObject(rio *r, robj *key, robj *o);
 void phsetCommand(client *c);
 void phmsetCommand(client *c);
@@ -3889,10 +3890,10 @@ void phgetallCommand(client *c);
 void phpathexistsCommand(client *c);
 void phdelCommand(client *c);
 void phprefixesCommand(client *c);
-void phdelprefixCommand(client *c);
+void phpathdelCommand(client *c);
 void phscanCommand(client *c);
 void phpathscanCommand(client *c);
-void phcardCommand(client *c);
+void phpathcountCommand(client *c);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);

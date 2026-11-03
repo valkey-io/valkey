@@ -124,6 +124,9 @@ dictType librariesDictType = {
 
 /* Libraries Ctx. */
 static functionsLibCtx *curr_functions_lib_ctx = NULL;
+/* Another functions ctx is held outside this file. Avoid resetting the shared
+ * engines while this ctx is current. */
+static int functions_lib_ctx_set_aside = 0;
 
 static size_t functionMallocSize(functionInfo *fi) {
     return zmalloc_size(fi) +
@@ -209,6 +212,11 @@ static void functionsLibCtxFreeGeneric(functionsLibCtx *functions_lib_ctx, int a
 }
 
 void functionReset(int async) {
+    /* The engines also hold the functions of the set-aside ctx, so don't reset them. */
+    if (functions_lib_ctx_set_aside) {
+        functionsLibCtxSwapWithCurrent(functionsLibCtxCreate(), async);
+        return;
+    }
     functionsLibCtxReleaseCurrent(async);
     functionsInit();
 }
@@ -246,6 +254,13 @@ void functionsLibCtxSwapWithCurrent(functionsLibCtx *new_lib_ctx, int async) {
 /* return the current functions ctx */
 functionsLibCtx *functionsLibCtxGetCurrent(void) {
     return curr_functions_lib_ctx;
+}
+
+/* Make lib_ctx the current functions ctx. set_aside: the previous ctx is kept
+ * to be restored later. */
+void functionsLibCtxSetCurrent(functionsLibCtx *lib_ctx, int set_aside) {
+    curr_functions_lib_ctx = lib_ctx;
+    functions_lib_ctx_set_aside = set_aside;
 }
 
 static void initializeFunctionsLibEngineStats(scriptingEngine *engine,

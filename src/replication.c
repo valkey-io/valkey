@@ -2955,6 +2955,9 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     /* If we aren't using the swapdb method, then we want to empty the data before loading the rdb */
     if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) flags |= RDBFLAGS_EMPTY_DATA;
     int retval = rdbLoadRioWithLoadingCtx(&rdb, flags, rsi, &loadingCtx, "primary replication stream");
+    /* An inline FUNCTION FLUSH or FUNCTION RESTORE FLUSH frees the loading
+     * functions ctx and creates a new one, so take the new one. */
+    if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) temp_functions_lib_ctx = loadingCtx.functions_lib_ctx;
     if (retval != RDB_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "

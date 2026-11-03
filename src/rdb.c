@@ -3877,16 +3877,22 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
              * live data instead of the data being loaded from the RDB. */
             int swap_data = rdb_loading_ctx->dbarray != server.db;
             int *dbids = NULL, numdbids = 0;
+            functionsLibCtx *live_functions_lib_ctx = NULL;
             if (swap_data) {
                 dbids = getInlineCommandDbIds(argv, argc, db->id, &numdbids);
                 swapInlineCommandDbs(rdb_loading_ctx->dbarray, dbids, numdbids);
+                live_functions_lib_ctx = functionsLibCtxGetCurrent();
+                functionsLibCtxSetCurrent(rdb_loading_ctx->functions_lib_ctx, 1);
             }
             fakeClient->db = server.db[db->id];
             sds err = NULL;
             int load_cmd_ret = loadCommandFromArgv(fakeClient, argv, argc, LOAD_CMD_SOURCE_INLINE_REPL, &err);
+            /* FUNCTION FLUSH and FUNCTION RESTORE FLUSH replace the current ctx. */
+            rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
             if (swap_data) {
                 swapInlineCommandDbs(rdb_loading_ctx->dbarray, dbids, numdbids);
                 zfree(dbids);
+                functionsLibCtxSetCurrent(live_functions_lib_ctx, 0);
             }
             /* On an unknown or invalid command, stop the load. Skipping it
              * would leave this replica with different data than the primary. */

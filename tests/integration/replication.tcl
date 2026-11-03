@@ -2436,6 +2436,84 @@ foreach primary_diskless {yes no} {
     }
 }
 
+foreach policy {require-fork prefer-forkless} {
+    foreach replica_load {disabled on-empty-db swapdb} {
+        foreach cmd {load delete flush flushload restore} {
+            start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+                set primary [srv 0 client]
+                set ph [srv 0 host]
+                set pp [srv 0 port]
+                $primary config set forkless-policy $policy
+                $primary function load {#!lua name=liba
+                    server.register_function{function_name='fa', callback=function() return 'a' end, flags={'no-writes'}}
+                }
+                $primary function load {#!lua name=libc
+                    server.register_function{function_name='fc', callback=function() return 'c' end, flags={'no-writes'}}
+                }
+                set dump [$primary function dump]
+                $primary function delete libc
+                $primary select 2
+                $primary debug populate 10000
+                $primary select 0
+
+                start_server {overrides {save {}}} {
+                    set replica [srv 0 client]
+                    $replica config set repl-diskless-load $replica_load
+                    $replica function load {#!lua name=libold
+                        server.register_function{function_name='fold', callback=function() return 'old' end, flags={'no-writes'}}
+                    }
+
+                    test "FUNCTION [string toupper $cmd] during full sync reaches the replica ($policy, replica load=$replica_load)" {
+                        $primary config set rdb-key-save-delay 100
+                        $replica replicaof $ph $pp
+                        wait_for_condition 50 100 {
+                            [s -1 rdb_bgsave_in_progress] == 1
+                        } else {
+                            fail "Save didn't start"
+                        }
+                        switch $cmd {
+                            load {
+                                $primary function load {#!lua name=libb
+                                    server.register_function{function_name='fb', callback=function() return 'b' end, flags={'no-writes'}}
+                                }
+                            }
+                            flushload {
+                                $primary function flush sync
+                                $primary function load {#!lua name=libb
+                                    server.register_function{function_name='fb', callback=function() return 'b' end, flags={'no-writes'}}
+                                }
+                            }
+                            delete { $primary function delete liba }
+                            flush { $primary function flush }
+                            restore { $primary function restore $dump flush }
+                        }
+                        assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                        $primary config set rdb-key-save-delay 0
+                        wait_for_condition 500 100 {
+                            [s 0 master_link_status] eq {up}
+                        } else {
+                            fail "Replica didn't sync"
+                        }
+                        wait_for_ofs_sync $primary $replica
+                        assert_equal [$primary function list] [$replica function list]
+                        foreach lib [$primary function list] {
+                            foreach f [dict get $lib functions] {
+                                set name [dict get $f name]
+                                assert_equal [$primary fcall_ro $name 0] [$replica fcall_ro $name 0]
+                            }
+                        }
+                        if {$policy eq "prefer-forkless"} {
+                            assert_equal 0 [s -1 total_forks]
+                        } else {
+                            assert_morethan [s -1 total_forks] 0
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
     set primary [srv 0 client]
     $primary set big 0

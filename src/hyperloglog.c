@@ -1665,6 +1665,7 @@ void pfaddCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     struct hllhdr *hdr;
     int updated = 0, j;
+    bool invalid = false;
 
     if (o == NULL) {
         /* Create the key with a string value of the exact length to
@@ -1682,8 +1683,20 @@ void pfaddCommand(client *c) {
         int retval = hllAdd(o, (unsigned char *)objectGetVal(c->argv[j]), sdslen(objectGetVal(c->argv[j])));
         switch (retval) {
         case 1: updated++; break;
-        case -1: addReplyError(c, invalid_hll_err); return;
+        case -1: invalid = true; break;
         }
+        if (invalid) break;
+    }
+    if (invalid && updated) {
+        /* The elements before argv[j] were already applied in place. Propagate
+         * only those, so replicas and the AOF reach the same value without
+         * replaying the error. */
+        robj **argv = zmalloc(sizeof(robj *) * j);
+        for (int k = 0; k < j; k++) {
+            argv[k] = c->argv[k];
+            incrRefCount(argv[k]);
+        }
+        replaceClientCommandVector(c, j, argv);
     }
     hdr = objectGetVal(o);
     if (updated) {
@@ -1692,7 +1705,10 @@ void pfaddCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_STRING, "pfadd", c->argv[1], c->db->id);
         server.dirty += updated;
     }
-    addReply(c, updated ? shared.cone : shared.czero);
+    if (invalid)
+        addReplyError(c, invalid_hll_err);
+    else
+        addReply(c, updated ? shared.cone : shared.czero);
 }
 
 /* PFCOUNT var -> approximated cardinality of set. */

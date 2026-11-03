@@ -2034,6 +2034,7 @@ struct valkeyServer {
     long long stat_forkless_fallbacks_exclude_data;        /* Forkless fallbacks caused by data-excluding RDB requests. */
     long long stat_forkless_fallbacks_missing_inband_repl; /* Forkless fallbacks caused by missing inline replication support. */
     long long stat_forkless_fallbacks_compression;         /* Forkless fallbacks caused by stream compression. */
+    long long stat_forkless_fallbacks_old_rdb_version;     /* Forkless fallbacks caused by an old RDB version. */
     long long stat_rejected_conn;                          /* Clients rejected because of maxclients */
     long long stat_rejected_priority_conn;                 /* Prioritized clients rejected because of maxclients */
     long long stat_num_active_priority_clients;            /* Number of active prioritized clients */

@@ -1378,6 +1378,9 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         } else if (socket_target && !(mincapa & REPLICA_CAPA_INBAND_REPL)) {
             server.stat_forkless_fallbacks_missing_inband_repl++;
             reason = "replica does not support inline replication";
+        } else if (rdbver < 81) {
+            server.stat_forkless_fallbacks_old_rdb_version++;
+            reason = "cohort requires an RDB version older than 81";
         } else if (sync_compression_algo != ALGO_NONE) {
             server.stat_forkless_fallbacks_compression++;
             reason = "cohort needs stream compression";

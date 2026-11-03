@@ -2963,6 +2963,7 @@ void resetServerStats(void) {
     server.stat_forkless_fallbacks_exclude_data = 0;
     server.stat_forkless_fallbacks_missing_inband_repl = 0;
     server.stat_forkless_fallbacks_compression = 0;
+    server.stat_forkless_fallbacks_old_rdb_version = 0;
     server.stat_rejected_conn = 0;
     server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
@@ -6915,6 +6916,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "forkless_fallbacks_exclude_data:%lld\r\n", server.stat_forkless_fallbacks_exclude_data,
                 "forkless_fallbacks_missing_inband_repl:%lld\r\n", server.stat_forkless_fallbacks_missing_inband_repl,
                 "forkless_fallbacks_compression:%lld\r\n", server.stat_forkless_fallbacks_compression,
+                "forkless_fallbacks_old_rdb_version:%lld\r\n", server.stat_forkless_fallbacks_old_rdb_version,
                 "migrate_cached_sockets:%zu\r\n", dictSize(server.migrate_cached_sockets),
                 "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
                 "active_defrag_hits:%lld\r\n", server.stat_active_defrag_hits,

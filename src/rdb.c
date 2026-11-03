@@ -3853,11 +3853,15 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         }
 
         /* Inline replication commands run on load. The opcode is honored on any
-         * load, but loadCommandFromArgv only runs the embedded command if it is
+         * RDB 81 or newer load, but loadCommandFromArgv only runs the embedded command if it is
          * a write command or one that may replicate (e.g. PUBLISH, EVAL). This
          * prevents a crafted RDB from invoking arbitrary commands through the
          * fake client, which bypasses ACL checks. */
         if (type == RDB_OPCODE_UPDATE) {
+            if (rdbver < 81) {
+                serverLog(LL_WARNING, "Opcode %d requires RDB version 81 or newer", type);
+                goto loaderr;
+            }
             robj **argv = NULL;
             int argc = 0;
             respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdbRioReadLine, rdb, &argc, &argv);

@@ -2258,6 +2258,7 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
         assert_equal 0 [s forkless_fallbacks_compression]
         assert_equal 0 [s forkless_fallbacks_module]
         assert_equal 0 [s forkless_fallbacks_slot_import]
+        assert_equal 0 [s forkless_fallbacks_old_rdb_version]
         r config resetstat
         assert_equal 0 [s forkless_fallbacks_exclude_data]
         close $replica
@@ -2268,6 +2269,35 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
+
+    test "Full sync for an old RDB version counts its fork fallback reason" {
+        set loglines [count_log_lines 0]
+        set forks [s total_forks]
+        set replica [socket $primary_host $primary_port]
+        fconfigure $replica -translation binary
+        foreach cmd {
+            {REPLCONF capa eof capa psync2 capa inband-repl}
+            {REPLCONF version 9.0.0}
+        } {
+            puts -nonewline $replica "[join $cmd { }]\r\n"
+            flush $replica
+            assert_equal {+OK} [string trim [gets $replica]]
+        }
+        puts -nonewline $replica "PSYNC ? -1\r\n"
+        flush $replica
+        wait_for_log_messages 0 {"*Falling back to fork-based save for SYNC: cohort requires an RDB version older than 81*"} $loglines 50 100
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: replicas sockets*method: fork*"} $loglines 50 100
+        wait_for_condition 50 100 {
+            [s total_forks] > $forks
+        } else {
+            fail "Old-version full sync didn't fork"
+        }
+        assert_equal 1 [s forkless_fallbacks_old_rdb_version]
+        assert_equal 0 [s forkless_fallbacks_exclude_data]
+        assert_equal 0 [s forkless_fallbacks_missing_inband_repl]
+        close $replica
+        waitForBgsave $primary
+    }
 
     test "Full sync without inline replication support counts its fork fallback reason" {
         set loglines [count_log_lines 0]
@@ -2280,6 +2310,7 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
         flush $replica
         wait_for_log_messages 0 {"*Falling back to fork-based save for SYNC: replica does not support inline replication*"} $loglines 50 100
         assert_equal 1 [s forkless_fallbacks_missing_inband_repl]
+        assert_equal 0 [s forkless_fallbacks_old_rdb_version]
         close $replica
         waitForBgsave $primary
     }

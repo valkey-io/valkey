@@ -57,6 +57,9 @@
  *     in order to remove up to max_count entries from the vset. The removed entries will all satisfy the condition that their expiration time is smaller than the provided now.
  *     Note that there are no guarantees about the order to the entries.
  *
+ *     bool vsetMayChangeOnRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) - returns false if vsetRemoveExpired would
+ *     neither remove entries nor restructure the set at the provided now.
+ *
  * Utilities:
  *     bool vsetIsEmpty(vset *set) - used in order to check if a given set has any entries.
  *     size_t vsetSize(vset *set) - returns the number of entries in the set. O(1).
@@ -97,7 +100,9 @@ void vsetRelease(vset *set);
 bool vsetIsValid(vset *set);
 long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
 size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
+bool vsetMayChangeOnRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
 size_t vsetMemUsage(vset *set);
 size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *));
+bool vsetMayChangeOnDefrag(vset *set);
 
 #endif

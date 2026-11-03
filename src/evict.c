@@ -31,6 +31,7 @@
  */
 
 #include "server.h"
+#include "key_memory_delta.h"
 #include "bio.h"
 #include "script.h"
 #include "cluster_migrateslots.h"
@@ -379,8 +380,8 @@ static unsigned long evictionTimeLimitUs(void) {
 
 /* Evict a single key from the database. This function handles the deletion,
  * memory tracking, propagation, and notification for a single evicted key.
- * Returns the amount of memory freed (in bytes). */
-static long long evictSingleKey(serverDb *db, robj *keyobj, int slot) {
+ * 'val' is the value of the key. Returns the amount of memory freed (in bytes). */
+static long long evictSingleKey(serverDb *db, robj *keyobj, robj *val, int slot) {
     long long delta;
     mstime_t eviction_latency;
 
@@ -398,6 +399,9 @@ static long long evictSingleKey(serverDb *db, robj *keyobj, int slot) {
      * We don't incr the dirty counter since we don't want to propagate
      * the read command on key eviction. */
     enterExecutionUnit(1, 0);
+    /* Memory used to track the key for key memory delta events must not be
+     * counted against the memory freed, so track it before measuring. */
+    keyMemoryDeltaTrackValue(db, val);
     delta = (long long)zmalloc_used_memory();
     latencyStartMonitor(eviction_latency);
     int deleted = dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
@@ -481,7 +485,7 @@ int performEvictions(void) {
         int bestdbid;
         int bestslot;
         serverDb *db;
-        robj *valkey;
+        robj *valkey = NULL;
 
         if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU | MAXMEMORY_FLAG_LFU) ||
             server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
@@ -574,7 +578,8 @@ int performEvictions(void) {
                 if (slot == KVSTORE_INDEX_NOT_FOUND) continue; /* No keys in this DB. */
                 void *entry;
                 if (kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
-                    bestkey = objectGetKey((robj *)entry);
+                    valkey = entry;
+                    bestkey = objectGetKey(valkey);
                     bestdbid = j;
                     bestslot = slot;
                     break;
@@ -586,7 +591,7 @@ int performEvictions(void) {
         if (bestkey) {
             db = server.db[bestdbid];
             robj *keyobj = createStringObject(bestkey, sdslen(bestkey));
-            delta = evictSingleKey(db, keyobj, bestslot);
+            delta = evictSingleKey(db, keyobj, valkey, bestslot);
             mem_freed += delta;
             decrRefCount(keyobj);
             keys_freed++;

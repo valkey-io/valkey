@@ -33,6 +33,7 @@
  */
 
 #include "server.h"
+#include "key_memory_delta.h"
 #include <math.h> /* isnan(), isinf() */
 #include <float.h>
 
@@ -400,6 +401,8 @@ void getexCommand(client *c) {
     if (checkType(c, o, OBJ_STRING)) {
         return;
     }
+    /* Looked up for reading, but may be modified below. */
+    keyMemoryDeltaTrackValue(c->db, o);
 
     initDeferredReplyBuffer(c);
     /* We need to do this before we expire the key or delete it */

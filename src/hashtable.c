@@ -1506,17 +1506,23 @@ bool hashtableExpandIfNeeded(hashtable *ht) {
     return resize(ht, min_capacity, NULL);
 }
 
+/* Returns true if the hashtable is sparse enough that hashtableShrinkIfNeeded()
+ * may shrink it, regardless of automatic shrinking being paused (it may still
+ * not shrink, e.g. if resizing is forbidden). For example, reads that pause and
+ * resume automatic shrinking (such as scans) may then shrink it. */
+bool hashtableNeedsShrink(hashtable *ht) {
+    /* Don't shrink if rehashing is already in progress. */
+    if (hashtableIsRehashing(ht)) return false;
+    size_t current_capacity = numBuckets(ht->bucket_exp[0]) * ENTRIES_PER_BUCKET;
+    unsigned min_fill_percent = resize_policy == HASHTABLE_RESIZE_ALLOW ? MIN_FILL_PERCENT_SOFT : MIN_FILL_PERCENT_HARD;
+    return ht->used[0] * 100 <= current_capacity * min_fill_percent;
+}
+
 /* Shrinking is done automatically on deletion, but less eagerly if resize
  * policy is set to AVOID and not at all if set to FORBID.
  * Returns true if shrinking, false if not shrinking. */
 bool hashtableShrinkIfNeeded(hashtable *ht) {
-    /* Don't shrink if rehashing is already in progress. */
-    if (hashtableIsRehashing(ht) || ht->pause_auto_shrink) {
-        return false;
-    }
-    size_t current_capacity = numBuckets(ht->bucket_exp[0]) * ENTRIES_PER_BUCKET;
-    unsigned min_fill_percent = resize_policy == HASHTABLE_RESIZE_ALLOW ? MIN_FILL_PERCENT_SOFT : MIN_FILL_PERCENT_HARD;
-    if (ht->used[0] * 100 > current_capacity * min_fill_percent) {
+    if (ht->pause_auto_shrink || !hashtableNeedsShrink(ht)) {
         return false;
     }
     return resize(ht, ht->used[0], NULL);

@@ -371,6 +371,59 @@ tags "modules" {
             assert_equal [r hooks.event_last config-change-first] rdbcompression
         }
 
+        test {Test pubsub subscription delta hooks} {
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
+            $rd1 subscribe ch1 ch2
+            $rd1 read
+            $rd1 read
+            assert_equal 1 [r hooks.event_last pubsub-channel-ch1]
+            assert_equal 0 [r hooks.event_last pubsub-channel-ch1-old]
+            $rd2 subscribe ch1
+            $rd2 read
+            assert_equal 2 [r hooks.event_last pubsub-channel-ch1]
+            assert_equal 1 [r hooks.event_last pubsub-channel-ch1-old]
+
+            # Subscribing again, or to a pattern, doesn't change the count.
+            set count [r hooks.event_count pubsub-channel-ch1]
+            $rd2 subscribe ch1
+            $rd2 read
+            $rd2 psubscribe ch*
+            $rd2 read
+            assert_equal $count [r hooks.event_count pubsub-channel-ch1]
+            assert_equal {} [r hooks.event_last pubsub-channel-ch*]
+
+            $rd2 unsubscribe ch1
+            $rd2 read
+            assert_equal 1 [r hooks.event_last pubsub-channel-ch1]
+            assert_equal 2 [r hooks.event_last pubsub-channel-ch1-old]
+
+            # Unsubscribe from all the channels at once.
+            $rd1 unsubscribe
+            $rd1 read
+            $rd1 read
+            assert_equal 0 [r hooks.event_last pubsub-channel-ch1]
+            assert_equal 0 [r hooks.event_last pubsub-channel-ch2]
+
+            $rd1 subscribe ch3
+            $rd1 read
+            $rd1 reset
+            $rd1 read
+            assert_equal 0 [r hooks.event_last pubsub-channel-ch3]
+            assert_equal 1 [r hooks.event_last pubsub-channel-ch3-old]
+
+            $rd2 ssubscribe sch1
+            $rd2 read
+            assert_equal 1 [r hooks.event_last pubsub-shard-sch1]
+            $rd2 close
+            wait_for_condition 50 100 {
+                [r hooks.event_last pubsub-shard-sch1] eq 0
+            } else {
+                fail "disconnected client was not unsubscribed"
+            }
+            $rd1 close
+        }
+
         # look into the log file of the server that just exited
         test {Test shutdown hook} {
             assert_equal [string match {*module-event-shutdown*} [exec tail -9 < $replica_stdout]] 1
@@ -464,6 +517,23 @@ tags "modules" {
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-jobname] $job_name
+        }
+
+        test {Test pubsub subscription delta hooks when a slot is removed} {
+            # Find a shard channel served by the first node.
+            for {set i 0} {[R 0 cluster keyslot sch$i] > 5460} {incr i} {}
+            set channel sch$i
+            set slot [R 0 cluster keyslot $channel]
+            set rd [valkey_deferring_client 0]
+            $rd ssubscribe $channel
+            $rd read
+            assert_equal 1 [R 0 hooks.event_last pubsub-shard-$channel]
+
+            R 0 cluster delslots $slot
+            assert_equal 0 [R 0 hooks.event_last pubsub-shard-$channel]
+            assert_equal 1 [R 0 hooks.event_last pubsub-shard-$channel-old]
+            R 0 cluster addslots $slot
+            $rd close
         }
     }
 }

@@ -40,6 +40,7 @@
 #include "util.h"
 #include "vset.h"
 #include "server.h"
+#include "key_memory_delta.h"
 #include "zmalloc.h"
 #include <math.h>
 #include <string.h>
@@ -2066,6 +2067,8 @@ void hgetexCommand(client *c) {
     o = lookupKeyRead(c->db, c->argv[1]);
 
     if (checkType(c, o, OBJ_HASH)) return;
+    /* Looked up for reading, but may be modified below. */
+    if (o) keyMemoryDeltaTrackValue(c->db, o);
 
     /* Check if the hash object has volatile fields, used for active-expiry tracking */
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
@@ -3137,6 +3140,22 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
         hashTypeIgnoreTTL(o, false, NULL);
     }
     return expired;
+}
+
+/* Returns true if hashTypeDeleteExpiredFields() may change the hash at 'now'.
+ * Listpacks aren't scanned for expired fields: measuring them is cheaper. */
+bool hashTypeMayChangeOnDeleteExpired(robj *o, mstime_t now) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return true;
+    vset *set = hashTypeGetVolatileSet(o);
+    return set && vsetMayChangeOnRemoveExpired(set, entryGetExpiryVsetFunc, now);
+}
+
+/* Returns true if hashTypeScanDefrag() may change the memory used by the set of
+ * volatile fields of the hash, see vsetMayChangeOnDefrag(). */
+bool hashTypeMayChangeVolatileSetOnDefrag(robj *o) {
+    if (objectGetEncoding(o) != OBJ_ENCODING_HASHTABLE) return false;
+    vset *set = hashTypeGetVolatileSet(o);
+    return set && vsetMayChangeOnDefrag(set);
 }
 
 /* Hashtable scan callback for hash datatype */

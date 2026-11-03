@@ -55,7 +55,7 @@ typedef struct {
     /* Hash function. Defaults to hashing the bits in the pointer, effectively
      * treating the pointer as an integer. */
     uint64_t (*hashFunction)(const void *key);
-    /* Compare function, returns 0 if the keys are equal. Defaults to just
+    /* Compare function, returns non-zero if the keys are equal. Defaults to just
      * comparing the pointers for equality. */
     int (*keyCompare)(const void *key1, const void *key2);
     /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */
@@ -143,6 +143,7 @@ bool hashtableExpand(hashtable *ht, size_t size);
 bool hashtableTryExpand(hashtable *ht, size_t size);
 bool hashtableExpandIfNeeded(hashtable *ht);
 bool hashtableShrinkIfNeeded(hashtable *ht);
+bool hashtableNeedsShrink(hashtable *ht);
 bool hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);

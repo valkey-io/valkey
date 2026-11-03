@@ -706,7 +706,10 @@ static int forklessSaveCommonStart(forklessSaveInfo *saveInfo, int req, int rdbv
     rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORKLESS, saveInfo->write_target);
     startSaving(RDBFLAGS_FORKLESS_SAVE);
 
-    rdbSaveInfo rsi, *rsiptr = rdbPopulateSaveInfo(&rsi);
+    rdbSaveInfo rsi, *rsiptr = NULL;
+    /* A socket save's offset is only known at the cut and is emitted in the RDB
+     * tail. Don't emit a stale start offset here. */
+    if (saveInfo->write_target == RDB_WRITE_TARGET_DISK) rsiptr = rdbPopulateSaveInfo(&rsi);
     if (rdbWriteHeader(&saveInfo->save_rio, req, rdbver, RDBFLAGS_NONE, rsiptr) == C_ERR) return C_ERR;
 
     /* A data-excluded (functions-only) save has no keyspace, so skip the

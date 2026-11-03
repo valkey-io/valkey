@@ -189,8 +189,127 @@ proc do_node_restart {idx} {
     }
 }
 
+# Retain three cancelled slot-0 exports on a fresh three-primary cluster,
+# checking that cancellation releases both the export and import guards.
+proc create_cancelled_migration_history {key} {
+    set target1 [R 1 CLUSTER MYID]
+    set target2 [R 2 CLUSTER MYID]
+    assert_equal OK [R 0 SET $key before]
+    set_debug_prevent_pause 1
+    for {set i 0} {$i < 3} {incr i} {
+        assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $target1]
+        set job [get_job_name 0 0]
+        wait_for_migration_field 0 $job state waiting-to-pause
+        assert_error {*I am already migrating slot 0*} {
+            R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $target2
+        }
+        assert_error {*Slot export in progress*} {R 0 CLUSTER SETSLOT 1 STABLE}
+        assert_error {*Slot import in progress*} {R 1 CLUSTER SETSLOT 1 STABLE}
+        assert_equal OK [R 0 CLUSTER CANCELSLOTMIGRATIONS]
+        wait_for_migration_field 0 $job state cancelled
+        wait_for_migration_field 1 $job state failed
+        wait_for_countkeysinslot 1 0 0
+        assert_equal OK [R 0 CLUSTER SETSLOT 1 STABLE]
+        assert_equal OK [R 1 CLUSTER SETSLOT 1 STABLE]
+    }
+    assert_equal 3 [llength [R 0 CLUSTER GETSLOTMIGRATIONS]]
+    assert_equal before [R 0 GET $key]
+    set_debug_prevent_pause 0
+}
+
+# Enable debug assertions in every cluster below to check the migration index
+# against the job list throughout the tests, including after restarts.
+
+# Each history test uses a fresh cluster and creates its own prerequisites so
+# it also exercises retained history when selected individually with --only.
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
+    test "Migration history: cancelled jobs release their slots" {
+        create_cancelled_migration_history "{06S}:history"
+    }
+}
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
+    test "Migration history: concurrent exports propagate writes after cancellation" {
+        set target1 [R 1 CLUSTER MYID]
+        set target2 [R 2 CLUSTER MYID]
+        set key0 "{06S}:history"
+        set key1 "{Qi}:history"
+        create_cancelled_migration_history $key0
+        set_debug_prevent_pause 1
+        assert_equal OK [R 0 SET $key1 before]
+        assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $target1 SLOTSRANGE 1 1 NODE $target2]
+        set job0 [get_job_name 0 0]
+        set job1 [get_job_name 0 1]
+        wait_for_migration_field 0 $job0 state waiting-to-pause
+        wait_for_migration_field 0 $job1 state waiting-to-pause
+
+        # Both snapshots have finished. These changes must use the live export
+        # streams even though the job list also contains cancelled exports.
+        assert_equal OK [R 0 SET $key0 after]
+        assert_equal 1 [R 0 DEL $key1]
+        assert_equal OK [R 0 SET "{Qi}:new" new]
+        assert_equal OK [R 0 SET "{06S}:deleted" transient]
+        assert_equal 1 [R 0 DEL "{06S}:deleted"]
+        set_debug_prevent_pause 0
+        wait_for_migration 1 0
+        wait_for_migration 2 1
+        wait_for_migration_field 0 $job0 state success
+        wait_for_migration_field 0 $job1 state success
+        wait_for_migration_field 1 $job0 state success
+        wait_for_migration_field 2 $job1 state success
+        assert_equal after [R 1 GET $key0]
+        assert_equal 0 [R 1 EXISTS "{06S}:deleted"]
+        assert_equal 0 [R 2 EXISTS $key1]
+        assert_equal new [R 2 GET "{Qi}:new"]
+        assert_equal 5 [llength [R 0 CLUSTER GETSLOTMIGRATIONS]]
+        assert_equal OK [R 0 CLUSTER SETSLOT 2 STABLE]
+        assert_equal OK [R 1 CLUSTER SETSLOT 2 STABLE]
+        assert_equal OK [R 2 CLUSTER SETSLOT 2 STABLE]
+    }
+}
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
+    test "Migration history: pruning finished jobs allows new exports" {
+        set source [R 0 CLUSTER MYID]
+        set target [R 1 CLUSTER MYID]
+        set key0 "{06S}:history"
+
+        # Establish slot ownership and non-empty history before pruning it.
+        assert_equal OK [R 0 SET $key0 before]
+        assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $target]
+        set job [get_job_name 0 0]
+        wait_for_migration 1 0
+        wait_for_migration_field 0 $job state success
+        wait_for_migration_field 1 $job state success
+        assert_equal before [R 1 GET $key0]
+        foreach node {0 1} {
+            assert_equal 1 [llength [R $node CLUSTER GETSLOTMIGRATIONS]]
+        }
+
+        foreach node {0 1 2} {
+            R $node CONFIG SET cluster-slot-migration-log-max-len 0
+            wait_for_condition 100 50 {
+                [llength [R $node CLUSTER GETSLOTMIGRATIONS]] == 0
+            } else {
+                fail "Finished migrations were not pruned on node $node"
+            }
+            R $node CONFIG SET cluster-slot-migration-log-max-len 1000
+        }
+        set_debug_prevent_pause 1
+        assert_equal OK [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $source]
+        set job [get_job_name 1 0]
+        wait_for_migration_field 1 $job state waiting-to-pause
+        assert_equal OK [R 1 SET $key0 returned]
+        set_debug_prevent_pause 0
+        wait_for_migration 0 0
+        wait_for_migration_field 1 $job state success
+        wait_for_migration_field 0 $job state success
+        assert_equal returned [R 0 GET $key0]
+    }
+}
+
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2492,7 +2611,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
     set 16383_slot_tag "{6ZJ}"
     set node0_id [R 0 CLUSTER MYID]
 
@@ -2528,7 +2647,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2582,7 +2701,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2648,7 +2767,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {enable-debug-assert yes appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2798,7 +2917,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} ove
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
@@ -2841,7 +2960,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {enable-debug-assert yes cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
     test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
         set 16383_slot_tag "{6ZJ}"
 

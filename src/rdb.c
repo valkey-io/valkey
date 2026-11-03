@@ -4901,8 +4901,10 @@ int rdbWriteEofAndChecksum(rio *rdb) {
 
 /* Common state updates when a background save starts. */
 void rdbRecordStartMetrics(int bgsave_type, int write_target) {
-    server.dirty_before_bgsave = server.dirty;
-    server.lastbgsave_try = time(NULL);
+    if (write_target == RDB_WRITE_TARGET_DISK) {
+        server.dirty_before_bgsave = server.dirty;
+        server.lastbgsave_try = time(NULL);
+    }
     server.rdb_save_time_start = time(NULL);
     server.rdb_write_target = write_target;
     server.cur_bgsave_type = bgsave_type;

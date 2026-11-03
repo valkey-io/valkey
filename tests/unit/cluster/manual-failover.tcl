@@ -186,51 +186,56 @@ test "Wait for instance #0 to return back alive" {
 
 } ;# start_cluster
 
+# Pick a primary that is not the Raft leader (any primary with legacy cluster),
+# so that a failover can be committed while that primary is unreachable.
+# Returns the primary, its replica, and a key the primary owns.
+proc manual_failover_pick_shard {} {
+    set leader [CI 0 cluster_raft_leader]
+    for {set p 0} {$p < 5} {incr p} {
+        if {[R $p cluster myid] ne $leader} break
+    }
+    set r [expr {$p + 5}]
+    assert_equal [srv -$p port] [s -$r master_port]
+    wait_for_condition 1000 50 {
+        [s -$r master_link_status] eq {up}
+    } else {
+        fail "Replica link status is not up"
+    }
+    for {set i 0} {$i < 1000} {incr i} {
+        if {![catch {R $p exists "key$i"}]} break
+    }
+    set key "key$i"
+    R $p set $key 0
+    wait_for_ofs_sync [srv -$p client] [srv -$r client]
+    return [list $p $r $key]
+}
+
 ## Check that a manual failover waits for the primary to pause writes, and that
-## no acknowledged write is lost. The primary is not the Raft leader, so the
-## failover can be committed while the primary is unreachable.
+## no acknowledged write is lost.
 start_cluster 5 5 {tags {external:skip cluster}} {
     test "Manual failover does not lose acknowledged writes when the primary is slow" {
         wait_for_cluster_state ok
+        lassign [manual_failover_pick_shard] p r key
 
-        # Pick a primary that is not the Raft leader (any primary with legacy cluster).
-        set leader [CI 0 cluster_raft_leader]
-        for {set p 0} {$p < 5} {incr p} {
-            if {[R $p cluster myid] ne $leader} break
-        }
-        set r [expr {$p + 5}]
-        assert_equal [srv -$p port] [s -$r master_port]
-        wait_for_condition 1000 50 {
-            [s -$r master_link_status] eq {up}
-        } else {
-            fail "Replica link status is not up"
-        }
-        for {set i 0} {$i < 1000} {incr i} {
-            if {![catch {R $p exists "key$i"}]} break
-        }
-        set key "key$i"
-        R $p set $key 0
-        wait_for_ofs_sync [srv -$p client] [srv -$r client]
-
-        # Create the clients first: their initial SELECT would block on a sleeping server.
-        set sleeper [valkey_deferring_client -$p]
+        # Create the clients first: their initial SELECT would block on a stopped server.
         set writer [valkey_deferring_client -$p]
         set failover [valkey_deferring_client -$r]
 
         # Make the primary unreachable, queue writes to it, and start a failover.
-        $sleeper debug sleep 2
-        after 100
+        pause_process [srv -$p pid]
         set numops 100
         for {set i 0} {$i < $numops} {incr i} {
             $writer incr $key
         }
         $failover cluster failover
 
-        # No failover while the primary can't pause writes.
+        # No failover while the primary can't pause writes. The primary stays
+        # stopped until resume_process, so this runs inside that window.
         after 1000
-        assert_equal slave [s -$r role]
+        set role [s -$r role]
+        resume_process [srv -$p pid]
+        assert_equal slave $role
 
-        assert_equal OK [$sleeper read]
         set acked 0
         for {set i 0} {$i < $numops} {incr i} {
             if {![catch {$writer read} reply]} {
@@ -245,7 +250,39 @@ start_cluster 5 5 {tags {external:skip cluster}} {
         }
         assert_equal $acked [R $r get $key]
 
-        $sleeper close
+        $writer close
+        $failover close
+    }
+} ;# start_cluster
+
+## Check that the primary pauses writes during a manual failover, so writes
+## sent while it is in progress are either replicated or rejected.
+start_cluster 5 5 {tags {external:skip cluster}} {
+    test "Manual failover does not lose acknowledged writes under continuous load" {
+        wait_for_cluster_state ok
+        lassign [manual_failover_pick_shard] p r key
+
+        set writer [valkey_client -$p]
+        set failover [valkey_deferring_client -$r]
+        $failover cluster failover
+
+        # Keep writing until the primary rejects a write after the failover.
+        set acked 0
+        set start [clock milliseconds]
+        while {[clock milliseconds] - $start < 10000} {
+            if {[catch {$writer incr $key} reply]} break
+            set acked $reply
+        }
+        # Writes are redirected once the failover is done, not held until the pause expires.
+        assert {[clock milliseconds] - $start < 5000}
+        assert_equal OK [$failover read]
+        wait_for_condition 1000 50 {
+            [s -$r role] eq {master} && [s -$p role] eq {slave}
+        } else {
+            fail "No failover"
+        }
+        assert_equal $acked [R $r get $key]
+
         $writer close
         $failover close
     }

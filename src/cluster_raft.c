@@ -2447,8 +2447,10 @@ static void clusterRaftCron(void) {
             rs->mf_end = 0;
             rs->mf_ctx = NULL;
             rs->mf_callback = NULL;
-        } else if (nodeIsReplica(myself) && myself->replicaof && rs->mf_primary_offset != -1 &&
-                   replicationGetReplicaOffset() == rs->mf_primary_offset) {
+            /* On the primary, writes were paused. */
+            unpauseActions(PAUSE_DURING_FAILOVER);
+        } else if (nodeIsReplica(myself) && myself->replicaof && server.repl_state == REPL_STATE_CONNECTED &&
+                   rs->mf_primary_offset != -1 && replicationGetReplicaOffset() == rs->mf_primary_offset) {
             clusterNode *primary = myself->replicaof;
             uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
             sds entry = sdsnew("FAILOVER ");
@@ -2780,8 +2782,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         if (link->node && nodeIsReplica(link->node) && link->node->replicaof == myself) {
             clusterRaftState *rs = RAFT_STATE();
             rs->mf_end = monotonicMs() + server.cluster_mf_timeout;
-            pauseActions(PAUSE_DURING_FAILOVER,
-                         monotonicMs() + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
+            /* The pause end is compared with server.mstime, not the monotonic clock. */
+            pauseActions(PAUSE_DURING_FAILOVER, server.mstime + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
                          PAUSE_ACTIONS_CLIENT_WRITE_SET);
             serverLog(LL_NOTICE, "Manual failover requested by replica %.40s, pausing writes.",
                       link->node->name);
@@ -3280,6 +3282,8 @@ static void clusterRaftCancelManualFailover(void) {
         rs->mf_end = 0;
         rs->mf_ctx = NULL;
         rs->mf_callback = NULL;
+        /* On the primary, writes were paused. Unpause regardless of the outcome. */
+        unpauseActions(PAUSE_DURING_FAILOVER);
     }
 }
 

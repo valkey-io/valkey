@@ -11,14 +11,36 @@ extern "C" {
 }
 extern hashtableType commandSetType;
 extern hashtableType originalCommandSetType;
+extern struct serverCommand serverCommandTable[];
 
 
 class CmdFlagsTest : public ::testing::Test {
   protected:
     void SetUp() override {
+        /* populateCommandTable() fills the static command table, and asserts
+         * if it runs twice in one process. Free what an earlier suite (for
+         * example BgIterationTest) populated first. */
+        releaseCommandTable();
         server.commands = hashtableCreate(&commandSetType);
         server.orig_commands = hashtableCreate(&originalCommandSetType);
         populateCommandTable();
+    }
+
+    void TearDown() override {
+        releaseCommandTable();
+    }
+
+    static void releaseCommandTable(void) {
+        for (struct serverCommand *c = serverCommandTable; c->declared_name; c++) {
+            if (c->subcommands_ht) {
+                hashtableRelease(c->subcommands_ht);
+                c->subcommands_ht = NULL;
+            }
+        }
+        if (server.commands) hashtableRelease(server.commands);
+        if (server.orig_commands) hashtableRelease(server.orig_commands);
+        server.commands = NULL;
+        server.orig_commands = NULL;
     }
 };
 

@@ -230,6 +230,8 @@ class BgIterationTest : public ::testing::Test {
     static void TearDownTestSuite() {
         hashtableRelease(server.commands);
         hashtableRelease(server.orig_commands);
+        server.commands = NULL;
+        server.orig_commands = NULL;
     }
 
 

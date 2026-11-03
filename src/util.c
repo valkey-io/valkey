@@ -1705,10 +1705,12 @@ sds escapeJsonString(sds s, const char *p, size_t len) {
         /* Append the run of characters that need no escaping in one go. */
         size_t run = 0;
         while (run < len && p[run] != '\\' && p[run] != '"' && (unsigned char)p[run] > 0x1f) run++;
-        s = sdscatlen(s, p, run);
-        p += run;
-        len -= run;
-        if (len == 0) break;
+        if (run) {
+            s = sdscatlen(s, p, run);
+            p += run;
+            len -= run;
+            continue;
+        }
 
         switch (*p) {
         case '\\': s = sdscatlen(s, "\\\\", 2); break;

@@ -1555,11 +1555,8 @@ static respParseResult readRespNumberLine(char *(*readline_fn)(void *ctx, char *
     char *newline = strchr(buf, '\n');
     /* An over-long line is malformed and would desync the stream. */
     if (!newline) return strlen(buf) == sizeof(buf) - 1 ? RESP_PARSE_FMTERR : RESP_PARSE_EOF;
-    *newline = '\0'; /* buf may have a trailing \r */
-    char *endptr;
-    *out = strtol(buf + 1, &endptr, 10);
-    /* strtol leaves endptr at the start when it parsed no digits at all. */
-    if (endptr == buf + 1) return RESP_PARSE_FMTERR;
+    if (newline[-1] != '\r') return RESP_PARSE_FMTERR;
+    if (!string2l(buf + 1, newline - buf - 2, out)) return RESP_PARSE_FMTERR;
     return RESP_PARSE_OK;
 }
 

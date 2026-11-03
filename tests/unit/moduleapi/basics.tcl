@@ -171,7 +171,7 @@ start_server {tags {"modules external:skip"} overrides {requirepass mypass enabl
     }
 }
 
-start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
+start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
     r module load $testmodule forkless
 
     test "CallArgv infrastructure blocking respects ERRORS_AS_REPLIES without deferred writes" {

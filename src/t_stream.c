@@ -723,8 +723,9 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     /* Check each node's last ID, just as the normal trimming loop does.
      * Restored streams can have a last_id below IDs in their nodes. */
+    int within_limit = limit == 0 || s->length <= (uint64_t)limit;
     int trim_all = trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0;
-    if (trim_strategy == TRIM_STRATEGY_MINID && streamCompareID(&s->last_id, id) < 0) {
+    if (within_limit && trim_strategy == TRIM_STRATEGY_MINID && streamCompareID(&s->last_id, id) < 0) {
         raxIterator check;
         raxStart(&check, s->rax);
         raxSeek(&check, "^", NULL, 0);
@@ -740,7 +741,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         }
         raxStop(&check);
     }
-    if (trim_all && (limit == 0 || s->length <= (uint64_t)limit)) {
+    if (trim_all && within_limit) {
         int64_t deleted = s->length;
         raxFreeWithCallback(s->rax, lpFreeVoid);
         s->rax = raxNew();

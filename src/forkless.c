@@ -282,6 +282,9 @@ static void *forklessSaveProcessor(void *arg) {
     const unsigned statsIntervalMs = 1000;
     monotime lastStatsTime;
     elapsedStart(&lastStatsTime);
+    const unsigned closingClientsIntervalMs = 100;
+    monotime lastClosingClientsTime;
+    elapsedStart(&lastClosingClientsTime);
 
     bool done = false;
     bool terminated = false;
@@ -289,7 +292,9 @@ static void *forklessSaveProcessor(void *arg) {
     while (!done && err == C_OK) {
         bgIteratorItem *item = bgIteratorRead(saveInfo->iterator);
 
-        if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
+        if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET &&
+            elapsedMs(lastClosingClientsTime) >= closingClientsIntervalMs) {
+            elapsedStart(&lastClosingClientsTime);
             handleClosingClients(saveInfo);
             if (listLength(saveInfo->u.repl.clients) == 0) {
                 serverLog(LL_WARNING, "forkless-save: all replicas disconnected, aborting");
@@ -396,6 +401,9 @@ static void *forklessSaveProcessor(void *arg) {
             rioFlush(&saveInfo->save_rio);
         }
 
+        /* Drop replicas that failed or were closed since the last check. */
+        handleClosingClients(saveInfo);
+
         /* Capture total bytes written for this save. */
         saveInfo->bytes_written = saveInfo->save_rio.processed_bytes;
 
@@ -409,6 +417,7 @@ static void *forklessSaveProcessor(void *arg) {
                 dropReplicaFromSaveAndQueueForMainThreadFree(saveInfo, c);
             }
         }
+        if (!terminated && listLength(saveInfo->u.repl.clients) == 0) err = C_ERR;
 
         rioFreeConnset(&saveInfo->save_rio);
     }

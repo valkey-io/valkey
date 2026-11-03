@@ -1718,7 +1718,13 @@ sds escapeJsonString(sds s, const char *p, size_t len) {
         case '\r': s = sdscatlen(s, "\\r", 2); break;
         case '\t': s = sdscatlen(s, "\\t", 2); break;
         case '\b': s = sdscatlen(s, "\\b", 2); break;
-        default: s = sdscatprintf(s, "\\u%04x", *p);
+        default: {
+            static const char hex[] = "0123456789abcdef";
+            unsigned char c = *p;
+            char escaped[] = {'\\', 'u', '0', '0', hex[c >> 4], hex[c & 0xf]};
+            s = sdscatlen(s, escaped, sizeof(escaped));
+            break;
+        }
         }
         p++;
         len--;

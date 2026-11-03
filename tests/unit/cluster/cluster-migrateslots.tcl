@@ -987,6 +987,31 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field $source_idx $jobname state failed
             wait_for_migration_field $target_idx $jobname state failed
         }
+
+        test "Already expired keys are not sent in the snapshot (slot $slot_to_migrate from node $source_idx to $target_idx)" {
+            assert_match "OK" [R $source_idx FLUSHALL SYNC]
+            assert_match "OK" [R $target_idx FLUSHALL SYNC]
+            assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 0]
+            assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
+            populate 100 "$slot_to_migrate_tag:live:" 100 -$source_idx
+            populate 100 "$slot_to_migrate_tag:dead:" 100 -$source_idx false 0.1
+            after 200
+            # The expired keys are still in memory on the source
+            assert_match "200" [R $source_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+
+            assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            set jobname [get_job_name $source_idx $slot_to_migrate]
+            wait_for_migration_field $source_idx $jobname state waiting-to-pause
+            assert_match "100" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+
+            # Cleanup for the next test
+            assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 1]
+            assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 1]
+            assert_match "OK" [R $source_idx FLUSHALL SYNC]
+            assert_match "OK" [R $target_idx FLUSHALL SYNC]
+            wait_for_migration_field $source_idx $jobname state failed
+            wait_for_migration_field $target_idx $jobname state failed
+        }
         set_debug_prevent_pause 0
     }
 

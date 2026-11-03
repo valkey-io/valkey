@@ -1653,7 +1653,7 @@ bool shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 }
 
 /* Contains the logic run on the child process during the snapshot phase. */
-int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
+int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job, mstime_t expired_before) {
     list *slot_ranges = job->slot_ranges;
     size_t key_count = 0;
     for (int db_num = 0; db_num < server.dbnum; db_num++) {
@@ -1664,7 +1664,7 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
             slotRange *r = (slotRange *)ln->value;
             for (int slot = r->start_slot; slot <= r->end_slot; slot++) {
                 if (rewriteSlotToAppendOnlyFileRio(
-                        aof, db_num, slot, &key_count) == C_ERR) return C_ERR;
+                        aof, db_num, slot, &key_count, expired_before) == C_ERR) return C_ERR;
             }
         }
     }
@@ -1729,6 +1729,13 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
 
     server.slot_migration_pipe_conn = job->client->conn;
 
+    /* Keys that are already expired at fork time are not sent to the target.
+     * The time is taken in the parent before the fork, so every command the
+     * parent runs after the fork sees these keys as expired too: any access
+     * deletes them and propagates the DEL, which is a no-op on the target.
+     * In import mode the parent does not expire keys, so keep them all. */
+    mstime_t expired_before = server.import_mode ? 0 : mstime();
+
     if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
         /* Child */
         rio aof;
@@ -1740,7 +1747,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
         serverSetProcTitle("valkey-slot-migration-to-target");
         serverSetCpuAffinity(server.bgsave_cpulist);
 
-        int retval = childSnapshotForSyncSlot(&aof, job);
+        int retval = childSnapshotForSyncSlot(&aof, job, expired_before);
         if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE, "Slot migration");

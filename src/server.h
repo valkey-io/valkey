@@ -3857,7 +3857,7 @@ void phgetallCommand(client *c);
 void phpathexistsCommand(client *c);
 void phdelCommand(client *c);
 void phprefixesCommand(client *c);
-void phdelprefixCommand(client *c);
+void phpathdelCommand(client *c);
 void phscanCommand(client *c);
 void phpathscanCommand(client *c);
 void phpathcountCommand(client *c);

@@ -9,8 +9,8 @@ tags {modules pathhash external:skip} {
                 foreach deletion {
                     {phdel ph-notify p f}
                     {phdel ph-notify p}
-                    {phdelprefix ph-notify p}
-                    {phdelprefix ph-notify {}}
+                    {phpathdel ph-notify p withsubpaths}
+                    {phpathdel ph-notify {} withsubpaths}
                 } {
                     r phset ph-notify p fields 1 f v
                     r pathhash.notify.configure observe
@@ -41,8 +41,8 @@ tags {modules pathhash external:skip} {
                 foreach deletion {
                     {phdel ph-notify p f}
                     {phdel ph-notify p}
-                    {phdelprefix ph-notify p}
-                    {phdelprefix ph-notify {}}
+                    {phpathdel ph-notify p withsubpaths}
+                    {phpathdel ph-notify {} withsubpaths}
                 } {
                     $primary pathhash.notify.configure observe
                     $primary del ph-notify

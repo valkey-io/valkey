@@ -1945,6 +1945,56 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
     }
 }
 
+start_server {tags {"repl durability external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    $primary debug populate 2000
+    start_server {overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes repl-diskless-load disabled loading-process-events-interval-bytes 1024 key-load-delay 500}} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+
+        test "A client that connected while the AOF was off for a sync load can FLUSHDB after promotion" {
+            # The replica stops its AOF to load the primary's RDB and restarts it
+            # afterwards. A client that connects during the load is created while
+            # reply blocking is off, so it has no per-client reply-blocking state.
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [getInfoProperty [$replica info persistence] loading] == 1
+            } else {
+                fail "replica did not start loading the sync RDB"
+            }
+            assert_equal 0 [getInfoProperty [$replica info persistence] aof_enabled]
+            set fd [socket $replica_host $replica_port]
+            fconfigure $fd -translation binary -buffering none
+
+            $replica config set key-load-delay 0
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "sync did not complete"
+            }
+            $replica replicaof no one
+
+            # FLUSHDB registers no task for this client, so nothing else sets up
+            # its reply-blocking state before the reply is held (a SET would,
+            # through the key invalidation task).
+            puts -nonewline $fd "*2\r\n\$7\r\nFLUSHDB\r\n\$4\r\nSYNC\r\n"
+            fconfigure $fd -blocking 0
+            set got ""
+            wait_for_condition 50 20 {
+                [string match "*\r\n" [append got [read $fd]]]
+            } else {
+                fail "no reply from the promoted replica"
+            }
+            close $fd
+            assert_equal "+OK\r\n" $got
+            assert_equal PONG [$replica ping]
+        }
+    }
+}
+
 start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
     test "Enabling reply blocking at runtime initializes fake clients created earlier" {
         # A Lua write pools a module temp client with no reply-blocking state.

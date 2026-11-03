@@ -127,6 +127,11 @@ static void resetPreExecutionOffset(struct client *c) {
 
 // Track the pre-execution position in the client reply COB.
 static void trackCommandPreExecutionPosition(struct client *c) {
+    /* A recorded position means the reply may be held, which needs the
+     * per-client lists. A client created while reply blocking was off (e.g.
+     * while a replica's AOF was stopped to load the primary's RDB) has none,
+     * and an AOF restart turns the feature on without visiting every client. */
+    replyBlockingClientInit(c);
     resetPreExecutionOffset(c);
     list *reply = c->reply;
     int bufpos = c->bufpos;

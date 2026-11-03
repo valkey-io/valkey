@@ -45,12 +45,6 @@
 #include <errno.h>
 #include <time.h>
 
-/* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
-extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
-#define ValkeyModule_ReplyRaw VM_ReplyRaw
-
 #define LUA_CMD_OBJCACHE_SIZE 32
 #define LUA_CMD_OBJCACHE_MAX_LEN 64
 
@@ -1421,8 +1415,8 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
 
 /* server.log() */
 static int luaLogCommand(lua_State *lua) {
+    /* There is no run context when called from a library body during FUNCTION LOAD. */
     luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
 
     int j, argc = lua_gettop(lua);
     int level;
@@ -1458,6 +1452,12 @@ static int luaLogCommand(lua_State *lua) {
         }
     }
 
+    /* The legacy log format writes the message verbatim, so a line break
+     * would let the script start a record without the module tag. */
+    for (char *p = log; p && *p; p++) {
+        if (*p == '\r' || *p == '\n') *p = ' ';
+    }
+
     const char *level_str = NULL;
     switch (level) {
     case LL_DEBUG: level_str = "debug"; break;
@@ -1467,7 +1467,7 @@ static int luaLogCommand(lua_State *lua) {
     default: ValkeyModule_Assert(0);
     }
 
-    ValkeyModule_Log(rctx->module_ctx, level_str, "%s", log);
+    ValkeyModule_Log(rctx ? rctx->module_ctx : NULL, level_str, "%s", log);
     ValkeyModule_Free(log);
     return 0;
 }
@@ -1960,25 +1960,29 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
         return;
     }
 
-    lua_getfield(lua, -1, "err");
+    lua_pushstring(lua, "err");
+    lua_rawget(lua, -2);
     if (lua_isstring(lua, -1)) {
         err_info->msg = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_getfield(lua, -1, "source");
+    lua_pushstring(lua, "source");
+    lua_rawget(lua, -2);
     if (lua_isstring(lua, -1)) {
         err_info->source = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_getfield(lua, -1, "line");
+    lua_pushstring(lua, "line");
+    lua_rawget(lua, -2);
     if (lua_isstring(lua, -1)) {
         err_info->line = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_getfield(lua, -1, "ignore_error_stats_update");
+    lua_pushstring(lua, "ignore_error_stats_update");
+    lua_rawget(lua, -2);
     if (lua_isboolean(lua, -1)) {
         err_info->ignore_err_stats_update = lua_toboolean(lua, -1);
     }

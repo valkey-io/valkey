@@ -3846,7 +3846,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
 
         /* Safeguard for unknown foreign opcode interpretations. */
-        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX && type != RDB_OPCODE_UPDATE) {
+        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
             serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
                       type, rdbver);
             goto loaderr;

@@ -77,7 +77,7 @@
             {
                 "token": "WEIGHTS",
                 "name": "weight",
-                "type": "double",
+                "type": "integer",
                 "optional": true,
                 "multiple": true
             },

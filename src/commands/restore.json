@@ -82,23 +82,18 @@
                 "since": "5.0.0"
             },
             {
-                "name": "eviction",
-                "type": "oneof",
+                "token": "IDLETIME",
+                "name": "seconds",
+                "type": "integer",
                 "optional": true,
-                "arguments": [
-                    {
-                        "token": "IDLETIME",
-                        "name": "seconds",
-                        "type": "integer",
-                        "since": "5.0.0"
-                    },
-                    {
-                        "token": "FREQ",
-                        "name": "frequency",
-                        "type": "integer",
-                        "since": "5.0.0"
-                    }
-                ]
+                "since": "5.0.0"
+            },
+            {
+                "token": "FREQ",
+                "name": "frequency",
+                "type": "integer",
+                "optional": true,
+                "since": "5.0.0"
             }
         ]
     }

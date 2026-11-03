@@ -69,19 +69,17 @@
             },
             {
                 "name": "ids",
-                "type": "block",
-                "token": "IDS",
-                "arguments": [
-                    {
-                        "name": "numids",
-                        "type": "integer"
-                    },
-                    {
-                        "name": "id",
-                        "type": "string",
-                        "multiple": true
-                    }
-                ]
+                "type": "pure-token",
+                "token": "IDS"
+            },
+            {
+                "name": "numids",
+                "type": "integer"
+            },
+            {
+                "name": "id",
+                "type": "string",
+                "multiple": true
             }
         ],
         "reply_schema": {

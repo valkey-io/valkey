@@ -49,7 +49,7 @@
             },
             {
                 "name": "increment",
-                "type": "double"
+                "type": "integer"
             },
             {
                 "name": "member",

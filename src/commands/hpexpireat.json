@@ -82,33 +82,19 @@
                         "token": "NX"
                     },
                     {
-                        "name": "xx-comparison",
-                        "type": "block",
-                        "arguments": [
-                            {
-                                "name": "xx",
-                                "type": "pure-token",
-                                "token": "XX",
-                                "optional": true
-                            },
-                            {
-                                "name": "comparison",
-                                "type": "oneof",
-                                "optional": true,
-                                "arguments": [
-                                    {
-                                        "name": "gt",
-                                        "type": "pure-token",
-                                        "token": "GT"
-                                    },
-                                    {
-                                        "name": "lt",
-                                        "type": "pure-token",
-                                        "token": "LT"
-                                    }
-                                ]
-                            }
-                        ]
+                        "name": "xx",
+                        "type": "pure-token",
+                        "token": "XX"
+                    },
+                    {
+                        "name": "gt",
+                        "type": "pure-token",
+                        "token": "GT"
+                    },
+                    {
+                        "name": "lt",
+                        "type": "pure-token",
+                        "token": "LT"
                     }
                 ]
             },
@@ -120,6 +106,7 @@
                     {
                         "name": "numfields",
                         "type": "integer",
+                        "key_spec_index": 0,
                         "multiple": false,
                         "minimum": 1
                     },

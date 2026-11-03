@@ -30,22 +30,20 @@
             {
                 "name": "mode",
                 "type": "oneof",
+                "optional": true,
                 "multiple": true,
                 "arguments": [
                     {
                         "name": "crash-after-election",
-                        "type": "pure-token",
-                        "token": "CRASH-AFTER-ELECTION"
+                        "type": "pure-token"
                     },
                     {
                         "name": "crash-after-promotion",
-                        "type": "pure-token",
-                        "token": "CRASH-AFTER-PROMOTION"
+                        "type": "pure-token"
                     },
                     {
                         "name": "help",
-                        "type": "pure-token",
-                        "token": "HELP"
+                        "type": "pure-token"
                     }
                 ]
             }

@@ -986,7 +986,6 @@ class BgIterationTest : public ::testing::Test {
         serverDb *aux = server.db[dbid0];
         server.db[dbid0] = server.db[dbid1];
         server.db[dbid1] = aux;
-        bgIteration_swapdb(dbid0, dbid1);
 
         bgIteration_handleCommandReplication(0, c->cmd, c->argc, c->argv);
         server.in_call--;

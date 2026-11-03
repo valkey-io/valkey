@@ -1960,29 +1960,25 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
         return;
     }
 
-    lua_pushstring(lua, "err");
-    lua_rawget(lua, -2);
+    lua_getfield(lua, -1, "err");
     if (lua_isstring(lua, -1)) {
         err_info->msg = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_pushstring(lua, "source");
-    lua_rawget(lua, -2);
+    lua_getfield(lua, -1, "source");
     if (lua_isstring(lua, -1)) {
         err_info->source = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_pushstring(lua, "line");
-    lua_rawget(lua, -2);
+    lua_getfield(lua, -1, "line");
     if (lua_isstring(lua, -1)) {
         err_info->line = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_pushstring(lua, "ignore_error_stats_update");
-    lua_rawget(lua, -2);
+    lua_getfield(lua, -1, "ignore_error_stats_update");
     if (lua_isboolean(lua, -1)) {
         err_info->ignore_err_stats_update = lua_toboolean(lua, -1);
     }

@@ -1372,7 +1372,9 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
      * For any cohort it cannot serve, fall back to fork. */
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
         const char *reason = NULL;
-        if (socket_target && !(mincapa & REPLICA_CAPA_INBAND_REPL)) {
+        if (socket_target && (req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
+            reason = "cohort requested an RDB without keyspace data";
+        } else if (socket_target && !(mincapa & REPLICA_CAPA_INBAND_REPL)) {
             reason = "replica does not support inline replication";
         } else if (sync_compression_algo != ALGO_NONE) {
             reason = "cohort needs stream compression";

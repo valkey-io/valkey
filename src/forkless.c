@@ -314,10 +314,6 @@ static void *forklessSaveProcessor(void *arg) {
             break;
 
         case BGITERATOR_ITEM_DBENTRY:
-            /* A data-excluded save streams no keyspace. */
-            if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET &&
-                (saveInfo->u.repl.req & REPLICA_REQ_RDB_EXCLUDE_DATA))
-                break;
             if ((err = writeSelectDb(saveInfo, item->dbid)) == C_ERR) break;
             items++;
 

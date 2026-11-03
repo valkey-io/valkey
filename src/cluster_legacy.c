@@ -1685,6 +1685,10 @@ void clusterInitLast(void) {
     }
 }
 
+/* Request a best-effort failover to a fully synchronized replica on shutdown.
+ * Prefer a known cluster node without NOFAILOVER, otherwise use any eligible
+ * replica. Skip failover if any connected replica is older than 9.0.
+ * The caller must flush replica output buffers before exiting. */
 void clusterAutoFailoverOnShutdown(void) {
     if (!nodeIsPrimary(myself)) return;
 

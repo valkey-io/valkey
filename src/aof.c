@@ -1548,7 +1548,7 @@ static respParseResult readRespNumberLine(char *(*readline_fn)(void *ctx, char *
                                           void *ctx,
                                           char prefix,
                                           long *out) {
-    char buf[128];
+    char buf[LONG_STR_SIZE + 3];
 
     if (readline_fn(ctx, buf, sizeof(buf)) == NULL) return RESP_PARSE_EOF;
     if (buf[0] != prefix) return RESP_PARSE_FMTERR;

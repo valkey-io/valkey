@@ -744,6 +744,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         raxStop(&check);
     }
     if (trim_all && within_limit) {
+        /* No nodes need to survive, so avoid removing them one by one. */
         int64_t deleted = s->length;
         raxFreeWithCallback(s->rax, lpFreeVoid);
         s->rax = raxNew();

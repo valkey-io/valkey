@@ -6839,6 +6839,9 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
     if (c->cmd == NULL && !is_running_script && !scriptIsRunning()) {
         struct serverCommand *orig = lookupCommandOrOriginal(c->argv, c->argc);
         if (orig != NULL) {
+            /* rename-command only renames a top level command, so for a subcommand such as config|get look at its parent,
+             * config. If that command is still in the current table under another name it was renamed, otherwise it was
+             * removed. */
             struct serverCommand *top = orig->parent ? orig->parent : orig;
             if (lookupCommandBySds(top->current_name) == top) {
                 robj *current_name = createStringObject(top->current_name, sdslen(top->current_name));

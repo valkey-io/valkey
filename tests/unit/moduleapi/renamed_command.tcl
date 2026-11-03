@@ -83,6 +83,22 @@ tags {"modules external:skip"} {
             assert_equal v [r get k]
         }
 
+        # The call rewrites the command name on the temporary client, which keeps the arguments as the module passed
+        # them in original_argv. The slowlog must show those, as it does for any other rewritten command.
+        test {Slowlog shows the arguments as the module passed them when the name is rewritten} {
+            r config set slowlog-log-slower-than 0
+            foreach name {set vset} {
+                r slowlog reset
+                assert_equal OK [r do_rm_call $name sl_$name 1]
+                # newest first: the module command, then the command it ran
+                set entries [r slowlog get 2]
+                assert_equal [list do_rm_call $name sl_$name 1] [lindex $entries 0 3]
+                assert_equal [list $name sl_$name 1] [lindex $entries 1 3]
+                assert_equal 1 [r get sl_$name]
+            }
+            r config set slowlog-log-slower-than 10000
+        }
+
         test {A write replicated by the original name of a renamed command survives an AOF reload} {
             assert_equal OK [r do_rm_call_fire_and_forget set k2 v2]
             r debug loadaof

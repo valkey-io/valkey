@@ -389,8 +389,11 @@ void phdelCommand(client *c) {
     if (c->argc != 3 && hashTypeLength(payload) == 0)
         serverAssert(pathHashDeletePath(path_hash, objectGetVal(c->argv[2])));
     if (deleted) {
+        bool keyremoved = raxSize(path_hash->index) == 0;
+        if (keyremoved) dbDelete(c->db, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -553,17 +556,12 @@ void phpathdelCommand(client *c) {
     pathHashObject *path_hash = objectGetVal(o);
     sds path = objectGetVal(c->argv[2]);
     size_t path_len = sdslen(path);
+    bool delete_all = withsubpaths && path_len == 0;
     long long deleted = 0;
     if (!withsubpaths) {
         deleted = pathHashDeletePath(path_hash, path);
-    } else if (path_len == 0) {
+    } else if (delete_all) {
         deleted = raxSize(path_hash->index);
-        if (deleted) {
-            rax *empty = raxNew();
-            raxFreeWithCallback(path_hash->index, freePathHashPayload);
-            path_hash->index = empty;
-            path_hash->num_fields = 0;
-        }
     } else {
         /* Deletion invalidates the iterator, so collect a bounded number of path
          * copies before removing them. The index stores a shared prefix once, so
@@ -596,8 +594,11 @@ void phpathdelCommand(client *c) {
         }
     }
     if (deleted) {
+        bool keyremoved = delete_all || raxSize(path_hash->index) == 0;
+        if (keyremoved) dbDelete(c->db, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phpathdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -772,31 +773,41 @@ void phpathscanCommand(client *c) {
     zfree(entries);
 }
 
-void phcardCommand(client *c) {
+/* Count stored paths with a byte prefix; an empty prefix counts the whole tree. */
+size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len) {
+    pathHashObject *path_hash = objectGetVal(o);
+    if (prefix_len == 0) return raxSize(path_hash->index);
+
+    size_t count = 0;
+    raxIterator iter;
+    raxStart(&iter, path_hash->index);
+    raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
+    while (raxNext(&iter) && pathHashPathHasPrefix(iter.key, iter.key_len, prefix, prefix_len)) count++;
+    raxStop(&iter);
+    return count;
+}
+
+void phpathcountCommand(client *c) {
+    sds prefix = NULL;
+    if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[2]), "prefix")) {
+        prefix = objectGetVal(c->argv[3]);
+    } else if (c->argc != 2) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_PATH_HASH)) return;
-    if (o == NULL)
+    if (o == NULL) {
         addReply(c, shared.czero);
-    else
-        addReplyLongLong(c, raxSize(((pathHashObject *)objectGetVal(o))->index));
+        return;
+    }
+    addReplyLongLong(c, pathHashTypeCount(o, (unsigned char *)prefix, prefix ? sdslen(prefix) : 0));
 }
 
 int rewritePathHashObject(rio *r, robj *key, robj *o) {
     pathHashObject *path_hash = objectGetVal(o);
     raxIterator paths;
-
-    if (raxSize(path_hash->index) == 0) {
-        /* As with XADD MAXLEN 0 for an empty stream, create a temporary
-         * logical path and remove it again to reconstruct an empty path hash. */
-        if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "PHSET", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkString(r, "FIELDS", 6) || !rioWriteBulkLongLong(r, 1) ||
-            !rioWriteBulkString(r, "", 0) || !rioWriteBulkString(r, "", 0) ||
-            !rioWriteBulkCount(r, '*', 3) || !rioWriteBulkString(r, "PHDEL", 5) ||
-            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0))
-            return 0;
-        return 1;
-    }
 
     raxStart(&paths, path_hash->index);
     raxSeek(&paths, "^", NULL, 0);

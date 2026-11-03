@@ -6,11 +6,39 @@ start_server {tags {pathhash}} {
         assert_equal OK [r phset tree $path fields 1 $field $value]
         assert_equal pathhash [r type tree]
         assert_equal pathhash [r object encoding tree]
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
         assert_equal [list $value] [r phget tree $path $field]
         assert_equal [list {}] [r phget tree $path missing]
         assert_equal [list $value {}] [r phget tree $path $field missing]
-        assert_equal 0 [r phcard missing]
+        assert_equal 0 [r phpathcount missing]
+    }
+
+    test {PHPATHCOUNT counts byte prefixes including exact and binary paths} {
+        r del count-tree
+        foreach path {{} a ab abc abcd abx b} {
+            r phset count-tree $path fields 1 f v
+        }
+        assert_equal 7 [r phpathcount count-tree]
+        assert_equal 7 [r phpathcount count-tree prefix {}]
+        assert_equal 5 [r phpathcount count-tree prefix a]
+        assert_equal 4 [r phpathcount count-tree prefix ab]
+        assert_equal 1 [r phpathcount count-tree prefix abcd]
+        assert_equal 0 [r phpathcount count-tree prefix z]
+        assert_equal 0 [r phpathcount missing prefix a]
+        set prefix [binary format H* 00ff]
+        r phset count-tree $prefix fields 1 f v
+        r phset count-tree "${prefix}child" fields 1 f v
+        assert_equal 2 [r phpathcount count-tree prefix $prefix]
+        r phdel count-tree $prefix
+        assert_equal 1 [r phpathcount count-tree prefix $prefix]
+        foreach key {count-tree missing} {
+            assert_error ERR*syntax* {r phpathcount $key prefix}
+            assert_error ERR*syntax* {r phpathcount $key match a}
+            assert_error ERR*syntax* {r phpathcount $key prefix a prefix b}
+        }
+        r set count-wrongtype value
+        assert_error WRONGTYPE* {r phpathcount count-wrongtype prefix a}
+        assert_equal {{}} [r command info phcard]
     }
 
     test {PHSET FNX and FXX atomically apply to the complete field group} {
@@ -31,7 +59,7 @@ start_server {tags {pathhash}} {
         assert_equal [list updated] [r phget tree path second]
         assert_equal OK [r phset tree path fields 2 duplicate first duplicate last]
         assert_equal [list last] [r phget tree path duplicate]
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
     }
 
     test {Exact path operations do not confuse ancestors and descendants} {
@@ -41,7 +69,7 @@ start_server {tags {pathhash}} {
         assert_equal [list two] [r phget tree ab f]
         assert_equal [list three] [r phget tree abc f]
         assert_equal [list {}] [r phget tree abcd f]
-        assert_equal 3 [r phcard tree]
+        assert_equal 3 [r phpathcount tree]
     }
 
     test {PHGET, PHMGET, and PHGETALL preserve field semantics} {
@@ -239,10 +267,10 @@ start_server {tags {pathhash}} {
         foreach p [list {} $path $child $sibling] {r phset del-tree $p fields 2 f one g two}
         assert_equal 1 [r phpathdel del-tree $path]
         assert_equal 0 [r phpathdel del-tree $path]
-        assert_equal 3 [r phcard del-tree]
+        assert_equal 3 [r phpathcount del-tree]
         foreach p [list {} $child $sibling] {assert_equal {one two} [r phget del-tree $p f g]}
         assert_equal 1 [r phpathdel del-tree {}]
-        assert_equal 2 [r phcard del-tree]
+        assert_equal 2 [r phpathcount del-tree]
         assert_equal 1 [r phpathdel del-tree $child]
         assert_equal {one two} [r phget del-tree $sibling f g]
     }
@@ -254,12 +282,12 @@ start_server {tags {pathhash}} {
         assert_equal 1 [r phdel tree a missing f1 missing]
         assert_equal {{} v2} [r phget tree a f1 f2]
         assert_equal 1 [r phdel tree a f2]
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
         assert_equal [list child] [r phget tree ab f]
         assert_equal 1 [r phdel tree ab]
-        assert_equal 1 [r exists tree]
-        assert_equal pathhash [r type tree]
-        assert_equal 0 [r phcard tree]
+        assert_equal 0 [r exists tree]
+        assert_equal none [r type tree]
+        assert_equal 0 [r phpathcount tree]
         assert_equal 0 [r phdel tree ab]
     }
 
@@ -268,11 +296,11 @@ start_server {tags {pathhash}} {
         r phmset del-tree {} fields 1 f root ab fields 2 f one g two \
             abc fields 1 f child abx fields 1 f other
         assert_equal 1 [r phpathdel del-tree ab]
-        assert_equal 3 [r phcard del-tree]
+        assert_equal 3 [r phpathcount del-tree]
         assert_equal {child} [r phget del-tree abc f]
         assert_equal 0 [r phpathdel del-tree ab]
         assert_equal 2 [r phpathdel del-tree ab withsubpaths]
-        assert_equal 1 [r phcard del-tree]
+        assert_equal 1 [r phpathcount del-tree]
         assert_equal 1 [r phpathdel del-tree {}]
         assert_equal 0 [r phpathdel missing path withsubpaths]
         r phset del-tree abc fields 1 f child
@@ -293,9 +321,9 @@ start_server {tags {pathhash}} {
         assert_equal 0 [lindex $result 0]
         assert_equal {a ac b ba} [lindex $result 1]
         assert_equal 4 [r phpathdel tree {} withsubpaths]
-        assert_equal 1 [r exists tree]
-        assert_equal pathhash [r type tree]
-        assert_equal 0 [r phcard tree]
+        assert_equal 0 [r exists tree]
+        assert_equal none [r type tree]
+        assert_equal 0 [r phpathcount tree]
         assert_equal 0 [r phpathdel tree anything withsubpaths]
     }
 
@@ -307,10 +335,12 @@ start_server {tags {pathhash}} {
         }
         lappend assignments keep:a fields 1 f one keep:b fields 1 f two keep:c fields 1 f three
         assert_equal OK [r phmset tree {*}$assignments]
-        assert_equal 603 [r phcard tree]
+        assert_equal 603 [r phpathcount tree]
         assert_equal 600 [r phpathdel tree delete: withsubpaths]
-        assert_equal 3 [r phcard tree]
+        assert_equal 3 [r phpathcount tree]
         assert_equal {keep:a keep:b keep:c} [lindex [r phpathscan tree 0 count 100] 1]
+        assert_equal 3 [r phpathdel tree keep: withsubpaths]
+        assert_equal 0 [r exists tree]
     }
 
     test {PHPATHDEL does not copy a long shared prefix once per path} {
@@ -542,7 +572,7 @@ start_server {tags {pathhash}} {
             {phpathdel not-pathhash p withsubpaths}
             {phpathscan not-pathhash 0}
             {phscan not-pathhash p 0}
-            {phcard not-pathhash}
+            {phpathcount not-pathhash}
         } {
             assert_error WRONGTYPE* {r {*}$command}
         }
@@ -575,7 +605,7 @@ start_server {tags {pathhash}} {
     }
 
     test {Path Hash commands are registered with the PH prefix} {
-        set commands {phcard phdel phget phgetall phmget phmset phpathdel phpathexists phpathscan phprefixes phscan phset}
+        set commands {phdel phget phgetall phmget phmset phpathcount phpathdel phpathexists phpathscan phprefixes phscan phset}
         assert_equal $commands [lsort [r command list filterby aclcat pathhash]]
         foreach command $commands {
             assert_no_match {*radix*} [string tolower [r command docs $command]]
@@ -735,8 +765,7 @@ start_server {tags {pathhash}} {
             assert_equal gpK [lindex [r config get notify-keyspace-events] 1]
             r phset notify-tree a fields 1 f one
             r phdel notify-tree a
-            assert_equal 1 [r exists notify-tree]
-            r del notify-tree
+            assert_equal 0 [r exists notify-tree]
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phdel" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree del" [$rd1 read]
@@ -744,8 +773,7 @@ start_server {tags {pathhash}} {
             r phset notify-tree a fields 1 f one
             r phset notify-tree ab fields 1 f two
             r phpathdel notify-tree {} withsubpaths
-            assert_equal 1 [r exists notify-tree]
-            r del notify-tree
+            assert_equal 0 [r exists notify-tree]
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree phpathdel" [$rd1 read]
@@ -761,7 +789,7 @@ start_server {tags {pathhash}} {
         for {set i 0} {$i < 100} {incr i} {
             r phset tree "path:$i" fields 1 field "value:$i"
         }
-        assert_equal 100 [r phcard tree]
+        assert_equal 100 [r phpathcount tree]
         assert_equal 1 [r unlink tree]
         assert_equal 0 [r exists tree]
         wait_for_condition 100 10 {
@@ -788,7 +816,7 @@ start_server {tags {pathhash}} {
         assert {[r pttl $tree_copy] > 0}
         assert_equal 1 [r persist $tree_copy]
         assert_equal {root value} [r phgetall $tree_copy {}]
-        assert_equal 2 [r phcard $tree_copy]
+        assert_equal 2 [r phpathcount $tree_copy]
         set dumped [r dump $tree]
         assert_equal OK [r restore $tree_restored 0 $dumped]
         assert_equal [r phprefixes $tree abc withvalues] [r phprefixes $tree_restored abc withvalues]
@@ -809,39 +837,70 @@ start_server {tags {pathhash}} {
         }
     } {} {needs:debug}
 
-    test {Empty Path Hash survives COPY, DUMP/RESTORE, and RDB reload} {
-        set empty_tree {empty-tree:{pathhash-empty}}
-        set empty_copy {empty-copy:{pathhash-empty}}
-        set empty_restored {empty-restored:{pathhash-empty}}
-        r del $empty_tree $empty_copy $empty_restored
-        r phset $empty_tree path fields 1 field value
-        assert_equal 1 [r phdel $empty_tree path]
-        assert_equal 1 [r exists $empty_tree]
-        assert_equal pathhash [r type $empty_tree]
-        assert_equal 0 [r phcard $empty_tree]
-
-        assert_equal 1 [r copy $empty_tree $empty_copy]
-        assert_equal pathhash [r type $empty_copy]
-        assert_equal 0 [r phcard $empty_copy]
-
-        set dumped [r dump $empty_tree]
-        assert_equal OK [r restore $empty_restored 0 $dumped]
-        assert_equal pathhash [r type $empty_restored]
-        assert_equal 0 [r phcard $empty_restored]
-
-        r debug reload
-        foreach key [list $empty_tree $empty_copy $empty_restored] {
-            assert_equal 1 [r exists $key]
-            assert_equal pathhash [r type $key]
-            assert_equal 0 [r phcard $key]
-            assert_equal {0 {}} [r phpathscan $key 0]
+    test {Final Path Hash deletions remove the key, TTL and WATCH state} {
+        set other [valkey_client]
+        test_defer {$other close}
+        foreach path [list {} p [binary format H* 00ff61]] {
+            foreach field_count {2 600} {
+                set fields {}
+                set names {}
+                for {set i 0} {$i < $field_count} {incr i} {
+                    lappend fields f:$i v:$i
+                    lappend names f:$i
+                }
+                foreach mode {fields path prefix all} {
+                    r phset final-tree $path fields $field_count {*}$fields
+                    r pexpire final-tree 60000
+                    r watch final-tree
+                    switch $mode {
+                        fields {
+                            assert_equal $field_count [$other phdel final-tree $path {*}$names missing f:0]
+                        }
+                        path {assert_equal 1 [$other phdel final-tree $path]}
+                        prefix {assert_equal 1 [$other phpathdel final-tree $path withsubpaths]}
+                        all {assert_equal 1 [$other phpathdel final-tree {} withsubpaths]}
+                    }
+                    r multi
+                    r exists final-tree
+                    assert_equal {} [r exec]
+                    assert_equal 0 [r exists final-tree]
+                    assert_equal none [r type final-tree]
+                    assert_equal -2 [r pttl final-tree]
+                    assert_equal 0 [r phpathcount final-tree]
+                    assert_equal {} [r dump final-tree]
+                    assert_equal 0 [r copy final-tree final-copy{final-tree}]
+                    assert_equal 0 [r phdel final-tree $path]
+                    assert_equal 0 [r phpathdel final-tree $path withsubpaths]
+                    r set final-tree string
+                    assert_equal string [r get final-tree]
+                    assert_equal -1 [r pttl final-tree]
+                    r del final-tree
+                }
+            }
         }
-        assert_equal 1 [r del $empty_tree]
-        assert_equal 1 [r unlink $empty_copy]
-        assert_equal 0 [r exists $empty_tree]
-        assert_equal 0 [r exists $empty_copy]
-        assert_equal 1 [r exists $empty_restored]
-    } {} {needs:debug}
+    }
+
+    test {Partial Path Hash deletions do not emit a generic del notification} {
+        r phmset partial-tree a fields 2 f one g two ab fields 1 f child keep fields 1 f keep
+        set old_notify [lindex [r config get notify-keyspace-events] 1]
+        test_defer {r config set notify-keyspace-events $old_notify}
+        r config set notify-keyspace-events Kpg
+        set subscriber [valkey_deferring_client]
+        test_defer {$subscriber close}
+        assert_equal {1} [psubscribe $subscriber *:partial-tree]
+        foreach deletion {
+            {phdel partial-tree a f}
+            {phdel partial-tree a}
+            {phpathdel partial-tree ab withsubpaths}
+        } {
+            assert_equal 1 [r {*}$deletion]
+            assert_equal 1 [r exists partial-tree]
+            assert_match "pmessage * __keyspace@*__:partial-tree [lindex $deletion 0]" [$subscriber read]
+            # A following event exposes a spurious del without a timed read.
+            r phset partial-tree keep fields 1 f keep
+            assert_match "pmessage * __keyspace@*__:partial-tree phset" [$subscriber read]
+        }
+    }
 
     test {RDB reload restores path hash paths, binary data, root payload, and TTL} {
         r del tree
@@ -854,12 +913,18 @@ start_server {tags {pathhash}} {
         assert_equal pathhash [r type tree]
         assert_equal [list root-value] [r phget tree {} root]
         assert_equal [list $binary_value] [r phget tree $binary_path field]
-        assert_equal 2 [r phcard tree]
+        assert_equal 2 [r phpathcount tree]
         assert {[r pttl tree] > 0}
     } {} {needs:debug}
 
     test {RESTORE rejects malformed path hash payloads without destabilizing the server} {
         r debug set-skip-checksum-validation 1
+
+        r phset legacy-source p fields 1 f v
+        set dumped [r dump legacy-source]
+        set empty_dump "[string index $dumped 0]\x00[string range $dumped end-9 end]"
+        assert_error {*Bad data format*} {r restore legacy-empty 0 $empty_dump}
+        assert_equal 0 [r exists legacy-empty]
 
         r del source
         r del corrupt
@@ -895,7 +960,7 @@ start_server {tags {pathhash}} {
         for {set i 0} {$i < 600} {incr i} {
             r phset tree path fields 1 "field:$i" "value:$i"
         }
-        assert_equal 1 [r phcard tree]
+        assert_equal 1 [r phpathcount tree]
         assert_equal [list value:599] [r phget tree path field:599]
         r debug reload
         assert_equal [list value:0] [r phget tree path field:0]
@@ -918,23 +983,25 @@ start_server {tags {pathhash}} {
 }
 
 start_server {tags {pathhash needs:debug} overrides {appendonly yes aof-use-rdb-preamble no}} {
-    test {AOF rewrite and reload preserve populated and empty Path Hash values} {
+    test {AOF rewrite and reload preserve populated Path Hash values and final deletion} {
         r phset tree {} fields 1 root value
         r phset tree abc fields 2 f1 v1 f2 v2
         r phset tree abcd fields 1 child v3
         r phdel tree abc f1
         r phset empty-tree path fields 1 field value
         r phdel empty-tree path
+        r debug loadaof
+        assert_equal 0 [r exists empty-tree]
         r bgrewriteaof
         waitForBgrewriteaof r
         r debug loadaof
-        assert_equal 3 [r phcard tree]
+        assert_equal 3 [r phpathcount tree]
         assert_equal [list value] [r phget tree {} root]
         assert_equal {{} v2} [r phget tree abc f1 f2]
         assert_equal [list v3] [r phget tree abcd child]
-        assert_equal 1 [r exists empty-tree]
-        assert_equal pathhash [r type empty-tree]
-        assert_equal 0 [r phcard empty-tree]
+        assert_equal 0 [r exists empty-tree]
+        assert_equal none [r type empty-tree]
+        assert_equal 0 [r phpathcount empty-tree]
     }
 }
 
@@ -983,17 +1050,17 @@ start_server {tags {pathhash external:skip}} {
             $primary phmset exact-tree $path fields 2 f one g two \
                 $child fields 1 f child {} fields 1 f root
             wait_for_ofs_sync $primary $replica
-            assert_equal 3 [$replica phcard exact-tree]
+            assert_equal 3 [$replica phpathcount exact-tree]
             assert_equal 1 [$primary phpathdel exact-tree $path]
             assert_equal 0 [$primary phpathdel exact-tree $path]
             wait_for_ofs_sync $primary $replica
             assert_equal 0 [$replica phpathexists exact-tree $path]
             assert_equal {child} [$replica phget exact-tree $child f]
             assert_equal {root} [$replica phget exact-tree {} f]
-            assert_equal 2 [$replica phcard exact-tree]
+            assert_equal 2 [$replica phpathcount exact-tree]
             assert_equal 1 [$primary phpathdel exact-tree {}]
             wait_for_ofs_sync $primary $replica
-            assert_equal 1 [$replica phcard exact-tree]
+            assert_equal 1 [$replica phpathcount exact-tree]
             assert_equal {child} [$replica phget exact-tree $child f]
         }
 
@@ -1011,13 +1078,26 @@ start_server {tags {pathhash external:skip}} {
             $primary phpathdel tree ab withsubpaths
             $primary phset empty-tree path fields 1 field value
             $primary phdel empty-tree path
+            foreach deletion {
+                {phdel final-tree p f}
+                {phdel final-tree p}
+                {phpathdel final-tree p withsubpaths}
+                {phpathdel final-tree {} withsubpaths}
+            } {
+                $primary phset final-tree p fields 1 f v
+                $primary pexpire final-tree 60000
+                $primary {*}$deletion
+                wait_for_ofs_sync $primary $replica
+                assert_equal 0 [$replica exists final-tree]
+                assert_equal -2 [$replica pttl final-tree]
+            }
             wait_for_ofs_sync $primary $replica
-            assert_equal 1 [$replica phcard tree]
+            assert_equal 1 [$replica phpathcount tree]
             assert_equal [list one] [$replica phget tree a f]
             assert_equal [list {}] [$replica phget tree ab f]
-            assert_equal 1 [$replica exists empty-tree]
-            assert_equal pathhash [$replica type empty-tree]
-            assert_equal 0 [$replica phcard empty-tree]
+            assert_equal 0 [$replica exists empty-tree]
+            assert_equal none [$replica type empty-tree]
+            assert_equal 0 [$replica phpathcount empty-tree]
         }
     }
 }

@@ -8500,6 +8500,21 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
             addReplyError(c, "Target node is not a master");
             return 0;
         }
+        /* A node in handshake, or one without a known address, cannot own a
+         * slot or be a migration peer: its id is a placeholder until the
+         * handshake completes, and it is deleted when the handshake times out.
+         * Reject it only for a direct client command. A command replayed from
+         * the primary was already validated there, the primary's view is
+         * authoritative, and a replica may briefly disagree (for example a node
+         * it already marked NOADDR), so rejecting it here would diverge the
+         * shard. On a primary with replicas the command runs twice: once
+         * before it is replicated, and again after the replicas ack, with
+         * replication_done set. The second pass must not reject a target the
+         * first pass accepted, because the replicas have applied it already. */
+        if (!c->flag.primary && !c->flag.replication_done && clusterNodePending(n)) {
+            addReplyError(c, "Target node is still in handshake or has no known address");
+            return 0;
+        }
         if (c->argc > 5) optarg_pos = 5;
     } else if (!strcasecmp(objectGetVal(c->argv[3]), "importing") && c->argc >= 5) {
         /* CLUSTER SETSLOT <SLOT> IMPORTING <NODE> */
@@ -8520,6 +8535,12 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
             addReplyError(c, "Target node is not a master");
             return 0;
         }
+        /* See the MIGRATING case for why this is rejected only for a direct
+         * client command. */
+        if (!c->flag.primary && !c->flag.replication_done && clusterNodePending(n)) {
+            addReplyError(c, "Target node is still in handshake or has no known address");
+            return 0;
+        }
         if (c->argc > 5) optarg_pos = 5;
     } else if (!strcasecmp(objectGetVal(c->argv[3]), "stable") && c->argc >= 4) {
         /* CLUSTER SETSLOT <SLOT> STABLE */
@@ -8533,6 +8554,13 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         }
         if (nodeIsReplica(n)) {
             addReplyError(c, "Target node is not a master");
+            return 0;
+        }
+        /* See the MIGRATING case. Here the slot would also be unassigned when
+         * the node is deleted, and we could become a replica of it below.
+         * Rejected only for a direct client command, for the same reason. */
+        if (!c->flag.primary && !c->flag.replication_done && clusterNodePending(n)) {
+            addReplyError(c, "Target node is still in handshake or has no known address");
             return 0;
         }
         /* If this hash slot was served by 'myself' before to switch

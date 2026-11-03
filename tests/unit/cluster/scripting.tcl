@@ -98,7 +98,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     }
 
     test "Cross-slot command in a script does not break later script calls" {
-        assert_error "*non local key*" {r 0 eval "return redis.call('mget', 'foo', 'bar')" 0}
+        assert_error "ERR Command 'mget' in script attempted to access keys that don't hash to the same slot*" {r 0 eval "return redis.call('mget', 'foo', 'bar')" 0}
         assert_equal PONG [r 0 eval "return redis.call('ping')" 0]
     }
 }

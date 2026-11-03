@@ -25,7 +25,7 @@ static int notification(ValkeyModuleCtx *ctx, int type, const char *event,
   VALKEYMODULE_NOT_USED(type);
   if (strncmp(ValkeyModule_StringPtrLen(key, NULL), "ph-notify", 9))
     return VALKEYMODULE_OK;
-  if (!strcmp(event, "phdel") || !strcmp(event, "phdelprefix")) {
+  if (!strcmp(event, "phdel") || !strcmp(event, "phpathdel")) {
     path_events++;
     ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "EXISTS", "s", key);
     exists_at_notification = ValkeyModule_CallReplyInteger(reply);

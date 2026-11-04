@@ -506,10 +506,12 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         r phset ph small FIELDS 1 f v
 
         r bgsave
+        set deadline [expr {[clock seconds] + 120}]
         while {[s rdb_bgsave_in_progress]} {
             r phget ph p f1
+            if {[clock seconds] > $deadline} { fail "forkless bgsave did not finish" }
         }
-        assert_equal [r ping] "PONG"
+        assert_equal [s rdb_last_bgsave_status] ok
     }
 }
 

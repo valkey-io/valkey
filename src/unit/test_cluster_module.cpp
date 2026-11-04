@@ -25,6 +25,9 @@ typedef struct TestClusterMsgSendBlock {
     } data[1];
 } TestClusterMsgSendBlock;
 
+/* Returns the largest payload length that clusterModuleMessageLengthValid()
+ * accepts for a normal cluster header. The limit keeps the full send-block
+ * allocation within UINT32_MAX. */
 static uint32_t maxModulePayloadLen(void) {
     size_t overhead = offsetof(TestClusterMsgSendBlock, data) + CLUSTERMSG_MIN_LEN +
                       offsetof(clusterMsgModule, bulk_data);

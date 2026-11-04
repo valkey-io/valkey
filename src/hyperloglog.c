@@ -856,7 +856,7 @@ int hllSparseSet(robj *o, long index, uint8_t count) {
         sdslen(o->ptr) + deltalen > server.hll_sparse_max_bytes) goto promote;
     serverAssert(sdslen(o->ptr) + deltalen <= sdsalloc(o->ptr));
     if (deltalen && next) memmove(next+deltalen,next,end-next);
-    sdsIncrLen(o->ptr,deltalen);
+    if (deltalen) sdsIncrLen(o->ptr,deltalen);
     memcpy(p,seq,seqlen);
     end += deltalen;
 

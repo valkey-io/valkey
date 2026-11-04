@@ -952,15 +952,17 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
 
         test "Primary importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - active expiration excludes importing keys" {
-            # Populate 1000 keys with 1 second timeout, and do the snapshot
+            # Populate 1000 keys with 2 second timeout, and do the snapshot. The
+            # source keys must still be live at fork time, since keys and hash
+            # fields that are already expired are not sent in the snapshot.
             assert_match "OK" [R $source_idx FLUSHALL SYNC]
             assert_match "OK" [R $target_idx FLUSHALL SYNC]
             assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 0]
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
-            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 0.5
-            populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 0.5
-            assert_match "1" [R $source_idx HSETEX "$slot_to_migrate_tag:hfe" PX 500 FIELDS 1 field value]
-            assert_match "1" [R $target_idx HSETEX "$slot_to_test_tag:hfe" PX 500 FIELDS 1 field value]
+            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 2
+            populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 2
+            assert_match "1" [R $source_idx HSETEX "$slot_to_migrate_tag:hfe" PX 2000 FIELDS 1 field value]
+            assert_match "1" [R $target_idx HSETEX "$slot_to_test_tag:hfe" PX 2000 FIELDS 1 field value]
             assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
@@ -995,7 +997,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
             populate 100 "$slot_to_migrate_tag:live:" 100 -$source_idx
             populate 100 "$slot_to_migrate_tag:dead:" 100 -$source_idx false 0.1
-            after 200
+            # Only keys that expired more than one second before the fork are skipped
+            after 1200
             # The expired keys are still in memory on the source
             assert_match "200" [R $source_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 

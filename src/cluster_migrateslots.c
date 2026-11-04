@@ -1729,12 +1729,19 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
 
     server.slot_migration_pipe_conn = job->client->conn;
 
-    /* Keys that are already expired at fork time are not sent to the target.
-     * The time is taken in the parent before the fork, so every command the
-     * parent runs after the fork sees these keys as expired too: any access
+    /* Keys that expired well before the fork are not sent to the target.
+     * Any code the parent runs after the fork sees the command time snapshot
+     * or a later one, so it sees these keys as expired too: any access
      * deletes them and propagates the DEL, which is a no-op on the target.
+     *
+     * The cutoff is one second before the snapshot. If the clock steps back
+     * after the fork, the parent could see a skipped key as live again, and
+     * a write to it would reach a target that does not have the key. The
+     * margin covers small clock corrections, and costs little, since the
+     * keys we want to skip have usually been expired for much longer.
+     *
      * In import mode the parent does not expire keys, so keep them all. */
-    mstime_t expired_before = server.import_mode ? 0 : mstime();
+    mstime_t expired_before = server.import_mode ? 0 : commandTimeSnapshot() - 1000;
 
     if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
         /* Child */

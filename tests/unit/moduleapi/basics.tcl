@@ -171,7 +171,18 @@ start_server {tags {"modules external:skip"} overrides {requirepass mypass enabl
     }
 }
 
-start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
+start_server {tags {"modules external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
+    r module load $testmodule
+
+    test "Module without forkless support counts its fork fallback reason" {
+        r bgsave
+        waitForBgsave r
+        assert_equal fork [getInfoProperty [r info persistence] rdb_last_bgsave_type]
+        assert_equal 1 [getInfoProperty [r info stats] forkless_fallbacks_module]
+    }
+}
+
+start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
     r module load $testmodule forkless
 
     test "CallArgv infrastructure blocking respects ERRORS_AS_REPLIES without deferred writes" {

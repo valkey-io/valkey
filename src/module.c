@@ -932,6 +932,14 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
     autoMemoryCollect(ctx);
     poolAllocRelease(ctx);
     if (ctx->postponed_arrays) {
+        /* Fill the placeholders, since a NULL node left in the reply list
+         * crashes the server when the reply is written. A thread safe context
+         * may be freed after its client was unblocked, so its placeholders are
+         * filled in moduleHandleBlockedClients() instead. */
+        if (!(ctx->flags & VALKEYMODULE_CTX_THREAD_SAFE)) {
+            for (int i = 0; i < ctx->postponed_arrays_count; i++)
+                setDeferredArrayLen(ctx->client, ctx->postponed_arrays[i], 0);
+        }
         zfree(ctx->postponed_arrays);
         ctx->postponed_arrays_count = 0;
         serverLog(LL_WARNING,
@@ -9291,6 +9299,14 @@ void moduleHandleBlockedClients(void) {
              * replies to send to the client in a thread safe context.
              * We need to glue such replies to the client output buffer and
              * free the temporary client we just used for the replies. */
+            listIter li;
+            listNode *reply_ln;
+            listRewind(bc->reply_client->reply, &li);
+            while ((reply_ln = listNext(&li))) {
+                /* The module can no longer set the length of a postponed
+                 * reply once it unblocked the client. */
+                if (!listNodeValue(reply_ln)) setDeferredArrayLen(bc->reply_client, reply_ln, 0);
+            }
             AddReplyFromClient(c, bc->reply_client);
         }
         moduleReleaseTempClient(bc->reply_client);
@@ -13897,6 +13913,14 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
     if (is_static && handle) {
         dlclose(handle);
         handle = NULL;
+    }
+
+    /* 'prefer-forkless' allows a non-forkless module but will always fall back to fork */
+    if (server.forkless_policy == FORKLESS_POLICY_PREFER_FORKLESS &&
+        !(ctx.module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS)) {
+        serverLog(LL_WARNING, "%sModule %s does not declare VALKEYMODULE_OPTIONS_HANDLE_FORKLESS; "
+                              "with forkless-policy 'prefer-forkless', forkless operations will fall back to fork.",
+                  is_static ? "Static " : "", display_name);
     }
 
     /* Module loaded! Register it. */

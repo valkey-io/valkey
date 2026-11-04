@@ -95,8 +95,10 @@ start_server {tags {"repl external:skip"}} {
 
 # Chained replication (subreplica -> replica -> primary).
 # Verifies the replica forwards the exact byte stream to its own replicas.
+foreach policy {require-fork prefer-forkless} {
 start_server {tags {"repl external:skip"}} {
-    start_server {} {
+    start_server [list overrides [list forkless-infrastructure-enabled yes forkless-policy $policy \
+                                       repl-diskless-sync yes repl-diskless-sync-delay 0]] {
         start_server {} {
             set primary [srv -2 client]
             set primary_host [srv -2 host]
@@ -113,7 +115,7 @@ start_server {tags {"repl external:skip"}} {
             wait_for_ofs_sync $primary $replica
             wait_for_ofs_sync $replica $subreplica
 
-            test {Chained replication: pipelined SETs converge on all 3 nodes} {
+            test "Chained replication ($policy): pipelined SETs converge on all 3 nodes" {
                 set rd [valkey_deferring_client -2]
                 for {set i 0} {$i < 500} {incr i} {
                     $rd set key1 value1
@@ -127,7 +129,7 @@ start_server {tags {"repl external:skip"}} {
                 $rd close
             }
 
-            test {Chained replication: MULTI/EXEC propagates correctly} {
+            test "Chained replication ($policy): MULTI/EXEC propagates correctly" {
                 set rd [valkey_deferring_client -2]
                 for {set i 0} {$i < 200} {incr i} {
                     $rd multi
@@ -144,7 +146,7 @@ start_server {tags {"repl external:skip"}} {
                 $rd close
             }
 
-            test {Chained replication: PROTO_MBULK_BIG_ARG in pipeline} {
+            test "Chained replication ($policy): PROTO_MBULK_BIG_ARG in pipeline" {
                 set rd [valkey_deferring_client -2]
                 set big_string [string repeat X 100000]
                 for {set i 0} {$i < 50} {incr i} {
@@ -159,7 +161,7 @@ start_server {tags {"repl external:skip"}} {
                 $rd close
             }
 
-            test {Chained replication: pipeline survives PSYNC reconnect} {
+            test "Chained replication ($policy): pipeline survives PSYNC reconnect" {
                 set rd [valkey_deferring_client -2]
                 for {set i 0} {$i < 200} {incr i} {
                     $rd set kx$i vx$i
@@ -185,7 +187,7 @@ start_server {tags {"repl external:skip"}} {
                 $rd close
             }
 
-            test {Chained replication: pipeline survives subreplica<-replica reconnect} {
+            test "Chained replication ($policy): pipeline survives subreplica<-replica reconnect" {
                 set rd [valkey_deferring_client -2]
                 for {set i 0} {$i < 200} {incr i} {
                     $rd set kp$i vp$i
@@ -210,6 +212,30 @@ start_server {tags {"repl external:skip"}} {
                 assert_primary_replica_consistent $replica $subreplica
                 $rd close
             }
+
+            test "Chained replication ($policy): subreplica full sync under write load loses no writes" {
+                populate 20000 fill: 10 -2
+                wait_for_ofs_sync $primary $replica
+                
+                # force the subreplica to do a fresh full sync.
+                $subreplica replicaof no one
+                $subreplica flushall
+
+                set loglines [count_log_lines -1]
+                $subreplica replicaof $replica_host $replica_port
+                for {set i 0} {$i < 20000} {incr i} { $primary set load:$i $i }
+                wait_for_sync $subreplica 500 100
+
+                if {$policy eq "prefer-forkless"} {
+                    wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 1 1
+                }
+                assert_primary_replica_consistent $primary $replica
+                assert_primary_replica_consistent $replica $subreplica
+                for {set i 0} {$i < 20000} {incr i} {
+                    assert_equal $i [$subreplica get load:$i]
+                }
+            }
         }
     }
+}
 }

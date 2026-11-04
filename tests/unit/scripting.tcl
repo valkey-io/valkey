@@ -1843,9 +1843,12 @@ start_server {tags {"scripting needs:debug external:skip"}} {
 
     test {Test scripting debug with an empty script} {
         r script debug sync
-        catch {r eval "\r\n" 0}
+        assert_match {{* Stopped at 1, stop reason = step over} *} [r eval "\r\n" 0]
+        r write "*1\r\n\$4\r\nstep\r\n"
+        r flush
+        assert_equal {<endsession>} [r read]
+        assert_equal {} [r read]
         reconnect
-        assert_equal [r ping] {PONG}
     }
 }
 

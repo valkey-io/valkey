@@ -215,8 +215,20 @@ static void ldbList(int around, int context) {
  * The element is neither automatically removed from the stack, nor
  * converted to a different type. */
 #define LDB_MAX_VALUES_DEPTH (LUA_MINSTACK / 2)
-static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State *lua, int idx, int level) {
+/* The depth limit alone does not bound the work: values reachable more than
+ * once are rendered every time, so a table holding N references to itself
+ * costs N^LDB_MAX_VALUES_DEPTH calls.
+ * 'budget' is charged one per value plus the length of each string. */
+#define LDB_MAX_VALUES_BUDGET (1024 * 1024)
+static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State *lua, int idx, int level, size_t *budget) {
     int t = lua_type(lua, idx);
+
+    if (*budget == 0) {
+        const char *msg = "<max output size reached!>";
+        ValkeyModule_StringAppendBuffer(NULL, s, msg, strlen(msg));
+        return s;
+    }
+    (*budget)--;
 
     if (level++ == LDB_MAX_VALUES_DEPTH) {
         const char *msg = "<max recursion level reached! Nested table?>";
@@ -228,7 +240,13 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
     case LUA_TSTRING: {
         size_t strl;
         char *strp = (char *)lua_tolstring(lua, idx, &strl);
-        ValkeyModule_StringAppendBuffer(NULL, s, strp, strl);
+        size_t len = strl < *budget ? strl : *budget;
+        ValkeyModule_StringAppendBuffer(NULL, s, strp, len);
+        *budget -= len;
+        if (len < strl) {
+            const char *msg = "<max output size reached!>";
+            ValkeyModule_StringAppendBuffer(NULL, s, msg, strlen(msg));
+        }
     } break;
     case LUA_TBOOLEAN: {
         const char *bool_str = lua_toboolean(lua, idx) ? "true" : "false";
@@ -236,10 +254,9 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
         break;
     }
     case LUA_TNUMBER: {
-        ValkeyModuleString *old_s = s;
-        const char *prefix = ValkeyModule_StringPtrLen(s, NULL);
-        s = ValkeyModule_CreateStringPrintf(NULL, "%s%g", prefix, (double)lua_tonumber(lua, idx));
-        ValkeyModule_FreeString(NULL, old_s);
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "%g", (double)lua_tonumber(lua, idx));
+        ValkeyModule_StringAppendBuffer(NULL, s, buf, len);
         break;
     }
     case LUA_TNIL: ValkeyModule_StringAppendBuffer(NULL, s, "nil", 3); break;
@@ -253,17 +270,31 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
         ValkeyModuleString *repr2 = ValkeyModule_CreateString(NULL, "", 0);
         lua_pushnil(lua); /* The first key to start the iteration is nil. */
         while (lua_next(lua, idx - 1)) {
+            if (*budget == 0) {
+                const char *msg = "<max output size reached!>";
+                ValkeyModule_StringAppendBuffer(NULL, repr1, msg, strlen(msg));
+                ValkeyModule_StringAppendBuffer(NULL, repr2, msg, strlen(msg));
+                lua_pop(lua, 2); /* Stack: table. */
+                break;
+            }
             /* Test if so far the table looks like an array. */
             if (is_array && (lua_type(lua, -2) != LUA_TNUMBER || lua_tonumber(lua, -2) != expected_index)) is_array = 0;
             /* Stack now: table, key, value */
-            /* Array repr. */
-            repr1 = ldbCatStackValueRec(repr1, lua, -1, level);
-            ValkeyModule_StringAppendBuffer(NULL, repr1, "; ", 2);
             /* Full repr. */
             ValkeyModule_StringAppendBuffer(NULL, repr2, "[", 1);
-            repr2 = ldbCatStackValueRec(repr2, lua, -2, level);
+            repr2 = ldbCatStackValueRec(repr2, lua, -2, level, budget);
             ValkeyModule_StringAppendBuffer(NULL, repr2, "]=", 2);
-            repr2 = ldbCatStackValueRec(repr2, lua, -1, level);
+            /* Render the value once and copy it into the array repr, so the
+             * discarded repr does not spend the budget. */
+            size_t value_start;
+            ValkeyModule_StringPtrLen(repr2, &value_start);
+            repr2 = ldbCatStackValueRec(repr2, lua, -1, level, budget);
+            if (is_array) {
+                size_t value_end;
+                const char *full = ValkeyModule_StringPtrLen(repr2, &value_end);
+                ValkeyModule_StringAppendBuffer(NULL, repr1, full + value_start, value_end - value_start);
+                ValkeyModule_StringAppendBuffer(NULL, repr1, "; ", 2);
+            }
             ValkeyModule_StringAppendBuffer(NULL, repr2, "; ", 2);
             lua_pop(lua, 1); /* Stack: table, key. Ready for next iteration. */
             expected_index++;
@@ -294,10 +325,9 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
             typename = "thread";
         else if (t == LUA_TLIGHTUSERDATA)
             typename = "light-userdata";
-        ValkeyModuleString *old_s = s;
-        const char *prefix = ValkeyModule_StringPtrLen(s, NULL);
-        s = ValkeyModule_CreateStringPrintf(NULL, "%s \"%s@%p\"", prefix, typename, p);
-        ValkeyModule_FreeString(NULL, old_s);
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), " \"%s@%p\"", typename, p);
+        ValkeyModule_StringAppendBuffer(NULL, s, buf, len);
     } break;
     default: {
         const char *unknown_str = "\"<unknown-lua-type>\"";
@@ -310,9 +340,10 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
 }
 
 /* Higher level wrapper for ldbCatStackValueRec() that just uses an initial
- * recursion level of '0'. */
+ * recursion level of '0' and a fresh budget. */
 ValkeyModuleString *ldbCatStackValue(ValkeyModuleString *s, lua_State *lua, int idx) {
-    return ldbCatStackValueRec(s, lua, idx, 0);
+    size_t budget = LDB_MAX_VALUES_BUDGET;
+    return ldbCatStackValueRec(s, lua, idx, 0, &budget);
 }
 
 /* Produce a debugger log entry representing the value of the Lua object

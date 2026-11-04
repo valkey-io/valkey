@@ -1840,6 +1840,56 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         reconnect
         assert_equal [r ping] {PONG}
     }
+
+    # tls:skip since the sync debugger drops a reply past the first TLS record.
+    test {Test scripting debug print of a table holding itself is bounded} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        r write "*2\r\n\$6\r\nmaxlen\r\n\$1\r\n0\r\n"
+        r flush
+        r read
+        # Printed in full this is over 4MB, the budget is 1MB.
+        set code {local t = {string.rep('x', 8000)} t[2] = t t[3] = t return t}
+        r write "*2\r\n\$4\r\neval\r\n\$[string length $code]\r\n$code\r\n"
+        r flush
+        set ret [r read]
+        assert_lessthan [string length $ret] 2000000
+        reconnect
+        assert_equal [r ping] {PONG}
+    } {} {tls:skip}
+
+    # tls:skip since the sync debugger drops a reply past the first TLS record.
+    test {Test scripting debug print of a large value is bounded} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        r write "*2\r\n\$6\r\nmaxlen\r\n\$1\r\n0\r\n"
+        r flush
+        r read
+        set marker {<max output size reached!>}
+
+        # A string longer than the budget is cut at the budget.
+        set code {return string.rep('x', 2 * 1024 * 1024)}
+        r write "*2\r\n\$4\r\neval\r\n\$[string length $code]\r\n$code\r\n"
+        r flush
+        set ret [r read]
+        assert_lessthan [string length $ret] 1100000
+        assert_match "*$marker*" $ret
+
+        # Printing stops at the first entry past the budget.
+        set code {local t = {} for i = 1, 1100000 do t[i] = i end return t}
+        r write "*2\r\n\$4\r\neval\r\n\$[string length $code]\r\n$code\r\n"
+        r flush
+        set ret [r read]
+        assert_lessthan [regexp -all $marker $ret] 3
+
+        # The discarded array form does not spend the budget of the key=value form.
+        set code {return {foo = string.rep('x', 1024 * 1024)}}
+        r write "*2\r\n\$4\r\neval\r\n\$[string length $code]\r\n$code\r\n"
+        r flush
+        set ret [r read]
+        reconnect
+        assert_match {*\[foo\]=xxxxxxxxxx*} $ret
+    } {} {tls:skip}
 }
 
 start_server {tags {"scripting external:skip"}} {

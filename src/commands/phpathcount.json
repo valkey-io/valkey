@@ -1,0 +1,18 @@
+{
+    "PHPATHCOUNT": {
+        "summary": "Returns the number of paths in a path hash, optionally limited to a prefix.",
+        "complexity": "O(1) without PREFIX or with an empty prefix; otherwise O(L + N), where L is the prefix length and N is the total size of matching paths.",
+        "group": "pathhash",
+        "since": "9.2.0",
+        "arity": -2,
+        "function": "phpathcountCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["PATHHASH", "READ", "SLOW"],
+        "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {"type": "integer"},
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "prefix", "type": "string", "token": "PREFIX", "optional": true}
+        ]
+    }
+}

@@ -24,6 +24,14 @@ start_server {tags {"hll large-memory"}} {
         assert_error {*INVALIDOBJ*} {r pfmerge fail_target hll_overflow hll_merge_source}
         assert_error {*INVALIDOBJ*} {r pfadd hll_overflow foo}
     }
+
+    test {PFADD with an element of 2^31 bytes} {
+        r config set proto-max-bulk-len 10000000000 ;#10gb
+        r config set client-query-buffer-limit 10000000000 ;#10gb
+        r write "*3\r\n\$5\r\nPFADD\r\n\$7\r\nhll_big\r\n"
+        assert_equal 1 [write_big_bulk 2147483648]
+        assert_equal PONG [r ping]
+    }
 }
 
 start_server {tags {"hll"}} {
@@ -159,6 +167,21 @@ start_server {tags {"hll"}} {
         assert_error {*INVALIDOBJ*} {r pfmerge hll hll}
         assert_error {*INVALIDOBJ*} {r pfdebug todense hll}
     } {} {needs:pfdebug}
+
+    test {PFADD propagates elements applied before a corrupted sparse HLL error} {
+        # A sparse HLL whose single XZERO opcode covers only registers 0..8191.
+        # Element "d" lands inside that range, element "a" runs off the end.
+        r set hll "HYLL\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x5f\xff"
+        set repl [attach_to_replication_stream]
+        assert_error {*INVALIDOBJ*} {r pfadd hll d a}
+        r set marker 1
+        assert_replication_stream $repl {
+            {select *}
+            {pfadd hll d}
+            {set marker 1}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
 
     test {Corrupted sparse HyperLogLogs are detected: Broken magic} {
         r del hll

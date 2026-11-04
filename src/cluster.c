@@ -2530,8 +2530,10 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      *    failed over and we should turn into a replica of the new
      *    master.
      * 2) We are a slave and our master is left without slots. We need
-     *    to replicate to the new slots owner. */
-    if (newmaster && curmaster->numslots == 0 &&
+     *    to replicate to the new slots owner.
+     * A replica whose master was deleted has curmaster == NULL and owns no
+     * slots. Unassigned slots match it above and can set newmaster. */
+    if (newmaster && (!curmaster || curmaster->numslots == 0) &&
             (server.cluster_allow_replica_migration ||
              sender_slots == migrated_our_slots)) {
         serverLog(LL_NOTICE,

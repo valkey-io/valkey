@@ -3436,10 +3436,8 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
                 /* Same owner: do not touch migrating/importing. */
                 if (old_owner == info.target_node) continue;
 
-                /* After DELSLOTS, old_owner is NULL; drop leftover keys if
-                 * the new owner is a different shard. */
-                if (countKeysInSlot(j) &&
-                    memcmp(info.target_node->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
+                /* Only while still bound, like gossip. DELSLOTS orphans stay. */
+                if (old_owner == myself && info.target_node != myself) {
                     serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
                               j, myself->name);
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);

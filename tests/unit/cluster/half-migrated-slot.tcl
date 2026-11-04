@@ -45,6 +45,7 @@ test "Half init migration in 'importing' is fixable" {
 
 test "Uncovered slot is reassigned by cluster fix" {
     reset_cluster
+    assert_equal {OK} [$cluster set aga xyz]
     assert_equal {OK} [$nodefrom(link) cluster delslots 609]
     fix_cluster $nodefrom(addr)
     assert_equal "xyz" [$cluster get aga]

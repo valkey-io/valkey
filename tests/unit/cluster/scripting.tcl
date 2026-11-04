@@ -83,6 +83,45 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         r 0 set "{a}x" v
         assert_error "*Script attempted to access keys that do not hash to the same slot*" {r 0 exec}
         assert_equal v [r 0 get "{a}x"]
+        assert_equal 1 [r 0 cluster COUNTKEYSINSLOT [r 0 cluster KEYSLOT "{a}x"]]
+        assert_equal 0 [r 0 cluster COUNTKEYSINSLOT [r 0 cluster KEYSLOT "{b}x"]]
+        assert_equal [list "{a}x"] [r 0 keys *]
+    }
+
+    test {Scripts in a keyless transaction may each write their own slot} {
+        r 0 flushall
+        r 0 multi
+        # No queued command declares a key, so each script starts from no slot,
+        # the same as when it runs outside a transaction.
+        r 0 eval {#!lua
+            return redis.call('set', '{b}x', 1)
+        } 0
+        r 0 eval {#!lua
+            return redis.call('set', '{c}x', 1)
+        } 0
+        assert_equal {OK OK} [r 0 exec]
+        assert_equal 1 [r 0 cluster COUNTKEYSINSLOT [r 0 cluster KEYSLOT "{b}x"]]
+        assert_equal 1 [r 0 cluster COUNTKEYSINSLOT [r 0 cluster KEYSLOT "{c}x"]]
+        assert_equal [list "{b}x" "{c}x"] [lsort [r 0 keys *]]
+    }
+
+    test {Functions in a transaction do not change the slot of later commands} {
+        r 0 flushall
+        r 0 function load REPLACE {#!lua name=txslot
+            server.register_function('keyless', function() return server.call('ping') end)
+            server.register_function('getb', function() return server.call('get', '{b}x') end)
+        }
+        test_defer {r 0 function delete txslot}
+        r 0 multi
+        # The first function leaves the slot at -1, so the second one is free
+        # to touch {b} and leave its slot behind for the SET.
+        r 0 fcall keyless 0
+        r 0 fcall getb 0
+        r 0 set "{a}x" v
+        assert_error "*Script attempted to access keys that do not hash to the same slot*" {r 0 exec}
+        assert_equal v [r 0 get "{a}x"]
+        assert_equal 1 [r 0 cluster COUNTKEYSINSLOT [r 0 cluster KEYSLOT "{a}x"]]
+        assert_equal 0 [r 0 cluster COUNTKEYSINSLOT [r 0 cluster KEYSLOT "{b}x"]]
     }
 
     test "Function no-cluster flag" {

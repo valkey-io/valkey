@@ -427,6 +427,7 @@ void execCommand(client *c) {
     c->argv_len = orig_argv_len;
     c->argc = orig_argc;
     c->cmd = c->realcmd = orig_cmd;
+    c->slot = orig_slot;
     discardTransaction(c);
 
     server.in_exec = 0;

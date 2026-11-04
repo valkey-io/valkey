@@ -2291,6 +2291,15 @@ int memtest_test_linux_anonymous_maps(void) {
         if (!strstr(p, "00:00")) continue;
         if (!strstr(p, "rw")) continue;
 
+        if (regions >= MEMTEST_MAX_REGIONS) {
+            snprintf(logbuf, sizeof(logbuf),
+                     "*** Reached maximum testable memory regions limit (%d), ignoring remaining regions\n",
+                     MEMTEST_MAX_REGIONS);
+            if (write(fd, logbuf, strlen(logbuf)) == -1) { /* Nothing to do. */
+            }
+            break;
+        }
+
         start_addr = strtoul(start, NULL, 16);
         end_addr = strtoul(end, NULL, 16);
         size = end_addr - start_addr;

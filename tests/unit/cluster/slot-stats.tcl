@@ -1018,6 +1018,24 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     }
     R 0 CONFIG RESETSTAT
     R 1 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS metrics replication for transactions" {
+        R 0 MULTI
+        R 0 SET $key VALUE
+        R 0 APPEND $key VALUE
+        R 0 EXEC
+
+        wait_for_condition 500 10 {
+            [string match {*calls=1,*} [cmdrstat exec $replica]]
+        } else {
+            fail "Replica did not receive the command."
+        }
+        set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $deterministic_metrics $non_deterministic_metrics
+    }
+    R 0 CONFIG RESETSTAT
+    R 1 CONFIG RESETSTAT
 }
 
 start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {

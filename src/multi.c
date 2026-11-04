@@ -427,7 +427,9 @@ void execCommand(client *c) {
     c->argv_len = orig_argv_len;
     c->argc = orig_argc;
     c->cmd = c->realcmd = orig_cmd;
-    c->slot = orig_slot;
+    /* A transaction with no slot keeps the one its commands set, which is how
+     * clients we must obey get theirs. */
+    if (orig_slot != -1) c->slot = orig_slot;
     discardTransaction(c);
 
     server.in_exec = 0;

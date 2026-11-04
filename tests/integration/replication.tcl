@@ -2398,6 +2398,7 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
             } else {
                 [srv 0 client] replicaof [srv -1 host] [srv -1 port]
                 wait_for_sync [srv 0 client]
+                waitForBgsave $src
                 $src save
                 [srv 0 client] replicaof no one
             }

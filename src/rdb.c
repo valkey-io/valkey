@@ -1836,9 +1836,9 @@ int isSaveInProgress(void) {
  * module can handle a forkless save. Otherwise fall back to a fork-based save
  * and log why, so the fallback is not silent. */
 int resolveBgsaveType(void) {
-    if (server.bgsave_default_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
+    if (server.forkless_policy != FORKLESS_POLICY_PREFER_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
 
-    /* bgsave-default-method can only be set to forkless when the infrastructure
+    /* forkless-policy can only be set to prefer-forkless when the infrastructure
      * is enabled (enforced by config validation), so it must be enabled here. */
     serverAssert(server.forkless_infrastructure_enabled);
 
@@ -2576,6 +2576,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     } else if (rdbtype == RDB_TYPE_PATH_HASH) {
         uint64_t path_count = rdbLoadLen(rdb, NULL);
         if (path_count == RDB_LENERR) return NULL;
+        if (path_count == 0) goto emptykey;
         o = createPathHashObject();
         pathHashObject *path_hash = objectGetVal(o);
 

@@ -1811,7 +1811,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * because we want to give priority to RDB savings for replication. */
     if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
-        if (rdbStartBgsave(server.rdb_bgsave_scheduled) == C_OK) server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+        if (rdbStartBgsave(resolveBgsaveType()) == C_OK) server.rdb_bgsave_scheduled = 0;
     }
 
     /* TLS auto-reload if enabled (only when TLS is built-in). */
@@ -2958,6 +2958,12 @@ void resetServerStats(void) {
     server.stat_fork_time = 0;
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
+    server.stat_forkless_fallbacks_module = 0;
+    server.stat_forkless_fallbacks_slot_import = 0;
+    server.stat_forkless_fallbacks_exclude_data = 0;
+    server.stat_forkless_fallbacks_missing_inband_repl = 0;
+    server.stat_forkless_fallbacks_compression = 0;
+    server.stat_forkless_fallbacks_old_rdb_version = 0;
     server.stat_rejected_conn = 0;
     server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
@@ -3199,7 +3205,7 @@ void initServer(void) {
     server.rdb_pipe_numconns_writing = 0;
     server.rdb_pipe_buff = NULL;
     server.rdb_pipe_bufflen = 0;
-    server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+    server.rdb_bgsave_scheduled = 0;
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
@@ -6905,6 +6911,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "pubsubshard_channels:%llu\r\n", kvstoreSize(server.pubsubshard_channels),
                 "latest_fork_usec:%lld\r\n", server.stat_fork_time,
                 "total_forks:%lld\r\n", server.stat_total_forks,
+                "forkless_fallbacks_module:%lld\r\n", server.stat_forkless_fallbacks_module,
+                "forkless_fallbacks_slot_import:%lld\r\n", server.stat_forkless_fallbacks_slot_import,
+                "forkless_fallbacks_exclude_data:%lld\r\n", server.stat_forkless_fallbacks_exclude_data,
+                "forkless_fallbacks_missing_inband_repl:%lld\r\n", server.stat_forkless_fallbacks_missing_inband_repl,
+                "forkless_fallbacks_compression:%lld\r\n", server.stat_forkless_fallbacks_compression,
+                "forkless_fallbacks_old_rdb_version:%lld\r\n", server.stat_forkless_fallbacks_old_rdb_version,
                 "migrate_cached_sockets:%zu\r\n", dictSize(server.migrate_cached_sockets),
                 "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
                 "active_defrag_hits:%lld\r\n", server.stat_active_defrag_hits,

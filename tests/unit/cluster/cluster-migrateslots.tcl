@@ -3113,3 +3113,45 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         wait_for_migration 2 16383
     }
 }
+
+start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no forkless-infrastructure-enabled yes forkless-policy prefer-forkless save "" repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set node0_id [R 0 CLUSTER MYID]
+
+    test "Forkless BGSAVE falls back to fork while a slot import is in progress" {
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_migration_registered 0 $jobname
+        R 0 bgsave
+        waitForBgsave [Rn 0]
+        assert_equal fork [getInfoProperty [R 0 info persistence] rdb_last_bgsave_type]
+        assert_equal 1 [getInfoProperty [R 0 info stats] forkless_fallbacks_slot_import]
+        R 1 CLUSTER CANCELSLOTMIGRATIONS
+        wait_for_migration_field 0 $jobname state failed
+        set_debug_prevent_pause 0
+    }
+
+    test "Forkless sync to a replica falls back to fork when a slot migration starts during the scan" {
+        R 0 debug populate 2000 {b}
+        R 0 config set rdb-key-save-delay 1000
+        set loglines [count_log_lines 0]
+        R 0 debug change-repl-id
+        R 0 client kill type replica
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: forkless*"} $loglines 50 100
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_log_messages 0 {"*forkless save cancelled*"} $loglines 50 100
+        R 0 config set rdb-key-save-delay 0
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: fork"} $loglines 50 100
+        wait_for_condition 50 100 {
+            [getInfoProperty [R 2 info replication] master_link_status] eq "up"
+        } else {
+            fail "Replica didn't resync"
+        }
+        R 1 CLUSTER CANCELSLOTMIGRATIONS
+        wait_for_migration_field 0 $jobname state failed
+        set_debug_prevent_pause 0
+        R 0 flushall
+    }
+}

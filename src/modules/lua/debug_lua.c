@@ -215,9 +215,9 @@ static void ldbList(int around, int context) {
  * The element is neither automatically removed from the stack, nor
  * converted to a different type. */
 #define LDB_MAX_VALUES_DEPTH (LUA_MINSTACK / 2)
-/* The depth limit alone does not bound the work: tables are rendered twice per
- * level and values reachable more than once are rendered every time, so a
- * table holding N references to itself costs (2N)^LDB_MAX_VALUES_DEPTH calls.
+/* The depth limit alone does not bound the work: values reachable more than
+ * once are rendered every time, so a table holding N references to itself
+ * costs N^LDB_MAX_VALUES_DEPTH calls.
  * 'budget' is charged one per value plus the length of each string. */
 #define LDB_MAX_VALUES_BUDGET (1024 * 1024)
 static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State *lua, int idx, int level, size_t *budget) {

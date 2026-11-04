@@ -3877,15 +3877,15 @@ static void propagateToBgIteration(int dbid, int argc, robj **argv, int target) 
         // Called from alsoPropagate() to replicate a command
         if (target & PROPAGATE_REPL && bgIteration_iterationActive()) {
             if (!sentMultiToBgIterator && (scriptIsRunning() || server.in_exec)) {
-                /* Ops already queued are either AOF-only or were handed to
-                 * bgIteration when queued (e.g. a key expired while checking
-                 * EXEC conditions), so they don't belong in this MULTI. */
                 /* If this is the first propagated command of a script or multi,
                  * make it a transaction.  It may turn out that there is only 1
                  * command in the MULTI block, but we can't know that now.
                  * Unlike regular replication, we can't defer all of the
                  * replication until we know for sure.  We must call bgIteration
-                 * after each command. */
+                 * after each command.
+                 * Ops already queued are either AOF-only or were handed to
+                 * bgIteration when queued (e.g. a key expired while checking
+                 * EXEC conditions), so they don't belong in this MULTI. */
                 static struct serverCommand *cmd_multi = NULL; // STATIC
                 if (cmd_multi == NULL) cmd_multi = lookupCommandOrOriginal(&shared.multi, 1);
                 bgIteration_handleCommandReplication(dbid, cmd_multi, 1, &shared.multi);

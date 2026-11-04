@@ -2012,3 +2012,21 @@ test {CONFIG hash-seed is immutable and settable at startup} {
         }
     }
 } {} {external:skip}
+
+# A sysfs attribute reports a size of 4096 but reads back far fewer bytes,
+# which gives a deterministic short read of the old config file.
+test {CONFIG REWRITE fails when the old config file reads short} {
+    set sysfs_file /sys/kernel/mm/transparent_hugepage/enabled
+    if {![file readable $sysfs_file] || [file size $sysfs_file] <= [string length [exec cat $sysfs_file]]} {
+        skip "$sysfs_file is missing or does not read short"
+    }
+    start_server {tags {"introspection"}} {
+        set config_file [srv 0 config_file]
+        file rename $config_file $config_file.bak
+        file link -symbolic $config_file $sysfs_file
+        catch {r config rewrite} err
+        file delete $config_file
+        file rename $config_file.bak $config_file
+        assert_match {ERR Rewriting config file: *} $err
+    }
+} {} {external:skip}

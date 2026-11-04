@@ -632,6 +632,7 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         close $fd
     }
 }
+
 test "Raft proto: outbound link without HI is dropped and reconnected" {
     # The real node joins a fake leader. Its outbound link to the leader goes
     # to a listener that accepts the connection but never replies, like a
@@ -681,7 +682,6 @@ test "Raft proto: outbound link without HI is dropped and reconnected" {
         close $fd1
     }
 }
-
 
 # --------------------------------------------------------------------------
 # Shard epoch: stale proposal rejection tests (parameterized).

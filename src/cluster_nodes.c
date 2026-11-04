@@ -297,7 +297,8 @@ static struct clusterNodeFlags clusterNodeFlagsTable[] = {
     {CLUSTER_NODE_FAIL, "fail,"},
     {CLUSTER_NODE_HANDSHAKE, "handshake,"},
     {CLUSTER_NODE_NOADDR, "noaddr,"},
-    {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
+    {CLUSTER_NODE_NOFAILOVER, "nofailover,"},
+    {CLUSTER_NODE_LEARNER, "learner,"}};
 
 /* Concatenate the comma separated list of node flags to the given SDS
  * string 'ci'. */
@@ -797,6 +798,8 @@ int clusterLoadConfig(char *filename) {
                 if (clusterCurrentBus->setNodeFailed) clusterCurrentBus->setNodeFailed(n);
             } else if (!strcasecmp(s, "nofailover")) {
                 n->flags |= CLUSTER_NODE_NOFAILOVER;
+            } else if (!strcasecmp(s, "learner")) {
+                n->flags |= CLUSTER_NODE_LEARNER;
             } else if (!strcasecmp(s, "noflags")) {
                 /* nothing to do */
             } else {

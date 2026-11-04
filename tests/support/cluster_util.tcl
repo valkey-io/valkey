@@ -2,6 +2,7 @@
 
 source tests/support/cli.tcl
 source tests/support/cluster.tcl
+source tests/support/cluster_raft.tcl
 
 proc config_set_all_nodes {keyword value} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -241,6 +242,11 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
         for {set i 1} {$i < $node_count} {incr i} {
             R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
         }
+    }
+
+    # See raft_promote_start_cluster_voters: test-only multi-voter restore.
+    if {$::cluster_raft} {
+        raft_promote_start_cluster_voters $node_count
     }
 
     $slot_allocator $masters $replicas

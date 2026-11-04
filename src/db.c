@@ -1828,6 +1828,7 @@ static void copyDbExpiry(serverDb *target, const serverDb *source) {
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
+    bgIteration_swapdb(id1, id2);
     serverDb *db1 = createDatabaseIfNeeded(id1);
     serverDb *db2 = createDatabaseIfNeeded(id2);
     serverDb aux = *db1;
@@ -1873,6 +1874,11 @@ int dbSwapDatabases(int id1, int id2) {
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
 void swapMainDbWithTempDb(serverDb **tempDb) {
+    /* The old main DB stops being the active keyspace here. Synchronously tear
+     * down any background iterators (e.g. a forkless save) borrowing live
+     * references into it, before the old keyspace is handed off to be freed. */
+    bgIteration_flushall();
+
     for (int i = 0; i < server.dbnum; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);

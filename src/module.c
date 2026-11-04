@@ -578,17 +578,23 @@ void *VM_TryAlloc(size_t bytes) {
     return ztrymalloc_usable(bytes, NULL);
 }
 
+static bool moduleCallocOverflows(size_t nmemb, size_t size) {
+    return size && nmemb > SIZE_MAX / size;
+}
+
 /* Use like calloc(). Memory allocated with this function is reported in
  * INFO memory, used for keys eviction according to maxmemory settings
  * and in general is taken into account as memory allocated by the server.
  * You should avoid using calloc() directly. */
 void *VM_Calloc(size_t nmemb, size_t size) {
+    if (moduleCallocOverflows(nmemb, size)) serverPanic("ValkeyModule_Calloc(%zu, %zu) overflows", nmemb, size);
     return zcalloc_usable(nmemb * size, NULL);
 }
 
 /* Similar to VM_Calloc, but returns NULL in case of allocation failure, instead
  * of panicking. */
 void *VM_TryCalloc(size_t nmemb, size_t size) {
+    if (moduleCallocOverflows(nmemb, size)) return NULL;
     return ztrycalloc_usable(nmemb * size, NULL);
 }
 

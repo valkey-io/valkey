@@ -443,37 +443,54 @@ run_solo {defrag} {
     }
 
     proc test_defrag_later_type_change {type} {
-        test "Active Defrag replaces a deferred set with a hash: $type" {
-            r config set hash-max-listpack-entries 1
-            r eval {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} 1 big
-            r hset h a 1 b 2
-            assert_encoding hashtable h
-
-            # Defrag regardless of fragmentation, slowly, so the set is
-            # scanned over many cycles.
-            r config set active-defrag-threshold-lower 0
-            r config set active-defrag-ignore-bytes 1
-            r config set active-defrag-cycle-min 1
-            r config set active-defrag-cycle-max 1
-            set steps [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
-            r config set activedefrag yes
-            wait_for_condition 100 50 {
-                [s active_defrag_key_hits] + [s active_defrag_key_misses] > $steps + 100
-            } else {
-                fail "defrag did not start scanning the set"
+        set key "{t}big"
+        set src "{t}h"
+        foreach {kind how populate replace} {
+            set RENAME {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {r rename $src $key}
+            zset RENAME {for i=1,200000 do redis.call('zadd', KEYS[1], i, i) end} {r rename $src $key}
+            list RENAME {for i=1,200000 do redis.call('rpush', KEYS[1], i) end} {r rename $src $key}
+            set {DEL then HSET} {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {
+                r multi
+                r del $key
+                r hset $key a 1 b 2
+                r exec
             }
+        } {
+            test "Active Defrag replaces a deferred $kind with a hash via $how: $type" {
+                r flushall
+                r config set hash-max-listpack-entries 1
+                r config set list-max-listpack-size 3 ;# enough quicklist nodes to defer the list
+                r eval $populate 1 $key
+                r hset $src a 1 b 2
+                assert_encoding hashtable $src
 
-            # Replace the set while its scan is in progress. The next deferred
-            # step resumes on the hash with the set's cursor.
-            r rename h big
-            set steps [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
-            wait_for_condition 100 100 {
-                [s active_defrag_key_hits] + [s active_defrag_key_misses] > $steps
-            } else {
-                fail "defrag did not move past the replaced key"
+                # Defrag regardless of fragmentation, slowly, so the key is
+                # scanned over many cycles.
+                r config set active-defrag-threshold-lower 0
+                r config set active-defrag-ignore-bytes 1
+                r config set active-defrag-cycle-min 1
+                r config set active-defrag-cycle-max 1
+                set steps [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
+                r config set activedefrag yes
+                wait_for_condition 100 50 {
+                    [s active_defrag_key_hits] + [s active_defrag_key_misses] > $steps + 5
+                } else {
+                    fail "defrag did not start scanning the $kind"
+                }
+
+                # Replace the key while its scan is in progress. The next
+                # deferred step resumes on the hash with the old cursor.
+                eval $replace
+                assert_encoding hashtable $key
+                set steps [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
+                wait_for_condition 100 100 {
+                    [s active_defrag_key_hits] + [s active_defrag_key_misses] > $steps
+                } else {
+                    fail "defrag did not move past the replaced key"
+                }
+                r config set activedefrag no
+                assert_equal {1 2} [r hmget $key a b]
             }
-            r config set activedefrag no
-            assert_equal PONG [r ping]
         }
     }
 
@@ -723,6 +740,7 @@ run_solo {defrag} {
     lappend tests [list test_stream cluster $std_overrides]
     lappend tests [list test_pubsub cluster $std_overrides]
     lappend tests [list test_tracking_table cluster $std_overrides]
+    lappend tests [list test_defrag_later_type_change cluster $std_overrides]
 
     # set ::verbose 1
 

@@ -3330,10 +3330,7 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     clusterRaftState *rs = RAFT_STATE();
     slotRange *filtered = NULL;
 
-    /* DELSLOTS is target=NULL. Only unassign slots we own: a SLOT_CHANGE
-     * with target=NULL is cluster-wide and deletes the owner's keys.
-     * Non-owner becomes a no-op OK (gossip's end state). Mixed ranges
-     * keep only locally owned slots. */
+    /* DELSLOTS (target=NULL) is cluster-wide; only unassign slots we own. */
     if (target == NULL) {
         numranges = raftOwnedDelSlotRanges(ranges, numranges, &filtered);
         if (numranges == 0) {
@@ -3439,7 +3436,10 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
                 /* Same owner: do not touch migrating/importing. */
                 if (old_owner == info.target_node) continue;
 
-                if (old_owner == myself && info.target_node != myself) {
+                /* After DELSLOTS, old_owner is NULL; drop leftover keys if
+                 * the new owner is a different shard. */
+                if (countKeysInSlot(j) &&
+                    memcmp(info.target_node->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
                     serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
                               j, myself->name);
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
@@ -3464,10 +3464,7 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
                 if (old_owner) clusterDelSlot(j);
                 clusterAddSlot(info.target_node, j);
             } else {
-                if (old_owner == myself) {
-                    RAFT_STATE()->todo_save_config = 1;
-                    delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
-                }
+                if (old_owner == myself) RAFT_STATE()->todo_save_config = 1;
                 clusterDelSlot(j);
             }
         }

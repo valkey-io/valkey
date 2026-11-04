@@ -5060,7 +5060,6 @@ static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int d
     return 1;
 
 abort:
-    /* MULTI succeeded; abort it so the node is not left in a transaction. */
     if (!raft) {
         valkeyReply *reply = CLUSTER_MANAGER_COMMAND(owner, "DISCARD");
         if (reply) freeReplyObject(reply);

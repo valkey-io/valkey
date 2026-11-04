@@ -335,7 +335,6 @@ start_server {tags {"repl needs:debug external:skip"}} {
     set primary_port [srv 0 port]
     start_server {} {
         set replica [srv 0 client]
-        set replica_pid [srv 0 pid]
         start_server {} {
             set sub_replica [srv 0 client]
 
@@ -349,8 +348,7 @@ start_server {tags {"repl needs:debug external:skip"}} {
                 $replica debug protect-client $id
 
                 $replica replicaof $primary_host $primary_port
-                catch {wait_for_sync $replica}
-                assert {[process_is_alive $replica_pid]}
+                wait_for_sync $replica
                 assert_equal up [status $replica master_link_status]
             }
         }

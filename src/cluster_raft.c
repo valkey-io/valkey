@@ -3330,7 +3330,9 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     clusterRaftState *rs = RAFT_STATE();
     slotRange *filtered = NULL;
 
-    /* DELSLOTS (target=NULL) is cluster-wide; only unassign slots we own. */
+    /* DELSLOTS (target=NULL) is cluster-wide; only unassign slots we own.
+     * Non-owner is a no-op that replies OK, matching gossip. Mixed ranges
+     * keep only locally owned slots. */
     if (target == NULL) {
         numranges = raftOwnedDelSlotRanges(ranges, numranges, &filtered);
         if (numranges == 0) {

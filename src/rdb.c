@@ -1881,7 +1881,7 @@ int resolveBgsaveType(void) {
 /* Start a background save, choosing fork or forkless based on bgsave_type. */
 int rdbStartBgsave(int bgsave_type) {
     if (bgsave_type == RDB_BGSAVE_TYPE_FORKLESS) {
-        return forklessSaveToDisk(server.rdb_filename);
+        return forklessSaveToDisk(server.rdb_filename, RDBFLAGS_NONE);
     } else {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -4683,7 +4683,7 @@ void bgsaveCommand(client *c) {
                              "possible.");
         }
     } else if (resolveBgsaveType() == RDB_BGSAVE_TYPE_FORKLESS) {
-        if (forklessSaveToDisk(server.rdb_filename) == C_OK) {
+        if (forklessSaveToDisk(server.rdb_filename, RDBFLAGS_NONE) == C_OK) {
             addReplyStatus(c, "Background saving started");
         } else {
             addReplyErrorObject(c, shared.err);

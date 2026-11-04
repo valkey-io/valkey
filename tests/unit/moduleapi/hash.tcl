@@ -21,6 +21,19 @@ start_server {tags {"modules"}} {
         r hgetall k
     } {squirrel ofcourse banana no what nothing something nice}
 
+    test {Module HSETEX propagates one expiry with aliased argument objects} {
+        set repl [attach_to_replication_stream]
+        set expected [list [list select *]]
+        foreach {option value} [list EX 100 PX 100000 EXAT [expr [clock seconds]+100]] {
+            assert_equal 1 [r hash.hsetex $option $option $value]
+            assert_equal v [r hget $option f]
+            set expiry [lindex [r hpexpiretime $option FIELDS 1 f] 0]
+            lappend expected [list hsetex $option PXAT $expiry FIELDS 1 f v]
+        }
+        assert_replication_stream $repl $expected
+        close_replication_stream $repl
+    } {} {needs:repl}
+
     test "Unload the module - hash" {
         assert_equal {OK} [r module unload hash]
     }

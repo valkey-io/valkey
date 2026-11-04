@@ -76,12 +76,41 @@ int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithLongLong(ctx, result);
 }
 
+/* Repeat the expiry option using the same objects in both argument positions. */
+int hash_hsetex(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4)
+        return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModule_AutoMemory(ctx);
+    ValkeyModuleString *args[] = {
+        argv[1],
+        argv[2],
+        argv[3],
+        argv[2],
+        argv[3],
+        ValkeyModule_CreateString(ctx, "FIELDS", 6),
+        ValkeyModule_CreateString(ctx, "1", 1),
+        ValkeyModule_CreateString(ctx, "f", 1),
+        ValkeyModule_CreateString(ctx, "v", 1),
+    };
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(
+        ctx, "HSETEX", "!v", args, sizeof(args) / sizeof(args[0]));
+    if (!reply)
+        return ValkeyModule_ReplyWithError(ctx, "ERR HSETEX call failed");
+
+    int result = ValkeyModule_ReplyWithCallReply(ctx, reply);
+    ValkeyModule_FreeCallReply(reply);
+    return result;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
     if (ValkeyModule_Init(ctx, "hash", 1, VALKEYMODULE_APIVER_1) ==
         VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "hash.set", hash_set, "write",
+                                  1, 1, 1) == VALKEYMODULE_OK &&
+        ValkeyModule_CreateCommand(ctx, "hash.hsetex", hash_hsetex, "write",
                                   1, 1, 1) == VALKEYMODULE_OK) {
         return VALKEYMODULE_OK;
     } else {

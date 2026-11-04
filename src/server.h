@@ -2938,7 +2938,7 @@ int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 
-int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
+int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, int command_type, int max_args);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);

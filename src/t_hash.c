@@ -1320,6 +1320,7 @@ void hsetCommand(client *c) {
 void hsetexCommand(client *c) {
     robj *o;
     robj *expire = NULL;
+    int expire_idx = -1;
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
@@ -1338,7 +1339,7 @@ void hsetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire_idx, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1418,11 +1419,18 @@ void hsetexCommand(client *c) {
             if (strcasecmp(c->argv[i]->ptr, "FNX") &&
                 strcasecmp(c->argv[i]->ptr, "FXX")) {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-                 * EX/PX/EXAT flag. */
-                if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {
-                    robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                    new_argv[new_argc++] = shared.pxat;
-                    new_argv[new_argc++] = milliseconds_obj;
+                 * EX/PX/EXAT flag. EX/PX/EXAT may be repeated and only the last one
+                 * applies, so drop the earlier ones, which are a syntax error next to
+                 * PXAT. i > 1 skips the key, which may itself be named EX. */
+                if (expire && !(flags & ARGS_PXAT) && i > 1 &&
+                    (!strcasecmp(c->argv[i]->ptr, "EX") ||
+                     !strcasecmp(c->argv[i]->ptr, "PX") ||
+                     !strcasecmp(c->argv[i]->ptr, "EXAT"))) {
+                    if (i == expire_idx) {
+                        robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                        new_argv[new_argc++] = shared.pxat;
+                        new_argv[new_argc++] = milliseconds_obj;
+                    }
                     i++; // skip the original expire argument
                 } else {
                     new_argv[new_argc++] = c->argv[i];
@@ -1588,7 +1596,7 @@ void hgetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, NULL, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }

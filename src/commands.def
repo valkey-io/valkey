@@ -8431,16 +8431,22 @@ keySpec ZADD_Keyspecs[1] = {
 };
 #endif
 
+/* ZADD condition xx_comparison comparison argument table */
+struct COMMAND_ARG ZADD_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* ZADD condition xx_comparison argument table */
+struct COMMAND_ARG ZADD_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,"6.2.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=ZADD_condition_xx_comparison_comparison_Subargs},
+};
+
 /* ZADD condition argument table */
 struct COMMAND_ARG ZADD_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-};
-
-/* ZADD comparison argument table */
-struct COMMAND_ARG ZADD_comparison_Subargs[] = {
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=ZADD_condition_xx_comparison_Subargs},
 };
 
 /* ZADD data argument table */
@@ -8453,7 +8459,6 @@ struct COMMAND_ARG ZADD_data_Subargs[] = {
 struct COMMAND_ARG ZADD_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"3.0.2",CMD_ARG_OPTIONAL,2,NULL),.subargs=ZADD_condition_Subargs},
-{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,"6.2.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=ZADD_comparison_Subargs},
 {MAKE_ARG("change",ARG_TYPE_PURE_TOKEN,-1,"CH",NULL,"3.0.2",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("increment",ARG_TYPE_PURE_TOKEN,-1,"INCR",NULL,"3.0.2",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=ZADD_data_Subargs},
@@ -10472,12 +10477,17 @@ keySpec LCS_Keyspecs[1] = {
 };
 #endif
 
+/* LCS output argument table */
+struct COMMAND_ARG LCS_output_Subargs[] = {
+{MAKE_ARG("len",ARG_TYPE_PURE_TOKEN,-1,"LEN",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("idx",ARG_TYPE_PURE_TOKEN,-1,"IDX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /* LCS argument table */
 struct COMMAND_ARG LCS_Args[] = {
 {MAKE_ARG("key1",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key2",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("len",ARG_TYPE_PURE_TOKEN,-1,"LEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("idx",ARG_TYPE_PURE_TOKEN,-1,"IDX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("output",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=LCS_output_Subargs},
 {MAKE_ARG("min-match-len",ARG_TYPE_INTEGER,-1,"MINMATCHLEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("withmatchlen",ARG_TYPE_PURE_TOKEN,-1,"WITHMATCHLEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
@@ -11048,7 +11058,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("bzmpop","Removes and returns a member by score from one or more sorted sets. Blocks until a member is available otherwise. Deletes the sorted set if the last element was popped.","O(K) + O(M*log(N)) where K is the number of provided keys, N being the number of elements in the sorted set, and M being the number of elements popped.","7.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,BZMPOP_History,0,BZMPOP_Tips,0,bzmpopCommand,-5,CMD_WRITE|CMD_BLOCKING,ACL_CATEGORY_SORTEDSET,BZMPOP_Keyspecs,1,blmpopGetKeys,5),.args=BZMPOP_Args},
 {MAKE_CMD("bzpopmax","Removes and returns the member with the highest score from one or more sorted sets. Blocks until a member available otherwise.  Deletes the sorted set if the last element was popped.","O(log(N)) with N being the number of elements in the sorted set.","5.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,BZPOPMAX_History,1,BZPOPMAX_Tips,0,bzpopmaxCommand,-3,CMD_WRITE|CMD_FAST|CMD_BLOCKING,ACL_CATEGORY_SORTEDSET,BZPOPMAX_Keyspecs,1,NULL,2),.args=BZPOPMAX_Args},
 {MAKE_CMD("bzpopmin","Removes and returns the member with the lowest score from one or more sorted sets. Blocks until a member is available otherwise. Deletes the sorted set if the last element was popped.","O(log(N)) with N being the number of elements in the sorted set.","5.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,BZPOPMIN_History,1,BZPOPMIN_Tips,0,bzpopminCommand,-3,CMD_WRITE|CMD_FAST|CMD_BLOCKING,ACL_CATEGORY_SORTEDSET,BZPOPMIN_Keyspecs,1,NULL,2),.args=BZPOPMIN_Args},
-{MAKE_CMD("zadd","Adds one or more members to a sorted set, or updates their scores. Creates the key if it doesn't exist.","O(log(N)) for each item added, where N is the number of elements in the sorted set.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZADD_History,3,ZADD_Tips,0,zaddCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZADD_Keyspecs,1,NULL,6),.args=ZADD_Args},
+{MAKE_CMD("zadd","Adds one or more members to a sorted set, or updates their scores. Creates the key if it doesn't exist.","O(log(N)) for each item added, where N is the number of elements in the sorted set.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZADD_History,3,ZADD_Tips,0,zaddCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZADD_Keyspecs,1,NULL,5),.args=ZADD_Args},
 {MAKE_CMD("zcard","Returns the number of members in a sorted set.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZCARD_History,0,ZCARD_Tips,0,zcardCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZCARD_Keyspecs,1,NULL,1),.args=ZCARD_Args},
 {MAKE_CMD("zcount","Returns the count of members in a sorted set that have scores within a range.","O(log(N)) with N being the number of elements in the sorted set.","2.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZCOUNT_History,0,ZCOUNT_Tips,0,zcountCommand,4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZCOUNT_Keyspecs,1,NULL,3),.args=ZCOUNT_Args},
 {MAKE_CMD("zdiff","Returns the difference between multiple sorted sets.","O(L + (N-K)log(N)) worst case where L is the total number of elements in all the sets, N is the size of the first set, and K is the size of the result set.","6.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZDIFF_History,0,ZDIFF_Tips,0,zdiffCommand,-3,CMD_READONLY,ACL_CATEGORY_SORTEDSET,ZDIFF_Keyspecs,1,zunionInterDiffGetKeys,3),.args=ZDIFF_Args},
@@ -11108,7 +11118,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("incr","Increments the integer value of a key by one. Uses 0 as initial value if the key doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,INCR_History,0,INCR_Tips,0,incrCommand,2,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_STRING,INCR_Keyspecs,1,NULL,1),.args=INCR_Args},
 {MAKE_CMD("incrby","Increments the integer value of a key by a number. Uses 0 as initial value if the key doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,INCRBY_History,0,INCRBY_Tips,0,incrbyCommand,3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_STRING,INCRBY_Keyspecs,1,NULL,2),.args=INCRBY_Args},
 {MAKE_CMD("incrbyfloat","Increment the floating point value of a key by a number. Uses 0 as initial value if the key doesn't exist.","O(1)","2.6.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,INCRBYFLOAT_History,0,INCRBYFLOAT_Tips,0,incrbyfloatCommand,3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_STRING,INCRBYFLOAT_Keyspecs,1,NULL,2),.args=INCRBYFLOAT_Args},
-{MAKE_CMD("lcs","Finds the longest common substring.","O(N*M) where N and M are the lengths of s1 and s2, respectively","7.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,LCS_History,0,LCS_Tips,0,lcsCommand,-3,CMD_READONLY,ACL_CATEGORY_STRING,LCS_Keyspecs,1,NULL,6),.args=LCS_Args},
+{MAKE_CMD("lcs","Finds the longest common substring.","O(N*M) where N and M are the lengths of s1 and s2, respectively","7.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,LCS_History,0,LCS_Tips,0,lcsCommand,-3,CMD_READONLY,ACL_CATEGORY_STRING,LCS_Keyspecs,1,NULL,5),.args=LCS_Args},
 {MAKE_CMD("mget","Atomically returns the string values of one or more keys.","O(N) where N is the number of keys to retrieve.","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MGET_History,0,MGET_Tips,1,mgetCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_STRING,MGET_Keyspecs,1,NULL,1),.args=MGET_Args},
 {MAKE_CMD("mset","Atomically creates or modifies the string values of one or more keys.","O(N) where N is the number of keys to set.","1.0.1",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MSET_History,0,MSET_Tips,2,msetCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_STRING,MSET_Keyspecs,1,NULL,1),.args=MSET_Args},
 {MAKE_CMD("msetnx","Atomically modifies the string values of one or more keys only when all keys don't exist.","O(N) where N is the number of keys to set.","1.0.1",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MSETNX_History,0,MSETNX_Tips,0,msetnxCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_STRING,MSETNX_Keyspecs,1,NULL,1),.args=MSETNX_Args},

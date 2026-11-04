@@ -281,7 +281,7 @@ start_server {tags {"introspection"}} {
 
     test {COMMAND DOCS does not mark hash field counts as keys} {
         foreach command {
-            hexpireat hexpiretime hgetdel hgetex hpersist hpexpire
+            hexpire hexpireat hexpiretime hgetdel hgetex hpersist hpexpire
             hpexpireat hpexpiretime hpttl hsetex httl
         } {
             set docs [dict get [r command docs $command] $command]

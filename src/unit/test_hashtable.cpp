@@ -333,6 +333,7 @@ TEST_F(HashtableTest, sample_entries_finishes_shrink) {
     ASSERT_EQ(hashtableSampleEntries(ht, &sample, 1), 1u);
     ASSERT_FALSE(hashtableIsRehashing(ht));
 
+    hashtableSetCanAbortShrink(true);
     hashtableRelease(ht);
 }
 

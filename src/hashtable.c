@@ -2445,7 +2445,8 @@ static void rehashStepOnSampleIfNeeded(hashtable *ht, size_t scans) {
     if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < ht->bucket_exp[0]) {
         steps = scans * numBuckets(ht->bucket_exp[0] - ht->bucket_exp[1]);
     }
-    while (steps--) rehashStepOnReadIfNeeded(ht);
+    if (ht->pause_rehash || resize_policy != HASHTABLE_RESIZE_ALLOW) return;
+    while (steps-- && hashtableIsRehashing(ht)) rehashStepOnReadIfNeeded(ht);
 }
 
 /* Scan independent random buckets and collect entries using reservoir sampling.

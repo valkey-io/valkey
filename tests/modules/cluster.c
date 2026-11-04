@@ -1,4 +1,5 @@
 #include "valkeymodule.h"
+#include <stdint.h>
 #include <string.h>
 
 #define UNUSED(x) (void)(x)
@@ -76,6 +77,17 @@ int PingallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_DING, "Hey", 3);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* Test that an impossible size is rejected before reading the payload. */
+int test_send_oversized_msg(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+
+    if (ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_DING, "x", UINT32_MAX) != VALKEYMODULE_ERR) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR oversized cluster module message was accepted");
+    }
+    return ValkeyModule_ReplyWithSimpleString(ctx, "REJECTED");
 }
 
 void DingReceiver(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
@@ -174,6 +186,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "test.pingall", PingallCommand, "readonly", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "test.send_oversized_msg", test_send_oversized_msg, "readonly", 0, 0, 0) ==
         VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 

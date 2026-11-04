@@ -1842,7 +1842,7 @@ start_server {tags {"scripting needs:debug external:skip"}} {
     }
 
     test {Test scripting debug kills a looping script once its client is gone} {
-        r config set busy-reply-threshold 100
+        test_config_set r busy-reply-threshold 100
         set loglines [count_log_lines 0]
         set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
         $dbg script debug sync
@@ -1850,8 +1850,19 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         $dbg close
 
         # Wait on the log, since a command would hang if the server is stuck.
-        wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines 50 100
+        wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines [expr {$::valgrind ? 500 : 50}] 100
         assert_equal [r ping] {PONG}
+    }
+
+    test {Test scripting debug kills a looping script that catches the timeout with pcall} {
+        test_config_set r busy-reply-threshold 100
+        set loglines [count_log_lines 0]
+        set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $dbg script debug sync
+        $dbg eval {local f = function() while true do end end; while true do pcall(f) end} 0
+        $dbg close
+
+        wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines [expr {$::valgrind ? 500 : 50}] 100
     }
 }
 

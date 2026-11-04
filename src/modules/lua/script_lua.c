@@ -2010,6 +2010,12 @@ static long long luaGetBusyReplyThreshold(ValkeyModuleCtx *module_ctx) {
     return threshold ? threshold : 5000;
 }
 
+static void luaLdbKillHook(lua_State *lua, lua_Debug *ar) {
+    VALKEYMODULE_NOT_USED(ar);
+    luaPushError(lua, "timeout during Lua debugging with client closing connection");
+    luaError(lua);
+}
+
 /* This is the core of our Lua debugger, called each time Lua is about
  * to start executing a new line. */
 void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
@@ -2051,9 +2057,10 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
         if (ldbRepl(lua) == C_ERR && timeout) {
             /* If the client closed the connection and we have a timeout
              * connection, let's kill the script otherwise the process
-             * will remain blocked indefinitely. */
-            luaPushError(lua, "timeout during Lua debugging with client closing connection");
-            luaError(lua);
+             * will remain blocked indefinitely. The hook raises the error
+             * again on every line, so pcall cannot catch it and keep going. */
+            lua_sethook(lua, luaLdbKillHook, LUA_MASKLINE, 0);
+            luaLdbKillHook(lua, ar);
         }
         rctx->ldb_start_time = ValkeyModule_MonotonicMicroseconds();
     }

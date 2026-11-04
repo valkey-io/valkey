@@ -292,12 +292,15 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua, registerFunctionArgs
             goto error;
         }
         const char *key = lua_tostring(lua, -2);
+        /* Case-insensitive argument names can repeat. The last value wins. */
         if (!strcasecmp(key, "function_name")) {
+            sdsfree(name);
             if (!(name = luaGetStringSds(lua, -1))) {
                 err = "function_name argument given to redis.register_function must be a string";
                 goto error;
             }
         } else if (!strcasecmp(key, "description")) {
+            sdsfree(desc);
             if (!(desc = luaGetStringSds(lua, -1))) {
                 err = "description argument given to redis.register_function must be a string";
                 goto error;
@@ -309,7 +312,11 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua, registerFunctionArgs
             }
             int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
-            lua_f_ctx = zmalloc(sizeof(*lua_f_ctx));
+            if (lua_f_ctx) {
+                lua_unref(lua, lua_f_ctx->lua_function_ref);
+            } else {
+                lua_f_ctx = zmalloc(sizeof(*lua_f_ctx));
+            }
             *lua_f_ctx = (luaFunctionCtx){
                 .lua = lua,
                 .lua_function_ref = lua_function_ref,

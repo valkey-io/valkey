@@ -271,6 +271,8 @@ int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     ValkeyModuleCallReply *reply;
 
     reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "attrib"); /* 3 stands for resp 3 reply */
+    /* The attribute must be available before any other accessor parses the reply */
+    ValkeyModuleCallReply *attr = ValkeyModule_CallReplyAttribute(reply);
     if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_STRING) goto fail;
 
     /* make sure we cannot reply to resp2 client with resp3 (it might be a string but it contains attribute) */
@@ -278,7 +280,7 @@ int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
 
     if (!TestMatchReply(reply,"Some real reply following the attribute")) goto fail;
 
-    reply = ValkeyModule_CallReplyAttribute(reply);
+    reply = attr;
     if (!reply || ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_ATTRIBUTE) goto fail;
     /* make sure we cannot reply to resp2 client with resp3 attribute */
     if (ValkeyModule_ReplyWithCallReply(ctx, reply) != VALKEYMODULE_ERR) goto fail;
@@ -291,6 +293,11 @@ int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     if (ValkeyModule_CallReplyLength(val) != 2) goto fail;
     if (!TestMatchReply(ValkeyModule_CallReplyArrayElement(val, 0),"key:123")) goto fail;
     if (!TestMatchReply(ValkeyModule_CallReplyArrayElement(val, 1),"90")) goto fail;
+
+    /* A plain map is not an attribute */
+    reply = ValkeyModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "map");
+    if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_MAP) goto fail;
+    if (ValkeyModule_CallReplyAttributeElement(reply,0,&key,&val) != VALKEYMODULE_ERR) goto fail;
 
     ValkeyModule_ReplyWithSimpleString(ctx,"OK");
     return VALKEYMODULE_OK;

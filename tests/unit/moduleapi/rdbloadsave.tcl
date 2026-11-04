@@ -226,5 +226,36 @@ start_server {tags {"modules"}} {
                 }
             }
         }
+
+        test {Module rdbloadsave on master with a replica whose free is deferred} {
+            start_server [list overrides [list loadmodule "$testmodule"]] {
+                set replica [srv 0 client]
+                start_server [list tags {needs:debug} overrides [list loadmodule "$testmodule" shutdown-timeout 0]] {
+                    set master [srv 0 client]
+                    set master_host [srv 0 host]
+                    set master_port [srv 0 port]
+
+                    $replica replicaof $master_host $master_port
+                    wait_for_sync $replica
+                    assert_equal OK [$master test.rdbsave master.rdb]
+
+                    # A protected client can only be freed asynchronously, the same
+                    # as a replica with a write in flight on an I/O thread.
+                    regexp {id=(\d+)} [$master client list type replica] -> id
+                    $master debug protect-client $id
+
+                    # Loading drops the replica, and the master must still be
+                    # able to propagate writes and attach a new replica.
+                    assert_equal OK [$master test.rdbload master.rdb]
+                    assert_equal OK [$master set y 1]
+                    start_server {} {
+                        set new_replica [srv 0 client]
+                        $new_replica replicaof $master_host $master_port
+                        wait_for_sync $new_replica
+                        assert_equal 1 [$new_replica get y]
+                    }
+                }
+            }
+        }
     }
 }

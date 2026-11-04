@@ -14916,6 +14916,14 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     /* Drop replicas if exist. */
     disconnectReplicas();
     freeReplicationBacklog();
+    /* A replica whose free was deferred is still attached, and attached
+     * replicas need a backlog. Start a new replication history so nobody
+     * can continue the old one. */
+    if (listLength(server.replicas)) {
+        changeReplicationId();
+        clearReplicationId2();
+        createReplicationBacklog();
+    }
 
     /* Stop and kill existing AOF rewriting fork as it is saving outdated data,
      * we will re-enable it after the rdbLoad. Also killing it will prevent COW

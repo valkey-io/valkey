@@ -493,7 +493,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 
     test "forkless save survives PHGET on a path hash payload that is rehashing" {
         r flushall
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r config set rdb-key-save-delay 0
         # Just past a growth threshold (buckets * entries per bucket: 7 * 2^15 on 64-bit,
         # 12 * 2^14 on 32-bit), the payload hashtable is partway through a resize, and

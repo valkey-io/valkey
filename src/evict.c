@@ -34,6 +34,8 @@
 #include "bio.h"
 #include "script.h"
 #include "cluster_migrateslots.h"
+#include "forkless.h"
+#include "bgiteration.h"
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
@@ -233,6 +235,10 @@ size_t freeMemoryGetNotCountedMemory(void) {
 
     if (clusterIsAnySlotExporting()) {
         overhead += clusterGetTotalSlotExportBufferMemory();
+    }
+
+    if (forklessIteratorOwnsIncomingReplication()) {
+        overhead += bgIteration_memoryInuseForReplication();
     }
 
     return overhead;

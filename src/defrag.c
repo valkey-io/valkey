@@ -298,7 +298,7 @@ static void activeDefragSdsDict(dict *d, int val_type) {
                                                                    : NULL)};
     do {
         cursor = hashtableScanDefrag(d, cursor, activeDefragDictCallback,
-                                     &defragfns, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+                                     &defragfns, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF | HASHTABLE_SCAN_PREFETCH);
     } while (cursor != 0);
 }
 
@@ -406,7 +406,7 @@ static void scanHashtableCallbackCountScanned(void *privdata, void *elemref) {
 static void scanLaterSet(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = objectGetVal(ob);
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF | HASHTABLE_SCAN_PREFETCH);
 }
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
@@ -480,7 +480,7 @@ static void defragSet(robj *ob) {
     } else {
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = hashtableScanDefrag(ht, cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF | HASHTABLE_SCAN_PREFETCH);
         } while (cursor != 0);
     }
     /* defrag the hashtable struct and tables */
@@ -909,7 +909,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
         if (privdata) *(kvstoreIterState *)privdata = state;
         state.cursor = kvstoreHashtableScanDefrag(kvs, state.slot, state.cursor,
                                                   scan_fn, privdata, activeDefragAlloc,
-                                                  HASHTABLE_SCAN_EMIT_REF);
+                                                  HASHTABLE_SCAN_EMIT_REF | HASHTABLE_SCAN_PREFETCH);
     }
 
     return DEFRAG_NOT_DONE;

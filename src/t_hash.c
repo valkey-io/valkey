@@ -3186,7 +3186,7 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
         hashtable *ht = objectGetVal(ob);
         vset_cursor->cursor = hashtableScanDefrag(ht, vset_cursor->cursor, defragHashTypeEntry, ob,
                                                   defragAllocfn,
-                                                  HASHTABLE_SCAN_EMIT_REF);
+                                                  HASHTABLE_SCAN_EMIT_REF | HASHTABLE_SCAN_PREFETCH);
         if (vset_cursor->cursor == 0) {
             if (hashTypeHasVolatileFields(ob)) {
                 /* We're done scanning the hash table, continue to defrag the volatile set only if there's one. */

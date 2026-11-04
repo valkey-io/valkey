@@ -1209,6 +1209,14 @@ static void prefetchNextBucketEntries(iter *iter, bucket *current_bucket) {
     }
 }
 
+/* Prefetches the entries of the given bucket and its child bucket, if any, so
+ * that the cache misses taken by the scan callback overlap instead of being
+ * paid one after another. */
+static void prefetchBucketForScan(bucket *b) {
+    prefetchBucketEntries(b);
+    if (b->chained) valkey_prefetch(getChildBucket(b));
+}
+
 /* Prefetches the values associated with the entries in the given bucket by
  * calling the entryPrefetchValue callback in the hashtableType */
 static void prefetchBucketValues(bucket *b, hashtable *ht) {
@@ -2076,7 +2084,7 @@ uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void 
  * - The scan callback may insert or replace any entry.
  */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata) {
-    return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, 0);
+    return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, HASHTABLE_SCAN_PREFETCH);
 }
 
 /* Given a scan cursor, determines whether a key's hashtable position has
@@ -2121,6 +2129,9 @@ bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
  *   for advanced things like reallocating the memory of an entry (for the
  *   purpose of defragmentation) and updating the pointer to the entry inside
  *   the hash table.
+ * - HASHTABLE_SCAN_PREFETCH: Prefetch the entries of each emitted bucket and
+ *   the bucket the next call will visit. Only useful when the scan continues
+ *   from the returned cursor; a random-cursor scan should not set it.
  */
 size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata, void *(*defragfn)(void *), int flags) {
     if (hashtableSize(ht) == 0) return 0;
@@ -2131,6 +2142,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
 
     /* Flags. */
     int emit_ref = (flags & HASHTABLE_SCAN_EMIT_REF);
+    int prefetch = fn && (flags & HASHTABLE_SCAN_PREFETCH);
 
     if (!hashtableIsRehashing(ht)) {
         /* Emit entries at the cursor index. */
@@ -2138,8 +2150,14 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         size_t idx = cursor & mask;
         size_t used_before = ht->used[0];
         bucket *b = &ht->tables[0][idx];
+
+        /* Advance cursor. Doing it here lets us prefetch the bucket for the next call */
+        cursor = nextCursor(cursor, mask);
+        if (prefetch && cursor) valkey_prefetch(&ht->tables[0][cursor & mask]);
+
         do {
             if (fn && b->presence != 0) {
+                if (prefetch) prefetchBucketForScan(b);
                 int pos;
                 for (pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                     if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
@@ -2159,9 +2177,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         if (ht->used[0] < used_before) {
             compactBucketChain(ht, idx, 0);
         }
-
-        /* Advance cursor. */
-        cursor = nextCursor(cursor, mask);
     } else {
         int table_small, table_large;
         if (ht->bucket_exp[0] <= ht->bucket_exp[1]) {
@@ -2183,6 +2198,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             bucket *b = &ht->tables[table_small][idx];
             do {
                 if (fn && b->presence) {
+                    if (prefetch) prefetchBucketForScan(b);
                     for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                         if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                             void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
@@ -2208,11 +2224,15 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             /* Emit entries in the larger table at this cursor, if this index
              * hash't already been rehashed. */
             idx = cursor & mask_large;
+            /* Increment the reverse cursor not covered by the smaller mask. */
+            cursor = nextCursor(cursor, mask_large);
+            if (prefetch && cursor) valkey_prefetch(&ht->tables[table_large][cursor & mask_large]);
             if (table_large == 1 || ht->rehash_idx == -1 || idx >= (size_t)ht->rehash_idx) {
                 size_t used_before = ht->used[table_large];
                 bucket *b = &ht->tables[table_large][idx];
                 do {
                     if (fn && b->presence) {
+                        if (prefetch) prefetchBucketForScan(b);
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                             if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                                 void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
@@ -2231,9 +2251,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                     compactBucketChain(ht, idx, table_large);
                 }
             }
-
-            /* Increment the reverse cursor not covered by the smaller mask. */
-            cursor = nextCursor(cursor, mask_large);
 
             /* Continue while bits covered by mask difference is non-zero. */
         } while (cursor & (mask_small ^ mask_large));
@@ -2448,7 +2465,8 @@ static unsigned sampleRandomBuckets(hashtable *ht, void **dst, unsigned count) {
     samples.seen = 0;
     samples.entries = dst;
     while (samples.seen < count) {
-        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        /* A fresh random cursor each time, so don't prefetch. */
+        hashtableScanDefrag(ht, randomSizeT(), sampleEntriesScanFn, &samples, NULL, 0);
     }
     rehashStepOnReadIfNeeded(ht);
     return samples.seen <= count ? samples.seen : count;

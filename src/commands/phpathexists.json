@@ -1,11 +1,11 @@
 {
-    "PHEXISTS": {
+    "PHPATHEXISTS": {
         "summary": "Tests whether an exact logical path exists in a path hash.",
         "complexity": "O(L), where L is the path length.",
         "group": "pathhash",
         "since": "9.2.0",
         "arity": 3,
-        "function": "phexistsCommand",
+        "function": "phpathexistsCommand",
         "command_flags": ["READONLY", "FAST"],
         "acl_categories": ["PATHHASH", "READ", "FAST"],
         "key_specs": [{

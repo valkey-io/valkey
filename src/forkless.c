@@ -16,12 +16,17 @@ typedef struct {
     int err_code;
     mutexQueue *foreground_queue;
     bool terminated;
+    bool cancel_requested; /* Set by a cancel that arrives after iteration finished. */
     sds temp_file;
     sds final_file;
 } forklessSaveInfo;
 
 /* Keep a global indicator of the current iterator (for cancellation purposes). */
 static forklessSaveInfo *currentForklessSave = NULL;
+
+/* Orders a cancel against the snapshot rename, so that once forklessSaveCancel()
+ * returns the stale snapshot cannot be renamed over a newer save. */
+static pthread_mutex_t forkless_rename_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* rio check_abort_between_writes callback: checks if the forkless save iterator is being terminated. */
 static int forklessSaveShouldAbort(rio *r) {
@@ -191,6 +196,8 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
         saveInfo->err_code = C_ERR;
     }
 
+    pthread_mutex_lock(&forkless_rename_mutex);
+    if (saveInfo->cancel_requested) saveInfo->terminated = true;
     if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
         if (rename(saveInfo->temp_file, saveInfo->final_file) != 0) {
             serverLog(LL_WARNING, "forkless-save: error moving temp file [%s] to destination [%s]: %s",
@@ -203,6 +210,7 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
             saveInfo->err_code = C_ERR;
         }
     }
+    pthread_mutex_unlock(&forkless_rename_mutex);
 
     if (saveInfo->terminated || saveInfo->err_code != C_OK) {
         bg_unlink(saveInfo->temp_file);
@@ -244,7 +252,6 @@ void forklessSaveComplete(bool terminated, void *privdata) {
     saveInfo->terminated = terminated;
     /* The save iterator should be terminated and freed at this point in time. */
     saveInfo->iterator = NULL;
-    currentForklessSave = NULL;
     /* For file based forkless save, we need to generate the RDB end marker. and complete the save */
     if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
         saveInfo->err_code = rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE) == C_ERR ? C_ERR : C_OK;
@@ -378,7 +385,14 @@ werr:
 void forklessSaveCancel(void) {
     serverAssert(onServerMainThread());
     if (currentForklessSave == NULL) return;
-    bgIteratorTerminate(currentForklessSave->iterator);
+    if (currentForklessSave->iterator != NULL) {
+        bgIteratorTerminate(currentForklessSave->iterator);
+    } else {
+        /* Iteration is done and the snapshot file is being closed in the background. */
+        pthread_mutex_lock(&forkless_rename_mutex);
+        currentForklessSave->cancel_requested = true;
+        pthread_mutex_unlock(&forkless_rename_mutex);
+    }
 }
 
 int isForklessSaveInProgress(void) {

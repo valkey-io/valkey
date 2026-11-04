@@ -301,7 +301,8 @@ int cmdHasPushAsReply(struct serverCommand *cmd) {
  * reply. */
 static int shouldDeferPushMessage(client *c) {
     return c->flag.pushing && c == server.current_client && server.executing_client &&
-           !ProcessingEventsWhileBlocked && !cmdHasPushAsReply(server.executing_client->cmd);
+           !(ProcessingEventsWhileBlocked && isInsideYieldingLongCommand()) &&
+           !cmdHasPushAsReply(server.executing_client->cmd);
 }
 
 /* Decides if copy avoidance is preferred according to client type, number of I/O threads, object size

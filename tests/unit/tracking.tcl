@@ -1014,13 +1014,15 @@ start_server {tags {"tracking network logreqres:skip"}} {
         $rd CLIENT TRACKING on
         $rd read
         set keys {}
-        for {set i 0} {$i < 10000} {incr i} {lappend keys key$i}
+        for {set i 0} {$i < 10000} {incr i} {lappend keys key$i{t}}
         $rd mget {*}$keys
         $rd read
-        r config set busy-reply-threshold 10
-        r config set tracking-table-max-keys 1
+        test_config_set r busy-reply-threshold 10
+        test_config_set r tracking-table-max-keys 1
 
         $rd_script eval {while true do end} 0
+        test_defer {$rd_script close}
+        test_defer {catch {r script kill}}
         wait_for_condition 50 100 {
             [catch {r ping} e] == 1
         } else {
@@ -1036,9 +1038,6 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert_error {*killed*} {$rd_script read}
         $rd_script ping
         assert_equal {PONG} [$rd_script read]
-
-        $rd_script close
-        r config set busy-reply-threshold 5000
     }
 
     foreach resp {3 2} {

@@ -591,3 +591,34 @@ start_server {tags {"pubsub network"}} {
     } {OK} {resp3}
 
 }
+
+start_server {tags {"pubsub network external:skip needs:debug"} overrides {key-load-delay 100 loading-process-events-interval-bytes 1024}} {
+    test {Publish to self inside MULTI during loading keeps the push after the EXEC reply} {
+        r debug populate 20000 key 1000
+        r save
+        restart_server 0 false false 0
+        set ri [valkey_client]
+        test_defer {$ri close}
+        wait_for_condition 50 10 {[status $ri loading] eq 1} else {
+            fail "Server did not start loading"
+        }
+
+        set rd [valkey_deferring_client]
+        test_defer {$rd close}
+        $rd hello 3
+        $rd read
+        $rd subscribe foo
+        $rd read
+        $rd multi
+        $rd publish foo bar
+        $rd publish foo baz
+        $rd exec
+        $rd publish foo top
+        set replies {}
+        for {set i 0} {$i < 8} {incr i} {lappend replies [$rd read]}
+        assert_equal 1 [status $ri loading]
+
+        # Each push follows the reply of the command that caused it.
+        assert_equal {OK QUEUED QUEUED {1 1} {message foo bar} {message foo baz} 1 {message foo top}} $replies
+    }
+}

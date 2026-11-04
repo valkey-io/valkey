@@ -396,7 +396,10 @@ void resizeReplicationBacklog(void) {
 }
 
 void freeReplicationBacklog(void) {
-    /* Only replicas whose free disconnectReplicas() deferred may be left. */
+    /* Callers that may have replicas call disconnectReplicas() right before
+     * this, so only replicas whose free it deferred may be left. They stay
+     * attached until freed, and on a primary an attached replica needs a
+     * backlog, see VM_RdbLoad(). */
     listIter li;
     listNode *ln;
     listRewind(server.replicas, &li);

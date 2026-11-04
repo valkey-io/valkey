@@ -61,6 +61,10 @@
 # Mutually exclusive arguments: RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds|FREQ frequency]
 "RESTORE key 0 serialized-value " "[REPLACE] [ABSTTL] [IDLETIME seconds|FREQ frequency]"
 
+# Mutually exclusive arguments: LCS key1 key2 [LEN|IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]
+"LCS key1 key2 " "[LEN|IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]"
+"LCS key1 key2 LEN " "[MINMATCHLEN min-match-len] [WITHMATCHLEN]"
+
 # Optional args can be in any order: ZRANGE key min max [BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES]
 "ZRANGE k 1 2 " "[BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES]"
 "ZRANGE k 1 2 bylex " "[REV] [LIMIT offset count] [WITHSCORES]"
@@ -105,9 +109,10 @@
 "GEOSEARCH k FROMLONLAT " "longitude latitude BYRADIUS radius M|KM|FT|MI|BYBOX width height M|KM|FT|MI [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]"
 "GEOSEARCH k FROMLONLAT 2.34 4.45 BYRADIUS badvalue " ""
 
-# Optional parameters followed by mandatory params: ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]
-"ZADD key " "[NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]"
-"ZADD key CH LT " "[NX|XX] [INCR] score member [score member ...]"
+# Optional parameters followed by mandatory params: ZADD key [NX|[XX] [GT|LT]] [CH] [INCR] score member [score member ...]
+"ZADD key " "[NX|[XX] [GT|LT]] [CH] [INCR] score member [score member ...]"
+"ZADD key CH XX " "[GT|LT] [INCR] score member [score member ...]"
+"ZADD key NX " "[CH] [INCR] score member [score member ...]"
 "ZADD key 0 " "member [score member ...]"
 
 # Empty-valued token argument represented as a pair of double-quotes.

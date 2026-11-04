@@ -107,7 +107,7 @@ start_server [list overrides [list save ""] ] {
 
 # SORT BY substitution with a set member >= 2^31 bytes.
 # lookupKeyByPattern() kept the prefix, element, and postfix lengths as int.
-# A member exactly at INT_MAX+1 bytes makes prefixlen+sublen+postfixlen overflow
+# A member of INT_MAX+2 bytes makes prefixlen+sublen+postfixlen overflow
 # to a negative int, which sign-extends to ~2^64 as size_t and causes an OOM panic.
 run_solo {sort-subst-overflow} {
 start_server [list overrides [list save ""] tags {"sort large-memory"}] {

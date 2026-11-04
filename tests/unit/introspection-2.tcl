@@ -173,6 +173,15 @@ start_server {tags {"introspection"}} {
         }
     }
 
+    test {COMMAND DOCS marks absolute expiry timestamps as unix-time} {
+        foreach command {expireat pexpireat hexpireat hpexpireat} {
+            set docs [dict get [r command docs $command] $command]
+            set timestamp [lindex [dict get $docs arguments] 1]
+            assert_match {unix-time-*} [dict get $timestamp name]
+            assert_equal unix-time [dict get $timestamp type]
+        }
+    }
+
     test {COMMAND GETKEYS GET} {
         assert_equal {key} [r command getkeys get key]
     }

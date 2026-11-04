@@ -343,7 +343,7 @@ typedef struct rememberKeyContext {
 static int trackingRememberKeyForPrefix(size_t prefix_len, void *data, void *context) {
     rememberKeyContext *ctx = context;
     bcastState *bs = data;
-    raxInsert(PrefixesToBroadcast, (unsigned char *)ctx->keyname, prefix_len, NULL, NULL);
+    raxTryInsert(PrefixesToBroadcast, (unsigned char *)ctx->keyname, prefix_len, NULL, NULL);
     /* We insert the client pointer as associated value in the radix
      * tree. This way we know who was the client that did the last
      * change to the key, and can avoid sending the notification in the

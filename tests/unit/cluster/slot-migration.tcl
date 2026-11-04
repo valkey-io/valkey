@@ -531,7 +531,7 @@ start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {c
     }
 }
 
-start_cluster 3 6 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000} } {
+start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
     test "Slot migration is ok when the replicas are down" {
         # Killing all replicas in primary 0.
         assert_equal 2 [s 0 connected_slaves]

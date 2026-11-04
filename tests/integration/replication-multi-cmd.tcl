@@ -216,7 +216,7 @@ start_server {tags {"repl external:skip"}} {
             test "Chained replication ($policy): subreplica full sync under write load loses no writes" {
                 populate 20000 fill: 10 -2
                 wait_for_ofs_sync $primary $replica
-                
+
                 # force the subreplica to do a fresh full sync.
                 $subreplica replicaof no one
                 $subreplica flushall

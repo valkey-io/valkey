@@ -714,6 +714,15 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*attempted to access nonexistent global variable 'acl_check_cmd'*}
 
+    test {LIBRARIES - redis.log from function load} {
+        r function load replace {#!lua name=lib2
+            redis.log(redis.LOG_WARNING, 'log from function load')
+            redis.register_function('log_at_load', function() return 1 end)
+        }
+        assert_equal 1 [r fcall log_at_load 0]
+        r function delete lib2
+    }
+
     test {LIBRARIES - malicious access test} {
         # the 'library' API is not exposed inside a
         # function context and the 'redis' API is not
@@ -1069,6 +1078,31 @@ start_server {tags {"scripting"}} {
 
         r config set maxmemory 0
     } {OK} {needs:config-maxmemory}
+}
+
+start_server {tags {"scripting"}} {
+    test {FUNCTION RESTORE applies the load timeout} {
+        # Swap a dumped library body for a same-length endless loop.
+        set lib "#!lua name=lib\nserver.register_function('f', function() return 1 end)"
+        set loop [format "%-*s" [string length $lib] "#!lua name=lib\nwhile 1 do end"]
+        r config set rdbcompression no
+        r function load $lib
+        set payload [string map [list $lib $loop] [r function dump]]
+        r debug set-skip-checksum-validation 1
+
+        # Read the reply without blocking, since an unbounded load never answers.
+        set rd [valkey_deferring_client]
+        $rd function restore $payload REPLACE
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        wait_for_condition 50 100 {[gets $fd reply] > 0} else {
+            fail "FUNCTION RESTORE did not return"
+        }
+        $rd close
+        r debug set-skip-checksum-validation 0
+        r config set rdbcompression yes
+        assert_match {*FUNCTION LOAD timeout*} $reply
+    } {} {needs:debug}
 }
 
 start_server {tags {"scripting"}} {

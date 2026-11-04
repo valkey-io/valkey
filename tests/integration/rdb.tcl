@@ -392,7 +392,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save "" enable-prot
             r flushall
             populate 100 "" 16
             r config set rdb-key-save-delay 20000
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             set loglines [count_log_lines 0]
             r bgsave
             wait_for_condition 50 100 {

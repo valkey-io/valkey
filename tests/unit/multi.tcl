@@ -1205,13 +1205,14 @@ start_server {tags {"multi repl external:skip"}} {
         wait_for_sync $replica
 
         test {Replica dirties every client WATCHing an expired key the primary overwrote} {
-            $primary set x v1 px 500
+            $primary set x v1 px 2000
             wait_for_ofs_sync $primary $replica
 
             # Hold back the primary's write until the key has expired on the replica.
             $replica client pause 100000 write
+            test_defer {$replica client unpause}
             $primary set x v2
-            wait_for_condition 50 20 {[$replica exists x] == 0} else {
+            wait_for_condition 150 20 {[$replica exists x] == 0} else {
                 fail "x did not expire on the replica"
             }
 

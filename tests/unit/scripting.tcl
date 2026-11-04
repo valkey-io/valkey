@@ -1842,7 +1842,9 @@ start_server {tags {"scripting needs:debug external:skip"}} {
     }
 
     test {Test scripting debug kills a looping script once its client is gone} {
-        test_config_set r busy-reply-threshold 100
+        # Not test_config_set, whose restore would hang if the server is stuck.
+        set old [lindex [r config get busy-reply-threshold] 1]
+        r config set busy-reply-threshold 100
         set loglines [count_log_lines 0]
         set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
         $dbg script debug sync
@@ -1851,11 +1853,14 @@ start_server {tags {"scripting needs:debug external:skip"}} {
 
         # Wait on the log, since a command would hang if the server is stuck.
         wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines [expr {$::valgrind ? 500 : 50}] 100
+        r config set busy-reply-threshold $old
         assert_equal [r ping] {PONG}
     }
 
     test {Test scripting debug kills a looping script that catches the timeout with pcall} {
-        test_config_set r busy-reply-threshold 100
+        # Not test_config_set, whose restore would hang if the server is stuck.
+        set old [lindex [r config get busy-reply-threshold] 1]
+        r config set busy-reply-threshold 100
         set loglines [count_log_lines 0]
         set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
         $dbg script debug sync
@@ -1863,6 +1868,7 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         $dbg close
 
         wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines [expr {$::valgrind ? 500 : 50}] 100
+        r config set busy-reply-threshold $old
     }
 }
 

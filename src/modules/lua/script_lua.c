@@ -68,6 +68,7 @@ typedef struct luaFuncCallCtx {
     int lua_enable_insecure_api;
     uint64_t ldb_start_time;    /* Start of the current debugger run, in monotonic microseconds. */
     long long ldb_timelimit_ms; /* Run time after which the debugger stops the script. */
+    int ldb_killed;             /* Timed out with the client gone, so every line raises an error. */
 } luaFuncCallCtx;
 
 /* Globals that are added by the Lua libraries */
@@ -2010,8 +2011,7 @@ static long long luaGetBusyReplyThreshold(ValkeyModuleCtx *module_ctx) {
     return threshold ? threshold : 5000;
 }
 
-static void luaLdbKillHook(lua_State *lua, lua_Debug *ar) {
-    VALKEYMODULE_NOT_USED(ar);
+static void luaLdbKillScript(lua_State *lua) {
     luaPushError(lua, "timeout during Lua debugging with client closing connection");
     luaError(lua);
 }
@@ -2021,6 +2021,9 @@ static void luaLdbKillHook(lua_State *lua, lua_Debug *ar) {
 void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
     luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
+    /* Checked first so that pcall and every coroutine, which inherits this
+     * hook, cannot keep the script going. */
+    if (rctx->ldb_killed) luaLdbKillScript(lua);
     lua_getstack(lua, 0, ar);
     lua_getinfo(lua, "Sl", ar);
     ldbSetCurrentLine(ar->currentline);
@@ -2057,10 +2060,9 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
         if (ldbRepl(lua) == C_ERR && timeout) {
             /* If the client closed the connection and we have a timeout
              * connection, let's kill the script otherwise the process
-             * will remain blocked indefinitely. The hook raises the error
-             * again on every line, so pcall cannot catch it and keep going. */
-            lua_sethook(lua, luaLdbKillHook, LUA_MASKLINE, 0);
-            luaLdbKillHook(lua, ar);
+             * will remain blocked indefinitely. */
+            rctx->ldb_killed = 1;
+            luaLdbKillScript(lua);
         }
         rctx->ldb_start_time = ValkeyModule_MonotonicMicroseconds();
     }

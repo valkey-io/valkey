@@ -481,6 +481,7 @@ int callReplyGetMapElement(CallReply *rep, size_t idx, CallReply **key, CallRepl
  * explicitly or used after CallReply itself is freed.
  */
 CallReply *callReplyGetAttribute(CallReply *rep) {
+    callReplyParse(rep);
     return rep->attribute;
 }
 

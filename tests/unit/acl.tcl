@@ -834,6 +834,7 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {ACLLOG - zero max length does not leak refused script keys} {
+        test_config_set r acllog-max-len 0
         set before [s used_memory]
         r AUTH antirez foo
         r EVAL {for i = 1, 200 do server.pcall('set', ARGV[1], '1') end} 0 [string repeat x 100000]

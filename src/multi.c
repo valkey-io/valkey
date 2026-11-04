@@ -401,7 +401,6 @@ void touchWatchedKey(redisDb *db, robj *key) {
                 wk->expired = 0;
                 goto skip_client;
             }
-            break;
         }
 
         c->flags |= CLIENT_DIRTY_CAS;

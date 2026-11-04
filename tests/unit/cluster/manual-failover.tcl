@@ -188,6 +188,8 @@ test "Wait for instance #0 to return back alive" {
 
 # Pick a primary that is not the Raft leader (any primary with legacy cluster),
 # so that a failover can be committed while that primary is unreachable.
+# Assumes 5 primaries (nodes 0-4), each with at least one replica, so that
+# node N+5 is a replica of node N.
 # Returns the primary, its replica, and a key the primary owns.
 proc manual_failover_pick_shard {} {
     set leader [CI 0 cluster_raft_leader]

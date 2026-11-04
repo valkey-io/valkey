@@ -3986,7 +3986,7 @@ static void clusterRaftResetCluster(int hard) {
     rs->log_count = 0;
     rs->role = RAFT_ROLE_LEADER;
     rs->failover_time = 0;
-    rs->mf_end = 0;
+    clusterRaftCancelManualFailover();
     server.cluster->size = 0;
     myself->flags |= CLUSTER_NODE_MEET;
     myself->flags &= ~CLUSTER_NODE_LEARNER;

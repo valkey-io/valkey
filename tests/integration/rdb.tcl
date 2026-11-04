@@ -380,6 +380,49 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     }
 }
 
+start_server {overrides {forkless-infrastructure-enabled yes save "" enable-protected-configs yes}} {
+    foreach bgsave_type {"fork" "forkless"} {
+        test "bgsave $bgsave_type writes to the dir it started in when dir changes mid-save" {
+            set old_dir [lindex [r config get dir] 1]
+            set new_dir [file normalize [tmpdir "server.rdb-dir-change"]]
+            set rdb_name [lindex [r config get dbfilename] 1]
+            file delete [file join $old_dir $rdb_name]
+            foreach f [glob -nocomplain -directory $old_dir temp-*.rdb] {file delete $f}
+
+            r flushall
+            populate 100 "" 16
+            r config set rdb-key-save-delay 20000
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            set loglines [count_log_lines 0]
+            r bgsave
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "$bgsave_type bgsave did not start"
+            }
+
+            r config set dir $new_dir
+            r debug log "dir changed mid-save"
+            r config set rdb-key-save-delay 0
+            waitForBgsave r
+
+            # The forkless rename is queued by the completion proc, so the dir
+            # change must be logged first or the test proves nothing.
+            if {$bgsave_type eq "forkless"} {
+                set first [wait_for_log_messages 0 {"*DEBUG LOG: dir changed mid-save*" "*forkless-save: completion proc*"} $loglines 1 0]
+                assert_match "*DEBUG LOG: dir changed mid-save*" [lindex $first 0]
+            }
+
+            assert_equal [s rdb_last_bgsave_status] "ok"
+            assert {[file exists [file join $old_dir $rdb_name]]}
+            assert_equal {} [glob -nocomplain -directory $old_dir temp-*.rdb]
+            assert_equal {} [glob -nocomplain -directory $new_dir *]
+
+            r config set dir $old_dir
+        }
+    }
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "forkless bgsave contains expired keys from when save started" {
         

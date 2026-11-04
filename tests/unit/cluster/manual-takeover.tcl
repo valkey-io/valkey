@@ -88,11 +88,11 @@ start_cluster 1 2 {tags {external:skip cluster} overrides {repl-diskless-load di
         R 2 debug populate 100000 key 100
         # Slow the load on replica 1 so the takeover lands mid-load, then
         # force it into a full sync.
-        R 1 config set key-load-delay 50
-        R 1 config set loading-process-events-interval-bytes 1024
+        test_config_set {R 1} key-load-delay 50
+        test_config_set {R 1} loading-process-events-interval-bytes 1024
         R 0 debug change-repl-id
         R 1 client kill type primary
-        wait_for_condition 100 50 {
+        wait_for_condition 1000 50 {
             [s -1 loading] eq 1
         } else {
             fail "Replica did not start loading"

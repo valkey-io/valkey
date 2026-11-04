@@ -75,9 +75,10 @@ void syncWithPrimary(connection *conn);
  * the instance is configured to have no persistence. */
 int RDBGeneratedByReplication = 0;
 
-/* Bumped by every cancelReplicationHandshake(). Loading a primary RDB from
- * disk processes events, and one of them (e.g. a cluster bus message that
- * moves us to a new primary) can cancel the sync being loaded. */
+/* Bumped by every cancelReplicationHandshake() that cancels a sync. Loading
+ * a primary RDB from disk processes events, and one of them (e.g. a cluster
+ * bus message that moves us to a new primary) can cancel the sync being
+ * loaded. */
 static unsigned long long repl_handshake_cancellations = 0;
 
 /* --------------------------- Utility functions ---------------------------- */
@@ -3017,7 +3018,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Skipping flush, no new data was loaded.");
         } else {
             /* If disk-based RDB loading fails, remove the half-loaded dataset. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the loaded data");
             emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
         }
 
@@ -4964,7 +4965,6 @@ void replicationAbortSyncTransfer(void) {
  *
  * Otherwise, zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
-    repl_handshake_cancellations++;
     if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
         /* Wait for the disk-saving bio thread to notice the abort flag
          * and exit. If it is blocked in a socket read this stalls the
@@ -4986,6 +4986,7 @@ int cancelReplicationHandshake(int reconnect) {
     } else {
         return 0;
     }
+    repl_handshake_cancellations++;
 
     if (!reconnect) return 1;
 

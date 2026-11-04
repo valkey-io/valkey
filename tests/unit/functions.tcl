@@ -837,16 +837,16 @@ start_server {tags {"scripting"}} {
         catch {
             r function load replace {#!lua name=lib
                 server.register_function{
-                    function_name=('x'):rep(10000000),
-                    Function_name=('x'):rep(10000000),
-                    description=('x'):rep(10000000),
-                    Description=('x'):rep(10000000),
+                    function_name=('x'):rep(1000000),
+                    Function_name=('x'):rep(1000000),
+                    description=('x'):rep(1000000),
+                    Description=('x'):rep(1000000),
                 }
             }
         } e
         assert_match {*must get a callback argument*} $e
         r function flush sync
-        assert_lessthan [expr {[s used_memory] - $before}] 1000000
+        assert_lessthan [expr {[s used_memory] - $before}] 500000
     }
 
     test {LIBRARIES - deleting a function frees its long description} {

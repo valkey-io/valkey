@@ -166,6 +166,7 @@ start_server {tags {"hll"}} {
         assert_error {*INVALIDOBJ*} {r pfcount hll}
         assert_error {*INVALIDOBJ*} {r pfmerge hll hll}
         assert_error {*INVALIDOBJ*} {r pfdebug todense hll}
+        assert_error {*INVALIDOBJ*} {r pfdebug decode hll}
     } {} {needs:pfdebug}
 
     test {PFADD propagates elements applied before a corrupted sparse HLL error} {

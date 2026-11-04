@@ -2078,6 +2078,11 @@ void pfdebugCommand(client *c) {
                 p++;
                 decoded = sdscatprintf(decoded, "z:%d ", runlen);
             } else if (HLL_SPARSE_IS_XZERO(p)) {
+                if (p + 1 >= end) { /* Truncated. */
+                    sdsfree(decoded);
+                    addReplyError(c, invalid_hll_err);
+                    return;
+                }
                 runlen = HLL_SPARSE_XZERO_LEN(p);
                 p += 2;
                 decoded = sdscatprintf(decoded, "Z:%d ", runlen);

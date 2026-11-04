@@ -495,7 +495,25 @@ void unblockResponsesWithAckOffset(const reply_blocking_t *rb_state, const long 
 
 /*================================= Post-ack handlers ======================= */
 
+/* The durably committed offset as last seen on the main thread, for threads
+ * that must not send data past it (the forkless sync thread). LLONG_MAX when
+ * reply blocking is not in effect, so nothing waits. */
+static _Atomic long long durable_offset_for_threads = LLONG_MAX;
+
+/* Publish the current durably committed offset for other threads. */
+void replyBlockingPublishDurableOffset(void) {
+    long long offset = isPrimaryReplyBlockingEnabled() ? getDurablyCommittedOffset() : LLONG_MAX;
+    atomic_store_explicit(&durable_offset_for_threads, offset, memory_order_release);
+}
+
+/* Read the offset published by replyBlockingPublishDurableOffset(). Safe to
+ * call from any thread. */
+long long replyBlockingDurableOffsetForThreads(void) {
+    return atomic_load_explicit(&durable_offset_for_threads, memory_order_acquire);
+}
+
 void notifyReplyBlockingProgress(void) {
+    replyBlockingPublishDurableOffset();
     if (!isPrimaryReplyBlockingEnabled()) {
         return;
     }

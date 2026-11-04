@@ -190,6 +190,8 @@ void replyBlockingTrackKeyRead(struct serverDb *db, struct serverObject *key);
 void beginCommandReplyBlocking(client *c);
 void finalizeCommandReplyBlocking(client *c);
 void notifyReplyBlockingProgress(void);
+void replyBlockingPublishDurableOffset(void);
+long long replyBlockingDurableOffsetForThreads(void);
 
 /* Response blocking */
 void blockClientOnReplOffset(client *c, long long blockingReplOffset);

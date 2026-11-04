@@ -1995,6 +1995,47 @@ start_server {tags {"repl durability external:skip"}} {
     }
 }
 
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0 save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {} {
+        set replica [srv 0 client]
+
+        test "Forkless sync holds back the EOF marker until the writes it carries are durable" {
+            # A forkless socket sync inlines writes made during the sync into
+            # the RDB stream, and the RDB's repl-offset covers everything up to
+            # the end of the keyspace scan. The replica must not finish loading
+            # it while that offset is not durable on the primary.
+            $primary debug populate 1000
+            $primary debug reply-blocking-pause aof
+            set writer [valkey_deferring_client -1]
+            $writer set rb:forkless:dirty v
+            wait_for_condition 50 100 {
+                [getInfoProperty [$primary info debug] reply_blocking_clients_waiting_ack] == 1
+            } else {
+                fail "write was not held"
+            }
+
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*method: forkless*"} 0 100 50
+            after 1000
+            assert_match {*master_link_status:down*} [$replica info replication]
+
+            $primary debug reply-blocking-resume aof
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "forkless sync did not complete once the writes were durable"
+            }
+            assert_equal OK [$writer read]
+            $writer close
+            wait_for_ofs_sync $primary $replica
+            assert_equal v [$replica get rb:forkless:dirty]
+        }
+    }
+}
+
 start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
     test "Enabling reply blocking at runtime initializes fake clients created earlier" {
         # A Lua write pools a module temp client with no reply-blocking state.
@@ -2023,7 +2064,7 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         r hset h f 0
         r debug populate 2000
         r config set rdb-key-save-delay 1000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         assert_equal 1 [s rdb_bgsave_in_progress]
         assert_equal forkless [s rdb_current_bgsave_type]

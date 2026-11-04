@@ -414,7 +414,7 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     /* try to free old MR & buffer */
     if (ctx->tx_length) {
         ibv_dereg_mr(ctx->tx.mr);
-        zlibc_free(ctx->tx.addr);
+        rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
         ctx->tx_length = 0;
     }
 
@@ -425,7 +425,7 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     if (!ctx->tx.mr) {
         serverRdmaError(server.neterr, "RDMA: reg send mr failed: %s", strerror(errno));
         serverLog(LL_WARNING, "RDMA: FATAL error, recv corrupted cmd");
-        zlibc_free(ctx->tx.addr);
+        rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
         ctx->tx.addr = NULL;
         ctx->tx_length = 0;
         return C_ERR;

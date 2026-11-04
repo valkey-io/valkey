@@ -8295,20 +8295,22 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
+ * compare_idx, pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
  * lbound obj, pointer to pointer of ubound obj, and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
  * Input flags are updated upon parsing the arguments. Unit, expire_idx and expire are updated if there are any
- * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
+ * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set. compare_idx and compare_val are
+ * updated if there is an IFEQ/IFNE argument.
  *
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, int *compare_idx, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
+    if (compare_idx) *compare_idx = -1;
     for (; j < max_args; j++) {
         char *opt = objectGetVal(c->argv[j]);
         robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
@@ -8349,6 +8351,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         {
             *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
+            if (compare_idx) *compare_idx = j + 1;
             j++;
         } else if ((opt[0] == 'i' || opt[0] == 'I') &&
                    (opt[1] == 'f' || opt[1] == 'F') &&
@@ -8359,6 +8362,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         {
             *flags |= ARGS_SET_IFNE;
             *compare_val = next;
+            if (compare_idx) *compare_idx = j + 1;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
                    (opt[1] == 'e' || opt[1] == 'E') &&

@@ -5042,32 +5042,30 @@ static int clusterManagerOnSetOwnerErr(valkeyReply *reply, clusterManagerNode *n
     return (bulk_idx != 1);
 }
 
-static int clusterManagerSetSlotOwnerRaft(clusterManagerNode *owner, int slot, int do_clear) {
-    if (!clusterManagerDelSlot(owner, slot, 1)) return 0;
-    if (!clusterManagerAddSlot(owner, slot)) return 0;
-    if (do_clear && !clusterManagerClearSlotStatus(owner, slot)) return 0;
-    if (!clusterManagerBumpEpoch(owner)) return 0;
-    return 1;
-}
-
-static int clusterManagerSetSlotOwnerGossip(clusterManagerNode *owner, int slot, int do_clear) {
-    int success = clusterManagerStartTransaction(owner);
-    if (!success) return 0;
-    /* Ensure the slot is not already assigned. */
-    clusterManagerDelSlot(owner, slot, 1);
-    /* Add the slot and bump epoch. */
-    clusterManagerAddSlot(owner, slot);
-    if (do_clear) clusterManagerClearSlotStatus(owner, slot);
-    clusterManagerBumpEpoch(owner);
-    success = clusterManagerExecTransaction(owner, clusterManagerOnSetOwnerErr);
-    return success;
-}
-
 static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int do_clear) {
     clusterManagerEnsureProtocolDetected(owner);
-    if (cluster_manager.protocol == CLUSTER_MANAGER_PROTOCOL_RAFT)
-        return clusterManagerSetSlotOwnerRaft(owner, slot, do_clear);
-    return clusterManagerSetSlotOwnerGossip(owner, slot, do_clear);
+    /* Raft topology commands use blockClientAsync and cannot run in MULTI. */
+    int raft = cluster_manager.protocol == CLUSTER_MANAGER_PROTOCOL_RAFT;
+
+    if (!raft && !clusterManagerStartTransaction(owner)) return 0;
+
+    /* Ensure the slot is not already assigned. */
+    if (!clusterManagerDelSlot(owner, slot, 1)) goto abort;
+    /* Add the slot and bump epoch. */
+    if (!clusterManagerAddSlot(owner, slot)) goto abort;
+    if (do_clear && !clusterManagerClearSlotStatus(owner, slot)) goto abort;
+    if (!clusterManagerBumpEpoch(owner)) goto abort;
+
+    if (!raft) return clusterManagerExecTransaction(owner, clusterManagerOnSetOwnerErr);
+    return 1;
+
+abort:
+    /* MULTI succeeded; abort it so the node is not left in a transaction. */
+    if (!raft) {
+        valkeyReply *reply = CLUSTER_MANAGER_COMMAND(owner, "DISCARD");
+        if (reply) freeReplyObject(reply);
+    }
+    return 0;
 }
 
 /* Get the hash for the values of the specified keys in *keys_reply for the

@@ -62,7 +62,7 @@ test "SETSLOT NODE to the current owner keeps migrating state" {
     assert_equal {OK} [$nodefrom(link) cluster setslot 609 stable]
 }
 
-test "DELSLOTS from a non-owner does not unassign the slot or delete keys" {
+test "DELSLOTS to a non-owner does not unassign the slot or delete keys" {
     reset_cluster
     $cluster set aga xyz
     assert_equal {OK} [$nodeto(link) cluster delslots 609]

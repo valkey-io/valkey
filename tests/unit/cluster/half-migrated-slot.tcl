@@ -7,6 +7,16 @@
 
 source tests/support/cluster_util.tcl
 
+# Returns 1 if the node behind 'link' sees 'slot' as unassigned.
+proc slot_is_unassigned {link slot} {
+    foreach range [$link cluster slots] {
+        if {$slot >= [lindex $range 0] && $slot <= [lindex $range 1]} {
+            return 0
+        }
+    }
+    return 1
+}
+
 start_cluster 2 0 {tags {external:skip cluster}} {
 
 config_set_all_nodes cluster-allow-replica-migration no
@@ -50,6 +60,39 @@ test "Uncovered slot is reassigned by cluster fix" {
     fix_cluster $nodefrom(addr)
     assert_equal "xyz" [$cluster get aga]
     reset_cluster
+}
+
+test "Uncovered slot with keys in two nodes is fixed without losing keys" {
+    reset_cluster
+    assert_equal {OK} [$cluster set aga xyz]
+    assert_equal {OK} [$cluster set "{aga}1" one]
+    # Put a key of the same slot on the other node too, through a temporary
+    # IMPORTING state.
+    assert_equal {OK} [$nodeto(link) cluster setslot 609 importing $nodefrom(id)]
+    assert_equal {OK} [$nodeto(link) asking]
+    assert_equal {OK} [$nodeto(link) set "{aga}2" two]
+    assert_equal {OK} [$nodeto(link) cluster setslot 609 stable]
+    assert_equal 2 [$nodefrom(link) cluster countkeysinslot 609]
+    assert_equal 1 [$nodeto(link) cluster countkeysinslot 609]
+    # Make the slot uncovered. Gossip doesn't propagate DELSLOTS, so send it to
+    # both nodes. With Raft, the second one is a no-op or fails because the slot
+    # is already unassigned.
+    assert_equal {OK} [$nodefrom(link) cluster delslots 609]
+    catch {$nodeto(link) cluster delslots 609}
+    wait_for_condition 100 50 {
+        [slot_is_unassigned $nodefrom(link) 609] && [slot_is_unassigned $nodeto(link) 609]
+    } else {
+        fail "Slot 609 is still assigned"
+    }
+    # Fix moves all keys to one node, which becomes the owner.
+    fix_cluster $nodefrom(addr)
+    reset_cluster
+    assert_equal 3 [$nodefrom(link) cluster countkeysinslot 609]
+    assert_equal 0 [$nodeto(link) cluster countkeysinslot 609]
+    assert_equal "xyz" [$cluster get aga]
+    assert_equal "one" [$cluster get "{aga}1"]
+    assert_equal "two" [$cluster get "{aga}2"]
+    assert_equal 2 [$nodefrom(link) del "{aga}1" "{aga}2"]
 }
 
 test "SETSLOT NODE to the current owner keeps migrating state" {

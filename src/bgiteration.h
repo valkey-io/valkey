@@ -305,6 +305,11 @@ void bgIteration_keyDelete(int dbid, const_sds key);
 void bgIteration_flushall(void);
 
 
+/* Iteration needs to know about every SWAPDB, including ones that are not replicated (e.g. a script
+ * that disabled replication), so this is called from the swap itself rather than from replication. */
+void bgIteration_swapdb(int db1, int db2);
+
+
 /* Updating value or expiration of an existing key may lead to reallocation of the dbEntry (robj).
  * BgIteration keeps track of expedited keys (by pointer) to avoid repeated iteration.  BgIteration
  * must be notified when dbEntries are reallocated.  BgIteration will not dereference the pointers;

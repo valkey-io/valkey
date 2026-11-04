@@ -1840,6 +1840,63 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         reconnect
         assert_equal [r ping] {PONG}
     }
+
+    test {Test scripting debug kills a looping script once its client is gone} {
+        # Not test_config_set, whose restore would hang if the server is stuck.
+        set old [lindex [r config get busy-reply-threshold] 1]
+        r config set busy-reply-threshold 100
+        set loglines [count_log_lines 0]
+        set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $dbg script debug sync
+        $dbg eval {while true do end} 0
+        $dbg close
+
+        # Wait on the log, since a command would hang if the server is stuck.
+        wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines [expr {$::valgrind ? 500 : 50}] 100
+        r config set busy-reply-threshold $old
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test scripting debug kills a looping script that catches the timeout with pcall} {
+        # Not test_config_set, whose restore would hang if the server is stuck.
+        set old [lindex [r config get busy-reply-threshold] 1]
+        r config set busy-reply-threshold 100
+        set loglines [count_log_lines 0]
+        set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $dbg script debug sync
+        $dbg eval {local f = function() while true do end end; while true do pcall(f) end} 0
+        $dbg close
+
+        wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines [expr {$::valgrind ? 500 : 50}] 100
+        r config set busy-reply-threshold $old
+    }
+
+    test {Test scripting debug kills a looping script that runs in nested coroutines} {
+        # Not test_config_set, whose restore would hang if the server is stuck.
+        set old [lindex [r config get busy-reply-threshold] 1]
+        r config set busy-reply-threshold 100
+        set loglines [count_log_lines 0]
+        set dbg [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $dbg script debug sync
+        $dbg eval {
+            local spin = function() while true do end end
+            local nest = function() while true do coroutine.resume(coroutine.create(spin)) end end
+            while true do coroutine.resume(coroutine.create(nest)) end
+        } 0
+        $dbg close
+
+        wait_for_log_messages 0 {"*debugging eval session ended*"} $loglines [expr {$::valgrind ? 500 : 50}] 100
+        r config set busy-reply-threshold $old
+    }
+}
+
+start_server {tags {"scripting external:skip"} overrides {rename-command {CONFIG ""}}} {
+    test {Test scripting debug works with CONFIG disabled} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        reconnect
+        assert_equal [r ping] {PONG}
+    }
 }
 
 start_server {tags {"scripting external:skip"}} {

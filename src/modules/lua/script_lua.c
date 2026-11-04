@@ -66,6 +66,9 @@ typedef struct luaFuncCallCtx {
     int replication_flags;
     int resp;
     int lua_enable_insecure_api;
+    uint64_t ldb_start_time;    /* Start of the current debugger run, in monotonic microseconds. */
+    long long ldb_timelimit_ms; /* Run time after which the debugger stops the script. */
+    int ldb_killed;             /* Timed out with the client gone, so every line raises an error. */
 } luaFuncCallCtx;
 
 /* Globals that are added by the Lua libraries */
@@ -1994,11 +1997,33 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
     }
 }
 
+/* Returns busy-reply-threshold in milliseconds, or 5000 if it is 0, which is
+ * how long the debugger lets a script run before stopping it. */
+static long long luaGetBusyReplyThreshold(ValkeyModuleCtx *module_ctx) {
+    long long threshold = 0;
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(module_ctx, "CONFIG", "cc", "GET", "busy-reply-threshold");
+    if (!reply) return 5000; /* CONFIG was renamed or disabled. */
+    if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ARRAY && ValkeyModule_CallReplyLength(reply) == 2) {
+        ValkeyModuleCallReply *val = ValkeyModule_CallReplyArrayElement(reply, 1);
+        threshold = strtoll(ValkeyModule_CallReplyStringPtr(val, NULL), NULL, 10);
+    }
+    ValkeyModule_FreeCallReply(reply);
+    return threshold ? threshold : 5000;
+}
+
+static void luaLdbKillScript(lua_State *lua) {
+    luaPushError(lua, "timeout during Lua debugging with client closing connection");
+    luaError(lua);
+}
+
 /* This is the core of our Lua debugger, called each time Lua is about
  * to start executing a new line. */
 void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
-    ValkeyModuleScriptingEngineServerRuntimeCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
+    /* Checked first so that pcall and every coroutine, which inherits this
+     * hook, cannot keep the script going. */
+    if (rctx->ldb_killed) luaLdbKillScript(lua);
     lua_getstack(lua, 0, ar);
     lua_getinfo(lua, "Sl", ar);
     ldbSetCurrentLine(ar->currentline);
@@ -2011,14 +2036,13 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
 
     /* Check if a timeout occurred. */
     if (ar->event == LUA_HOOKCOUNT && !ldbIsStepEnabled() && bp == 0) {
-        // mstime_t elapsed = elapsedMs(rctx->start_time);
-        // mstime_t timelimit = server.busy_reply_threshold ? server.busy_reply_threshold : 5000;
-        // if (elapsed >= timelimit) {
-        //     timeout = 1;
-        //     ldbSetStepMode(1);
-        // } else {
-        return; /* No timeout, ignore the COUNT event. */
-        // }
+        long long elapsed = (ValkeyModule_MonotonicMicroseconds() - rctx->ldb_start_time) / 1000;
+        if (elapsed >= rctx->ldb_timelimit_ms) {
+            timeout = 1;
+            ldbSetStepMode(1);
+        } else {
+            return; /* No timeout, ignore the COUNT event. */
+        }
     }
 
     if (ldbIsStepEnabled() || bp) {
@@ -2037,10 +2061,10 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
             /* If the client closed the connection and we have a timeout
              * connection, let's kill the script otherwise the process
              * will remain blocked indefinitely. */
-            luaPushError(lua, "timeout during Lua debugging with client closing connection");
-            luaError(lua);
+            rctx->ldb_killed = 1;
+            luaLdbKillScript(lua);
         }
-        // rctx->start_time = getMonotonicUs();
+        rctx->ldb_start_time = ValkeyModule_MonotonicMicroseconds();
     }
 }
 
@@ -2076,6 +2100,8 @@ void luaCallFunction(ValkeyModuleCtx *ctx,
         lua_sethook(lua, luaMaskCountHook, LUA_MASKCOUNT, 100000);
         delhook = 1;
     } else if (debug_enabled) {
+        call_ctx.ldb_start_time = ValkeyModule_MonotonicMicroseconds();
+        call_ctx.ldb_timelimit_ms = luaGetBusyReplyThreshold(ctx);
         lua_sethook(lua, luaLdbLineHook, LUA_MASKLINE | LUA_MASKCOUNT, 100000);
         delhook = 1;
     }

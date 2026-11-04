@@ -68,7 +68,7 @@
             },
             {
                 "name": "unix-time-milliseconds",
-                "type": "integer"
+                "type": "unix-time"
             },
             {
                 "name": "condition",

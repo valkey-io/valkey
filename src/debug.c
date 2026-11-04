@@ -53,6 +53,7 @@
 #include "valkey_strtod.h"
 
 #ifdef HAVE_BACKTRACE
+#include <sys/wait.h>
 #ifdef HAVE_EXECINFO
 #include <execinfo.h>
 #endif
@@ -65,7 +66,6 @@ typedef ucontext_t sigcontext_t;
 
 #ifdef USE_LIBBACKTRACE
 #include <backtrace.h>
-#include <sys/wait.h>
 #endif
 
 #ifdef __CYGWIN__
@@ -76,6 +76,10 @@ typedef ucontext_t sigcontext_t;
 
 #if defined(__APPLE__) && defined(__arm64__)
 #include <mach/mach.h>
+#endif
+
+#if defined(__linux__)
+#include <sys/syscall.h>
 #endif
 
 /* Globals */
@@ -1834,6 +1838,47 @@ static void setupStacktracePipe(void) { /* we don't need a pipe to write the sta
 #ifdef HAVE_BACKTRACE
 #define BACKTRACE_MAX_SIZE 100
 
+
+/* Fork a child for the crash report. Unlike fork(), this does not run the
+ * pthread_atfork() handlers. */
+static pid_t forkFromHandler(void) {
+    pid_t pid;
+#if defined(__GLIBC__) && __GLIBC_PREREQ(2, 34)
+    pid = _Fork();
+#elif defined(__linux__) && defined(SYS_clone) && !defined(__s390__)
+    pid = (pid_t)syscall(SYS_clone, SIGCHLD, 0, 0, 0, 0);
+#else
+    pid = fork();
+#endif
+    return pid;
+}
+
+/* Wait for child process to exit gracefully within a specified timeout, if the timeout
+ * is exhausted & child is yet to return, we kill it.
+ * timeout is only 10ms granular, timeout will be clamped to the previous 10ms boundary.
+ */
+static int waitChild(pid_t pid, long long timeout) {
+    int status;
+    long long attempts = timeout / 10000;
+    pid_t ret = 0;
+
+    while (attempts--) {
+        usleep(10000);
+        ret = waitpid(pid, &status, WNOHANG);
+        if (ret > 0) break;                     /* Child exited */
+        if (ret == -1 && errno != EINTR) break; /* Real error */
+    }
+
+    if (ret == 0 || (ret == -1 && errno == EINTR)) {
+        /* Timeout or still interrupted - kill child */
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        return 1;
+    }
+
+    return 0;
+}
+
 #ifdef USE_LIBBACKTRACE
 /* On systems without execinfo.h (e.g. musl/Alpine), use libbacktrace's
  * backtrace_simple() to collect stack frame addresses. */
@@ -1919,73 +1964,84 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
     return 0;
 }
 
-/* Fork and symbolize using libbacktrace (signal-safe approach) */
-static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int uplevel) {
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        /* Child process - safe to use libbacktrace here */
-        struct backtrace_state *state = backtrace_create_state(
-            NULL, 0, libbacktrace_error_cb, &fd);
-        if (state) {
-            backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0};
-            for (int i = uplevel; i < trace_size; i++) {
-                backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb,
-                                 libbacktrace_error_cb, &cb_data);
-            }
-            /* If libbacktrace produced no frames or no useful function names, fall back to standard backtrace */
-            if (cb_data.count == 0 || !cb_data.found_symbols) {
-#ifdef HAVE_EXECINFO
-                char *msg = "\n(libbacktrace failed to resolve symbols, falling back to standard backtrace)\n";
-                if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
-                }
-                backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
-#else
-                char *msg = "\n(no symbol information available for these frames)\n";
-                if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
-                }
-#endif
-            }
-        } else {
-            /* Fallback if state creation fails */
-#ifdef HAVE_EXECINFO
-            backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
-#else
-            char *msg = "(libbacktrace state creation failed, no fallback available)\n";
-            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
-            }
-#endif
-        }
-        _exit(0);
-    } else if (pid > 0) {
-        /* Parent process - wait for child with timeout */
-        int status;
-        int waited = 0;
-        pid_t ret;
-        while (waited < 50) {
-            ret = waitpid(pid, &status, WNOHANG);
-            if (ret > 0) break;                     /* Child exited */
-            if (ret == -1 && errno != EINTR) break; /* Real error */
-            usleep(10000);                          /* 10ms */
-            waited++;
-        }
-        if (ret == 0 || (ret == -1 && errno == EINTR)) {
-            /* Timeout or still interrupted - kill child */
-            kill(pid, SIGKILL);
-            waitpid(pid, NULL, 0);
-        }
-    } else {
-        /* Fork failed, fall back to backtrace_symbols_fd */
-#ifdef HAVE_EXECINFO
-        backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
-#else
-        char *msg = "(fork failed, no fallback available)\n";
+/* Symbolize using libbacktrace. Must only be called from the child forked.
+ * Returns 1 if libbacktrace couldn't resolve the frames and the caller should
+ * fall back to backtrace_symbols_fd(), 0 otherwise. */
+static int symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int uplevel) {
+    char *msg;
+    struct backtrace_state *state = backtrace_create_state(NULL, 0, libbacktrace_error_cb, &fd);
+    if (!state) {
+#ifndef HAVE_EXECINFO
+        msg = "(libbacktrace state creation failed, no fallback available)\n";
         if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
         }
 #endif
+        return 1;
     }
+
+    backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0};
+    for (int i = uplevel; i < trace_size; i++) {
+        backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb, libbacktrace_error_cb, &cb_data);
+    }
+    /* No frames or no useful function names. */
+    if (cb_data.count == 0 || !cb_data.found_symbols) {
+#ifdef HAVE_EXECINFO
+        msg = "\n(libbacktrace failed to resolve symbols, falling back to standard backtrace)\n";
+#else
+        msg = "\n(no symbol information available for these frames)\n";
+#endif
+        if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+        }
+        return 1;
+    }
+    return 0;
 }
 #endif /* USE_LIBBACKTRACE */
+
+/* Write the symbolized trace[uplevel..trace_size) to fd, using libbacktrace when
+ * available and backtrace_symbols_fd() otherwise. Both may take locks or allocate
+ * memory and deadlock in a crashed process, so symbolization runs in a forked
+ * child that is killed if it doesn't finish in time.
+ *
+ * pid is -1 if this function should fork. Otherwise the caller already forked
+ * with forkFromHandler() and passes its result: the child (pid 0) symbolizes and
+ * exits, the parent (pid > 0) only waits, so trace is unused there. */
+static void symbolizeStackTrace(pid_t pid, void **trace, int trace_size, int fd, int uplevel) {
+    char *msg;
+
+    if (pid == -1) {
+        if (trace_size <= uplevel) return; /* Nothing to symbolize. */
+        pid = forkFromHandler();
+    }
+
+    if (pid == 0) {
+        int use_backtrace_symbols = 1;
+#ifdef USE_LIBBACKTRACE
+        use_backtrace_symbols = symbolizeWithLibbacktrace(trace, trace_size, fd, uplevel);
+#endif
+#ifdef HAVE_EXECINFO
+        if (use_backtrace_symbols) backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+#else
+        UNUSED(use_backtrace_symbols);
+        UNUSED(trace);
+        UNUSED(trace_size);
+        UNUSED(uplevel);
+#endif
+        _exit(0);
+    } else if (pid > 0) {
+        /* Parent process - wait for child with timeout (500 ms) */
+        if (waitChild(pid, 50 * 10000)) {
+            msg = "(stack trace symbolization timed out; preceding output may be partial)\n";
+            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+            }
+        }
+    } else {
+        /* Fork failed, skip symbolization since it might deadlock in this process. */
+        msg = "(fork failed, no fallback available)\n";
+        if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+        }
+    }
+}
 
 #ifdef __linux__
 #if !defined(_GNU_SOURCE)
@@ -1993,7 +2049,6 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
 #endif
 #include <sys/prctl.h>
 #include <unistd.h>
-#include <sys/syscall.h>
 #include <dirent.h>
 
 #define TIDS_MAX_SIZE 150
@@ -2008,9 +2063,27 @@ typedef struct {
 
 __attribute__((noinline)) static void collect_stacktrace_data(void) {
     stacktrace_data trace_data = {{0}};
+    int child_pipe[2];
 
-    /* Get the stack trace first! */
-    trace_data.trace_size = backtrace(trace_data.trace, BACKTRACE_MAX_SIZE);
+    /* backtrace() may take locks or allocate memory and deadlock in a crashed
+     * process, so walk the stack in a forked child. The child gets a copy of
+     * this thread's stack, so it collects this thread's frames, and sends them
+     * back over a pipe. On failure or timeout trace_size stays 0. */
+    if (pipe(child_pipe) == 0) {
+        pid_t pid = forkFromHandler();
+        if (pid == 0) {
+            close(child_pipe[0]);
+            trace_data.trace_size = backtrace(trace_data.trace, BACKTRACE_MAX_SIZE);
+            if (write(child_pipe[1], &trace_data, sizeof(trace_data)) == -1) { /* Avoid warning. */
+            }
+            _exit(0);
+        }
+        close(child_pipe[1]);
+        if (pid > 0 && !waitChild(pid, 50 * 10000)) {
+            if (read(child_pipe[0], &trace_data, sizeof(trace_data)) != sizeof(trace_data)) trace_data.trace_size = 0;
+        }
+        close(child_pipe[0]);
+    }
 
     /* get the thread name */
     prctl(PR_GET_NAME, trace_data.thread_name);
@@ -2068,12 +2141,7 @@ __attribute__((noinline)) static void writeStacktraces(int fd, int uplevel) {
         }
 
         /* add the stacktrace */
-#ifdef USE_LIBBACKTRACE
-        symbolizeWithLibbacktrace(curr_stacktrace_data.trace, curr_stacktrace_data.trace_size, fd, curr_uplevel);
-#else
-        backtrace_symbols_fd(curr_stacktrace_data.trace + curr_uplevel, curr_stacktrace_data.trace_size - curr_uplevel,
-                             fd);
-#endif
+        symbolizeStackTrace(-1, curr_stacktrace_data.trace, curr_stacktrace_data.trace_size, fd, curr_uplevel);
 
         ++collected;
     }
@@ -2088,17 +2156,23 @@ __attribute__((noinline)) static void writeStacktraces(int fd, int uplevel) {
 
 __attribute__((noinline)) static void writeCurrentThreadsStackTrace(int fd, int uplevel) {
     void *trace[BACKTRACE_MAX_SIZE];
-
-    int trace_size = backtrace(trace, BACKTRACE_MAX_SIZE);
+    int trace_size = 0;
 
     char *msg = "\nBacktrace:\n";
     if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
     };
-#ifdef USE_LIBBACKTRACE
-    symbolizeWithLibbacktrace(trace, trace_size, fd, uplevel);
-#else
-    backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
-#endif
+
+    /* backtrace() may deadlock too, so collect the frames in the same child
+     * that symbolizes them. The child has a copy of this thread's stack. */
+    pid_t pid = forkFromHandler();
+    if (pid == -1) {
+        msg = "(fork failed, no fallback available)\n";
+        if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+        }
+        return;
+    }
+    if (pid == 0) trace_size = backtrace(trace, BACKTRACE_MAX_SIZE);
+    symbolizeStackTrace(pid, trace, trace_size, fd, uplevel);
 }
 
 /* Logs the stack trace using the backtrace() call. This function is designed
@@ -2124,11 +2198,7 @@ __attribute__((noinline)) void logStackTrace(void *eip, int uplevel, int current
         msg = "EIP:\n";
         if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
         };
-#ifdef USE_LIBBACKTRACE
-        symbolizeWithLibbacktrace(&eip, 1, fd, 0);
-#elif defined(HAVE_EXECINFO)
-        backtrace_symbols_fd(&eip, 1, fd);
-#endif
+        symbolizeStackTrace(-1, &eip, 1, fd, 0);
     }
 
     /* Write symbols to log file */

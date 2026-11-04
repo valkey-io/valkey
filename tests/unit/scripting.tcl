@@ -1855,7 +1855,7 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         # pcall catches the buffer limit error, so the script stops at the second breakpoint.
         r write "*[string repeat x [expr {1 << 20}]]"
         r flush
-        r read
+        assert_match {*Stopped at 6*} [r read]
         r write "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
         r flush
         assert_match {*PONG*} [r read]

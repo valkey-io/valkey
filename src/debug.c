@@ -698,7 +698,7 @@ void debugCommand(client *c) {
         }
         server.debug_cluster_failover_epoch = epoch;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration") && c->argc == 4) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {
             server.debug_slot_migration_prevent_pause = (atoi(objectGetVal(c->argv[3])) != 0);
         } else if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-failover")) {

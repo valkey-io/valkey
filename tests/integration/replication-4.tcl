@@ -354,3 +354,46 @@ start_server {tags {"repl needs:debug external:skip"}} {
         }
     }
 }
+
+start_server {tags {"repl needs:debug external:skip"} overrides {dual-channel-replication-enabled yes}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    $primary debug populate 1000
+    start_server {overrides {dual-channel-replication-enabled yes repl-diskless-load disabled}} {
+        set replica [srv 0 client]
+        start_server {} {
+            set sub_replica [srv 0 client]
+
+            test {Dual channel full sync with a sub-replica whose free is deferred does not crash} {
+                $sub_replica replicaof [srv -1 host] [srv -1 port]
+                wait_for_sync $sub_replica
+
+                regexp {id=(\d+)} [$replica client list type replica] -> id
+                $replica debug protect-client $id
+
+                # Slow the RDB transfer so a write is buffered on the main channel,
+                # which is streamed to the sub-replica once the load finishes.
+                test_config_set $primary rdb-key-save-delay 1000
+                $replica replicaof $primary_host $primary_port
+                wait_for_condition 500 10 {
+                    [s -2 rdb_bgsave_in_progress] eq 1
+                } else {
+                    fail "Primary didn't start the RDB transfer"
+                }
+                $primary set foo bar
+                wait_for_condition 500 10 {
+                    [s -1 replicas_repl_buffer_size] > 0
+                } else {
+                    fail "Replica didn't buffer the write"
+                }
+                wait_for_sync $replica
+                wait_for_condition 50 100 {
+                    [$replica get foo] eq {bar}
+                } else {
+                    fail "Replica didn't get the write"
+                }
+            }
+        }
+    }
+}

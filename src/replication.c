@@ -3916,6 +3916,9 @@ void dualChannelSyncSuccess(void) {
     replicationResurrectProvisionalPrimary();
     /* Finalize full sync duration here to exclude backlog draining/streaming time to be consistent with single channel. */
     captureReplFullSyncCompleteDuration();
+    /* A sub-replica whose free was deferred may still be attached, and
+     * proxying the buffer below to attached replicas needs a backlog. */
+    if (listLength(server.replicas) && server.repl_backlog == NULL) createReplicationBacklog();
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
     if (server.pending_repl_data.blocks && streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */

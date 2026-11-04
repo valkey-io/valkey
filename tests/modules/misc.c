@@ -507,6 +507,15 @@ final:
     return REDISMODULE_OK;
 }
 
+/* nmemb * size wraps to 2, so a correct calloc must panic rather than return 2 bytes. */
+int test_calloc_overflow(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    RedisModule_Free(RedisModule_Calloc(SIZE_MAX / 2 + 2, 2));
+    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     REDISMODULE_NOT_USED(argv);
     REDISMODULE_NOT_USED(argc);
@@ -569,6 +578,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     if (RedisModule_CreateCommand(ctx, "test.get_n_events", test_get_n_events,"", 0, 0, 0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
     if (RedisModule_CreateCommand(ctx, "test.clear_n_events", test_clear_n_events,"", 0, 0, 0) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+    if (RedisModule_CreateCommand(ctx, "test.calloc_overflow", test_calloc_overflow,"", 0, 0, 0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
     return REDISMODULE_OK;

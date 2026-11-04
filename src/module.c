@@ -535,11 +535,16 @@ void *VM_TryAlloc(size_t bytes) {
     return ztrymalloc_usable(bytes,NULL);
 }
 
+static int moduleCallocOverflows(size_t nmemb, size_t size) {
+    return size && nmemb > SIZE_MAX / size;
+}
+
 /* Use like calloc(). Memory allocated with this function is reported in
  * Redis INFO memory, used for keys eviction according to maxmemory settings
  * and in general is taken into account as memory allocated by Redis.
  * You should avoid using calloc() directly. */
 void *VM_Calloc(size_t nmemb, size_t size) {
+    if (moduleCallocOverflows(nmemb, size)) serverPanic("ValkeyModule_Calloc(%zu, %zu) overflows", nmemb, size);
     return zcalloc_usable(nmemb*size,NULL);
 }
 

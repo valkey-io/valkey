@@ -798,8 +798,12 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) $(LDFLAGS) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
 # engine_lua.so
-$(LUA_MODULE_NAME): .make-prerequisites
+# FORCE runs the sub-make on every build so it can rebuild changed Lua sources.
+$(LUA_MODULE_NAME): .make-prerequisites FORCE
 	$(MAKE) -C modules/lua OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
+
+.PHONY: FORCE
+FORCE:
 
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)

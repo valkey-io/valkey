@@ -231,7 +231,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             r config set rdb-key-save-delay 1000
             populate 5000
             assert_lessthan 999 [s rdb_changes_since_last_save]
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             assert_equal [s rdb_bgsave_in_progress] 1
             
@@ -260,7 +260,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     foreach bgsave_type {"fork" "forkless"} {
         test "bgsave $bgsave_type resets the change counter" {
             r config set rdb-key-save-delay 0
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 0
@@ -279,7 +279,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         test "bgsave $bgsave_type metrics are correct after success" {
             set saves_before [s rdb_saves]
             populate 100 "" 16
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             waitForBgsave r
             assert {[s rdb_saves] == $saves_before + 1}
@@ -297,7 +297,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         test "bgsave $bgsave_type metrics are correct after failure" {
             set saves_before [s rdb_saves]
             populate 1000 "" 16
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r config set rdb-key-save-delay 10000000
             if {$bgsave_type eq "forkless"} {
                 # Inject a failure to make the save fail: a directory whose name
@@ -341,7 +341,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             r config set rdb-key-save-delay 1000000
             populate 100 "" 16
 
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 1
@@ -392,7 +392,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -429,7 +429,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     # unaffected, so the tests target forkless only.
     test "forkless save survives RENAME over an existing key" {
         r flushall
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r config set rdb-key-save-delay 0
 
         # Populate keys that are part of the snapshot.  The iterator has not yet reached them when
@@ -460,7 +460,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 
     test "forkless save survives PEXPIRE after a collection key is emptied" {
         r flushall
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r config set rdb-key-save-delay 0
         r debug populate 100000
         # 22-char key: the set's dbEntry is 48 bytes, the same jemalloc bin as a
@@ -527,7 +527,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 100000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -570,7 +570,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 100000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -614,7 +614,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -703,7 +703,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -791,7 +791,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -858,7 +858,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -907,6 +907,43 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+foreach repl {REPL_ALL REPL_AOF REPL_NONE} {
+    # A fresh server per case keeps the iterator's adaptive queue small, so
+    # the iterator is still in db0 when the swap runs.
+    start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+        test "SWAPDB from a script with $repl during forkless bgsave" {
+            r select 1
+            r debug populate 500 db1
+            r select 0
+            r debug populate 500 db0
+
+            r config set rdb-key-save-delay 10000
+            r config set forkless-policy prefer-forkless
+            r bgsave
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless bgsave did not start"
+            }
+
+            r eval "server.set_repl(server.$repl); return server.call('swapdb', '0', '1')" 0
+
+            r config set rdb-key-save-delay 0
+            waitForBgsave r
+            assert_equal [s rdb_last_bgsave_status] ok
+
+            # The snapshot is point-in-time, so each DB holds its own keys from
+            # before the swap.
+            r debug reload nosave
+            for {set db 0} {$db < 2} {incr db} {
+                r select $db
+                assert_equal 500 [r dbsize]
+                assert_equal 500 [llength [r keys db$db:*]]
+            }
+        } {} {needs:debug}
+    }
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "deleting keys during forkless bgsave" {
         
@@ -922,7 +959,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -996,7 +1033,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with slow speed
         r config set rdb-key-save-delay 100000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1151,7 +1188,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         # num_keys * 12 keys at 10 ms each would take about 12 seconds, well
         # over that stretch; the delay is cleared once the window is covered.
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         set expired_before [s expired_keys]
         
         # Nothing has expired yet: the earliest deadline is still 2 s out. This
@@ -1255,7 +1292,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with stopped speed
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1312,7 +1349,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with slow speed to keep it running during modifications
         r config set rdb-key-save-delay 1000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave        
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -1391,7 +1428,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with stopped speed
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1455,7 +1492,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with slow speed
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1559,7 +1596,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 r config set rdb-key-save-delay 1000000
                 populate 100 "" 16
 
-                r config set bgsave-default-method $first_type
+                r config set forkless-policy [expr {$first_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
                 r bgsave
                 wait_for_condition 50 100 {
                     [s rdb_bgsave_in_progress] == 1
@@ -1568,7 +1605,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 }
                 assert_equal [s rdb_current_bgsave_type] $first_type
 
-                r config set bgsave-default-method $second_type
+                r config set forkless-policy [expr {$second_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
                 assert_error "ERR Background save already in progress" {r bgsave}
 
                 r bgsave cancel
@@ -1784,7 +1821,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             r config set rdb-key-save-delay 10000000
             populate 1000
             r set x x
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             if {$bgsave_type eq "forkless"} {
                 # Inject a failure to make the save fail: a directory whose name
                 # collides with the RDB file makes the final rename fail. We
@@ -1838,7 +1875,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 # Remove the blocking directory so the recovery save can succeed.
                 file delete [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
             }
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             waitForBgsave r
 
@@ -1878,14 +1915,14 @@ start_server {} {
 
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    test {bgsave-default-method can be set to forkless with forkless-infrastructure-enabled} {
-        r config set bgsave-default-method forkless
-        assert_equal [lindex [r config get bgsave-default-method] 1] "forkless"
+    test {forkless-policy can be set to prefer-forkless with forkless-infrastructure-enabled} {
+        r config set forkless-policy prefer-forkless
+        assert_equal [lindex [r config get forkless-policy] 1] "prefer-forkless"
     }
 }
 
-start_server {overrides {forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
-    test {BGSAVE uses forkless when bgsave-default-method is forkless} {
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
+    test {BGSAVE uses forkless when forkless-policy is prefer-forkless} {
         r set key value
         set result [r bgsave]
         assert_match "*Background saving started*" $result
@@ -1894,8 +1931,8 @@ start_server {overrides {forkless-infrastructure-enabled yes bgsave-default-meth
     }
 }
 
-start_server {overrides {bgsave-default-method fork}} {
-    test {BGSAVE uses fork when bgsave-default-method is fork} {
+start_server {overrides {forkless-policy require-fork}} {
+    test {BGSAVE uses fork when forkless-policy is require-fork} {
         r set key value
         set result [r bgsave]
         assert_match "*Background saving started*" $result
@@ -1905,24 +1942,76 @@ start_server {overrides {bgsave-default-method fork}} {
 }
 
 start_server {overrides {save ""}} {
-    test {bgsave-default-method forkless is rejected without forkless-infrastructure-enabled} {
+    test {forkless-policy prefer-forkless is rejected without forkless-infrastructure-enabled} {
         # forkless-infrastructure-enabled defaults to no here.
         assert_error "*forkless-infrastructure-enabled yes*" {
-            r config set bgsave-default-method forkless
+            r config set forkless-policy prefer-forkless
         }
-        # The value is unchanged and remains fork.
-        assert_equal [lindex [r config get bgsave-default-method] 1] "fork"
+        # The value is unchanged and remains require-fork.
+        assert_equal [lindex [r config get forkless-policy] 1] "require-fork"
     }
 }
 
-test {Server refuses to start with bgsave-default-method forkless and no forkless-infrastructure-enabled} {
-    catch {exec $::VALKEY_SERVER_BIN --bgsave-default-method forkless} err
+test {Server refuses to start with forkless-policy prefer-forkless and no forkless-infrastructure-enabled} {
+    catch {exec $::VALKEY_SERVER_BIN --forkless-policy prefer-forkless} err
     assert_match {*forkless-infrastructure-enabled yes*} $err
 }
 
-test {Server starts with bgsave-default-method before forkless-infrastructure-enabled yes} {
-    start_server {overrides {bgsave-default-method forkless forkless-infrastructure-enabled yes save ""}} {
-        assert_equal [lindex [r config get bgsave-default-method] 1] "forkless"
+test {Server starts with forkless-policy before forkless-infrastructure-enabled yes} {
+    start_server {overrides {forkless-policy prefer-forkless forkless-infrastructure-enabled yes save ""}} {
+        assert_equal [lindex [r config get forkless-policy] 1] "prefer-forkless"
+    }
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
+    test {forkless-policy accepts require-fork and prefer-forkless} {
+        foreach v {require-fork prefer-forkless} {
+            r config set forkless-policy $v
+            assert_equal [lindex [r config get forkless-policy] 1] $v
+        }
+        assert_error "*argument*" {r config set forkless-policy require-forkless}
+    }
+}
+
+start_server {overrides {save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    start_server {overrides {
+        forkless-policy prefer-forkless
+        forkless-infrastructure-enabled yes
+        repl-diskless-load swapdb
+    }} {
+        set replica [srv 0 client]
+
+        # Regression test for a use-after-free in fullScanIteratorGetEntries: a
+        # swapdb-mode full sync frees the replica's old keyspace while a forkless
+        # save's background iterator still holds live references into it. Fixed by
+        # tearing down iterators in swapMainDbWithTempDb() before the free.
+        #
+        # A large replica keyspace against a tiny primary keeps the save reading
+        # at full speed while the small RDB loads and swaps. The crash needs the
+        # save's background thread to be actively reading an entry at the moment
+        # the swap frees the keyspace; rdb-key-save-delay is intentionally not used
+        # here, as it makes the save sleep between keys, so at the swap it is idle
+        # rather than reading.
+        test {forkless save during swapdb full sync does not use-after-free} {
+            $primary debug populate 100
+            $replica debug populate 1000000
+            $replica bgsave
+            # The save must be in progress when the swap happens.
+            wait_for_condition 50 10 {
+                [s 0 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "forkless save did not start"
+            }
+
+            $replica replicaof $primary_host $primary_port
+
+            wait_for_sync $replica
+            assert_equal [$replica dbsize] [$primary dbsize]
+        } {} {needs:debug}
     }
 }
 

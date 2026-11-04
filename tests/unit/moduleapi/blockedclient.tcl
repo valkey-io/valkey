@@ -312,6 +312,12 @@ foreach call_type {nested normal} {
         assert_match "OK" [r unblock_by_timer 100 100]
     }
     
+    test {Unmatched POSTPONED_LEN reply from a thread safe context does not crash the server} {
+        assert_equal {} [r postponed_unmatched_thread]
+        assert_equal OK [r postponed_unmatched_free]
+        assert_equal PONG [r ping]
+    }
+
     test "Unload the module - blockedclient" {
         assert_equal {OK} [r module unload blockedclient]
     }

@@ -1836,9 +1836,9 @@ int isSaveInProgress(void) {
  * module can handle a forkless save. Otherwise fall back to a fork-based save
  * and log why, so the fallback is not silent. */
 int resolveBgsaveType(void) {
-    if (server.bgsave_default_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
+    if (server.forkless_policy != FORKLESS_POLICY_PREFER_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
 
-    /* bgsave-default-method can only be set to forkless when the infrastructure
+    /* forkless-policy can only be set to prefer-forkless when the infrastructure
      * is enabled (enforced by config validation), so it must be enabled here. */
     serverAssert(server.forkless_infrastructure_enabled);
 
@@ -2576,6 +2576,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     } else if (rdbtype == RDB_TYPE_PATH_HASH) {
         uint64_t path_count = rdbLoadLen(rdb, NULL);
         if (path_count == RDB_LENERR) return NULL;
+        if (path_count == 0) goto emptykey;
         o = createPathHashObject();
         pathHashObject *path_hash = objectGetVal(o);
 
@@ -3646,8 +3647,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi, const char *filename) {
  * message on failure.
  *
  * The lib_ctx argument is also optional. If NULL is given, only verify rdb
- * structure without performing the actual functions loading. */
-int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err) {
+ * structure without performing the actual functions loading.
+ *
+ * The timeout is in milliseconds, 0 means no limit. */
+int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, size_t timeout, sds *err) {
     UNUSED(ver);
     sds error = NULL;
     sds final_payload = NULL;
@@ -3660,7 +3663,7 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
     if (lib_ctx) {
         sds library_name = NULL;
         if (!(library_name =
-                  functionsCreateWithLibraryCtx(final_payload, rdbflags & RDBFLAGS_ALLOW_DUP, &error, lib_ctx, 0))) {
+                  functionsCreateWithLibraryCtx(final_payload, rdbflags & RDBFLAGS_ALLOW_DUP, &error, lib_ctx, timeout))) {
             if (!error) {
                 error = sdsnew("Failed creating the library");
             }
@@ -3994,7 +3997,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             exit(1);
         } else if (type == RDB_OPCODE_FUNCTION2) {
             sds err = NULL;
-            if (rdbFunctionLoad(rdb, rdbver, rdb_loading_ctx->functions_lib_ctx, rdbflags, &err) != C_OK) {
+            if (rdbFunctionLoad(rdb, rdbver, rdb_loading_ctx->functions_lib_ctx, rdbflags, 0, &err) != C_OK) {
                 serverLog(LL_WARNING, "Failed loading library, %s", err);
                 sdsfree(err);
                 goto eoferr;

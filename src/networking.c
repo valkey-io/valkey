@@ -2229,7 +2229,11 @@ void disconnectReplicas(void) {
         client *replica = (client *)ln->value;
         /* If we are going to disconnect all replicas, there is no need to protect the rdb channel. */
         replica->flag.protected_rdb_channel = 0;
-        freeClient(replica);
+        /* The replica may be the client running this command. */
+        if (replica == server.current_client)
+            freeClientAsync(replica);
+        else
+            freeClient(replica);
     }
 }
 
@@ -3193,9 +3197,14 @@ static void proceedToUnwritten(replyIOV *reply, int nwritten) {
 static int writevToClient(client *c) {
     int iovmax = min(IOV_MAX, c->conn->iovcnt);
     struct iovec iov_arr[iovmax];
-    /* iov_arr can accommodate iovmax / NUM_OF_IOV_PER_BULK_STR full bulk string replies
-     * and one partial bulk reply */
-    char prefixes[iovmax / NUM_OF_IOV_PER_BULK_STR + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];
+    /* Each referenced bulk string needs a $<length>\r\n prefix slot.
+     * A non-empty string costs NUM_OF_IOV_PER_BULK_STR (3) iov entries;
+     * an empty string costs only 2 because addPlainBufferToReplyIOV skips
+     * the zero-length data iov. The worst-case prefix count is therefore
+     * iovmax/2. The +1 is needed because when iovmax is even the last CRLF
+     * fills iov_arr before limit_reached is set, so the loop writes one more
+     * prefix entry before discovering the array is full. */
+    char prefixes[iovmax / 2 + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];
     char crlf[2] = {'\r', '\n'};
     size_t bufcnt = 0;
 
@@ -5245,7 +5254,7 @@ void resetCommand(client *c) {
         flags.replica = 0;
     }
 
-    if (flags.replica || flags.primary || flags.module) {
+    if (flags.replica || flags.primary || flags.module || c->slot_migration_job) {
         addReplyError(c, "can only reset normal client connections");
         return;
     }
@@ -6384,6 +6393,15 @@ void helloCommand(client *c) {
     long long ver = 0;
     int next_arg = 1;
 
+    /* Redact credentials before any validation, since a rejected command is
+     * still shown in MONITOR and the commandlog. */
+    for (int j = 1; j < c->argc; j++) {
+        if (strcasecmp(objectGetVal(c->argv[j]), "AUTH")) continue;
+        if (j + 1 < c->argc) redactClientCommandArgument(c, j + 1);
+        if (j + 2 < c->argc) redactClientCommandArgument(c, j + 2);
+        j += 2;
+    }
+
     if (c->argc >= 2) {
         if (getLongLongFromObjectOrReply(c, c->argv[next_arg++], &ver,
                                          "Protocol version is not an integer or out of range") != C_OK) {
@@ -6403,8 +6421,6 @@ void helloCommand(client *c) {
         int moreargs = (c->argc - 1) - j;
         const char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "AUTH") && moreargs >= 2) {
-            redactClientCommandArgument(c, j + 1);
-            redactClientCommandArgument(c, j + 2);
             username = c->argv[j + 1];
             password = c->argv[j + 2];
             j += 2;
@@ -7130,9 +7146,10 @@ int processClientIOReadsDone(client *c) {
         int mask = 0;
         if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
             mask = CONN_POSTPONE_READ;
-            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
             needs_post_read_update = 1;
         }
+        /* An IO thread may still be writing, keep WRITE postponed until processClientIOWriteDone. */
+        if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
         connSetPostponeUpdateState(c->conn, mask);
         connUpdateState(c->conn);
     }

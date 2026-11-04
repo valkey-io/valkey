@@ -2528,6 +2528,42 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+    set 16383_slot_tag "{6ZJ}"
+    set node0_id [R 0 CLUSTER MYID]
+
+    test "Busy script on the source does not fail the slot migration" {
+        populate 100 "$16383_slot_tag:" 10 -2
+        R 2 CONFIG SET busy-reply-threshold 100
+
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        set rd [valkey_deferring_client_by_addr [srv -2 host] [srv -2 port]]
+        $rd EVAL {while true do end} 0
+        $rd flush
+        wait_for_condition 50 100 {
+            [catch {R 2 PING} e] == 1 && [string match {BUSY*} $e]
+        } else {
+            fail "Script did not become busy"
+        }
+
+        # The target sends an ACK every second
+        after 1500
+        assert_match "OK" [R 2 SCRIPT KILL]
+        catch {$rd read}
+        $rd close
+
+        set_debug_prevent_pause 0
+        wait_for_migration 0 16383
+        assert_match "100" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+    }
+}
+
 start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]

@@ -2656,6 +2656,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
 
     if (server.acllog_max_len == 0) {
         trimACLLogEntriesToMaxLen();
+        sdsfree(object);
         return;
     }
 

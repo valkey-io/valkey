@@ -671,7 +671,7 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
 
 # Valgrind will complain that the process terminated by a signal, skip it.
 tags {"valgrind:skip"} {
-    start_server {tags {"modules external:skip"}} {
+    start_server {tags {"modules external:skip"} overrides {crash-memcheck-enabled no}} {
         r module load $testmodule
         test "Calloc panics when nmemb * size overflows" {
             catch {r test.calloc_overflow}

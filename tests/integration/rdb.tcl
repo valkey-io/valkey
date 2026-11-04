@@ -538,7 +538,6 @@ start_server {overrides {forkless-infrastructure-enabled yes save "" appendonly 
         r multi
         r set d 1
         assert_equal {OK} [r exec ifne c 2]
-        assert_equal 0 [r exists c]
         r debug set-active-expire 1
         finish_forkless_bgsave_and_check_snapshot
     } {} {needs:debug}

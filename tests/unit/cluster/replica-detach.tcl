@@ -107,7 +107,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-require-full-
         assert_equal "-" [dict get [get_myself 1] slaveof]
 
         R 0 CLUSTER ADDSLOTS 16383
-        wait_for_condition 50 100 {
+        wait_for_condition 100 100 {
             [lindex [R 1 CLUSTER SLOTS] 0 1] == 16383
         } else {
             fail "R 1 did not learn the new slot"

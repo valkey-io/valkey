@@ -2466,7 +2466,7 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
         } else if (spec->find_keys_type == KSPEC_FK_KEYNUM) {
             step = spec->fk.keynum.keystep;
             long long numkeys;
-            if (spec->fk.keynum.keynumidx >= argc) goto invalid_spec;
+            if (spec->fk.keynum.keynumidx >= argc - first) goto invalid_spec;
 
             sds keynum_str = objectGetVal(argv[first + spec->fk.keynum.keynumidx]);
             if (!string2ll(keynum_str, sdslen(keynum_str), &numkeys) || numkeys < 0) {

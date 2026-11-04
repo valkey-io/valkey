@@ -860,14 +860,17 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.keys++;
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
-        if ((val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, NULL, RDBFLAGS_NONE, 0)) == NULL) goto eoferr;
-        if (rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);
+        int error = 0;
+        val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, &error, RDBFLAGS_NONE, 0);
+        /* Match the server when loading legacy empty containers. */
+        if (val == NULL && error != RDB_LOAD_ERR_EMPTY_KEY) goto eoferr;
+        if (val && rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now) rdbstate.already_expired++;
         if (expiretime != -1) rdbstate.expires++;
         rdbstate.key = NULL;
         decrRefCount(key);
-        decrRefCount(val);
+        if (val) decrRefCount(val);
         rdbstate.key_type = -1;
         expiretime = -1;
     }

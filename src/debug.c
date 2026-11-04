@@ -81,7 +81,7 @@ typedef ucontext_t sigcontext_t;
 /* Globals */
 #define MAX_RECURSIVE_CRASHES 4
 static volatile atomic_int bug_report_start = 0; /* True if bug report header was already logged. */
-static volatile atomic_int signal_handler_thread = 0;
+static volatile _Atomic pthread_t signal_handler_thread = (pthread_t)0;
 static volatile atomic_int signal_handler_count = 0;
 /* Forward declarations */
 int bugReportStart(void);
@@ -2420,11 +2420,11 @@ __attribute__((noinline)) static void sigsegvHandler(int sig, siginfo_t *info, v
     UNUSED(secret);
     UNUSED(info);
     int print_full_crash_info = 1;
-    int target_thread = gettid();
-    int initial_thread = 0;
+    pthread_t target_thread = pthread_self();
+    pthread_t initial_thread = (pthread_t)0;
 
     /* Crashed while we're already handling a different crash on a different thread. */
-    if (!atomic_compare_exchange_strong(&signal_handler_thread, &initial_thread, target_thread) && atomic_load(&signal_handler_thread) != target_thread) {
+    if (!atomic_compare_exchange_strong(&signal_handler_thread, &initial_thread, target_thread) && !pthread_equal(atomic_load(&signal_handler_thread), target_thread)) {
         /* park thread forever. */
         sigset_t mask;
         sigfillset(&mask);
@@ -2435,6 +2435,8 @@ __attribute__((noinline)) static void sigsegvHandler(int sig, siginfo_t *info, v
     /* Too many recursive crashes, stop processing new crashes. */
     if (current_crash >= MAX_RECURSIVE_CRASHES) {
         serverLogRawFromHandler(LL_WARNING, "Recursive crashing limit reached.");
+        /* Returning would re-run a synchronously faulting instruction and loop forever. */
+        bugReportEnd(1, sig);
         return;
     } else if (current_crash != 0) {
         /* Crashed while processing a different signal/crash, switch to printing the minimal information about the crash. */

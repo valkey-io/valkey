@@ -1886,6 +1886,15 @@ int getKeysUsingKeySpecs(struct redisCommand *cmd, robj **argv, int argc, int se
         first = 0;
         if (spec->begin_search_type == KSPEC_BS_INDEX) {
             first = spec->bs.index.pos;
+            /* The optional arguments holding this spec's keys were omitted, e.g.
+             * PFMERGE with no source keys. Like a missing keyword, the spec matches
+             * nothing, instead of invalidating the keys found by the other specs.
+             * An incomplete spec still defers to the getkeys callback, which may
+             * find keys elsewhere. */
+            if (first >= argc) {
+                if (spec->flags & CMD_KEY_INCOMPLETE) goto invalid_spec;
+                continue;
+            }
         } else if (spec->begin_search_type == KSPEC_BS_KEYWORD) {
             int start_index = spec->bs.keyword.startfrom > 0 ? spec->bs.keyword.startfrom : argc+spec->bs.keyword.startfrom;
             int end_index = spec->bs.keyword.startfrom > 0 ? argc-1: 1;
@@ -1921,7 +1930,7 @@ int getKeysUsingKeySpecs(struct redisCommand *cmd, robj **argv, int argc, int se
         } else if (spec->find_keys_type == KSPEC_FK_KEYNUM) {
             step = spec->fk.keynum.keystep;
             long long numkeys;
-            if (spec->fk.keynum.keynumidx >= argc)
+            if (spec->fk.keynum.keynumidx >= argc - first)
                 goto invalid_spec;
 
             sds keynum_str = argv[first + spec->fk.keynum.keynumidx]->ptr;

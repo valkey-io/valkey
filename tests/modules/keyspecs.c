@@ -100,6 +100,36 @@ int createKspecTwoRangesWithGap(RedisModuleCtx *ctx) {
     return REDISMODULE_OK;
 }
 
+int createKspecIncompleteWithGetkeys(RedisModuleCtx *ctx) {
+    /* An incomplete spec that can start past the last argument. Key extraction
+     * must still fall back to the getkeys callback, which reports odd positions. */
+    if (RedisModule_CreateCommand(ctx,"kspec.incompletewithgetkeys",kspec_impl,"getkeys-api",0,0,0) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    RedisModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.incompletewithgetkeys");
+    RedisModuleCommandInfo info = {
+        .version = REDISMODULE_COMMAND_INFO_VERSION,
+        .arity = -2,
+        .key_specs = (RedisModuleCommandKeySpec[]){
+            {
+                .flags = REDISMODULE_CMD_KEY_RO | REDISMODULE_CMD_KEY_ACCESS,
+                .begin_search_type = REDISMODULE_KSPEC_BS_INDEX,
+                .bs.index.pos = 1,
+            },
+            {
+                .flags = REDISMODULE_CMD_KEY_RO | REDISMODULE_CMD_KEY_ACCESS | REDISMODULE_CMD_KEY_INCOMPLETE,
+                .begin_search_type = REDISMODULE_KSPEC_BS_INDEX,
+                .bs.index.pos = 4,
+            },
+            {0}
+        }
+    };
+    if (RedisModule_SetCommandInfo(command, &info) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    return REDISMODULE_OK;
+}
+
 int createKspecKeyword(RedisModuleCtx *ctx) {
     /* Only keyword-based specs. The legacy triple is wiped and set to (0,0,0). */
     if (RedisModule_CreateCommand(ctx,"kspec.keyword",kspec_impl,"",3,-1,1) == REDISMODULE_ERR)
@@ -218,6 +248,32 @@ int createKspecComplex2(RedisModuleCtx *ctx) {
     return REDISMODULE_OK;
 }
 
+int createKspecKeynumOffset(RedisModuleCtx *ctx) {
+    /* A keynum spec whose numkeys argument is not at its begin index, like EVAL. */
+    if (RedisModule_CreateCommand(ctx,"kspec.keynumoffset",kspec_impl,"",0,0,0) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    RedisModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.keynumoffset");
+    RedisModuleCommandInfo info = {
+        .version = REDISMODULE_COMMAND_INFO_VERSION,
+        .arity = -2,
+        .key_specs = (RedisModuleCommandKeySpec[]){
+            {
+                .flags = REDISMODULE_CMD_KEY_RO | REDISMODULE_CMD_KEY_ACCESS,
+                .begin_search_type = REDISMODULE_KSPEC_BS_INDEX,
+                .bs.index.pos = 1,
+                .find_keys_type = REDISMODULE_KSPEC_FK_KEYNUM,
+                .fk.keynum = {1,2,1}
+            },
+            {0}
+        }
+    };
+    if (RedisModule_SetCommandInfo(command, &info) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    return REDISMODULE_OK;
+}
+
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     REDISMODULE_NOT_USED(argv);
     REDISMODULE_NOT_USED(argc);
@@ -229,8 +285,10 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     if (createKspecNoneWithGetkeys(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
     if (createKspecTwoRanges(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
     if (createKspecTwoRangesWithGap(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (createKspecIncompleteWithGetkeys(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
     if (createKspecKeyword(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
     if (createKspecComplex1(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
     if (createKspecComplex2(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (createKspecKeynumOffset(ctx) == REDISMODULE_ERR) return REDISMODULE_ERR;
     return REDISMODULE_OK;
 }

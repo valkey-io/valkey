@@ -579,7 +579,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-infrastructure-enabled yes bgsave-default-method forkless save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
     test "ZINTERCARD on a set source during forkless bgsave does not corrupt the snapshot" {
         # A zset lookup marks its key by rewriting the sds header, which makes
         # an SDS_TYPE_5 (under 32 bytes) member read as empty. Members over 20

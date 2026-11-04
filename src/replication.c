@@ -1795,7 +1795,8 @@ void freeClientReplicationData(client *c) {
  * lz4: accepts LZ4 streaming-compressed replication payloads.
  * zstd: accepts Zstd streaming-compressed replication payloads.
  * inband-repl: supports RDB_OPCODE_UPDATE for inline replication during forkless sync;
- *              replicas configured for swapdb loading do not advertise it.
+ *              replicas configured for swapdb loading or with a module that does not
+ *              handle forkless operations do not advertise it.
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it
@@ -4486,8 +4487,8 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         lens[argc] = strlen(REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR);
         argc++;
     }
-    /* Swapdb loading cannot safely apply inline commands to its temporary database. */
-    if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
+    /* Inline commands require direct loading and modules that handle forkless operations. */
+    if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB && moduleAllModulesHandleForkless()) {
         argv[argc] = "capa";
         lens[argc] = strlen("capa");
         argc++;

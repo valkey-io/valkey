@@ -222,9 +222,15 @@ char *lm_asprintf(char const *fmt, ...) {
     va_list args;
 
     va_start(args, fmt);
-    size_t str_len = vsnprintf(NULL, 0, fmt, args) + 1;
+    int len = vsnprintf(NULL, 0, fmt, args);
     va_end(args);
 
+    /* vsnprintf() fails if the output would be longer than INT_MAX, which a
+     * script can cause with a long enough string. Return an empty string
+     * instead of a buffer that nothing writes to. */
+    if (len < 0) return lm_strcpy("");
+
+    size_t str_len = (size_t)len + 1;
     char *str = ValkeyModule_Alloc(str_len);
 
     va_start(args, fmt);

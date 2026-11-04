@@ -348,3 +348,55 @@ test "CLUSTER SHARDS id response validation" {
 }
 
 } split_slot_allocation split_slot_replica_allocation
+
+# A node in handshake is not part of any shard, so CLUSTER SHARDS does not
+# release its slot info. A large node timeout keeps the node in handshake for
+# the whole test.
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-node-timeout 60000}} {
+    test "CLUSTER SHARDS and CLUSTER NODES with a handshake node that owns many slot ranges" {
+        if {$::tls} {
+            set baseport [lindex [R 0 config get tls-port] 1]
+        } else {
+            set baseport [lindex [R 0 config get port] 1]
+        }
+        # No server listens on this port, so the new node stays in handshake.
+        set port [find_available_port [expr {$baseport + 1}] 100]
+        R 0 CLUSTER MEET 127.0.0.1 $port
+
+        set hs_id {}
+        foreach n [get_cluster_nodes 0] {
+            if {[cluster_has_flag $n handshake]} {
+                set hs_id [dict get $n id]
+            }
+        }
+        assert_not_equal {} $hs_id
+
+        # Give every second slot to the handshake node, so that each of its
+        # slots is a separate range.
+        set num_ranges 100
+        for {set i 0} {$i < $num_ranges} {incr i} {
+            R 0 CLUSTER SETSLOT [expr {$i * 2}] NODE $hs_id
+        }
+
+        # Each command must generate the slot info from scratch, and not
+        # append to the slot info that the previous command left behind.
+        set shards [R 0 CLUSTER SHARDS]
+        assert_equal $num_ranges [llength [dict get [cluster_get_node_by_id 0 $hs_id] slots]]
+        assert_equal $shards [R 0 CLUSTER SHARDS]
+        assert_equal $num_ranges [llength [dict get [cluster_get_node_by_id 0 $hs_id] slots]]
+        assert_equal {PONG} [R 0 PING]
+
+        # CLUSTER SHARDS does not free the slot info of a node that is in no
+        # shard. Let the handshake time out while the node still holds that
+        # buffer, so freeClusterNode() must release it. CLUSTER INFO does not
+        # generate slot info, so polling it does not free the buffer first.
+        R 0 CLUSTER SHARDS
+        R 0 CONFIG SET cluster-node-timeout 1000
+        wait_for_condition 50 100 {
+            [CI 0 cluster_known_nodes] == 1
+        } else {
+            fail "Handshake node was not removed"
+        }
+        assert_equal {PONG} [R 0 PING]
+    }
+}

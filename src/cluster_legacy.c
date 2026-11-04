@@ -2414,6 +2414,7 @@ void freeClusterNode(clusterNode *n) {
     sdsfree(n->announce_client_ipv6);
     raxFree(n->fail_reports);
     zfree(n->replicas);
+    clusterFreeNodesSlotsInfo(n);
     zfree(n);
 }
 
@@ -7772,6 +7773,15 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
 void clusterGenNodesSlotsInfo(int filter) {
     clusterNode *n = NULL;
     int start = -1;
+
+    /* Callers free the slot info only for the nodes they output, so a node
+     * can keep slot info from an earlier call. Reset it on every node, so the
+     * ranges are not appended to stale ones and each buffer is sized for the
+     * node's current number of slots. */
+    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) clusterFreeNodesSlotsInfo(dictGetVal(de));
+    dictReleaseIterator(di);
 
     for (int i = 0; i <= CLUSTER_SLOTS; i++) {
         /* Find start node and slot id. */

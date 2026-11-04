@@ -497,10 +497,10 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     # database remapped by a queued SWAPDB or by a script.  Lists are used because they are never
     # cloned, so the writer has to wait.
     test "forkless save survives MULTI writes to keys EXEC could not foresee" {
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r select 0
         r debug populate 1000
-        r rpush L0 a
+        r rpush L0 x
         r select 2
         r rpush L1 a
         r select 3
@@ -525,9 +525,19 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         r rpush L2 b
         assert_equal {{} 2} [r exec]
 
-        assert_equal PONG [r ping]
         r config set rdb-key-save-delay 0
         waitForBgsave r
+
+        # The snapshot holds every key as it was when the save started.
+        assert_equal OK [r debug reload nosave]
+        r select 0
+        assert_equal {x} [r lrange L0 0 -1]
+        r select 1
+        assert_equal 0 [r dbsize]
+        r select 2
+        assert_equal {a} [r lrange L1 0 -1]
+        r select 3
+        assert_equal {a} [r lrange L2 0 -1]
     } {} {needs:debug}
 }
 

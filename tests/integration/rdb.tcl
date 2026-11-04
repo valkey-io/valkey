@@ -495,7 +495,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 # Starts a forkless BGSAVE of 1000 keys that stays in progress until the delay is cleared.
 proc start_slow_forkless_bgsave {} {
     waitForBgrewriteaof r
-    r config set bgsave-default-method forkless
+    r config set forkless-policy prefer-forkless
     r debug populate 1000
     r config set rdb-key-save-delay 100000
     r bgsave

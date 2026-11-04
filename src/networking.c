@@ -295,13 +295,13 @@ int cmdHasPushAsReply(struct serverCommand *cmd) {
            cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
 }
 
-/* Publish-to-self push must wait until after the command reply. Not while
- * processing events during a busy script or module yield, since deferred
- * pushes are only flushed when the yielding command ends, into its caller's
- * reply. */
+/* Publish-to-self push must wait until after the command reply. Not for a
+ * client served outside its own command while a busy script or module yields,
+ * since deferred pushes are only flushed when the yielding command ends, into
+ * its caller's reply. */
 static int shouldDeferPushMessage(client *c) {
     return c->flag.pushing && c == server.current_client && server.executing_client &&
-           !(ProcessingEventsWhileBlocked && isInsideYieldingLongCommand()) &&
+           !(ProcessingEventsWhileBlocked && isInsideYieldingLongCommand() && !c->flag.executing_command) &&
            !cmdHasPushAsReply(server.executing_client->cmd);
 }
 

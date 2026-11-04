@@ -1775,6 +1775,7 @@ void hsetCommand(client *c) {
 void hsetexCommand(client *c) {
     robj *o;
     robj *expire = NULL;
+    int expire_idx = -1;
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
@@ -1793,7 +1794,7 @@ void hsetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, &expire_idx, &expire, &comparison, NULL, NULL, NULL) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1881,11 +1882,18 @@ void hsetexCommand(client *c) {
                 strcasecmp(objectGetVal(c->argv[i]), "FNX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "FXX")) {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-                 * EX/PX/EXAT flag. */
-                if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {
-                    robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                    new_argv[new_argc++] = shared.pxat;
-                    new_argv[new_argc++] = milliseconds_obj;
+                 * EX/PX/EXAT flag. EX/PX/EXAT may be repeated and only the last one
+                 * applies, so drop the earlier ones, which are a syntax error next to
+                 * PXAT. i > 1 skips the key, which may itself be named EX. */
+                if (expire && !(flags & ARGS_PXAT) && i > 1 &&
+                    (!strcasecmp(objectGetVal(c->argv[i]), "EX") ||
+                     !strcasecmp(objectGetVal(c->argv[i]), "PX") ||
+                     !strcasecmp(objectGetVal(c->argv[i]), "EXAT"))) {
+                    if (i == expire_idx) {
+                        robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                        new_argv[new_argc++] = shared.pxat;
+                        new_argv[new_argc++] = milliseconds_obj;
+                    }
                     i++; // skip the original expire argument
                 } else {
                     new_argv[new_argc++] = c->argv[i];

@@ -601,7 +601,9 @@ start_server {overrides {forkless-infrastructure-enabled yes bgsave-default-meth
         # The race is timing dependent, so give it several saves to show up.
         for {set i 0} {$i < 10} {incr i} {
             r bgsave
+            set rounds 0
             while {[s rdb_bgsave_in_progress]} {
+                if {[incr rounds] > 1000} { fail "forkless bgsave did not finish" }
                 for {set j 0} {$j < 10} {incr j} { r zintercard 2 s z }
             }
             assert_equal ok [s rdb_last_bgsave_status]

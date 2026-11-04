@@ -1212,6 +1212,7 @@ start_server {tags {"multi repl external:skip"}} {
             $replica client pause 100000 write
             test_defer {$replica client unpause}
             $primary set x v2
+            assert_equal 0 [s -1 expired_keys]
             wait_for_condition 150 20 {[$replica exists x] == 0} else {
                 fail "x did not expire on the replica"
             }

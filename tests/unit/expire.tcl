@@ -528,6 +528,8 @@ start_server {tags {"expire"}} {
         set encoded [r dump foo5]
         r restore foo6 100000 $encoded
         r restore foo7 [expr [clock milliseconds]+100000] $encoded absttl
+        # HSETEX with a repeated expire option
+        r hsetex foo9 px 100000 px 200000 fields 1 f v
 
         assert_replication_stream $repl {
             {select *}
@@ -552,6 +554,7 @@ start_server {tags {"expire"}} {
             {set foo5 bar}
             {restore foo6 * * ABSTTL}
             {restore foo7 * * absttl}
+            {hsetex foo9 PXAT * fields 1 f v}
         }
         close_replication_stream $repl
     } {} {needs:repl}
@@ -614,6 +617,21 @@ start_server {tags {"expire"}} {
             # This is because TTLs are always replicated as absolute values
             foreach key [$primary keys *] {
                 assert_equal [$primary pexpiretime $key] [$replica pexpiretime $key]
+            }
+        }
+
+        test {HSETEX with a repeated expire option is replicated with the last one} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            $primary hsetex foo21 ex 100 ex 200 fields 1 f v
+            $primary hsetex foo22 px 100000 px 200000 fields 1 f v
+            $primary hsetex foo23 exat [expr [clock seconds]+100] exat [expr [clock seconds]+200] fields 1 f v
+            # Key named like the option
+            $primary hsetex px px 100000 px 200000 fields 1 f v
+            wait_for_ofs_sync $primary $replica
+
+            foreach key {foo21 foo22 foo23 px} {
+                assert_equal [$primary hpexpiretime $key FIELDS 1 f] [$replica hpexpiretime $key FIELDS 1 f]
             }
         }
 

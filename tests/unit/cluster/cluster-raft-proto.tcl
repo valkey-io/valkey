@@ -570,6 +570,56 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         close $fd
     }
 }
+test "Raft proto: outbound link without HI is dropped and reconnected" {
+    # The real node joins a fake leader. Its outbound link to the leader goes
+    # to a listener that accepts the connection but never replies, like a
+    # frozen process. Without HI, the link must be dropped after
+    # node-timeout/2 and a new connection made.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+
+        # Silent listener for the node's outbound link to the leader.
+        set ::_raft_silent_accepts {}
+        proc _raft_on_silent_accept {fd addr port} {
+            fconfigure $fd -blocking 0
+            lappend ::_raft_silent_accepts $fd
+        }
+        set listen_fd [socket -server _raft_on_silent_accept -myaddr 127.0.0.1 0]
+        set leader_cport [lindex [fconfigure $listen_fd -sockname] 2]
+        set leader_port [expr {$leader_cport - 10000}]
+        set leader_addr "127.0.0.1:${leader_port}@${leader_cport},,tls-port=0,shard-id=[string repeat e 40]"
+
+        # Join the fake leader's cluster over an inbound link to the node.
+        set fd1 [raft_connect 127.0.0.1 $cport]
+        raft_send $fd1 "HELLO $leader_id $leader_addr"
+        assert_match "HI *" [raft_recv $fd1]
+        raft_send $fd1 "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd1]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        raft_send $fd1 "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr\n1 NODE_JOIN $node_id $node_addr"
+        assert_match "AE_ACK *" [raft_recv $fd1]
+        assert_equal "follower" [CI 0 cluster_raft_role]
+
+        # Keep the node a follower with heartbeats on the inbound link while
+        # counting connections on the silent listener.
+        set deadline [expr {[clock milliseconds] + 5000}]
+        while {[llength $::_raft_silent_accepts] < 2 && [clock milliseconds] < $deadline} {
+            raft_send $fd1 "AE $leader_id 1 2 1 2 0"
+            after 200 {set ::_raft_tick 1}
+            vwait ::_raft_tick
+            catch {read $fd1} ;# Discard AE_ACKs.
+        }
+        assert_equal "follower" [CI 0 cluster_raft_role]
+        assert_morethan_equal [llength $::_raft_silent_accepts] 2
+
+        foreach fd $::_raft_silent_accepts {catch {close $fd}}
+        close $listen_fd
+        close $fd1
+    }
+}
+
 
 # --------------------------------------------------------------------------
 # Shard epoch: stale proposal rejection tests (parameterized).

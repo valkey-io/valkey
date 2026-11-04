@@ -2268,7 +2268,8 @@ static void clusterRaftCron(void) {
             clusterNode *node = dictGetVal(de);
             if (node == myself || !node->link) continue;
             if (node->flags & CLUSTER_NODE_MEET) continue;
-            if ((node->data_received < node->link->ctime && now - node->link->ctime > stale) ||
+            /* link->ctime and data_received are wall-clock (mstime) times. */
+            if ((node->data_received < node->link->ctime && mstime() - node->link->ctime > stale) ||
                 (rs->role == RAFT_ROLE_LEADER && now - RAFT_NODE(node)->last_ack_time > stale)) {
                 freeClusterLink(node->link);
             }

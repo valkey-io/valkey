@@ -240,8 +240,13 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
     case LUA_TSTRING: {
         size_t strl;
         char *strp = (char *)lua_tolstring(lua, idx, &strl);
-        ValkeyModule_StringAppendBuffer(NULL, s, strp, strl);
-        *budget -= strl < *budget ? strl : *budget;
+        size_t len = strl < *budget ? strl : *budget;
+        ValkeyModule_StringAppendBuffer(NULL, s, strp, len);
+        *budget -= len;
+        if (len < strl) {
+            const char *msg = "<max output size reached!>";
+            ValkeyModule_StringAppendBuffer(NULL, s, msg, strlen(msg));
+        }
     } break;
     case LUA_TBOOLEAN: {
         const char *bool_str = lua_toboolean(lua, idx) ? "true" : "false";
@@ -265,17 +270,31 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
         ValkeyModuleString *repr2 = ValkeyModule_CreateString(NULL, "", 0);
         lua_pushnil(lua); /* The first key to start the iteration is nil. */
         while (lua_next(lua, idx - 1)) {
+            if (*budget == 0) {
+                const char *msg = "<max output size reached!>";
+                ValkeyModule_StringAppendBuffer(NULL, repr1, msg, strlen(msg));
+                ValkeyModule_StringAppendBuffer(NULL, repr2, msg, strlen(msg));
+                lua_pop(lua, 2); /* Stack: table. */
+                break;
+            }
             /* Test if so far the table looks like an array. */
             if (is_array && (lua_type(lua, -2) != LUA_TNUMBER || lua_tonumber(lua, -2) != expected_index)) is_array = 0;
             /* Stack now: table, key, value */
-            /* Array repr. */
-            repr1 = ldbCatStackValueRec(repr1, lua, -1, level, budget);
-            ValkeyModule_StringAppendBuffer(NULL, repr1, "; ", 2);
             /* Full repr. */
             ValkeyModule_StringAppendBuffer(NULL, repr2, "[", 1);
             repr2 = ldbCatStackValueRec(repr2, lua, -2, level, budget);
             ValkeyModule_StringAppendBuffer(NULL, repr2, "]=", 2);
+            /* Render the value once and copy it into the array repr, so the
+             * discarded repr does not spend the budget. */
+            size_t value_start;
+            ValkeyModule_StringPtrLen(repr2, &value_start);
             repr2 = ldbCatStackValueRec(repr2, lua, -1, level, budget);
+            if (is_array) {
+                size_t value_end;
+                const char *full = ValkeyModule_StringPtrLen(repr2, &value_end);
+                ValkeyModule_StringAppendBuffer(NULL, repr1, full + value_start, value_end - value_start);
+                ValkeyModule_StringAppendBuffer(NULL, repr1, "; ", 2);
+            }
             ValkeyModule_StringAppendBuffer(NULL, repr2, "; ", 2);
             lua_pop(lua, 1); /* Stack: table, key. Ready for next iteration. */
             expected_index++;

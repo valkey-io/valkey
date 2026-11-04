@@ -1075,8 +1075,17 @@ void addReplyErrorSdsExSafe(client *c, sds err, int flags) {
 void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list ap) {
     va_list copy;
     va_copy(copy, ap);
-    sds s = sdscatvprintf(sdsempty(), fmt, copy);
+    sds empty = sdsempty();
+    sds s = sdscatvprintf(empty, fmt, copy);
     va_end(copy);
+    /* sdscatvprintf() returns NULL when vsnprintf() fails, for example when
+     * the formatted string is longer than INT_MAX. It does not free its input
+     * in that case, so free it here and reply with a short fixed error
+     * instead of dereferencing NULL below. */
+    if (s == NULL) {
+        sdsfree(empty);
+        s = sdsnew("error message is too long");
+    }
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
     /* Make sure there are no newlines in the middle of the string; otherwise,

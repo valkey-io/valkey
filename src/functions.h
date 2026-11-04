@@ -89,7 +89,6 @@ unsigned long functionsLibNum(void);
 dict *functionsLibGet(void);
 size_t functionsLibCtxFunctionsLen(functionsLibCtx *functions_ctx);
 functionsLibCtx *functionsLibCtxGetCurrent(void);
-void functionsLibCtxSetCurrent(functionsLibCtx *lib_ctx, int set_aside);
 functionsLibCtx *functionsLibCtxCreate(void);
 void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, list *engine_callbacks);
 void functionsLibCtxClear(functionsLibCtx *lib_ctx);

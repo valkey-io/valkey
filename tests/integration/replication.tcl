@@ -670,13 +670,12 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
 
 # Diskless load swapdb when NOT async_loading (different master replid)
 foreach testType {Successful Aborted} dualchannel {yes no} {
-    foreach forkless {no yes} {
     start_server {tags {"repl external:skip"}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        start_server {overrides {forkless-infrastructure-enabled yes}} {
+        start_server {} {
             set master [srv 0 client]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
@@ -686,10 +685,6 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
             $master config set dual-channel-replication-enabled $dualchannel
-            # Forkless cannot serve a dual-channel sync (its RDB channel
-            # has no inline-replication capability), so use forkless only
-            # when dual-channel is off.
-            $master config set forkless-policy [expr {$forkless eq "yes" ? ($dualchannel eq "yes" ? "require-fork" : "prefer-forkless") : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled $dualchannel
@@ -712,7 +707,7 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
                     # Start the replication process
                     $replica replicaof $master_host $master_port
 
-                    test "Diskless load swapdb (different replid): replica enter loading dual-channel-replication-enabled=$dualchannel forkless=$forkless" {
+                    test "Diskless load swapdb (different replid): replica enter loading dual-channel-replication-enabled=$dualchannel" {
                         # Wait for the replica to start reading the rdb
                         wait_for_condition 100 100 {
                             [s -1 loading] eq 1
@@ -736,7 +731,7 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
                         fail "Replica didn't disconnect"
                     }
 
-                    test "Diskless load swapdb (different replid): old database is exposed after replication fails dual-channel=$dualchannel forkless=$forkless" {
+                    test "Diskless load swapdb (different replid): old database is exposed after replication fails dual-channel=$dualchannel" {
                         # Ensure we see old values from replica
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -758,33 +753,27 @@ foreach testType {Successful Aborted} dualchannel {yes no} {
                         fail "Master <-> Replica didn't finish sync"
                     }
 
-                    test "Diskless load swapdb (different replid): new database is exposed after swapping dual-channel=$dualchannel forkless=$forkless" {
+                    test "Diskless load swapdb (different replid): new database is exposed after swapping dual-channel=$dualchannel" {
                         # Ensure we don't see anymore the key that was stored only to replica and also that we don't get LOADING status
                         assert_equal [$replica GET mykey] ""
 
                         # Make sure amount of keys matches master
                         assert_equal [$replica dbsize] 1000
-
-                        if {$forkless eq "yes" && $dualchannel eq "no"} {
-                            assert_equal 0 [s 0 total_forks]
-                        }
                     }
                 }
             }
         }
     }
-    }
 }
 
 # Diskless load swapdb when async_loading (matching master replid)
-foreach forkless {no yes} {
 foreach testType {Successful Aborted} {
     start_server {tags {"repl external:skip"}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        start_server {overrides {forkless-infrastructure-enabled yes}} {
+        start_server {} {
             set master [srv 0 client]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
@@ -793,7 +782,6 @@ foreach testType {Successful Aborted} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
-            $master config set forkless-policy [expr {$forkless eq "yes" ? "prefer-forkless" : "require-fork"}]
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
             $replica config set dual-channel-replication-enabled no; # Doesn't work with swapdb
@@ -860,7 +848,7 @@ foreach testType {Successful Aborted} {
 
             switch $testType {
                 "Aborted" {
-                    test "Diskless load swapdb (async_loading): replica enter async_loading forkless=$forkless" {
+                    test {Diskless load swapdb (async_loading): replica enter async_loading} {
                         # Wait for the replica to start reading the rdb
                         wait_for_condition 100 100 {
                             [s -1 async_loading] eq 1
@@ -871,7 +859,7 @@ foreach testType {Successful Aborted} {
                         assert_equal [s -1 loading] 0
                     }
 
-                    test "Diskless load swapdb (async_loading): old database is exposed while async replication is in progress forkless=$forkless" {
+                    test {Diskless load swapdb (async_loading): old database is exposed while async replication is in progress} {
                         # Ensure we still see old values while async_loading is in progress and also not LOADING status
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -921,7 +909,7 @@ foreach testType {Successful Aborted} {
                         fail "Replica didn't disconnect"
                     }
 
-                    test "Diskless load swapdb (async_loading): old database is exposed after async replication fails forkless=$forkless" {
+                    test {Diskless load swapdb (async_loading): old database is exposed after async replication fails} {
                         # Ensure we see old values from replica
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -943,7 +931,7 @@ foreach testType {Successful Aborted} {
                         fail "Master <-> Replica didn't finish sync"
                     }
 
-                    test "Diskless load swapdb (async_loading): new database is exposed after swapping forkless=$forkless" {
+                    test {Diskless load swapdb (async_loading): new database is exposed after swapping} {
                         # Ensure we don't see anymore the key that was stored only to replica and also that we don't get LOADING status
                         assert_equal [$replica GET mykey] ""
 
@@ -952,10 +940,6 @@ foreach testType {Successful Aborted} {
 
                         # Make sure amount of keys matches master
                         assert_equal [$replica dbsize] 2010
-
-                        if {$forkless eq "yes"} {
-                            assert_equal 0 [s 0 total_forks]
-                        }
                     }
                 }
             }
@@ -1071,7 +1055,6 @@ test {diskless loading short read} {
         }
     }
 } {} {external:skip}
-}
 
 # get current stime and utime metrics for a thread (since it's creation)
 proc get_cpu_metrics { statfile } {
@@ -2231,6 +2214,28 @@ start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-ena
     }
 }
 
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    populate 1000 primary 100 0
+    set digest [$primary debug digest]
+    set forks [s total_forks]
+
+    start_server {overrides {save {} repl-diskless-load swapdb}} {
+        set replica [srv 0 client]
+
+        test "A swapdb-loading replica makes forkless full sync fall back to fork" {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+
+            assert_equal 1 [s -1 forkless_fallbacks_missing_inband_repl]
+            assert {[s -1 total_forks] > $forks}
+            assert_equal $digest [$replica debug digest]
+        } {} {needs:debug}
+    }
+}
+
 start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     test "Functions-only full sync falls back to fork" {
         set loglines [count_log_lines 0]
@@ -2425,6 +2430,41 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
     }
 }
 
+start_server {tags {"repl external:skip tls:skip"} overrides {save {}}} {
+    set source [srv 0 client]
+    $source save
+    set data [read_binary_file [server_rdb_path $source]]
+    set prefix [string range $data 0 end-9]
+    set inline "\xF2*3\r\n\$3\r\nSET\r\n\$8\r\ninjected\r\n\$3\r\nyes\r\n"
+    set payload "$prefix$inline\xFF\x00\x00\x00\x00\x00\x00\x00\x00"
+
+    start_server {overrides {save {} repl-diskless-load swapdb}} {
+        set replica [srv 0 client]
+
+        test "A swapdb-loading replica rejects an inline RDB command" {
+            $replica set old value
+            set payload_file [tmpfile swapdb-inline-payload]
+            write_binary_file $payload_file $payload
+            set port [find_available_port $::baseport $::portcount]
+            set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                         $port $payload_file [string length $payload] &]
+            wait_for_condition 50 50 {
+                [ping_server 127.0.0.1 $port]
+            } else {
+                fail "Failed to start fake primary"
+            }
+            set loglines [count_log_lines 0]
+            $replica replicaof 127.0.0.1 $port
+            wait_for_log_messages 0 {"*Inline RDB commands are not supported with swapdb loading*"} $loglines 100 100
+            assert_equal down [s 0 master_link_status]
+            assert_equal value [$replica get old]
+            assert_equal {} [$replica get injected]
+            $replica replicaof no one
+            catch {exec kill $pid}
+        }
+    }
+}
+
 # Live writes that arrive after the bg iterator has finished scanning the
 # keyspace, but before the replica has come online, are not captured by the
 # iterator and cannot yet be served from the shared replication buffer. They
@@ -2473,13 +2513,8 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
 }
 
 
-# A SWAPDB, FLUSHDB, MOVE or COPY issued on the primary while a forkless full
-# sync is in progress is carried to the replica as an inline command in the RDB
-# stream. It must land on the databases being loaded. In swapdb-mode diskless
-# load those are a temporary array (not the live server.db), which is the case
-# that previously applied the command to the wrong databases.
 foreach primary_diskless {yes no} {
-    foreach replica_load {disabled on-empty-db swapdb} {
+    foreach replica_load [expr {$primary_diskless eq "yes" ? {disabled on-empty-db} : {disabled on-empty-db swapdb}}] {
         # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels the save.
         foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}
                             {1 {copy db1:3 db1:copy3 db 1}} {1 {copy db1:4 dst4 db 3 db 3}} {1 {move db1:5 7}}
@@ -2536,7 +2571,7 @@ foreach primary_diskless {yes no} {
 }
 
 foreach policy {require-fork prefer-forkless} {
-    foreach replica_load {disabled on-empty-db swapdb} {
+    foreach replica_load {disabled on-empty-db} {
         foreach cmd {load delete flush flushload restore} {
             start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes repl-diskless-sync yes repl-diskless-sync-delay 0}} {
                 set primary [srv 0 client]
@@ -2705,7 +2740,7 @@ foreach kind {multi eval} {
     }
 }
 
-foreach load_mode {disabled swapdb} {
+foreach load_mode {disabled on-empty-db} {
     start_server {tags {"repl external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]

@@ -3733,56 +3733,6 @@ static char *rdbRioReadLine(void *ctx, char *buf, int size) {
     return buf;
 }
 
-/* Append dbid to the list unless it is already there: swapping a db twice
- * would undo the swap. */
-static void addInlineCommandDbId(int *dbids, int *count, int dbid) {
-    for (int i = 0; i < *count; i++) {
-        if (dbids[i] == dbid) return;
-    }
-    dbids[(*count)++] = dbid;
-}
-
-/* Return the databases an inline command can touch: its own db, plus any it
- * names by id. Returns NULL if it can touch any database. The caller frees
- * the returned array. */
-static int *getInlineCommandDbIds(robj **argv, int argc, int dbid, int *count) {
-    struct serverCommand *cmd = lookupCommand(argv, argc);
-    /* Swap every db when we can't tell which ones the command uses: an unknown
-     * command (the load fails anyway), a module command (it can select any db
-     * without declaring it), or one flagged as touching all dbs (FLUSHALL). */
-    if (cmd == NULL || cmd->module_cmd || (cmd->flags & CMD_ALL_DBS)) return NULL;
-
-    /* get_dbid_args returns the argv positions of the db ids it names, or NULL
-     * if it names none (e.g. COPY without DB). */
-    int numpos = 0;
-    int *positions = cmd->get_dbid_args ? cmd->get_dbid_args(argv, argc, &numpos) : NULL;
-    if (positions == NULL) numpos = 0;
-
-    int *dbids = zmalloc(sizeof(int) * (numpos + 1));
-    *count = 0;
-    /* The db the record was written in, which every command uses even if it
-     * names no db (e.g. SET). */
-    addInlineCommandDbId(dbids, count, dbid);
-    for (int i = 0; i < numpos; i++) {
-        long long id;
-        /* get_dbid_args already checked it is a valid, in-range db id. */
-        serverAssert(getLongLongFromObject(argv[positions[i]], &id) == C_OK);
-        addInlineCommandDbId(dbids, count, (int)id);
-    }
-    zfree(positions);
-    return dbids;
-}
-
-/* Swap the live and loading data of the given dbs, or of every db when dbids
- * is NULL. Calling it again with the same arguments swaps them back. */
-static void swapInlineCommandDbs(serverDb **tempDb, int *dbids, int count) {
-    if (dbids == NULL) {
-        swapMainDbDataWithTempDb(tempDb, -1);
-        return;
-    }
-    for (int i = 0; i < count; i++) swapMainDbDataWithTempDb(tempDb, dbids[i]);
-}
-
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
  * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
@@ -3863,6 +3813,10 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                 serverLog(LL_WARNING, "Opcode %d requires RDB version 81 or newer", type);
                 goto loaderr;
             }
+            if (rdb_loading_ctx->dbarray != server.db) {
+                serverLog(LL_WARNING, "Inline RDB commands are not supported with swapdb loading");
+                goto loaderr;
+            }
             robj **argv = NULL;
             int argc = 0;
             respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdbRioReadLine, rdb, &argc, &argv);
@@ -3878,29 +3832,11 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             }
             client *fakeClient = rdb_loading_ctx->update_client;
 
-            /* In swapdb mode the RDB loads into a separate set of databases, so
-             * move their data into server.db while the command runs. Otherwise
-             * commands that pick a db by number, like FLUSHDB or MOVE, change the
-             * live data instead of the data being loaded from the RDB. */
-            int swap_data = rdb_loading_ctx->dbarray != server.db;
-            int *dbids = NULL, numdbids = 0;
-            functionsLibCtx *live_functions_lib_ctx = NULL;
-            if (swap_data) {
-                dbids = getInlineCommandDbIds(argv, argc, db->id, &numdbids);
-                swapInlineCommandDbs(rdb_loading_ctx->dbarray, dbids, numdbids);
-                live_functions_lib_ctx = functionsLibCtxGetCurrent();
-                functionsLibCtxSetCurrent(rdb_loading_ctx->functions_lib_ctx, 1);
-            }
-            fakeClient->db = server.db[db->id];
+            fakeClient->db = db;
             sds err = NULL;
             int load_cmd_ret = loadCommandFromArgv(fakeClient, argv, argc, LOAD_CMD_SOURCE_INLINE_REPL, &err);
             /* FUNCTION FLUSH and FUNCTION RESTORE FLUSH replace the current ctx. */
             rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
-            if (swap_data) {
-                swapInlineCommandDbs(rdb_loading_ctx->dbarray, dbids, numdbids);
-                zfree(dbids);
-                functionsLibCtxSetCurrent(live_functions_lib_ctx, 0);
-            }
             /* On an unknown or invalid command, stop the load. Skipping it
              * would leave this replica with different data than the primary. */
             if (load_cmd_ret != LOAD_CMD_OK) {

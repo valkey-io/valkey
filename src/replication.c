@@ -1794,7 +1794,8 @@ void freeClientReplicationData(client *c) {
  *                    a connection that has integrity checks (such as TLS).
  * lz4: accepts LZ4 streaming-compressed replication payloads.
  * zstd: accepts Zstd streaming-compressed replication payloads.
- * inband-repl: supports RDB_OPCODE_UPDATE for inline replication during forkless sync.
+ * inband-repl: supports RDB_OPCODE_UPDATE for inline replication during forkless sync;
+ *              replicas configured for swapdb loading do not advertise it.
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it
@@ -2961,9 +2962,6 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     /* If we aren't using the swapdb method, then we want to empty the data before loading the rdb */
     if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) flags |= RDBFLAGS_EMPTY_DATA;
     int retval = rdbLoadRioWithLoadingCtx(&rdb, flags, rsi, &loadingCtx, "primary replication stream");
-    /* An inline FUNCTION FLUSH or FUNCTION RESTORE FLUSH frees the loading
-     * functions ctx and creates a new one, so take the new one. */
-    if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) temp_functions_lib_ctx = loadingCtx.functions_lib_ctx;
     if (retval != RDB_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
@@ -4488,13 +4486,15 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         lens[argc] = strlen(REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR);
         argc++;
     }
-    /* This build understands RDB_OPCODE_UPDATE for inline replication. */
-    argv[argc] = "capa";
-    lens[argc] = strlen("capa");
-    argc++;
-    argv[argc] = REPLICA_CAPA_INBAND_REPL_STR;
-    lens[argc] = strlen(REPLICA_CAPA_INBAND_REPL_STR);
-    argc++;
+    /* Swapdb loading cannot safely apply inline commands to its temporary database. */
+    if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
+        argv[argc] = "capa";
+        lens[argc] = strlen("capa");
+        argc++;
+        argv[argc] = REPLICA_CAPA_INBAND_REPL_STR;
+        lens[argc] = strlen(REPLICA_CAPA_INBAND_REPL_STR);
+        argc++;
+    }
     if (server.dual_channel_replication) {
         argv[argc] = "capa";
         lens[argc] = strlen("capa");

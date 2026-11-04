@@ -539,6 +539,9 @@ start_server {tags {"expire"}} {
         set encoded [r dump foo5]
         r restore foo6 100000 $encoded
         r restore foo7 [expr [clock milliseconds]+100000] $encoded absttl
+        # MSETEX and HSETEX with a repeated expire option
+        r msetex 1 foo8 bar ex 100 ex 200
+        r hsetex foo9 px 100000 px 200000 fields 1 f v
 
         assert_replication_stream $repl {
             {select *}
@@ -563,6 +566,8 @@ start_server {tags {"expire"}} {
             {set foo5 bar}
             {restore foo6 * * ABSTTL}
             {restore foo7 * * absttl}
+            {msetex 1 foo8 bar PXAT *}
+            {hsetex foo9 PXAT * fields 1 f v}
         }
         close_replication_stream $repl
     } {} {needs:repl}
@@ -629,6 +634,8 @@ start_server {tags {"expire"}} {
         }
 
         test {MSETEX and HSETEX with a repeated expire option are replicated with the last one} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
             $primary msetex 1 foo18 bar ex 100 ex 200
             $primary msetex 1 foo19 bar px 100000 px 200000
             $primary msetex 1 foo20 bar exat [expr [clock seconds]+100] exat [expr [clock seconds]+200]

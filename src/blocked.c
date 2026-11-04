@@ -182,11 +182,22 @@ void processUnblockedClients(void) {
                 continue;
             }
         }
+        uint64_t id = c->id;
+        int may_invoke_handlers = connUpdateStateMayInvokeHandlers(c->conn);
         /* If we have a queued command, execute it now. */
         if (processPendingCommandAndInputBuffer(c) == C_ERR) {
             continue;
         }
         beforeNextClient(c);
+
+        /* handleReadJobs() skips blocked and throttled clients and leaves the transport's READ
+         * postponed while cmd_queue is non-empty. Release it now that the queue is drained. A
+         * client throttled again has no read handler, so it keeps READ until its next release. */
+        if (!may_invoke_handlers) continue;
+        c = lookupClientByID(id);
+        if (!c || !c->conn || !connHasReadHandler(c->conn)) continue;
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
+        connUpdateState(c->conn);
     }
 }
 

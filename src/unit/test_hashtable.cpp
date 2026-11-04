@@ -296,7 +296,6 @@ TEST_F(HashtableTest, empty_buckets_rehashing) {
 TEST_F(HashtableTest, sample_entries_finishes_shrink) {
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
-    hashtableSetCanAbortShrink(false);
     long j;
     long keep = 0;
     size_t keep_bucket = 0;
@@ -333,7 +332,6 @@ TEST_F(HashtableTest, sample_entries_finishes_shrink) {
     ASSERT_EQ(hashtableSampleEntries(ht, &sample, 1), 1u);
     ASSERT_FALSE(hashtableIsRehashing(ht));
 
-    hashtableSetCanAbortShrink(true);
     hashtableRelease(ht);
 }
 

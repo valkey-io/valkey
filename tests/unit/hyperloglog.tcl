@@ -125,14 +125,12 @@ start_server {tags {"hll"}} {
         # so deltalen == 0.  The SDS_TYPE_5 branch of sdsIncrLen() rejected zero
         # increment and aborted the server.
         set hdr [binary format a4c4x8 HYLL {1 0 0 0}]
-        # hll_dst: XZERO(65)={0x40,0x40} + XZERO(16319)={0x7f,0xbe}, total 20 bytes
-        r set hll_dst "$hdr\x40\x40\x7f\xbe"
+        r set hll_dst{t} "$hdr\x40\x40\x7f\xbe"
         # hll_src: VAL(1,1)={0x80} + XZERO(16383)={0x7f,0xfe}, total 19 bytes
-        r set hll_src "$hdr\x80\x7f\xfe"
-        r config set hll-sparse-max-bytes 0
-        r pfmerge hll_dst hll_src
-        r config set hll-sparse-max-bytes 3000
-        assert_equal 1 [r pfcount hll_dst]
+        r set hll_src{t} "$hdr\x80\x7f\xfe"
+        test_config_set r hll-sparse-max-bytes 0
+        r pfmerge hll_dst{t} hll_src{t}
+        assert_equal 1 [r pfcount hll_dst{t}]
     }
 
     test {HyperLogLog sparse encoding stress test} {

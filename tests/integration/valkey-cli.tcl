@@ -341,6 +341,9 @@ start_server {tags {"cli logreqres:skip"}} {
             set expected "${quote}left[string repeat $slash [expr {$count * 4}]]right${quote}"
             assert_equal $expected [run_cli --quoted-json get quoted-json-input]
         }
+        r set quoted-json-input "[string repeat $slash 32]\n"
+        set expected "${quote}[string repeat $slash 130]n${quote}"
+        assert_equal $expected [run_cli --quoted-json get quoted-json-input]
         r set quoted-json-input "\x00\x01\xff"
         set expected "${quote}${slash}${slash}x00${slash}${slash}x01${slash}${slash}xff${quote}"
         assert_equal $expected [run_cli --quoted-json get quoted-json-input]

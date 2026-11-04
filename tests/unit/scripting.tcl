@@ -101,6 +101,12 @@ start_server {tags {"scripting"}} {
         r get x
     } {}
 
+    test {EVAL - Return or raise error table with a metatable that raises error} {
+        catch {run_script {return setmetatable({err='x'}, {__index=function() error('boom') end})} 0}
+        catch {run_script {error(setmetatable({}, {__index=function() error('boom') end}))} 0}
+        r ping
+    } {PONG}
+
     test {EVAL - Lua integer -> Redis protocol type conversion} {
         run_script {return 100.5} 0
     } {100}
@@ -1052,6 +1058,12 @@ start_server {tags {"scripting"}} {
         r del scriptkey:wt
     }
 
+    test {server.log() keeps a multi-line message in one log record} {
+        set loglines [count_log_lines 0]
+        run_script {redis.log(redis.LOG_WARNING, 'before\r\nafter')} 0
+        verify_log_message 0 "*<lua> before  after*" $loglines
+    } {} {external:skip}
+
     test {Correct handling of reused argv (issue #1939)} {
         run_script {
               for i = 0, 10 do
@@ -1724,6 +1736,26 @@ start_server {tags {"scripting external:skip"}} {
     }
 }
 
+start_server {tags {"scripting external:skip tls:skip"}} {
+    test {Forked scripting debug session does not suspend save points} {
+        set rd [valkey_deferring_client]
+        $rd script debug yes
+        assert_equal OK [$rd read]
+        $rd eval {return 'hello'} 0
+        assert_match {*Stopped at*} [$rd read]
+
+        r config set save "1 1"
+        r set foo bar
+        wait_for_condition 50 100 {
+            [s rdb_changes_since_last_save] == 0
+        } else {
+            fail "Save point did not fire while a forked debug session was open"
+        }
+        $rd close
+        r config set save ""
+    }
+}
+
 start_server {tags {"scripting needs:debug external:skip"}} {
     test {Test scripting debug protocol parsing} {
         r script debug sync
@@ -1795,6 +1827,18 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r flush
         assert_match {*<value>*somearg*} [r read]
         reconnect
+    }
+
+    test {Test scripting debug command larger than one read} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        # The debugger reads 1024 bytes at a time, so this command arrives in two reads.
+        set arg [string repeat x 1020]
+        r write "*2\r\n\$5\r\nprint\r\n\$1020\r\n$arg\r\n"
+        r flush
+        r read
+        reconnect
+        assert_equal [r ping] {PONG}
     }
 
     test {Test scripting debug with an empty script} {

@@ -173,6 +173,15 @@ start_server {tags {"introspection"}} {
         }
     }
 
+    test {COMMAND DOCS marks absolute expiry timestamps as unix-time} {
+        foreach command {expireat pexpireat hexpireat hpexpireat} {
+            set docs [dict get [r command docs $command] $command]
+            set timestamp [lindex [dict get $docs arguments] 1]
+            assert_match {unix-time-*} [dict get $timestamp name]
+            assert_equal unix-time [dict get $timestamp type]
+        }
+    }
+
     test {COMMAND GETKEYS GET} {
         assert_equal {key} [r command getkeys get key]
     }
@@ -192,6 +201,49 @@ start_server {tags {"introspection"}} {
                 assert {![dict exists $option flags]}
             }
         }
+    }
+
+    test {COMMAND DOCS allows XX with GT or LT for ZADD} {
+        set docs [dict get [r command docs zadd] zadd]
+        set condition [lindex [dict get $docs arguments] 1]
+        assert_equal oneof [dict get $condition type]
+        assert_equal {optional} [dict get $condition flags]
+        set alternatives [dict get $condition arguments]
+        assert_equal NX [dict get [lindex $alternatives 0] token]
+
+        set xx_comparison [lindex $alternatives 1]
+        assert_equal block [dict get $xx_comparison type]
+        set options [dict get $xx_comparison arguments]
+        assert_equal XX [dict get [lindex $options 0] token]
+        assert_equal {optional} [dict get [lindex $options 0] flags]
+
+        set comparison [lindex $options 1]
+        assert_equal oneof [dict get $comparison type]
+        assert_equal {optional} [dict get $comparison flags]
+        set comparisons [dict get $comparison arguments]
+        assert_equal GT [dict get [lindex $comparisons 0] token]
+        assert_equal LT [dict get [lindex $comparisons 1] token]
+
+        # CH follows the condition directly.
+        assert_equal CH [dict get [lindex [dict get $docs arguments] 2] token]
+    }
+
+    test {COMMAND DOCS marks LCS LEN and IDX as mutually exclusive} {
+        set docs [dict get [r command docs lcs] lcs]
+        set output [lindex [dict get $docs arguments] 2]
+        assert_equal oneof [dict get $output type]
+        assert_equal {optional} [dict get $output flags]
+
+        set options [dict get $output arguments]
+        foreach {index token} {0 LEN 1 IDX} {
+            set option [lindex $options $index]
+            assert_equal pure-token [dict get $option type]
+            assert_equal $token [dict get $option token]
+            assert {![dict exists $option flags]}
+        }
+
+        # MINMATCHLEN follows the output selector directly.
+        assert_equal MINMATCHLEN [dict get [lindex [dict get $docs arguments] 3] token]
     }
 
     test {COMMAND GETKEYS EXEC} {
@@ -272,7 +324,7 @@ start_server {tags {"introspection"}} {
 
     test {COMMAND DOCS does not mark hash field counts as keys} {
         foreach command {
-            hexpireat hexpiretime hgetdel hgetex hpersist hpexpire
+            hexpire hexpireat hexpiretime hgetdel hgetex hpersist hpexpire
             hpexpireat hpexpiretime hpttl hsetex httl
         } {
             set docs [dict get [r command docs $command] $command]

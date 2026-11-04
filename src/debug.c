@@ -79,12 +79,10 @@ typedef ucontext_t sigcontext_t;
 #endif
 
 /* Globals */
-static int bug_report_start = 0; /* True if bug report header was already logged. */
-static pthread_mutex_t bug_report_start_mutex = PTHREAD_MUTEX_INITIALIZER;
-/* Mutex for a case when two threads crash at the same time. */
-static pthread_mutex_t signal_handler_lock;
-static pthread_mutexattr_t signal_handler_lock_attr;
-static volatile int signal_handler_lock_initialized = 0;
+#define MAX_RECURSIVE_CRASHES 4
+static volatile atomic_int bug_report_start = 0; /* True if bug report header was already logged. */
+static volatile atomic_int signal_handler_thread = 0;
+static volatile atomic_int signal_handler_count = 0;
 /* Forward declarations */
 int bugReportStart(void);
 void printCrashReport(void);
@@ -1327,15 +1325,11 @@ __attribute__((noinline)) void _serverPanic(const char *file, int line, const ch
 
 /* Start a bug report, returning 1 if this is the first time this function was called, 0 otherwise. */
 int bugReportStart(void) {
-    pthread_mutex_lock(&bug_report_start_mutex);
-    if (bug_report_start == 0) {
-        serverLog(LL_WARNING | LL_RAW, "\n\n=== %s BUG REPORT START: Cut & paste starting from here ===\n",
-                  server.extended_redis_compat ? "REDIS" : "VALKEY");
-        bug_report_start = 1;
-        pthread_mutex_unlock(&bug_report_start_mutex);
+    if (atomic_exchange(&bug_report_start, 1) == 0) {
+        serverLogFromHandler(LL_WARNING | LL_RAW, "\n\n=== %s BUG REPORT START: Cut & paste starting from here ===\n",
+                             server.extended_redis_compat ? "REDIS" : "VALKEY");
         return 1;
     }
-    pthread_mutex_unlock(&bug_report_start_mutex);
     return 0;
 }
 
@@ -2426,29 +2420,43 @@ __attribute__((noinline)) static void sigsegvHandler(int sig, siginfo_t *info, v
     UNUSED(secret);
     UNUSED(info);
     int print_full_crash_info = 1;
-    /* Check if it is safe to enter the signal handler. second thread crashing at the same time will deadlock. */
-    if (pthread_mutex_lock(&signal_handler_lock) == EDEADLK) {
-        /* If this thread already owns the lock (meaning we crashed during handling a signal) switch
-         * to printing the minimal information about the crash. */
+    int target_thread = gettid();
+    int initial_thread = 0;
+
+    /* Crashed while we're already handling a different crash on a different thread. */
+    if (!atomic_compare_exchange_strong(&signal_handler_thread, &initial_thread, target_thread) && atomic_load(&signal_handler_thread) != target_thread) {
+        /* park thread forever. */
+        sigset_t mask;
+        sigfillset(&mask);
+        sigsuspend(&mask);
+    }
+
+    int current_crash = atomic_fetch_add(&signal_handler_count, 1);
+    /* Too many recursive crashes, stop processing new crashes. */
+    if (current_crash >= MAX_RECURSIVE_CRASHES) {
+        serverLogRawFromHandler(LL_WARNING, "Recursive crashing limit reached.");
+        return;
+    } else if (current_crash != 0) {
+        /* Crashed while processing a different signal/crash, switch to printing the minimal information about the crash. */
         serverLogRawFromHandler(LL_WARNING,
                                 "Crashed running signal handler. Providing reduced version of recursive crash report.");
         print_full_crash_info = 0;
     }
 
     bugReportStart();
-    serverLog(LL_WARNING, SERVER_NAME " %s crashed by signal: %d, si_code: %d", VALKEY_VERSION, sig, info->si_code);
+    serverLogFromHandler(LL_WARNING, SERVER_NAME " %s crashed by signal: %d, si_code: %d", VALKEY_VERSION, sig, info->si_code);
     if (sig == SIGSEGV || sig == SIGBUS) {
-        serverLog(LL_WARNING, "Accessing address: %p", (void *)info->si_addr);
+        serverLogFromHandler(LL_WARNING, "Accessing address: %p", (void *)info->si_addr);
     }
     if (info->si_code == SI_USER && info->si_pid != -1) {
-        serverLog(LL_WARNING, "Killed by PID: %ld, UID: %d", (long)info->si_pid, info->si_uid);
+        serverLogFromHandler(LL_WARNING, "Killed by PID: %ld, UID: %d", (long)info->si_pid, info->si_uid);
     }
 
 #ifdef HAVE_BACKTRACE
     ucontext_t *uc = (ucontext_t *)secret;
     void *eip = getAndSetMcontextEip(uc, NULL);
     if (eip != NULL) {
-        serverLog(LL_WARNING, "Crashed running the instruction at: %p", eip);
+        serverLogFromHandler(LL_WARNING, "Crashed running the instruction at: %p", eip);
     }
 
     if (eip == info->si_addr) {
@@ -2498,16 +2506,6 @@ void setupDebugSigHandlers(void) {
 }
 
 void setupSigSegvHandler(void) {
-    /* Initialize the signal handler lock.
-    Attempting to initialize an already initialized mutex or mutexattr results in undefined behavior. */
-    if (!signal_handler_lock_initialized) {
-        /* Set signal handler with error checking attribute. re-lock within the same thread will error. */
-        pthread_mutexattr_init(&signal_handler_lock_attr);
-        pthread_mutexattr_settype(&signal_handler_lock_attr, PTHREAD_MUTEX_ERRORCHECK);
-        pthread_mutex_init(&signal_handler_lock, &signal_handler_lock_attr);
-        signal_handler_lock_initialized = 1;
-    }
-
     struct sigaction act;
 
     sigemptyset(&act.sa_mask);

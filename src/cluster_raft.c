@@ -1295,6 +1295,10 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
             if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
                 pp->retries--;
                 pp->deferred = 1;
+                /* The epoch may already have advanced before this rejection
+                 * arrived. Retry in case it did; raftRefreshEpochInData()
+                 * skips it otherwise. */
+                rs->todo_retry_deferred = 1;
                 return;
             }
             if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));

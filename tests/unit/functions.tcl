@@ -6,7 +6,7 @@ proc get_no_writes_function_code {args} {
     return [format "#!%s name=%s\nserver.register_function{function_name='%s', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
 }
 
-start_server {tags {"scripting"}} {
+start_server {tags {"scripting external:skip"}} {
     # This test must run on a fresh server before any FUNCTION LOAD has
     # executed, so it lives in its own start_server block.
     test {FUNCTION - NUL byte in shebang engine name does not crash on first function load} {
@@ -63,7 +63,6 @@ start_server {tags {"scripting"}} {
         } e
         set _ $e
     } {*Library names can only contain letters, numbers, or underscores(_)*}
-
 
     test {FUNCTION - Create library with unexisting engine} {
         catch {

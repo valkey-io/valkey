@@ -1393,6 +1393,7 @@ start_server {tags {"scripting"}} {
         } else {
             fail "Can't wait for script to start running"
         }
+        assert_match {BUSY*} $e
 
         kill_script
 
@@ -1401,6 +1402,7 @@ start_server {tags {"scripting"}} {
         } else {
             fail "Can't wait for script to be killed"
         }
+        assert_equal [r ping] "PONG"
 
         catch {$rd read} res
         $rd close
@@ -1412,16 +1414,18 @@ start_server {tags {"scripting"}} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {
-            local function spin() for i=1,20000 do end end
-            local function mid() for i=1,100 do coroutine.resume(coroutine.create(spin)) end end
-            for i=1,100 do coroutine.resume(coroutine.create(mid)) end
+            local function spin() for i=1,10000 do end end
+            local function mid() for i=1,50 do coroutine.resume(coroutine.create(spin)) end end
+            for i=1,50 do coroutine.resume(coroutine.create(mid)) end
         } 0
 
-        wait_for_condition 50 100 {
+        # The script only runs for a moment, so poll often.
+        wait_for_condition 500 10 {
             [catch {r ping} e] == 1
         } else {
             fail "Can't wait for script to start running"
         }
+        assert_match {BUSY*} $e
 
         $rd read
         $rd close

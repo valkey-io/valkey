@@ -4586,7 +4586,7 @@ int canParseCommand(client *c) {
      * condition on this node. We want just to accumulate the replication
      * stream (instead of replying -BUSY like we do with other clients) and
      * later resume the processing. */
-    if (isInsideYieldingLongCommand() && isReplicatedClient(c)) return 0;
+    if (isInsideYieldingLongCommand() && (isReplicatedClient(c) || c->slot_migration_job)) return 0;
 
     /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
      * written to the client. Make sure to not let the reply grow after

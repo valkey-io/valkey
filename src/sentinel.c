@@ -2726,7 +2726,8 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     if ((ri->flags & SRI_SLAVE) &&
         role == SRI_SLAVE &&
         (ri->slave_master_port != ri->master->addr->port ||
-         !sentinelAddrEqualsHostname(ri->master->addr, ri->slave_master_host)))
+         (ri->slave_master_host &&
+          !sentinelAddrEqualsHostname(ri->master->addr, ri->slave_master_host))))
     {
         mstime_t wait_time = ri->master->failover_timeout;
 

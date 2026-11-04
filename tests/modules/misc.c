@@ -680,6 +680,19 @@ int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithLongLong(ctx, slot);
 }
 
+int test_set_shared_get(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 4) return ValkeyModule_WrongArity(ctx);
+
+    /* Pass one object as both the IFEQ/IFNE comparison value and the GET option. */
+    ValkeyModuleString *get = ValkeyModule_CreateString(ctx, "GET", 3);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "SET", "!sssss", argv[1], argv[2], argv[3], get, get);
+    ValkeyModule_FreeString(ctx, get);
+    if (!reply) return ValkeyModule_ReplyWithError(ctx, strerror(errno));
+    ValkeyModule_ReplyWithCallReply(ctx, reply);
+    ValkeyModule_FreeCallReply(reply);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -756,6 +769,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.malloc_api", test_malloc_api,"", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.keyslot", test_keyslot, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.set_shared_get", test_set_shared_get, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

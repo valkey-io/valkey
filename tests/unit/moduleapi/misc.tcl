@@ -594,6 +594,19 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     test "Cluster keyslot" {
         assert_equal 12182 [r test.keyslot foo]
     }
+
+    foreach {cond initial} {IFEQ GET IFNE other} {
+        test "RM_Call SET $cond GET with one object as comparison value and GET option" {
+            r del k
+            r set k $initial
+            set repl [attach_to_replication_stream]
+            assert_equal $initial [r test.set_shared_get k newval $cond]
+            assert_equal newval [r get k]
+            assert_replication_stream $repl [list {select *} "set k newval $cond GET"]
+            r del k
+            close_replication_stream $repl
+        } {} {needs:repl}
+    }
 }
 
 start_server {tags {"modules"}} {

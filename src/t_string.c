@@ -82,7 +82,8 @@ void setGenericCommand(client *c,
                        int unit,
                        robj *ok_reply,
                        robj *abort_reply,
-                       robj *comparison) {
+                       robj *comparison,
+                       int comparison_idx) {
     mstime_t milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
@@ -206,7 +207,7 @@ void setGenericCommand(client *c,
             char *a = objectGetVal(c->argv[j]);
             /* Skip GET which may be repeated multiple times. The IFEQ/IFNE
              * comparison value is free-form and may itself spell GET. */
-            if (j >= 3 && c->argv[j] != comparison && (a[0] == 'g' || a[0] == 'G') && (a[1] == 'e' || a[1] == 'E') &&
+            if (j >= 3 && j != comparison_idx && (a[0] == 'g' || a[0] == 'G') && (a[1] == 'e' || a[1] == 'E') &&
                 (a[2] == 't' || a[2] == 'T') && a[3] == '\0')
                 continue;
             argv[argc++] = c->argv[j];
@@ -266,32 +267,33 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
 void setCommand(client *c) {
     robj *expire = NULL;
     robj *comparison = NULL;
+    int comparison_idx;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison_idx, &comparison, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
     if (!c->flag.argv_borrowed) {
         c->argv[2] = tryObjectEncoding(c->argv[2]);
     }
-    setGenericCommand(c, flags, c->argv[1], c->argv[2], expire, unit, NULL, NULL, comparison);
+    setGenericCommand(c, flags, c->argv[1], c->argv[2], expire, unit, NULL, NULL, comparison, comparison_idx);
 }
 
 void setnxCommand(client *c) {
     if (!c->flag.argv_borrowed) c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c, ARGS_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL);
+    setGenericCommand(c, ARGS_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL, -1);
 }
 
 void setexCommand(client *c) {
     if (!c->flag.argv_borrowed) c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, ARGS_EX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL);
+    setGenericCommand(c, ARGS_EX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL, -1);
 }
 
 void psetexCommand(client *c) {
     if (!c->flag.argv_borrowed) c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
+    setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL, -1);
 }
 
 /* Function handling DELEX key <IFEQ | IFNE> value */
@@ -302,7 +304,7 @@ void delexCommand(client *c) {
 
     if (parseExtendedCommandArgumentsOrReply(
             c, COMMAND_DELEX, 2, c->argc,
-            &flags, NULL, NULL, NULL, &compare_val, &incrby_val, NULL, NULL) != C_OK) {
+            &flags, NULL, NULL, NULL, NULL, &compare_val, &incrby_val, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -383,7 +385,7 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL, NULL, NULL) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -665,7 +667,7 @@ void msetexCommand(client *c) {
         return;
     }
     if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
-                                             &flags, &unit, &expire_idx, &expire, NULL, NULL, NULL, NULL) != C_OK) {
+                                             &flags, &unit, &expire_idx, &expire, NULL, NULL, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -840,7 +842,7 @@ void increxCommand(client *c) {
     long double incr_ld = 1.0L;
     int use_float = 0;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj, &lbound_obj, &ubound_obj) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL, &incr_obj, &lbound_obj, &ubound_obj) != C_OK) {
         return;
     }
 

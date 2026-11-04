@@ -2493,6 +2493,16 @@ static int isValidForklessPolicy(int val, const char **err) {
     return 1;
 }
 
+static int updateForklessPolicy(const char **err) {
+    UNUSED(err);
+    if (server.forkless_policy == FORKLESS_POLICY_PREFER_FORKLESS && !moduleAllModulesHandleForkless()) {
+        serverLog(LL_WARNING, "forkless-policy is 'prefer-forkless' but a loaded module does not declare "
+                              "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS; forkless operations will fall "
+                              "back to fork.");
+    }
+    return 1;
+}
+
 static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG
     if (val) {
@@ -3559,7 +3569,7 @@ standardConfig static_configs[] = {
     createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, isValidRdbCompression, NULL),
     createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
     createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, isValidReplCompression, NULL),
-    createEnumConfig("forkless-policy", NULL, MODIFIABLE_CONFIG, forkless_policy_enum, server.forkless_policy, FORKLESS_POLICY_REQUIRE_FORK, isValidForklessPolicy, NULL),
+    createEnumConfig("forkless-policy", NULL, MODIFIABLE_CONFIG, forkless_policy_enum, server.forkless_policy, FORKLESS_POLICY_REQUIRE_FORK, isValidForklessPolicy, updateForklessPolicy),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),

@@ -155,6 +155,20 @@ start_server {tags {"hll"}} {
         set e
     } {*INVALIDOBJ*}
 
+    test {Corrupted sparse HyperLogLogs are detected: Truncated XZERO at tail} {
+        r del hll
+        r pfadd hll
+        # Invalidate the cached cardinality, then three ZEROs of 64, a ZERO
+        # of 63 and the first byte of an XZERO that the NUL terminator would
+        # complete to 16129 registers.
+        r setrange hll 15 "\x80\x3f\x3f\x3f\x3e\x7f"
+        assert_error {*INVALIDOBJ*} {r pfadd hll a}
+        assert_error {*INVALIDOBJ*} {r pfcount hll}
+        assert_error {*INVALIDOBJ*} {r pfmerge hll hll}
+        assert_error {*INVALIDOBJ*} {r pfdebug todense hll}
+        assert_error {*INVALIDOBJ*} {r pfdebug decode hll}
+    } {} {needs:pfdebug}
+
     test {PFADD propagates elements applied before a corrupted sparse HLL error} {
         # A sparse HLL whose single XZERO opcode covers only registers 0..8191.
         # Element "d" lands inside that range, element "a" runs off the end.

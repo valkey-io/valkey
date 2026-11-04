@@ -1838,12 +1838,18 @@ static void setupStacktracePipe(void) { /* we don't need a pipe to write the sta
 #ifdef HAVE_BACKTRACE
 #define BACKTRACE_MAX_SIZE 100
 
+/* __GLIBC_PREREQ() can only be evaluated once we know it's defined. */
+#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+#if __GLIBC_PREREQ(2, 34)
+#define HAVE__FORK 1
+#endif
+#endif
 
 /* Fork a child for the crash report. Unlike fork(), this does not run the
  * pthread_atfork() handlers. */
 static pid_t forkFromHandler(void) {
     pid_t pid;
-#if defined(__GLIBC__) && __GLIBC_PREREQ(2, 34)
+#if defined(HAVE__FORK)
     pid = _Fork();
 #elif defined(__linux__) && defined(SYS_clone) && !defined(__s390__)
     pid = (pid_t)syscall(SYS_clone, SIGCHLD, 0, 0, 0, 0);
@@ -1870,9 +1876,14 @@ static int waitChild(pid_t pid, long long timeout) {
     }
 
     if (ret == 0 || (ret == -1 && errno == EINTR)) {
-        /* Timeout or still interrupted - kill child */
+        /* kill the child, but don't block on reaping it.
+         * Give it up to 100ms, then leave it unreaped. */
         kill(pid, SIGKILL);
-        waitpid(pid, NULL, 0);
+        for (int j = 0; j < 10; j++) {
+            usleep(10000);
+            ret = waitpid(pid, NULL, WNOHANG);
+            if (ret == pid || (ret == -1 && errno != EINTR)) return 1;
+        }
         return 1;
     }
 
@@ -2069,7 +2080,7 @@ __attribute__((noinline)) static void collect_stacktrace_data(void) {
      * process, so walk the stack in a forked child. The child gets a copy of
      * this thread's stack, so it collects this thread's frames, and sends them
      * back over a pipe. On failure or timeout trace_size stays 0. */
-    if (pipe(child_pipe) == 0) {
+    if (anetPipe(child_pipe, O_CLOEXEC | O_NONBLOCK, O_CLOEXEC) == 0) {
         pid_t pid = forkFromHandler();
         if (pid == 0) {
             close(child_pipe[0]);
@@ -2140,6 +2151,13 @@ __attribute__((noinline)) static void writeStacktraces(int fd, int uplevel) {
             };
         }
 
+        if (curr_stacktrace_data.trace_size == 0) {
+            /* Collecting the frames failed or timed out (see collect_stacktrace_data). */
+            char *msg = "(stack trace collection failed or timed out)\n";
+            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+            }
+            continue;
+        }
         /* add the stacktrace */
         symbolizeStackTrace(-1, curr_stacktrace_data.trace, curr_stacktrace_data.trace_size, fd, curr_uplevel);
 

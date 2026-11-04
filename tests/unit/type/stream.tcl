@@ -1676,6 +1676,42 @@ start_server {
         assert_equal "0-0" [dict get $reply recorded-first-entry-id]
     }
 
+    # With enable-debug-assert, MEMORY USAGE also checks that the listpack
+    # bytes counter matches a full walk of the listpacks.
+    test {MEMORY USAGE of a stream tracks listpack changes} {
+        r DEL mystream{t} mystream2{t} mystream3{t}
+        for {set j 1} {$j <= 350} {incr j} {
+            r XADD mystream{t} $j-0 f [string repeat x [expr {$j % 50}]]
+        }
+        set full [r MEMORY USAGE mystream{t}]
+        r XDEL mystream{t} 1-0 150-0 151-0 349-0
+        r MEMORY USAGE mystream{t}
+        r XTRIM mystream{t} MINID 120
+        r XTRIM mystream{t} MAXLEN ~ 150
+        r XTRIM mystream{t} MAXLEN = 120
+        assert_lessthan [r MEMORY USAGE mystream{t}] $full
+        r COPY mystream{t} mystream2{t}
+        r MEMORY USAGE mystream2{t}
+        r RESTORE mystream3{t} 0 [r DUMP mystream{t}]
+        r MEMORY USAGE mystream3{t}
+        r XADD mystream3{t} * f v
+        r MEMORY USAGE mystream3{t}
+    } {*}
+
+    test {MEMORY USAGE of a stream drops after XTRIM MAXLEN 0} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XTRIM mystream MAXLEN = 0
+        set empty [r MEMORY USAGE mystream]
+        r DEL mystream
+        for {set j 1} {$j <= 1000} {incr j} {
+            r XADD mystream $j-0 f [string repeat x 100]
+        }
+        assert_morethan [r MEMORY USAGE mystream] [expr {$empty + 100000}]
+        r XTRIM mystream MAXLEN = 0
+        assert_equal $empty [r MEMORY USAGE mystream]
+    }
+
     test {XADD with LIMIT consecutive calls} {
         r del mystream
         r config set stream-node-max-entries 10

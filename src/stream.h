@@ -21,6 +21,8 @@ typedef struct stream {
     streamID first_id;             /* The first non-tombstone entry, zero if empty. */
     streamID max_deleted_entry_id; /* The maximal ID that was deleted. */
     uint64_t entries_added;        /* All time count of elements added. */
+    size_t tracked_memory_bytes;   /* Sum of allocated bytes (zmalloc_size) of all listpacks in the rax. */
+    size_t cgroups_memory_bytes;   /* Allocated bytes of all consumer groups, not counting the cgroups rax. */
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without
@@ -115,6 +117,9 @@ struct client;
 
 stream *streamNew(void);
 void freeStream(stream *s);
+size_t streamMemUsage(const stream *s);
+int streamCGRaxInsert(stream *s, rax *r, unsigned char *key, size_t len, void *data, int overwrite);
+void streamTrackLpAdd(stream *s, unsigned char *lp);
 unsigned long streamLength(const robj *subject);
 size_t streamReplyWithRange(client *c,
                             stream *s,
@@ -137,13 +142,13 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current);
 void streamIteratorStop(streamIterator *si);
 streamCG *streamLookupCG(stream *s, sds groupname);
 streamConsumer *streamLookupConsumer(streamCG *cg, sds name);
-streamConsumer *streamCreateConsumer(streamCG *cg, sds name, robj *key, int dbid, int flags);
+streamConsumer *streamCreateConsumer(stream *s, streamCG *cg, sds name, robj *key, int dbid, int flags);
 streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, long long entries_read);
-streamNACK *streamCreateNACK(streamConsumer *consumer);
+streamNACK *streamCreateNACK(stream *s, streamConsumer *consumer);
 void streamEncodeID(void *buf, streamID *id);
 void streamDecodeID(void *buf, streamID *id);
 int streamCompareID(streamID *a, streamID *b);
-void streamFreeNACK(streamNACK *na);
+void streamFreeNACK(stream *s, streamNACK *na);
 int streamIncrID(streamID *id);
 int streamDecrID(streamID *id);
 void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds consumername);

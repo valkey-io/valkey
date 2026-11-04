@@ -1104,6 +1104,113 @@ start_server {
         assert_error "*NOGROUP*" {r XGROUP CREATECONSUMER mystream mygroup consumer}
     }
 
+    # The tests below call MEMORY USAGE after each step. With
+    # enable-debug-assert, MEMORY USAGE also checks that the consumer group
+    # bytes counter matches a full walk of the groups.
+    test {MEMORY USAGE of a stream goes back to the base value after groups are removed} {
+        r DEL mystream
+        for {set j 1} {$j <= 100} {incr j} {
+            r XADD mystream $j-0 f v
+        }
+        # Create the cgroups rax once, so the base value includes it.
+        r XGROUP CREATE mystream g0 0
+        r XGROUP DESTROY mystream g0
+        set base [r MEMORY USAGE mystream]
+
+        r XGROUP CREATE mystream g1 0
+        set one_group [r MEMORY USAGE mystream]
+        assert_morethan $one_group $base
+        r XREADGROUP GROUP g1 c1 COUNT 50 STREAMS mystream >
+        r XREADGROUP GROUP g1 c2 STREAMS mystream >
+        set full [r MEMORY USAGE mystream]
+        assert_morethan $full $one_group
+
+        # Ack everything and delete the consumers: close to an empty group.
+        # An emptied rax can keep a few bytes more than a new one.
+        for {set j 1} {$j <= 100} {incr j} {
+            r XACK mystream g1 $j-0
+        }
+        r XGROUP DELCONSUMER mystream g1 c1
+        r XGROUP DELCONSUMER mystream g1 c2
+        assert_range [r MEMORY USAGE mystream] $one_group [expr {$one_group + 64}]
+        r XGROUP DESTROY mystream g1
+        assert_equal $base [r MEMORY USAGE mystream]
+    }
+
+    test {MEMORY USAGE of a stream with many consumer groups and consumers} {
+        r DEL mystream
+        for {set j 1} {$j <= 100} {incr j} {
+            r XADD mystream $j-0 f v
+        }
+        set base [r MEMORY USAGE mystream]
+        for {set g 0} {$g < 10} {incr g} {
+            r XGROUP CREATE mystream g$g 0
+            for {set c 0} {$c < 10} {incr c} {
+                set name consumer-$c-[string repeat x [expr {$c * 10}]]
+                r XREADGROUP GROUP g$g $name COUNT [expr {$c + 1}] STREAMS mystream >
+            }
+            r MEMORY USAGE mystream
+        }
+        assert_morethan [r MEMORY USAGE mystream] $base
+    }
+
+    tags {"needs:debug"} {
+        test {MEMORY USAGE of a stream tracks consumer group changes} {
+            r DEL mystream{t} mystream2{t} mystream3{t}
+            for {set j 1} {$j <= 100} {incr j} {
+                r XADD mystream{t} $j-0 f v
+            }
+            r XGROUP CREATE mystream{t} g1 0
+            r XGROUP CREATE mystream{t} g2 0
+            r XGROUP CREATECONSUMER mystream{t} g1 c0
+            r MEMORY USAGE mystream{t}
+
+            # Deliver all entries, then deliver some again to another consumer.
+            r XREADGROUP GROUP g1 c1 COUNT 40 STREAMS mystream{t} >
+            r XREADGROUP GROUP g1 c2 STREAMS mystream{t} >
+            r XREADGROUP GROUP g2 c1 STREAMS mystream{t} >
+            r XGROUP SETID mystream{t} g1 0
+            r XREADGROUP GROUP g1 c3 COUNT 20 STREAMS mystream{t} >
+            r MEMORY USAGE mystream{t}
+
+            # Move entries between consumers, and create one with FORCE.
+            r XCLAIM mystream{t} g1 c4 0 30-0 31-0
+            r XACK mystream{t} g2 50-0
+            r XCLAIM mystream{t} g2 c4 0 50-0 FORCE
+            r XAUTOCLAIM mystream{t} g1 c5 0 0 COUNT 10
+            r MEMORY USAGE mystream{t}
+
+            # XCLAIM and XAUTOCLAIM drop PEL entries of deleted messages.
+            r XDEL mystream{t} 60-0 61-0 62-0
+            r XCLAIM mystream{t} g1 c1 0 60-0
+            r XAUTOCLAIM mystream{t} g2 c1 0 61-0 COUNT 5
+            r MEMORY USAGE mystream{t}
+
+            # Ack and delete in all modes.
+            r XACK mystream{t} g1 1-0 2-0 3-0
+            r XACKDEL mystream{t} g1 KEEPREF IDS 2 4-0 5-0
+            r XACKDEL mystream{t} g1 DELREF IDS 1 6-0
+            r XACKDEL mystream{t} g1 ACKED IDS 1 7-0
+            r XDELEX mystream{t} DELREF IDS 1 8-0
+            r XDELEX mystream{t} ACKED IDS 1 9-0
+            r MEMORY USAGE mystream{t}
+
+            # COPY duplicates the stream, RESTORE and DEBUG RELOAD load it.
+            r COPY mystream{t} mystream2{t}
+            r MEMORY USAGE mystream2{t}
+            r RESTORE mystream3{t} 0 [r DUMP mystream{t}]
+            r MEMORY USAGE mystream3{t}
+            r DEBUG RELOAD
+            r MEMORY USAGE mystream{t}
+
+            r XGROUP DELCONSUMER mystream{t} g1 c1
+            r XGROUP DESTROY mystream{t} g2
+            r MEMORY USAGE mystream{t}
+            r XGROUP DESTROY mystream{t} g1
+            r MEMORY USAGE mystream{t}
+        } {*}
+    }
+
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no appendfsync always}} {
         test {XREADGROUP with NOACK creates consumer} {
             r del mystream

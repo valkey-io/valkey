@@ -85,6 +85,8 @@ int TestCallResp3Attribute(RedisModuleCtx *ctx, RedisModuleString **argv, int ar
     RedisModuleCallReply *reply;
 
     reply = RedisModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "attrib"); /* 3 stands for resp 3 reply */
+    /* The attribute must be available before any other accessor parses the reply */
+    RedisModuleCallReply *attr = RedisModule_CallReplyAttribute(reply);
     if (RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_STRING) goto fail;
 
     /* make sure we can not reply to resp2 client with resp3 (it might be a string but it contains attribute) */
@@ -92,7 +94,7 @@ int TestCallResp3Attribute(RedisModuleCtx *ctx, RedisModuleString **argv, int ar
 
     if (!TestMatchReply(reply,"Some real reply following the attribute")) goto fail;
 
-    reply = RedisModule_CallReplyAttribute(reply);
+    reply = attr;
     if (!reply || RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_ATTRIBUTE) goto fail;
     /* make sure we can not reply to resp2 client with resp3 attribute */
     if (RedisModule_ReplyWithCallReply(ctx, reply) != REDISMODULE_ERR) goto fail;
@@ -105,6 +107,11 @@ int TestCallResp3Attribute(RedisModuleCtx *ctx, RedisModuleString **argv, int ar
     if (RedisModule_CallReplyLength(val) != 2) goto fail;
     if (!TestMatchReply(RedisModule_CallReplyArrayElement(val, 0),"key:123")) goto fail;
     if (!TestMatchReply(RedisModule_CallReplyArrayElement(val, 1),"90")) goto fail;
+
+    /* A plain map is not an attribute */
+    reply = RedisModule_Call(ctx,"DEBUG","3cc" ,"PROTOCOL", "map");
+    if (RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_MAP) goto fail;
+    if (RedisModule_CallReplyAttributeElement(reply,0,&key,&val) != REDISMODULE_ERR) goto fail;
 
     RedisModule_ReplyWithSimpleString(ctx,"OK");
     return REDISMODULE_OK;

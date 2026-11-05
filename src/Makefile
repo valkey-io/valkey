@@ -284,15 +284,17 @@ ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2
 ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
     $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
     $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
-ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && echo $$?)
 ifneq ($(ZSTD_PKGCONFIG),0)
 $(error BUILD_ZSTD=yes requires static Zstandard 1.4.7 or newer)
 endif
+ifeq ($(ZSTD_STATIC_ARCHIVE),)
+	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd)
+	ZSTD_LIBS := $(shell $(PKG_CONFIG) --libs libzstd)
+else
 	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd)
 	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
 endif
-ifeq ($(ZSTD_STATIC_ARCHIVE),)
-$(error BUILD_ZSTD=yes requires a static Zstandard library)
 endif
 	FINAL_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
 	FINAL_LIBS += $(ZSTD_LIBS)

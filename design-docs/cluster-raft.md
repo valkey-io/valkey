@@ -908,5 +908,3 @@ targets.
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either
   atomically or not.
-- `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
-  some cases, which doesn't work with blocking admin commands).

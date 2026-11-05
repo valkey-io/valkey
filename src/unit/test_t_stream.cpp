@@ -121,6 +121,33 @@ TEST_F(StreamListpackIntegrityTest, TestTrimCleansEmptyNodeWithTombstones) {
     freeStream(s);
 }
 
+/* A restored node may contain only its primary entry. The edge-ID helper
+ * does not write an ID for this listpack, so MINID must handle it safely. */
+TEST_F(StreamListpackIntegrityTest, TestTrimPrimaryOnlyNode) {
+    stream *s = streamNew();
+    streamID node_id = {5, 0};
+    unsigned char key[16];
+    streamEncodeID(key, &node_id);
+
+    unsigned char *lp = lpNew(0);
+    lp = lpAppendInteger(lp, 0); /* live */
+    lp = lpAppendInteger(lp, 0); /* deleted */
+    lp = lpAppendInteger(lp, 1); /* primary fields */
+    lp = lpAppend(lp, (unsigned char *)"f", 1);
+    lp = lpAppendInteger(lp, 0); /* primary terminator */
+
+    uint64_t valid_count = 0;
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 1);
+    ASSERT_EQ(valid_count, 0u);
+    ASSERT_EQ(raxInsert(s->rax, key, sizeof(key), lp, NULL), 1);
+    s->last_id = node_id;
+
+    streamID minid = {6, 0};
+    ASSERT_EQ(streamTrimByID(s, minid, 0), 0);
+    ASSERT_EQ(raxSize(s->rax), 0u);
+    freeStream(s);
+}
+
 class StreamIdTest : public ::testing::Test {};
 
 TEST_F(StreamIdTest, TestStreamEncodeDecodeRoundtrip) {

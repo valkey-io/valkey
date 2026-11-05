@@ -733,7 +733,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         raxSeek(&check, "^", NULL, 0);
         trim_all = 1;
         while (raxNext(&check)) {
-            streamID primary_id, node_last_id;
+            streamID primary_id, node_last_id = {0, 0};
             streamDecodeID(check.key, &primary_id);
             lpGetEdgeStreamID(check.data, 0, &primary_id, &node_last_id);
             if (streamCompareID(&node_last_id, id) >= 0) {

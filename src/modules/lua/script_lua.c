@@ -364,15 +364,16 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
      * is an uncatchable trap). 0 (default) means no extra cap.
      * Scripts run one at a time under the GIL, so a plain static is safe. */
     static int depth = 0;
-    if (depth >= LUA_REPLY_MAX_DEPTH) {
+    const int counted = (t == LUA_TTABLE); /* Only tables nest. */
+    if (counted && depth >= LUA_REPLY_MAX_DEPTH) {
         ValkeyModule_ReplyWithError(ctx, "ERR reached lua stack limit");
         lua_pop(lua, 1);
         return;
     }
-    depth++;
+    depth += counted;
 #define LUA_REPLY_RETURN() \
     do {                   \
-        depth--;           \
+        depth -= counted;  \
         return;            \
     } while (0)
 #else

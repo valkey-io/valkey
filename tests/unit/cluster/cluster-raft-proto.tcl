@@ -2,113 +2,9 @@
 # A single valkey-server is started and we connect to its cluster bus port,
 # speaking the raft wire protocol directly.
 
-# Build a raft wire message: "RAFT" + 4-byte big-endian length + payload.
-proc raft_msg {payload} {
-    set len [expr {8 + [string length $payload]}]
-    set hdr "RAFT"
-    append hdr [binary format I $len]
-    append hdr $payload
-    return $hdr
-}
-
-# Connect to a node's cluster bus port and return the socket.
-proc raft_connect {host port} {
-    set fd [socket $host $port]
-    fconfigure $fd -translation binary -buffering full
-    return $fd
-}
-
-# Send a raft message on a cluster bus connection.
-proc raft_send {fd payload} {
-    puts -nonewline $fd [raft_msg $payload]
-    flush $fd
-}
-
-# Read a raft message from a cluster bus connection. Returns the payload.
-proc raft_recv {fd {timeout 5000}} {
-    # Read 8-byte header
-    fconfigure $fd -blocking 0
-    set deadline [expr {[clock milliseconds] + $timeout}]
-    set hdr ""
-    while {[string length $hdr] < 8} {
-        append hdr [read $fd [expr {8 - [string length $hdr]}]]
-        if {[string length $hdr] < 8} {
-            if {[clock milliseconds] > $deadline} {
-                error "timeout reading raft header"
-            }
-            after 10
-        }
-    }
-    if {[string range $hdr 0 3] ne "RAFT"} {
-        error "bad raft header: [string range $hdr 0 3]"
-    }
-    binary scan [string range $hdr 4 7] I totlen
-    set paylen [expr {$totlen - 8}]
-    set payload ""
-    while {[string length $payload] < $paylen} {
-        append payload [read $fd [expr {$paylen - [string length $payload]}]]
-        if {[string length $payload] < $paylen} {
-            if {[clock milliseconds] > $deadline} {
-                error "timeout reading raft payload (got [string length $payload]/$paylen)"
-            }
-            after 10
-        }
-    }
-    return $payload
-}
+source tests/support/cluster_raft.tcl
 
 tags {tls:skip external:skip cluster singledb} {
-
-# Listen on a random port, run optional setup code, accept one connection, close
-# the listener. Returns the accepted client fd. Sets the listen port in the
-# upvar port_var before running the setup code.
-proc raft_listen_and_accept {port_var {timeout 5000} {before_accept {}}} {
-    upvar $port_var listen_port
-    set ::_raft_accepted ""
-    proc _raft_on_accept {fd addr port} {
-        fconfigure $fd -translation binary -buffering full
-        set ::_raft_accepted $fd
-    }
-    set listen_fd [socket -server _raft_on_accept -myaddr 127.0.0.1 0]
-    set listen_port [lindex [fconfigure $listen_fd -sockname] 2]
-    if {$before_accept ne {}} {
-        uplevel 1 $before_accept
-    }
-    set accept_after [after $timeout {set ::_raft_accepted timeout}]
-    vwait ::_raft_accepted
-    after cancel $accept_after
-    close $listen_fd
-    if {$::_raft_accepted eq "timeout"} {
-        error "timeout waiting for connection"
-    }
-    return $::_raft_accepted
-}
-
-# Connect a fake node to a cluster bus port and complete HELLO handshake.
-# Returns the connected fd.
-proc raft_connect_fake_node {host cport fake_id fake_addr} {
-    set fd [raft_connect $host $cport]
-    raft_send $fd "HELLO $fake_id $fake_addr"
-    set reply [raft_recv $fd]
-    assert_match "HI *" $reply
-    return $fd
-}
-
-# Parse an AE message and reply with AE_ACK.
-# Returns the last log index after applying the entries.
-proc raft_reply_ae_ack {fd ae_msg repl_offset} {
-    set lines [split $ae_msg "\n"]
-    set fields [split [lindex $lines 0] " "]
-    # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
-    set term [lindex $fields 2]
-    set prev_idx [lindex $fields 3]
-    set count [lindex $fields 6]
-    set last_index [expr {$prev_idx + $count}]
-    raft_send $fd "AE_ACK $term 1 $last_index $repl_offset"
-    return $last_index
-}
-
-source tests/support/cluster_raft.tcl
 
 test "Raft proto: connect to cluster bus and exchange HELLO" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
@@ -235,7 +131,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 2 *" $reply
         assert_equal 1 [CI 0 cluster_size]
-        assert_match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+        assert {[cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]}
         R 0 CLUSTER SAVECONFIG
         set nodes_conf "[lindex [R 0 CONFIG GET dir] 1]/nodes.conf"
         set fp [open $nodes_conf r]
@@ -249,7 +145,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 3 *" $reply
         assert_equal 2 [CI 0 cluster_size]
-        assert {![string match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]]}
+        assert {![cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]}
 
         set ae "AE $leader_id 1 3 1 4 1\n"
         append ae "1 DEL_VOTER $learner_id"
@@ -257,7 +153,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 4 *" $reply
         assert_equal 1 [CI 0 cluster_size]
-        assert_match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+        assert {[cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]}
 
         set ae "AE $leader_id 1 4 1 5 1\n"
         append ae "1 NODE_FORGET $learner_id 0"
@@ -265,7 +161,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 5 *" $reply
         assert_equal 1 [CI 0 cluster_size]
-        assert_equal "" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+        assert_equal {} [cluster_get_node_by_id 0 $learner_id]
 
         close $fd
     }
@@ -596,7 +492,6 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
 start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
     # Shared setup: form cluster and assign slots.
     R 0 CLUSTER MEET [srv -1 host] [srv -1 port]
-    raft_add_voter [srv 0 client] [R 1 CLUSTER MYID]
 
     wait_for_condition 50 100 {
         [CI 0 cluster_size] == 2 &&

@@ -1,4 +1,13 @@
-if (USE_JEMALLOC)
+if (USE_JEMALLOC AND USE_SYSTEM_JEMALLOC_LIB)
+    # Link the jemalloc installed on the system instead of the vendored copy. The target keeps the name of the
+    # vendored one so that everything linking "jemalloc" works unchanged.
+    find_path(SYSTEM_JEMALLOC_INCLUDE_DIR jemalloc/jemalloc.h REQUIRED)
+    find_library(SYSTEM_JEMALLOC_LIBRARY jemalloc REQUIRED)
+    message(STATUS "Using system jemalloc: ${SYSTEM_JEMALLOC_LIBRARY}")
+    add_library(jemalloc UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(jemalloc PROPERTIES IMPORTED_LOCATION "${SYSTEM_JEMALLOC_LIBRARY}"
+                                              INTERFACE_INCLUDE_DIRECTORIES "${SYSTEM_JEMALLOC_INCLUDE_DIR}")
+elseif (USE_JEMALLOC)
     add_subdirectory(jemalloc)
 endif ()
 add_subdirectory(lua)

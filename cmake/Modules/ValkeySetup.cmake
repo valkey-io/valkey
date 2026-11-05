@@ -134,12 +134,22 @@ if (NOT BUILD_MALLOC)
 endif ()
 
 # User may pass different allocator library. Using -DBUILD_MALLOC=<libname>, make sure it is a valid value
+set(USE_SYSTEM_JEMALLOC_LIB 0)
 if (BUILD_MALLOC)
     if ("${BUILD_MALLOC}" STREQUAL "jemalloc")
         set(MALLOC_LIB "jemalloc")
         set(ALLOCATOR_LIB "jemalloc")
         add_valkey_server_compiler_options("-DUSE_JEMALLOC")
         set(USE_JEMALLOC 1)
+    elseif ("${BUILD_MALLOC}" STREQUAL "system-jemalloc")
+        # The jemalloc installed on the system, built without the je_ prefix. JEMALLOC_NO_DEMANGLE keeps the je_*
+        # names that jemalloc.h maps to the unprefixed functions, so the call sites stay unchanged.
+        set(MALLOC_LIB "system-jemalloc")
+        set(ALLOCATOR_LIB "jemalloc")
+        add_valkey_server_compiler_options("-DUSE_JEMALLOC")
+        add_valkey_server_compiler_options("-DJEMALLOC_NO_DEMANGLE")
+        set(USE_JEMALLOC 1)
+        set(USE_SYSTEM_JEMALLOC_LIB 1)
     elseif ("${BUILD_MALLOC}" STREQUAL "libc")
         set(MALLOC_LIB "libc")
     elseif ("${BUILD_MALLOC}" STREQUAL "tcmalloc")
@@ -155,7 +165,7 @@ if (BUILD_MALLOC)
         add_valkey_server_compiler_options("-DUSE_TCMALLOC")
         set(USE_TCMALLOC_MINIMAL 1)
     else ()
-        message(FATAL_ERROR "BUILD_MALLOC can be one of: jemalloc, libc, tcmalloc or tcmalloc_minimal")
+        message(FATAL_ERROR "BUILD_MALLOC can be one of: jemalloc, system-jemalloc, libc, tcmalloc or tcmalloc_minimal")
     endif ()
 endif ()
 
@@ -321,7 +331,7 @@ endif ()
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
 
 # Update linker flags for the allocator
-if (USE_JEMALLOC)
+if (USE_JEMALLOC AND NOT USE_SYSTEM_JEMALLOC_LIB)
     include_directories("${CMAKE_SOURCE_DIR}/deps/jemalloc/include")
 endif ()
 

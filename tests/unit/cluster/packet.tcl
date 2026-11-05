@@ -355,3 +355,86 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
         close $sock
     }
 }
+
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "Oversized PING length is rejected before the body is buffered" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+
+        # Only the 14-byte header: signature, totlen of 256MB, ver, port, type PING.
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 0
+        puts -nonewline $sock "RCmb[binary format ISSS [expr {256 * 1024 * 1024}] 1 0 0]"
+
+        # The node must drop the link rather than wait for 256MB of body.
+        wait_for_condition 100 50 {
+            [read $sock] eq "" && [eof $sock]
+        } else {
+            fail "Node kept the link open waiting for an oversized packet"
+        }
+        close $sock
+    }
+}
+
+
+start_cluster 2 0 {tags {external:skip cluster}} {
+    test "PUBLISH larger than the cluster bus packet cap reaches other nodes" {
+        set rd [redis_deferring_client -1]
+        subscribe $rd {bigchannel}
+
+        set data [string repeat x [expr {20 * 1024 * 1024}]]
+        R 0 PUBLISH bigchannel $data
+        wait_for_condition 100 100 {
+            [CI 1 cluster_stats_messages_publish_received] eq 1
+        } else {
+            fail "node 1 didn't receive the clusterbus publish packet"
+        }
+        assert_equal [string length $data] [string length [lindex [$rd read] 2]]
+        $rd close
+    }
+}
+
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "Invalid cluster signature and length are rejected after eight bytes" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        foreach header [list "BAD![binary format I 2256]" "RCmb[binary format I 0]"] {
+            set sock [socket 127.0.0.1 $cluster_port]
+            fconfigure $sock -translation binary -buffering none -blocking 0
+            puts -nonewline $sock $header
+            wait_for_condition 100 50 {
+                [read $sock] eq "" && [eof $sock]
+            } else {
+                fail "Node stopped rejecting an invalid eight-byte cluster header"
+            }
+            close $sock
+        }
+    }
+
+    test "Oversized unknown packet with a fragmented header is rejected" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 0
+        puts -nonewline $sock "RCmb[binary format I [expr {16 * 1024 * 1024 + 1}]]"
+        after 50
+        puts -nonewline $sock [binary format SSS 1 0 65535]
+        wait_for_condition 100 50 {
+            [read $sock] eq "" && [eof $sock]
+        } else {
+            fail "Node kept the link open waiting for an oversized unknown packet"
+        }
+        close $sock
+    }
+
+    test "Cluster packet cap preserves large Pub/Sub and module headers" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        # PUBLISH, MODULE and PUBLISHSHARD retain their existing payload limits.
+        foreach type {4 9 10} {
+            set sock [socket 127.0.0.1 $cluster_port]
+            fconfigure $sock -translation binary -buffering none -blocking 0
+            puts -nonewline $sock "RCmb[binary format ISSS [expr {20 * 1024 * 1024}] 1 0 $type]"
+            after 200
+            assert_equal "" [read $sock]
+            assert {![eof $sock]}
+            close $sock
+        }
+    }
+}

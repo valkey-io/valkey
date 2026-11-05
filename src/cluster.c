@@ -3517,9 +3517,21 @@ void clusterLinkConnectHandler(connection *conn) {
             node->name, node->ip, node->cport);
 }
 
-/* Read data. Try to read the first field of the header first to check the
- * full length of the packet. When a whole packet is in memory this function
- * will call the function to process the packet. And so forth. */
+/* Read enough of the header to validate its length for the message type. */
+#define RCVBUF_MIN_READ_LEN (offsetof(clusterMsg, type) + sizeof(uint16_t))
+
+/* PING gossip fits below this bound. Pub/Sub and module messages carry
+ * client-supplied payloads and can legitimately be much larger. */
+#define CLUSTERMSG_MAX_LEN (16 * 1024 * 1024)
+
+static inline int isClusterMsgLengthTooLarge(uint16_t type, uint32_t totlen) {
+    if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD || type == CLUSTERMSG_TYPE_MODULE)
+        return 0;
+    return totlen > CLUSTERMSG_MAX_LEN;
+}
+
+/* Read data. Validate the packet header before buffering its body. When a
+ * whole packet is in memory this function will process it. */
 void clusterReadHandler(connection *conn) {
     clusterMsg buf[1];
     ssize_t nread;
@@ -3538,11 +3550,13 @@ void clusterReadHandler(connection *conn) {
         } else {
             /* Finally read the full message. */
             hdr = (clusterMsg*) link->rcvbuf;
-            if (rcvbuflen == 8) {
+            if (rcvbuflen == 8 || rcvbuflen == RCVBUF_MIN_READ_LEN) {
                 /* Perform some sanity check on the message signature
                  * and length. */
                 if (memcmp(hdr->sig,"RCmb",4) != 0 ||
-                    ntohl(hdr->totlen) < CLUSTERMSG_MIN_LEN)
+                    ntohl(hdr->totlen) < CLUSTERMSG_MIN_LEN ||
+                    (rcvbuflen == RCVBUF_MIN_READ_LEN &&
+                     isClusterMsgLengthTooLarge(ntohs(hdr->type), ntohl(hdr->totlen))))
                 {
                     char ip[NET_IP_STR_LEN];
                     int port;
@@ -3559,8 +3573,13 @@ void clusterReadHandler(connection *conn) {
                     return;
                 }
             }
-            readlen = ntohl(hdr->totlen) - rcvbuflen;
-            if (readlen > sizeof(buf)) readlen = sizeof(buf);
+            if (rcvbuflen < RCVBUF_MIN_READ_LEN) {
+                /* Get the type before accepting the advertised payload length. */
+                readlen = RCVBUF_MIN_READ_LEN - rcvbuflen;
+            } else {
+                readlen = ntohl(hdr->totlen) - rcvbuflen;
+                if (readlen > sizeof(buf)) readlen = sizeof(buf);
+            }
         }
 
         nread = connRead(conn,buf,readlen);

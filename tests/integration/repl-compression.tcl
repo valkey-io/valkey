@@ -738,8 +738,12 @@ start_server {tags {"repl"} overrides {save ""}} {
                 $primary save
 
                 set rdb_payload [read_binary_file [server_rdb_path $primary]]
-                set codec_hex [expr {$mode eq "zstd" ? "02" : "01"}]
+                # Not expr: it would turn "01" into the integer 1, shifting the
+                # envelope by a nibble so it fails on the codec id, not in the codec.
+                if {$mode eq "zstd"} {set codec_hex 02} else {set codec_hex 01}
                 set corrupt_stream [binary format H* "56435301${codec_hex}0002"]
+                binary scan [string range $corrupt_stream 4 6] H* envelope_tail
+                assert_equal "${codec_hex}0002" $envelope_tail
                 append corrupt_stream [string repeat "\x00" 64]
 
                 set fake_pid ""

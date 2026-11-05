@@ -1988,6 +1988,24 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     for (uint64_t i = 0; i < rs->log_count; i++) raftLogFree(rs->log[i]);
     rs->log_count = 0;
 
+    /* clusterLoadNodeLine() only adds flags and replica links to a node that
+     * already exists. Reset them first so that the snapshot fully defines the
+     * new state. MIGRATE_TO isn't part of the node lines, so keep it. A joiner
+     * keeps MEET until it finds itself in the snapshot. */
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            int keep = CLUSTER_NODE_MYSELF | CLUSTER_NODE_MIGRATE_TO;
+            if (node == myself && rs->role == RAFT_ROLE_JOINER) keep |= CLUSTER_NODE_MEET;
+            node->flags &= keep;
+            node->replicaof = NULL;
+            node->num_replicas = 0;
+        }
+        dictReleaseIterator(di);
+    }
+
     /* Parse snapshot node lines — updates existing nodes, creates new ones. */
     dict *snapshot_nodes = dictCreate(&clusterNodesDictType);
     for (int i = 0; i < config_line_count; i++) {

@@ -442,7 +442,7 @@ TEST_F(UtilTest, TestSnprintfAsyncSignalSafe) {
     ASSERT_ASYNC_FORMAT_MATCHES("%zu %zu", (size_t)0, SIZE_MAX);
     ASSERT_ASYNC_FORMAT_MATCHES("%x %x %lx %llx", 0xdeadbeefu, UINT_MAX, ULONG_MAX, ULLONG_MAX);
     /* Zero-padded and space-padded widths, as used for registers and stack content. */
-    ASSERT_ASYNC_FORMAT_MATCHES("[%016lx] [%08lx] [%08lx]", 0xabcUL, 0x12345678UL, 0x123456789UL);
+    ASSERT_ASYNC_FORMAT_MATCHES("[%016lx] [%08lx] [%04lx]", 0xabcUL, 0x12345678UL, 0xdeadbeefUL);
     ASSERT_ASYNC_FORMAT_MATCHES("[%04ld] [%04ld] [%5d] [%03u]", 7L, -7L, 42, 5u);
     ASSERT_ASYNC_FORMAT_MATCHES("%p %p", (void *)&x, (void *)0x1);
     ASSERT_ASYNC_FORMAT_MATCHES("[%s] [%s]", "abc", "");

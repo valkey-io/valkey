@@ -2658,7 +2658,8 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
     /* Handle replicas replicating to a different primary address. */
     if ((ri->flags & SRI_REPLICA) && role == SRI_REPLICA &&
         (ri->replica_primary_port != ri->primary->addr->port ||
-         !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host))) {
+         (ri->replica_primary_host &&
+          !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host)))) {
         mstime_t wait_time = ri->primary->failover_timeout;
 
         /* Make sure the primary is sane before reconfiguring this instance
@@ -3816,7 +3817,8 @@ void sentinelCommand(client *c) {
             "    Show a list of Sentinel instances for this primary and their state.",
             "SET <primary-name> <option> <value> [<option> <value> ...]",
             "    Set configuration parameters for certain primaries.",
-            "SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
+            "SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) "
+            "[(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...]",
             "    Simulate a Sentinel crash.",
             NULL,
         };
@@ -4116,7 +4118,8 @@ void sentinelCommand(client *c) {
         dictReleaseIterator(di);
         if (primaries_local != sentinel.primaries) dictRelease(primaries_local);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "simulate-failure")) {
-        /* SENTINEL SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP] */
+        /* SENTINEL SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP)
+         * [(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...] */
         int j;
 
         sentinel.simfailure_flags = SENTINEL_SIMFAILURE_NONE;

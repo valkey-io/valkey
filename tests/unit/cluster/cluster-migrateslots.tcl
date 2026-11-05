@@ -1295,6 +1295,21 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Import cancelled while target writes are paused" {
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        R 0 CLIENT PAUSE 100000 WRITE
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
+        wait_for_migration_field 0 $jobname state failed
+        assert_equal "PONG" [R 0 PING]
+
+        R 0 CLIENT UNPAUSE
+        set_debug_prevent_pause 0
+    }
+
     test "OOM on target aborts migration" {
         assert_does_not_resync {
             # Load some data before the snapshot
@@ -1598,6 +1613,16 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 10923 10923
             }
+        }
+    }
+
+    test "RESET is rejected on a slot migration client" {
+        assert_does_not_resync {
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                $client RESET
+            }
+            assert_equal PONG [R 0 PING]
         }
     }
 
@@ -3086,5 +3111,47 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_match "OK" [R 0 FLUSHALL SYNC]
         assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
         wait_for_migration 2 16383
+    }
+}
+
+start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no forkless-infrastructure-enabled yes forkless-policy prefer-forkless save "" repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set node0_id [R 0 CLUSTER MYID]
+
+    test "Forkless BGSAVE falls back to fork while a slot import is in progress" {
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_migration_registered 0 $jobname
+        R 0 bgsave
+        waitForBgsave [Rn 0]
+        assert_equal fork [getInfoProperty [R 0 info persistence] rdb_last_bgsave_type]
+        assert_equal 1 [getInfoProperty [R 0 info stats] forkless_fallbacks_slot_import]
+        R 1 CLUSTER CANCELSLOTMIGRATIONS
+        wait_for_migration_field 0 $jobname state failed
+        set_debug_prevent_pause 0
+    }
+
+    test "Forkless sync to a replica falls back to fork when a slot migration starts during the scan" {
+        R 0 debug populate 2000 {b}
+        R 0 config set rdb-key-save-delay 1000
+        set loglines [count_log_lines 0]
+        R 0 debug change-repl-id
+        R 0 client kill type replica
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: forkless*"} $loglines 50 100
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_log_messages 0 {"*forkless save cancelled*"} $loglines 50 100
+        R 0 config set rdb-key-save-delay 0
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: fork"} $loglines 50 100
+        wait_for_condition 50 100 {
+            [getInfoProperty [R 2 info replication] master_link_status] eq "up"
+        } else {
+            fail "Replica didn't resync"
+        }
+        R 1 CLUSTER CANCELSLOTMIGRATIONS
+        wait_for_migration_field 0 $jobname state failed
+        set_debug_prevent_pause 0
+        R 0 flushall
     }
 }

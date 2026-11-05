@@ -1106,6 +1106,22 @@ start_server {tags {"introspection"}} {
         $rd close
     } {0} {needs:repl}
 
+    test {MONITOR redacts credentials of rejected commands} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ; # Discard the OK
+
+        catch {r hello 4 AUTH not-real not-a-password} _
+        catch {r hello 3 AUTH not-a-password} _
+        catch {r auth not-real not-a-password extra} _
+        catch {r migrate [srv 0 host] [srv 0 port] key 9 5000 bogus AUTH not-a-password} _
+
+        for {set i 0} {$i < 4} {incr i} {
+            assert_no_match {*not-a-password*} [$rd read]
+        }
+        $rd close
+    } {0} {needs:repl}
+
     test {MONITOR correctly handles multi-exec cases} {
         set rd [valkey_deferring_client]
         $rd monitor
@@ -2066,6 +2082,36 @@ test {CONFIG REWRITE handles large unsigned memory config values} {
     }
 } {} {external:skip}
 
+# A sysfs attribute reports a size of 4096 but reads back far fewer bytes,
+# which gives a deterministic short read of the old config file.
+test {CONFIG REWRITE fails when the old config file reads short} {
+    set sysfs_file /sys/kernel/mm/transparent_hugepage/enabled
+    if {![file readable $sysfs_file] || [file size $sysfs_file] <= [string length [exec cat $sysfs_file]]} {
+        skip "$sysfs_file is missing or does not read short"
+    }
+    start_server {tags {"introspection"}} {
+        set config_file [srv 0 config_file]
+        file rename $config_file $config_file.bak
+        file link -symbolic $config_file $sysfs_file
+        catch {r config rewrite} err
+        file delete $config_file
+        file rename $config_file.bak $config_file
+        assert_match {ERR Rewriting config file: *} $err
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE keeps a replicaof host with a newline on one line} {
+    start_server {tags {"introspection"}} {
+        set host "127.0.0.1 1\nmaxmemory 1234567\n#"
+        r replicaof $host 1
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get replicaof] 1] "$host 1"
+    }
+} {} {external:skip}
+
 test {SIGNED MEMORY CONFIG allows negative number} {
     start_server {tags {"introspection"}} {
         r config set slot-migration-max-failover-repl-bytes -1
@@ -2092,7 +2138,7 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"introspecti
             r flushall
             r set k v
             r config set rdb-key-save-delay 10000000
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             wait_for_condition 1000 10 {
                 [s rdb_bgsave_in_progress] eq 1

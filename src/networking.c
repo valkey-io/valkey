@@ -32,6 +32,8 @@
 #include "cluster_slot_stats.h"
 #include "cluster_migrateslots.h"
 #include "script.h"
+#include "forkless.h"
+#include "bgiteration.h"
 #include "intset.h"
 #include "sds.h"
 #include "fpconv_dtoa.h"
@@ -2229,7 +2231,11 @@ void disconnectReplicas(void) {
         client *replica = (client *)ln->value;
         /* If we are going to disconnect all replicas, there is no need to protect the rdb channel. */
         replica->flag.protected_rdb_channel = 0;
-        freeClient(replica);
+        /* The replica may be the client running this command. */
+        if (replica == server.current_client)
+            freeClientAsync(replica);
+        else
+            freeClient(replica);
     }
 }
 
@@ -2399,6 +2405,18 @@ int freeClient(client *c) {
     if (server.debug_force_free_primary_async && c->flag.primary) {
         server.debug_force_free_primary_async = 0;
         freeClientAsync(c);
+        return 0;
+    }
+
+    /* The forkless save's background thread may still be using this replica's
+     * connection, so we must not free it here. Instead, remove it from the
+     * replica tracking now and mark it for close; the forkless save owns the
+     * client and frees it when it is safe to do so. */
+    if (c->flag.forkless_managed) {
+        if (atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed))
+            return 0; /* Already marked, don't double-process. */
+        retireForklessManagedReplica(c);
+        atomic_store_explicit(&c->repl_data->forkless_pending_close, 1, memory_order_relaxed);
         return 0;
     }
 
@@ -3193,9 +3211,14 @@ static void proceedToUnwritten(replyIOV *reply, int nwritten) {
 static int writevToClient(client *c) {
     int iovmax = min(IOV_MAX, c->conn->iovcnt);
     struct iovec iov_arr[iovmax];
-    /* iov_arr can accommodate iovmax / NUM_OF_IOV_PER_BULK_STR full bulk string replies
-     * and one partial bulk reply */
-    char prefixes[iovmax / NUM_OF_IOV_PER_BULK_STR + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];
+    /* Each referenced bulk string needs a $<length>\r\n prefix slot.
+     * A non-empty string costs NUM_OF_IOV_PER_BULK_STR (3) iov entries;
+     * an empty string costs only 2 because addPlainBufferToReplyIOV skips
+     * the zero-length data iov. The worst-case prefix count is therefore
+     * iovmax/2. The +1 is needed because when iovmax is even the last CRLF
+     * fills iov_arr before limit_reached is set, so the loop writes one more
+     * prefix entry before discovering the array is full. */
+    char prefixes[iovmax / 2 + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];
     char crlf[2] = {'\r', '\n'};
     size_t bufcnt = 0;
 
@@ -4458,9 +4481,10 @@ int processCommandAndResetClient(client *c) {
  * the client. Returns C_ERR if the client is no longer valid after executing
  * the command, and C_OK for all other cases. */
 int processPendingCommandAndInputBuffer(client *c) {
-    /* Blocked clients are resumed via processUnblockedClients(); skip them here
-     * to avoid re-entering processCommand() while pending_command is intentionally left set. */
-    if (c->flag.blocked) return C_OK;
+    /* Blocked and throttled clients are resumed via processUnblockedClients(); skip them here
+     * to avoid re-entering processCommand() while pending_command is intentionally left set.
+     * A throttled client has already passed its throttle check, so re-entry would execute it. */
+    if (c->flag.blocked || c->flag.throttled) return C_OK;
 
     /* Notice, this code is also called from 'processUnblockedClients'.
      * But in case of a module blocked client (see RM_Call 'K' flag) we do not reach this code path.
@@ -4988,6 +5012,11 @@ int isClientConnIpV6(client *c) {
     return getClientPeerId(c)[0] == '[';
 }
 
+static int clientIsClosing(client *c) {
+    return c->flag.close_asap ||
+           (c->repl_data && atomic_load_explicit(&c->repl_data->forkless_pending_close, memory_order_relaxed));
+}
+
 /* Concatenate a string representing the state of a client in a human
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
@@ -5012,7 +5041,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.dirty_cas) *p++ = 'd';
     if (client->flag.close_after_reply) *p++ = 'c';
     if (client->flag.unblocked) *p++ = 'u';
-    if (client->flag.close_asap) *p++ = 'A';
+    if (clientIsClosing(client)) *p++ = 'A';
     if (client->flag.unix_socket) *p++ = 'U';
     if (client->flag.readonly) *p++ = 'r';
     if (client->flag.no_evict) *p++ = 'e';
@@ -5245,7 +5274,7 @@ void resetCommand(client *c) {
         flags.replica = 0;
     }
 
-    if (flags.replica || flags.primary || flags.module) {
+    if (flags.replica || flags.primary || flags.module || c->slot_migration_job) {
         addReplyError(c, "can only reset normal client connections");
         return;
     }
@@ -5687,7 +5716,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
             if (!c->flag.unblocked) return 0;
             break;
         case 'A': /* Close ASAP */
-            if (!c->flag.close_asap) return 0;
+            if (!clientIsClosing(c)) return 0;
             break;
         case 'U': /* client is connected via a Unix domain socket */
             if (!c->flag.unix_socket) return 0;
@@ -5721,7 +5750,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.multi || c->flag.blocked || c->flag.tracking ||
                 c->flag.tracking_broken_redir || c->flag.tracking_bcast ||
                 c->flag.dirty_cas || c->flag.close_after_reply ||
-                c->flag.unblocked || c->flag.close_asap ||
+                c->flag.unblocked || clientIsClosing(c) ||
                 c->flag.unix_socket || c->flag.readonly ||
                 c->flag.no_evict || c->flag.no_touch || c->flag.throttled ||
                 c->flag.import_source || c->slot_migration_job ||
@@ -6384,6 +6413,15 @@ void helloCommand(client *c) {
     long long ver = 0;
     int next_arg = 1;
 
+    /* Redact credentials before any validation, since a rejected command is
+     * still shown in MONITOR and the commandlog. */
+    for (int j = 1; j < c->argc; j++) {
+        if (strcasecmp(objectGetVal(c->argv[j]), "AUTH")) continue;
+        if (j + 1 < c->argc) redactClientCommandArgument(c, j + 1);
+        if (j + 2 < c->argc) redactClientCommandArgument(c, j + 2);
+        j += 2;
+    }
+
     if (c->argc >= 2) {
         if (getLongLongFromObjectOrReply(c, c->argv[next_arg++], &ver,
                                          "Protocol version is not an integer or out of range") != C_OK) {
@@ -6403,8 +6441,6 @@ void helloCommand(client *c) {
         int moreargs = (c->argc - 1) - j;
         const char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "AUTH") && moreargs >= 2) {
-            redactClientCommandArgument(c, j + 1);
-            redactClientCommandArgument(c, j + 2);
             username = c->argv[j + 1];
             password = c->argv[j + 2];
             j += 2;
@@ -6672,7 +6708,12 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
         }
         /* A compressed batch keeps this cursor pinned until the staged output
          * drains, so repl_buf_size already represents all unsent data. */
-        return repl_buf_size + (repl_node_size * repl_node_num);
+        size_t usage = repl_buf_size + (repl_node_size * repl_node_num);
+        /* While a forkless sync scans, its queued inline writes are shared by
+         * all its replicas, like the backlog, so each replica is charged all. */
+        if (c->flag.forkless_managed && forklessIteratorOwnsIncomingReplication())
+            usage += bgIteration_memoryInuseForReplication();
+        return usage;
     }
 
     size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
@@ -7130,9 +7171,10 @@ int processClientIOReadsDone(client *c) {
         int mask = 0;
         if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
             mask = CONN_POSTPONE_READ;
-            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
             needs_post_read_update = 1;
         }
+        /* An IO thread may still be writing, keep WRITE postponed until processClientIOWriteDone. */
+        if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
         connSetPostponeUpdateState(c->conn, mask);
         connUpdateState(c->conn);
     }

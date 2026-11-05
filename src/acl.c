@@ -3587,6 +3587,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
 
     if (server.acllog_max_len == 0) {
         trimACLLogEntriesToMaxLen();
+        sdsfree(object);
         return;
     }
 
@@ -4297,13 +4298,15 @@ void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
  * When the user is omitted it means that we are trying to authenticate
  * against the default user. */
 void authCommand(client *c) {
+    /* Redact every argument before the syntax check, since a rejected command
+     * is still shown in MONITOR and the commandlog. */
+    for (int j = 1; j < c->argc; j++) redactClientCommandArgument(c, j);
+
     /* Only two or three argument forms are allowed. */
     if (c->argc > 3) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
-    /* Always redact the second argument */
-    redactClientCommandArgument(c, 1);
 
     /* Handle the two different forms here. The form with two arguments
      * will just use "default" as username. */
@@ -4323,7 +4326,6 @@ void authCommand(client *c) {
     } else {
         username = c->argv[1];
         password = c->argv[2];
-        redactClientCommandArgument(c, 2);
     }
 
     robj *err = NULL;

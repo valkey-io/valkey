@@ -26,12 +26,9 @@ static bool isScriptCallWriteCmd(struct serverCommand *cmd) {
  * write commands, blocking them from modifying the format while the background thread might be
  * operating on the item.
  *  - PFCOUNT - modifies the underlying string (and is replicated!)
- *  - LINDEX/LRANGE/LPOS - may modify quicklist by LZF compress/uncompress */
+ *  - SORT_RO may modify the encoding (#4698) */
 static bool isFormatChangingCommand(struct serverCommand *cmd) {
     return ((cmd->proc == pfcountCommand) ||
-            (cmd->proc == lindexCommand) ||
-            (cmd->proc == lrangeCommand) ||
-            (cmd->proc == lposCommand) ||
             (cmd->proc == sortroCommand));
 }
 
@@ -2312,6 +2309,12 @@ void bgIteration_flushall(void) {
 
 
 // PUBLIC API
+void bgIteration_swapdb(int db1, int db2) {
+    if (bgIteration_iterationActive()) handleSwapdb(db1, db2);
+}
+
+
+// PUBLIC API
 bool bgIteration_blockClientIfRequired(client *c) {
     serverAssert(hasMainThreadExclusivity());
     iteratorReplicationFlagsWereUpdated = false;
@@ -2451,14 +2454,6 @@ void bgIteration_handleCommandReplication(int dbid,
         sdsfree(sdsArgv);
     }
 
-    if (cmd->proc == swapdbCommand) {
-        // All iterators and clients must be informed of swapdb
-        int id1, id2;
-        // command has been processed, but Valkey allows "swapdb 0 0" (which can be ignored)
-        if (getParamsForSwapdb(argc, argv, NULL, &id1, &id2))
-            handleSwapdb(id1, id2);
-    }
-
     /* In the case that a key is touched in a different DB (COPY/MOVE) the key is recorded as
      *  a "special" key and than handled below. */
     int special_dbid = 0;
@@ -2526,7 +2521,11 @@ void bgIteration_handleCommandReplication(int dbid,
                  *       handle it as a "missing key" below.  If we were to try to handle it as a
                  *       standard "missing key", we would get the DBID incorrect. */
 
-            } else if (listLength(curCmdMissingKeys) > 0) {
+            } else if (listLength(curCmdMissingKeys) > 0 &&
+                       cmd->proc != multiCommand && cmd->proc != execCommand) {
+                /* MULTI/EXEC are ignored because they are injected around a transaction by
+                 * propagateToBgIteration without passing through bgIteration_blockClientIfRequired.
+                 * curCmdMissingKeys holds the keys of a command inside the transaction. */
                 listIter missingIt;
                 listNode *missingNode;
                 listRewind(curCmdMissingKeys, &missingIt);

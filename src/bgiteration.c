@@ -26,12 +26,9 @@ static bool isScriptCallWriteCmd(struct serverCommand *cmd) {
  * write commands, blocking them from modifying the format while the background thread might be
  * operating on the item.
  *  - PFCOUNT - modifies the underlying string (and is replicated!)
- *  - LINDEX/LRANGE/LPOS - may modify quicklist by LZF compress/uncompress */
+ *  - SORT_RO may modify the encoding (#4698) */
 static bool isFormatChangingCommand(struct serverCommand *cmd) {
     return ((cmd->proc == pfcountCommand) ||
-            (cmd->proc == lindexCommand) ||
-            (cmd->proc == lrangeCommand) ||
-            (cmd->proc == lposCommand) ||
             (cmd->proc == sortroCommand));
 }
 

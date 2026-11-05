@@ -1,3 +1,12 @@
+# macOS ships Tcl 8.5, where lsort does not support -stride.
+proc sort_path_hash_field_pairs {pairs} {
+    set pair_list {}
+    foreach {field value} $pairs {
+        lappend pair_list [list $field $value]
+    }
+    return [concat {*}[lsort -index 0 $pair_list]]
+}
+
 start_server {tags {pathhash}} {
     test {PHSET creates a native path hash object and exact reads are binary safe} {
         set path [binary format H* 0001ff]
@@ -122,7 +131,7 @@ start_server {tags {pathhash}} {
             [r phprefixes tree abczzz fields 3 f1 missing f2 count 1]
         set match [lindex [r phprefixes tree abczzz withvalues count 1] 0]
         assert_equal abc [lindex $match 0]
-        assert_equal {f1 v1 f2 v2} [lsort -stride 2 [lindex $match 1]]
+        assert_equal {f1 v1 f2 v2} [sort_path_hash_field_pairs [lindex $match 1]]
         assert_equal [list {}] [r phprefixes tree zzz count 1]
         assert_equal {0} [r phprefixes tree zzz lengths count 1]
         assert_equal {} [r phprefixes missing anything count 1]
@@ -402,7 +411,7 @@ start_server {tags {pathhash}} {
             if {$cursor eq "0"} break
             assert {[incr pages] < 1000}
         }
-        assert_equal {user:1 Alice user:2 Bob} [lsort -stride 2 $values]
+        assert_equal {user:1 Alice user:2 Bob} [sort_path_hash_field_pairs $values]
         assert_equal {0 {}} [r phscan scan-tree a 0 match Alice]
         assert_equal {0 {}} [r phscan scan-tree missing 0]
         assert_equal {0 {}} [r phscan missing a 0]
@@ -453,7 +462,7 @@ start_server {tags {pathhash}} {
         # Compact payloads finish in one call, even with COUNT 1.
         lassign [r phscan scan-tree p 0 count 1] cursor entries
         assert_equal 0 $cursor
-        assert_equal {f0 v0 f1 v1} [lsort -stride 2 $entries]
+        assert_equal {f0 v0 f1 v1} [sort_path_hash_field_pairs $entries]
         for {set i 2} {$i < 100} {incr i} {
             r phset scan-tree p fields 1 f$i v$i
         }

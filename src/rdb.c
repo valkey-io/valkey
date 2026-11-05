@@ -1381,6 +1381,15 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val) {
     return rdbSaveAuxField(rdb, key, strlen(key), buf, vlen);
 }
 
+/* Save the replication AUX fields (stream db, replication ID and offset). */
+int rdbSaveInfoReplAuxFields(rio *rdb, rdbSaveInfo *rsi) {
+    serverAssert(rsi != NULL);
+    if (rdbSaveAuxFieldStrInt(rdb, "repl-stream-db", rsi->repl_stream_db) == -1) return -1;
+    if (rdbSaveAuxFieldStrStr(rdb, "repl-id", server.replid) == -1) return -1;
+    if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.primary_repl_offset) == -1) return -1;
+    return 1;
+}
+
 /* Save a few default AUX fields with information about the RDB generated. */
 int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     int redis_bits = (sizeof(void *) == 8) ? 64 : 32;
@@ -1393,11 +1402,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     if (rdbSaveAuxFieldStrInt(rdb, "used-mem", zmalloc_used_memory()) == -1) return -1;
 
     /* Handle saving options that generate aux fields. */
-    if (rsi) {
-        if (rdbSaveAuxFieldStrInt(rdb, "repl-stream-db", rsi->repl_stream_db) == -1) return -1;
-        if (rdbSaveAuxFieldStrStr(rdb, "repl-id", server.replid) == -1) return -1;
-        if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.primary_repl_offset) == -1) return -1;
-    }
+    if (rsi && rdbSaveInfoReplAuxFields(rdb, rsi) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb, "aof-base", aof_base) == -1) return -1;
 
     /* Handle additional dynamic aux fields */
@@ -1613,22 +1618,38 @@ static void rdbCompressionFree(rio *rdb, streamWriter *writer);
  * While the suffix is the 40 bytes hex string we announced in the prefix.
  * This way processes receiving the payload can understand when it ends
  * without doing any processing of the content. */
+
+/* Generate a fresh diskless-replication EOF mark into eofmark (which must be
+ * RDB_EOF_MARK_SIZE bytes) and write the "$EOF:<mark>\r\n" prefix that precedes
+ * the RDB payload. The caller keeps eofmark to pass to rdbWriteEofMarkEnd. */
+int rdbWriteEofMarkStart(rio *rdb, char *eofmark) {
+    getRandomHexChars(eofmark, RDB_EOF_MARK_SIZE);
+    if (rioWrite(rdb, "$EOF:", 5) == 0) return C_ERR;
+    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) return C_ERR;
+    if (rioWrite(rdb, "\r\n", 2) == 0) return C_ERR;
+    return C_OK;
+}
+
+/* Write the diskless-replication EOF-mark that follows the RDB payload; it
+ * repeats the mark announced by rdbWriteEofMarkStart. */
+int rdbWriteEofMarkEnd(rio *rdb, const char *eofmark) {
+    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) return C_ERR;
+    return C_OK;
+}
+
 static int rdbSaveRioWithEOFMark(int req, int rdbver, rio *rdb, int *error, rdbSaveInfo *rsi, compressionAlgo compression_algo) {
     char eofmark[RDB_EOF_MARK_SIZE];
 
     startSaving(RDBFLAGS_REPLICATION);
-    getRandomHexChars(eofmark, RDB_EOF_MARK_SIZE);
     if (error) *error = 0;
-    if (rioWrite(rdb, "$EOF:", 5) == 0) goto werr;
-    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
-    if (rioWrite(rdb, "\r\n", 2) == 0) goto werr;
+    if (rdbWriteEofMarkStart(rdb, eofmark) == C_ERR) goto werr;
 
     /* Compress only the RDB body; the $EOF prefix/suffix stay plaintext. */
     if (rdbSaveRio(compression_algo, req, rdbver, rdb, error,
                    RDBFLAGS_REPLICATION, rsi) == C_ERR)
         goto werr;
 
-    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
+    if (rdbWriteEofMarkEnd(rdb, eofmark) == C_ERR) goto werr;
     stopSaving(1);
     return C_OK;
 
@@ -1843,8 +1864,15 @@ int resolveBgsaveType(void) {
     serverAssert(server.forkless_infrastructure_enabled);
 
     if (!moduleAllModulesHandleForkless()) {
+        server.stat_forkless_fallbacks_module++;
         serverLog(LL_WARNING, "Falling back to fork-based save: forkless is configured but a loaded "
                               "module has not declared VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
+        return RDB_BGSAVE_TYPE_FORK;
+    }
+    /* A forkless save currently doesn't include slot import state or importing keys. */
+    if (clusterIsAnySlotImporting()) {
+        server.stat_forkless_fallbacks_slot_import++;
+        serverLog(LL_NOTICE, "Falling back to fork-based save: a slot import is in progress");
         return RDB_BGSAVE_TYPE_FORK;
     }
     return RDB_BGSAVE_TYPE_FORKLESS;
@@ -1892,7 +1920,7 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
             return C_ERR;
         }
         serverLog(LL_NOTICE, "Background saving started by pid %ld", (long)childpid);
-        rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK);
+        rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK, RDB_WRITE_TARGET_DISK);
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -3694,6 +3722,24 @@ done:
     return res;
 }
 
+/* Adapts rioRead to the read_fn signature used by parseRespCommandFromReader. */
+static size_t rdbRioReader(void *ctx, void *buf, size_t len) {
+    return rioRead((rio *)ctx, buf, len);
+}
+
+/* Adapts rioRead to the readline_fn signature used by parseRespCommandFromReader:
+ * like fgets, reads up to and including '\n', one byte at a time. */
+static char *rdbRioReadLine(void *ctx, char *buf, int size) {
+    int pos = 0;
+    while (pos < size - 1) {
+        if (rioRead((rio *)ctx, buf + pos, 1) == 0) break;
+        if (buf[pos++] == '\n') break;
+    }
+    if (pos == 0) return NULL;
+    buf[pos] = '\0';
+    return buf;
+}
+
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
  * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
@@ -3711,6 +3757,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
     long long empty_keys_skipped = 0;
     long long rdb_last_load_all_fields_expired = 0;
     bool is_valkey_magic = false, is_redis_magic = false;
+    int ret; /* set by each exit path, returned at the shared cleanup label */
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
@@ -3760,7 +3807,54 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
             serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
                       type, rdbver);
-            return RDB_FAILED;
+            goto loaderr;
+        }
+
+        /* Inline replication commands run on load. The opcode is honored on any
+         * RDB 81 or newer load, but loadCommandFromArgv only runs the embedded command if it is
+         * a write command or one that may replicate (e.g. PUBLISH, EVAL). This
+         * prevents a crafted RDB from invoking arbitrary commands through the
+         * fake client, which bypasses ACL checks. */
+        if (type == RDB_OPCODE_UPDATE) {
+            if (rdbver < 81) {
+                serverLog(LL_WARNING, "Opcode %d requires RDB version 81 or newer", type);
+                goto loaderr;
+            }
+            if (rdb_loading_ctx->dbarray != server.db) {
+                serverLog(LL_WARNING, "Inline RDB commands are not supported with swapdb loading");
+                goto loaderr;
+            }
+            robj **argv = NULL;
+            int argc = 0;
+            respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdbRioReadLine, rdb, &argc, &argv);
+            if (pr == RESP_PARSE_EOF) goto eoferr;
+            if (pr == RESP_PARSE_FMTERR) goto inlinefmterr;
+            if (pr == RESP_PARSE_OOM) goto inlineoomerr;
+
+            /* Create the fake client the first time we see an inline command,
+             * then reuse it. Most loads have no inline commands, so we avoid
+             * making one until it is actually needed. */
+            if (rdb_loading_ctx->update_client == NULL) {
+                rdb_loading_ctx->update_client = createAOFClient();
+            }
+            client *fakeClient = rdb_loading_ctx->update_client;
+
+            fakeClient->db = db;
+            sds err = NULL;
+            int load_cmd_ret = loadCommandFromArgv(fakeClient, argv, argc, LOAD_CMD_SOURCE_INLINE_REPL, &err);
+            /* FUNCTION FLUSH and FUNCTION RESTORE FLUSH replace the current ctx. */
+            rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
+            /* On an unknown or invalid command, stop the load. Skipping it
+             * would leave this replica with different data than the primary. */
+            if (load_cmd_ret != LOAD_CMD_OK) {
+                serverLog(LL_WARNING, "Error applying inline command from RDB stream: %s", err);
+                sdsfree(err);
+                /* loadCommandFromArgv already freed argv via the fake client. */
+                goto loaderr;
+            }
+            fakeClient->cmd = NULL;
+            /* argv was freed by loadCommandFromArgv (through the fake client). */
+            continue;
         }
 
         /* Handle special types. */
@@ -4050,7 +4144,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
                 serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
-                return RDB_FAILED;
+                goto loaderr;
             } else if (error == RDB_LOAD_ERR_ALL_ITEMS_EXPIRED) {
                 rdb_last_load_all_fields_expired++;
                 sdsfree(key);
@@ -4146,7 +4240,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                           "got (%llx). Aborting now.",
                           (unsigned long long)expected, (unsigned long long)cksum);
                 rdbReportCorruptRDB("RDB CRC error");
-                return RDB_FAILED;
+                goto loaderr;
             }
         }
     }
@@ -4158,26 +4252,51 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, all fields expired hashes: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, rdb_last_load_all_fields_expired);
     }
-    return RDB_OK;
+    ret = RDB_OK;
+    goto cleanup;
+
+    /* Common failure exit for direct failure paths, so none of them leak the
+     * inline-command fake client. Falls through to the shared cleanup below. */
+loaderr:
+    ret = RDB_FAILED;
+    goto cleanup;
+
+inlinefmterr:
+    serverLog(LL_WARNING, "Malformed inline replication command in RDB");
+    goto loaderr;
+
+inlineoomerr:
+    serverLog(LL_WARNING, "Out of memory reading inline replication command in RDB");
+    goto loaderr;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
      * this will in turn either abort the server in most cases, or if we are loading
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    ret = RDB_FAILED;
     if (rdbRioHasInternalStreamReaderError(rdb)) {
         serverLog(LL_WARNING, "Internal error while decoding streaming-compressed RDB input. Aborting now.");
         rdbReportReadError("Internal error decoding compressed RDB stream");
-        return RDB_FAILED;
+        goto cleanup;
     }
     if (rdbRioHasCorruptCompressedInput(rdb)) {
         serverLog(LL_WARNING, "Corrupt streaming-compressed RDB input. Unrecoverable error, aborting now.");
         rdbReportCorruptRDB("Corrupt compressed RDB stream");
-        return RDB_FAILED;
+        goto cleanup;
     }
     serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
-    return RDB_FAILED;
+    /* fall through */
+
+cleanup:
+    /* Single exit: free the inline-command fake client (if one was created) and
+     * return the result code set by the path that jumped here. */
+    if (rdb_loading_ctx->update_client) {
+        freeClient(rdb_loading_ctx->update_client);
+        rdb_loading_ctx->update_client = NULL;
+    }
+    return ret;
 }
 
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
@@ -4360,11 +4479,13 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         server.rdb_pipe_numconns = 0;
         server.rdb_pipe_numconns_writing = 0;
     }
-    /* Filter replica connections pending full sync (ie. in WAIT_BGSAVE_START state). */
+    /* Filter replica connections pending full sync. The caller has already set them
+     * up for full resync (moving them to WAIT_BGSAVE_END); here we only wire each
+     * connection for transfer. */
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
-        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
             /* Check replica has the exact requirements */
             if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
 
@@ -4381,7 +4502,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
             } else {
                 server.rdb_pipe_numconns++;
             }
-            replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
         }
 
         // do not skip RDB checksum on the primary if connection doesn't have integrity check or if the replica doesn't support it
@@ -4535,9 +4655,9 @@ void bgsaveCommand(client *c) {
                 serverLog(LL_NOTICE, "Background saving (forkless) will be aborted due to user request");
                 forklessSaveCancel();
                 addReplyStatus(c, "Background saving cancelled");
-            } else if (server.rdb_bgsave_scheduled != RDB_BGSAVE_TYPE_NONE) {
+            } else if (server.rdb_bgsave_scheduled) {
                 serverLog(LL_NOTICE, "Scheduled background saving will be cancelled due to user request");
-                server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+                server.rdb_bgsave_scheduled = 0;
                 addReplyStatus(c, "Scheduled background saving cancelled");
             } else {
                 addReplyError(c, "Background saving is currently not in progress or scheduled");
@@ -4549,8 +4669,6 @@ void bgsaveCommand(client *c) {
         }
     }
 
-    int chosen_save_type = resolveBgsaveType();
-
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 
@@ -4558,7 +4676,8 @@ void bgsaveCommand(client *c) {
         addReplyError(c, "Background save already in progress");
     } else if (hasActiveChildProcess() || server.in_exec) {
         if (schedule || server.in_exec) {
-            server.rdb_bgsave_scheduled = chosen_save_type;
+            /* The save method is chosen when the scheduled save starts. */
+            server.rdb_bgsave_scheduled = 1;
             if (schedule) {
                 serverLog(LL_NOTICE, "Background saving scheduled due to user request");
             } else {
@@ -4570,7 +4689,7 @@ void bgsaveCommand(client *c) {
                              "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                              "possible.");
         }
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
+    } else if (resolveBgsaveType() == RDB_BGSAVE_TYPE_FORKLESS) {
         if (forklessSaveToDisk(server.rdb_filename) == C_OK) {
             addReplyStatus(c, "Background saving started");
         } else {
@@ -4705,7 +4824,22 @@ int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi
 /* Write the RDB footer: module aux (after RDB), EOF opcode, and checksum.
  * Returns C_OK on success, C_ERR on error. */
 int rdbWriteFooter(rio *rdb, int req) {
-    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) return C_ERR;
+    if (rdbWriteModulesAuxAfter(rdb, req) == C_ERR) return C_ERR;
+    return rdbWriteEofAndChecksum(rdb);
+}
+
+/* Write the module AFTER_RDB aux fields (skipped when data is excluded). Module
+ * callbacks run here, so this is main-thread only.
+ * Returns C_OK on success, C_ERR on error. */
+int rdbWriteModulesAuxAfter(rio *rdb, int req) {
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1)
+        return C_ERR;
+    return C_OK;
+}
+
+/* Write the EOF opcode and the running RDB checksum that terminate an RDB.
+ * Returns C_OK on success, C_ERR on error. */
+int rdbWriteEofAndChecksum(rio *rdb) {
     if (rdbSaveType(rdb, RDB_OPCODE_EOF) == -1) return C_ERR;
     /* RDB checksum field. It will be zero if checksum computation is disabled, the
      * loading code skips the check in this case. */
@@ -4716,11 +4850,13 @@ int rdbWriteFooter(rio *rdb, int req) {
 }
 
 /* Common state updates when a background save starts. */
-void rdbRecordStartMetrics(int bgsave_type) {
-    server.dirty_before_bgsave = server.dirty;
-    server.lastbgsave_try = time(NULL);
+void rdbRecordStartMetrics(int bgsave_type, int write_target) {
+    if (write_target == RDB_WRITE_TARGET_DISK) {
+        server.dirty_before_bgsave = server.dirty;
+        server.lastbgsave_try = time(NULL);
+    }
     server.rdb_save_time_start = time(NULL);
-    server.rdb_write_target = RDB_WRITE_TARGET_DISK;
+    server.rdb_write_target = write_target;
     server.cur_bgsave_type = bgsave_type;
 }
 

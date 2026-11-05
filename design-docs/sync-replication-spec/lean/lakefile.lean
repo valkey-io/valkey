@@ -11,16 +11,6 @@ require mathlib from git
 @[default_target]
 lean_lib CoreProof
 
--- TLC-Lean cross-check of Core (see LEAN.md, "Cross-check against TLC").
-lean_lib XCheck
-
-lean_exe xcheck where
-  root := `XCheck.Main
-
--- The same for CoreAck (held replies, okd); see LEAN.md, "Cross-check of CoreAck".
-lean_exe xcheck_ack where
-  root := `XCheck.AckMain
-
 @[default_target]
 lean_lib Lease
 

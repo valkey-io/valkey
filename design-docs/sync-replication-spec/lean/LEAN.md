@@ -76,13 +76,11 @@ Three parts are written so the proof can be read against the design doc:
   actions where the fence can drop: a replica that learns of the new configuration
   leaves `p`, and its acknowledgement may be below the old fence. The earlier
   existential witness `Wit`, which also had to carry "this witness has the smallest
-  acknowledgement", is gone. XCheck decides `Fenced` through `FencedAt`, the
-  hypotheses of `Fenced.of_left` for one replica, which implies it.
+  acknowledgement", is gone.
 
 Checked against b14b36c: all 13 theorem statements and the definitions they mention
-print identically, and the theorems' axioms are unchanged. `xcheck` and `xcheck_ack`
-pass with 0 failures. In `XCheck/Axioms.lean`, `invB_sound` and `ainvB_sound` now also
-use `Classical.choice`, because `fence` is a set minimum.
+print identically, and the theorems' axioms are unchanged. The TLC cross-checks (see
+"Cross-check against TLC") passed with 0 failures at these statements.
 
 Until commit 24680af, CoreProof, ReconProof and RestartProof were three separate proofs,
 each a copy of the previous one with changes. The Core-only invariant described in "The
@@ -341,199 +339,20 @@ the expensive mode because Lean gives no traces.
 - Zero proof effort for new configurations and bug switches.
 - Reachability and liveness checks. In Lean, non-vacuity is shown only by explicit runs.
 
-## Cross-check against TLC (`XCheck/`)
+## Cross-check against TLC (not in this tree)
 
-The Lean encoding was compared mechanically with `spec/Core.tla` on TLC's complete state
-graph of `spec/Core_xcheck.cfg`: 3 nodes, `InitPrim = n1`, `MaxLen = 1`, `MaxVer = 5`,
-`ReconcileFirst = TRUE`, `EarlyDrop = FALSE`. The graph has 45,284 states and 146,532
-labelled transitions.
+The Lean step relations of Core and CoreAck were compared with TLC's complete
+state graphs of `spec/Core_xcheck.cfg` and `spec/CoreAck_xcheck.cfg` (3 nodes,
+`MaxLen = 1`, `MaxVer = 5`): 45,284 states and 146,532 transitions for Core,
+111,840 states and 410,788 transitions for CoreAck. Initial states, every
+transition in both directions within the bounds, and `RestartProof.Inv` /
+`AInv` on every state all matched, with 0 failures, last run after the dedup
+(2026-11-05) at the current theorem statements. A mutation test made the checks
+fail as expected. CoreRestart was not cross-checked.
 
-### Pieces
-
-- `xcheck/dot2lean.py` parses TLC's dot dump (`xcheck/core_xcheck.dot`) into
-  `lean/XCheck/data/` (`states.txt`, `labels.txt`, `edges.txt`, `init.txt`). These files
-  are generated and git-ignored.
-- `XCheck/Data.lean` decodes each line into a `CoreProof.State (Fin 3)` (n1, n2, n3 = 0,
-  1, 2). `render` prints a decoded state back in TLC syntax. The checker compares this
-  output with TLC's own state text, whitespace removed, for every state. The decoder is
-  therefore tested against TLC's output and does not have to trust the Python parser.
-- `XCheck/Basic.lean` defines:
-  - `succs s`: for each `Step` constructor, node argument and node pair, the guard is
-    checked with `decide`. Each enabled instance yields its label and its post-state,
-    computed with Model.lean's own post-state functions.
-  - `stepB s s'`: true if `s'` is one of `succs s`.
-  - `stepLB s l s'`: the same, but the label must also be `l`.
-  - `invB s`: `decide` of `InvP (lift s)`, which has the 21 fields of `RestartProof.Inv`.
-    `lift` is `ReconProof.emb ∘ CoreProof.toRecon`, so this checks the invariant the
-    proof of `CoreProof.safety` actually goes through. Until 24680af it checked the
-    standalone Core proof's 17-field `Inv`; that check also passed on all 45,284 states.
-  - `safetyB`: `decide` of `Safety`.
-  - `inBounds`: every log and `hist` have length ≤ 1, and `cfg.ver ≤ 5`.
-  - Decidable equality for states over `Fin 3`, by comparing functions at 0, 1 and 2.
-- Soundness is proven, using only the axioms `propext` and `Quot.sound`, plus
-  `Classical.choice` for `invB_sound` since the fence (see `XCheck/Axioms.lean`):
-  - `stepB_sound : stepB s s' = true → Step true false s s'`, and the same for `stepLB`.
-    Each partial successor `oX` is an `if guard then some (x s p) else none`, where the
-    guard is exactly that constructor's premises. Lemmas `gX` prove that every `some t`
-    is a `Step`, and `allActs_good` covers every list entry.
-  - `invB_sound : invB s = true → RestartProof.Inv (lift s)`.
-  - `safetyB_sound : safetyB s = true → Safety s`.
-- `XCheck/Main.lean` (`lake exe xcheck`) runs the checks.
-
-### Reproduce
-
-The dot dump and `lean/XCheck/data/` are generated and git-ignored. To regenerate both
-(TLC about 5 s, with a metadir under scratch space that is deleted afterwards):
-
-```
-cd spec
-java -XX:+UseParallelGC -cp ../tools/tla2tools.jar tlc2.TLC -config Core_xcheck.cfg \
-     -workers 8 -deadlock -metadir "$MD" -dump dot,actionlabels ../xcheck/core_xcheck \
-     Core.tla > ../xcheck/tlc.out 2>&1
-find "$MD" -delete
-cd ..
-python3 xcheck/dot2lean.py               # about 11 s; writes lean/XCheck/data/
-cd lean
-../tools/lean.sh lake build xcheck XCheck
-../tools/lean.sh lake exe xcheck         # about 6 s
-../tools/lean.sh lake env lean XCheck/Axioms.lean
-```
-
-`lake build XCheck` is needed for `Axioms.lean`, which imports the `XCheck` root module;
-the `xcheck` executable alone does not build it.
-
-### Result (2026-11-04, rerun 2026-11-05 after the dedup): no mismatches
-
-| Check | Result |
-|---|---|
-| Decoding: `render (decode line) = TLC text` | 45,284 / 45,284 |
-| (a) every TLC edge `s → s'` has `stepB s s'` | 146,532 / 146,532 |
-| (a') with the same action label (`stepLB`) | 146,532 / 146,532 |
-| (b) every in-bounds Lean successor of every TLC state is a TLC state, joined by a TLC edge with the same label | 146,532 / 146,532. The in-bounds labelled Lean successors and the distinct labelled TLC edges are the same set. |
-| (b) Lean successors outside the bounds | 68,158. All of them violate a dropped bound: AppendWrite with a log longer than MaxLen (42,738), MakeEligible (18,744), MakeIneligible (5,260) and Takeover (1,416) with `ver > MaxVer`. |
-| (c) TLC's initial state = `init n1` | yes |
-| (d) `invB` (`RestartProof.Inv` of the lifted state) and `safetyB` on every TLC state | 45,284 / 45,284 each |
-
-A mutation test changed one state's `term` and one edge's label in a copy of the data.
-The checker reported decode, (a), (a') and (b) failures as expected.
-
-### What this establishes
-
-On this configuration, the two encodings define the same transition system once the
-TLC bounds are applied. The two systems have:
-
-- the same initial state,
-- the same reachable states,
-- the same transitions, with the same action and arguments.
-
-So every behaviour TLC explored is a `Reachable true false 0` run in Lean. `CoreProof.safety`
-covers exactly these behaviours and extends them to unbounded logs, versions and node
-sets. The check also confirms that `RestartProof.Inv` holds on the image of every
-reachable state here, so the invariant is not stronger than reachability at this size.
-
-This catches encoding slips that the proof could not catch, such as a wrong guard, a
-wrong `EXCEPT`, or the CommitCap rewrite, as long as the slip shows up within the bounds.
-
-### What it does not establish
-
-- **Behaviour outside the bounds.** Logs longer than 1 and versions above 5 were not
-  compared. A Lean/TLA divergence that only shows up with two log entries would go
-  unnoticed. One example is the `getD` index in Replicate when a log is non-empty and
-  being extended. `MaxLen = 1` exercises appending to an empty log only.
-- **Other configurations.** The check does not cover other node counts or
-  `InitPrim` values. It does not cover `ReconcileFirst = FALSE` or `EarlyDrop = TRUE`
-  either: `stepB` fixes `rf = true` and `ed = false`.
-- **Exact fidelity to TLC's semantics.** The decoding and `render` are tested against
-  TLC's printed text, not against TLC's internal values. The parser and printer were
-  written for this dump format only.
-- **TLC's own completeness.** The check relies on TLC's fingerprint-based exploration,
-  which has a reported collision probability of about 1e-10. Any Lean successor TLC
-  missed would show up as a (b) failure.
-
-## Cross-check of CoreAck against TLC (`XCheck/Ack.lean`, `XCheck/AckMain.lean`)
-
-The same comparison for `spec/CoreAck.tla` and `AckProof.AStep true false false`, on TLC's
-complete state graph of `spec/CoreAck_xcheck.cfg`: the Core bounds above (3 nodes,
-`InitPrim = n1`, `MaxLen = 1`, `MaxVer = 5`, `ReconcileFirst = TRUE`, `EarlyDrop = FALSE`)
-plus `NoReplyFence = FALSE`. The graph has 111,840 states and 410,788 labelled
-transitions; TLC checks all of CoreAck's invariants on it.
-
-### Pieces
-
-- `xcheck/dot2lean.py --ack` reads `xcheck/coreack_xcheck.dot` and writes
-  `lean/XCheck/data_ack/`. The state encoding is Core's followed by `held` (count, then
-  node, offset, tag per reply) and `okd` (count, then offset, value per pair).
-  TLC's variable order is not fixed in this dump, so `labels.txt` has the
-  `/\ var = value` conjuncts sorted by variable name; this sort is the only transformation
-  of TLC's text that the script performs.
-- `XCheck/Ack.lean`:
-  - `held` and `okd` are lists in Lean and sets in TLA+. `cn` sorts both (lexicographic on
-    `(node, offset, tag)` and `(offset, value)`) and removes duplicates. States are
-    compared after `cn`.
-  - `asuccs a`: every enabled `AStep` instance with a TLC-style label. `AStep.core` steps
-    are labelled `C<Action>(...)` as CoreAck.tla's wrappers are, `AStep.write` is
-    `Write(p)`, and `AStep.release` / `AStep.abort` are `ReleaseSome` / `AbortSome`
-    (TLC does not print the bound `h`; distinct replies give distinct post-states). A core
-    `AppendWrite` keeps the label `AppendWrite(p)`: it is an append with no held reply,
-    which CoreAck.tla does not have.
-  - `asuccs_sound : (l, t) ∈ asuccs a → AStep true false false a t`, and
-    `astepLB_sound : astepLB a l t = true → ∃ u, AStep true false false a u ∧ cn u = t`.
-  - `ainvB_sound : ainvB a = true → RestartProof.AInv (alift a)` (`Inv`, `TermLe`,
-    `HeldInv`, `AckedDurable` of CoreRestart, on `alift a = ReconProof.aemb (atoRecon a)`),
-    and `ackedHeldB_sound` for `AckedHeld`. Until 24680af `ainvB` checked the standalone
-    `AckProof.AInv`; that check also passed on all 111,840 states.
-  - `decodeA`, `encodeA`, and `renderA`, which prints a state in TLC syntax with the
-    variables in alphabetical order and records as TLC prints them in this dump.
-  - Axioms (`XCheck/Axioms.lean`): `propext`, `Quot.sound`, and for `asuccs_sound` /
-    `astepLB_sound` (and `ainvB_sound`, since the fence) also `Classical.choice`. No `sorry`.
-- `XCheck/AckMain.lean` (`lake exe xcheck_ack`) runs the checks.
-
-### Reproduce
-
-```
-cd spec
-java -XX:+UseParallelGC -cp ../tools/tla2tools.jar tlc2.TLC -config CoreAck_xcheck.cfg \
-     -workers 8 -deadlock -metadir "$MD" -dump dot,actionlabels ../xcheck/coreack_xcheck \
-     CoreAck.tla > ../xcheck/tlc_ack.out 2>&1      # about 11 s, 198 MB dot file
-find "$MD" -delete
-cd ..
-python3 xcheck/dot2lean.py --ack         # about 33 s; writes lean/XCheck/data_ack/
-cd lean
-../tools/lean.sh lake build xcheck_ack XCheck
-../tools/lean.sh lake exe xcheck_ack     # about 14 s
-../tools/lean.sh lake env lean XCheck/Axioms.lean
-```
-
-`xcheck/coreack_xcheck.dot`, `xcheck/tlc_ack.out` and `lean/XCheck/data_ack/` are
-git-ignored.
-
-### Result (2026-11-04, rerun 2026-11-05 after the dedup): no mismatches; Lean is a strict superset by one action
-
-| Check | Result |
-|---|---|
-| Decoding: `renderA (decodeA line) = TLC text` | 111,840 / 111,840 |
-| Every decoded state is canonical (`cn a = a`): TLC's set order is `cn`'s order | 111,840 / 111,840 |
-| (a) every TLC edge `s → s'` has an `AStep` with the same label to a state with `cn = s'` | 410,788 / 410,788 |
-| (b) every in-bounds labelled Lean successor, other than a reply-less `AppendWrite`, of every TLC state is a TLC state joined by a TLC edge with the same label | 410,788 / 410,788. The two edge sets are equal. |
-| (b) Lean successors outside the bounds | 161,904: Write with a log longer than MaxLen (103,042), CMakeEligible (46,278), CMakeIneligible (9,776) and CTakeover (2,808) with `ver > MaxVer`. |
-| Lean successors whose `held` or `okd` list had a duplicate before `cn` | 0 / 0. On these states list and set semantics agree (`erase` removes the only copy). |
-| (b') expected superset: `AStep.core` with `AppendWrite`, an append with no held reply | 13,246 in bounds, one per TLC `Write` edge; none of their post-states is a TLC state. 103,042 more are outside the bounds. |
-| (c) TLC's initial state = `cn (ainit n1)` | yes |
-| (d) `ainvB` (`RestartProof.AInv` of the lifted state), `ackedHeldB`, `safetyB` on every TLC state | 111,840 / 111,840 each |
-
-Direction (b') is the only difference, and it is the one `AckProof/Model.lean` documents:
-`AStep.core` admits Core's `AppendWrite` with `held` and `okd` unchanged. Example, from the
-initial state, `AppendWrite(n1)` gives `log[n1] = <<1>>` with `held = {}`; in TLC, n1's
-only append is `Write(n1)`, which also adds `[n |-> n1, o |-> 1, t |-> 1]` to `held`.
-Lean's model therefore has more behaviours than CoreAck.tla, and `ackSafety` covers it.
-
-A mutation test changed one state's held tag, and separately relabelled one
-`ReleaseSome` edge as `AbortSome`, in copies of the data. The checker reported decode,
-(a), (b) and (d) failures for the first, and (a) and (b) failures for the second.
-
-What this does and does not establish is as for Core above, with one more limit: with
-`MaxLen = 1` every reply has offset 1, so `held` holds at most two replies and `okd` at
-most one pair, and the sort order of larger sets is not exercised.
+The checker (`lean/XCheck/`, `xcheck/dot2lean.py`) needs TLC and the TLA+ models,
+so it was removed from this Lean-only tree. It is in git history and will come
+back with the TLA+ models.
 
 # Lease timing proofs (F11)
 

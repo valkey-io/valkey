@@ -56,8 +56,7 @@ theorem fence_le {s : State Node} {p r : Node} (hr : r ∈ leftSync s p) : fence
 
 /-- To show `p` is fenced, name one sync replica `w` that has left it and show the
 fence properties at `w`'s acknowledgement. The fence is at most that, and each
-property still holds at a smaller offset. `XCheck.FencedAt` restates these
-hypotheses as a decidable predicate: keep the two in sync. -/
+property still holds at a smaller offset. -/
 theorem Fenced.of_left {s : State Node} {p w : Node} (hw : w ∈ leftSync s p)
     (hrec : PrimaryAuthoritative s → s.acked p w ≤ s.recon s.cfg.prim)
     (hprim : PrimaryAuthoritative s → (s.log p).take (s.acked p w) <+: s.log s.cfg.prim)

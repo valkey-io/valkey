@@ -305,8 +305,8 @@ rate at most `ρ`). The main results:
 | Survival condition needed | `RestartProof.noSurvivor_loses` |
 | Lease margin (F11) and durations (F12) | `Lease/` |
 
-Every row has a Lean theorem. The TLA+ model checking that found these results,
-and the encoding cross-check, are in Appendix B.
+Every row has a Lean theorem. The TLA+ model checking that found these results
+is in Appendix B.
 
 Size: the `RestartProof` model is 429 lines (with the held-reply layer), the
 invariant and its lemmas 383, the per-action contracts 460, and the preservation
@@ -373,9 +373,10 @@ The Lean model is written by hand from the design. Nothing mechanical checks it
 against the design doc itself; sections 1 and 6 are the argument, and reviewing
 them is the step that needs a systems engineer (Appendix A.6). The model was
 also written to mirror a TLA+ model, and for two of the four models (`CoreProof`,
-`AckProof`) the Lean steps are checked against that TLA+ model's complete state
-graph at small sizes (Appendix B.3). That catches slips in how the Lean was
-written, not differences between both models and the design.
+`AckProof`) the Lean steps were checked against that TLA+ model's complete state
+graph at small sizes (Appendix B.3; the checker is not part of this tree). That
+catches slips in how the Lean was written, not differences between both models
+and the design.
 
 "Any number of nodes" means any Lean type of node identifiers, including
 infinite ones. `Writable` uses `Set.encard`, which is the usual cardinality on
@@ -400,7 +401,6 @@ Determine whether the `Count` and `Writable` incarnation checks are each needed.
 | `lean/RestartProof/Counterexample.lean` | F5, incarnation-check and survival counterexamples | 167 |
 | `lean/ReconProof/`, `lean/CoreProof/`, `lean/AckProof/` | The smaller models, their embeddings into the next model, corollaries, F1 and F2 counterexamples | 1,030 |
 | `lean/Lease/` | Lease timing (additive and rate clocks, durations) | 377 |
-| `lean/XCheck/` | State-graph cross-checks against TLA+ (Appendix B.3) | 939 |
 | `lean/Check.lean` | Prints the axioms of every main theorem and counterexample | |
 
 Lean 4.35 with Mathlib `v4.35.0`, used for list-prefix lemmas and for `Set.encard`
@@ -431,8 +431,7 @@ cd lean
 into `tools/elan/`, build the image once
 (`docker build -t valkey-lean:24.04 -f tools/Dockerfile.lean tools`), and fetch
 Mathlib's prebuilt files once with `../tools/lean.sh lake exe cache get` (about
-7 GB). A clean build then takes about 30 seconds. The cross-checks are optional;
-Appendix B.3 says how to run them.
+7 GB). A clean build then takes about 30 seconds.
 
 ## References
 
@@ -633,10 +632,10 @@ replication part of `spec/CoreRestart.tla`, except:
 
 ### B.3 The state-graph cross-check
 
-To catch slips in writing the Lean model, `lean/XCheck/` compares it with TLC's
-complete state graph for a small configuration (3 nodes, logs of length 1, up to
-5 configuration versions). For `CoreProof` (45,284 states, 146,532 transitions)
-and `AckProof` (111,840 states, 410,788 transitions):
+To catch slips in writing the Lean model, a separate checker compared it with
+TLC's complete state graph for a small configuration (3 nodes, logs of length 1,
+up to 5 configuration versions). For `CoreProof` (45,284 states, 146,532
+transitions) and `AckProof` (111,840 states, 410,788 transitions):
 
 - TLC's initial state is Lean's initial state;
 - every TLC transition is a Lean step with the same action;
@@ -644,15 +643,16 @@ and `AckProof` (111,840 states, 410,788 transitions):
   transition;
 - the invariant `Inv` holds on every TLC state.
 
-All checks pass with no mismatches, and a mutation test (one state and one
-transition label changed) makes them fail. The one difference is intended: the
-Lean held-reply model also allows a write that records no reply. The checker
-uses Boolean versions of `Step` and `Inv` with soundness lemmas (`stepB_sound`,
-`invB_sound`) proving that a `true` answer implies the proposition.
+All checks passed with no mismatches, at the same theorem statements as this
+tree, and a mutation test (one state and one transition label changed) made them
+fail. The one difference is intended: the Lean held-reply model also allows a
+write that records no reply. The checker evaluated Boolean versions of `Step` and
+`Inv`, with soundness lemmas proving that a `true` answer implies the
+proposition. `RestartProof` was not cross-checked.
 
-`RestartProof` is not cross-checked. The check needs TLC state graphs generated
-from the spec branch; [lean/LEAN.md](lean/LEAN.md) gives the commands
-(`lake exe xcheck`, `lake exe xcheck_ack`).
+The checker needs TLC and the TLA+ models, so it is not part of this Lean-only
+tree. It will come back with the TLA+ models; until then it is in this branch's
+history at commit `bb987c679` (`lean/XCheck/`, `xcheck/dot2lean.py`).
 
 ### B.4 The TLC runs behind each finding
 

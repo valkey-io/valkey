@@ -251,6 +251,7 @@ start_server {} {
     test "client evicted due to client tracking prefixes" {
         r flushdb
         set rr [valkey_client]
+        test_defer { $rr close }
         # RESP3 so the client can still run CLIENT TRACKING after subscribing below
         $rr hello 3
 
@@ -259,7 +260,7 @@ start_server {} {
         # can't go below 128kb (see getClientEvictionLimit), pad the client  with pubsub channel names to get close
         # to the limit, so only a couple thousand prefixes are needed to trigger eviction.
         set temp_maxmemory_clients [kb 128]
-        r config set maxmemory-clients $temp_maxmemory_clients
+        test_config_set r maxmemory-clients $temp_maxmemory_clients
         # The headroom must absorb the reply buffers being resized by clientsCron while we pad.
         set headroom [kb 20]
         set c 0
@@ -284,10 +285,6 @@ start_server {} {
         assert_match {I/O error reading reply} $e
         # Eviction must have been driven by the prefix list, not by the padding
         assert {$j > 0}
-        $rr close
-
-        # Restore config for next tests
-        r config set maxmemory-clients $maxmemory_clients
     }
 
     test "client evicted due to output buf" {

@@ -3257,37 +3257,6 @@ static void clusterLogSlotRangeMigration(int first_slot,
               target_node->name, humanNodename(target_node), target_node->shard_id);
 }
 
-/* Returns true if a slot that is migrating to 'mn' should migrate to 'sender' instead. */
-static inline int isMigrationTargetRepairNeeded(clusterNode *mn, clusterNode *sender, uint64_t senderConfigEpoch) {
-    return mn != NULL && mn != sender &&
-           (mn->configEpoch < senderConfigEpoch || nodeIsReplica(mn)) &&
-           areInSameShard(mn, sender);
-}
-
-/* For each migrating slot that 'sender' does not claim, point the slot's
- * migration target to 'sender' if the old target's shard failed over to it.
- * Used when 'sender' becomes primary without its slots changing, such as in
- * an empty shard, where clusterUpdateSlotsConfigWith() is not called. */
-static void clusterRepairMigrationTargetsOfPrimary(clusterNode *sender, uint64_t senderConfigEpoch, unsigned char *slots) {
-    /* A safe iterator is required: setMigratingSlotDest() looks up and updates
-     * entries of the same dict while we iterate. */
-    dictIterator *di = dictGetSafeIterator(server.cluster->migrating_slots_to);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        int j = (int)(uintptr_t)dictGetKey(de);
-        if (bitmapTestBit(slots, j)) continue;
-        clusterNode *mn = dictGetVal(de);
-        if (!isMigrationTargetRepairNeeded(mn, sender, senderConfigEpoch)) continue;
-        serverLog(LL_VERBOSE,
-                  "Failover occurred in migration target."
-                  " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
-                  j, sender->name, humanNodename(sender), sender->shard_id);
-        setMigratingSlotDest(j, sender);
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-    }
-    dictReleaseIterator(di);
-}
-
 /* This function is called when we receive a primary configuration via a
  * PING, PONG or UPDATE packet. What we receive is a node, a configEpoch of the
  * node, and the set of slots claimed under this configEpoch.
@@ -3457,7 +3426,10 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * the shard. Update the migrating_slots_to state to point to the
              * sender if it has just taken over the primary role. */
             clusterNode *mn = getMigratingSlotDest(j);
-            if (isMigrationTargetRepairNeeded(mn, sender, senderConfigEpoch)) {
+            if (mn != NULL && mn != sender &&
+                (mn->configEpoch < senderConfigEpoch ||
+                 nodeIsReplica(mn)) &&
+                areInSameShard(mn, sender)) {
                 serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
@@ -3634,6 +3606,26 @@ static clusterMsgPingExt *getInitialPingExt(clusterMsg *hdr, int count) {
 static clusterMsgPingExt *getNextPingExt(clusterMsgPingExt *ext) {
     clusterMsgPingExt *next = (clusterMsgPingExt *)(((char *)ext) + getPingExtLength(ext));
     return next;
+}
+
+/* Returns the shard id announced in the ping extensions of 'hdr', or NULL if it
+ * has none or it is not a valid node id. The pointer refers into the receive
+ * buffer. clusterProcessPingExtensions() applies the shard id only after the
+ * role switch, so a caller that must decide before that reads it here. */
+static char *getClaimedShardIdFromPingExt(clusterMsg *hdr) {
+    if (!(hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) return NULL;
+    char *shard_id = NULL;
+    uint16_t extensions = ntohs(hdr->extensions);
+    clusterMsgPingExt *ext = getInitialPingExt(hdr, ntohs(hdr->count));
+    while (extensions--) {
+        if (ntohs(ext->type) == CLUSTERMSG_EXT_TYPE_SHARDID) {
+            clusterMsgPingExtShardId *shardid_ext = (clusterMsgPingExtShardId *)&(ext->ext[0].shard_id);
+            shard_id = shardid_ext->shard_id;
+        }
+        ext = getNextPingExt(ext);
+    }
+    if (shard_id && verifyClusterNodeId(shard_id, CLUSTER_NAMELEN) != C_OK) return NULL;
+    return shard_id;
 }
 
 /* All PING extensions must be 8-byte aligned */
@@ -4552,6 +4544,23 @@ int clusterProcessPacket(clusterLink *link) {
             if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
                 if (sender_last_reported_as_replica) {
+                    /* A stale primary claim from a node we record as a replica must not
+                     * flip it back to primary. Epoch 0 has nothing to order against (soft
+                     * reset can keep it). A claim with another shard id comes from a node
+                     * that moved shards on soft reset, so it is not stale. */
+                    if (sender_claimed_config_epoch != 0 && nodeEpoch(sender) > sender_claimed_config_epoch) {
+                        char *claimed_shard_id = getClaimedShardIdFromPingExt(msg);
+                        if (claimed_shard_id == NULL ||
+                            memcmp(claimed_shard_id, clusterNodeGetPrimary(sender)->shard_id, CLUSTER_NAMELEN) == 0) {
+                            serverLog(LL_NOTICE,
+                                      "Ignore stale primary claim from %.40s (%s) in shard %.40s;"
+                                      " gossip config epoch: %llu, current config epoch: %llu",
+                                      sender->name, humanNodename(sender), sender->shard_id,
+                                      (unsigned long long)sender_claimed_config_epoch,
+                                      (unsigned long long)nodeEpoch(sender));
+                            return 1;
+                        }
+                    }
                     serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a primary in shard %.40s",
                               sender->name, humanNodename(sender), sender->shard_id);
                     clusterSetNodeAsPrimary(sender);
@@ -4777,12 +4786,6 @@ int clusterProcessPacket(clusterLink *link) {
                     }
                 }
             }
-        } else if (sender && sender_claims_to_be_primary && isAnySlotInManualMigratingState()) {
-            /* The slot set did not change, so clusterUpdateSlotsConfigWith() did
-             * not run. A primary can still take over the shard of a migration
-             * target without changing its slots (e.g. the failback to an empty
-             * shard), so re-point those migrating targets to the sender here. */
-            clusterRepairMigrationTargetsOfPrimary(sender, sender_claimed_config_epoch, msg->myslots);
         }
 
         /* If our config epoch collides with the sender's try to fix

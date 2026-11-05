@@ -141,9 +141,10 @@ typedef struct {
     sds data;     /* Expected entry data (for matching) */
     void *ctx;    /* Client context */
     void (*callback)(void *ctx, const char *error);
-    mstime_t ctime; /* Creation time for expiry */
-    int retries;    /* Remaining epoch-retry attempts */
-    int deferred;   /* Waiting for epoch advance before re-propose */
+    mstime_t ctime;        /* Creation time, for the overall expiry cap */
+    mstime_t propose_time; /* Last time it was sent to the leader, for expiry */
+    int retries;           /* Remaining epoch-retry attempts */
+    int deferred;          /* Waiting for epoch advance before re-propose */
 } raftPendingProposal;
 
 /* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
@@ -890,6 +891,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->ctx = ctx;
         pp->callback = callback;
         pp->ctime = monotonicMs();
+        pp->propose_time = pp->ctime;
         pp->deferred = 0;
         /* Entry types carrying shard epochs get automatic retry. */
         switch (type) {
@@ -2281,6 +2283,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
 static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader_link) {
     clusterRaftState *rs = RAFT_STATE();
 
+    pp->propose_time = monotonicMs();
     if (rs->role == RAFT_ROLE_LEADER) {
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
@@ -2417,16 +2420,19 @@ static void clusterRaftCron(void) {
         }
 
         /* Expire stale pending proposals to prevent unbounded buildup
-         * during prolonged partitions. Timeout covers election detection
-         * (1-2x node_timeout), election itself (~1x), plus margin. */
+         * during prolonged partitions. The timeout covers failure detection
+         * (1-2x node_timeout), the election and the commit after the last
+         * time the proposal was sent; a resend to a new leader restarts it.
+         * The cap bounds the total time if the leader keeps changing. */
         if (listLength(rs->pending_proposals) > 0) {
             mstime_t timeout = server.cluster_node_timeout * 3;
+            mstime_t cap = server.cluster_node_timeout * 10;
             listIter ei;
             listNode *eln;
             listRewind(rs->pending_proposals, &ei);
             while ((eln = listNext(&ei)) != NULL) {
                 raftPendingProposal *pp = listNodeValue(eln);
-                if (now - pp->ctime > timeout) {
+                if (now - pp->propose_time > timeout || now - pp->ctime > cap) {
                     serverLog(LL_NOTICE, "Expiring stale proposal %s after %lldms.",
                               raftEntryTypeName(pp->type), (long long)(now - pp->ctime));
                     if (pp->callback) pp->callback(pp->ctx, "-TIMEOUT Cluster consensus not reached in time");

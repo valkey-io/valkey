@@ -614,7 +614,6 @@ void touchWatchedKey(serverDb *db, robj *key) {
                 wk->expired = 0;
                 goto skip_client;
             }
-            break;
         }
 
         c->flag.dirty_cas = 1;

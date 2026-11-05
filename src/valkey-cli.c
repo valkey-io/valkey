@@ -10011,6 +10011,7 @@ void testHint(const char *input) {
 
     sds hint = getHintForInput(input);
     printf("%s\n", hint);
+    sdsfree(hint);
     exit(0);
 }
 

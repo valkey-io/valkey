@@ -1235,7 +1235,9 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
 
     /* Load the file content */
     sds config = sdsnewlen(SDS_NOINIT, sb.st_size);
-    if (fread(config, 1, sb.st_size, fp) == 0) {
+    if (fread(config, 1, sb.st_size, fp) != (size_t)sb.st_size) {
+        /* A short read at EOF leaves errno untouched. */
+        if (!ferror(fp)) errno = EIO;
         sdsfree(config);
         rewriteConfigReleaseState(state);
         fclose(fp);

@@ -2783,7 +2783,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
             clusterRaftState *rs = RAFT_STATE();
             rs->mf_end = monotonicMs() + server.cluster_mf_timeout;
             /* The pause end is compared with server.mstime, not the monotonic clock. */
-            pauseActions(PAUSE_DURING_FAILOVER, server.mstime + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
+            pauseActions(PAUSE_DURING_FAILOVER,
+                         server.mstime + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
                          PAUSE_ACTIONS_CLIENT_WRITE_SET);
             serverLog(LL_NOTICE, "Manual failover requested by replica %.40s, pausing writes.",
                       link->node->name);

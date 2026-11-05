@@ -59,29 +59,51 @@ proc raft_recv {fd {timeout 5000}} {
 
 tags {tls:skip external:skip cluster singledb} {
 
+# Listen on a random port for one connection. Sets the listen port in the
+# upvar port_var and returns the listening fd, to be passed to raft_accept.
+proc raft_listen {port_var} {
+    upvar $port_var listen_port
+    set key [incr ::_raft_listen_seq]
+    set ::_raft_accepted($key) ""
+    set listen_fd [socket -server [list _raft_on_accept $key] -myaddr 127.0.0.1 0]
+    set ::_raft_listen_key($listen_fd) $key
+    set listen_port [lindex [fconfigure $listen_fd -sockname] 2]
+    return $listen_fd
+}
+
+proc _raft_on_accept {key fd addr port} {
+    fconfigure $fd -translation binary -buffering full
+    set ::_raft_accepted($key) $fd
+}
+
+# Wait for a connection on a listener from raft_listen and close the listener.
+# Returns the accepted client fd.
+proc raft_accept {listen_fd {timeout 5000}} {
+    set key $::_raft_listen_key($listen_fd)
+    if {$::_raft_accepted($key) eq ""} {
+        set accept_after [after $timeout [list set ::_raft_accepted($key) timeout]]
+        vwait ::_raft_accepted($key)
+        after cancel $accept_after
+    }
+    close $listen_fd
+    set fd $::_raft_accepted($key)
+    unset ::_raft_accepted($key) ::_raft_listen_key($listen_fd)
+    if {$fd eq "timeout"} {
+        error "timeout waiting for connection"
+    }
+    return $fd
+}
+
 # Listen on a random port, run optional setup code, accept one connection, close
 # the listener. Returns the accepted client fd. Sets the listen port in the
 # upvar port_var before running the setup code.
 proc raft_listen_and_accept {port_var {timeout 5000} {before_accept {}}} {
     upvar $port_var listen_port
-    set ::_raft_accepted ""
-    proc _raft_on_accept {fd addr port} {
-        fconfigure $fd -translation binary -buffering full
-        set ::_raft_accepted $fd
-    }
-    set listen_fd [socket -server _raft_on_accept -myaddr 127.0.0.1 0]
-    set listen_port [lindex [fconfigure $listen_fd -sockname] 2]
+    set listen_fd [raft_listen listen_port]
     if {$before_accept ne {}} {
         uplevel 1 $before_accept
     }
-    set accept_after [after $timeout {set ::_raft_accepted timeout}]
-    vwait ::_raft_accepted
-    after cancel $accept_after
-    close $listen_fd
-    if {$::_raft_accepted eq "timeout"} {
-        error "timeout waiting for connection"
-    }
-    return $::_raft_accepted
+    return [raft_accept $listen_fd $timeout]
 }
 
 # Connect a fake node to a cluster bus port and complete HELLO handshake.
@@ -291,6 +313,52 @@ test "Raft proto: PRE_VOTE denied while leader lease is active" {
         assert_equal $term [CI 0 cluster_raft_current_term]
 
         close $fd
+    }
+}
+
+test "Raft proto: PRE_VOTE granted after node-timeout even with randomized election timeout" {
+    # The leader lease uses the base node-timeout, not the randomized election
+    # timeout. If the lease used the randomized timeout (up to 2x node-timeout),
+    # a voter could incorrectly deny pre-votes from candidates that have
+    # legitimately detected a failed leader.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+
+        # Connect as a fake peer and form a 2-node cluster via MEET.
+        set fd1 [raft_connect 127.0.0.1 $cport]
+        raft_send $fd1 "HELLO $leader_id $leader_addr"
+        set reply [raft_recv $fd1]
+        assert_match "HI *" $reply
+
+        # The real node is a singleton leader. MEET "cluster" makes it
+        # step down to joiner and reply ADD_ME.
+        raft_send $fd1 "MEET cluster"
+        set reply [raft_recv $fd1]
+        assert_match "ADD_ME*" $reply
+
+        # Send AE with NODE_JOIN entries for both nodes to form the cluster.
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set term 1
+        raft_send $fd1 "AE $leader_id $term 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        set reply [raft_recv $fd1]
+        assert_match "AE_ACK *" $reply
+        assert_equal "follower" [CI 0 cluster_raft_role]
+        assert_equal $leader_id [CI 0 cluster_raft_leader]
+
+        # Leader goes silent. Wait just over node-timeout for lease to expire.
+        after 1100
+
+        # The old leader comes back as a candidate, sends PRE_VOTE_REQ.
+        # Its log is at least as up-to-date (same 2 entries at term 1).
+        set prevote_term [expr {$term + 1}]
+        raft_send $fd1 "PRE_VOTE_REQ $leader_id $prevote_term 2 1"
+        set reply [raft_recv $fd1]
+        assert_match "PRE_VOTE $prevote_term 1" $reply
+
+        close $fd1
     }
 }
 
@@ -584,6 +652,121 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         assert_equal 1 $found "leader should send REPL_OFFSETS with offset 5000"
 
         close $fd
+    }
+}
+
+test "Raft proto: outbound link without HI is dropped and reconnected" {
+    # The real node joins a fake leader. Its outbound link to the leader goes
+    # to a listener that accepts the connection but never replies, like a
+    # frozen process. Without HI, the link must be dropped after
+    # node-timeout/2 and a new connection made.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+
+        # Silent listener for the node's outbound link to the leader.
+        set ::_raft_silent_accepts {}
+        proc _raft_on_silent_accept {fd addr port} {
+            fconfigure $fd -blocking 0
+            lappend ::_raft_silent_accepts $fd
+        }
+        set listen_fd [socket -server _raft_on_silent_accept -myaddr 127.0.0.1 0]
+        set leader_cport [lindex [fconfigure $listen_fd -sockname] 2]
+        set leader_port [expr {$leader_cport - 10000}]
+        set leader_addr "127.0.0.1:${leader_port}@${leader_cport},,tls-port=0,shard-id=[string repeat e 40]"
+
+        # Join the fake leader's cluster over an inbound link to the node.
+        set fd1 [raft_connect 127.0.0.1 $cport]
+        raft_send $fd1 "HELLO $leader_id $leader_addr"
+        assert_match "HI *" [raft_recv $fd1]
+        raft_send $fd1 "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd1]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        raft_send $fd1 "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd1]
+        assert_equal "follower" [CI 0 cluster_raft_role]
+
+        # Keep the node a follower with heartbeats on the inbound link while
+        # counting connections on the silent listener.
+        set deadline [expr {[clock milliseconds] + 5000}]
+        while {[llength $::_raft_silent_accepts] < 2 && [clock milliseconds] < $deadline} {
+            raft_send $fd1 "AE $leader_id 1 2 1 2 0"
+            after 200 {set ::_raft_tick 1}
+            vwait ::_raft_tick
+            catch {read $fd1} ;# Discard AE_ACKs.
+        }
+        assert_equal "follower" [CI 0 cluster_raft_role]
+        assert_morethan_equal [llength $::_raft_silent_accepts] 2
+
+        foreach fd $::_raft_silent_accepts {catch {close $fd}}
+        close $listen_fd
+        close $fd1
+    }
+}
+
+# Read messages until one matches the pattern and return it.
+proc raft_recv_until {fd pattern {timeout 5000}} {
+    set deadline [expr {[clock milliseconds] + $timeout}]
+    while {1} {
+        set msg [raft_recv $fd [expr {max(1, $deadline - [clock milliseconds])}]]
+        if {[string match $pattern $msg]} {return $msg}
+    }
+}
+
+test "Raft proto: proposal waits for a new leader instead of expiring" {
+    # The leader goes silent after receiving a proposal, and a new leader
+    # shows up more than 2x node-timeout later. The proposal is resent to the
+    # new leader, which restarts its expiry, so it commits more than 3x
+    # node-timeout after it was made instead of failing with TIMEOUT.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set b_id [string repeat "e" 40]
+
+        # Listeners for the node's outbound links to the fake nodes A and B.
+        set listen_a [raft_listen a_cport]
+        set listen_b [raft_listen b_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+        set b_addr "127.0.0.1:[expr {$b_cport - 10000}]@$b_cport,,tls-port=0,shard-id=[string repeat c 40]"
+
+        # A forms a cluster of three voters (A, B and the node) and leads it.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 3 3\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter\n1 NODE_JOIN $b_id $b_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        set out_b [raft_accept $listen_b]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+        assert_match "HELLO *" [raft_recv $out_b]
+        raft_send $out_b "HI $b_id $b_addr"
+
+        # The node proposes a slot change to A, which never replies.
+        set rd [valkey_deferring_client]
+        set start [clock milliseconds]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        set entry [string range $propose [string length "PROPOSE "] end]
+
+        # B becomes leader in term 2, more than 2x node-timeout later. The node
+        # resends the proposal to B.
+        after 2500
+        set fd_b [raft_connect_fake_node 127.0.0.1 $cport $b_id $b_addr]
+        raft_send $fd_b "AE $b_id 2 3 1 3 0"
+        assert_equal $propose [raft_recv_until $out_b "PROPOSE *"]
+
+        # B commits it more than 3x node-timeout after it was first proposed.
+        after 1000
+        raft_send $fd_b "AE $b_id 2 3 1 4 1\n2 $entry"
+        assert_equal {OK} [$rd read]
+        assert_morethan [expr {[clock milliseconds] - $start}] 3000
+
+        $rd close
+        foreach fd [list $fd_a $fd_b $out_a $out_b] {close $fd}
     }
 }
 

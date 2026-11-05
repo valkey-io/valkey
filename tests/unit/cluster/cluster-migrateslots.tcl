@@ -1007,6 +1007,9 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
             assert_match "100" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 
+            # In import mode the skipped keys would be live again for an import source
+            assert_error "*Cannot enable import-mode*" {R $source_idx CONFIG SET import-mode yes}
+
             # Cleanup for the next test
             assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 1]
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 1]
@@ -1014,6 +1017,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R $target_idx FLUSHALL SYNC]
             wait_for_migration_field $source_idx $jobname state failed
             wait_for_migration_field $target_idx $jobname state failed
+
+            # With no export running, import-mode can be enabled again
+            assert_match "OK" [R $source_idx CONFIG SET import-mode yes]
+            assert_match "OK" [R $source_idx CONFIG SET import-mode no]
         }
         set_debug_prevent_pause 0
     }

@@ -1,9 +1,14 @@
 # Test Raft log snapshot (InstallSnapshot) behavior.
 
+source tests/support/cluster_raft.tcl
+
 tags {external:skip cluster singledb} {
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
+    # Nodes join as learners. Make all three voters, like start_cluster
+    # does with --cluster-raft.
+    raft_promote_start_cluster_voters 3
     test "Raft snapshot: follower catches up via snapshot after leader trims log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
 
@@ -40,6 +45,9 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
+    # Nodes join as learners. Make all three voters, like start_cluster
+    # does with --cluster-raft.
+    raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins leader with compacted log (via restart)" {
         assert_equal "leader" [CI 0 cluster_raft_role]
         set leader_port [srv 0 port]
@@ -87,6 +95,9 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
+    # Nodes join as learners. Make all three voters, like start_cluster
+    # does with --cluster-raft.
+    raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins when leader has trimmed log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
         set leader_port [srv 0 port]
@@ -116,9 +127,10 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
                 fail "new node did not join (known_nodes=[CI 0 cluster_known_nodes])"
             }
 
-            # Verify snapshot was used and the new node caught up.
+            # Verify snapshot was used and the new node caught up. New nodes
+            # join as learners.
             assert {[count_log_message 0 "Installed snapshot"] > 0}
-            assert {[count_log_message 0 "Promoted from joiner to follower"] > 0}
+            assert {[count_log_message 0 "Promoted from joiner to learner"] > 0}
             assert {[CI 0 cluster_raft_last_applied] >= $leader_applied}
         }
     }

@@ -1970,7 +1970,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
 
     if (msg_term < rs->current_term) return 1;
     clusterRaftMaybeStepDown(msg_term);
-    if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
+    if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
     memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
 
@@ -2025,16 +2025,21 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         dictReleaseIterator(di);
     }
     /* If we were a joiner and the snapshot includes us (our NODE_JOIN was
-     * committed), promote to follower — same as raftLogApply(NODE_JOIN). */
+     * committed), promote to learner or follower, same as
+     * raftLogApply(NODE_JOIN). Otherwise sync the role with our voter or
+     * learner status in the snapshot, as ADD_VOTER and DEL_VOTER do. */
     if (rs->role == RAFT_ROLE_JOINER) {
         sds mykey = sdsnewlen(myself->name, CLUSTER_NAMELEN);
         int found = dictFind(snapshot_nodes, mykey) != NULL;
         sdsfree(mykey);
         if (found) {
             myself->flags &= ~CLUSTER_NODE_MEET;
-            rs->role = RAFT_ROLE_FOLLOWER;
-            serverLog(LL_NOTICE, "Promoted from joiner to follower (via snapshot).");
+            rs->role = nodeIsLearner(myself) ? RAFT_ROLE_LEARNER : RAFT_ROLE_FOLLOWER;
+            serverLog(LL_NOTICE, "Promoted from joiner to %s (via snapshot).",
+                      nodeIsLearner(myself) ? "learner" : "follower");
         }
+    } else {
+        rs->role = nodeIsLearner(myself) ? RAFT_ROLE_LEARNER : RAFT_ROLE_FOLLOWER;
     }
     dictRelease(snapshot_nodes);
 
@@ -2053,7 +2058,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
-            if (!(node->flags & CLUSTER_NODE_MEET)) server.cluster->size++;
+            if (nodeIsVoter(node)) server.cluster->size++;
         }
         dictReleaseIterator(di);
     }

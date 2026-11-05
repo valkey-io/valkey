@@ -358,22 +358,22 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
 #define LUA_REPLY_MAX_DEPTH 0
 #endif
 #if LUA_REPLY_MAX_DEPTH > 0
-    /* Optional compile-time cap on table nesting in a script reply, for
+    /* Optional compile-time cap on the recursion depth of this function, for
      * builds whose native stack runs out before Lua's LUAI_MAXCSTACK (8000)
      * makes lua_checkstack() fail (e.g. WebAssembly, where a stack overflow
-     * is an uncatchable trap). 0 (default) means no extra cap.
+     * is an uncatchable trap). Every call counts, including leaf values, so
+     * the cap bounds the number of stack frames. 0 (default) means no cap.
      * Scripts run one at a time under the GIL, so a plain static is safe. */
     static int depth = 0;
-    const int counted = (t == LUA_TTABLE); /* Only tables nest. */
-    if (counted && depth >= LUA_REPLY_MAX_DEPTH) {
+    if (depth >= LUA_REPLY_MAX_DEPTH) {
         ValkeyModule_ReplyWithError(ctx, "ERR reached lua stack limit");
         lua_pop(lua, 1);
         return;
     }
-    depth += counted;
+    depth++;
 #define LUA_REPLY_RETURN() \
     do {                   \
-        depth -= counted;  \
+        depth--;           \
         return;            \
     } while (0)
 #else

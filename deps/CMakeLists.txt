@@ -1,4 +1,4 @@
-if (USE_JEMALLOC AND USE_SYSTEM_JEMALLOC_LIB)
+if (USE_SYSTEM_JEMALLOC_LIB)
     # Link the jemalloc installed on the system instead of the vendored copy. The target keeps the name of the
     # vendored one so that everything linking "jemalloc" works unchanged.
     find_path(SYSTEM_JEMALLOC_INCLUDE_DIR jemalloc/jemalloc.h REQUIRED)

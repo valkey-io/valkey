@@ -1867,9 +1867,10 @@ static int waitChild(pid_t pid, long long timeout) {
     int status;
     long long attempts = timeout / 10000;
     pid_t ret = 0;
+    const struct timespec poll_interval = {.tv_sec = 0, .tv_nsec = 10 * 1000 * 1000};
 
     while (attempts--) {
-        usleep(10000);
+        nanosleep(&poll_interval, NULL);
         ret = waitpid(pid, &status, WNOHANG);
         if (ret > 0) break;                     /* Child exited */
         if (ret == -1 && errno != EINTR) break; /* Real error */
@@ -1880,7 +1881,7 @@ static int waitChild(pid_t pid, long long timeout) {
          * Give it up to 100ms, then leave it unreaped. */
         kill(pid, SIGKILL);
         for (int j = 0; j < 10; j++) {
-            usleep(10000);
+            nanosleep(&poll_interval, NULL);
             ret = waitpid(pid, NULL, WNOHANG);
             if (ret == pid || (ret == -1 && errno != EINTR)) return 1;
         }

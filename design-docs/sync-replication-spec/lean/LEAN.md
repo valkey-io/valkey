@@ -3,7 +3,7 @@
 ## Proof structure
 
 There is one inductive invariant proof, for CoreRestart (`RestartProof/Inv.lean`,
-`Actions1-3.lean`, `Restart.lean`, `AckProof.lean`). The Core, CoreAck and CoreRecon
+`Preserve/*.lean`, `Preserve.lean`, `AckProof.lean`). The Core, CoreAck and CoreRecon
 results are corollaries, obtained by embedding each smaller model into the next:
 
 ```
@@ -41,6 +41,15 @@ Three parts are written so the proof can be read against the design doc:
   follow from the action alone, without the invariant. Each preservation lemma starts
   by taking the facts it needs from the action's contract; the action is not unfolded
   in the proof body.
+- **Subsystems** (`RestartProof/Preserve/`). The preservation proofs are grouped as
+  in the design doc: `Replication.lean`, `Commit.lean`, `Config.lean`, `Failover.lean`,
+  `Restart.lean`; `Preserve.lean` dispatches each action to its file. Every action
+  with a non-trivial proof is proved one layer at a time: `config_X`, `repl_X`,
+  `membership_X`, `commit_X`, `failover_X`, `ehc_X` for X in ack, resync, commit,
+  count, learn, makeElig, makeInelig, takeover, restartEmpty, restartKeep. Each has a
+  docstring saying in design terms why that layer survives the action, and `inv_X`
+  assembles them. Each layer lemma takes the action's whole guard, so the files turn
+  off the unused-variable linter.
 - **Layers** (`RestartProof/Inv.lean`). `Inv` extends five structures, each about one
   part of the design and stated in terms of the earlier ones (except that
   `syncNew` uses the reconciliation point, which `CommitInv` constrains): `ConfigInv` (Cluster V2
@@ -190,7 +199,7 @@ The only deviation is the removal of `MaxLen`/`MaxVer`. `Init` is `init i`.
 This section and the next describe the standalone Core proof, `CoreProof/Inv.lean` and
 `CoreProof/Actions1-3.lean` at commit 24680af. `RestartProof/Inv.lean` keeps these
 conjuncts with the changes listed under "Invariant changes" for ReconProof and
-RestartProof, and `RestartProof/Actions1-3.lean` has the same lemma names.
+RestartProof, and `RestartProof/Preserve/` has the same lemma names.
 
 The invariant has 17 conjuncts, and the `stale` conjunct uses a witness predicate `Wit`
 with 6 parts.
@@ -820,7 +829,7 @@ what removes the deadlock below.
 ReconProof now has no invariant of its own: `ReconProof.safety` is derived from
 `RestartProof.safety` through `ReconProof.emb`. The changes below, made when ReconProof
 was a copy of CoreProof, are carried in `RestartProof/Inv.lean` and the lemmas named
-here are in `RestartProof/Actions1-3.lean`.
+here are in `RestartProof/Preserve/`.
 
 CoreProof's 17 conjuncts and `Wit` are kept, except:
 
@@ -1039,7 +1048,7 @@ ReconProof's invariant, with:
   uses it where ReconProof used the current primary as the common holder of the
   history.
 
-Preservation for the two restarts is `RestartProof/Restart.lean`. RestartKeep
+Preservation for the two restarts is `RestartProof/Preserve/Restart.lean`. RestartKeep
 with RebuildSync = TRUE keeps `eligSync`, the conjunct F5 breaks: with an empty
 sync set a restarted primary may commit without an eligible replica, which then
 lacks the write (`CoreRestart_noRebuildMin1`).
@@ -1146,3 +1155,22 @@ Checks after the change:
 - `XCheck/Axioms.lean`: `propext`, `Quot.sound`, plus `Classical.choice` for
   `asuccs_sound`/`astepLB_sound`, as before.
 - `xcheck` and `xcheck_ack` rerun on freshly generated TLC graphs: 0 failures.
+
+# Counterexamples for restarts (`RestartProof/Counterexample.lean`)
+
+Three runs on `Fin 3`, every guard checked by `decide`, at MinSync 1:
+
+- `noRebuild_unsafe`: `Reachable 1 true false 0 s ∧ ¬ Safety s`, the model's own
+  `Step` with RebuildSync = FALSE (F5). 9 steps: n0 counts and promotes n1, writes,
+  restarts with its data and an empty sync set, n2 replicates and acks, n0 counts and
+  promotes n2 and commits. n1 is authoritative and lacks the write.
+- `noIncCheck_unsafe`: `StepNoInc` is `Step` plus Count and MakeEligible guarded by
+  `known[p].prim = p` alone. 9 steps: a write commits on n0 and n1, n0 restarts empty,
+  then counts and promotes empty n2. Only the ThinksPrimary incarnation check is
+  removed; TLC's `CoreRestart_noIncMin1` removes all three.
+- `noSurvivor_loses`: `StepNoSurv` is `Step` plus RestartEmpty without the survival
+  guard. 9 steps: a write commits on n0 and n1, n1 and then n0 restart empty. The
+  history is non-empty, no log holds it, and no node is authoritative, so
+  EligibleHoldsCommitted holds vacuously; the theorem states the loss.
+
+Axioms: `propext`, `Classical.choice`, `Quot.sound` for all three.

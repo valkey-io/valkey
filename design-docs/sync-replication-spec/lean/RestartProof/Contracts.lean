@@ -7,7 +7,7 @@ What each action of `Model.lean` changes and what it leaves alone (AppendWrite a
 Replicate only extend one log, and are covered by `inv_grow` instead), stated in the
 design's terms: who thinks it is primary, who is authoritative, whose log, sync
 replica set, acknowledgements and commit point move. The invariant proofs
-(`Actions1-3.lean`, `Restart.lean`) use these lemmas instead of unfolding the
+(`Preserve/*.lean`) use these lemmas instead of unfolding the
 actions, so each action's effect is written down, and can be checked against the
 design doc, in one place.
 

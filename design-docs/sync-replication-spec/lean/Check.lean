@@ -15,3 +15,6 @@ import RestartProof
 #print axioms RestartProof.ackSafety
 #print axioms RestartProof.ackedHeld
 #print axioms RestartProof.commit_two_copies
+#print axioms RestartProof.noRebuild_unsafe
+#print axioms RestartProof.noIncCheck_unsafe
+#print axioms RestartProof.noSurvivor_loses

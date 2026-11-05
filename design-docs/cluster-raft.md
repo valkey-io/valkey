@@ -422,10 +422,10 @@ Adding or removing a learner does not affect quorum, so the safety
 discussion below only applies to the quorum-changing entries.
 
 **Config takes effect on apply, not on append.** Quorum is computed
-from `server.cluster->size`, which is updated when NODE_JOIN is
-applied (after commit). This differs from Ongaro's single-server
-approach (§4.1) where the new configuration takes effect when the
-entry is appended to the log.
+from `server.cluster->size`, which is updated when a quorum-changing
+entry is applied (after commit). This differs from Ongaro's
+single-server approach (§4.1) where the new configuration takes effect
+when the entry is appended to the log.
 
 **Implications of config-on-apply:**
 
@@ -434,79 +434,84 @@ entry is appended to the log.
    This enables fast cluster formation (all nodes invited in one
    batch).
 
-2. NODE_JOIN is committed using the **old** quorum (the cluster size
-   before the new node is added). For example, adding D to {A,B,C}
-   requires 2 ACKs (majority of 3), not 3 ACKs (majority of 4).
+2. A quorum-changing entry is committed using the **old** quorum (the
+   cluster size before that entry is applied). `ADD_VOTER` of D on
+   {A,B,C} requires 2 ACKs (majority of 3), not 3 ACKs (majority of 4).
+   A learner `NODE_JOIN` does not change `size`, so it is committed
+   under the same quorum either way.
 
 3. If a leader election truncates uncommitted NODE_JOINs, no
    configuration rollback is needed — the config never took effect.
    Affected nodes time out as joiners and revert to singleton leaders.
 
-4. Joint consensus is not needed. The quorum transitions atomically
-   at apply time in a single step.
+4. Joint consensus is not needed. Each quorum-changing entry adds or
+   removes one voter, so any majority of the old voter set intersects
+   any majority of the new one.
 
 **Comparison to config-on-append (Ongaro §4.1):**
 
-With config-on-append, the new quorum is used to commit the
-membership entry itself. This guarantees the new node has the entry
-before it takes effect, eliminating any window of reduced redundancy.
-However, it adds complexity:
+With config-on-append, a node adopts the new voter set when the entry
+is appended to its log, before that entry is committed. The entry is
+then committed by a majority of the new set. Adding or removing one
+server keeps every new majority overlapping every old majority. That
+majority does not have to include the added server. `ADD_VOTER` of D
+on {A,B,C} raises the quorum from 2 to 3, and {A,B,C} is a majority of
+the new set.
 
-- Only one membership change can be in flight at a time (the leader
-  must wait for commit before proposing the next change).
-- If the entry is truncated after append but before commit, nodes
-  must roll back to the previous configuration.
-- The new node must be caught up before the entry is proposed
-  (otherwise it can't ACK in time, stalling the commit).
+`clusterRaftApplyAddVoter()` runs its catch-up check before the entry
+is appended. The learner's `match_index` must already reach the
+leader's current log end. That end does not contain this `ADD_VOTER`.
 
-**Safety of committing with old quorum — known limitation:**
+Using the new set before commit also means:
 
-After committing NODE_JOIN(F) to {A,B,C,D,E} with old quorum
-(3 ACKs), the nodes that have the entry operate at size=6
-(quorum=4), while nodes that don't have it still believe size=5
-(quorum=3). This split in quorum views can violate safety:
+- Only one quorum-changing entry may be uncommitted. The leader waits
+  for it to commit before proposing the next one.
+- If the entry is truncated after append but before commit, nodes roll
+  the voter set back to the previous configuration.
 
-Example (size 5→6): 3 nodes have the entry (size=6 view). The
-other 3 nodes don't have it (size=5 view, quorum=3). If 2 of the
-3 nodes with the entry crash, the 3 nodes without it can elect a
-leader among themselves (they have quorum=3 under their view). That
-leader overwrites the entry via log truncation. The committed
-NODE_JOIN is lost.
+**Committing a one-server change with the old quorum:**
 
-For size 3→4: 2 nodes have the entry (size=4 view). The other 2
-don't (size=3 view, quorum=2). If 1 node with the entry crashes,
-the 2 without can elect a leader (quorum=2 under their view).
+A quorum-changing entry is committed with the voter set the leader has
+already applied. Each node updates `server.cluster->size` only when it
+applies that entry. Until AE delivers the new commit index, a node that
+has applied the entry and a node that has not stored it disagree on
+`size`.
 
-The root cause: nodes disagree on cluster size, leading to two
-different quorum calculations coexisting. This is exactly what
-Ongaro's config-on-append prevents — by making all nodes adopt the
-new config immediately on append, they all agree on quorum.
+`ADD_VOTER D` on `{A,B,C}` (quorum 2), stored on A and B, with A down
+after applying it:
 
-In practice, this requires crashes within the brief window between
-commit and AE delivery. The leader sends AE immediately after
-commit, so the window is one network round-trip. Once AE is
-delivered, all nodes agree on the new size and the split disappears.
+- C still has `size=3` and the voter set `{A,B,C}`. D stays outside
+  that set until D applies the entry. `clusterRaftCanGrantVote()`
+  returns 0 for a learner or a joiner.
+- The only old voter without the entry is C. Quorum 2 needs another
+  vote from A or B.
+- B's log is longer, so B rejects C's vote request. C does not become
+  leader, and B's copy of the entry stays in its log.
 
-**Worst case if this occurs:** The new node is orphaned — it stepped
-down to joiner but its NODE_JOIN was lost. It reverts to singleton
-leader after timeout. The CLUSTER MEET client already returned OK,
-so the admin believes the node joined. No data loss or split brain
-occurs (the node never had slots). The admin can detect the issue
-via CLUSTER NODES and retry CLUSTER MEET.
+A voter `NODE_JOIN(F)` on `{A,B,C,D,E}` is the same count. An old
+quorum of 3 stores the entry. Only two old voters lack it, and F is
+not a voter in their configuration.
 
-**Accepted tradeoff:** We accept this limitation because:
-- The window is extremely brief (one AE round-trip after commit).
-- It enables fast cluster formation (multiple NODE_JOINs in flight,
-  no need to catch up the new node before committing).
-- It avoids the complexity of config-on-append or joint consensus.
-- Kafka's KRaft uses the same approach.
+One server added or removed means every other majority of the old
+voter set intersects the majority that stored the entry.
+`clusterRaftCanGrantVote()` compares last log term and index, so a
+voter that has the entry rejects a candidate that does not.
 
-**Future fix:** To eliminate this window entirely, use either
-config-on-append (Ongaro §4.1, where the new configuration takes
-effect on append and its quorum is used for commit) or joint
-consensus (§4.3). Both require the new node to receive AE as a
-non-voting member before its NODE_JOIN is committed, adding
-complexity to the leader's replication logic.
+After B applies `ADD_VOTER D`, `server.cluster->size` is 4 and
+`clusterRaftQuorum()` is 3. D still refuses votes until D applies the
+entry. If A is down, B receives C's vote and still has 2. C's log is
+shorter, so B rejects C. Neither is elected. The entry is still in B's
+log. If B has not applied the entry, B's quorum is still 2, C grants
+B's request, and B keeps the entry.
+
+A learner `NODE_JOIN` does not change `size`. `DEL_VOTER` and
+`NODE_FORGET` of a voter are committed with the `size` already applied
+on the leader. Old voters that lack that entry are short of that
+quorum.
+
+Joint consensus is for one entry whose old and new voter sets differ
+by more than one server. Each quorum-changing entry here adds or
+removes one voter.
 
 ## Failure Detection
 
@@ -893,9 +898,6 @@ targets.
   are spread across at least 3 zones, letting the cluster survive a
   single zone outage.
 - Leader transfer on CLUSTER FORGET where the target is the leader.
-- Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either
   atomically or not.
-- `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
-  some cases, which doesn't work with blocking admin commands).

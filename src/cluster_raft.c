@@ -2368,7 +2368,9 @@ static void clusterRaftCron(void) {
      * - All roles: no data received on the current connection (HI never
      *   arrived). The peer's kernel accepted our SYN but the process is frozen.
      * - Leader: no AE_ACK. last_ack_time is reset on election, giving peers
-     *   time to respond to the first AE. */
+     *   time to respond to the first AE. A new link also gets node_timeout/2
+     *   to get an AE_ACK through, so it isn't freed again on every cron tick
+     *   while last_ack_time is still stale. */
     {
         mstime_t stale = server.cluster_node_timeout / 2;
         dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -2378,8 +2380,10 @@ static void clusterRaftCron(void) {
             if (node == myself || !node->link) continue;
             if (node->flags & CLUSTER_NODE_MEET) continue;
             /* link->ctime and data_received are wall-clock (mstime) times. */
-            if ((node->data_received < node->link->ctime && mstime() - node->link->ctime > stale) ||
-                (rs->role == RAFT_ROLE_LEADER && now - RAFT_NODE(node)->last_ack_time > stale)) {
+            mstime_t link_age = mstime() - node->link->ctime;
+            if ((node->data_received < node->link->ctime && link_age > stale) ||
+                (rs->role == RAFT_ROLE_LEADER && now - RAFT_NODE(node)->last_ack_time > stale &&
+                 link_age > stale)) {
                 freeClusterLink(node->link);
             }
         }

@@ -2425,10 +2425,13 @@ __attribute__((noinline)) static void sigsegvHandler(int sig, siginfo_t *info, v
 
     /* Crashed while we're already handling a different crash on a different thread. */
     if (!atomic_compare_exchange_strong(&signal_handler_thread, &initial_thread, target_thread) && !pthread_equal(atomic_load(&signal_handler_thread), target_thread)) {
-        /* park thread forever. */
+        /* Park thread forever, but keep it reachable by the stack trace collector so
+         * its crash shows up in the report. sigsuspend() returns after each
+         * THREADS_SIGNAL handler, so loop. */
         sigset_t mask;
         sigfillset(&mask);
-        sigsuspend(&mask);
+        sigdelset(&mask, THREADS_SIGNAL);
+        for (;;) sigsuspend(&mask);
     }
 
     int current_crash = atomic_fetch_add(&signal_handler_count, 1);

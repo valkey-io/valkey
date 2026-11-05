@@ -2029,7 +2029,10 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
             if (node == myself) continue;
-            if (dictFind(snapshot_nodes, node->name)) continue;
+            sds name = sdsnewlen(node->name, CLUSTER_NAMELEN);
+            int in_snapshot = dictFind(snapshot_nodes, name) != NULL;
+            sdsfree(name);
+            if (in_snapshot) continue;
             if (node->link) {
                 node->link->node = NULL;
                 node->link = NULL;

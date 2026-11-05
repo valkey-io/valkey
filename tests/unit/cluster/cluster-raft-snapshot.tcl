@@ -132,6 +132,8 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
             assert {[count_log_message 0 "Installed snapshot"] > 0}
             assert {[count_log_message 0 "Promoted from joiner to learner"] > 0}
             assert {[CI 0 cluster_raft_last_applied] >= $leader_applied}
+            # The snapshot includes the slot assignments.
+            assert_equal 16384 [CI 0 cluster_slots_assigned]
         }
     }
 }

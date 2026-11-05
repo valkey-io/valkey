@@ -1308,6 +1308,21 @@ start_server {tags {"scripting external:skip large-memory"}} {
 }
 
 start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - server.error_reply with a string larger than 2GB} {
+        # The formatted "-<msg>" error is longer than INT_MAX, which vsnprintf() rejects.
+        # With jemalloc, the short error_reply() leaves "-PRIME" in the allocation that a failed
+        # vsnprintf() would hand back unwritten, so the bug yields "ERR PRIME", not "ERR ".
+        run_script {
+            local s = string.rep("a", 1024 * 1024)
+            for i=1,9 do s = s .. s end
+            s = s .. s .. s .. s
+            server.error_reply("-PRIME")
+            return {#s, server.error_reply(s)["err"]}
+        } 0
+    } {2147483648 {ERR }}
+}
+
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Test long escape sequences for strings} {
         r eval {
             -- Generate 1gb '==...==' separator

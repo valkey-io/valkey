@@ -38,6 +38,7 @@ proc ensure_master_down {} {
 }
 
 test "Crash the majority of Sentinels to prevent failovers for this unit" {
+    set quorum [expr {[llength $::sentinel_instances] / 2 + 1}]
     for {set id 0} {$id < $quorum} {incr id} {
         kill_instance sentinel $id
     }

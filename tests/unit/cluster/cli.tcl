@@ -562,20 +562,10 @@ start_multiple_servers 3 [list overrides $base_conf] {
 
 } ;# foreach use_atomic_slot_migration
 
-# Test valkey-cli --cluster del-node
-# For cluster-raft we need to handle leader transfer when FORGET targets the leader.
+# Test valkey-cli --cluster del-node with a reachable node
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
-start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
-
-    # Create cluster with 1 primary and 2 replicas for del-node tests
-    exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
-                    127.0.0.1:[srv 0 port] \
-                    127.0.0.1:[srv -1 port] \
-                    127.0.0.1:[srv -2 port] \
-                    --cluster-replicas 2
-
-    # Wait for the cluster to be ready
-    wait_for_cluster_state ok
+start_cluster 1 2 [list overrides $base_conf] {
+    # start_cluster explicitly promotes all Raft nodes to voters.
 
     test "del-node: Cannot delete node with slots" {
         set node1 [srv 0 client]
@@ -619,6 +609,12 @@ start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
             fail "Nodes don't have expected cluster state"
         }
     }
+} ;# stop servers
+
+# Test valkey-cli --cluster del-node with an unreachable node
+start_cluster 1 2 [list overrides $base_conf] {
+    # start_cluster explicitly promotes all Raft nodes to voters, preserving
+    # a two-node quorum after one voter becomes unreachable.
 
     test "del-node: Delete unreachable node without slots" {
         set node3 [srv -2 client]
@@ -645,15 +641,12 @@ start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
         # Check for success message
         assert_match {*\[OK\] Node*removed from the cluster*} $output
 
-        # Verify cluster state after deletion:
-        # - Node0 (primary): only node left, knows only itself
-        # - Node1 (deleted in test 2): still standalone
-        # - Node2 (deleted in test 3): shutdown, can't check
+        # Verify cluster state after deletion.
         wait_for_condition 1000 50 {
-            [CI 0 cluster_known_nodes] == 1 &&
-            [CI 1 cluster_known_nodes] == 1
+            [CI 0 cluster_known_nodes] == 2 &&
+            [CI 1 cluster_known_nodes] == 2
         } else {
-            fail "Nodes don't have expected cluster state"
+            fail "Nodes don't have expected cluster state: known_nodes=[CI 0 cluster_known_nodes],[CI 1 cluster_known_nodes]"
         }
     }
 } ;# stop servers

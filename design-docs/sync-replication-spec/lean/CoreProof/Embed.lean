@@ -44,16 +44,16 @@ theorem cfgToRecon_upd (f : Node → Cfg Node) (p : Node) (c : Cfg Node) :
   · simp [upd, ReconProof.upd, h]
 
 /-- The strict reconciliation rule: once `p` is reconciled, CatchUpPoint is the commit. -/
-theorem cup_of_reconciled {s : State Node} {p : Node} (h : reconciled true s p) :
-    ReconProof.cup true (toRecon s) p = s.commit p := by
+theorem catchUpPoint_of_reconciled {s : State Node} {p : Node} (h : Reconciled true s p) :
+    ReconProof.catchUpPoint true (toRecon s) p = s.commit p := by
   have := h rfl
-  simp only [ReconProof.cup, toRecon]
+  simp only [ReconProof.catchUpPoint, toRecon]
   split
   · omega
   · rfl
 
-theorem writable_zero (s : ReconProof.State Node) (p : Node) : ReconProof.writable 0 s p :=
-  ⟨[], List.nodup_nil, Nat.le_refl _, fun _ h => absurd h (List.not_mem_nil)⟩
+theorem writable_zero (s : ReconProof.State Node) (p : Node) : ReconProof.Writable 0 s p := by
+  simp [ReconProof.Writable]
 
 /-! ### Post-states commute with `toRecon` -/
 
@@ -65,8 +65,8 @@ theorem toRecon_appendWrite (p : Node) :
 theorem toRecon_replicate (r : Node) :
     toRecon (replicate s r) = ReconProof.replicate (toRecon s) r := rfl
 theorem toRecon_ack (r : Node) : toRecon (ack s r) = ReconProof.ack (toRecon s) r := rfl
-theorem toRecon_commitA (p : Node) :
-    toRecon (commitA s p) = ReconProof.commitA (toRecon s) p := rfl
+theorem toRecon_commitNext (p : Node) :
+    toRecon (commitNext s p) = ReconProof.commitNext (toRecon s) p := rfl
 theorem toRecon_count (p r : Node) :
     toRecon (count s p r) = ReconProof.count (toRecon s) p r := rfl
 
@@ -75,27 +75,27 @@ theorem toRecon_learn (n : Node) : toRecon (learn s n) = ReconProof.learn (toRec
 
 theorem toRecon_makeElig (p r : Node) :
     toRecon (makeElig s p r) = ReconProof.makeElig (toRecon s) p r := by
-  have hc : ReconProof.eligCfg (toRecon s) r true = cfgToRecon (eligCfg s r true) := rfl
+  have hc : ReconProof.makeEligCfg (toRecon s) r true = cfgToRecon (makeEligCfg s r true) := rfl
   simp only [ReconProof.makeElig, hc]
   simp only [toRecon, makeElig, cfgToRecon_upd]
 
 theorem toRecon_makeInelig (p r : Node) :
     toRecon (makeInelig s p r) = ReconProof.makeInelig (toRecon s) p r := by
-  have hc : ReconProof.eligCfg (toRecon s) r false = cfgToRecon (eligCfg s r false) := rfl
+  have hc : ReconProof.makeEligCfg (toRecon s) r false = cfgToRecon (makeEligCfg s r false) := rfl
   simp only [ReconProof.makeInelig, hc]
   simp only [toRecon, makeInelig, cfgToRecon_upd]; rfl
 
 theorem toRecon_takeover (n : Node) :
     toRecon (takeover s n) = ReconProof.takeover (toRecon s) n := by
-  have hc : ReconProof.toCfg (toRecon s) n = cfgToRecon (toCfg s n) := rfl
+  have hc : ReconProof.takeoverCfg (toRecon s) n = cfgToRecon (takeoverCfg s n) := rfl
   simp only [ReconProof.takeover, hc]
   simp only [toRecon, takeover, cfgToRecon_upd]; rfl
 
-theorem toRecon_resync {r : Node} (h : reconciled true s (pof s r)) :
+theorem toRecon_resync {r : Node} (h : Reconciled true s (primaryOf s r)) :
     toRecon (resync s r) = ReconProof.resync true (toRecon s) r := by
-  have hc := cup_of_reconciled h
+  have hc := catchUpPoint_of_reconciled h
   simp only [ReconProof.resync]
-  rw [show ReconProof.pof (toRecon s) r = pof s r from rfl, hc]
+  rw [show ReconProof.primaryOf (toRecon s) r = primaryOf s r from rfl, hc]
   rfl
 
 end
@@ -112,10 +112,10 @@ theorem step_toRecon {s s' : State Node} (h : Step true false s s') :
   | replicate r h1 h2 h3 => rw [toRecon_replicate]; exact .replicate _ r h1 h2 h3
   | ack r h1 h2 h3 => rw [toRecon_ack]; exact .ack _ r h1 h2 h3
   | commit p hp h1 h2 =>
-    rw [toRecon_commitA]; exact .commit _ p hp (writable_zero _ p) h1 h2
+    rw [toRecon_commitNext]; exact .commit _ p hp (writable_zero _ p) h1 h2
   | count p r hp hr h1 h2 h3 h4 =>
     rw [toRecon_count]
-    exact .count _ p r hp h1 h2 h3 (by rw [cup_of_reconciled hr]; exact h4)
+    exact .count _ p r hp h1 h2 h3 (by rw [catchUpPoint_of_reconciled hr]; exact h4)
   | makeElig p r hp hk h1 h2 => rw [toRecon_makeElig]; exact .makeElig _ p r hp hk h1 h2
   | makeInelig p r hp hk h1 => rw [toRecon_makeInelig]; exact .makeInelig _ p r hp hk h1
   | earlyUncount _ _ hed _ _ => exact absurd hed (by decide)

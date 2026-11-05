@@ -11,21 +11,14 @@ theorem upd_eq_ite {α β : Type} [DecidableEq α] (f : α → β) (a : α) (b :
 
 /-! ### Learn -/
 
-theorem inv_learn {s : State Node} (h : Inv s) (n : Node) (hk : ¬ kl s n) : Inv (learn s n) := by
+theorem inv_learn {s : State Node} (h : Inv s) (n : Node) (hk : ¬ KnowsLatest s n) : Inv (learn s n) := by
   have hnp : n ≠ s.cfg.prim := by
-    intro e; apply hk; unfold kl; rw [e, h.primKnows]
-  have hK : ∀ x, (learn s n).known x = if x = n then s.cfg else s.known x := fun _ => rfl
-  have hSn : (learn s n).sync n = fun _ => false := by
-    simp [learn, upd, Ne.symm hnp]
-  have hS : ∀ x, x ≠ n → (learn s n).sync x = s.sync x := by
-    intro x hx; simp [learn, upd, hx]
-  have htp : ∀ x, tp (learn s n) x → x ≠ n ∧ tp s x := by
-    intro x hx
-    obtain ⟨hx1, hx2⟩ := hx
-    rw [hK] at hx1 hx2
-    by_cases e : x = n
-    · rw [if_pos e] at hx1; exact absurd (hx1.trans e).symm hnp
-    · rw [if_neg e] at hx1 hx2; exact ⟨e, hx1, hx2⟩
+    intro e; apply hk; unfold KnowsLatest; rw [e, h.primKnows]
+  have hK := learn_known (s := s) (n := n)
+  have hSn : (learn s n).sync n = fun _ => false := learn_sync_self hnp
+  have hS : ∀ x, x ≠ n → (learn s n).sync x = s.sync x := fun _ => learn_sync_other
+  have htp : ∀ x, ThinksPrimary (learn s n) x → x ≠ n ∧ ThinksPrimary s x :=
+    fun _ => learn_thinksPrimary hnp
   exact {
   ehc := h.ehc, caLen := h.caLen, caHist := h.caHist, caEq := h.caEq
   knownLe := by
@@ -106,117 +99,69 @@ theorem inv_learn {s : State Node} (h : Inv s) (n : Node) (hk : ¬ kl s n) : Inv
       have := hv; change ((if p = n then s.cfg else s.known p).ver < s.cfg.ver) at this
       rwa [if_neg hpn] at this
     have hprim := stale_ne_prim h hv'
-    obtain ⟨w, hw1, hw2, hw3, hw4, hw5, hw6⟩ := h.stale p hp' hv'
-    -- frozen in the post-state
+    have hF := h.stale p hp' hv'
+    obtain ⟨w, ⟨hw1, hw2⟩, hwF⟩ := hF.attained
+    -- Learn moves no log, acknowledgement or configuration; only whom n follows.
     have hfz : ∀ r, ((learn s n).known r).prim ≠ p ↔ (r = n ∨ (s.known r).prim ≠ p) := by
       intro r; rw [hK]; by_cases e : r = n
       · subst e; simp; exact fun x => hprim x.symm
       · simp [e]
     have hSp : (learn s n).sync p = s.sync p := hS p hpn
-    by_cases hsw : s.sync p n = true ∧ (s.known n).prim = p ∧ s.acked p n < s.acked p w
-    · obtain ⟨hs1, hs2, hs3⟩ := hsw
+    by_cases hsw : s.sync p n = true ∧ (s.known n).prim = p ∧ s.acked p n < fence s p
+    · -- n followed p with an acknowledgement below the fence. Having learned the new
+      -- configuration it has left p, and its acknowledgement is the new fence.
+      obtain ⟨hs1, hs2, hs3⟩ := hsw
       have hnp' : n ≠ p := fun e => hpn e.symm
-      refine ⟨n, ?_, ?_, ?_, ?_, ?_, ?_⟩
-      · rw [hSp]; exact hs1
-      · exact (hfz n).2 (Or.inl rfl)
-      · intro r hr hf
-        rw [hSp] at hr
-        rcases (hfz r).1 hf with e | hf'
-        · subst e; exact Nat.le_refl _
-        · exact Nat.le_trans (Nat.le_of_lt hs3) (hw3 r hr hf')
-      · intro hpa; show s.acked p n ≤ s.recon s.cfg.prim; have := hw4 hpa; omega
-      · intro hpa; exact take_mono_prefix (Nat.le_of_lt hs3) (hw5 hpa)
+      refine Fenced.of_left (w := n) ⟨by rw [hSp]; exact hs1, (hfz n).2 (Or.inl rfl)⟩ ?_ ?_ ?_
+      · intro hpa; show s.acked p n ≤ s.recon s.cfg.prim; have := hF.reconLe hpa; omega
+      · intro hpa; exact take_mono_prefix (Nat.le_of_lt hs3) (hF.primHolds hpa)
       · intro m hm hi
-        rcases hw6 m hm hi with d | ⟨d1, d2⟩
+        rcases hF.eligHolds m hm hi with d | ⟨d1, d2⟩
         · exact Or.inl (take_mono_prefix (Nat.le_of_lt hs3) d)
         · by_cases e : m = n
           · subst e; exact Or.inl (h.ackHolds p m hp' hnp' hs2)
           · right; rw [hSp]; refine ⟨d1, ?_⟩
             show (if m = n then s.cfg else s.known m).prim = p; rw [if_neg e]; exact d2
-    · refine ⟨w, ?_, ?_, ?_, hw4, hw5, ?_⟩
-      · rw [hSp]; exact hw1
-      · exact (hfz w).2 (Or.inr hw2)
-      · intro r hr hf
-        rw [hSp] at hr
-        show s.acked p w ≤ s.acked p r
-        rcases (hfz r).1 hf with e | hf'
-        · subst e
-          by_cases hf0 : (s.known r).prim = p
-          · exact Nat.le_of_not_lt (fun hl => hsw ⟨hr, hf0, hl⟩)
-          · exact hw3 r hr hf0
-        · exact hw3 r hr hf'
+    · -- Otherwise the old fence still holds.
+      refine Fenced.of_left (w := w) ⟨by rw [hSp]; exact hw1, (hfz w).2 (Or.inr hw2)⟩ ?_ ?_ ?_
+      · intro hpa; show s.acked p w ≤ s.recon s.cfg.prim; rw [hwF]; exact hF.reconLe hpa
+      · intro hpa
+        show (s.log p).take (s.acked p w) <+: s.log s.cfg.prim; rw [hwF]; exact hF.primHolds hpa
       · intro m hm hi
-        rcases hw6 m hm hi with d | ⟨d1, d2⟩
+        show (s.log p).take (s.acked p w) <+: s.log m ∨ _
+        rw [hwF]
+        rcases hF.eligHolds m hm hi with d | ⟨d1, d2⟩
         · exact Or.inl d
         · by_cases e : m = n
           · subst e
             have hnp' : m ≠ p := fun e => hpn e.symm
-            have hle : s.acked p w ≤ s.acked p m :=
-              Nat.le_of_not_lt (fun hl => hsw ⟨d1, d2, hl⟩)
+            have hle : fence s p ≤ s.acked p m := Nat.le_of_not_lt (fun hl => hsw ⟨d1, d2, hl⟩)
             exact Or.inl (take_mono_prefix hle (h.ackHolds p m hp' hnp' d2))
           · right; rw [hSp]; refine ⟨d1, ?_⟩
             show (if m = n then s.cfg else s.known m).prim = p; rw [if_neg e]; exact d2 }
 
-/-! ### A witness survives steps that leave the stale primary's row alone. -/
-
-theorem wit_transfer {s s' : State Node} {x w : Node} (hw : Wit s x w)
-    (hsync : s'.sync x = s.sync x) (hkn : ∀ y, (s'.known y).prim = (s.known y).prim)
-    (hack : s'.acked x w = s.acked x w)
-    (hack' : ∀ r, s.sync x r = true → s'.acked x r = s.acked x r)
-    (hlog : s'.log x = s.log x) (hprim : s'.cfg.prim = s.cfg.prim)
-    (hpa : pa s' → pa s)
-    (hrec : pa s' → s.recon s.cfg.prim ≤ s'.recon s.cfg.prim)
-    (hlp : pa s' → s'.log s.cfg.prim = s.log s.cfg.prim)
-    (hcov : ∀ m, s'.cfg.elig m = true → s'.cfg.inc m = s'.inc m →
-      (s.cfg.elig m = true ∧ s.cfg.inc m = s.inc m ∧ s'.log m = s.log m) ∨
-        (s.log x).take (s.acked x w) <+: s'.log m) :
-    Wit s' x w := by
-  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hw
-  refine ⟨by rw [hsync]; exact h1, by rw [hkn]; exact h2, ?_, ?_, ?_, ?_⟩
-  · intro r hr hf; rw [hsync] at hr; rw [hkn] at hf
-    rw [hack, hack' r hr]; exact h3 r hr hf
-  · intro hp; rw [hack, hprim]; exact Nat.le_trans (h4 (hpa hp)) (hrec hp)
-  · intro hp; rw [hack, hlog, hprim, hlp hp]; exact h5 (hpa hp)
-  · intro m hm hi
-    rcases hcov m hm hi with ⟨he, hi0, hl⟩ | d
-    · rcases h6 m he hi0 with d | ⟨d1, d2⟩
-      · left; rw [hack, hlog, hl]; exact d
-      · right; rw [hsync, hkn]; exact ⟨d1, d2⟩
-    · left; rw [hack, hlog]; exact d
-
 /-! ### MakeEligible / MakeIneligible -/
 
 section cas
-variable {s : State Node} (h : Inv s) {p r : Node} (hp : tp s p) (hkl : kl s p)
+variable {s : State Node} (h : Inv s) {p r : Node} (hp : ThinksPrimary s p) (hkl : KnowsLatest s p)
 include h hp hkl
 
 theorem inv_makeElig (hs : s.sync p r = true) (he : s.cfg.elig r = false) :
     Inv (makeElig s p r) := by
-  obtain ⟨hkp, hpp⟩ := tp_kl h hp hkl
-  have hpa : pa s := (tp_pa hp hkp).2
+  obtain ⟨hkp, hpp⟩ := thinksPrimary_knowsLatest h hp hkl
+  have hpa : PrimaryAuthoritative s := (thinksPrimary_primaryAuthoritative hp hkp).2
   subst hpp
-  have hK : ∀ x, (makeElig s s.cfg.prim r).known x =
-      if x = s.cfg.prim then eligCfg s r else s.known x := fun _ => rfl
-  have hKp : ∀ x, ((makeElig s s.cfg.prim r).known x).prim = (s.known x).prim := by
-    intro x; rw [hK]; split
-    · rename_i e; subst e; rw [hkp]; rfl
-    · rfl
-  have hE : ∀ x, (makeElig s s.cfg.prim r).cfg.elig x = if x = r then true else s.cfg.elig x :=
-    fun _ => rfl
-  have hI : ∀ x, (makeElig s s.cfg.prim r).cfg.inc x = if x = r then s.inc r else s.cfg.inc x :=
-    fun _ => rfl
+  have hK := makeElig_known (s := s) (r := r)
+  have hKp := makeElig_known_prim (s := s) (r := r) hkp
+  have hE := makeElig_elig (s := s) (r := r)
+  have hI := makeElig_inc (s := s) (r := r)
   have hrp : r ≠ s.cfg.prim := by
     intro e; rw [e, h.noSelfSync] at hs; exact Bool.false_ne_true hs
-  have hKi : ∀ x, ((makeElig s s.cfg.prim r).known x).inc x = (s.known x).inc x := by
-    intro x; rw [hK]; split
-    · rename_i e; subst e; rw [hkp]
-      show upd s.cfg.inc r (s.inc r) s.cfg.prim = s.cfg.inc s.cfg.prim
-      exact upd_ne _ _ (Ne.symm hrp)
-    · rfl
+  have hKi := makeElig_known_inc (s := s) hkp hrp
   obtain ⟨hrf, hrec⟩ := h.syncNew r hs he
   have hra : (s.log s.cfg.prim).take (s.acked s.cfg.prim r) <+: s.log r :=
-    h.ackHolds _ _ (tp_prim h hpa) hrp hrf
-  have hsc := h.syncCommit _ _ (tp_prim h hpa) hs
+    h.ackHolds _ _ (thinksPrimary_prim h hpa) hrp hrf
+  have hsc := h.syncCommit _ _ (thinksPrimary_prim h hpa) hs
   have hhl : s.hist.length ≤ s.acked s.cfg.prim r := by
     rcases h.histLe hpa with a | a <;> omega
   have hhist : s.hist <+: s.log r := by
@@ -224,16 +169,9 @@ theorem inv_makeElig (hs : s.sync p r = true) (he : s.cfg.elig r = false) :
     have e := prefix_take_eq hp0 (Nat.le_refl s.hist.length)
     rw [List.take_length] at e
     rw [e]; exact take_mono_prefix hhl hra
-  have htp : ∀ x, tp (makeElig s s.cfg.prim r) x ↔ tp s x := by
-    intro x; unfold tp; rw [hKp, hKi]; rfl
-  have hauth : ∀ n, auth (makeElig s s.cfg.prim r) n → n = r ∨ auth s n := by
-    intro n ⟨hn, hi⟩
-    by_cases e : n = r
-    · exact Or.inl e
-    · right
-      change (if n = r then true else s.cfg.elig n) = true ∨ n = s.cfg.prim at hn
-      change (if n = r then s.inc r else s.cfg.inc n) = s.inc n at hi
-      rw [if_neg e] at hn hi; exact ⟨hn, hi⟩
+  have htp := makeElig_thinksPrimary (s := s) hkp hrp
+  have hauth : ∀ n, IsAuthoritative (makeElig s s.cfg.prim r) n → n = r ∨ IsAuthoritative s n :=
+    fun _ => makeElig_isAuthoritative
   exact {
   ehc := by
     intro n hn
@@ -247,7 +185,7 @@ theorem inv_makeElig (hs : s.sync p r = true) (he : s.cfg.elig r = false) :
     · exact Nat.le_succ_of_le (h.knownLe x)
   knownEq := by
     intro x hx; change ((makeElig s s.cfg.prim r).known x).ver = s.cfg.ver + 1 at hx
-    show (makeElig s s.cfg.prim r).known x = eligCfg s r
+    show (makeElig s s.cfg.prim r).known x = makeEligCfg s r
     rw [hK] at hx ⊢; split
     · rfl
     · rename_i e; rw [if_neg e] at hx; have := h.knownLe x; omega
@@ -279,7 +217,7 @@ theorem inv_makeElig (hs : s.sync p r = true) (he : s.cfg.elig r = false) :
       by_cases ey : y = r
       · subst ey; exact hs
       · rw [if_neg ey] at hy; rw [upd_ne _ _ ey] at hi
-        exact h.eligSync _ y (tp_prim h hpa) (by rw [h.primKnows]; exact hy)
+        exact h.eligSync _ y (thinksPrimary_prim h hpa) (by rw [h.primKnows]; exact hy)
           (by rw [h.primKnows]; exact hi)
     · rename_i e; rw [if_neg e] at hi; exact h.eligSync x y ((htp x).1 hx) hy hi
   noSelfSync := h.noSelfSync
@@ -313,59 +251,38 @@ theorem inv_makeElig (hs : s.sync p r = true) (he : s.cfg.elig r = false) :
       rcases Nat.lt_or_ge (s.known x).ver s.cfg.ver with a | a
       · exact a
       · exfalso; have := h.knownEq x (Nat.le_antisymm (h.knownLe x) a)
-        exact hxp (tp_kl h hx' (by unfold kl; rw [this])).2.symm
-    obtain ⟨w, hw⟩ := h.stale x hx' hv'
-    refine ⟨w, wit_transfer hw rfl hKp rfl (fun _ _ => rfl) rfl rfl (fun _ => hpa)
-      (fun _ => Nat.le_refl _) (fun _ => rfl) ?_⟩
+        exact hxp (thinksPrimary_knowsLatest h hx' (by unfold KnowsLatest; rw [this])).2.symm
+    -- The fence does not move; the newly eligible r holds x's log up to it because r
+    -- caught up past the reconciliation point, which is past the fence.
+    have hF := h.stale x hx' hv'
+    refine hF.transfer rfl hKp (fun _ _ => rfl) rfl rfl (fun _ => hpa)
+      (fun _ => Nat.le_refl _) (fun _ => rfl) ?_
     intro m hm hi
     by_cases e : m = r
     · subst e; right
-      obtain ⟨_, _, _, hw4, hw5, _⟩ := hw
-      exact take_transfer (Nat.le_trans (hw4 hpa) hrec) (h.ackedLe x w hx') (hw5 hpa) hra
+      exact take_transfer (Nat.le_trans (hF.reconLe hpa) hrec)
+        (hF.le_len (fun y => h.ackedLe x y hx')) (hF.primHolds hpa) hra
     · left
       change (if m = r then true else s.cfg.elig m) = true at hm
       change (if m = r then s.inc r else s.cfg.inc m) = s.inc m at hi
       rw [if_neg e] at hm hi; exact ⟨hm, hi, rfl⟩ }
 
 theorem inv_makeInelig (he : s.cfg.elig r = true) : Inv (makeInelig s p r) := by
-  obtain ⟨hkp, hpp⟩ := tp_kl h hp hkl
-  have hpa : pa s := (tp_pa hp hkp).2
+  obtain ⟨hkp, hpp⟩ := thinksPrimary_knowsLatest h hp hkl
+  have hpa : PrimaryAuthoritative s := (thinksPrimary_primaryAuthoritative hp hkp).2
   subst hpp
-  have hK : ∀ x, (makeInelig s s.cfg.prim r).known x =
-      if x = s.cfg.prim then ineligCfg s r else s.known x := fun _ => rfl
-  have hKp : ∀ x, ((makeInelig s s.cfg.prim r).known x).prim = (s.known x).prim := by
-    intro x; rw [hK]; split
-    · rename_i e; subst e; rw [hkp]; rfl
-    · rfl
-  have hKi : ∀ x, ((makeInelig s s.cfg.prim r).known x).inc = (s.known x).inc := by
-    intro x; rw [hK]; split
-    · rename_i e; subst e; rw [hkp]; rfl
-    · rfl
-  have hE : ∀ x, (makeInelig s s.cfg.prim r).cfg.elig x = if x = r then false else s.cfg.elig x :=
-    fun _ => rfl
-  have hS : ∀ x y, (makeInelig s s.cfg.prim r).sync x y =
-      if x = s.cfg.prim ∧ y = r then false else s.sync x y := by
-    intro x y
-    by_cases ex : x = s.cfg.prim
-    · subst ex; by_cases ey : y = r
-      · subst ey; simp [makeInelig, upd]
-      · simp [makeInelig, upd, ey]
-    · simp [makeInelig, upd, ex]
-  have hSle : ∀ x y, (makeInelig s s.cfg.prim r).sync x y = true → s.sync x y = true := by
-    intro x y hxy; rw [hS] at hxy; split at hxy
-    · exact absurd hxy Bool.false_ne_true
-    · exact hxy
-  have htp : ∀ x, tp (makeInelig s s.cfg.prim r) x ↔ tp s x := by
-    intro x; unfold tp; rw [hKp, hKi]; rfl
-  have hEle : ∀ m, (makeInelig s s.cfg.prim r).cfg.elig m = true → m ≠ r ∧ s.cfg.elig m = true := by
-    intro m hm; rw [hE] at hm; split at hm
-    · exact absurd hm Bool.false_ne_true
-    · rename_i e; exact ⟨e, hm⟩
-  have hauth : ∀ n, auth (makeInelig s s.cfg.prim r) n → auth s n := by
-    intro n ⟨hn, hi⟩
-    rcases hn with hn | hn
-    · exact ⟨Or.inl (hEle n hn).2, hi⟩
-    · exact ⟨Or.inr hn, hi⟩
+  have hK := makeInelig_known (s := s) (r := r)
+  have hKp := makeInelig_known_prim (s := s) (r := r) hkp
+  have hKi := makeInelig_known_inc (s := s) (r := r) hkp
+  have hE := makeInelig_elig (s := s) (r := r)
+  have hS := makeInelig_sync (s := s) (r := r)
+  have hSle : ∀ x y, (makeInelig s s.cfg.prim r).sync x y = true → s.sync x y = true :=
+    fun _ _ => makeInelig_sync_le
+  have htp := makeInelig_thinksPrimary (s := s) (r := r) hkp
+  have hEle : ∀ m, (makeInelig s s.cfg.prim r).cfg.elig m = true → m ≠ r ∧ s.cfg.elig m = true :=
+    fun _ => makeInelig_elig_true
+  have hauth : ∀ n, IsAuthoritative (makeInelig s s.cfg.prim r) n → IsAuthoritative s n :=
+    fun _ => makeInelig_isAuthoritative
   exact {
   ehc := fun n hn => h.ehc n (hauth n hn)
   caLen := h.caLen, caHist := h.caHist, caEq := h.caEq
@@ -375,7 +292,7 @@ theorem inv_makeInelig (he : s.cfg.elig r = true) : Inv (makeInelig s p r) := by
     · exact Nat.le_succ_of_le (h.knownLe x)
   knownEq := by
     intro x hx; change ((makeInelig s s.cfg.prim r).known x).ver = s.cfg.ver + 1 at hx
-    show (makeInelig s s.cfg.prim r).known x = ineligCfg s r
+    show (makeInelig s s.cfg.prim r).known x = makeIneligCfg s r
     rw [hK] at hx ⊢; split
     · rfl
     · rename_i e; rw [if_neg e] at hx; have := h.knownLe x; omega
@@ -399,7 +316,7 @@ theorem inv_makeInelig (he : s.cfg.elig r = true) : Inv (makeInelig s p r) := by
       · exact absurd hy Bool.false_ne_true
       · rename_i ey
         rw [if_neg (fun c => ey c.2)]
-        exact h.eligSync _ y (tp_prim h hpa) (by rw [h.primKnows]; exact hy)
+        exact h.eligSync _ y (thinksPrimary_prim h hpa) (by rw [h.primKnows]; exact hy)
           (by rw [h.primKnows]; exact hi)
     · rename_i e; rw [if_neg e] at hi; rw [if_neg (fun c => e c.1)]
       exact h.eligSync x y ((htp x).1 hx) hy hi
@@ -437,13 +354,12 @@ theorem inv_makeInelig (he : s.cfg.elig r = true) : Inv (makeInelig s p r) := by
       rcases Nat.lt_or_ge (s.known x).ver s.cfg.ver with a | a
       · exact a
       · exfalso; have := h.knownEq x (Nat.le_antisymm (h.knownLe x) a)
-        exact hxp (tp_kl h hx' (by unfold kl; rw [this])).2.symm
-    obtain ⟨w, hw⟩ := h.stale x hx' hv'
+        exact hxp (thinksPrimary_knowsLatest h hx' (by unfold KnowsLatest; rw [this])).2.symm
     have hSx : (makeInelig s s.cfg.prim r).sync x = s.sync x := by
       funext y; rw [hS, if_neg (fun c => hxp c.1)]
-    exact ⟨w, wit_transfer hw hSx hKp rfl (fun _ _ => rfl) rfl rfl (fun _ => hpa)
+    exact (h.stale x hx' hv').transfer hSx hKp (fun _ _ => rfl) rfl rfl (fun _ => hpa)
       (fun _ => Nat.le_refl _) (fun _ => rfl)
-      (fun m hm hi => Or.inl ⟨(hEle m hm).2, hi, rfl⟩)⟩ }
+      (fun m hm hi => Or.inl ⟨(hEle m hm).2, hi, rfl⟩) }
 
 end cas
 

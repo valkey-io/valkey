@@ -36,42 +36,42 @@ instance instDecEqState : DecidableEq S := fun a b =>
 
 /-! ### Decidability of the guards -/
 
-instance (s : S) (p : N) : Decidable (tp s p) := inferInstanceAs (Decidable (_ = _))
-instance (s : S) (p : N) : Decidable (kl s p) := inferInstanceAs (Decidable (_ = _))
-instance (rf : Bool) (s : S) (p : N) : Decidable (reconciled rf s p) :=
+instance (s : S) (p : N) : Decidable (ThinksPrimary s p) := inferInstanceAs (Decidable (_ = _))
+instance (s : S) (p : N) : Decidable (KnowsLatest s p) := inferInstanceAs (Decidable (_ = _))
+instance (rf : Bool) (s : S) (p : N) : Decidable (Reconciled rf s p) :=
   inferInstanceAs (Decidable (_ → _))
 
 /-! ### One partial successor function per `Step` constructor (rf = true, ed = false) -/
 
 def oAppend (s : S) (p : N) : Option S :=
-  if tp s p ∧ reconciled true s p then some (appendWrite s p) else none
+  if ThinksPrimary s p ∧ Reconciled true s p then some (appendWrite s p) else none
 def oReplicate (s : S) (r : N) : Option S :=
-  if pof s r ≠ r ∧ s.log r <+: s.log (pof s r) ∧ (s.log r).length < (s.log (pof s r)).length
+  if primaryOf s r ≠ r ∧ s.log r <+: s.log (primaryOf s r) ∧ (s.log r).length < (s.log (primaryOf s r)).length
   then some (replicate s r) else none
 def oAck (s : S) (r : N) : Option S :=
-  if pof s r ≠ r ∧ s.log r <+: s.log (pof s r) ∧ s.acked (pof s r) r < (s.log r).length
+  if primaryOf s r ≠ r ∧ s.log r <+: s.log (primaryOf s r) ∧ s.acked (primaryOf s r) r < (s.log r).length
   then some (ack s r) else none
 def oCommit (s : S) (p : N) : Option S :=
-  if tp s p ∧ s.commit p < (s.log p).length ∧ (∀ r, s.sync p r = true → s.commit p < s.acked p r)
-  then some (commitA s p) else none
+  if ThinksPrimary s p ∧ s.commit p < (s.log p).length ∧ (∀ r, s.sync p r = true → s.commit p < s.acked p r)
+  then some (commitNext s p) else none
 def oCount (s : S) (p r : N) : Option S :=
-  if tp s p ∧ reconciled true s p ∧ r ≠ p ∧ pof s r = p ∧ s.sync p r = false ∧
+  if ThinksPrimary s p ∧ Reconciled true s p ∧ r ≠ p ∧ primaryOf s r = p ∧ s.sync p r = false ∧
      s.commit p ≤ s.acked p r
   then some (count s p r) else none
 def oMakeElig (s : S) (p r : N) : Option S :=
-  if tp s p ∧ kl s p ∧ s.sync p r = true ∧ s.cfg.elig r = false
+  if ThinksPrimary s p ∧ KnowsLatest s p ∧ s.sync p r = true ∧ s.cfg.elig r = false
   then some (makeElig s p r) else none
 def oMakeInelig (s : S) (p r : N) : Option S :=
-  if tp s p ∧ kl s p ∧ s.cfg.elig r = true then some (makeInelig s p r) else none
+  if ThinksPrimary s p ∧ KnowsLatest s p ∧ s.cfg.elig r = true then some (makeInelig s p r) else none
 def oEarlyUncount (s : S) (p r : N) : Option S :=
-  if (false = true) ∧ tp s p ∧ s.sync p r = true then some (earlyUncount s p r) else none
+  if (false = true) ∧ ThinksPrimary s p ∧ s.sync p r = true then some (earlyUncount s p r) else none
 def oLearn (s : S) (n : N) : Option S :=
-  if ¬ kl s n then some (learn s n) else none
+  if ¬ KnowsLatest s n then some (learn s n) else none
 def oTakeover (s : S) (n : N) : Option S :=
-  if kl s n ∧ s.cfg.elig n = true ∧ n ≠ s.cfg.prim then some (takeover s n) else none
+  if KnowsLatest s n ∧ s.cfg.elig n = true ∧ n ≠ s.cfg.prim then some (takeover s n) else none
 def oResync (s : S) (r : N) : Option S :=
-  if pof s r ≠ r ∧ ¬ (s.log r <+: s.log (pof s r)) ∧ s.sync (pof s r) r = false ∧
-     (s.known (pof s r)).elig r = false ∧ reconciled true s (pof s r)
+  if primaryOf s r ≠ r ∧ ¬ (s.log r <+: s.log (primaryOf s r)) ∧ s.sync (primaryOf s r) r = false ∧
+     (s.known (primaryOf s r)).elig r = false ∧ Reconciled true s (primaryOf s r)
   then some (resync s r) else none
 
 /-- `o` only yields `Step` successors of `s`. -/
@@ -213,22 +213,32 @@ instance instDecEqRCfg : DecidableEq (RestartProof.Cfg N) := fun a b =>
     isTrue (by cases a; cases b; simp_all)
   else isFalse (fun e => h (by subst e; exact ⟨rfl, rfl, rfl, rfl⟩))
 
-instance (s : R) (p : N) : Decidable (RestartProof.tp s p) := by
-  unfold RestartProof.tp; infer_instance
-instance (s : R) (n : N) : Decidable (RestartProof.auth s n) := by
-  unfold RestartProof.auth; infer_instance
-instance (s : R) : Decidable (RestartProof.pa s) := by
-  unfold RestartProof.pa; infer_instance
-instance (s : R) (p w : N) : Decidable (RestartProof.Wit s p w) := by
-  unfold RestartProof.Wit; infer_instance
+instance (s : R) (p : N) : Decidable (RestartProof.ThinksPrimary s p) := by
+  unfold RestartProof.ThinksPrimary; infer_instance
+instance (s : R) (n : N) : Decidable (RestartProof.IsAuthoritative s n) := by
+  unfold RestartProof.IsAuthoritative; infer_instance
+instance (s : R) : Decidable (RestartProof.PrimaryAuthoritative s) := by
+  unfold RestartProof.PrimaryAuthoritative; infer_instance
+/-- `p` is fenced at `w`'s acknowledgement: the hypotheses of `Fenced.of_left`. A
+decidable stand-in for `Fenced`, which is defined with a set minimum. -/
+def FencedAt (s : R) (p w : N) : Prop :=
+  (s.sync p w = true ∧ (s.known w).prim ≠ p) ∧
+  (RestartProof.PrimaryAuthoritative s → s.acked p w ≤ s.recon s.cfg.prim) ∧
+  (RestartProof.PrimaryAuthoritative s → (s.log p).take (s.acked p w) <+: s.log s.cfg.prim) ∧
+  ∀ m, s.cfg.elig m = true → s.cfg.inc m = s.inc m →
+    (s.log p).take (s.acked p w) <+: s.log m ∨ (s.sync p m = true ∧ (s.known m).prim = p)
+instance (s : R) (p w : N) : Decidable (FencedAt s p w) := by
+  unfold FencedAt; infer_instance
+theorem FencedAt.fenced {s : R} {p w : N} (h : FencedAt s p w) : RestartProof.Fenced s p :=
+  RestartProof.Fenced.of_left h.1 h.2.1 h.2.2.1 h.2.2.2
 
 /-! `RestartProof.Inv` field by field (same statements, same order), each decidable. -/
 
 section
-open RestartProof (auth pa Wit)
+open RestartProof (IsAuthoritative PrimaryAuthoritative)
 variable (s : R)
 
-def I_ehc : Prop := ∀ n, auth s n → s.hist <+: s.log n
+def I_ehc : Prop := ∀ n, IsAuthoritative s n → s.hist <+: s.log n
 def I_caLen : Prop := ∀ p, s.commit p ≤ (s.log p).length
 def I_caHist : Prop := ∀ p, s.commit p ≤ s.hist.length
 def I_caEq : Prop := ∀ p, (s.log p).take (s.commit p) = s.hist.take (s.commit p)
@@ -237,27 +247,27 @@ def I_knownEq : Prop := ∀ n, (s.known n).ver = s.cfg.ver → s.known n = s.cfg
 def I_primKnows : Prop := s.known s.cfg.prim = s.cfg
 def I_incLe : Prop := ∀ n, s.cfg.inc n ≤ s.inc n
 def I_knownIncLe : Prop := ∀ x n, (s.known x).inc n ≤ s.inc n
-def I_authEx : Prop := ∃ n, auth s n
+def I_authEx : Prop := ∃ n, IsAuthoritative s n
 def I_eligSync : Prop :=
-  ∀ p r, RestartProof.tp s p → (s.known p).elig r = true → (s.known p).inc r = s.inc r →
+  ∀ p r, RestartProof.ThinksPrimary s p → (s.known p).elig r = true → (s.known p).inc r = s.inc r →
     s.sync p r = true
 def I_noSelfSync : Prop := ∀ p, s.sync p p = false
 def I_ackedPrim : Prop := ∀ r, (s.known r).prim ≠ s.cfg.prim → s.acked s.cfg.prim r = 0
-def I_ackedLe : Prop := ∀ p r, RestartProof.tp s p → s.acked p r ≤ (s.log p).length
+def I_ackedLe : Prop := ∀ p r, RestartProof.ThinksPrimary s p → s.acked p r ≤ (s.log p).length
 def I_ackHolds : Prop :=
-  ∀ p n, RestartProof.tp s p → n ≠ p → (s.known n).prim = p →
+  ∀ p n, RestartProof.ThinksPrimary s p → n ≠ p → (s.known n).prim = p →
     (s.log p).take (s.acked p n) <+: s.log n
 def I_syncNew : Prop :=
   ∀ r, s.sync s.cfg.prim r = true → s.cfg.elig r = false →
     (s.known r).prim = s.cfg.prim ∧ s.recon s.cfg.prim ≤ s.acked s.cfg.prim r
 def I_reconLen : Prop := s.recon s.cfg.prim ≤ (s.log s.cfg.prim).length
-def I_syncCommit : Prop := ∀ q r, RestartProof.tp s q → s.sync q r = true → s.commit q ≤ s.acked q r
+def I_syncCommit : Prop := ∀ q r, RestartProof.ThinksPrimary s q → s.sync q r = true → s.commit q ≤ s.acked q r
 def I_eligFol : Prop :=
   ∀ m, s.cfg.elig m = true → (s.known m).prim ≠ s.cfg.prim →
     (s.known (s.known m).prim).elig m = true
 def I_histLe : Prop :=
-  pa s → s.hist.length ≤ s.commit s.cfg.prim ∨ s.hist.length ≤ s.recon s.cfg.prim
-def I_stale : Prop := ∀ p, RestartProof.tp s p → (s.known p).ver < s.cfg.ver → ∃ w, Wit s p w
+  PrimaryAuthoritative s → s.hist.length ≤ s.commit s.cfg.prim ∨ s.hist.length ≤ s.recon s.cfg.prim
+def I_stale : Prop := ∀ p, RestartProof.ThinksPrimary s p → (s.known p).ver < s.cfg.ver → ∃ w, FencedAt s p w
 
 instance : Decidable (I_ehc s) := by unfold I_ehc; infer_instance
 instance : Decidable (I_caLen s) := by unfold I_caLen; infer_instance
@@ -294,8 +304,8 @@ end
 theorem invP_inv {s : R} (h : InvP s) : RestartProof.Inv s := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18,
     h19, h20, h21⟩ := h
-  exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18,
-    h19, h20, h21⟩
+  exact
+    { ehc := h1, caLen := h2, caHist := h3, caEq := h4, knownLe := h5, knownEq := h6, primKnows := h7, incLe := h8, knownIncLe := h9, authEx := h10, eligSync := h11, noSelfSync := h12, ackedPrim := h13, ackedLe := h14, ackHolds := h15, syncNew := h16, reconLen := h17, syncCommit := h18, eligFol := h19, histLe := h20, stale := fun p hp hv => (h21 p hp hv).elim fun _ hw => hw.fenced }
 
 /-- `RestartProof.Inv` holds on the CoreRestart image of `s`. -/
 def invB (s : S) : Bool := decide (InvP (lift s))
@@ -303,7 +313,7 @@ def invB (s : S) : Bool := decide (InvP (lift s))
 theorem invB_sound {s : S} (h : invB s = true) : RestartProof.Inv (lift s) :=
   invP_inv (of_decide_eq_true h)
 
-instance (s : S) : Decidable (Safety s) := by unfold Safety EHC CA; infer_instance
+instance (s : S) : Decidable (Safety s) := by unfold Safety EligibleHoldsCommitted CommittedAgree; infer_instance
 
 def safetyB (s : S) : Bool := decide (Safety s)
 

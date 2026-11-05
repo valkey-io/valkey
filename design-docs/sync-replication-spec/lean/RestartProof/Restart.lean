@@ -7,82 +7,30 @@ namespace RestartProof
 
 variable {Node : Type} [DecidableEq Node]
 
-theorem inv_restartEmpty {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n)
-    (hsurv : ∃ m, m ≠ n ∧ auth s m) : Inv (restartEmpty s n) := by
+theorem inv_restartEmpty {s : State Node} (h : Inv s) (n : Node) (hkl : KnowsLatest s n)
+    (hsurv : ∃ m, m ≠ n ∧ IsAuthoritative s m) : Inv (restartEmpty s n) := by
   have hkn : s.known n = s.cfg := h.knownEq n hkl
-  have hI : ∀ x, (restartEmpty s n).inc x = if x = n then s.inc n + 1 else s.inc x := by
-    intro x; by_cases e : x = n
-    · subst e; simp [restartEmpty]
-    · simp [restartEmpty, upd, e]
-  have hIo : ∀ x, x ≠ n → (restartEmpty s n).inc x = s.inc x := by
-    intro x e; rw [hI, if_neg e]
-  have hIn : (restartEmpty s n).inc n = s.inc n + 1 := by rw [hI, if_pos rfl]
-  have hLo : ∀ x, x ≠ n → (restartEmpty s n).log x = s.log x := by
-    intro x e; simp [restartEmpty, upd, e]
-  have hCo : ∀ x, x ≠ n → (restartEmpty s n).commit x = s.commit x := by
-    intro x e; simp [restartEmpty, upd, e]
-  have hCn : (restartEmpty s n).commit n = 0 := by simp [restartEmpty]
-  have hRo : ∀ x, x ≠ n → (restartEmpty s n).recon x = s.recon x := by
-    intro x e; simp [restartEmpty, upd, e]
-  have hRn : (restartEmpty s n).recon n = 0 := by simp [restartEmpty]
-  have hS : ∀ p r, (restartEmpty s n).sync p r =
-      if p = n then false else if p = s.cfg.prim ∧ r = n then false else s.sync p r := by
-    intro p r
-    by_cases e : p = n
-    · simp [restartEmpty, e]
-    · by_cases ep : p = s.cfg.prim
-      · subst ep
-        by_cases er : r = n
-        · simp [restartEmpty, e, er]
-        · simp [restartEmpty, e, er, upd]
-      · simp [restartEmpty, e, ep]
-  have hA : ∀ p r, (restartEmpty s n).acked p r =
-      if p = n then 0 else if p = s.cfg.prim ∧ r = n then 0 else s.acked p r := by
-    intro p r
-    by_cases e : p = n
-    · simp [restartEmpty, e]
-    · by_cases ep : p = s.cfg.prim
-      · subst ep
-        by_cases er : r = n
-        · simp [restartEmpty, e, er]
-        · simp [restartEmpty, e, er, upd]
-      · simp [restartEmpty, e, ep]
-  have hAle : ∀ p r, (restartEmpty s n).acked p r ≤ s.acked p r := by
-    intro p r; rw [hA]; split
-    · exact Nat.zero_le _
-    · split
-      · exact Nat.zero_le _
-      · exact Nat.le_refl _
-  have hSle : ∀ p r, (restartEmpty s n).sync p r = true → s.sync p r = true := by
-    intro p r hs; rw [hS] at hs; split at hs
-    · exact absurd hs (by decide)
-    · split at hs
-      · exact absurd hs (by decide)
-      · exact hs
+  have hI := restartEmpty_inc (s := s) (n := n)
+  have hIo : ∀ x, x ≠ n → (restartEmpty s n).inc x = s.inc x := fun _ => restartEmpty_inc_other
+  have hIn := restartEmpty_inc_self (s := s) (n := n)
+  have hLo : ∀ x, x ≠ n → (restartEmpty s n).log x = s.log x := fun _ => restartEmpty_log_other
+  have hCo : ∀ x, x ≠ n → (restartEmpty s n).commit x = s.commit x := fun _ => restartEmpty_commit_other
+  have hCn := restartEmpty_commit_self (s := s) (n := n)
+  have hRo : ∀ x, x ≠ n → (restartEmpty s n).recon x = s.recon x := fun _ => restartEmpty_recon_other
+  have hRn := restartEmpty_recon_self (s := s) (n := n)
+  have hS := restartEmpty_sync (s := s) (n := n)
+  have hA := restartEmpty_acked (s := s) (n := n)
+  have hAle := restartEmpty_acked_le (s := s) (n := n)
+  have hSle : ∀ p r, (restartEmpty s n).sync p r = true → s.sync p r = true :=
+    fun _ _ => restartEmpty_sync_le
   -- the restarted node is no longer authoritative and not a primary
   have hnauth : ¬ (s.cfg.inc n = s.inc n + 1) := by have := h.incLe n; omega
-  have htp : ∀ x, tp (restartEmpty s n) x → x ≠ n ∧ tp s x := by
-    intro x ⟨h1, h2⟩
-    have hxn : x ≠ n := by
-      intro e; subst e
-      change (s.known x).inc x = (restartEmpty s x).inc x at h2
-      rw [hkn, hIn] at h2; exact hnauth h2
-    refine ⟨hxn, h1, ?_⟩
-    change (s.known x).inc x = (restartEmpty s n).inc x at h2
-    rw [hIo x hxn] at h2; exact h2
-  have hauth : ∀ x, auth (restartEmpty s n) x → x ≠ n ∧ auth s x := by
-    intro x ⟨h1, h2⟩
-    have hxn : x ≠ n := by
-      intro e; subst e
-      change s.cfg.inc x = (restartEmpty s x).inc x at h2
-      rw [hIn] at h2; exact hnauth h2
-    refine ⟨hxn, h1, ?_⟩
-    change s.cfg.inc x = (restartEmpty s n).inc x at h2
-    rw [hIo x hxn] at h2; exact h2
-  have hpa : pa (restartEmpty s n) → s.cfg.prim ≠ n ∧ pa s := by
-    intro hp
-    have := (hauth s.cfg.prim ⟨Or.inr rfl, hp⟩)
-    exact ⟨this.1, this.2.2⟩
+  have htp : ∀ x, ThinksPrimary (restartEmpty s n) x → x ≠ n ∧ ThinksPrimary s x :=
+    fun _ => restartEmpty_thinksPrimary hkn (h.incLe n)
+  have hauth : ∀ x, IsAuthoritative (restartEmpty s n) x → x ≠ n ∧ IsAuthoritative s x :=
+    fun _ => restartEmpty_isAuthoritative (h.incLe n)
+  have hpa : PrimaryAuthoritative (restartEmpty s n) → s.cfg.prim ≠ n ∧ PrimaryAuthoritative s :=
+    restartEmpty_primaryAuthoritative (h.incLe n)
   exact {
   ehc := by
     intro x hx
@@ -184,14 +132,13 @@ theorem inv_restartEmpty {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n)
     intro p hp hv
     obtain ⟨hpn, hp'⟩ := htp p hp
     have hpp := stale_ne_prim h hv
-    obtain ⟨w, hw⟩ := h.stale p hp' hv
     have hSp : (restartEmpty s n).sync p = s.sync p := by
       funext r; rw [hS, if_neg hpn, if_neg (fun c => hpp c.1)]
     have hAp : ∀ r, (restartEmpty s n).acked p r = s.acked p r := by
       intro r; rw [hA, if_neg hpn, if_neg (fun c => hpp c.1)]
-    refine ⟨w, wit_transfer hw hSp (fun _ => rfl) (hAp w) (fun r _ => hAp r) (hLo p hpn) rfl
-      (fun hq => (hpa hq).2) (fun hq => by rw [hRo _ (hpa hq).1]; exact Nat.le_refl _)
-      (fun hq => hLo _ (hpa hq).1) ?_⟩
+    refine (h.stale p hp' hv).transfer hSp (fun _ => rfl) (fun r _ => hAp r) (hLo p hpn) rfl
+      (fun hq => (hpa hq).2) (fun hq => by rw [hRo _ (hpa hq).1])
+      (fun hq => hLo _ (hpa hq).1) ?_
     intro m hm hi
     have hmn : m ≠ n := (hauth m ⟨Or.inl hm, hi⟩).1
     left
@@ -199,29 +146,22 @@ theorem inv_restartEmpty {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n)
     change s.cfg.inc m = (restartEmpty s n).inc m at hi
     rw [hIo m hmn] at hi; exact hi }
 
-theorem inv_restartKeep {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n) :
+theorem inv_restartKeep {s : State Node} (h : Inv s) (n : Node) (hkl : KnowsLatest s n) :
     Inv (restartKeep true s n) := by
   have hkn : s.known n = s.cfg := h.knownEq n hkl
-  have hCo : ∀ x, x ≠ n → (restartKeep true s n).commit x = s.commit x := by
-    intro x e; simp [restartKeep, upd, e]
-  have hCn : (restartKeep true s n).commit n = 0 := by simp [restartKeep]
-  have hRo : ∀ x, x ≠ n → (restartKeep true s n).recon x = s.recon x := by
-    intro x e; simp [restartKeep, upd, e]
-  have hRn : (restartKeep true s n).recon n = (s.log n).length := by simp [restartKeep]
-  have hAo : ∀ x, x ≠ n → (restartKeep true s n).acked x = s.acked x := by
-    intro x e; simp [restartKeep, upd, e]
-  have hAn : (restartKeep true s n).acked n = fun _ => 0 := by simp [restartKeep]
-  have hSo : ∀ x, x ≠ n → (restartKeep true s n).sync x = s.sync x := by
-    intro x e; simp [restartKeep, upd, e]
-  have hSn : (restartKeep true s n).sync n =
-      if (s.known n).prim = n ∧ (s.known n).inc n = s.inc n then rebuilt s n
-      else fun _ => false := by
-    simp [restartKeep]
+  have hCo : ∀ x, x ≠ n → (restartKeep true s n).commit x = s.commit x := fun _ => restartKeep_commit_other
+  have hCn := restartKeep_commit_self (s := s) (n := n)
+  have hRo : ∀ x, x ≠ n → (restartKeep true s n).recon x = s.recon x := fun _ => restartKeep_recon_other
+  have hRn := restartKeep_recon_self (s := s) (n := n)
+  have hAo : ∀ x, x ≠ n → (restartKeep true s n).acked x = s.acked x := fun _ => restartKeep_acked_other
+  have hAn := restartKeep_acked_self (s := s) (n := n)
+  have hSo : ∀ x, x ≠ n → (restartKeep true s n).sync x = s.sync x := fun _ => restartKeep_sync_other
+  have hSn := restartKeep_sync_self (s := s) (n := n)
   -- a primary is never eligible in its own config
-  have hnse : tp s n → (s.known n).elig n = true → (s.known n).inc n = s.inc n → False := by
+  have hnse : ThinksPrimary s n → (s.known n).elig n = true → (s.known n).inc n = s.inc n → False := by
     intro hp he hi; have := h.eligSync n n hp he hi; rw [h.noSelfSync] at this
     exact absurd this (by decide)
-  have htp : ∀ x, tp (restartKeep true s n) x ↔ tp s x := fun _ => Iff.rfl
+  have htp := restartKeep_thinksPrimary (s := s) (n := n)
   exact {
   ehc := h.ehc
   caLen := by
@@ -246,13 +186,13 @@ theorem inv_restartKeep {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n) :
       rw [hSn, if_pos hc]
       have hrp : r ≠ p := by
         intro c; subst c; exact hnse hp he hi
-      simp only [rebuilt, Bool.and_eq_true, decide_eq_true_eq]
+      simp only [rebuiltSync, Bool.and_eq_true, decide_eq_true_eq]
       exact ⟨⟨he, hi⟩, hrp⟩
     · rw [hSo p e]; exact h.eligSync p r hp he hi
   noSelfSync := by
     intro p; by_cases e : p = n
     · subst e; rw [hSn]; split
-      · simp [rebuilt]
+      · simp [rebuiltSync]
       · rfl
     · rw [hSo p e]; exact h.noSelfSync p
   ackedPrim := by
@@ -281,7 +221,7 @@ theorem inv_restartKeep {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n) :
       change s.cfg.elig r = false at he
       rw [hSn] at hs'
       split at hs'
-      · simp only [rebuilt, hkn, Bool.and_eq_true] at hs'
+      · simp only [rebuiltSync, hkn, Bool.and_eq_true] at hs'
         have := hs'.1.1; rw [he] at this; exact absurd this (by decide)
       · exact Bool.false_ne_true hs'
     · have hs' : s.sync s.cfg.prim r = true := by rw [← hSo _ e]; exact hs
@@ -292,7 +232,7 @@ theorem inv_restartKeep {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n) :
   reconLen := by
     show (restartKeep true s n).recon s.cfg.prim ≤ (s.log s.cfg.prim).length
     by_cases e : s.cfg.prim = n
-    · rw [e, hRn]; exact Nat.le_refl _
+    · rw [e, hRn]
     · rw [hRo _ e]; exact h.reconLen
   syncCommit := by
     intro q r hq hs
@@ -312,15 +252,14 @@ theorem inv_restartKeep {s : State Node} (h : Inv s) (n : Node) (hkl : kl s n) :
     have hpn : p ≠ n := by
       intro c
       have hv' : (s.known p).ver < s.cfg.ver := hv
-      rw [c] at hv'; unfold kl at hkl; omega
-    obtain ⟨w, hw⟩ := h.stale p hp hv
-    refine ⟨w, wit_transfer hw (hSo p hpn) (fun _ => rfl) (by rw [hAo p hpn])
+      rw [c] at hv'; unfold KnowsLatest at hkl; omega
+    refine (h.stale p hp hv).transfer (hSo p hpn) (fun _ => rfl)
       (fun r _ => by rw [hAo p hpn]) rfl rfl id ?_ (fun _ => rfl)
-      (fun m hm hi => Or.inl ⟨hm, hi, rfl⟩)⟩
+      (fun m hm hi => Or.inl ⟨hm, hi, rfl⟩)
     intro _
     show s.recon s.cfg.prim ≤ (restartKeep true s n).recon s.cfg.prim
     by_cases e : s.cfg.prim = n
     · rw [e, hRn]; rw [← e]; exact h.reconLen
-    · rw [hRo _ e]; exact Nat.le_refl _ }
+    · rw [hRo _ e] }
 
 end RestartProof

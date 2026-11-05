@@ -36,7 +36,7 @@ def write (a : AState Node) (p : Node) : AState Node :=
 
 /-- `Fenced(h)`: the primaryship that set the reply boundary is still current
 (F2 fix). -/
-def fenced (s : State Node) (h : Held Node) : Prop := tp s h.1 ∧ s.term h.1 = h.2.2
+def fenced (s : State Node) (h : Held Node) : Prop := ThinksPrimary s h.1 ∧ s.term h.1 = h.2.2
 
 /-- `Release(h)`: OK. -/
 def release (a : AState Node) (h : Held Node) : AState Node :=
@@ -54,15 +54,15 @@ def dropHeld (held : List (Held Node)) (n : Node) : List (Held Node) :=
 inductive AStep (m : Nat) (rf nf rb : Bool) : AState Node → AState Node → Prop
   | core (a : AState Node) (c : State Node) : Step m rf rb a.core c →
       AStep m rf nf rb a ⟨c, a.held, a.okd⟩
-  | write (a : AState Node) (p : Node) : tp a.core p → writable m a.core p →
-      reconciled rf a.core p → AStep m rf nf rb a (write a p)
+  | write (a : AState Node) (p : Node) : ThinksPrimary a.core p → Writable m a.core p →
+      Reconciled rf a.core p → AStep m rf nf rb a (write a p)
   | release (a : AState Node) (h : Held Node) : h ∈ a.held → h.2.1 ≤ a.core.commit h.1 →
       (nf = false → fenced a.core h) → AStep m rf nf rb a (release a h)
   | abort (a : AState Node) (h : Held Node) : h ∈ a.held → ¬ fenced a.core h →
       AStep m rf nf rb a (abort a h)
-  | restartE (a : AState Node) (n : Node) : kl a.core n → (∃ m, m ≠ n ∧ auth a.core m) →
+  | restartE (a : AState Node) (n : Node) : KnowsLatest a.core n → (∃ m, m ≠ n ∧ IsAuthoritative a.core m) →
       AStep m rf nf rb a ⟨restartEmpty a.core n, dropHeld a.held n, a.okd⟩
-  | restartK (a : AState Node) (n : Node) : kl a.core n →
+  | restartK (a : AState Node) (n : Node) : KnowsLatest a.core n →
       AStep m rf nf rb a ⟨restartKeep rb a.core n, dropHeld a.held n, a.okd⟩
 
 inductive AReachable (m : Nat) (rf nf rb : Bool) (i : Node) : AState Node → Prop
@@ -75,7 +75,7 @@ def AckedDurable (a : AState Node) : Prop :=
 
 /-- AckedHeld: every authoritative node holds every acknowledged write. -/
 def AckedHeld (a : AState Node) : Prop :=
-  ∀ x ∈ a.okd, ∀ n, auth a.core n →
+  ∀ x ∈ a.okd, ∀ n, IsAuthoritative a.core n →
     x.1 ≤ (a.core.log n).length ∧ (a.core.log n).getD (x.1 - 1) 0 = x.2
 
 end RestartProof

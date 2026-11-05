@@ -41,13 +41,13 @@ theorem ecfg_upd (f : Node → Cfg Node) (p : Node) (c : Cfg Node) :
   · subst h; simp [upd, RestartProof.upd]
   · simp [upd, RestartProof.upd, h]
 
-theorem tp_emb {s : State Node} {p : Node} : RestartProof.tp (emb s) p ↔ tp s p :=
+theorem thinksPrimary_emb {s : State Node} {p : Node} : RestartProof.ThinksPrimary (emb s) p ↔ ThinksPrimary s p :=
   ⟨fun h => h.1, fun h => ⟨h, rfl⟩⟩
 
-theorem writable_emb {m : Nat} {s : State Node} {p : Node} (h : writable m s p) :
-    RestartProof.writable m (emb s) p := by
-  obtain ⟨l, hn, hl, hr⟩ := h
-  exact ⟨l, hn, hl, fun r hm => ⟨(hr r hm).1, (hr r hm).2, rfl⟩⟩
+theorem writable_emb {m : Nat} {s : State Node} {p : Node} (h : Writable m s p) :
+    RestartProof.Writable m (emb s) p := by
+  refine h.trans (Set.encard_le_encard fun r hr => ?_)
+  exact ⟨hr.1, hr.2, rfl⟩
 
 /-! ### Post-states commute with `emb` -/
 
@@ -58,7 +58,7 @@ theorem emb_appendWrite (p : Node) :
     emb (appendWrite s p) = RestartProof.appendWrite (emb s) p := rfl
 theorem emb_replicate (r : Node) : emb (replicate s r) = RestartProof.replicate (emb s) r := rfl
 theorem emb_ack (r : Node) : emb (ack s r) = RestartProof.ack (emb s) r := rfl
-theorem emb_commitA (p : Node) : emb (commitA s p) = RestartProof.commitA (emb s) p := rfl
+theorem emb_commitNext (p : Node) : emb (commitNext s p) = RestartProof.commitNext (emb s) p := rfl
 theorem emb_count (p r : Node) : emb (count s p r) = RestartProof.count (emb s) p r := rfl
 theorem emb_resync (rf : Bool) (r : Node) :
     emb (resync rf s r) = RestartProof.resync rf (emb s) r := rfl
@@ -68,8 +68,8 @@ theorem emb_learn (n : Node) : emb (learn s n) = RestartProof.learn (emb s) n :=
 
 theorem emb_makeElig (p r : Node) :
     emb (makeElig s p r) = RestartProof.makeElig (emb s) p r := by
-  have hc : RestartProof.eligCfg (emb s) r = ecfg (eligCfg s r true) := by
-    simp only [RestartProof.eligCfg, emb, ecfg, eligCfg, RestartProof.Cfg.mk.injEq,
+  have hc : RestartProof.makeEligCfg (emb s) r = ecfg (makeEligCfg s r true) := by
+    simp only [RestartProof.makeEligCfg, emb, ecfg, makeEligCfg, RestartProof.Cfg.mk.injEq,
       true_and]
     constructor <;> funext x <;> by_cases h : x = r <;> simp [RestartProof.upd, upd, h]
   simp only [RestartProof.makeElig, hc]
@@ -77,15 +77,15 @@ theorem emb_makeElig (p r : Node) :
 
 theorem emb_makeInelig (p r : Node) :
     emb (makeInelig s p r) = RestartProof.makeInelig (emb s) p r := by
-  have hc : RestartProof.ineligCfg (emb s) r = ecfg (eligCfg s r false) := rfl
+  have hc : RestartProof.makeIneligCfg (emb s) r = ecfg (makeEligCfg s r false) := rfl
   simp only [RestartProof.makeInelig, hc]
   simp only [emb, makeInelig, ecfg_upd]; rfl
 
 theorem emb_takeover (n : Node) : emb (takeover s n) = RestartProof.takeover (emb s) n := by
-  have hc : RestartProof.toCfg (emb s) n = ecfg (toCfg s n) := rfl
-  have hs : RestartProof.newSync (emb s) n = newElig s n := by
+  have hc : RestartProof.takeoverCfg (emb s) n = ecfg (takeoverCfg s n) := rfl
+  have hs : RestartProof.takeoverSync (emb s) n = takeoverElig s n := by
     funext x
-    simp only [RestartProof.newSync, RestartProof.newElig, newElig, emb, ecfg, decide_true,
+    simp only [RestartProof.takeoverSync, RestartProof.takeoverElig, takeoverElig, emb, ecfg, decide_true,
       Bool.and_true]
     rfl
   simp only [RestartProof.takeover, hc, hs]
@@ -100,17 +100,17 @@ theorem step_emb {m : Nat} {rf rb : Bool} {s s' : State Node} (h : Step m rf s s
     RestartProof.Step m rf rb (emb s) (emb s') := by
   cases h with
   | append p hp hw hr =>
-    rw [emb_appendWrite]; exact .append _ p (tp_emb.2 hp) (writable_emb hw) hr
+    rw [emb_appendWrite]; exact .append _ p (thinksPrimary_emb.2 hp) (writable_emb hw) hr
   | replicate r h1 h2 h3 => rw [emb_replicate]; exact .replicate _ r h1 h2 h3
   | ack r h1 h2 h3 => rw [emb_ack]; exact .ack _ r h1 h2 h3
   | commit p hp hw h1 h2 =>
-    rw [emb_commitA]; exact .commit _ p (tp_emb.2 hp) (writable_emb hw) h1 h2
+    rw [emb_commitNext]; exact .commit _ p (thinksPrimary_emb.2 hp) (writable_emb hw) h1 h2
   | count p r hp h1 h2 h3 h4 =>
-    rw [emb_count]; exact .count _ p r (tp_emb.2 hp) h1 h2 (fun _ => rfl) h3 h4
+    rw [emb_count]; exact .count _ p r (thinksPrimary_emb.2 hp) h1 h2 (fun _ => rfl) h3 h4
   | makeElig p r hp hk h1 h2 =>
-    rw [emb_makeElig]; exact .makeElig _ p r (tp_emb.2 hp) hk h1 h2
+    rw [emb_makeElig]; exact .makeElig _ p r (thinksPrimary_emb.2 hp) hk h1 h2
   | makeInelig p r hp hk h1 =>
-    rw [emb_makeInelig]; exact .makeInelig _ p r (tp_emb.2 hp) hk h1
+    rw [emb_makeInelig]; exact .makeInelig _ p r (thinksPrimary_emb.2 hp) hk h1
   | learn n hk => rw [emb_learn]; exact .learn _ n hk
   | takeover n hk h1 h2 => rw [emb_takeover]; exact .takeover _ n hk h1 h2 rfl
   | resync r h1 h2 h3 h4 => rw [emb_resync]; exact .resync _ r h1 h2 h3 h4
@@ -121,7 +121,7 @@ theorem reach_emb {m : Nat} {rf rb : Bool} {i : Node} {s : State Node}
   | init => rw [emb_init]; exact .init
   | step _ hs ih => exact .step ih (step_emb hs)
 
-/-- With no restart every node's incarnation matches, so `auth` is "eligible or
+/-- With no restart every node's incarnation matches, so `IsAuthoritative` is "eligible or
 primary" and CoreRestart's Safety is CoreRecon's. -/
 theorem safety_of_emb {s : State Node} (h : RestartProof.Safety (emb s)) : Safety s :=
   ⟨fun n hn => h.1 n ⟨hn, rfl⟩, h.2⟩

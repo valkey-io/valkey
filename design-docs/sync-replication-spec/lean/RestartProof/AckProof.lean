@@ -35,15 +35,15 @@ structure AInv (a : AState Node) : Prop where
 
 theorem ainv_init (i : Node) : AInv (ainit i) where
   core := inv_init i
-  term := by intro n; simp only [ainit, init, cfg0]; split <;> omega
+  term := by intro n; simp only [ainit, init, initCfg]; split <;> omega
   held := by intro x hx; simp [ainit] at hx
   acked := by intro x hx; simp [ainit] at hx
 
 /-- What a Core step does to the parts the reply invariants read. -/
 theorem step_facts {s s' : State Node} (h : Inv s) (ht : TermLe s) {m : Nat} (hs : Step m true true s s') :
     s.hist <+: s'.hist ∧ s.cfg.ver ≤ s'.cfg.ver ∧ TermLe s' ∧
-    ∀ x t, t ≤ s.cfg.ver → tp s' x → s'.term x = t →
-      tp s x ∧ s.term x = t ∧ s.log x <+: s'.log x := by
+    ∀ x t, t ≤ s.cfg.ver → ThinksPrimary s' x → s'.term x = t →
+      ThinksPrimary s x ∧ s.term x = t ∧ s.log x <+: s'.log x := by
   cases hs with
   | append p _ _ _ =>
     exact ⟨List.prefix_refl _, Nat.le_refl _, ht, fun x _ _ hp e =>
@@ -67,14 +67,14 @@ theorem step_facts {s s' : State Node} (h : Inv s) (ht : TermLe s) {m : Nat} (hs
     refine ⟨?_, e, List.prefix_refl _⟩
     by_cases hxp : x = p
     · subst hxp; exact hp
-    · unfold tp at hx ⊢; simpa [makeElig, upd_ne _ _ hxp] using hx
+    · unfold ThinksPrimary at hx ⊢; simpa [makeElig, upd_ne _ _ hxp] using hx
   | makeInelig p r hp hk _ =>
     refine ⟨List.prefix_refl _, Nat.le_succ _, fun n => Nat.le_succ_of_le (ht n), ?_⟩
     intro x _ _ hx e
     refine ⟨?_, e, List.prefix_refl _⟩
     by_cases hxp : x = p
     · subst hxp; exact hp
-    · unfold tp at hx ⊢; simpa [makeInelig, upd_ne _ _ hxp] using hx
+    · unfold ThinksPrimary at hx ⊢; simpa [makeInelig, upd_ne _ _ hxp] using hx
   | learn n hk =>
     refine ⟨List.prefix_refl _, Nat.le_refl _, ht, ?_⟩
     intro x _ _ hx e
@@ -82,8 +82,8 @@ theorem step_facts {s s' : State Node} (h : Inv s) (ht : TermLe s) {m : Nat} (hs
     by_cases hxn : x = n
     · exfalso; apply hk
       have hx' : s.cfg.prim = x := by have := hx.1; simpa [learn, hxn] using this
-      unfold kl; rw [← hxn, ← hx', h.primKnows]
-    · unfold tp at hx ⊢; simpa [learn, upd_ne _ _ hxn] using hx
+      unfold KnowsLatest; rw [← hxn, ← hx', h.primKnows]
+    · unfold ThinksPrimary at hx ⊢; simpa [learn, upd_ne _ _ hxn] using hx
   | takeover n _ _ _ _ =>
     refine ⟨List.prefix_refl _, Nat.le_succ _, ?_, ?_⟩
     · intro x
@@ -97,7 +97,7 @@ theorem step_facts {s s' : State Node} (h : Inv s) (ht : TermLe s) {m : Nat} (hs
         have : s.cfg.ver + 1 = t := by simpa [takeover] using e
         omega
       · refine ⟨?_, ?_, List.prefix_refl _⟩
-        · unfold tp at hx ⊢; simpa [takeover, upd_ne _ _ hxn] using hx
+        · unfold ThinksPrimary at hx ⊢; simpa [takeover, upd_ne _ _ hxn] using hx
         · simpa [takeover, upd_ne _ _ hxn] using e
   | resync r hne _ _ _ =>
     refine ⟨List.prefix_refl _, Nat.le_refl _, ht, ?_⟩
@@ -106,7 +106,7 @@ theorem step_facts {s s' : State Node} (h : Inv s) (ht : TermLe s) {m : Nat} (hs
       intro hxr; subst hxr; exact hne hx.1
     refine ⟨hx, e, ?_⟩
     show s.log x <+: upd s.log r _ x
-    rw [upd_ne _ _ hxr]; exact List.prefix_refl _
+    rw [upd_ne _ _ hxr]
   | restartEmpty n hk _ =>
     refine ⟨List.prefix_refl _, Nat.le_refl _, ht, ?_⟩
     intro x _ _ hx e
@@ -119,7 +119,7 @@ theorem step_facts {s s' : State Node} (h : Inv s) (ht : TermLe s) {m : Nat} (hs
     refine ⟨⟨hx.1, ?_⟩, e, ?_⟩
     · have h2 := hx.2; rw [hI] at h2; exact h2
     · show s.log x <+: upd s.log n [] x
-      rw [upd_ne _ _ hxn]; exact List.prefix_refl _
+      rw [upd_ne _ _ hxn]
   | restartKeep n _ =>
     exact ⟨List.prefix_refl _, Nat.le_refl _, ht, fun x _ _ hp e => ⟨hp, e, List.prefix_refl _⟩⟩
 

@@ -18,7 +18,7 @@ CoreAck --atoRecon--> CoreRecon + replies   --aemb--> CoreRestart + replies
 - `ReconProof/Embed.lean`: `emb` sets every incarnation, and every incarnation a config
   records, to 1, as in CoreRestart's `Init`. Every incarnation check then holds, so every
   CoreRecon step is a CoreRestart step (`step_emb`), with either RebuildSync value.
-  `auth` becomes "eligible or primary", so CoreRestart's Safety and AckedHeld of the
+  `IsAuthoritative` becomes "eligible or primary", so CoreRestart's Safety and AckedHeld of the
   image are CoreRecon's (`safety_of_emb`).
 - `reach_toRecon`, `reach_emb`, `areach_toRecon`, `areach_emb` lift this to
   reachability. `CoreProof.safety`, `AckProof.ackSafety`/`ackedHeld` and
@@ -29,6 +29,51 @@ The models (`*/Model.lean`, `*/AckModel.lean`) and the counterexamples are uncha
 each still states its own TLA+ module. Every theorem statement is unchanged; this was
 checked by printing all 13 theorems and the definitions they mention at commit 24680af
 and after the change, with identical output. The axioms are unchanged too.
+
+## Reading the RestartProof invariant proof
+
+Three parts are written so the proof can be read against the design doc:
+
+- **Action contracts** (`RestartProof/Contracts.lean`). For each action, what it
+  changes and what it leaves alone, in design terms: who thinks it is primary, who is
+  authoritative, whose log, sync replica set, acknowledgements and commit point move
+  (`takeover_thinksPrimary`, `restartEmpty_isAuthoritative`, `takeover_log`, …). These
+  follow from the action alone, without the invariant. Each preservation lemma starts
+  by taking the facts it needs from the action's contract; the action is not unfolded
+  in the proof body.
+- **Layers** (`RestartProof/Inv.lean`). `Inv` extends five structures, each about one
+  part of the design and stated in terms of the earlier ones (except that
+  `syncNew` uses the reconciliation point, which `CommitInv` constrains): `ConfigInv` (Cluster V2
+  configuration and incarnations), `ReplInv` (acknowledgements are real; the commit
+  rule), `MembershipInv` (the two ordering rules of promotion and demotion),
+  `CommitInv` (committed prefixes and the reconciliation point), `FailoverInv` (deposed
+  primaries are fenced; survival). The goal `ehc` is `Inv`'s own field. Each conjunct
+  has a docstring tied to the doc. Field names are unchanged, so `h.ehc` etc. work as
+  before.
+- **The fence** (`Inv.lean`, "The fence of a deposed primary"). `fence s p` is the
+  smallest acknowledgement `p` has recorded from a sync replica that has left it for a
+  newer primary. That replica never acknowledges `p` again, so `p` can never commit past
+  the fence. `Fenced s p` says some replica has left and the new configuration holds
+  `p`'s log up to the fence. The `stale` conjunct is "every deposed primary is
+  `Fenced`", the design's "Writes can't split-brain" stated directly. `fence` is
+  defined from existing state (a minimum, `sInf`), so the model is unchanged.
+  The preservation proofs work with the fence directly, through four lemmas:
+  `Fenced.of_left` (to show `p` is fenced, name any one replica that has left it and
+  check the properties at its acknowledgement; the fence is at most that), `attained`
+  (the fence is some departed replica's acknowledgement), `Fenced.mono` (steps that
+  only extend logs or add sync replicas: AppendWrite, Replicate, Ack, Commit, Count) and
+  `Fenced.transfer` (steps that leave the fenced primary's row alone: MakeEligible,
+  MakeIneligible, Resync, restarts of other nodes). Learn and Takeover are the two
+  actions where the fence can drop: a replica that learns of the new configuration
+  leaves `p`, and its acknowledgement may be below the old fence. The earlier
+  existential witness `Wit`, which also had to carry "this witness has the smallest
+  acknowledgement", is gone. XCheck decides `Fenced` through `FencedAt`, the
+  hypotheses of `Fenced.of_left` for one replica, which implies it.
+
+Checked against b14b36c: all 13 theorem statements and the definitions they mention
+print identically, and the theorems' axioms are unchanged. `xcheck` and `xcheck_ack`
+pass with 0 failures. In `XCheck/Axioms.lean`, `invB_sound` and `ainvB_sound` now also
+use `Classical.choice`, because `fence` is a set minimum.
 
 Until commit 24680af, CoreProof, ReconProof and RestartProof were three separate proofs,
 each a copy of the previous one with changes. The Core-only invariant described in "The
@@ -74,12 +119,42 @@ violates `EligibleHoldsCommitted`. This is the F1 scenario:
 
 ```
 cd lean
-../tools/lean.sh lake build                 # about 6 s from clean
+docker build -t valkey-lean:24.04 -f ../tools/Dockerfile.lean ../tools   # once
+../tools/lean.sh lake exe cache get         # once: Mathlib's prebuilt oleans (~7 GB)
+../tools/lean.sh lake build                 # about 30 s from clean
 ../tools/lean.sh lake env lean Check.lean   # prints the axioms
 ```
 
-This uses Lean 4.35.0 core only: no Mathlib, no Batteries, and no packages in
-`lake-manifest.json`.
+This uses Lean 4.35.0 and Mathlib `v4.35.0` (pinned in `lakefile.lean` and
+`lake-manifest.json`). Mathlib is used for list-prefix lemmas and for `Set.encard` in
+`Writable`. Since commit 5f88591 (the last core-only commit), every theorem
+statement is unchanged; see "Mathlib" below. `tools/lean.sh` runs the toolchain in
+an Ubuntu image that adds git and curl, which Lake and `cache get` need. If the
+container has no `git`, clone Mathlib and the packages listed in its
+`lake-manifest.json` into `.lake/packages/` on the host at the pinned revisions;
+Lake then uses those checkouts.
+
+## Mathlib
+
+Changes when Mathlib was added:
+
+- `RestartProof/Lists.lean` drops the lemmas that duplicated core or Mathlib
+  (`List.take_append_of_le_length`, `List.take_prefix_take_left`,
+  `List.length_take_of_le`, `List.prefix_append_of_prefix`) and the ones nothing used.
+- `Writable m s p` is `(m : ℕ∞) ≤ (syncEligible s p).encard`, the TLA+
+  `Cardinality(...) >= m` with `Set.encard`, which needs no finiteness assumption on
+  `Node`. `writable_iff_list` proves it equivalent to the earlier list form (a
+  duplicate-free list of at least `m` counted nodes), in both `ReconProof` and
+  `RestartProof`.
+- Seven `exact List.prefix_refl _` / `exact Nat.le_refl _` steps became redundant
+  (Mathlib's `@[refl]` lemmas let `rw` close the goal) and were removed.
+
+Checked against 5f88591: all 13 theorem statements and the `Step`, `Reachable`,
+`Safety`, `AStep`, `AReachable`, `AckedDurable` and `AckedHeld` definitions print
+identically (after normalising `Nat`/`ℕ` and `.fst`/`.1`, which only Mathlib's pretty
+printer changes). The axioms are unchanged except `ReconProof.noReconcile_unsafe`,
+which now also uses `Classical.choice`: its run proves `Writable 0` by `simp` on
+`Set.encard`, whose lemmas use classical reasoning. `XCheck/Axioms.lean` is unchanged.
 
 ## Encoding (`CoreProof/Model.lean`)
 
@@ -106,7 +181,7 @@ The table below lists, action by action, where the encoding differs from the TLA
 | Commit | `commit[p] < CommitCap(p)` is encoded as `∀ r, sync[p][r] → commit[p] < acked[p][r]`, next to `commit[p] < Len(log[p])`. This is equivalent to the TLA guard for both an empty and a non-empty sync set, and needs no `CHOOSE`/min. The `hist` update is literal. |
 | MakeEligible, MakeIneligible, Takeover | `CanCas` (`cfg.ver < MaxVer`) dropped |
 | EarlyUncount | present and guarded by `ed = true`. With `ed = false`, as in the theorem, it is impossible. |
-| Takeover | `newElig = elig \ {prim, n}` as a Bool function |
+| Takeover | `takeoverElig = elig \ {prim, n}` as a Bool function |
 
 The only deviation is the removal of `MaxLen`/`MaxVer`. `Init` is `init i`.
 
@@ -121,7 +196,7 @@ The invariant has 17 conjuncts, and the `stale` conjunct uses a witness predicat
 with 6 parts.
 
 Notation:
-- `tp p` means `known[p].prim = p`, that is, p thinks it is primary.
+- `ThinksPrimary p` means `known[p].prim = p`, that is, p thinks it is primary.
 - `prim` means `cfg.prim`.
 
 1. `ehc`: EligibleHoldsCommitted.
@@ -141,7 +216,7 @@ Notation:
 10. `eligFol`: an eligible replica that follows a stale primary `q` is eligible in
     `known[q]`. This is why Resync never truncates an eligible replica.
 11. `histLe`: `Len(hist) ≤ commit[prim]`, or `Len(hist) ≤ recon[prim]`.
-12. `stale`: every stale primary `p` (`tp p`, `known[p].ver < cfg.ver`) has a witness `w`
+12. `stale`: every stale primary `p` (`ThinksPrimary p`, `known[p].ver < cfg.ver`) has a witness `w`
     satisfying `Wit s p w`:
     - `w` is in `sync[p]`.
     - `w` no longer follows `p`, so `acked[p][w]` is frozen.
@@ -212,7 +287,7 @@ summarized in "Size after the dedup" at the end of this file.
 | Invariant conjuncts | 17, plus the 6-part `Wit` |
 | Lean lines | 1421 total: model 154, invariant and derived lemmas 137, list lemmas 66, preservation 962, top theorem 34, counterexample 50 |
 | `sorry` at the end | 0 |
-| Clean build | about 6 s, no dependencies |
+| Clean build | about 6 s, no dependencies (core only, before Mathlib was added) |
 | Compile/fix iterations | about 10 |
 | Invariant revisions forced by Lean | 0 |
 
@@ -286,8 +361,8 @@ labelled transitions.
   - `safetyB`: `decide` of `Safety`.
   - `inBounds`: every log and `hist` have length ≤ 1, and `cfg.ver ≤ 5`.
   - Decidable equality for states over `Fin 3`, by comparing functions at 0, 1 and 2.
-- Soundness is proven, using only the axioms `propext` and `Quot.sound` (see
-  `XCheck/Axioms.lean`):
+- Soundness is proven, using only the axioms `propext` and `Quot.sound`, plus
+  `Classical.choice` for `invB_sound` since the fence (see `XCheck/Axioms.lean`):
   - `stepB_sound : stepB s s' = true → Step true false s s'`, and the same for `stepLB`.
     Each partial successor `oX` is an `if guard then some (x s p) else none`, where the
     guard is exactly that constructor's premises. Lemmas `gX` prove that every `some t`
@@ -401,7 +476,7 @@ transitions; TLC checks all of CoreAck's invariants on it.
   - `decodeA`, `encodeA`, and `renderA`, which prints a state in TLC syntax with the
     variables in alphabetical order and records as TLC prints them in this dump.
   - Axioms (`XCheck/Axioms.lean`): `propext`, `Quot.sound`, and for `asuccs_sound` /
-    `astepLB_sound` also `Classical.choice`. No `sorry`.
+    `astepLB_sound` (and `ainvB_sound`, since the fence) also `Classical.choice`. No `sorry`.
 - `XCheck/AckMain.lean` (`lake exe xcheck_ack`) runs the checks.
 
 ### Reproduce
@@ -602,7 +677,7 @@ NoReplyFence = FALSE (F2 fix: release OK only while `ThinksPrim(p) ∧ term[p] =
   (TLC: `CoreAck_ReachDeposedCommit`, `CoreAck_ReachDeposedAck`). It is still safe
   because Core's `CommittedAgree` covers deposed primaries: a deposed primary commits only
   up to the frozen ack of a sync replica that left it, and the new primary holds that
-  prefix (`Wit` in `RestartProof/Inv.lean`). The F8 loss trace (`Shard_f_noFence`) relies on
+  prefix (`Fenced` in `RestartProof/Inv.lean`). The F8 loss trace (`Shard_f_noFence`) relies on
   forced failover, which is out of scope here.
 - **Out of scope:** forced failover (F7, an operator action whose losses the doc
   accepts), and lossy or correlated events (crash with log loss, restart with empty
@@ -717,11 +792,12 @@ Writable(p) == Cardinality(sync[p] \cap known[p].elig) >= MinSync
 ```
 
 `Writable` is Shard.tla's definition (`EligOf(p)` there is the eligible set of the
-config `p` knows). In Lean, `writable m s p` says some duplicate-free list of
-length at least `m` consists of nodes in `sync[p]` that are eligible in
-`known[p]`; this is the cardinality bound without a `Fintype` assumption.
+config `p` knows). In Lean, `Writable m s p` is `(m : ℕ∞) ≤ (syncEligible s p).encard`,
+where `syncEligible s p` is the set of nodes in `sync[p]` that are eligible in
+`known[p]`. `Set.encard` is the cardinality in `ℕ∞`, so there is no `Fintype`
+assumption. `writable_iff_list` gives the equivalent list form used before Mathlib.
 
-The proof never reads `writable`: it only restricts AppendWrite and Commit, and
+The proof never reads `Writable`: it only restricts AppendWrite and Commit, and
 the invariant is preserved by every step whether or not the guard holds. So the
 all-`m` theorem needed no simulation lemma.
 
@@ -758,14 +834,14 @@ CoreProof's 17 conjuncts and `Wit` are kept, except:
 
 Where it matters:
 
-- Count: `recon_le_cup` (`recon[prim] ≤ CatchUpPoint`) gives the new
-  `syncNew`; `commit_le_cup` (`commit ≤ CatchUpPoint`) gives `syncCommit`.
+- Count: `recon_le_catchUpPoint` (`recon[prim] ≤ CatchUpPoint`) gives the new
+  `syncNew`; `commit_le_catchUpPoint` (`commit ≤ CatchUpPoint`) gives `syncCommit`.
 - MakeEligible: the new eligible replica holds `hist` because
   `Len(hist) ≤ commit[prim] ≤ acked` or `Len(hist) ≤ recon[prim] ≤ acked`
   (`histLe`), and it holds `take acked log[prim]` (`ackHolds`), of which `hist`
   is a prefix (`ehc`). The stale-witness case uses
   `acked[p][w] ≤ recon[prim] ≤ acked[prim][r]` directly.
-- Resync: `commit[p] ≤ CatchUpPoint(p) ≤ Len(log[p])` (`cup_le_len`) is all
+- Resync: `commit[p] ≤ CatchUpPoint(p) ≤ Len(log[p])` (`catchUpPoint_le_len`) is all
   CommittedAgree needs; Core's Resync proof never used the Reconciled gate.
 - Ack: the acked value only grows, so `syncNew` is kept.
 
@@ -790,10 +866,11 @@ allows an append without a reply, a superset of CoreRecon.tla's `Write`.
 'ReconProof.safety' depends on axioms: [propext, Classical.choice, Quot.sound]
 'ReconProof.ackSafety' depends on axioms: [propext, Classical.choice, Quot.sound]
 'ReconProof.ackedHeld' depends on axioms: [propext, Classical.choice, Quot.sound]
-'ReconProof.noReconcile_unsafe' depends on axioms: [propext, Quot.sound]
+'ReconProof.noReconcile_unsafe' depends on axioms: [propext, Classical.choice, Quot.sound]
 ```
 
-There is no `sorry`.
+There is no `sorry`. (`noReconcile_unsafe` used only `propext` and `Quot.sound`
+before `Writable` moved to `Set.encard`; see "Mathlib".)
 
 ## Size
 
@@ -864,23 +941,23 @@ theorem RestartProof.ackSafety {Node : Type} [DecidableEq Node] {i : Node}
 theorem RestartProof.ackedHeld ... (h : AReachable m true false true i a) : AckedHeld a
 
 theorem RestartProof.commit_two_copies {m : Nat} (hm : 1 ≤ m) {i : Node} {s : State Node}
-    (h : Reachable m true true i s) {p : Node} (hp : tp s p) (hpp : p = s.cfg.prim)
-    (hw : writable m s p) (hlen : s.commit p < (s.log p).length)
+    (h : Reachable m true true i s) {p : Node} (hp : ThinksPrimary s p) (hpp : p = s.cfg.prim)
+    (hw : Writable m s p) (hlen : s.commit p < (s.log p).length)
     (hcap : ∀ r, s.sync p r = true → s.commit p < s.acked p r) :
-    ∃ e, e ≠ p ∧ auth (commitA s p) e ∧ auth (commitA s p) p ∧
-      (commitA s p).hist <+: (commitA s p).log e ∧ (commitA s p).hist <+: (commitA s p).log p
+    ∃ e, e ≠ p ∧ IsAuthoritative (commitNext s p) e ∧ IsAuthoritative (commitNext s p) p ∧
+      (commitNext s p).hist <+: (commitNext s p).log e ∧ (commitNext s p).hist <+: (commitNext s p).log p
 ```
 
 `m` (MinSync) is universally quantified. The Bool arguments are ReconcileFirst =
 `true`, NoReplyFence = `false` (F2 fence on) and RebuildSync = `true` (F5 fix on).
 Nodes, log lengths, configuration changes, incarnations and the number of restarts
-are unbounded. `Safety` is `EHC /\ CA`, where EligibleHoldsCommitted is restated
+are unbounded. `Safety` is `EligibleHoldsCommitted /\ CommittedAgree`, where EligibleHoldsCommitted is restated
 for authoritative nodes:
 
 ```
-auth s n  :=  (cfg.elig n ∨ n = cfg.prim) ∧ cfg.inc n = inc n      -- TLA+: n \in Auth
-EHC s     :=  ∀ n, auth s n → hist <+: log n
-AckedHeld :=  ∀ acknowledged (o, v), ∀ n, auth s n → log n holds v at o
+IsAuthoritative s n       :=  (cfg.elig n ∨ n = cfg.prim) ∧ cfg.inc n = inc n   -- TLA+: n \in Auth
+EligibleHoldsCommitted s  :=  ∀ n, IsAuthoritative s n → hist <+: log n
+AckedHeld                 :=  ∀ acknowledged (o, v), ∀ n, IsAuthoritative s n → log n holds v at o
 ```
 
 The primary is authoritative only while its own incarnation matches: a primary
@@ -891,7 +968,7 @@ that came back empty holds nothing and is not a primary any more.
 RestartEmpty(n) (n loses its log and gets a new incarnation) has the guard
 
 ```
-∃ m, m ≠ n ∧ auth s m          -- TLA+: \E m \in Auth : m # n
+∃ m, m ≠ n ∧ IsAuthoritative s m    -- TLA+: \E m \in Auth : m # n
 ```
 
 At every restart without data, some other node that is the primary or an eligible
@@ -924,7 +1001,7 @@ CoreRecon plus:
 - `inc n`; the config records `cfg.inc r`. MakeEligible records `inc[r]`;
   Takeover keeps `cfg.inc` and checks `cfg.inc[n] = inc[n]`.
 - ThinksPrim checks the incarnation the config `p` knows records for `p`:
-  `tp s p := known[p].prim = p ∧ known[p].inc p = inc p`.
+  `ThinksPrimary s p := known[p].prim = p ∧ known[p].inc p = inc p`.
 - Primaries ack-count only replicas of the matching incarnation: Writable counts
   `sync[p] ∩ {r ∈ known[p].elig : known[p].inc r = inc r}`; Count refuses an
   eligible replica whose incarnation does not match; Takeover counts only the
@@ -952,10 +1029,10 @@ CoreRecon plus:
 
 ReconProof's invariant, with:
 
-- `ehc`, and the last clause of `Wit`, over authoritative nodes.
+- `ehc`, and `Fenced.eligHolds` (formerly the last clause of `Wit`), over authoritative nodes.
 - `eligSync` (O1) only for eligible replicas whose recorded incarnation matches.
-- `histLe`, and the `Wit` clauses about the current primary's log and recon point,
-  only while the current primary is authoritative (`pa s`).
+- `histLe`, and the `Fenced` clauses about the current primary's log and recon point,
+  only while the current primary is authoritative (`PrimaryAuthoritative s`).
 - New: `incLe` (`cfg.inc n ≤ inc n`), `knownIncLe` (the same for every known
   config): a restarted-empty node never matches its old record.
 - New: `authEx` (some node is authoritative), kept by the survival guard. Commit

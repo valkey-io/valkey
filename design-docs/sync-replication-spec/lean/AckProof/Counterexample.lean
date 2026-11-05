@@ -8,7 +8,7 @@ namespace AckProof
 
 open CoreProof
 
-instance (s : State N) (p : N) : Decidable (reconciled true s p) :=
+instance (s : State N) (p : N) : Decidable (Reconciled true s p) :=
   inferInstanceAs (Decidable (true = true → s.recon p ≤ s.commit p))
 
 def b0 : AState N := ainit 0
@@ -24,7 +24,7 @@ def b9 : AState N := ⟨makeElig b8.core 1 0, b8.held, b8.okd⟩    -- n0 eligib
 def b10 : AState N := ⟨learn b9.core 0, b9.held, b9.okd⟩        -- n0 learns ver 4
 def b11 : AState N := ⟨takeover b10.core 0, b10.held, b10.okd⟩  -- n0 takes over (ver 5)
 def b12 : AState N := write b11 0                               -- n0 writes term 5 at offset 1
-def b13 : AState N := ⟨commitA b12.core 0, b12.held, b12.okd⟩   -- commits alone: hist = [5]
+def b13 : AState N := ⟨commitNext b12.core 0, b12.held, b12.okd⟩   -- commits alone: hist = [5]
 def b14 : AState N := release b13 (0, 1, 1)                     -- old reply released OK
 
 theorem noReplyFence_reach : AReachable true false true (0 : N) b14 := by

@@ -17,13 +17,13 @@ def aemb (a : AState Node) : RestartProof.AState Node := ⟨emb a.core, a.held, 
 
 theorem fenced_emb {s : State Node} {h : Held Node} :
     RestartProof.fenced (emb s) h ↔ fenced s h :=
-  ⟨fun ⟨h1, h2⟩ => ⟨tp_emb.1 h1, h2⟩, fun ⟨h1, h2⟩ => ⟨tp_emb.2 h1, h2⟩⟩
+  ⟨fun ⟨h1, h2⟩ => ⟨thinksPrimary_emb.1 h1, h2⟩, fun ⟨h1, h2⟩ => ⟨thinksPrimary_emb.2 h1, h2⟩⟩
 
 theorem astep_emb {m : Nat} {rf nf rb : Bool} {a a' : AState Node} (h : AStep m rf nf a a') :
     RestartProof.AStep m rf nf rb (aemb a) (aemb a') := by
   cases h with
   | core c hc => exact .core (aemb a) (emb c) (step_emb hc)
-  | write p hp hw hr => exact .write (aemb a) p (tp_emb.2 hp) (writable_emb hw) hr
+  | write p hp hw hr => exact .write (aemb a) p (thinksPrimary_emb.2 hp) (writable_emb hw) hr
   | release x hm hc hf =>
     exact .release (aemb a) x hm hc (fun e => fenced_emb.2 (hf e))
   | abort x hm hf => exact .abort (aemb a) x hm (fun e => hf (fenced_emb.1 e))

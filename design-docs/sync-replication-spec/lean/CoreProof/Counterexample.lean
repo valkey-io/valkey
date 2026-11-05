@@ -7,9 +7,9 @@ namespace CoreProof
 
 abbrev N := Fin 3
 
-instance (s : State N) (p : N) : Decidable (tp s p) :=
+instance (s : State N) (p : N) : Decidable (ThinksPrimary s p) :=
   inferInstanceAs (Decidable ((s.known p).prim = p))
-instance (s : State N) (p : N) : Decidable (kl s p) :=
+instance (s : State N) (p : N) : Decidable (KnowsLatest s p) :=
   inferInstanceAs (Decidable ((s.known p).ver = s.cfg.ver))
 
 def c0 : State N := init 0
@@ -19,13 +19,13 @@ def c3 := appendWrite c2 0      -- n0 appends a write
 def c4 := learn c3 1            -- n1 learns ver 2
 def c5 := replicate c4 1        -- n1 copies the write
 def c6 := ack c5 1              -- n1 acks it
-def c7 := commitA c6 0          -- n0 commits it: hist = [1]
+def c7 := commitNext c6 0          -- n0 commits it: hist = [1]
 def c8 := takeover c7 1         -- n1 takes over (ver 3), commit[n1] = 0
 def c9 := learn c8 2            -- n2 learns ver 3 and follows n1
 def c10 := count c9 1 2         -- n1 counts empty n2: ack 0 ≥ commit 0 (no reconciliation)
 def c11 := makeElig c10 1 2     -- n2 eligible with an empty log
 
-theorem noRec (s : State N) (p : N) : reconciled false s p := fun h => absurd h (by decide)
+theorem noRec (s : State N) (p : N) : Reconciled false s p := fun h => absurd h (by decide)
 
 theorem noReconcile_reach : Reachable false false (0 : N) c11 := by
   have r0 : Reachable false false (0 : N) c0 := Reachable.init

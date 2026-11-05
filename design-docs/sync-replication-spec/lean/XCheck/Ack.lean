@@ -53,7 +53,7 @@ def coreLabel (l : String) : String :=
   if l.startsWith "AppendWrite" then l else "C" ++ l
 
 def oWrite (a : A) (p : N) : Option A :=
-  if tp a.core p ∧ reconciled true a.core p then some (write a p) else none
+  if ThinksPrimary a.core p ∧ Reconciled true a.core p then some (write a p) else none
 
 def releases (a : A) : List (String × A) :=
   a.held.filterMap fun h =>

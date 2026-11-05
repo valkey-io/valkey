@@ -33,7 +33,7 @@ def write (a : AState Node) (p : Node) : AState Node :=
 
 /-- `Fenced(h)`: the primaryship that set the reply boundary is still current
 (F2 fix). -/
-def fenced (s : State Node) (h : Held Node) : Prop := tp s h.1 ∧ s.term h.1 = h.2.2
+def fenced (s : State Node) (h : Held Node) : Prop := ThinksPrimary s h.1 ∧ s.term h.1 = h.2.2
 
 /-- `Release(h)`: OK. -/
 def release (a : AState Node) (h : Held Node) : AState Node :=
@@ -47,7 +47,7 @@ def abort (a : AState Node) (h : Held Node) : AState Node :=
 inductive AStep (rf ed nf : Bool) : AState Node → AState Node → Prop
   | core (a : AState Node) (c : State Node) : Step rf ed a.core c →
       AStep rf ed nf a ⟨c, a.held, a.okd⟩
-  | write (a : AState Node) (p : Node) : tp a.core p → reconciled rf a.core p →
+  | write (a : AState Node) (p : Node) : ThinksPrimary a.core p → Reconciled rf a.core p →
       AStep rf ed nf a (write a p)
   | release (a : AState Node) (h : Held Node) : h ∈ a.held → h.2.1 ≤ a.core.commit h.1 →
       (nf = false → fenced a.core h) → AStep rf ed nf a (release a h)

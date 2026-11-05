@@ -124,7 +124,6 @@ typedef struct RdmaContext {
     /* CMD 0 ~ VALKEY_RDMA_MAX_WQE for recv buffer
      * VALKEY_RDMA_MAX_WQE ~ 2 * VALKEY_RDMA_MAX_WQE -1 for send buffer */
     ValkeyRdmaCmd *cmd_buf;
-    uint32_t cmd_buf_len;
     struct ibv_mr *cmd_mr;
 } RdmaContext;
 
@@ -255,6 +254,8 @@ static void rdmaMemoryFree(void **ptr, uint32_t *size) {
     *size = 0;
 }
 
+#define CMD_BUF_LEN (sizeof(ValkeyRdmaCmd) * VALKEY_RDMA_MAX_WQE * 2)
+
 static void rdmaDestroyIoBuf(RdmaContext *ctx) {
     if (ctx->rx.mr) {
         ibv_dereg_mr(ctx->rx.mr);
@@ -276,17 +277,17 @@ static void rdmaDestroyIoBuf(RdmaContext *ctx) {
         ctx->cmd_mr = NULL;
     }
 
-    rdmaMemoryFree((void **)&ctx->cmd_buf, &ctx->cmd_buf_len);
+    uint32_t length = CMD_BUF_LEN;
+    rdmaMemoryFree((void **)&ctx->cmd_buf, &length);
 }
 
 static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     int access = IBV_ACCESS_LOCAL_WRITE;
-    uint32_t length = sizeof(ValkeyRdmaCmd) * VALKEY_RDMA_MAX_WQE * 2;
+    uint32_t length = CMD_BUF_LEN;
     ValkeyRdmaCmd *cmd;
     int i;
 
     /* setup CMD buf & MR */
-    ctx->cmd_buf_len = length;
     ctx->cmd_buf = rdmaMemoryAlloc(length);
     ctx->cmd_mr = ibv_reg_mr(ctx->pd, ctx->cmd_buf, length, access);
     if (!ctx->cmd_mr) {

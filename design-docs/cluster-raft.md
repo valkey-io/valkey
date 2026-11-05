@@ -445,78 +445,68 @@ when the entry is appended to the log.
 
 **Comparison to config-on-append (Ongaro §4.1):**
 
-With config-on-append, the new quorum is used to commit the
-membership entry itself. This guarantees the new node has the entry
-before it takes effect, eliminating any window of reduced redundancy.
-However, it adds complexity:
+With config-on-append, a node adopts the new voter set when the entry
+is appended to its log, before that entry is committed. The entry is
+then committed by a majority of the new set. Adding or removing one
+server keeps every new majority overlapping every old majority. That
+majority does not have to include the added server. `ADD_VOTER` of D
+on {A,B,C} raises the quorum from 2 to 3, and {A,B,C} is a majority of
+the new set.
 
-- Only one membership change can be in flight at a time (the leader
-  must wait for commit before proposing the next change).
-- If the entry is truncated after append but before commit, nodes
-  must roll back to the previous configuration.
-- The new node must be caught up before the entry is proposed
-  (otherwise it can't ACK in time, stalling the commit).
+`clusterRaftApplyAddVoter()` runs its catch-up check before the entry
+is appended. The learner's `match_index` must already reach the
+leader's current log end. That end does not contain this `ADD_VOTER`.
+
+Using the new set before commit also means:
+
+- Only one quorum-changing entry may be uncommitted. The leader waits
+  for it to commit before proposing the next one.
+- If the entry is truncated after append but before commit, nodes roll
+  the voter set back to the previous configuration.
 
 **Committing a one-server change with the old quorum:**
 
 A quorum-changing entry is committed with the voter set the leader has
 already applied. Each node updates `server.cluster->size` only when it
 applies that entry. Until AE delivers the new commit index, a node that
-has applied the entry and a node that has not yet stored it disagree on
-`size`. For a change of one voter this does not elect a leader whose log
-lacks the entry, so the committed entry is not truncated.
+has applied the entry and a node that has not stored it disagree on
+`size`.
 
-`ADD_VOTER D` on `{A,B,C}` (quorum 2), stored on A and B, with A crashed
+`ADD_VOTER D` on `{A,B,C}` (quorum 2), stored on A and B, with A down
 after applying it:
 
-- C still has `size=3` and the voter set `{A,B,C}`. D stays outside that
-  set until D applies the entry. Learners and joiners refuse votes in
-  `clusterRaftCanGrantVote()`.
-- Nodes that lack the entry are only C. That is short of quorum 2. The
-  other vote has to come from B, the surviving node that stored the entry.
-- B's log is longer, so B rejects C's vote request.
+- C still has `size=3` and the voter set `{A,B,C}`. D stays outside
+  that set until D applies the entry. `clusterRaftCanGrantVote()`
+  returns 0 for a learner or a joiner.
+- The only old voter without the entry is C. Quorum 2 needs another
+  vote from A or B.
+- B's log is longer, so B rejects C's vote request. C does not become
+  leader, and B's copy of the entry stays in its log.
 
-A voter `NODE_JOIN(F)` on `{A,B,C,D,E}` is the same count. An old quorum
-of 3 stores the entry. Only two old voters lack it, and F is not a voter
-in their configuration, so they are short of quorum 3. The entry can be
-truncated only by a leader that does not have it, and no such leader can
-collect a quorum.
+A voter `NODE_JOIN(F)` on `{A,B,C,D,E}` is the same count. An old
+quorum of 3 stores the entry. Only two old voters lack it, and F is
+not a voter in their configuration.
 
-Any other majority of the old voter set intersects the majority that
-stored the entry, because the two sets differ by one server. The vote
-grant compares last log term and index, so a voter that has the entry
-rejects a candidate that does not.
+One server added or removed means every other majority of the old
+voter set intersects the majority that stored the entry.
+`clusterRaftCanGrantVote()` compares last log term and index, so a
+voter that has the entry rejects a candidate that does not.
 
-**Liveness window after the quorum grows:**
+After B applies `ADD_VOTER D`, `server.cluster->size` is 4 and
+`clusterRaftQuorum()` is 3. D still refuses votes until D applies the
+entry. If A is down, B receives C's vote and still has 2. C's log is
+shorter, so B rejects C. Neither is elected. The entry is still in B's
+log. If B has not applied the entry, B's quorum is still 2, C grants
+B's request, and B keeps the entry.
 
-The committed entry remains on the nodes that stored it. Electing a
-leader can still stall once those nodes have applied a larger voter set.
-After B applies `ADD_VOTER D`, B's quorum is 3. If A is down and D has
-not applied the entry, D still refuses to vote. C will vote for B, which
-is 2 votes, and B will not vote for C. Neither wins, and there is no
-leader to replicate the entry to D.
+A learner `NODE_JOIN` does not change `size`. `DEL_VOTER` and
+`NODE_FORGET` of a voter are committed with the `size` already applied
+on the leader. Old voters that lack that entry are short of that
+quorum.
 
-This stall needs every surviving voter that stores the entry to have
-applied it already. If B has the entry in its log but has not yet applied
-it, B still uses quorum 2, wins with C's vote, and does not truncate the
-entry. When B has applied and A is down, the cluster moves again once A
-returns: A and B together, plus C's vote, satisfy the new quorum of 3.
-
-AE that reaches only the previous majority is what moves those nodes onto
-the larger quorum. The window stays open until the new voter applies the
-entry and starts granting votes.
-
-Learner `NODE_JOIN` does not change `size`. Several of those entries may
-be in flight, and this window does not apply to them. Shrinking the voter
-set (`DEL_VOTER`, `NODE_FORGET` of a voter) commits under the larger old
-quorum, so the old voters that lack the entry are still short of it.
-
-Joint consensus is not required to close this window. It applies when one
-entry changes the voter set by more than one server. Committing the
-one-server entry under the new quorum (config-on-append, Ongaro §4.1)
-removes the window: the entry is not committed until a majority of the
-new voter set has stored it, so the larger quorum is not used while the
-new voter still refuses votes.
+Joint consensus is for one entry whose old and new voter sets differ
+by more than one server. Each quorum-changing entry here adds or
+removes one voter.
 
 ## Failure Detection
 
@@ -903,8 +893,6 @@ targets.
   are spread across at least 3 zones, letting the cluster survive a
   single zone outage.
 - Leader transfer on CLUSTER FORGET where the target is the leader.
-- Commit a one-server voter addition under the new quorum, so the new
-  voter has stored the entry before the larger quorum is used.
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either
   atomically or not.

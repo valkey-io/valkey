@@ -109,6 +109,6 @@ static char *aeApiName(void) {
 }
 
 static int aeApiGetPollFd(aeApiState *state) {
-    UNUSED(state);
+    (void)state;
     return -1;
 }

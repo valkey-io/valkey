@@ -1024,9 +1024,14 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
 
         test "Failed CONFIG SET restores import-mode during an export (slot $slot_to_migrate from node $source_idx to $target_idx)" {
-            assert_match "OK" [R $source_idx CONFIG SET import-mode yes]
+            test_config_set [list R $source_idx] import-mode yes
             assert_match "OK" [R $source_idx SET "$slot_to_migrate_tag:key" value]
             assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            test_defer_fail "
+                catch {R $source_idx CLUSTER CANCELSLOTMIGRATIONS}
+                R $source_idx FLUSHALL SYNC
+                R $target_idx FLUSHALL SYNC
+            "
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
 

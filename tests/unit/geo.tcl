@@ -413,11 +413,11 @@ start_server {tags {"geo"}} {
         }
         foreach resp $protocols {
             set rd [valkey_client]
+            test_defer [list $rd close]
             $rd hello $resp
             $rd readraw 1
             assert_equal {*1} [$rd geohash points missing]
             assert_equal [expr {$resp == 2 ? {$-1} : {_}}] [$rd read]
-            $rd close
         }
     }
 

@@ -224,19 +224,19 @@ start_server {tags {"geo"}} {
     } {*valid*}
 
     test {GEOADD out of range coordinates} {
+        r del range_check
         # Valid longitudes are limited to [-180,+180]
-        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc -190 40.747533 "out of range"}
-        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc 190 40.747533 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -190 40.747533 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check 190 40.747533 "out of range"}
         # Valid latitudes are limited to [-85.05112878,+85.05112878]
-        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc -73.9454966 -86 "out of range"}
-        assert_error "*invalid longitude,latitude pair*" {r geoadd nyc -73.9454966 86 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 -86 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 86 "out of range"}
         # The failing pair is reported even when it is not the first one.
         assert_error "*invalid longitude,latitude pair 181.000000,38.000000*" {
-            r geoadd nyc -73.9454966 40.747533 "in range" 181 38 "out of range"
+            r geoadd range_check -73.9454966 40.747533 "in range" 181 38 "out of range"
         }
         # GEOADD is all-or-nothing
-        assert_equal {} [r zscore nyc "in range"]
-        assert_equal {} [r zscore nyc "out of range"]
+        assert_equal 0 [r exists range_check]
     }
 
     test {GEOADD multi add} {

@@ -221,6 +221,47 @@ static void freeHashtableIfNeeded(kvstore *kvs, int didx) {
     kvs->allocated_hashtables--;
 }
 
+/* Detach and return the hashtable at didx, updating kvstore metadata.
+ * The caller is responsible for iterating and releasing the returned hashtable. */
+hashtable *kvstoreDetachHashtable(kvstore *kvs, int didx) {
+    if (didx < 0 || didx >= kvs->num_hashtables) return NULL;
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (!ht) return NULL;
+
+    size_t size = hashtableSize(ht);
+    if (size > 0) {
+        if (!kvstoreIsImporting(kvs, didx)) {
+            kvs->non_empty_hashtables--;
+        }
+        cumulativeKeyCountAdd(kvs, didx, -(long)size);
+    }
+    kvs->allocated_hashtables--;
+
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    if (hashtableIsRehashing(ht)) {
+        if (metadata->rehashing_node) {
+            listDelNode(kvs->rehashing, metadata->rehashing_node);
+            metadata->rehashing_node = NULL;
+        }
+        size_t from, to;
+        hashtableRehashingInfo(ht, &from, &to);
+        kvs->overhead_hashtable_rehashing -= from * HASHTABLE_BUCKET_SIZE;
+    }
+
+    if (kvs->num_hashtables != 1) {
+        kvs->bucket_count -= hashtableBuckets(ht);
+    }
+
+    kvs->overhead_hashtable_lut -= hashtableMemUsage(ht);
+    metadata->kvs = NULL;
+
+    kvs->hashtables[didx] = NULL;
+    if (!(kvs->flags & KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND)) {
+        createHashtableIfNeeded(kvs, didx);
+    }
+    return ht;
+}
+
 /*************************************/
 /*** hashtable callbacks ***************/
 /*************************************/
@@ -233,6 +274,7 @@ static void freeHashtableIfNeeded(kvstore *kvs, int didx) {
  * If there's one hashtable, bucket count can be retrieved directly from single hashtable bucket. */
 void kvstoreHashtableRehashingStarted(hashtable *ht) {
     kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    if (metadata->kvs == NULL) return;
     kvstore *kvs = metadata->kvs;
     listAddNodeTail(kvs->rehashing, ht);
     metadata->rehashing_node = listLast(kvs->rehashing);
@@ -249,6 +291,7 @@ void kvstoreHashtableRehashingStarted(hashtable *ht) {
  * the old ht size of the hash table from the total sum of buckets for a DB.  */
 void kvstoreHashtableRehashingCompleted(hashtable *ht) {
     kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    if (metadata->kvs == NULL) return;
     kvstore *kvs = metadata->kvs;
     if (metadata->rehashing_node) {
         listDelNode(kvs->rehashing, metadata->rehashing_node);

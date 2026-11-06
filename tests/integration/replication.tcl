@@ -2792,6 +2792,9 @@ foreach load_mode {disabled on-empty-db} {
                 } else {
                     fail "Replica didn't sync (repl-diskless-load=$load_mode)"
                 }
+                if {!$::valgrind} {
+                    assert_equal 2 [regexp -all {name=LOAD_HANDLER} [$primary client list]]
+                }
 
                 stop_write_load $load1
                 stop_write_load $load2

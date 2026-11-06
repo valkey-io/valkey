@@ -148,51 +148,61 @@ tags {"aof-integrity external:skip"} {
         }
     }
 
-    test "AOF integrity: dynamic toggle and disabled marker" {
+    test "AOF integrity: toggling at runtime applies to the files of a scheduled rewrite" {
         set sp [tmpdir server.aof-integrity-toggle]
-        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes aof-use-rdb-preamble yes] keep_persistence true] {
-            set rd [valkey [srv host] [srv port] 0 $::tls]
-            set ai_path [file join [dict get [srv config] dir] "appendonlydir" "appendonly.aof.1.incr.aof"]
-            set sp_actual [dict get [srv config] dir]
-            
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+            r set a 1
+            r config set aof-integrity-check no
+            wait_for_condition 100 100 {
+                [s aof_rewrite_scheduled] == 0 && [s aof_rewrite_in_progress] == 0
+            } else {
+                fail "AOF rewrite didn't run"
+            }
+            r set b 2
+            assert_no_match {*#HDR:*} [read_binary_file [get_last_incr_aof_path r]]
+            assert_no_match {*integrity*} [read_binary_file $manifest]
+
+            r config set aof-integrity-check yes
+            wait_for_condition 100 100 {
+                [s aof_rewrite_scheduled] == 0 && [s aof_rewrite_in_progress] == 0
+            } else {
+                fail "AOF rewrite didn't run"
+            }
+            r set c 3
+            assert_match {*#HDR:v1;*} [read_binary_file [get_last_incr_aof_path r]]
+            assert_match {*type i integrity 1*# manifest-checksum: *} [read_binary_file $manifest]
+        }
+
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal 1 [r get a]
+            assert_equal 2 [r get b]
+            assert_equal 3 [r get c]
+        }
+    }
+
+    test "AOF integrity: toggling twice before a flush doesn't mix modes in a block" {
+        set sp [tmpdir server.aof-integrity-toggle-twice]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            set rd [valkey_deferring_client]
             $rd set a 1
             $rd config set aof-integrity-check no
             $rd set b 2
-            
-            wait_for_condition 50 100 {
-                [file size $ai_path] > 50
-            } else {
-                fail "AOF file not updated"
-            }
-            
-            set fp [open $ai_path r]
-            set content [read $fp]
-            close $fp
-            assert_match {*#INTEGRITY_OFF*} $content
-            
             $rd config set aof-integrity-check yes
             $rd set c 3
-            
-            # Wait for the write to hit disk
-            wait_for_condition 50 100 {
-                [file size $ai_path] > 100
+            for {set i 0} {$i < 5} {incr i} {$rd read}
+            $rd close
+            wait_for_condition 100 100 {
+                [s aof_rewrite_scheduled] == 0 && [s aof_rewrite_in_progress] == 0
             } else {
-                fail "AOF file not updated after re-enabling"
+                fail "AOF rewrite didn't run"
             }
-            
-            set fp [open $ai_path r]
-            set content [read $fp]
-            close $fp
-            
-            # Verify that a new #HDR:v1 appears after #INTEGRITY_OFF
-            assert_match {*#INTEGRITY_OFF*#HDR:v1;*set*c*} $content
         }
-        
-        start_server [list overrides [list dir $sp_actual appendonly yes aof-integrity-check yes]] {
-            set rd [valkey [srv host] [srv port] 0 $::tls]
-            assert_equal "1" [$rd get a]
-            assert_equal "2" [$rd get b]
-            assert_equal "3" [$rd get c]
+
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal 1 [r get a]
+            assert_equal 2 [r get b]
+            assert_equal 3 [r get c]
         }
     }
 
@@ -298,7 +308,8 @@ tags {"aof-integrity external:skip"} {
             close $fp
             
             assert {[string match {*# manifest-checksum: *} $content]}
-            assert {[string match {*checksum *} $content]}
+            assert {[string match {*type b integrity 1 checksum *} $content]}
+            assert {[string match {*type i integrity 1*} $content]}
         }
     }
 
@@ -318,6 +329,532 @@ tags {"aof-integrity external:skip"} {
             
             assert {! [string match {*# manifest-checksum: *} $content]}
             assert {! [string match {*checksum *} $content]}
+            assert {! [string match {*integrity*} $content]}
+        }
+    }
+
+    test "AOF integrity: test helper builds blocks the server accepts" {
+        assert_equal 16845390139448941002 [crc64 0 "123456789"]
+        set sp [tmpdir server.aof-integrity-helper]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        set payload "*3\r\n\$3\r\nSET\r\n\$2\r\nk2\r\n\$2\r\nv2\r\n"
+        append_binary_file $incr [aof_integrity_block [aof_last_block_checksum $incr] $payload]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal v2 [r get k2]
+        }
+    }
+
+    test "AOF integrity: a torn header at the end of the file is truncated with aof-load-truncated" {
+        foreach torn [list "#H" "#HDR:v1;" "#HDR:v1;len:45" "#HDR:v1;len:45;checksum:" "#HDR:v1;len:45;checksum:123;\r"] {
+            set sp [tmpdir server.aof-integrity-torn-header]
+            start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+                r set k1 v1
+                set incr [get_last_incr_aof_path r]
+            }
+            append_binary_file $incr $torn
+            start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated yes] keep_persistence true] {
+                assert_equal v1 [r get k1]
+                verify_log_message 0 "*Truncating the AOF*" 0
+                r set k2 v2
+            }
+            # The torn bytes are gone, so the next append continues a valid chain.
+            start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+                assert_equal v1 [r get k1]
+                assert_equal v2 [r get k2]
+            }
+        }
+    }
+
+    test "AOF integrity: a torn header at the end of the file fails to load without aof-load-truncated" {
+        set sp [tmpdir server.aof-integrity-torn-header-strict]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        append_binary_file $incr "#HDR:v1;len:45"
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*Unexpected end of file reading the append only file*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a torn header"
+            }
+        }
+    }
+
+    test "AOF: a torn annotation at the end of the file is truncated with aof-load-truncated" {
+        set sp [tmpdir server.aof-torn-annotation]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check no] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        append_binary_file $incr "#TS:17"
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check no aof-load-truncated yes] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            r set k2 v2
+        }
+        # Without the truncation, the next append would have been glued onto the torn line.
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check no aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal v2 [r get k2]
+        }
+    }
+
+    test "AOF integrity: a torn block at the end of the file is truncated and the chain continues" {
+        set sp [tmpdir server.aof-integrity-torn-block]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            r set k2 v2
+            set incr [get_last_incr_aof_path r]
+        }
+        # Cut the end of the last block (SET k2 v2).
+        set content [read_binary_file $incr]
+        write_binary_file $incr [string range $content 0 end-5]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated yes] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal {} [r get k2]
+            r set k3 v3
+        }
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal v3 [r get k3]
+        }
+    }
+
+    test "AOF integrity: an incomplete transaction inside a verified block is a format error" {
+        set sp [tmpdir server.aof-integrity-incomplete-multi]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        set payload "*1\r\n\$5\r\nMULTI\r\n*3\r\n\$3\r\nSET\r\n\$2\r\nk2\r\n\$2\r\nv2\r\n"
+        append_binary_file $incr [aof_integrity_block [aof_last_block_checksum $incr] $payload]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated yes] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*Incomplete data inside a verified integrity block*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite an incomplete transaction"
+            }
+        }
+    }
+
+    test "AOF integrity: a command extending past its block is a format error" {
+        set sp [tmpdir server.aof-integrity-command-past-block]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        # The block's len ends inside the command, so the rest of it isn't covered.
+        set payload "*3\r\n\$3\r\nSET\r\n\$2\r\nk2\r\n\$2\r\nv2\r\n"
+        append_binary_file $incr [aof_integrity_block [aof_last_block_checksum $incr] $payload 10]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*extends past the end of its integrity block*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a command outside its block"
+            }
+        }
+    }
+
+    test "AOF integrity: the file is never truncated inside a verified block" {
+        set sp [tmpdir server.aof-integrity-truncate-inside-block]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        # A verified block holding SET k2 and the start of SET k3, with the file ending
+        # inside SET k3. SET k2 runs before the end of the file is reached.
+        set k2 "*3\r\n\$3\r\nSET\r\n\$2\r\nk2\r\n\$2\r\nv2\r\n"
+        set k3 "*3\r\n\$3\r\nSET\r\n\$2\r\nk3\r\n\$2\r\nv3\r\n"
+        set payload "$k2[string range $k3 0 19]"
+        set len [expr {[string length $k2] + 10}]
+        append_binary_file $incr [aof_integrity_block [aof_last_block_checksum $incr] $payload $len]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated yes] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*Incomplete data inside a verified integrity block*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running after truncating inside a verified block"
+            }
+        }
+    }
+
+    test "AOF integrity: unknown header fields are ignored by the loader and valkey-check-aof" {
+        set sp [tmpdir server.aof-integrity-unknown-field]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+        }
+        set payload "*3\r\n\$3\r\nSET\r\n\$2\r\nk2\r\n\$2\r\nv2\r\n"
+        append_binary_file $incr [aof_integrity_block [aof_last_block_checksum $incr] $payload {} "foo:bar;"]
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*All AOF files and manifest are valid*} $output
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v2 [r get k2]
+        }
+    }
+
+    test "AOF integrity: malformed headers are format errors" {
+        foreach {hdr err} [list "#HDR:v1;len:abc;checksum:1;\r\n" "*invalid len*" \
+                                "#HDR:v2;len:4;checksum:1;\r\n" "*unsupported header version*"] {
+            set sp [tmpdir server.aof-integrity-malformed-header]
+            start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+                r set k1 v1
+                set incr [get_last_incr_aof_path r]
+            }
+            append_binary_file $incr "$hdr*1\r\n"
+            start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated yes] keep_persistence true wait_ready false] {
+                wait_for_log_messages 0 [list "*Malformed AOF integrity header*$err"] 0 10 1000
+                wait_for_condition 50 100 {
+                    [is_alive [srv pid]] == 0
+                } else {
+                    fail "Server is still running despite a malformed header"
+                }
+            }
+        }
+    }
+
+    test "AOF integrity: a block longer than the rest of the file is truncated" {
+        set sp [tmpdir server.aof-integrity-len-past-eof]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        append_binary_file $incr "#HDR:v1;len:1000000;checksum:1;\r\n*3\r\n"
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated yes] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            verify_log_message 0 "*extends past the end of the file*" 0
+            r set k2 v2
+        }
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal v2 [r get k2]
+        }
+    }
+
+    test "valkey-check-aof --fix truncates a torn integrity header" {
+        set sp [tmpdir server.aof-integrity-fix-torn]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+        }
+        set size [file size $incr]
+        append_binary_file $incr "#HDR:v1;len:45"
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*Torn annotation at the end of the file*} $output
+        exec $::VALKEY_CHECK_AOF_BIN --fix $manifest << "y\n"
+        assert_equal $size [file size $incr]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+        }
+    }
+
+    test "valkey-check-aof --fix truncates a corrupt integrity block" {
+        set sp [tmpdir server.aof-integrity-fix-corrupt]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+            set size [file size $incr]
+            r set k2 v2
+        }
+        # Change "v2" to "x2" in the last block.
+        set content [read_binary_file $incr]
+        write_binary_file $incr [string replace $content end-3 end-3 "x"]
+        exec $::VALKEY_CHECK_AOF_BIN --fix $manifest << "y\n"
+        assert_equal $size [file size $incr]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal {} [r get k2]
+        }
+    }
+
+    test "valkey-check-aof --fix truncates a block whose command extends past it" {
+        set sp [tmpdir server.aof-integrity-fix-past-block]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+        }
+        set size [file size $incr]
+        set payload "*3\r\n\$3\r\nSET\r\n\$2\r\nk2\r\n\$2\r\nv2\r\n"
+        append_binary_file $incr [aof_integrity_block [aof_last_block_checksum $incr] $payload 10]
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*extends past the end of its integrity block*} $output
+        exec $::VALKEY_CHECK_AOF_BIN --fix $manifest << "y\n"
+        assert_equal $size [file size $incr]
+    }
+
+    test "valkey-check-aof --truncate-to-timestamp truncates whole integrity blocks" {
+        set sp [tmpdir server.aof-integrity-truncate-ts]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes aof-timestamp-enabled yes] keep_persistence true] {
+            r set k1 v1
+            after 1100
+            r set k2 v2
+            after 1100
+            r set k3 v3
+            set incr [get_last_incr_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+        }
+        # Each block starts with #HDR followed by the #TS of its second.
+        set ts2 [lindex [regexp -all -inline {#TS:([0-9]+)\r\n} [read_binary_file $incr]] 3]
+        exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp [expr {$ts2 - 1}] $manifest
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*All AOF files and manifest are valid*} $output
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal {} [r get k2]
+            assert_equal {} [r get k3]
+        }
+    }
+
+    test "AOF integrity: restarting with integrity disabled keeps the previous file verifiable" {
+        set sp [tmpdir server.aof-integrity-restart-disabled]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            r set k2 v2
+        }
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check no] keep_persistence true] {
+            assert_equal v2 [r get k2]
+            r set k3 v3
+            # The previous file keeps its marker and records its final checksum.
+            set manifest [read_binary_file [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]]
+            assert_match "*seq 1 type i integrity 1 checksum *seq 2 type i\n# manifest-checksum: *" $manifest
+        }
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v2 [r get k2]
+            assert_equal v3 [r get k3]
+        }
+    }
+
+    test "AOF integrity: restarting with integrity enabled starts a new file and rewrites the AOF" {
+        set sp [tmpdir server.aof-integrity-restart-enabled]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check no] keep_persistence true] {
+            r set k1 v1
+        }
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            wait_for_condition 100 100 {
+                [s aof_rewrite_scheduled] == 0 && [s aof_rewrite_in_progress] == 0
+            } else {
+                fail "AOF rewrite didn't run"
+            }
+            r set k2 v2
+            assert_match {*#HDR:v1;*} [read_binary_file [get_last_incr_aof_path r]]
+        }
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal v2 [r get k2]
+        }
+    }
+
+    test "AOF integrity: an integrity file needs headers from its first byte" {
+        set sp [tmpdir server.aof-integrity-stripped]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set incr [get_last_incr_aof_path r]
+        }
+        write_binary_file $incr [regsub -all {#HDR:[^\r]*\r\n} [read_binary_file $incr] {}]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*lacks an integrity header*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite missing integrity headers"
+            }
+        }
+        # With integrity disabled, the file is loaded without verification.
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+        }
+    }
+
+    test "AOF integrity: a closed file must end with the checksum recorded for it" {
+        set sp [tmpdir server.aof-integrity-closed-checksum]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes rdb-key-save-delay 10000000] keep_persistence true] {
+            r set k1 v1
+            r set k2 v2
+            set incr [get_last_incr_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+            # A failed rewrite leaves the INCR file closed, with its final checksum recorded.
+            r bgrewriteaof
+            catch {exec kill -9 [get_child_pid 0]}
+            wait_for_condition 50 100 {
+                [s aof_rewrite_in_progress] == 0
+            } else {
+                fail "AOF rewrite didn't stop"
+            }
+        }
+        # Drop the last block (SET k2) of the closed file.
+        set content [read_binary_file $incr]
+        write_binary_file $incr [string range $content 0 [expr {[string last "#HDR:" $content] - 1}]]
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*ends with checksum*but the manifest records*} $output
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*ends with checksum*but the manifest records*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a shortened closed file"
+            }
+        }
+    }
+
+    test "AOF integrity: disabling during a rewrite keeps the AOF loadable" {
+        set sp [tmpdir server.aof-integrity-toggle-during-rewrite]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes rdb-key-save-delay 500000] keep_persistence true] {
+            r set k1 v1
+            r bgrewriteaof
+            r config set aof-integrity-check no
+            r set k2 v2
+            wait_for_condition 100 100 {
+                [s aof_rewrite_scheduled] == 0 && [s aof_rewrite_in_progress] == 0
+            } else {
+                fail "AOF rewrites didn't run"
+            }
+            r set k3 v3
+        }
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+            assert_equal v2 [r get k2]
+            assert_equal v3 [r get k3]
+        }
+    }
+
+    test "AOF integrity: the manifest checksum is verified, also by valkey-check-aof" {
+        set sp [tmpdir server.aof-integrity-manifest-corrupt]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+        }
+        # A trailing space doesn't change how the line is parsed, only its checksum.
+        set content [read_binary_file $manifest]
+        write_binary_file $manifest [regsub {\n} $content " \n"]
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*checksum mismatch*} $output
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*AOF manifest file*checksum mismatch*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a corrupt manifest"
+            }
+        }
+    }
+
+    test "AOF integrity: the manifest checksum line allows whitespace, and nothing may follow it" {
+        set sp [tmpdir server.aof-integrity-manifest-line]
+        start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
+            r set k1 v1
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+        }
+        set content [read_binary_file $manifest]
+        write_binary_file $manifest [string map {"# manifest-checksum: " "#  Manifest-Checksum :  "} $content]
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+        }
+        append_binary_file $manifest "file appendonly.aof.9.incr.aof seq 9 type i\n"
+        start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes] keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*Unexpected content after the AOF manifest checksum*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite content after the manifest checksum"
+            }
+        }
+    }
+
+    test "AOF integrity: a RESP base ends with its CRC, which is verified" {
+        set sp [tmpdir server.aof-integrity-resp-base]
+        set overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes aof-use-rdb-preamble no]
+        start_server [list overrides $overrides keep_persistence true] {
+            r set k1 v1
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            set base [get_base_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
+            assert_match "*#CRC:*\r\n" [read_binary_file $base]
+            assert_match {*type b integrity 1 checksum *} [read_binary_file $manifest]
+        }
+        start_server [list overrides [concat $overrides aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+        }
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*All AOF files and manifest are valid*} $output
+
+        # A changed byte fails the CRC.
+        set orig [read_binary_file $base]
+        set idx [string first "v1" $orig]
+        write_binary_file $base [string replace $orig $idx $idx "x"]
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*checksum mismatch*} $output
+        start_server [list overrides $overrides keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*AOF base file*checksum mismatch*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a corrupt base"
+            }
+        }
+
+        # So does a missing CRC.
+        write_binary_file $base [regsub {#CRC:[0-9]+\r\n$} $orig {}]
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*lacks its checksum*} $output
+        start_server [list overrides $overrides keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*AOF base file*lacks its checksum*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a base without its CRC"
+            }
+        }
+    }
+
+    test "AOF integrity: an RDB base loads with rdbchecksum disabled" {
+        set sp [tmpdir server.aof-integrity-rdb-base-no-rdbchecksum]
+        set overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes rdbchecksum no]
+        start_server [list overrides $overrides keep_persistence true] {
+            r set k1 v1
+            r bgrewriteaof
+            waitForBgrewriteaof r
+        }
+        start_server [list overrides [concat $overrides aof-load-truncated no] keep_persistence true] {
+            assert_equal v1 [r get k1]
+        }
+
+        set sp_lz4 [tmpdir server.aof-integrity-rdb-base-lz4-no-rdbchecksum]
+        set overrides_lz4 [concat $overrides [list dir $sp_lz4 rdbcompression lz4]]
+        set val [string repeat "lz4-value-" 100]
+        start_server [list overrides $overrides_lz4 keep_persistence true] {
+            r set k1 $val
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            set ::lz4_base_path [get_base_aof_path r]
+        }
+        start_server [list overrides [concat $overrides_lz4 aof-load-truncated no] keep_persistence true] {
+            assert_equal $val [r get k1]
+        }
+
+        # Corrupt the compressed base's codec checksum and verify loading fails.
+        set raw [read_binary_file $::lz4_base_path]
+        binary scan [string index $raw end] cu last_byte
+        set corrupted "[string range $raw 0 end-1][binary format c [expr {$last_byte ^ 1}]]"
+        write_binary_file $::lz4_base_path $corrupted
+        start_server [list overrides $overrides_lz4 keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*Corrupt streaming-compressed RDB input*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a corrupted compressed RDB base"
+            }
         }
     }
 }

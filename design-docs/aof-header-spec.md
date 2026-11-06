@@ -101,11 +101,11 @@ CRLF            = %x0D %x0A ; \r\n
 If the `checksum` field is present, it MUST be the last field in the header, and its value is calculated as follows:
 
 1. **Scope**: The checksum is a continuous CRC64 of the stream.
-2. **Header Contribution**: The checksum calculation for the current block includes the header prefix and all preceding fields up to the `checksum:` key itself, including the colon.
+2. **Header Contribution**: The checksum calculation for the current block includes the header prefix and all preceding fields, up to but not including the `checksum` field.
    - Specifically, for the header: `#HDR:v1;len:45;replid:abc;checksum:12345;\r\n`
-   - The checksummed header string is: `#HDR:v1;len:45;replid:abc;checksum:`
+   - The checksummed header string is: `#HDR:v1;len:45;replid:abc;`
 3. **Payload Contribution**: The calculation then continues over the payload data of the block (of length specified by `len`).
-4. **Validation**: The loader calculates `CRC64(PreviousChecksum, HeaderString + PayloadData)` and compares it to the parsed `checksum` value. The trailing `;\r\n` of the header is excluded from the checksum calculation.
+4. **Validation**: The loader calculates `CRC64(PreviousChecksum, HeaderString + PayloadData)` and compares it to the parsed `checksum` value. The `checksum` field and the trailing `\r\n` of the header are excluded from the checksum calculation.
 
 ---
 

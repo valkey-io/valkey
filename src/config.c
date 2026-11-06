@@ -2816,15 +2816,11 @@ static int updateAofAutoGCEnabled(const char **err) {
  * If disabled at runtime, we inject a marker into the AOF to signal the loader. */
 static int updateAofIntegrityCheck(const char **err) {
     UNUSED(err);
-    if (!server.aof_integrity_check) {
-        serverLog(LL_NOTICE, "AOF integrity check disabled, resetting running checksum");
-        server.aof_running_checksum = 0;
-        if (server.aof_state == AOF_ON) {
-            sds new_buf = sdsnew(AOF_INTEGRITY_OFF_MARKER);
-            new_buf = sdscatsds(new_buf, server.aof_buf);
-            sdsfree(server.aof_buf);
-            server.aof_buf = new_buf;
-        }
+    /* The new setting applies from the next INCR file, which an AOF rewrite opens. */
+    if (server.aof_state != AOF_OFF && server.aof_integrity_check != server.aof_integrity_active) {
+        serverLog(LL_NOTICE, "AOF integrity check %s, scheduling an AOF rewrite to apply it",
+                  server.aof_integrity_check ? "enabled" : "disabled");
+        server.aof_rewrite_scheduled = 1;
     }
     return 1;
 }

@@ -1168,7 +1168,11 @@ proc wait_for_watched_clients_count {count {maxtries 100} {delay 10} {idx 0}} {
 
 proc read_from_aof {fp} {
     # Input fp is a blocking binary file descriptor of an opened AOF file.
-    if {[gets $fp count] == -1} return ""
+    # Annotations, such as integrity headers, are skipped.
+    while {1} {
+        if {[gets $fp count] == -1} return ""
+        if {[string index $count 0] ne "#"} break
+    }
     set count [string range $count 1 end]
 
     # Return a list of arguments for the command.

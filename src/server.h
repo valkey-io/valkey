@@ -163,7 +163,7 @@ struct ValkeyModule;
 #define LOG_MAX_LEN 1024                                      /* Default maximum length of syslog messages.*/
 #define AOF_REWRITE_ITEMS_PER_CMD 64
 #define AOF_ANNOTATION_LINE_MAX_LEN 1024
-#define AOF_INTEGRITY_OFF_MARKER "#INTEGRITY_OFF\r\n"
+#define AOF_CRC "#CRC:" /* CRC64 of the preceding bytes of a RESP base file written with integrity. */
 #define CONFIG_RUN_ID_SIZE 40
 #define RDB_EOF_MARK_SIZE 40
 #define CONFIG_REPL_BACKLOG_MIN_SIZE (1024 * 16) /* 16k */
@@ -1837,7 +1837,9 @@ typedef struct {
     sds file_name;           /* file name */
     long long file_seq;      /* file sequence */
     aof_file_type file_type; /* file type */
-    uint64_t last_checksum;  /* The last checksum of this AOF file. */
+    int integrity;           /* Written with integrity headers. */
+    int has_checksum;        /* Whether last_checksum is known. */
+    uint64_t last_checksum;  /* Running checksum of all AOF blocks written up to the end of this file. */
 } aofInfo;
 
 typedef struct {
@@ -1851,6 +1853,15 @@ typedef struct {
     int dirty;                    /* 1 Indicates that the aofManifest in the memory is inconsistent with
                                      disk, we need to persist it immediately. */
 } aofManifest;
+
+/* A parsed AOF integrity header, see aofParseHeader(). */
+typedef struct {
+    long long len;     /* Length of the block that follows the header. */
+    uint64_t checksum; /* Running checksum at the end of the block. */
+    int has_checksum;
+    size_t checksum_start; /* Offset of the checksum value in the header line. */
+    size_t checksum_end;   /* Offset right after the checksum value. */
+} aofHeader;
 
 /*-----------------------------------------------------------------------------
  * Global server state
@@ -2179,11 +2190,12 @@ struct valkeyServer {
     time_t aof_cur_timestamp;           /* Current record timestamp in AOF */
     int aof_timestamp_enabled;          /* Enable record timestamp in AOF */
     int aof_integrity_check;            /* Enable metadata integrity check in AOF */
+    int aof_integrity_active;           /* The current INCR file is written with integrity headers. */
     uint64_t aof_running_checksum;      /* Current AOF running checksum */
     uint64_t aof_rewrite_base_checksum; /* AOF running checksum at the start of rewrite */
-    sds aof_retry_buf;                  /* Buffer to store data that failed to be written fully during a partial write. */
-    int aof_integrity_chain_active;     /* 1 if we are currently in an active AOF integrity chain.
-                                           This ensures we expect headers even if the checksum is 0. */
+    int aof_rewrite_integrity;          /* The INCR file opened at the start of rewrite has integrity headers. */
+    sds aof_retry_buf;                  /* Unwritten remainder of a partially written AOF block (header + commands),
+                                           used when integrity is enabled. It must be written before anything else. */
     int aof_lastbgrewrite_status;       /* C_OK or C_ERR */
     unsigned long aof_delayed_fsync;    /* delayed AOF fsync() counter */
     int aof_rewrite_incremental_fsync;  /* fsync incrementally while aof rewriting? */
@@ -3559,6 +3571,10 @@ void restartAOFAfterSYNC(void);
 void aofLoadManifestFromDisk(void);
 void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
+int aofParseHeader(const char *line, size_t linelen, aofHeader *hdr, const char **err);
+int aofParseUint64(const char *s, size_t len, uint64_t *out);
+uint64_t aofChecksumHeader(uint64_t crc, const char *line, size_t linelen, const aofHeader *hdr);
+int aofChecksumBlock(FILE *fp, long long len, char *buf, uint64_t *crc);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);

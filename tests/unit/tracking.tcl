@@ -1006,6 +1006,40 @@ start_server {tags {"tracking network logreqres:skip"}} {
         r debug pause-cron 0
     } {OK} {needs:debug}
 
+    test {Tracking invalidations don't leak into a busy script caller's reply} {
+        clean_all
+        set rd_script [valkey_deferring_client]
+        $rd HELLO 3
+        $rd read
+        $rd CLIENT TRACKING on
+        $rd read
+        set keys {}
+        for {set i 0} {$i < 10000} {incr i} {lappend keys key$i{t}}
+        $rd mget {*}$keys
+        $rd read
+        test_config_set r busy-reply-threshold 10
+        test_config_set r tracking-table-max-keys 1
+
+        $rd_script eval {while true do end} 0
+        test_defer {$rd_script close}
+        test_defer {catch {r script kill}}
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+
+        # The tracking table is over the limit while the script yields.
+        $rd ping
+        while {![catch {$rd read} e]} {}
+        assert_match {BUSY*} $e
+
+        r script kill
+        assert_error {*killed*} {$rd_script read}
+        $rd_script ping
+        assert_equal {PONG} [$rd_script read]
+    }
+
     foreach resp {3 2} {
         test "RESP$resp based basic invalidation with client reply off" {
             # This entire test is mostly irrelevant for RESP2, but we run it anyway just for some extra coverage.

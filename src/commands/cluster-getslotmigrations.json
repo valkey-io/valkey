@@ -19,7 +19,7 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "link_name": {
+                    "name": {
                         "type": "string",
                         "description": "A 40-byte randomly generated hex string representing the migration.",  
                         "pattern": "^[0-9a-fA-F]{40}$"

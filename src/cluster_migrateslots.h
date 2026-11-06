@@ -33,11 +33,10 @@ bool clusterSlotFailoverGranted(int slot);
 void clusterFailAllSlotExportsWithMessage(char *message);
 void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
 void killSlotMigrationChild(void);
-void clusterCleanSlotImportsOnFullSync(void);
 void clusterCleanSlotImportsOnPromotion(void);
 void clusterCleanSlotImportsBeforeLoad(void);
 void clusterCleanSlotImportsAfterLoad(void);
 int clusterRDBSaveSlotImports(rio *rdb, int rdbver);
-int clusterRDBLoadSlotImport(rio *rdb);
+int clusterRDBLoadSlotImport(rio *rdb, serverDb **dbarray);
 
 #endif /* __CLUSTER_MIGRATESLOTS_H */

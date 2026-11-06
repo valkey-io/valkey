@@ -1440,7 +1440,7 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 VALKEY_NO_SANITIZE("address")
 void logStackContent(void **sp) {
     if (server.hide_user_data_from_log) {
-        serverLog(LL_NOTICE, "hide-user-data-from-log is on, skip logging stack content to avoid spilling user data.");
+        serverLogRawFromHandler(LL_NOTICE, "hide-user-data-from-log is on, skip logging stack content to avoid spilling user data.");
         return;
     }
     int i;
@@ -1449,64 +1449,66 @@ void logStackContent(void **sp) {
         unsigned long val = (unsigned long)sp[i];
 
         if (sizeof(long) == 4)
-            serverLog(LL_WARNING, "(%08lx) -> %08lx", addr, val);
+            serverLogFromHandler(LL_WARNING, "(%08lx) -> %08lx", addr, val);
         else
-            serverLog(LL_WARNING, "(%016lx) -> %016lx", addr, val);
+            serverLogFromHandler(LL_WARNING, "(%016lx) -> %016lx", addr, val);
     }
 }
 
 /* Log dump of processor registers */
 void logRegisters(ucontext_t *uc) {
-    serverLog(LL_WARNING | LL_RAW, "\n------ REGISTERS ------\n");
-#define NOT_SUPPORTED()                                                                 \
-    do {                                                                                \
-        UNUSED(uc);                                                                     \
-        serverLog(LL_WARNING, "  Dumping of registers not supported for this OS/arch"); \
+    serverLogRawFromHandler(LL_WARNING | LL_RAW, "\n------ REGISTERS ------\n");
+#define NOT_SUPPORTED()                                                                               \
+    do {                                                                                              \
+        UNUSED(uc);                                                                                   \
+        serverLogRawFromHandler(LL_WARNING, "  Dumping of registers not supported for this OS/arch"); \
     } while (0)
 
 /* Mac OS X */
 #if defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
     /* Mac OS X AMD64 */
 #if defined(_STRUCT_X86_THREAD_STATE64) && !defined(__i386__)
-    serverLog(LL_WARNING,
-              "\n"
-              "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
-              "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
-              "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
-              "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
-              "RIP:%016lx EFL:%016lx\nCS :%016lx FS:%016lx  GS:%016lx",
-              (unsigned long)uc->uc_mcontext->__ss.__rax, (unsigned long)uc->uc_mcontext->__ss.__rbx,
-              (unsigned long)uc->uc_mcontext->__ss.__rcx, (unsigned long)uc->uc_mcontext->__ss.__rdx,
-              (unsigned long)uc->uc_mcontext->__ss.__rdi, (unsigned long)uc->uc_mcontext->__ss.__rsi,
-              (unsigned long)uc->uc_mcontext->__ss.__rbp, (unsigned long)uc->uc_mcontext->__ss.__rsp,
-              (unsigned long)uc->uc_mcontext->__ss.__r8, (unsigned long)uc->uc_mcontext->__ss.__r9,
-              (unsigned long)uc->uc_mcontext->__ss.__r10, (unsigned long)uc->uc_mcontext->__ss.__r11,
-              (unsigned long)uc->uc_mcontext->__ss.__r12, (unsigned long)uc->uc_mcontext->__ss.__r13,
-              (unsigned long)uc->uc_mcontext->__ss.__r14, (unsigned long)uc->uc_mcontext->__ss.__r15,
-              (unsigned long)uc->uc_mcontext->__ss.__rip, (unsigned long)uc->uc_mcontext->__ss.__rflags,
-              (unsigned long)uc->uc_mcontext->__ss.__cs, (unsigned long)uc->uc_mcontext->__ss.__fs,
-              (unsigned long)uc->uc_mcontext->__ss.__gs);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+        "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+        "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+        "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+        "RIP:%016lx EFL:%016lx\nCS :%016lx FS:%016lx  GS:%016lx",
+        (unsigned long)uc->uc_mcontext->__ss.__rax, (unsigned long)uc->uc_mcontext->__ss.__rbx,
+        (unsigned long)uc->uc_mcontext->__ss.__rcx, (unsigned long)uc->uc_mcontext->__ss.__rdx,
+        (unsigned long)uc->uc_mcontext->__ss.__rdi, (unsigned long)uc->uc_mcontext->__ss.__rsi,
+        (unsigned long)uc->uc_mcontext->__ss.__rbp, (unsigned long)uc->uc_mcontext->__ss.__rsp,
+        (unsigned long)uc->uc_mcontext->__ss.__r8, (unsigned long)uc->uc_mcontext->__ss.__r9,
+        (unsigned long)uc->uc_mcontext->__ss.__r10, (unsigned long)uc->uc_mcontext->__ss.__r11,
+        (unsigned long)uc->uc_mcontext->__ss.__r12, (unsigned long)uc->uc_mcontext->__ss.__r13,
+        (unsigned long)uc->uc_mcontext->__ss.__r14, (unsigned long)uc->uc_mcontext->__ss.__r15,
+        (unsigned long)uc->uc_mcontext->__ss.__rip, (unsigned long)uc->uc_mcontext->__ss.__rflags,
+        (unsigned long)uc->uc_mcontext->__ss.__cs, (unsigned long)uc->uc_mcontext->__ss.__fs,
+        (unsigned long)uc->uc_mcontext->__ss.__gs);
     logStackContent((void **)uc->uc_mcontext->__ss.__rsp);
 #elif defined(__i386__)
     /* Mac OS X x86 */
-    serverLog(LL_WARNING,
-              "\n"
-              "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
-              "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
-              "SS:%08lx  EFL:%08lx EIP:%08lx CS :%08lx\n"
-              "DS:%08lx  ES:%08lx  FS :%08lx GS :%08lx",
-              (unsigned long)uc->uc_mcontext->__ss.__eax, (unsigned long)uc->uc_mcontext->__ss.__ebx,
-              (unsigned long)uc->uc_mcontext->__ss.__ecx, (unsigned long)uc->uc_mcontext->__ss.__edx,
-              (unsigned long)uc->uc_mcontext->__ss.__edi, (unsigned long)uc->uc_mcontext->__ss.__esi,
-              (unsigned long)uc->uc_mcontext->__ss.__ebp, (unsigned long)uc->uc_mcontext->__ss.__esp,
-              (unsigned long)uc->uc_mcontext->__ss.__ss, (unsigned long)uc->uc_mcontext->__ss.__eflags,
-              (unsigned long)uc->uc_mcontext->__ss.__eip, (unsigned long)uc->uc_mcontext->__ss.__cs,
-              (unsigned long)uc->uc_mcontext->__ss.__ds, (unsigned long)uc->uc_mcontext->__ss.__es,
-              (unsigned long)uc->uc_mcontext->__ss.__fs, (unsigned long)uc->uc_mcontext->__ss.__gs);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
+        "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
+        "SS:%08lx  EFL:%08lx EIP:%08lx CS :%08lx\n"
+        "DS:%08lx  ES:%08lx  FS :%08lx GS :%08lx",
+        (unsigned long)uc->uc_mcontext->__ss.__eax, (unsigned long)uc->uc_mcontext->__ss.__ebx,
+        (unsigned long)uc->uc_mcontext->__ss.__ecx, (unsigned long)uc->uc_mcontext->__ss.__edx,
+        (unsigned long)uc->uc_mcontext->__ss.__edi, (unsigned long)uc->uc_mcontext->__ss.__esi,
+        (unsigned long)uc->uc_mcontext->__ss.__ebp, (unsigned long)uc->uc_mcontext->__ss.__esp,
+        (unsigned long)uc->uc_mcontext->__ss.__ss, (unsigned long)uc->uc_mcontext->__ss.__eflags,
+        (unsigned long)uc->uc_mcontext->__ss.__eip, (unsigned long)uc->uc_mcontext->__ss.__cs,
+        (unsigned long)uc->uc_mcontext->__ss.__ds, (unsigned long)uc->uc_mcontext->__ss.__es,
+        (unsigned long)uc->uc_mcontext->__ss.__fs, (unsigned long)uc->uc_mcontext->__ss.__gs);
     logStackContent((void **)uc->uc_mcontext->__ss.__esp);
 #elif defined(__arm64__)
     /* macOS ARM64 */
-    serverLog(
+    serverLogFromHandler(
         LL_WARNING,
         "\n"
         "x0:%016lx x1:%016lx x2:%016lx x3:%016lx\n"
@@ -1545,253 +1547,283 @@ void logRegisters(ucontext_t *uc) {
 #elif defined(__linux__)
 /* Linux x86 */
 #if defined(__i386__) || ((defined(__X86_64__) || defined(__x86_64__)) && defined(__ILP32__))
-    serverLog(LL_WARNING,
-              "\n"
-              "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
-              "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
-              "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
-              "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
-              (unsigned long)uc->uc_mcontext.gregs[11], (unsigned long)uc->uc_mcontext.gregs[8],
-              (unsigned long)uc->uc_mcontext.gregs[10], (unsigned long)uc->uc_mcontext.gregs[9],
-              (unsigned long)uc->uc_mcontext.gregs[4], (unsigned long)uc->uc_mcontext.gregs[5],
-              (unsigned long)uc->uc_mcontext.gregs[6], (unsigned long)uc->uc_mcontext.gregs[7],
-              (unsigned long)uc->uc_mcontext.gregs[18], (unsigned long)uc->uc_mcontext.gregs[17],
-              (unsigned long)uc->uc_mcontext.gregs[14], (unsigned long)uc->uc_mcontext.gregs[15],
-              (unsigned long)uc->uc_mcontext.gregs[3], (unsigned long)uc->uc_mcontext.gregs[2],
-              (unsigned long)uc->uc_mcontext.gregs[1], (unsigned long)uc->uc_mcontext.gregs[0]);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
+        "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
+        "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
+        "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
+        (unsigned long)uc->uc_mcontext.gregs[11], (unsigned long)uc->uc_mcontext.gregs[8],
+        (unsigned long)uc->uc_mcontext.gregs[10], (unsigned long)uc->uc_mcontext.gregs[9],
+        (unsigned long)uc->uc_mcontext.gregs[4], (unsigned long)uc->uc_mcontext.gregs[5],
+        (unsigned long)uc->uc_mcontext.gregs[6], (unsigned long)uc->uc_mcontext.gregs[7],
+        (unsigned long)uc->uc_mcontext.gregs[18], (unsigned long)uc->uc_mcontext.gregs[17],
+        (unsigned long)uc->uc_mcontext.gregs[14], (unsigned long)uc->uc_mcontext.gregs[15],
+        (unsigned long)uc->uc_mcontext.gregs[3], (unsigned long)uc->uc_mcontext.gregs[2],
+        (unsigned long)uc->uc_mcontext.gregs[1], (unsigned long)uc->uc_mcontext.gregs[0]);
     logStackContent((void **)uc->uc_mcontext.gregs[7]);
 #elif defined(__X86_64__) || defined(__x86_64__)
     /* Linux AMD64 */
-    serverLog(LL_WARNING,
-              "\n"
-              "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
-              "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
-              "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
-              "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
-              "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
-              (unsigned long)uc->uc_mcontext.gregs[13], (unsigned long)uc->uc_mcontext.gregs[11],
-              (unsigned long)uc->uc_mcontext.gregs[14], (unsigned long)uc->uc_mcontext.gregs[12],
-              (unsigned long)uc->uc_mcontext.gregs[8], (unsigned long)uc->uc_mcontext.gregs[9],
-              (unsigned long)uc->uc_mcontext.gregs[10], (unsigned long)uc->uc_mcontext.gregs[15],
-              (unsigned long)uc->uc_mcontext.gregs[0], (unsigned long)uc->uc_mcontext.gregs[1],
-              (unsigned long)uc->uc_mcontext.gregs[2], (unsigned long)uc->uc_mcontext.gregs[3],
-              (unsigned long)uc->uc_mcontext.gregs[4], (unsigned long)uc->uc_mcontext.gregs[5],
-              (unsigned long)uc->uc_mcontext.gregs[6], (unsigned long)uc->uc_mcontext.gregs[7],
-              (unsigned long)uc->uc_mcontext.gregs[16], (unsigned long)uc->uc_mcontext.gregs[17],
-              (unsigned long)uc->uc_mcontext.gregs[18]);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+        "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+        "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+        "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+        "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
+        (unsigned long)uc->uc_mcontext.gregs[13], (unsigned long)uc->uc_mcontext.gregs[11],
+        (unsigned long)uc->uc_mcontext.gregs[14], (unsigned long)uc->uc_mcontext.gregs[12],
+        (unsigned long)uc->uc_mcontext.gregs[8], (unsigned long)uc->uc_mcontext.gregs[9],
+        (unsigned long)uc->uc_mcontext.gregs[10], (unsigned long)uc->uc_mcontext.gregs[15],
+        (unsigned long)uc->uc_mcontext.gregs[0], (unsigned long)uc->uc_mcontext.gregs[1],
+        (unsigned long)uc->uc_mcontext.gregs[2], (unsigned long)uc->uc_mcontext.gregs[3],
+        (unsigned long)uc->uc_mcontext.gregs[4], (unsigned long)uc->uc_mcontext.gregs[5],
+        (unsigned long)uc->uc_mcontext.gregs[6], (unsigned long)uc->uc_mcontext.gregs[7],
+        (unsigned long)uc->uc_mcontext.gregs[16], (unsigned long)uc->uc_mcontext.gregs[17],
+        (unsigned long)uc->uc_mcontext.gregs[18]);
     logStackContent((void **)uc->uc_mcontext.gregs[15]);
 #elif defined(__riscv)     /* Linux RISC-V */
-    serverLog(LL_WARNING,
-              "\n"
-              "ra:%016lx gp:%016lx\ntp:%016lx t0:%016lx\n"
-              "t1:%016lx t2:%016lx\ns0:%016lx s1:%016lx\n"
-              "a0:%016lx a1:%016lx\na2:%016lx a3:%016lx\n"
-              "a4:%016lx a5:%016lx\na6:%016lx a7:%016lx\n"
-              "s2:%016lx s3:%016lx\ns4:%016lx s5:%016lx\n"
-              "s6:%016lx s7:%016lx\ns8:%016lx s9:%016lx\n"
-              "s10:%016lx s11:%016lx\nt3:%016lx t4:%016lx\n"
-              "t5:%016lx t6:%016lx\n",
-              (unsigned long)uc->uc_mcontext.__gregs[1], (unsigned long)uc->uc_mcontext.__gregs[3],
-              (unsigned long)uc->uc_mcontext.__gregs[4], (unsigned long)uc->uc_mcontext.__gregs[5],
-              (unsigned long)uc->uc_mcontext.__gregs[6], (unsigned long)uc->uc_mcontext.__gregs[7],
-              (unsigned long)uc->uc_mcontext.__gregs[8], (unsigned long)uc->uc_mcontext.__gregs[9],
-              (unsigned long)uc->uc_mcontext.__gregs[10], (unsigned long)uc->uc_mcontext.__gregs[11],
-              (unsigned long)uc->uc_mcontext.__gregs[12], (unsigned long)uc->uc_mcontext.__gregs[13],
-              (unsigned long)uc->uc_mcontext.__gregs[14], (unsigned long)uc->uc_mcontext.__gregs[15],
-              (unsigned long)uc->uc_mcontext.__gregs[16], (unsigned long)uc->uc_mcontext.__gregs[17],
-              (unsigned long)uc->uc_mcontext.__gregs[18], (unsigned long)uc->uc_mcontext.__gregs[19],
-              (unsigned long)uc->uc_mcontext.__gregs[20], (unsigned long)uc->uc_mcontext.__gregs[21],
-              (unsigned long)uc->uc_mcontext.__gregs[22], (unsigned long)uc->uc_mcontext.__gregs[23],
-              (unsigned long)uc->uc_mcontext.__gregs[24], (unsigned long)uc->uc_mcontext.__gregs[25],
-              (unsigned long)uc->uc_mcontext.__gregs[26], (unsigned long)uc->uc_mcontext.__gregs[27],
-              (unsigned long)uc->uc_mcontext.__gregs[28], (unsigned long)uc->uc_mcontext.__gregs[29],
-              (unsigned long)uc->uc_mcontext.__gregs[30], (unsigned long)uc->uc_mcontext.__gregs[31]);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "ra:%016lx gp:%016lx\ntp:%016lx t0:%016lx\n"
+        "t1:%016lx t2:%016lx\ns0:%016lx s1:%016lx\n"
+        "a0:%016lx a1:%016lx\na2:%016lx a3:%016lx\n"
+        "a4:%016lx a5:%016lx\na6:%016lx a7:%016lx\n"
+        "s2:%016lx s3:%016lx\ns4:%016lx s5:%016lx\n"
+        "s6:%016lx s7:%016lx\ns8:%016lx s9:%016lx\n"
+        "s10:%016lx s11:%016lx\nt3:%016lx t4:%016lx\n"
+        "t5:%016lx t6:%016lx\n",
+        (unsigned long)uc->uc_mcontext.__gregs[1], (unsigned long)uc->uc_mcontext.__gregs[3],
+        (unsigned long)uc->uc_mcontext.__gregs[4], (unsigned long)uc->uc_mcontext.__gregs[5],
+        (unsigned long)uc->uc_mcontext.__gregs[6], (unsigned long)uc->uc_mcontext.__gregs[7],
+        (unsigned long)uc->uc_mcontext.__gregs[8], (unsigned long)uc->uc_mcontext.__gregs[9],
+        (unsigned long)uc->uc_mcontext.__gregs[10], (unsigned long)uc->uc_mcontext.__gregs[11],
+        (unsigned long)uc->uc_mcontext.__gregs[12], (unsigned long)uc->uc_mcontext.__gregs[13],
+        (unsigned long)uc->uc_mcontext.__gregs[14], (unsigned long)uc->uc_mcontext.__gregs[15],
+        (unsigned long)uc->uc_mcontext.__gregs[16], (unsigned long)uc->uc_mcontext.__gregs[17],
+        (unsigned long)uc->uc_mcontext.__gregs[18], (unsigned long)uc->uc_mcontext.__gregs[19],
+        (unsigned long)uc->uc_mcontext.__gregs[20], (unsigned long)uc->uc_mcontext.__gregs[21],
+        (unsigned long)uc->uc_mcontext.__gregs[22], (unsigned long)uc->uc_mcontext.__gregs[23],
+        (unsigned long)uc->uc_mcontext.__gregs[24], (unsigned long)uc->uc_mcontext.__gregs[25],
+        (unsigned long)uc->uc_mcontext.__gregs[26], (unsigned long)uc->uc_mcontext.__gregs[27],
+        (unsigned long)uc->uc_mcontext.__gregs[28], (unsigned long)uc->uc_mcontext.__gregs[29],
+        (unsigned long)uc->uc_mcontext.__gregs[30], (unsigned long)uc->uc_mcontext.__gregs[31]);
     logStackContent((void **)uc->uc_mcontext.__gregs[REG_SP]);
 #elif defined(__aarch64__) /* Linux AArch64 */
-    serverLog(LL_WARNING,
-              "\n"
-              "X18:%016lx X19:%016lx\nX20:%016lx X21:%016lx\n"
-              "X22:%016lx X23:%016lx\nX24:%016lx X25:%016lx\n"
-              "X26:%016lx X27:%016lx\nX28:%016lx X29:%016lx\n"
-              "X30:%016lx\n"
-              "pc:%016lx sp:%016lx\npstate:%016lx fault_address:%016lx\n",
-              (unsigned long)uc->uc_mcontext.regs[18], (unsigned long)uc->uc_mcontext.regs[19],
-              (unsigned long)uc->uc_mcontext.regs[20], (unsigned long)uc->uc_mcontext.regs[21],
-              (unsigned long)uc->uc_mcontext.regs[22], (unsigned long)uc->uc_mcontext.regs[23],
-              (unsigned long)uc->uc_mcontext.regs[24], (unsigned long)uc->uc_mcontext.regs[25],
-              (unsigned long)uc->uc_mcontext.regs[26], (unsigned long)uc->uc_mcontext.regs[27],
-              (unsigned long)uc->uc_mcontext.regs[28], (unsigned long)uc->uc_mcontext.regs[29],
-              (unsigned long)uc->uc_mcontext.regs[30], (unsigned long)uc->uc_mcontext.pc,
-              (unsigned long)uc->uc_mcontext.sp, (unsigned long)uc->uc_mcontext.pstate,
-              (unsigned long)uc->uc_mcontext.fault_address);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "X0:%016lx X1:%016lx\nX2:%016lx X3:%016lx\n"
+        "X4:%016lx X5:%016lx\nX6:%016lx X7:%016lx\n"
+        "X8:%016lx X9:%016lx\nX10:%016lx X11:%016lx\n"
+        "X12:%016lx X13:%016lx\nX14:%016lx X15:%016lx\n"
+        "X16:%016lx X17:%016lx\n"
+        "X18:%016lx X19:%016lx\nX20:%016lx X21:%016lx\n"
+        "X22:%016lx X23:%016lx\nX24:%016lx X25:%016lx\n"
+        "X26:%016lx X27:%016lx\nX28:%016lx X29:%016lx\n"
+        "X30:%016lx\n"
+        "pc:%016lx sp:%016lx\npstate:%016lx fault_address:%016lx\n",
+        (unsigned long)uc->uc_mcontext.regs[0], (unsigned long)uc->uc_mcontext.regs[1],
+        (unsigned long)uc->uc_mcontext.regs[2], (unsigned long)uc->uc_mcontext.regs[3],
+        (unsigned long)uc->uc_mcontext.regs[4], (unsigned long)uc->uc_mcontext.regs[5],
+        (unsigned long)uc->uc_mcontext.regs[6], (unsigned long)uc->uc_mcontext.regs[7],
+        (unsigned long)uc->uc_mcontext.regs[8], (unsigned long)uc->uc_mcontext.regs[9],
+        (unsigned long)uc->uc_mcontext.regs[10], (unsigned long)uc->uc_mcontext.regs[11],
+        (unsigned long)uc->uc_mcontext.regs[12], (unsigned long)uc->uc_mcontext.regs[13],
+        (unsigned long)uc->uc_mcontext.regs[14], (unsigned long)uc->uc_mcontext.regs[15],
+        (unsigned long)uc->uc_mcontext.regs[16], (unsigned long)uc->uc_mcontext.regs[17],
+        (unsigned long)uc->uc_mcontext.regs[18], (unsigned long)uc->uc_mcontext.regs[19],
+        (unsigned long)uc->uc_mcontext.regs[20], (unsigned long)uc->uc_mcontext.regs[21],
+        (unsigned long)uc->uc_mcontext.regs[22], (unsigned long)uc->uc_mcontext.regs[23],
+        (unsigned long)uc->uc_mcontext.regs[24], (unsigned long)uc->uc_mcontext.regs[25],
+        (unsigned long)uc->uc_mcontext.regs[26], (unsigned long)uc->uc_mcontext.regs[27],
+        (unsigned long)uc->uc_mcontext.regs[28], (unsigned long)uc->uc_mcontext.regs[29],
+        (unsigned long)uc->uc_mcontext.regs[30], (unsigned long)uc->uc_mcontext.pc,
+        (unsigned long)uc->uc_mcontext.sp, (unsigned long)uc->uc_mcontext.pstate,
+        (unsigned long)uc->uc_mcontext.fault_address);
     logStackContent((void **)uc->uc_mcontext.sp);
 #elif defined(__arm__)     /* Linux ARM */
-    serverLog(LL_WARNING,
-              "\n"
-              "R10:%016lx R9 :%016lx\nR8 :%016lx R7 :%016lx\n"
-              "R6 :%016lx R5 :%016lx\nR4 :%016lx R3 :%016lx\n"
-              "R2 :%016lx R1 :%016lx\nR0 :%016lx EC :%016lx\n"
-              "fp: %016lx ip:%016lx\n"
-              "pc:%016lx sp:%016lx\ncpsr:%016lx fault_address:%016lx\n",
-              (unsigned long)uc->uc_mcontext.arm_r10, (unsigned long)uc->uc_mcontext.arm_r9,
-              (unsigned long)uc->uc_mcontext.arm_r8, (unsigned long)uc->uc_mcontext.arm_r7,
-              (unsigned long)uc->uc_mcontext.arm_r6, (unsigned long)uc->uc_mcontext.arm_r5,
-              (unsigned long)uc->uc_mcontext.arm_r4, (unsigned long)uc->uc_mcontext.arm_r3,
-              (unsigned long)uc->uc_mcontext.arm_r2, (unsigned long)uc->uc_mcontext.arm_r1,
-              (unsigned long)uc->uc_mcontext.arm_r0, (unsigned long)uc->uc_mcontext.error_code,
-              (unsigned long)uc->uc_mcontext.arm_fp, (unsigned long)uc->uc_mcontext.arm_ip,
-              (unsigned long)uc->uc_mcontext.arm_pc, (unsigned long)uc->uc_mcontext.arm_sp,
-              (unsigned long)uc->uc_mcontext.arm_cpsr, (unsigned long)uc->uc_mcontext.fault_address);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "R10:%016lx R9 :%016lx\nR8 :%016lx R7 :%016lx\n"
+        "R6 :%016lx R5 :%016lx\nR4 :%016lx R3 :%016lx\n"
+        "R2 :%016lx R1 :%016lx\nR0 :%016lx EC :%016lx\n"
+        "fp: %016lx ip:%016lx\n"
+        "pc:%016lx sp:%016lx\ncpsr:%016lx fault_address:%016lx\n",
+        (unsigned long)uc->uc_mcontext.arm_r10, (unsigned long)uc->uc_mcontext.arm_r9,
+        (unsigned long)uc->uc_mcontext.arm_r8, (unsigned long)uc->uc_mcontext.arm_r7,
+        (unsigned long)uc->uc_mcontext.arm_r6, (unsigned long)uc->uc_mcontext.arm_r5,
+        (unsigned long)uc->uc_mcontext.arm_r4, (unsigned long)uc->uc_mcontext.arm_r3,
+        (unsigned long)uc->uc_mcontext.arm_r2, (unsigned long)uc->uc_mcontext.arm_r1,
+        (unsigned long)uc->uc_mcontext.arm_r0, (unsigned long)uc->uc_mcontext.error_code,
+        (unsigned long)uc->uc_mcontext.arm_fp, (unsigned long)uc->uc_mcontext.arm_ip,
+        (unsigned long)uc->uc_mcontext.arm_pc, (unsigned long)uc->uc_mcontext.arm_sp,
+        (unsigned long)uc->uc_mcontext.arm_cpsr, (unsigned long)uc->uc_mcontext.fault_address);
     logStackContent((void **)uc->uc_mcontext.arm_sp);
 #else
     NOT_SUPPORTED();
 #endif
 #elif defined(__FreeBSD__)
 #if defined(__x86_64__)
-    serverLog(LL_WARNING,
-              "\n"
-              "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
-              "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
-              "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
-              "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
-              "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
-              (unsigned long)uc->uc_mcontext.mc_rax, (unsigned long)uc->uc_mcontext.mc_rbx,
-              (unsigned long)uc->uc_mcontext.mc_rcx, (unsigned long)uc->uc_mcontext.mc_rdx,
-              (unsigned long)uc->uc_mcontext.mc_rdi, (unsigned long)uc->uc_mcontext.mc_rsi,
-              (unsigned long)uc->uc_mcontext.mc_rbp, (unsigned long)uc->uc_mcontext.mc_rsp,
-              (unsigned long)uc->uc_mcontext.mc_r8, (unsigned long)uc->uc_mcontext.mc_r9,
-              (unsigned long)uc->uc_mcontext.mc_r10, (unsigned long)uc->uc_mcontext.mc_r11,
-              (unsigned long)uc->uc_mcontext.mc_r12, (unsigned long)uc->uc_mcontext.mc_r13,
-              (unsigned long)uc->uc_mcontext.mc_r14, (unsigned long)uc->uc_mcontext.mc_r15,
-              (unsigned long)uc->uc_mcontext.mc_rip, (unsigned long)uc->uc_mcontext.mc_rflags,
-              (unsigned long)uc->uc_mcontext.mc_cs);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+        "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+        "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+        "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+        "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
+        (unsigned long)uc->uc_mcontext.mc_rax, (unsigned long)uc->uc_mcontext.mc_rbx,
+        (unsigned long)uc->uc_mcontext.mc_rcx, (unsigned long)uc->uc_mcontext.mc_rdx,
+        (unsigned long)uc->uc_mcontext.mc_rdi, (unsigned long)uc->uc_mcontext.mc_rsi,
+        (unsigned long)uc->uc_mcontext.mc_rbp, (unsigned long)uc->uc_mcontext.mc_rsp,
+        (unsigned long)uc->uc_mcontext.mc_r8, (unsigned long)uc->uc_mcontext.mc_r9,
+        (unsigned long)uc->uc_mcontext.mc_r10, (unsigned long)uc->uc_mcontext.mc_r11,
+        (unsigned long)uc->uc_mcontext.mc_r12, (unsigned long)uc->uc_mcontext.mc_r13,
+        (unsigned long)uc->uc_mcontext.mc_r14, (unsigned long)uc->uc_mcontext.mc_r15,
+        (unsigned long)uc->uc_mcontext.mc_rip, (unsigned long)uc->uc_mcontext.mc_rflags,
+        (unsigned long)uc->uc_mcontext.mc_cs);
     logStackContent((void **)uc->uc_mcontext.mc_rsp);
 #elif defined(__i386__)
-    serverLog(LL_WARNING,
-              "\n"
-              "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
-              "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
-              "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
-              "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
-              (unsigned long)uc->uc_mcontext.mc_eax, (unsigned long)uc->uc_mcontext.mc_ebx,
-              (unsigned long)uc->uc_mcontext.mc_ebx, (unsigned long)uc->uc_mcontext.mc_edx,
-              (unsigned long)uc->uc_mcontext.mc_edi, (unsigned long)uc->uc_mcontext.mc_esi,
-              (unsigned long)uc->uc_mcontext.mc_ebp, (unsigned long)uc->uc_mcontext.mc_esp,
-              (unsigned long)uc->uc_mcontext.mc_ss, (unsigned long)uc->uc_mcontext.mc_eflags,
-              (unsigned long)uc->uc_mcontext.mc_eip, (unsigned long)uc->uc_mcontext.mc_cs,
-              (unsigned long)uc->uc_mcontext.mc_es, (unsigned long)uc->uc_mcontext.mc_fs,
-              (unsigned long)uc->uc_mcontext.mc_gs);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
+        "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
+        "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
+        "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
+        (unsigned long)uc->uc_mcontext.mc_eax, (unsigned long)uc->uc_mcontext.mc_ebx,
+        (unsigned long)uc->uc_mcontext.mc_ecx, (unsigned long)uc->uc_mcontext.mc_edx,
+        (unsigned long)uc->uc_mcontext.mc_edi, (unsigned long)uc->uc_mcontext.mc_esi,
+        (unsigned long)uc->uc_mcontext.mc_ebp, (unsigned long)uc->uc_mcontext.mc_esp,
+        (unsigned long)uc->uc_mcontext.mc_ss, (unsigned long)uc->uc_mcontext.mc_eflags,
+        (unsigned long)uc->uc_mcontext.mc_eip, (unsigned long)uc->uc_mcontext.mc_cs,
+        (unsigned long)uc->uc_mcontext.mc_ds, (unsigned long)uc->uc_mcontext.mc_es,
+        (unsigned long)uc->uc_mcontext.mc_fs, (unsigned long)uc->uc_mcontext.mc_gs);
     logStackContent((void **)uc->uc_mcontext.mc_esp);
 #else
     NOT_SUPPORTED();
 #endif
 #elif defined(__OpenBSD__)
 #if defined(__x86_64__)
-    serverLog(LL_WARNING,
-              "\n"
-              "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
-              "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
-              "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
-              "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
-              "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
-              (unsigned long)uc->sc_rax, (unsigned long)uc->sc_rbx, (unsigned long)uc->sc_rcx,
-              (unsigned long)uc->sc_rdx, (unsigned long)uc->sc_rdi, (unsigned long)uc->sc_rsi,
-              (unsigned long)uc->sc_rbp, (unsigned long)uc->sc_rsp, (unsigned long)uc->sc_r8, (unsigned long)uc->sc_r9,
-              (unsigned long)uc->sc_r10, (unsigned long)uc->sc_r11, (unsigned long)uc->sc_r12,
-              (unsigned long)uc->sc_r13, (unsigned long)uc->sc_r14, (unsigned long)uc->sc_r15,
-              (unsigned long)uc->sc_rip, (unsigned long)uc->sc_rflags, (unsigned long)uc->sc_cs);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+        "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+        "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+        "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+        "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
+        (unsigned long)uc->sc_rax, (unsigned long)uc->sc_rbx, (unsigned long)uc->sc_rcx,
+        (unsigned long)uc->sc_rdx, (unsigned long)uc->sc_rdi, (unsigned long)uc->sc_rsi,
+        (unsigned long)uc->sc_rbp, (unsigned long)uc->sc_rsp, (unsigned long)uc->sc_r8, (unsigned long)uc->sc_r9,
+        (unsigned long)uc->sc_r10, (unsigned long)uc->sc_r11, (unsigned long)uc->sc_r12,
+        (unsigned long)uc->sc_r13, (unsigned long)uc->sc_r14, (unsigned long)uc->sc_r15,
+        (unsigned long)uc->sc_rip, (unsigned long)uc->sc_rflags, (unsigned long)uc->sc_cs);
     logStackContent((void **)uc->sc_rsp);
 #elif defined(__i386__)
-    serverLog(LL_WARNING,
-              "\n"
-              "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
-              "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
-              "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
-              "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
-              (unsigned long)uc->sc_eax, (unsigned long)uc->sc_ebx, (unsigned long)uc->sc_ebx,
-              (unsigned long)uc->sc_edx, (unsigned long)uc->sc_edi, (unsigned long)uc->sc_esi,
-              (unsigned long)uc->sc_ebp, (unsigned long)uc->sc_esp, (unsigned long)uc->sc_ss,
-              (unsigned long)uc->sc_eflags, (unsigned long)uc->sc_eip, (unsigned long)uc->sc_cs,
-              (unsigned long)uc->sc_es, (unsigned long)uc->sc_fs, (unsigned long)uc->sc_gs);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
+        "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
+        "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
+        "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
+        (unsigned long)uc->sc_eax, (unsigned long)uc->sc_ebx, (unsigned long)uc->sc_ecx,
+        (unsigned long)uc->sc_edx, (unsigned long)uc->sc_edi, (unsigned long)uc->sc_esi,
+        (unsigned long)uc->sc_ebp, (unsigned long)uc->sc_esp, (unsigned long)uc->sc_ss,
+        (unsigned long)uc->sc_eflags, (unsigned long)uc->sc_eip, (unsigned long)uc->sc_cs,
+        (unsigned long)uc->sc_ds, (unsigned long)uc->sc_es, (unsigned long)uc->sc_fs,
+        (unsigned long)uc->sc_gs);
     logStackContent((void **)uc->sc_esp);
 #else
     NOT_SUPPORTED();
 #endif
 #elif defined(__NetBSD__)
 #if defined(__x86_64__)
-    serverLog(LL_WARNING,
-              "\n"
-              "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
-              "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
-              "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
-              "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
-              "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_RAX], (unsigned long)uc->uc_mcontext.__gregs[_REG_RBX],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_RCX], (unsigned long)uc->uc_mcontext.__gregs[_REG_RDX],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_RDI], (unsigned long)uc->uc_mcontext.__gregs[_REG_RSI],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_RBP], (unsigned long)uc->uc_mcontext.__gregs[_REG_RSP],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_R8], (unsigned long)uc->uc_mcontext.__gregs[_REG_R9],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_R10], (unsigned long)uc->uc_mcontext.__gregs[_REG_R11],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_R12], (unsigned long)uc->uc_mcontext.__gregs[_REG_R13],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_R14], (unsigned long)uc->uc_mcontext.__gregs[_REG_R15],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_RIP], (unsigned long)uc->uc_mcontext.__gregs[_REG_RFLAGS],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_CS]);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+        "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+        "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+        "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+        "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_RAX], (unsigned long)uc->uc_mcontext.__gregs[_REG_RBX],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_RCX], (unsigned long)uc->uc_mcontext.__gregs[_REG_RDX],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_RDI], (unsigned long)uc->uc_mcontext.__gregs[_REG_RSI],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_RBP], (unsigned long)uc->uc_mcontext.__gregs[_REG_RSP],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_R8], (unsigned long)uc->uc_mcontext.__gregs[_REG_R9],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_R10], (unsigned long)uc->uc_mcontext.__gregs[_REG_R11],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_R12], (unsigned long)uc->uc_mcontext.__gregs[_REG_R13],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_R14], (unsigned long)uc->uc_mcontext.__gregs[_REG_R15],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_RIP], (unsigned long)uc->uc_mcontext.__gregs[_REG_RFLAGS],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_CS]);
     logStackContent((void **)uc->uc_mcontext.__gregs[_REG_RSP]);
 #elif defined(__i386__)
-    serverLog(LL_WARNING,
-              "\n"
-              "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
-              "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
-              "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
-              "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_EAX], (unsigned long)uc->uc_mcontext.__gregs[_REG_EBX],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_EDX], (unsigned long)uc->uc_mcontext.__gregs[_REG_EDI],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_ESI], (unsigned long)uc->uc_mcontext.__gregs[_REG_EBP],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_ESP], (unsigned long)uc->uc_mcontext.__gregs[_REG_SS],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_EFLAGS], (unsigned long)uc->uc_mcontext.__gregs[_REG_EIP],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_CS], (unsigned long)uc->uc_mcontext.__gregs[_REG_ES],
-              (unsigned long)uc->uc_mcontext.__gregs[_REG_FS], (unsigned long)uc->uc_mcontext.__gregs[_REG_GS]);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
+        "EDI:%08lx ESI:%08lx EBP:%08lx ESP:%08lx\n"
+        "SS :%08lx EFL:%08lx EIP:%08lx CS:%08lx\n"
+        "DS :%08lx ES :%08lx FS :%08lx GS:%08lx",
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_EAX], (unsigned long)uc->uc_mcontext.__gregs[_REG_EBX],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_ECX], (unsigned long)uc->uc_mcontext.__gregs[_REG_EDX],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_EDI],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_ESI], (unsigned long)uc->uc_mcontext.__gregs[_REG_EBP],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_ESP], (unsigned long)uc->uc_mcontext.__gregs[_REG_SS],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_EFLAGS], (unsigned long)uc->uc_mcontext.__gregs[_REG_EIP],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_CS], (unsigned long)uc->uc_mcontext.__gregs[_REG_DS],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_ES], (unsigned long)uc->uc_mcontext.__gregs[_REG_FS],
+        (unsigned long)uc->uc_mcontext.__gregs[_REG_GS]);
 #else
     NOT_SUPPORTED();
 #endif
 #elif defined(__DragonFly__)
-    serverLog(LL_WARNING,
-              "\n"
-              "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
-              "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
-              "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
-              "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
-              "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
-              (unsigned long)uc->uc_mcontext.mc_rax, (unsigned long)uc->uc_mcontext.mc_rbx,
-              (unsigned long)uc->uc_mcontext.mc_rcx, (unsigned long)uc->uc_mcontext.mc_rdx,
-              (unsigned long)uc->uc_mcontext.mc_rdi, (unsigned long)uc->uc_mcontext.mc_rsi,
-              (unsigned long)uc->uc_mcontext.mc_rbp, (unsigned long)uc->uc_mcontext.mc_rsp,
-              (unsigned long)uc->uc_mcontext.mc_r8, (unsigned long)uc->uc_mcontext.mc_r9,
-              (unsigned long)uc->uc_mcontext.mc_r10, (unsigned long)uc->uc_mcontext.mc_r11,
-              (unsigned long)uc->uc_mcontext.mc_r12, (unsigned long)uc->uc_mcontext.mc_r13,
-              (unsigned long)uc->uc_mcontext.mc_r14, (unsigned long)uc->uc_mcontext.mc_r15,
-              (unsigned long)uc->uc_mcontext.mc_rip, (unsigned long)uc->uc_mcontext.mc_rflags,
-              (unsigned long)uc->uc_mcontext.mc_cs);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+        "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+        "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+        "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+        "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
+        (unsigned long)uc->uc_mcontext.mc_rax, (unsigned long)uc->uc_mcontext.mc_rbx,
+        (unsigned long)uc->uc_mcontext.mc_rcx, (unsigned long)uc->uc_mcontext.mc_rdx,
+        (unsigned long)uc->uc_mcontext.mc_rdi, (unsigned long)uc->uc_mcontext.mc_rsi,
+        (unsigned long)uc->uc_mcontext.mc_rbp, (unsigned long)uc->uc_mcontext.mc_rsp,
+        (unsigned long)uc->uc_mcontext.mc_r8, (unsigned long)uc->uc_mcontext.mc_r9,
+        (unsigned long)uc->uc_mcontext.mc_r10, (unsigned long)uc->uc_mcontext.mc_r11,
+        (unsigned long)uc->uc_mcontext.mc_r12, (unsigned long)uc->uc_mcontext.mc_r13,
+        (unsigned long)uc->uc_mcontext.mc_r14, (unsigned long)uc->uc_mcontext.mc_r15,
+        (unsigned long)uc->uc_mcontext.mc_rip, (unsigned long)uc->uc_mcontext.mc_rflags,
+        (unsigned long)uc->uc_mcontext.mc_cs);
     logStackContent((void **)uc->uc_mcontext.mc_rsp);
 #elif defined(__sun)
 #if defined(__x86_64__)
-    serverLog(LL_WARNING,
-              "\n"
-              "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
-              "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
-              "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
-              "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
-              "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
-              (unsigned long)uc->uc_mcontext.gregs[REG_RAX], (unsigned long)uc->uc_mcontext.gregs[REG_RBX],
-              (unsigned long)uc->uc_mcontext.gregs[REG_RCX], (unsigned long)uc->uc_mcontext.gregs[REG_RDX],
-              (unsigned long)uc->uc_mcontext.gregs[REG_RDI], (unsigned long)uc->uc_mcontext.gregs[REG_RSI],
-              (unsigned long)uc->uc_mcontext.gregs[REG_RBP], (unsigned long)uc->uc_mcontext.gregs[REG_RSP],
-              (unsigned long)uc->uc_mcontext.gregs[REG_R8], (unsigned long)uc->uc_mcontext.gregs[REG_R9],
-              (unsigned long)uc->uc_mcontext.gregs[REG_R10], (unsigned long)uc->uc_mcontext.gregs[REG_R11],
-              (unsigned long)uc->uc_mcontext.gregs[REG_R12], (unsigned long)uc->uc_mcontext.gregs[REG_R13],
-              (unsigned long)uc->uc_mcontext.gregs[REG_R14], (unsigned long)uc->uc_mcontext.gregs[REG_R15],
-              (unsigned long)uc->uc_mcontext.gregs[REG_RIP], (unsigned long)uc->uc_mcontext.gregs[REG_RFL],
-              (unsigned long)uc->uc_mcontext.gregs[REG_CS]);
+    serverLogFromHandler(
+        LL_WARNING,
+        "\n"
+        "RAX:%016lx RBX:%016lx\nRCX:%016lx RDX:%016lx\n"
+        "RDI:%016lx RSI:%016lx\nRBP:%016lx RSP:%016lx\n"
+        "R8 :%016lx R9 :%016lx\nR10:%016lx R11:%016lx\n"
+        "R12:%016lx R13:%016lx\nR14:%016lx R15:%016lx\n"
+        "RIP:%016lx EFL:%016lx\nCSGSFS:%016lx",
+        (unsigned long)uc->uc_mcontext.gregs[REG_RAX], (unsigned long)uc->uc_mcontext.gregs[REG_RBX],
+        (unsigned long)uc->uc_mcontext.gregs[REG_RCX], (unsigned long)uc->uc_mcontext.gregs[REG_RDX],
+        (unsigned long)uc->uc_mcontext.gregs[REG_RDI], (unsigned long)uc->uc_mcontext.gregs[REG_RSI],
+        (unsigned long)uc->uc_mcontext.gregs[REG_RBP], (unsigned long)uc->uc_mcontext.gregs[REG_RSP],
+        (unsigned long)uc->uc_mcontext.gregs[REG_R8], (unsigned long)uc->uc_mcontext.gregs[REG_R9],
+        (unsigned long)uc->uc_mcontext.gregs[REG_R10], (unsigned long)uc->uc_mcontext.gregs[REG_R11],
+        (unsigned long)uc->uc_mcontext.gregs[REG_R12], (unsigned long)uc->uc_mcontext.gregs[REG_R13],
+        (unsigned long)uc->uc_mcontext.gregs[REG_R14], (unsigned long)uc->uc_mcontext.gregs[REG_R15],
+        (unsigned long)uc->uc_mcontext.gregs[REG_RIP], (unsigned long)uc->uc_mcontext.gregs[REG_RFL],
+        (unsigned long)uc->uc_mcontext.gregs[REG_CS]);
     logStackContent((void **)uc->uc_mcontext.gregs[REG_RSP]);
 #endif
 #else

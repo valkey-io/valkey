@@ -3220,3 +3220,37 @@ TEST_F(BgIterationTest, checkNoKeysWriteIsReplicated) {
     expectReadKeySequence(it, 3, LAST_ITEM);
     expectReadComplete(it);
 }
+
+
+// During a save, a write to an unsaved key queues that key ahead of the scan.  Expedited keys
+//  waiting at a feed must not stop the queue target from growing.
+TEST_F(BgIterationTest, queueTargetGrowsWithExpeditedKeysWaiting) {
+    // Start a consistent save, as BGSAVE does.  Capture its feed timer so the test runs the feed.
+    aeTimeProc *feed = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(DoAll(SaveArg<2>(&feed), Return(0)));
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_START, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    ASSERT_NE(feed, nullptr);
+
+    // Before anything is fed, write 3 keys.  All are expedited into the queue.
+    for (int item = 0; item < 3; item++) {
+        client *writer = getWriteClient(item, "xxx");
+        simulateBlockedWrite(writer);
+        freeTestClient(writer);
+    }
+
+    // The client reads one of them.  (The first read doesn't run a feed.)
+    bgIteratorRead(it);
+
+    bgIteratorStatus status;
+    bgIteratorGetStatus(it, &status);
+    ASSERT_EQ(status.queue_length, 2u);
+    unsigned long target = status.queue_length_target;
+
+    // Run one feed.  Everything in the queue was added since the last feed, so the target must grow.
+    feed(NULL, 0, NULL);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_GT(status.queue_length_target, target);
+
+    expectAnythingCleanup(it);
+}

@@ -930,7 +930,7 @@ start_server {tags {"hashexpire"}} {
         set res [r HEXPIRE myhash 1 LT FIELDS 1 field1]
         assert_equal {1} $res
 
-        ## TODO this is an expected behavior really? what does non existintg ttl mean?
+        ## TODO this is an expected behavior really? what does non existing ttl mean?
         r HSET myhash field2 val2
         set res2 [r HEXPIRE myhash 1 LT FIELDS 1 field2]
         assert_equal {1} $res2
@@ -1712,7 +1712,7 @@ start_server {tags {"hashexpire"}} {
 
         # Verify field values are preserved
         assert_equal "v1 v2" [r HMGET myhash f1 f2]
-        # Veridy expiry
+        # Verify expiry
         assert_morethan [r HTTL myhash FIELDS 1 f1] 100
         assert_equal -1 [r HTTL myhash FIELDS 1 f2]
         # Re-enable active expiry
@@ -2913,7 +2913,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         # Set expiration to 0
         R 1 HGETEX $key EX 0 FIELDS 1 f1
         
-        # Veridy expiration
+        # Verify expiration
         assert_keyevent_patterns $rd "{$key}" hexpired
         assert_equal 2 [R 1 HLEN $key]
         assert_equal "" [R 1 HGET $key f1]
@@ -3702,7 +3702,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 wait_for_active_expiry r $target_key 2 $initial_expired 2
                 
                 assert_equal "{} v2 {}" [r HMGET $target_key f1 f2 f3]
-                # In copy verify original hash hasnt changed
+                # In copy verify original hash hasn't changed
                 if {$op eq "COPY"} {
                     assert_equal "{} v2 v3" [r HMGET myhash f1 f2 f3]
                 }
@@ -4849,7 +4849,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 fail "Field was not logically expired on primary"
             }
 
-            # Now overite the expired field on the primary and wait for it to propagate to the replica
+            # Now overwrite the expired field on the primary and wait for it to propagate to the replica
             $primary hsetex myhash KEEPTTL fields 1 f1 v2
             wait_for_ofs_sync $primary $replica
 

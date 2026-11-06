@@ -496,7 +496,7 @@ start_server {tags {"maxmemory external:skip io-threads:skip"}} {
         }
 
         # eviction continues (known problem described in #8069)
-        # for now this test only make sures the eviction loop itself doesn't
+        # for now this test only makes sure the eviction loop itself doesn't
         # have feedback loop
         set evicted [s evicted_keys]
         if {$::verbose} { puts "evicted: $evicted" }

@@ -60,7 +60,7 @@ proc kill_server config {
         [dict get $config "client"] close
     }
 
-    # nevermind if its already dead
+    # nevermind if it's already dead
     set pid [dict get $config pid]
     if {![is_alive $pid]} {
         # Check valgrind errors if needed

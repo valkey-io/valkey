@@ -441,10 +441,17 @@ TEST_F(AdlistTest, ListInitNode) {
     EXPECT_EQ(listNodeValue(&node), &value);
 }
 
+/* Fill the links with garbage so the tests below catch a link function that
+ * leaves prev or next unset, including on an empty list. */
+static void initNodesWithGarbageLinks(listNode *nodes, int *values, int count) {
+    memset(nodes, 0xff, sizeof(*nodes) * count);
+    for (int i = 0; i < count; i++) nodes[i].value = &values[i];
+}
+
 TEST_F(AdlistTest, ListLinkNodeHead) {
     listNode nodes[2];
     int v[2] = {1, 2};
-    for (int i = 0; i < 2; i++) listInitNode(&nodes[i], &v[i]);
+    initNodesWithGarbageLinks(nodes, v, 2);
     listLinkNodeHead(l, &nodes[1]);
     int expected1[] = {2};
     verifyList(l, expected1, 1);
@@ -457,7 +464,7 @@ TEST_F(AdlistTest, ListLinkNodeHead) {
 TEST_F(AdlistTest, ListLinkNodeTail) {
     listNode nodes[2];
     int v[2] = {1, 2};
-    for (int i = 0; i < 2; i++) listInitNode(&nodes[i], &v[i]);
+    initNodesWithGarbageLinks(nodes, v, 2);
     listLinkNodeTail(l, &nodes[0]);
     int expected1[] = {1};
     verifyList(l, expected1, 1);
@@ -487,6 +494,10 @@ TEST_F(AdlistTest, ListUnlinkNode) {
     listUnlinkNode(l, nodes[2]);
     verifyList(l, NULL, 0);
 
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(listPrevNode(nodes[i]), (listNode *)NULL);
+        EXPECT_EQ(listNextNode(nodes[i]), (listNode *)NULL);
+    }
     EXPECT_EQ(free_calls, 0);
     EXPECT_EQ(zmalloc_used_memory(), used_before);
     for (int i = 0; i < 4; i++) {

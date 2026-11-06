@@ -31,9 +31,11 @@ proc check_log_backtrace_for_debug {log_pattern} {
         if {!$::valgrind} {
             assert_equal [count_log_message 0 "wait_threads(): waiting threads timed out"] 0
             # make sure the server prints stack trace for all threads. we know 5 threads are idle in bio.c
+            # (the bio_pool-N threads start only on first use).
             # Search for thread names (bio_*) which appear on all systems, including Alpine where
-            # function names may not be resolved
-            assert_equal [count_log_message 0 "bio_"] 5
+            # function names may not be resolved. The thread lines are "<tid> bio_<name>", so match
+            # " bio_" to skip INFO fields such as bio_pool_pending_jobs.
+            assert_equal [count_log_message 0 " bio_"] 5
             # Verify at least one stack frame was emitted (format: #<n> 0x...)
             # This format is specific to libbacktrace; execinfo.h uses a different format
             if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {

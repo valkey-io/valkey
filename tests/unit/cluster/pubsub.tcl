@@ -2,27 +2,64 @@
 
 start_cluster 5 5 {tags {external:skip cluster}} {
 
-proc test_cluster_publish {instance instances} {
-    # Subscribe all the instances but the one we use to send.
+# Helper procedure to check if all subscriber nodes have received the cluster publish message.
+proc all_nodes_received_publish {instance instances initial_received_var} {
+    upvar 1 $initial_received_var initial_received
     for {set j 0} {$j < $instances} {incr j} {
         if {$j != $instance} {
-            R $j deferred 1
-            R $j subscribe testchannel
-            R $j read; # Read the subscribe reply
+            set cur [CI $j cluster_stats_messages_publish_received]
+            if {$cur eq ""} { set cur 0 }
+            if {$cur <= $initial_received($j)} {
+                return 0
+            }
+        }
+    }
+    return 1
+}
+
+proc test_cluster_publish {instance instances} {
+    # Ensure the publishing instance has established connections to all other cluster nodes.
+    wait_for_condition 50 100 {
+        [llength [lsearch -all -inline [split [R $instance cluster nodes] "\n"] "*connected*"]] >= $instances
+    } else {
+        fail "Node $instance did not connect to all cluster nodes"
+    }
+
+    # Subscribe on dedicated clients for all instances except the publishing node.
+    set sub_clients {}
+    for {set j 0} {$j < $instances} {incr j} {
+        if {$j != $instance} {
+            set sc [valkey_deferring_client -$j]
+            $sc deferred 1
+            $sc subscribe testchannel
+            $sc read; # Read the subscribe reply
+            dict set sub_clients $j $sc
+
+            set initial_received($j) [CI $j cluster_stats_messages_publish_received]
+            if {$initial_received($j) eq ""} { set initial_received($j) 0 }
         }
     }
 
     set data [randomValue]
     R $instance PUBLISH testchannel $data
 
-    # Read the message back from all the nodes.
+    # Wait for the publish message to propagate across the cluster bus to all nodes.
+    wait_for_condition 100 100 {
+        [all_nodes_received_publish $instance $instances initial_received]
+    } else {
+        fail "Publish message did not propagate to all cluster nodes"
+    }
+
+    # Read the message back from all the subscriber nodes.
     for {set j 0} {$j < $instances} {incr j} {
         if {$j != $instance} {
-            set msg [R $j read]
+            set sc [dict get $sub_clients $j]
+            set msg [$sc read]
             assert {$data eq [lindex $msg 2]}
-            R $j unsubscribe testchannel
-            R $j read; # Read the unsubscribe reply
-            R $j deferred 0
+            $sc unsubscribe testchannel
+            $sc read; # Read the unsubscribe reply
+            $sc deferred 0
+            $sc close
         }
     }
 }

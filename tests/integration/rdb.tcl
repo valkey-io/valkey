@@ -492,6 +492,57 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+# Starts a forkless BGSAVE of 1000 keys that stays in progress until the delay is cleared.
+proc start_slow_forkless_bgsave {} {
+    waitForBgrewriteaof r
+    r config set forkless-policy prefer-forkless
+    r debug populate 1000
+    r config set rdb-key-save-delay 100000
+    r bgsave
+    wait_for_condition 50 100 {
+        [s rdb_bgsave_in_progress] == 1
+    } else {
+        fail "forkless bgsave did not start"
+    }
+}
+
+# Finishes the save and checks the RDB holds only the keys that existed when it started.
+proc finish_forkless_bgsave_and_check_snapshot {} {
+    r config set rdb-key-save-delay 0
+    waitForBgsave r
+    r debug reload nosave
+    assert_equal 1000 [r dbsize]
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes save "" appendonly yes}} {
+    test "forkless save allows an AOF-only write before a script's first replicated write" {
+        start_slow_forkless_bgsave
+        assert_equal {} [r eval {
+            server.set_repl(server.REPL_AOF)
+            server.call('set', 'a', '1')
+            server.set_repl(server.REPL_ALL)
+            server.call('set', 'b', '1')
+        } 0]
+        assert_equal 1 [r get b]
+        finish_forkless_bgsave_and_check_snapshot
+    } {} {needs:debug}
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes save "" appendonly yes}} {
+    test "forkless save allows a key expired by EXEC conditions before the first replicated write" {
+        start_slow_forkless_bgsave
+        # The expired key is unlinked by checkExecConditions() before the transaction runs.
+        r debug set-active-expire 0
+        r set c 1 px 1
+        after 10
+        r multi
+        r set d 1
+        assert_equal {OK} [r exec ifne c 2]
+        r debug set-active-expire 1
+        finish_forkless_bgsave_and_check_snapshot
+    } {} {needs:debug}
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         

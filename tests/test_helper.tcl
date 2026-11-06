@@ -93,6 +93,7 @@ set ::cluster_mode 0
 set ::ignoreencoding 0
 set ::ignoredigest 0
 set ::large_memory 0
+set ::skip_solo 0
 set ::log_req_res 0
 set ::force_resp3 0
 set ::solo_tests_count 0
@@ -330,6 +331,11 @@ proc get_field_in_client_list {id client_list filed} {
 # test server, so that the test server will send them again to
 # clients once the clients are idle.
 proc run_solo {name code} {
+    if {$::skip_solo} {
+        # Solo tests are consolidated into a dedicated CI job; skip them here.
+        send_data_packet $::test_server_fd skip $name
+        return
+    }
     if {$::numclients == 1 || $::loop || $::external} {
         # run_solo is not supported in these scenarios, just run the code.
         eval $code
@@ -794,6 +800,7 @@ proc print_help_screen {} {
         "--ignore-encoding  Don't validate object encoding."
         "--ignore-digest    Don't use debug digest validations."
         "--large-memory     Run tests using over 100mb."
+        "--skip-solo        Skip tests wrapped in run_solo."
         "--debug-defrag     Indicate the test is running against server compiled with"
         "                   DEBUG_FORCE_DEFRAG option."
         "--help             Print this help screen."
@@ -953,6 +960,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::cluster_mode 1
     } elseif {$opt eq {--large-memory}} {
         set ::large_memory 1
+    } elseif {$opt eq {--skip-solo}} {
+        set ::skip_solo 1
     } elseif {$opt eq {--ignore-encoding}} {
         set ::ignoreencoding 1
     } elseif {$opt eq {--ignore-digest}} {

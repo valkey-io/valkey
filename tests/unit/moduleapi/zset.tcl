@@ -164,8 +164,51 @@ start_server {tags {"modules"}} {
             assert_equal {{} END} [r zset.walk k score-last nan 5 p]
             assert_equal {a b} [r zset.walk k score 0 5 n]
         }
+
+        test "Module zset range iteration with delete through key handle - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c 4 d
+            assert_equal $enc [r object encoding k]
+            assert_equal {b c} [r zset.iter_rem k 2 3]
+            assert_equal {a d} [r zrange k 0 -1]
+            assert_equal {a d} [r zset.iter_rem k -inf +inf]
+            assert_equal 0 [r exists k]
+
+            if {$enc eq "btree"} {
+                set expected {}
+                for {set i 0} {$i < 200} {incr i} {
+                    set m [format "member_%03d_padding_for_leaf_nodes" $i]
+                    r zadd k $i $m
+                    if {$i >= 150} { lappend expected $m }
+                }
+                assert_equal btree [r object encoding k]
+                assert_equal $expected [r zset.iter_rem k 150 199]
+                assert_equal 150 [r zcard k]
+            }
+        }
+
+        test "Module zset range iteration with delete through ValkeyModule_Call - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c 4 d
+            assert_equal $enc [r object encoding k]
+            assert_equal {d 0 END 1} [r zset.iter_call_rem k 0 -2]
+
+            r del k
+            r zadd k 1 a 2 b 3 c 4 d
+            assert_equal $enc [r object encoding k]
+            assert_equal {{} 0 b 0} [r zset.iter_call_rem k 2 3]
+        }
     }
     r config set zset-max-listpack-entries 128
+
+    test {Module zset range iteration across listpack to btree conversion} {
+        r del k
+        r zadd k 1 a 3 c
+        assert_equal listpack [r object encoding k]
+        set big [string repeat b 70]
+        assert_equal [list a $big c] [r zset.iter_add k 2 $big]
+        assert_equal btree [r object encoding k]
+    }
 
     test "Unload the module - zset" {
         assert_equal {OK} [r module unload zset]

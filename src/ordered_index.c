@@ -99,15 +99,18 @@ void orderedIndexFree(OrderedIndex *oi) {
  * ========================================================================== */
 
 OrderedIndexItem *orderedIndexInsert(OrderedIndex *oi, double score, const char *ele, size_t len) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     sds packed = packScoreElement(score, ele, len);
     return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)oi, packed);
 }
 
 void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     fbtreeDelete((fbtreeIndex *)oi, (const_sds)item);
 }
 
 OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     const_sds packed = (const_sds)item;
     size_t ele_len;
     const char *ele = unpackElement(packed, &ele_len);
@@ -117,10 +120,12 @@ OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *it
 }
 
 OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *oi) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     return (OrderedIndexItem *)fbtreePopMin((fbtreeIndex *)oi);
 }
 
 OrderedIndexItem *orderedIndexPopLast(OrderedIndex *oi) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     return (OrderedIndexItem *)fbtreePopMax((fbtreeIndex *)oi);
 }
 
@@ -138,6 +143,7 @@ void orderedIndexItemSetScore(OrderedIndexItem *item, double score) {
 }
 
 OrderedIndexItem *orderedIndexInsertItem(OrderedIndex *oi, OrderedIndexItem *item) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)oi, (sds)item);
 }
 
@@ -168,6 +174,7 @@ static inline bool scoreRangeIsEmpty(double min, double max, bool min_ex, bool m
 
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata) {
     if (scoreRangeIsEmpty(min, max, min_ex, max_ex)) return 0;
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     uint64_t min_sortable = scoreToSortable(min);
     uint64_t max_sortable = scoreToSortable(max);
     rangeDeleteArgs args = {on_delete, privdata};
@@ -175,6 +182,7 @@ unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, doubl
 }
 
 unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *privdata) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     rangeDeleteArgs args = {on_delete, privdata};
     return fbtreeDeleteRangeByRank((fbtreeIndex *)oi, start, end, rangeDeleteCallback, &args);
 }
@@ -260,6 +268,7 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
     if (fbtreeLength(fbt) == 0) return 0;
     if (max == shared.minstring || min == shared.maxstring) return 0;
+    fbtreeBumpModCount(fbt);
 
     if (hasMixedScores(fbt)) {
         unsigned long start, end;
@@ -321,6 +330,10 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
 
 unsigned long orderedIndexLength(const OrderedIndex *oi) {
     return fbtreeLength((fbtreeIndex *)oi);
+}
+
+uint64_t orderedIndexGetModCount(const OrderedIndex *oi) {
+    return fbtreeGetModCount((const fbtreeIndex *)oi);
 }
 
 OrderedIndexItem *orderedIndexGetByIndex(const OrderedIndex *oi, unsigned long index) {
@@ -501,6 +514,24 @@ OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter) {
 
 void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
     fbtreeSeekToRank((fbtreeIterator *)iter, index);
+}
+
+void orderedIndexSeekFromKey(OrderedIndexIterator *iter, double score, const char *ele, size_t len, int reverse) {
+    fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
+    if (!fbtreeIteratorGetIndex(fbt_iter)) return;
+    size_t total = SCORE_SIZE + len;
+    char stackbuf[256];
+    if (total <= sdsTypeMaxSize(SDS_TYPE_8) && sdsReqSize(total, SDS_TYPE_8) <= sizeof(stackbuf)) {
+        uint64_t sortable = scoreToSortable(score);
+        sds packed = sdswrite(stackbuf, sizeof(stackbuf), SDS_TYPE_8, SDS_NOINIT, total);
+        memcpy(packed, &sortable, SCORE_SIZE);
+        memcpy(packed + SCORE_SIZE, ele, len);
+        seekForBound(fbt_iter, packed, reverse, 0);
+    } else {
+        sds packed = packScoreElement(score, ele, len);
+        seekForBound(fbt_iter, packed, reverse, 0);
+        sdsfree(packed);
+    }
 }
 
 /* Position the iterator to begin a score-range scan.
@@ -705,6 +736,7 @@ static void defragItemCallback(sds old_item, sds new_item, void *ctx_raw) {
 }
 
 unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *privdata, void *(*defragfn)(void *)) {
+    fbtreeBumpModCount((fbtreeIndex *)oi);
     defragScanCtx ctx = {callback, privdata};
     return fbtreeDefragScan((fbtreeIndex *)oi, cursor, defragItemCallback, &ctx, defragfn);
 }

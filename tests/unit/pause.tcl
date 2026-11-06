@@ -60,6 +60,7 @@ start_server {tags {"pause network"}} {
         $rd get FOO
         set elapsed [expr {[clock milliseconds]-$test_start_time}]
         assert_lessthan 200 $elapsed
+        $rd close
     }
 
     test "Test new pause time is smaller than old one, then old time preserved" {

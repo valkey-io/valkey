@@ -1458,6 +1458,55 @@ start_server {tags {"scripting"}} {
         $rd close
     }
 
+    # cmsgpack.pack and cjson.encode read a script-built value in one C
+    # function call, so they never return to the Lua VM while they run. Before
+    # the fix the instruction-count hook could not fire, so SCRIPT KILL could
+    # not stop a long encode and other clients never got BUSY. Each input below
+    # takes a few seconds to encode without the fix, so a regression fails the
+    # BUSY wait instead of hanging, and far longer than the kill takes with it;
+    # the waits poll every 10 ms to keep that margin wide. The long-string case
+    # spends its time in the string escaping loop rather than in per-value
+    # recursion. The pcall cases check that a kill raised inside the encoder
+    # cannot be caught by the script: the next line after pcall is killed.
+    foreach {name script} {
+        {cmsgpack.pack} {local t={} t[1]=t t[2]=t t[3]=t return #cmsgpack.pack(t)}
+        {cjson.encode} {local t={} for i=1,25 do t={t,t} end return #cjson.encode(t)}
+        {cjson.encode of long strings} {local s=string.rep('"',2*1024*1024) local t={} for i=1,32 do t[i]=s end return #cjson.encode(t)}
+        {cmsgpack.pack inside pcall} {local t={} t[1]=t t[2]=t t[3]=t
+            pcall(cmsgpack.pack, t)
+            return 'not killed'}
+        {cjson.encode inside pcall} {local t={} for i=1,25 do t={t,t} end
+            pcall(cjson.encode, t)
+            return 'not killed'}
+    } {
+        test "Timed out $name can be killed by SCRIPT KILL" {
+            set rd [valkey_deferring_client]
+            r config set lua-time-limit 10
+            run_script_on_connection $rd $script 0
+
+            wait_for_condition 500 10 {
+                [catch {r ping} e] == 1
+            } else {
+                fail "Can't wait for $name to become busy"
+            }
+            catch {r ping} e
+            assert_match {BUSY*} $e
+
+            kill_script
+
+            wait_for_condition 500 10 {
+                [catch {r ping} e] == 0
+            } else {
+                fail "Can't wait for $name to be killed"
+            }
+            assert_equal [r ping] "PONG"
+
+            catch {$rd read} res
+            $rd close
+            assert_match {*killed by user*} $res
+        }
+    }
+
     test {Timed out script does not cause a false dead client} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10

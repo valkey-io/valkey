@@ -38,6 +38,7 @@
 #include "functions.h"
 #include "module.h"
 #include "util.h"
+#include "crc64.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -100,6 +101,9 @@ void aof_background_fsync_and_close(int fd);
 #define AOF_MANIFEST_KEY_FILE_NAME "file"
 #define AOF_MANIFEST_KEY_FILE_SEQ "seq"
 #define AOF_MANIFEST_KEY_FILE_TYPE "type"
+#define AOF_MANIFEST_KEY_FILE_CHECKSUM "checksum"
+#define AOF_MANIFEST_KEY_FILE_INTEGRITY "integrity"
+#define AOF_MANIFEST_KEY_CHECKSUM "manifest-checksum"
 
 /* Create an empty aofInfo. */
 aofInfo *aofInfoCreate(void) {
@@ -120,6 +124,9 @@ aofInfo *aofInfoDup(aofInfo *orig) {
     ai->file_name = sdsdup(orig->file_name);
     ai->file_seq = orig->file_seq;
     ai->file_type = orig->file_type;
+    ai->integrity = orig->integrity;
+    ai->has_checksum = orig->has_checksum;
+    ai->last_checksum = orig->last_checksum;
     return ai;
 }
 
@@ -131,9 +138,17 @@ sds aofInfoFormat(sds buf, aofInfo *ai) {
 
     if (sdsneedsrepr(ai->file_name)) filename_repr = sdscatrepr(sdsempty(), ai->file_name, sdslen(ai->file_name));
 
-    sds ret = sdscatprintf(buf, "%s %s %s %lld %s %c\n", AOF_MANIFEST_KEY_FILE_NAME,
+    sds ret = sdscatprintf(buf, "%s %s %s %lld %s %c", AOF_MANIFEST_KEY_FILE_NAME,
                            filename_repr ? filename_repr : ai->file_name, AOF_MANIFEST_KEY_FILE_SEQ, ai->file_seq,
                            AOF_MANIFEST_KEY_FILE_TYPE, ai->file_type);
+
+    if (ai->integrity) ret = sdscatprintf(ret, " %s 1", AOF_MANIFEST_KEY_FILE_INTEGRITY);
+    if (ai->has_checksum) {
+        ret = sdscatprintf(ret, " %s %llu", AOF_MANIFEST_KEY_FILE_CHECKSUM, (unsigned long long)ai->last_checksum);
+    }
+
+    ret = sdscatlen(ret, "\n", 1);
+
     sdsfree(filename_repr);
 
     return ret;
@@ -183,15 +198,17 @@ sds getTempAofManifestFileName(void) {
  * The string is multiple lines separated by '\n', and each line represents
  * an AOF file.
  *
- * Each line is space delimited and contains 6 fields, as follows:
- * "file" [filename] "seq" [sequence] "type" [type]
+ * Each line is space delimited and contains at least 6 fields, as follows:
+ * "file" [filename] "seq" [sequence] "type" [type] ["integrity" 1] ["checksum" [checksum]]
  *
  * Where "file", "seq" and "type" are keywords that describe the next value,
  * [filename] and [sequence] describe file name and order, and [type] is one
- * of 'b' (base), 'h' (history) or 'i' (incr).
+ * of 'b' (base), 'h' (history) or 'i' (incr). "integrity" marks a file written
+ * with integrity headers, and [checksum] is the running checksum at its end.
  *
  * The base file, if exists, will always be first, followed by history files,
- * and incremental files.
+ * and incremental files. If any file uses integrity, a last line holds the
+ * checksum of the lines before it.
  */
 sds getAofManifestAsString(aofManifest *am) {
     serverAssert(am != NULL);
@@ -199,11 +216,13 @@ sds getAofManifestAsString(aofManifest *am) {
     sds buf = sdsempty();
     listNode *ln;
     listIter li;
+    int integrity = 0;
 
     /* 1. Add BASE File information, it is always at the beginning
      * of the manifest file. */
     if (am->base_aof_info) {
         buf = aofInfoFormat(buf, am->base_aof_info);
+        integrity |= am->base_aof_info->integrity || am->base_aof_info->has_checksum;
     }
 
     /* 2. Add HISTORY type AOF information. */
@@ -211,6 +230,7 @@ sds getAofManifestAsString(aofManifest *am) {
     while ((ln = listNext(&li)) != NULL) {
         aofInfo *ai = (aofInfo *)ln->value;
         buf = aofInfoFormat(buf, ai);
+        integrity |= ai->integrity;
     }
 
     /* 3. Add INCR type AOF information. */
@@ -218,6 +238,12 @@ sds getAofManifestAsString(aofManifest *am) {
     while ((ln = listNext(&li)) != NULL) {
         aofInfo *ai = (aofInfo *)ln->value;
         buf = aofInfoFormat(buf, ai);
+        integrity |= ai->integrity;
+    }
+
+    if (integrity) {
+        uint64_t checksum = crc64(0, (unsigned char *)buf, sdslen(buf));
+        buf = sdscatprintf(buf, "# %s: %llu\n", AOF_MANIFEST_KEY_CHECKSUM, (unsigned long long)checksum);
     }
 
     return buf;
@@ -255,6 +281,22 @@ void aofLoadManifestFromDisk(void) {
     sdsfree(am_filepath);
 }
 
+/* Parses the manifest checksum line, allowing whitespace around the key and the
+ * value. Returns 1 and sets *checksum if the line is one. A malformed value fails
+ * the checksum comparison. */
+static int aofParseManifestChecksumLine(const char *line, unsigned long long *checksum) {
+    size_t keylen = strlen(AOF_MANIFEST_KEY_CHECKSUM);
+    const char *p = line;
+    if (*p++ != '#') return 0;
+    p += strspn(p, " \t");
+    if (strncasecmp(p, AOF_MANIFEST_KEY_CHECKSUM, keylen)) return 0;
+    p += keylen;
+    p += strspn(p, " \t");
+    if (*p++ != ':') return 0;
+    *checksum = strtoull(p, NULL, 10);
+    return 1;
+}
+
 /* Generic manifest loading function, used in `aofLoadManifestFromDisk` and valkey-check-aof tool. */
 #define MANIFEST_MAX_LINE 1024
 aofManifest *aofLoadManifestFromFile(sds am_filepath) {
@@ -278,6 +320,9 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
 
     sds line = NULL;
     int linenum = 0;
+    uint64_t calculated_checksum = 0;
+    int saw_integrity = 0;
+    int saw_manifest_checksum = 0;
 
     while (1) {
         if (fgets(buf, MANIFEST_MAX_LINE + 1, fp) == NULL) {
@@ -295,6 +340,33 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
         }
 
         linenum++;
+
+        unsigned long long file_checksum;
+        if (server.aof_integrity_check && !saw_manifest_checksum &&
+            aofParseManifestChecksumLine(buf, &file_checksum)) {
+            saw_manifest_checksum = 1;
+            if (calculated_checksum != file_checksum) {
+                serverLog(LL_WARNING, "\n*** FATAL AOF MANIFEST FILE ERROR ***\n");
+                serverLog(LL_WARNING, "AOF manifest file %s checksum mismatch. Calculated %llu, expected %llu\n",
+                          am_filepath, (unsigned long long)calculated_checksum, (unsigned long long)file_checksum);
+                aofManifestFree(am);
+                exit(1);
+            }
+            continue;
+        }
+        if (saw_manifest_checksum) {
+            /* The checksum doesn't cover anything after it. */
+            if (buf[strspn(buf, " \t\r\n")] != '\0') {
+                line = sdstrim(sdsnew(buf), " \t\r\n");
+                err = "Unexpected content after the AOF manifest checksum";
+                goto loaderr;
+            }
+            continue;
+        }
+
+        if (server.aof_integrity_check) {
+            calculated_checksum = crc64(calculated_checksum, (unsigned char *)buf, strlen(buf));
+        }
 
         /* Skip comments lines */
         if (buf[0] == '#') continue;
@@ -329,6 +401,13 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
                 ai->file_seq = atoll(argv[i + 1]);
             } else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_FILE_TYPE)) {
                 ai->file_type = (argv[i + 1])[0];
+            } else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_FILE_INTEGRITY)) {
+                ai->integrity = !strcmp(argv[i + 1], "1");
+                saw_integrity |= ai->integrity;
+            } else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_FILE_CHECKSUM)) {
+                ai->last_checksum = strtoull(argv[i + 1], NULL, 10);
+                ai->has_checksum = 1;
+                saw_integrity = 1;
             }
             /* else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_OTHER)) {} */
         }
@@ -367,6 +446,11 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
         sdsfree(line);
         line = NULL;
         ai = NULL;
+    }
+
+    if (server.aof_integrity_check && saw_integrity && !saw_manifest_checksum) {
+        err = "Missing AOF manifest checksum";
+        goto loaderr;
     }
 
     fclose(fp);
@@ -460,6 +544,7 @@ sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am, int aof_use_rdb_pream
 sds getNewIncrAofName(aofManifest *am) {
     aofInfo *ai = aofInfoCreate();
     ai->file_type = AOF_FILE_TYPE_INCR;
+    ai->integrity = server.aof_integrity_check;
     ai->file_name = sdscatprintf(sdsempty(), "%s.%lld%s%s", server.aof_filename, ++am->curr_incr_file_seq,
                                  INCR_FILE_SUFFIX, AOF_FORMAT_SUFFIX);
     ai->file_seq = am->curr_incr_file_seq;
@@ -721,6 +806,8 @@ void aofOpenIfNeededOnServerStart(void) {
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
         sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
+        server.aof_rewrite_integrity = server.aof_integrity_check;
+        server.aof_manifest->base_aof_info->integrity = server.aof_integrity_check;
         if (rewriteAppendOnlyFile(base_filepath) != C_OK) {
             exit(1);
         }
@@ -730,7 +817,23 @@ void aofOpenIfNeededOnServerStart(void) {
 
     /* Because we will 'exit(1)' if open AOF or persistent manifest fails, so
      * we don't need atomic modification here. */
+    listNode *ln = listLast(server.aof_manifest->incr_aof_list);
+    aofInfo *last_ai = ln ? listNodeValue(ln) : NULL;
+    if (last_ai && last_ai->integrity != server.aof_integrity_check) {
+        /* The integrity setting changed since the last INCR file was opened. Start a
+         * new one, and when enabling, rewrite the AOF so the base is covered too. */
+        if (last_ai->integrity) {
+            last_ai->last_checksum = server.aof_running_checksum;
+            last_ai->has_checksum = 1;
+        } else {
+            server.aof_running_checksum = 0;
+            server.aof_rewrite_scheduled = 1;
+        }
+        getNewIncrAofName(server.aof_manifest);
+        incr_aof_len = 0;
+    }
     sds aof_name = getLastIncrAofName(server.aof_manifest);
+    server.aof_integrity_active = server.aof_integrity_check;
 
     /* Here we should use 'O_APPEND' flag. */
     sds aof_filepath = makePath(server.aof_dirname, aof_name);
@@ -793,6 +896,17 @@ int openNewIncrAofForAppend(void) {
     } else {
         /* Dup a temp aof_manifest to modify. */
         temp_am = aofManifestDup(server.aof_manifest);
+
+        /* Record the final checksum of the INCR file being closed. */
+        listNode *last_node = listLast(temp_am->incr_aof_list);
+        if (last_node) {
+            aofInfo *last_ai = listNodeValue(last_node);
+            if (last_ai->integrity) {
+                last_ai->last_checksum = server.aof_running_checksum;
+                last_ai->has_checksum = 1;
+            }
+        }
+
         new_aof_name = sdsdup(getNewIncrAofName(temp_am));
     }
     sds new_aof_filepath = makePath(server.aof_dirname, new_aof_name);
@@ -824,6 +938,14 @@ int openNewIncrAofForAppend(void) {
         server.aof_last_fsync = server.mstime;
     }
     server.aof_fd = newfd;
+
+    /* The new file uses the integrity setting at the time it's opened. The chain
+     * restarts after a file without integrity. */
+    if (server.aof_integrity_check != server.aof_integrity_active) {
+        serverLog(LL_NOTICE, "AOF integrity check %s for new writes", server.aof_integrity_check ? "enabled" : "disabled");
+        if (server.aof_integrity_check) server.aof_running_checksum = 0;
+        server.aof_integrity_active = server.aof_integrity_check;
+    }
 
     /* Reset the aof_last_incr_size. */
     server.aof_last_incr_size = 0;
@@ -962,6 +1084,9 @@ void stopAppendOnly(void) {
     killAppendOnlyChild();
     sdsfree(server.aof_buf);
     server.aof_buf = sdsempty();
+    /* A block left incomplete in the closed file must not be completed in a later one. */
+    sdsclear(server.aof_retry_buf);
+    server.aof_integrity_active = 0;
 }
 
 /* Called when the user switches from "appendonly no" to "appendonly yes"
@@ -1099,6 +1224,9 @@ int restartAOFWithSyncRdb(void) {
     server.aof_current_size = server.aof_rewrite_base_size;
 
     server.aof_fd = newfd;
+    /* The new INCR file starts a new chain after the new base. */
+    server.aof_running_checksum = 0;
+    server.aof_integrity_active = server.aof_integrity_check;
     server.aof_state = AOF_ON;
 
     serverLog(LL_NOTICE, "Reused RDB file from primary sync as AOF base file: %s", new_base_filename);
@@ -1136,6 +1264,43 @@ cleanup:
     return ret;
 }
 
+/*
+ * Write the given iovec array to the AOF file descriptor.
+ * Handles short writes by advancing the iovec array and retrying,
+ * and handles EINTR by retrying the write.
+ *
+ * Returns the total number of bytes written, or -1 on error.
+ */
+ssize_t aofWritev(int fd, struct iovec *iov, int iovcnt) {
+    ssize_t nwritten = 0, totwritten = 0;
+
+    while (iovcnt > 0) {
+        nwritten = writev(fd, iov, iovcnt);
+
+        if (nwritten < 0) {
+            if (errno == EINTR) continue;
+            return totwritten ? totwritten : -1;
+        }
+
+        totwritten += nwritten;
+
+        /* Advance the iovec array to account for written bytes */
+        while (iovcnt > 0 && nwritten >= (ssize_t)iov[0].iov_len) {
+            nwritten -= iov[0].iov_len;
+            iov++;
+            iovcnt--;
+        }
+
+        /* If a short write happened in the middle of an iovec, adjust it */
+        if (nwritten > 0) {
+            iov[0].iov_base = (char *)iov[0].iov_base + nwritten;
+            iov[0].iov_len -= nwritten;
+        }
+    }
+
+    return totwritten;
+}
+
 /* This is a wrapper to the write syscall in order to retry on short writes
  * or if the syscall gets interrupted. It could look strange that we retry
  * on short writes given that we are writing to a block device: normally if
@@ -1144,22 +1309,29 @@ cleanup:
  * true, and in general it looks just more resilient to retry the write. If
  * there is an actual error condition we'll get it at the next try. */
 ssize_t aofWrite(int fd, const char *buf, size_t len) {
-    ssize_t nwritten = 0, totwritten = 0;
+    struct iovec iov = {.iov_base = (void *)buf, .iov_len = len};
+    return aofWritev(fd, &iov, 1);
+}
 
-    while (len) {
-        nwritten = write(fd, buf, len);
-
-        if (nwritten < 0) {
-            if (errno == EINTR) continue;
-            return totwritten ? totwritten : -1;
-        }
-
-        len -= nwritten;
-        buf += nwritten;
-        totwritten += nwritten;
+/* Writes the remainder of a partially written AOF block, which must be completed
+ * before anything else is written. Returns C_OK once the block is complete, or
+ * C_ERR if part of it is still pending. */
+static int aofWriteRetryBuf(void) {
+    ssize_t nwritten = aofWrite(server.aof_fd, server.aof_retry_buf, sdslen(server.aof_retry_buf));
+    if (nwritten > 0) {
+        server.aof_current_size += nwritten;
+        server.aof_last_incr_size += nwritten;
+        sdsrange(server.aof_retry_buf, nwritten, -1);
     }
+    if (sdslen(server.aof_retry_buf) > 0) return C_ERR;
 
-    return totwritten;
+    /* With nothing else to write, the main write path won't run and clear the write
+     * error, so clear it here to accept writes again. */
+    if (sdslen(server.aof_buf) == 0 && server.aof_last_write_status == C_ERR) {
+        serverLog(LL_NOTICE, "AOF write error looks solved. The server can write again.");
+        server.aof_last_write_status = C_OK;
+    }
+    return C_OK;
 }
 
 /* Write the append only file buffer on disk.
@@ -1185,6 +1357,9 @@ void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
+
+    /* A partially written block must be completed before anything else is written. */
+    if (sdslen(server.aof_retry_buf) > 0 && aofWriteRetryBuf() == C_ERR) return;
 
     if (sdslen(server.aof_buf) == 0) {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -1250,8 +1425,51 @@ void flushAppendOnlyFile(int force) {
         usleep(server.aof_flush_sleep);
     }
 
+    size_t expected_len = sdslen(server.aof_buf);
+    uint64_t checksum = 0;
+    char hdr[128];
+    int hdr_len = 0;
+    struct iovec iov[2];
+    int iovcnt = 0;
+
+    if (server.aof_integrity_active) {
+        char hdr_prefix[64];
+        char *p = hdr_prefix;
+        memcpy(p, "#HDR:v1;len:", 12);
+        p += 12;
+        int len_str_len = ull2string(p, sizeof(hdr_prefix) - (p - hdr_prefix), (unsigned long long)sdslen(server.aof_buf));
+        p += len_str_len;
+        *p++ = ';';
+        *p = '\0';
+        int prefix_len = p - hdr_prefix;
+
+        /* The running checksum is only updated once the block is on disk, see below. */
+        checksum = crc64(server.aof_running_checksum, (unsigned char *)hdr_prefix, prefix_len);
+        checksum = crc64(checksum, (unsigned char *)server.aof_buf, sdslen(server.aof_buf));
+
+        char *hp = hdr;
+        memcpy(hp, hdr_prefix, prefix_len);
+        hp += prefix_len;
+        memcpy(hp, "checksum:", 9);
+        hp += 9;
+        int checksum_len = ull2string(hp, sizeof(hdr) - (hp - hdr), (unsigned long long)checksum);
+        hp += checksum_len;
+        memcpy(hp, ";\r\n", 3);
+        hp += 3;
+        *hp = '\0';
+        hdr_len = hp - hdr;
+        expected_len += hdr_len;
+
+        iov[iovcnt].iov_base = hdr;
+        iov[iovcnt].iov_len = hdr_len;
+        iovcnt++;
+    }
+    iov[iovcnt].iov_base = server.aof_buf;
+    iov[iovcnt].iov_len = sdslen(server.aof_buf);
+    iovcnt++;
+
     latencyStartMonitor(latency);
-    nwritten = aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
+    nwritten = aofWritev(server.aof_fd, iov, iovcnt);
     latencyEndMonitor(latency);
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
@@ -1274,7 +1492,7 @@ void flushAppendOnlyFile(int force) {
     /* We performed the write so reset the postponed flush sentinel to zero. */
     server.aof_flush_postponed_start = 0;
 
-    if (nwritten != (ssize_t)sdslen(server.aof_buf)) {
+    if (nwritten != (ssize_t)expected_len) {
         static time_t last_write_error_log = 0;
         int can_log = 0;
 
@@ -1296,7 +1514,7 @@ void flushAppendOnlyFile(int force) {
                           "Short write while writing to "
                           "the AOF file: (nwritten=%lld, "
                           "expected=%lld)",
-                          (long long)nwritten, (long long)sdslen(server.aof_buf));
+                          (long long)nwritten, (long long)expected_len);
             }
 
             if (ftruncate(server.aof_fd, server.aof_last_incr_size) == -1) {
@@ -1337,7 +1555,24 @@ void flushAppendOnlyFile(int force) {
             if (nwritten > 0) {
                 server.aof_current_size += nwritten;
                 server.aof_last_incr_size += nwritten;
-                sdsrange(server.aof_buf, nwritten, -1);
+
+                if (hdr_len) {
+                    /* Part of the block is on disk: keep the rest so that it's completed
+                     * before anything else, and chain the next block from this one. */
+                    if ((size_t)nwritten < (size_t)hdr_len) {
+                        /* Failed during header write. Save remaining header and all data. */
+                        server.aof_retry_buf = sdscatlen(server.aof_retry_buf, hdr + nwritten, hdr_len - nwritten);
+                        server.aof_retry_buf = sdscatlen(server.aof_retry_buf, server.aof_buf, sdslen(server.aof_buf));
+                    } else {
+                        /* Header fully written, failed during data write. */
+                        size_t data_written = nwritten - hdr_len;
+                        server.aof_retry_buf = sdscatlen(server.aof_retry_buf, server.aof_buf + data_written, sdslen(server.aof_buf) - data_written);
+                    }
+                    sdsclear(server.aof_buf);
+                    server.aof_running_checksum = checksum;
+                } else {
+                    sdsrange(server.aof_buf, nwritten, -1);
+                }
             }
             return; /* We'll try again on the next call... */
         }
@@ -1348,6 +1583,7 @@ void flushAppendOnlyFile(int force) {
             serverLog(LL_NOTICE, "AOF write error looks solved. The server can write again.");
             server.aof_last_write_status = C_OK;
         }
+        if (hdr_len) server.aof_running_checksum = checksum;
     }
     server.aof_current_size += nwritten;
     server.aof_last_incr_size += nwritten;
@@ -1532,14 +1768,26 @@ struct client *createAOFClient(void) {
     return c;
 }
 
+typedef struct {
+    FILE *fp;
+    int verify_crc;
+    uint64_t crc;
+} aofReadCtx;
+
 /* Adapts fread to the read_fn signature used by parseRespCommandFromReader. */
 static size_t aofFileReader(void *ctx, void *buf, size_t len) {
-    return fread(buf, len, 1, (FILE *)ctx) == 1 ? len : 0;
+    aofReadCtx *rctx = ctx;
+    if (fread(buf, len, 1, rctx->fp) != 1) return 0;
+    if (rctx->verify_crc) rctx->crc = crc64(rctx->crc, buf, len);
+    return len;
 }
 
 /* Adapts fgets to the readline_fn signature used by parseRespCommandFromReader. */
 static char *aofFileReadLine(void *ctx, char *buf, int size) {
-    return fgets(buf, size, (FILE *)ctx);
+    aofReadCtx *rctx = ctx;
+    if (fgets(buf, size, rctx->fp) == NULL) return NULL;
+    if (rctx->verify_crc) rctx->crc = crc64(rctx->crc, (unsigned char *)buf, strlen(buf));
+    return buf;
 }
 
 /* Read a "<prefix><number>\r\n" line through readline_fn and parse the number
@@ -1706,21 +1954,96 @@ loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc,
     return res;
 }
 
+/* Parses an AOF integrity header line, including its CRLF, as specified in
+ * design-docs/aof-header-spec.md. Unknown fields are ignored. Returns C_OK and
+ * fills *hdr, or C_ERR with *err describing the problem. */
+int aofParseHeader(const char *line, size_t linelen, aofHeader *hdr, const char **err) {
+    const char *p = line, *end = line + linelen;
+
+    memset(hdr, 0, sizeof(*hdr));
+    if (linelen < 7 || memcmp(p, "#HDR:", 5) || end[-2] != '\r' || end[-1] != '\n') {
+        *err = "malformed header line";
+        return C_ERR;
+    }
+    end -= 2;
+    p += 5;
+    if (end - p < 3 || memcmp(p, "v1;", 3)) {
+        *err = "unsupported header version";
+        return C_ERR;
+    }
+    p += 3;
+
+    int seen_len = 0;
+    while (p < end) {
+        const char *key = p;
+        while (p < end && *p != ':' && *p != ';') p++;
+        if (p == end || *p != ':' || p == key) {
+            *err = "malformed field";
+            return C_ERR;
+        }
+        size_t keylen = p - key;
+        const char *val = ++p;
+        while (p < end && *p != ';') p++;
+        if (p == end) {
+            *err = "malformed field";
+            return C_ERR;
+        }
+        size_t vallen = p++ - val;
+
+        if (keylen == 3 && !memcmp(key, "len", 3)) {
+            if (key != line + 8) {
+                *err = "len must be the first field";
+                return C_ERR;
+            }
+            if (!string2ll(val, vallen, &hdr->len) || hdr->len < 0) {
+                *err = "invalid len";
+                return C_ERR;
+            }
+            seen_len = 1;
+        } else if (keylen == 8 && !memcmp(key, "checksum", 8)) {
+            if (p != end) {
+                *err = "checksum must be the last field";
+                return C_ERR;
+            }
+            /* A malformed value fails the checksum comparison. */
+            hdr->checksum = strtoull(val, NULL, 10);
+            hdr->has_checksum = 1;
+            hdr->checksum_offset = key - line;
+        }
+    }
+    if (!seen_len) {
+        *err = "missing len field";
+        return C_ERR;
+    }
+    return C_OK;
+}
+
 /* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
  * otherwise, one of the following is returned:
  * AOF_OPEN_ERR: Failed to open the AOF file.
  * AOF_NOT_EXIST: AOF file doesn't exist.
  * AOF_EMPTY: The AOF file is empty (nothing to load).
- * AOF_FAILED: Failed to load the AOF file. */
-int loadSingleAppendOnlyFile(char *filename) {
+ * AOF_FAILED: Failed to load the AOF file.
+ *
+ * 'integrity' tells whether the file was written with integrity: an INCR file
+ * then has integrity headers, and a RESP base file ends with its CRC. They are
+ * verified only when aof-integrity-check is enabled. */
+int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity) {
     struct client *fakeClient;
     struct valkey_stat sb;
     int old_aof_state = server.aof_state;
+    int verify = integrity && server.aof_integrity_check && type == AOF_FILE_TYPE_INCR;
+    int verify_crc = integrity && server.aof_integrity_check && type == AOF_FILE_TYPE_BASE;
+    int crc_seen = 0;
     long loops = 0;
     off_t valid_up_to = 0;        /* Offset of latest well-formed command loaded. */
     off_t valid_before_multi = 0; /* Offset before MULTI command loaded. */
     off_t last_progress_report_size = 0;
     int ret = AOF_OK;
+
+    /* integrity_validated_until tracks the file offset up to which data has been verified by a header checksum.
+     * Commands must start before this offset to be considered validated. */
+    off_t integrity_validated_until = 0;
 
     sds aof_filepath = makePath(server.aof_dirname, filename);
     FILE *fp = fopen(aof_filepath, "r");
@@ -1738,7 +2061,9 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
     }
 
-    if (fp && valkey_fstat(fileno(fp), &sb) != -1 && sb.st_size == 0) {
+    off_t file_size = -1;
+    if (valkey_fstat(fileno(fp), &sb) != -1) file_size = sb.st_size;
+    if (file_size == 0) {
         fclose(fp);
         sdsfree(aof_filepath);
         return AOF_EMPTY;
@@ -1765,6 +2090,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         /* RDB format. Pass loading the RDB functions. */
         rio rdb;
         int old_style = !strcmp(filename, server.aof_filename);
+        verify_crc = 0; /* The RDB has its own checksum. */
         if (old_style)
             serverLog(LL_NOTICE, "Reading RDB preamble from AOF file...");
         else
@@ -1791,6 +2117,8 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
     }
 
+    aofReadCtx rctx = {fp, verify_crc, 0};
+
     /* Read the actual AOF file, in REPL format, command by command. */
     while (1) {
         int argc = 0;
@@ -1813,17 +2141,105 @@ int loadSingleAppendOnlyFile(char *filename) {
                 goto readerr;
             }
         }
-        if (ch == '#') { /* Skip annotations */
-            if (fgets(buf, sizeof(buf), fp) == NULL && !feof(fp)) goto readerr;
+        if (ch == '#') {
+            ungetc(ch, fp);
+            if (fgets(buf, sizeof(buf), fp) == NULL) goto readerr;
+            /* A line without a newline at EOF is a torn annotation: treat it as a short read. */
+            if (feof(fp)) goto readerr;
+            if (verify_crc && !strncmp(buf, AOF_CRC, strlen(AOF_CRC))) {
+                if (strtoull(buf + strlen(AOF_CRC), NULL, 10) != rctx.crc) {
+                    serverLog(LL_WARNING, "AOF base file %s checksum mismatch", filename);
+                    goto fmterr;
+                }
+                /* Nothing may follow it, as it wouldn't be covered. */
+                if (fgetc(fp) != EOF) {
+                    serverLog(LL_WARNING, "Unexpected data after the checksum of AOF base file %s", filename);
+                    goto fmterr;
+                }
+                crc_seen = 1;
+                break;
+            }
+            if (verify_crc) rctx.crc = crc64(rctx.crc, (unsigned char *)buf, strlen(buf));
+            if (verify && !strncmp(buf, "#HDR:", 5)) {
+                off_t current_pos = ftello(fp);
+                off_t hdr_offset = current_pos - (off_t)strlen(buf);
+                aofHeader hdr;
+                const char *err;
+                if (aofParseHeader(buf, strlen(buf), &hdr, &err) == C_ERR) {
+                    serverLog(LL_WARNING, "Malformed AOF integrity header in %s at offset %lld: %s", filename,
+                              (long long)hdr_offset, err);
+                    goto fmterr;
+                }
+                if (!hdr.has_checksum) {
+                    serverLog(LL_WARNING, "AOF integrity header in %s at offset %lld lacks a checksum", filename,
+                              (long long)hdr_offset);
+                    goto fmterr;
+                }
+                if (file_size != -1 && hdr.len > file_size - current_pos) {
+                    serverLog(LL_WARNING, "AOF integrity block in %s at offset %lld extends past the end of the file",
+                              filename, (long long)hdr_offset);
+                    goto uxeof;
+                }
+
+                uint64_t computed_checksum = crc64(server.aof_running_checksum, (unsigned char *)buf, hdr.checksum_offset);
+                long long remaining = hdr.len;
+                unsigned char check_buf[16 * 1024];
+                while (remaining > 0) {
+                    size_t to_read = remaining > (long long)sizeof(check_buf) ? sizeof(check_buf) : (size_t)remaining;
+                    if (fread(check_buf, to_read, 1, fp) != 1) {
+                        serverLog(LL_WARNING, "AOF short read in %s in the block at offset %lld", filename,
+                                  (long long)hdr_offset);
+                        goto readerr;
+                    }
+                    computed_checksum = crc64(computed_checksum, check_buf, to_read);
+                    remaining -= to_read;
+                }
+
+                if (computed_checksum != hdr.checksum) {
+                    serverLog(LL_WARNING, "AOF checksum mismatch in %s in the block at offset %lld. Calculated %llu, got %llu",
+                              filename, (long long)hdr_offset, (unsigned long long)computed_checksum,
+                              (unsigned long long)hdr.checksum);
+                    goto fmterr;
+                }
+                if (fseek(fp, current_pos, SEEK_SET) == -1) {
+                    serverLog(LL_WARNING, "Error seeking in AOF file %s to offset %lld: %s", filename,
+                              (long long)current_pos, strerror(errno));
+                    goto readerr;
+                }
+                integrity_validated_until = current_pos + hdr.len;
+                server.aof_running_checksum = computed_checksum;
+            } else if (integrity && !strncmp(buf, "#HDR:", 5)) {
+                /* Not verified, but follow the chain to record the file's final checksum. */
+                aofHeader hdr;
+                const char *err;
+                if (aofParseHeader(buf, strlen(buf), &hdr, &err) == C_OK && hdr.has_checksum) {
+                    server.aof_running_checksum = hdr.checksum;
+                }
+            }
             continue;
         }
+        if (ch != '*') goto fmterr;
         ungetc(ch, fp);
+        if (verify && ftello(fp) >= integrity_validated_until) {
+            serverLog(LL_WARNING, "AOF command in %s at offset %lld lacks an integrity header.", filename,
+                      (long long)ftello(fp));
+            goto fmterr;
+        }
 
         /* Read the next command into the fake client's argv. */
-        respParseResult pr = parseRespCommandFromReader(aofFileReader, aofFileReadLine, fp, &argc, &argv);
+        respParseResult pr = parseRespCommandFromReader(aofFileReader, aofFileReadLine, &rctx, &argc, &argv);
         if (pr == RESP_PARSE_EOF) goto readerr;
         if (pr == RESP_PARSE_FMTERR) goto fmterr;
         if (pr == RESP_PARSE_OOM) goto oomerr;
+
+        /* The whole command must be inside its verified block, not just its first line. */
+        if (verify && ftello(fp) > integrity_validated_until) {
+            serverLog(LL_WARNING, "AOF command in %s extends past the end of its integrity block at offset %lld",
+                      filename, (long long)integrity_validated_until);
+            for (int j = 0; j < argc; j++) decrRefCount(argv[j]);
+            zfree(argv);
+            goto fmterr;
+        }
 
         /* Command lookup, validation and execution. Keep MULTI framing (0) so
          * AOF transactions replay as transactions. */
@@ -1846,6 +2262,10 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
+    if (verify_crc && !crc_seen) {
+        serverLog(LL_WARNING, "AOF base file %s lacks its checksum", filename);
+        goto fmterr;
+    }
     if (fakeClient->flag.multi) goto uxeof;
 
 loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). */
@@ -1861,11 +2281,24 @@ readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
     }
 
 uxeof: /* Unexpected AOF end of file. */
+    /* A base file is written atomically, so it can't be torn. */
+    if (verify_crc) {
+        serverLog(LL_WARNING, "AOF base file %s is incomplete", filename);
+        goto fmterr;
+    }
     if (fakeClient->flag.multi) {
         serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
         valid_up_to = valid_before_multi;
     }
     if (server.aof_load_truncated) {
+        /* A torn block fails its length check before any of its commands run, so with
+         * integrity the file can only be truncated at the end of a verified block. */
+        if (verify &&
+            valid_up_to != integrity_validated_until) {
+            serverLog(LL_WARNING, "Incomplete data inside a verified integrity block in AOF file %s, block ends at offset %lld",
+                      filename, (long long)integrity_validated_until);
+            goto fmterr;
+        }
         serverLog(LL_WARNING, "!!! Warning: short read while loading the AOF file %s!!!", filename);
         serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %llu !!!", filename,
                   (unsigned long long)valid_up_to);
@@ -1964,6 +2397,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
     }
 
     startLoading(total_size, RDBFLAGS_AOF_PREAMBLE, 0);
+    server.aof_running_checksum = 0;
 
     /* Load BASE AOF if needed. */
     if (am->base_aof_info) {
@@ -1973,8 +2407,10 @@ int loadAppendOnlyFiles(aofManifest *am) {
         base_size = getAppendOnlyFileSize(aof_name, NULL);
         last_file = ++aof_num == total_num;
         start = ustime();
-        ret = loadSingleAppendOnlyFile(aof_name);
+        ret = loadSingleAppendOnlyFile(aof_name, AOF_FILE_TYPE_BASE, am->base_aof_info->integrity);
         if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
+            /* The chain of the first INCR file starts where the base says. */
+            if (am->base_aof_info->has_checksum) server.aof_running_checksum = am->base_aof_info->last_checksum;
             serverLog(LL_NOTICE, "DB loaded from base file %s: %.3f seconds", aof_name,
                       (float)(ustime() - start) / 1000000);
         }
@@ -2003,7 +2439,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
             updateLoadingFileName(aof_name);
             last_file = ++aof_num == total_num;
             start = ustime();
-            ret = loadSingleAppendOnlyFile(aof_name);
+            ret = loadSingleAppendOnlyFile(aof_name, AOF_FILE_TYPE_INCR, ai->integrity);
             if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
                 serverLog(LL_NOTICE, "DB loaded from incr file %s: %.3f seconds", aof_name,
                           (float)(ustime() - start) / 1000000);
@@ -2021,6 +2457,26 @@ int loadAppendOnlyFiles(aofManifest *am) {
 
             if (ret == AOF_OPEN_ERR || ret == AOF_FAILED) {
                 goto cleanup;
+            }
+
+            if (!ai->integrity) {
+                server.aof_running_checksum = 0;
+            } else if (server.aof_integrity_check) {
+                /* A closed file must end with the checksum recorded for it. */
+                if (ai->has_checksum && server.aof_running_checksum != ai->last_checksum) {
+                    serverLog(LL_WARNING, "AOF file %s ends with checksum %llu, but the manifest records %llu", aof_name,
+                              (unsigned long long)server.aof_running_checksum, (unsigned long long)ai->last_checksum);
+                    ret = AOF_FAILED;
+                    goto cleanup;
+                }
+            } else if (ret == AOF_TRUNCATED) {
+                /* Without verification, a torn block can be cut in the middle, so the file
+                 * no longer matches its headers. */
+                serverLog(LL_NOTICE, "AOF file %s was truncated without integrity verification, "
+                                     "it's no longer treated as an integrity file",
+                          aof_name);
+                ai->integrity = 0;
+                am->dirty = 1;
             }
         }
     }
@@ -2701,7 +3157,13 @@ int rewriteAppendOnlyFile(char *filename) {
             goto werr;
         }
     } else {
+        if (server.aof_rewrite_integrity) aof.update_cksum = rioGenericUpdateChecksum;
         if (rewriteAppendOnlyFileRio(&aof) == C_ERR) goto werr;
+        if (server.aof_rewrite_integrity) {
+            char crc[64];
+            int len = snprintf(crc, sizeof(crc), "%s%llu\r\n", AOF_CRC, (unsigned long long)aof.cksum);
+            if (rioWrite(&aof, crc, len) == 0) goto werr;
+        }
     }
 
     /* Make sure data will not remain on the OS's output buffers */
@@ -2769,6 +3231,11 @@ int rewriteAppendOnlyFileBackground(void) {
      * feedAppendOnlyFile() to issue a SELECT command. */
     server.aof_selected_db = -1;
     flushAppendOnlyFile(1);
+    if (sdslen(server.aof_retry_buf) > 0 || sdslen(server.aof_buf) > 0) {
+        serverLog(LL_WARNING, "Can't start AOF rewrite while pending AOF data could not be flushed");
+        server.aof_lastbgrewrite_status = C_ERR;
+        return C_ERR;
+    }
     if (openNewIncrAofForAppend() != C_OK) {
         server.aof_lastbgrewrite_status = C_ERR;
         return C_ERR;
@@ -2789,6 +3256,10 @@ int rewriteAppendOnlyFileBackground(void) {
     }
 
     server.stat_aof_rewrites++;
+
+    /* The new base records where the chain of the INCR file opened above starts. */
+    server.aof_rewrite_integrity = server.aof_integrity_active;
+    server.aof_rewrite_base_checksum = server.aof_running_checksum;
 
     if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
@@ -2982,6 +3453,8 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             sds temp_incr_filepath = makePath(server.aof_dirname, temp_incr_aof_name);
             /* Get next new incr aof name. */
             sds new_incr_filename = getNewIncrAofName(temp_am);
+            /* Keep the integrity setting the temporary file was written with. */
+            ((aofInfo *)listNodeValue(listLast(temp_am->incr_aof_list)))->integrity = server.aof_integrity_active;
             new_incr_filepath = makePath(server.aof_dirname, new_incr_filename);
             latencyStartMonitor(latency);
             if (rename(temp_incr_filepath, new_incr_filepath) == -1) {
@@ -3009,6 +3482,12 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         /* Change the AOF file type in 'incr_aof_list' from AOF_FILE_TYPE_INCR
          * to AOF_FILE_TYPE_HIST, and move them to the 'history_aof_list'. */
         markRewrittenIncrAofAsHistory(temp_am);
+
+        if (server.aof_rewrite_integrity) {
+            temp_am->base_aof_info->integrity = 1;
+            temp_am->base_aof_info->last_checksum = server.aof_rewrite_base_checksum;
+            temp_am->base_aof_info->has_checksum = 1;
+        }
 
         /* Persist our modifications. */
         if (persistAofManifest(temp_am) == C_ERR) {
@@ -3078,6 +3557,7 @@ cleanup:
     if (server.aof_state == AOF_WAIT_REWRITE) {
         sdsfree(server.aof_buf);
         server.aof_buf = sdsempty();
+        sdsclear(server.aof_retry_buf);
         aofDelTempIncrAofFile();
     }
     server.aof_rewrite_time_last = time(NULL) - server.aof_rewrite_time_start;

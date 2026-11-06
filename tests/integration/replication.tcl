@@ -2491,6 +2491,11 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             set load2 [start_write_load $primary_host $primary_port 10]
             set load3 [start_write_load $primary_host $primary_port 10]
             set load4 [start_write_load $primary_host $primary_port 10]
+            wait_for_condition 50 100 {
+                [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 4
+            } else {
+                fail "Write load handlers didn't connect"
+            }
             after 200
             $replica replicaof $primary_host $primary_port
             wait_for_condition 500 100 {
@@ -2505,6 +2510,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             stop_write_load $load2
             stop_write_load $load3
             stop_write_load $load4
+            wait_load_handlers_disconnected -1
             wait_for_ofs_sync $primary $replica
             assert_equal [$primary dbsize] [$replica dbsize]
             assert_equal [$primary debug digest] [$replica debug digest]
@@ -2541,6 +2547,11 @@ foreach primary_diskless {yes no} {
                     test "[string toupper $cmd] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
                         set load1 [start_write_load $ph $pp 8]
                         set load2 [start_write_load $ph $pp 8]
+                        wait_for_condition 50 100 {
+                            [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
+                        } else {
+                            fail "Write load handlers didn't connect"
+                        }
                         $primary config set rdb-key-save-delay 100
                         $replica replicaof $ph $pp
                         wait_for_condition 50 100 {
@@ -2561,6 +2572,7 @@ foreach primary_diskless {yes no} {
                         after 800
                         stop_write_load $load1
                         stop_write_load $load2
+                        wait_load_handlers_disconnected -1
                         wait_for_ofs_sync $primary $replica
                         assert_equal [$primary debug digest] [$replica debug digest]
                         assert_equal 0 [s -1 total_forks]
@@ -2759,6 +2771,11 @@ foreach load_mode {disabled on-empty-db} {
                 set loglines [count_log_lines -1]
                 set load1 [start_write_load $primary_host $primary_port 60]
                 set load2 [start_write_load $primary_host $primary_port 60]
+                wait_for_condition 50 100 {
+                    [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
+                } else {
+                    fail "Write load handlers didn't connect"
+                }
                 after 200
                 $replica replicaof $primary_host $primary_port
 
@@ -2774,6 +2791,7 @@ foreach load_mode {disabled on-empty-db} {
 
                 stop_write_load $load1
                 stop_write_load $load2
+                wait_load_handlers_disconnected -1
                 wait_for_ofs_sync $primary $replica
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal [$primary debug digest] [$replica debug digest]

@@ -102,6 +102,70 @@ TEST_F(StreamListpackIntegrityTest, TestRejectsAllRecordsDeletedWithLiveHeader) 
     lpFree(lp);
 }
 
+/* Build a structurally valid two-record stream listpack, then re-encode the
+ * first record's flags with a valid but NON-minimal 16-bit integer encoding --
+ * the shape a crafted RESTORE payload can take. The listpack stays well-formed
+ * (it still passes lpValidateIntegrity and streamValidateListpackIntegrity), but
+ * the wider flags element makes streamTrim's lpReplaceInteger shrink the
+ * listpack when it marks the record deleted. */
+static unsigned char *buildStreamListpackWithWideFirstFlags(void) {
+    unsigned char *lp = buildTwoRecordStreamListpack(2, 0, 0, 0);
+    /* Element index 5 is the first record's flags; indexes 0..4 are the primary
+     * entry (count, deleted, num-fields, field, terminator). */
+    unsigned char *p = lpSeek(lp, 5);
+    unsigned char *pnext = lpNext(lp, p);
+    size_t off = (size_t)(p - lp);
+    size_t oldelen = (size_t)(pnext - p); /* 7-bit int + backlen == 2 bytes */
+    size_t oldtotal = lpBytes(lp);
+    /* 16-bit int encoding of SAMEFIELDS(2): 0xF1, value little-endian in two
+     * bytes, then a one-byte backlen of 3 (the encoded element length). */
+    const unsigned char wide[] = {0xF1, 0x02, 0x00, 0x03};
+    size_t newtotal = oldtotal - oldelen + sizeof(wide);
+    unsigned char *nlp = lpNew(newtotal);
+    memcpy(nlp, lp, off);                   /* header + earlier elements */
+    memcpy(nlp + off, wide, sizeof(wide));  /* widened flags element */
+    memcpy(nlp + off + sizeof(wide), pnext, oldtotal - off - oldelen); /* rest + terminator */
+    /* Patch the four-byte little-endian total-bytes header. */
+    nlp[0] = (unsigned char)(newtotal & 0xFF);
+    nlp[1] = (unsigned char)((newtotal >> 8) & 0xFF);
+    nlp[2] = (unsigned char)((newtotal >> 16) & 0xFF);
+    nlp[3] = (unsigned char)((newtotal >> 24) & 0xFF);
+    lpFree(lp);
+    return nlp;
+}
+
+/* Regression: trimming a stream whose record flags use a non-minimal integer
+ * encoding used to abort the server. streamTrim() saved the parse cursor as a
+ * byte offset, then lpReplaceInteger() shrank the listpack when re-encoding the
+ * flags in canonical form, so restoring the cursor from the stale offset
+ * overshot the next entry and the following parse tripped
+ * serverAssert(ret != 0) in lpGetIntegerIfValid. */
+TEST_F(StreamListpackIntegrityTest, TrimSurvivesNonMinimalFlagsEncoding) {
+    unsigned char *lp = buildStreamListpackWithWideFirstFlags();
+
+    /* The crafted listpack is still well-formed and stream-valid, so RESTORE
+     * would accept it. */
+    uint64_t valid_count = 0;
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), NULL, NULL, 0), 1);
+    ASSERT_EQ(streamValidateListpackIntegrity(lp, lpBytes(lp), &valid_count), 1);
+    ASSERT_EQ(valid_count, 2u);
+
+    stream *s = streamNew();
+    streamID master_id = {0, 0};
+    uint64_t rax_key[2];
+    streamEncodeID(rax_key, &master_id);
+    raxInsert(s->rax, (unsigned char *)rax_key, sizeof(rax_key), lp, NULL);
+    s->length = 2;
+
+    /* XTRIM MAXLEN = 1 marks the first record deleted; the server must not
+     * abort and the trim must report one removed entry. */
+    int64_t deleted = streamTrimByLength(s, 1, 0);
+    ASSERT_EQ(deleted, 1);
+    ASSERT_EQ(s->length, 1u);
+
+    freeStream(s);
+}
+
 class StreamIdTest : public ::testing::Test {};
 
 TEST_F(StreamIdTest, TestStreamEncodeDecodeRoundtrip) {

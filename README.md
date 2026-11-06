@@ -48,6 +48,12 @@ To build RDMA as Valkey module:
 
     % make BUILD_RDMA=module
 
+To build valkey-benchmark with EFA transfer support for valkey-large-object
+(`--efa-provider`, see `valkey-benchmark --help`), you'll need libfabric via
+pkg-config (on EFA hosts, `PKG_CONFIG_PATH=/opt/amazon/efa/lib64/pkgconfig`):
+
+    % make BUILD_EFA=yes
+
 To build with systemd support, you'll need systemd development libraries (such
 as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
@@ -339,6 +345,7 @@ Other options supported by Valkey's `CMake` build system:
 
 - `-DBUILD_TLS=<yes|no>` enable TLS build for Valkey. Default: `no`
 - `-DBUILD_RDMA=<no|module>` enable RDMA module build (only module mode supported). Default: `no`
+- `-DBUILD_EFA=<yes|no>` build valkey-benchmark with the EFA transfer support for valkey-large-object (needs libfabric). Default: `no`
 - `-DBUILD_ZSTD=<yes|no>` configure Zstandard streaming compression support. Default: `no`
 - `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
 - `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled. Default: disabled (no sanitizer)

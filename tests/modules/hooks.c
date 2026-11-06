@@ -439,6 +439,14 @@ void atomicSlotMigrationCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint
     }
 }
 
+void clusterTopologyChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
+{
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(sub);
+    VALKEYMODULE_NOT_USED(data);
+    LogNumericEvent(ctx, "cluster-topology-change", 0);
+}
+
 static int cmdIsKeyRemoved(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
     if(argc != 2){
         return ValkeyModule_WrongArity(ctx);
@@ -532,6 +540,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     ValkeyModule_SubscribeToServerEvent(ctx,
         ValkeyModuleEvent_AtomicSlotMigration, atomicSlotMigrationCallback);
+
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_ClusterTopologyChange, clusterTopologyChangeCallback);
 
     event_log = ValkeyModule_CreateDict(ctx);
     removed_event_log = ValkeyModule_CreateDict(ctx);

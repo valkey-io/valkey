@@ -832,6 +832,7 @@ void zsetConvertToListpackIfNeeded(robj *zobj, size_t maxelelen, size_t totelele
 /* Return (by reference) the score of the specified member of the sorted set
  * storing it into *score. If the element does not exist C_ERR is returned
  * otherwise C_OK is returned and *score is correctly populated.
+ * 'score' may be NULL to only test whether the member exists.
  * If 'zobj' or 'member' is NULL, C_ERR is returned. */
 int zsetScore(robj *zobj, sds member, double *score) {
     if (!zobj || !member) return C_ERR;
@@ -846,7 +847,7 @@ int zsetScore(robj *zobj, sds member, double *score) {
         zsetUnmarkLookupKey(member);
         if (!found) return C_ERR;
         OrderedIndexItem *setElement = entry;
-        *score = orderedIndexItemGetScore(setElement);
+        if (score) *score = orderedIndexItemGetScore(setElement);
     } else {
         serverPanic("Unknown sorted set encoding");
     }

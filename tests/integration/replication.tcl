@@ -2477,7 +2477,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
     set primary_port [srv 0 port]
     $primary config set repl-diskless-sync yes
     $primary config set repl-diskless-sync-delay 0
-    $primary debug populate 800000
+    $primary debug populate [expr {$::valgrind ? 100000 : 800000}]
     start_server {overrides {save {}}} {
         set replica [srv 0 client]
         test "Writes after bg iterator termination still reach the replica" {
@@ -2498,7 +2498,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             }
             after 200
             $replica replicaof $primary_host $primary_port
-            wait_for_condition 500 100 {
+            wait_for_condition 600 100 {
                 [s 0 master_link_status] eq {up}
             } else {
                 fail "Replica didn't sync"

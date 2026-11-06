@@ -4060,7 +4060,8 @@ static void propagatePendingCommands(void) {
  * Must stay an OR of every condition below - never drop one as an
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
-    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags ||
+           bgIteration_iterationActive();
 }
 
 /* Performs operations that should be performed after an execution unit ends.

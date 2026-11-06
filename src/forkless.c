@@ -745,7 +745,7 @@ static void forklessMarkSaveFailed(forklessSaveInfo *saveInfo) {
 /* Save a point-in-time snapshot to the given filename.
  * The filename must be under the server's current working directory.
  * Writes to a temp file and renames to the final filename on completion. */
-int forklessSaveToDisk(const char *filename) {
+int forklessSaveToDisk(const char *filename, int rdbflags) {
     serverAssert(onServerMainThread());
     serverAssert(currentForklessSave == NULL);
     serverAssert(!isSaveInProgress());
@@ -775,7 +775,7 @@ int forklessSaveToDisk(const char *filename) {
     rioInitWithFile(&saveInfo->save_rio, file);
     if (server.rdb_save_incremental_fsync) {
         rioSetAutoSync(&saveInfo->save_rio, REDIS_AUTOSYNC_BYTES);
-        rioSetReclaimCache(&saveInfo->save_rio, 1);
+        if (!(rdbflags & RDBFLAGS_KEEP_CACHE)) rioSetReclaimCache(&saveInfo->save_rio, 1);
     }
 
     int rc = forklessSaveCommonStart(saveInfo, REPLICA_REQ_NONE, RDB_VERSION);

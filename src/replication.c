@@ -1413,7 +1413,8 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
                 goto error;
             }
         } else {
-            if (forklessSaveToDisk(server.rdb_filename) == C_ERR) {
+            /* Keep the page cache since it'll get used soon */
+            if (forklessSaveToDisk(server.rdb_filename, RDBFLAGS_KEEP_CACHE) == C_ERR) {
                 fail_msg = "Can't start the forkless process for a disk-based full sync";
                 goto error;
             }

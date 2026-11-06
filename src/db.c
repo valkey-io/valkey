@@ -85,6 +85,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
+    if (server.bio_aof_offload_enabled) replyBlockingTrackKeyRead(db, key);
     int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     robj *val = dbFindWithDictIndex(db, objectGetVal(key), dict_index);
     if (val) {
@@ -751,6 +752,10 @@ void discardTempDb(serverDb **tempDb) {
             dictRelease(tempDb[i]->blocking_keys_unblock_on_nokey);
             dictRelease(tempDb[i]->ready_keys);
             dictRelease(tempDb[i]->watched_keys);
+            if (tempDb[i]->uncommitted_keys) {
+                hashtableRelease(tempDb[i]->uncommitted_keys);
+                tempDb[i]->uncommitted_keys = NULL;
+            }
             zfree(tempDb[i]);
             tempDb[i] = NULL;
         }
@@ -787,8 +792,13 @@ long long dbTotalServerKeyCount(void) {
  * a context of a client. */
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
-    trackingInvalidateKey(c, key, 1);
     bgIteration_keyModified(db->id, objectGetVal(key));
+    /* Under reply blocking the tracking invalidation is deferred until the
+     * write is durable; everything above must run right away. */
+    if (replyBlockingSignalModifiedKey(c, db, key)) {
+        return;
+    }
+    trackingInvalidateKey(c, key, 1);
 }
 
 void signalFlushedDb(int dbid, int async) {
@@ -804,6 +814,10 @@ void signalFlushedDb(int dbid, int async) {
         if (server.db[j] == NULL) continue;
         scanDatabaseForDeletedKeys(server.db[j], NULL);
         touchAllWatchedKeysInDb(server.db[j], NULL);
+    }
+
+    if (replyBlockingSignalFlushedDb(async)) {
+        return;
     }
 
     trackingInvalidateKeysOnFlush(async);
@@ -1856,6 +1870,13 @@ int dbSwapDatabases(int id1, int id2) {
     db2->keys_with_volatile_items = aux.keys_with_volatile_items;
     copyDbExpiry(db2, &aux);
 
+    /* Swap uncommitted key tracking so it stays consistent with the key data. */
+    db1->uncommitted_keys = db2->uncommitted_keys;
+    db1->dirty_repl_offset = db2->dirty_repl_offset;
+
+    db2->uncommitted_keys = aux.uncommitted_keys;
+    db2->dirty_repl_offset = aux.dirty_repl_offset;
+
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
      * X in a given DB, may now actually be unblocked if X happens
@@ -1905,6 +1926,13 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         newdb->expires = aux.expires;
         newdb->keys_with_volatile_items = aux.keys_with_volatile_items;
         copyDbExpiry(newdb, &aux);
+
+        /* Swap uncommitted key tracking so it stays consistent with the key data. */
+        activedb->uncommitted_keys = newdb->uncommitted_keys;
+        activedb->dirty_repl_offset = newdb->dirty_repl_offset;
+
+        newdb->uncommitted_keys = aux.uncommitted_keys;
+        newdb->dirty_repl_offset = aux.dirty_repl_offset;
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list

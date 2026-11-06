@@ -2505,6 +2505,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             stop_write_load $load2
             stop_write_load $load3
             stop_write_load $load4
+            wait_load_handlers_disconnected -1
             wait_for_ofs_sync $primary $replica
             assert_equal [$primary dbsize] [$replica dbsize]
             assert_equal [$primary debug digest] [$replica debug digest]
@@ -2561,6 +2562,7 @@ foreach primary_diskless {yes no} {
                         after 800
                         stop_write_load $load1
                         stop_write_load $load2
+                        wait_load_handlers_disconnected -1
                         wait_for_ofs_sync $primary $replica
                         assert_equal [$primary debug digest] [$replica debug digest]
                         assert_equal 0 [s -1 total_forks]
@@ -2774,6 +2776,7 @@ foreach load_mode {disabled on-empty-db} {
 
                 stop_write_load $load1
                 stop_write_load $load2
+                wait_load_handlers_disconnected -1
                 wait_for_ofs_sync $primary $replica
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal [$primary debug digest] [$replica debug digest]

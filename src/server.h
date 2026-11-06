@@ -4427,6 +4427,7 @@ void hexpiretimeCommand(client *c);
 void hpexpiretimeCommand(client *c);
 void hpersistCommand(client *c);
 void configSetCommand(client *c);
+void configResetCommand(client *c);
 void configGetCommand(client *c);
 void configResetStatCommand(client *c);
 void configRewriteCommand(client *c);

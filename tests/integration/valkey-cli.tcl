@@ -330,9 +330,15 @@ start_server {tags {"cli logreqres:skip"}} {
         r hset npkey "K\u0000\u0001ey" "V\u0000\u0001alue"
         assert_equal \{\"K\\u0000\\u0001ey\":\"V\\u0000\\u0001alue\"\} [run_cli --json hgetall npkey]
         assert_equal \{\"K\\\\x00\\\\x01ey\":\"V\\\\x00\\\\x01alue\"\} [run_cli --quoted-json hgetall npkey]
-        # double quote inside a string
+        # double quotes inside a string, and at its start and end
         r set dquote {a"b}
         assert_equal {"a\\\"b"} [run_cli --quoted-json get dquote]
+        r set dquote {"ab}
+        assert_equal {"\\\"ab"} [run_cli --quoted-json get dquote]
+        r set dquote {ab"}
+        assert_equal {"ab\\\""} [run_cli --quoted-json get dquote]
+        r set dquote {"}
+        assert_equal {"\\\""} [run_cli --quoted-json get dquote]
     }
 
     test_nontty_cli "Status reply" {

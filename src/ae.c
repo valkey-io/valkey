@@ -632,11 +632,19 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 
-        /* Prioritize high-priority events: drain them immediately before processing
-         * normal events. Like normal file events, skip them if the caller did not
-         * request AE_FILE_EVENTS. */
-        if (flags & AE_FILE_EVENTS) {
-            processed += aeProcessQoSEvents(eventLoop);
+        /* The main poll reports level-triggered priority_fd when the priority
+         * set is non-empty; drain only then. Leave priority_events_last_poll at
+         * the last real drain so preemption still measures from that poll. */
+        if ((flags & AE_FILE_EVENTS) && eventLoop->priority_apidata != NULL) {
+            int priority_pending = 0;
+
+            for (j = 0; j < numevents; j++) {
+                if (eventLoop->fired[j].fd == eventLoop->priority_fd) {
+                    priority_pending = 1;
+                    break;
+                }
+            }
+            if (priority_pending || eventLoop->custompoll != NULL) processed += aeProcessQoSEvents(eventLoop);
         }
 
         /* Process normal file events */

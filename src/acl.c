@@ -2236,7 +2236,13 @@ static inline int shouldRestrictCmd(struct serverCommand *cmd) {
     return (cmd->acl_categories & ACL_CATEGORY_KEYSPACE) ||
            (cmd->acl_categories & ACL_CATEGORY_READ) ||
            (cmd->acl_categories & ACL_CATEGORY_WRITE) ||
-           doesCommandHaveKeys(cmd);
+           /* Commands that act on the currently selected DB without declaring
+            * keys or a dbid argument opt in explicitly. Using a command flag
+            * rather than an ACL category keeps the db= check applied to them
+            * without also widening what a '+@keyspace' or '+@read' rule grants.
+            * The SCRIPT subcommands only act on the selected DB when the script
+            * cache is per DB; otherwise the cache is global. */
+           ((cmd->flags & CMD_CURRENT_DB) && server.script_cache_per_db) || doesCommandHaveKeys(cmd);
 }
 
 /* Check if the command is ready to be executed according to the

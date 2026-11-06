@@ -180,4 +180,34 @@ start_server {overrides {log-format json}} {
     }
 }
 
+# The ISO 8601 log timestamp must carry the actual local UTC offset, including
+# daylight-saving shapes that are not a one-hour step forward: Lord Howe Island
+# shifts by 30 minutes, and tzdata models Europe/Dublin's winter as negative DST.
+# The server inherits TZ from the test runner, so it is set around start_server.
+#
+# The log line stamps the current time, so this checks the whole path (cached
+# offset -> lock-free conversion -> "+HH:MM" suffix) at whatever season the test
+# runs in; the seasonal cases themselves are pinned at fixed instants by the
+# unit tests in src/unit/test_util.cpp.
+foreach tz {Australia/Lord_Howe Europe/Dublin America/St_Johns} {
+    # Skip zones this system's tz database does not know (libc would fall back to UTC).
+    if {![file exists /usr/share/zoneinfo/$tz]} continue
+    set saved_tz_set [info exists ::env(TZ)]
+    if {$saved_tz_set} {set saved_tz $::env(TZ)}
+    set ::env(TZ) $tz
+    start_server {overrides {log-timestamp-format iso8601}} {
+        test "ISO 8601 log timestamp carries the actual UTC offset ($tz)" {
+            set log_lines [count_log_lines 0]
+            r debug log "timezone probe"
+            set line [lindex [wait_for_log_messages 0 {"*timezone probe*"} $log_lines 100 10] 0]
+            assert {[regexp {\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}([+-]\d\d:\d\d)} $line -> got]}
+            # Tcl's view of the same zone at the same instant, as +HH:MM.
+            set z [clock format [clock seconds] -format %z -timezone :$tz]
+            set expected "[string range $z 0 2]:[string range $z 3 4]"
+            assert_equal $expected $got
+        }
+    }
+    if {$saved_tz_set} {set ::env(TZ) $saved_tz} else {unset ::env(TZ)}
+}
+
 }

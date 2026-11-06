@@ -36,15 +36,11 @@
  * in order to log something to the server log, it may deadlock: in the copy
  * of the address space of the forked process the lock will never be released.
  *
- * This function takes the timezone 'tz' as argument, and the 'dst' flag is
- * used to check if daylight saving time is currently in effect. The caller
- * of this function should obtain such information calling tzset() ASAP in the
- * main() function to obtain the timezone offset from the 'timezone' global
- * variable. To obtain the daylight information, if it is currently active or not,
- * one trick is to call localtime() in main() ASAP as well, and get the
- * information from the tm_isdst field of the tm structure. However the daylight
- * time may switch in the future for long running processes, so this information
- * should be refreshed at safe times.
+ * This function takes the local time's offset east of UTC in seconds as
+ * argument, daylight saving included (see utcOffsetFromLocaltime() in util.c).
+ * The offset may change while a long running process is up (DST, and tzdata
+ * has half-hour and negative DST shifts), so the caller should refresh it at
+ * safe times; the server does so in updateCachedTime().
  *
  * Note that this function does not work for dates < 1/1/1970, it is solely
  * designed to work with what time(NULL) may return, and to support server
@@ -60,17 +56,16 @@ static int is_leap_year(time_t year) {
         return 1; /* If div by 100 and 400 is leap. */
 }
 
-void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst) {
+void nolocks_localtime(struct tm *tmp, time_t t, long utc_offset) {
     const time_t secs_min = 60;
     const time_t secs_hour = 3600;
     const time_t secs_day = 3600 * 24;
 
-    t -= tz;                       /* Adjust for timezone. */
-    t += 3600 * dst;               /* Adjust for daylight time. */
+    t += utc_offset;               /* UTC -> local wall clock (DST already included). */
     time_t days = t / secs_day;    /* Days passed since epoch. */
     time_t seconds = t % secs_day; /* Remaining seconds. */
 
-    tmp->tm_isdst = dst;
+    tmp->tm_isdst = -1; /* DST is folded into utc_offset; not known separately here. */
     tmp->tm_hour = seconds / secs_hour;
     tmp->tm_min = (seconds % secs_hour) / secs_min;
     tmp->tm_sec = (seconds % secs_hour) % secs_min;
@@ -110,18 +105,18 @@ void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst) {
 #ifdef LOCALTIME_TEST_MAIN
 #include <stdio.h>
 
+/* Build: cc -DLOCALTIME_TEST_MAIN localtime.c util.c ... -- or compare by hand: */
 int main(void) {
-    /* Obtain timezone and daylight info. */
-    tzset(); /* Now 'timezone' global is populated. */
     time_t t = time(NULL);
-    struct tm *aux = localtime(&t);
-    int daylight_active = aux->tm_isdst;
+    struct tm local, utc, tm;
+    localtime_r(&t, &local);
+    gmtime_r(&t, &utc);
+    long utc_offset = (local.tm_hour - utc.tm_hour) * 3600L + (local.tm_min - utc.tm_min) * 60L;
+    if (local.tm_yday != utc.tm_yday) utc_offset += (local.tm_yday - utc.tm_yday > 0) ? 86400L : -86400L;
 
-    struct tm tm;
     char buf[1024];
-
-    nolocks_localtime(&tm, t, timezone, daylight_active);
+    nolocks_localtime(&tm, t, utc_offset);
     strftime(buf, sizeof(buf), "%d %b %H:%M:%S", &tm);
-    printf("[timezone: %d, dl: %d] %s\n", (int)timezone, (int)daylight_active, buf);
+    printf("[utc_offset: %ld] %s\n", utc_offset, buf);
 }
 #endif

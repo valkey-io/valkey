@@ -492,6 +492,70 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+start_server {tags {"repl"} overrides {save "" repl-ping-replica-period 1}} {
+    start_server {overrides {forkless-infrastructure-enabled yes save "" repl-timeout 3}} {
+        test "Primary link blocked by a forkless save does not hit repl-timeout" {
+            set replica [srv 0 client]
+            set primary [srv -1 client]
+
+            # Lists are never cloned for the save thread, so a replicated DEL of
+            # these keys blocks the primary link until the save thread has
+            # written every one of them. The whole database is just these few
+            # keys, so the block lasts about num_keys x the per-key save delay
+            # and no longer.
+            set lists {}
+            for {set i 0} {$i < 3} {incr i} {
+                $primary rpush list:$i a
+                lappend lists list:$i
+            }
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            wait_for_ofs_sync $primary $replica
+            assert_equal 1 [s -1 sync_full]
+
+            # 4 s per key keeps each key in the save thread well past the 3 s
+            # repl-timeout. These are wall-clock sleeps, like the timeout, so
+            # the ratio holds on slow and valgrind runners without scaling.
+            # The delay is restored and the save drained when the test ends,
+            # also when an assertion fails, so the save thread does not keep
+            # sleeping 4 s per key until the server is killed.
+            $replica config set bgsave-default-method forkless
+            test_defer {waitForBgsave $replica}
+            test_config_set $replica rdb-key-save-delay 4000000
+            $replica bgsave
+            wait_for_condition 50 100 {
+                [s 0 rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless bgsave did not start"
+            }
+
+            # The replicated DEL blocks the primary link until the save thread
+            # has written the lists. The link shows flags M and b on the replica.
+            set t0 [clock milliseconds]
+            $primary del {*}$lists
+            wait_for_condition 50 100 {
+                [regexp {flags=M[a-zA-Z]*b} [$replica client list]]
+            } else {
+                fail "primary link was not blocked by the forkless save"
+            }
+            wait_for_condition 600 100 {
+                ![regexp {flags=M[a-zA-Z]*b} [$replica client list]]
+            } else {
+                fail "primary link is still blocked"
+            }
+            # The block must have outlasted repl-timeout, otherwise this test
+            # does not exercise the timeout check at all.
+            assert_morethan [expr {[clock milliseconds] - $t0}] 3000
+
+            # The link stayed up: no timeout, and no second full sync.
+            assert_equal 0 [count_log_message 0 "PRIMARY timeout"]
+            assert_equal 1 [s -1 sync_full]
+            wait_for_ofs_sync $primary $replica
+            assert_equal 0 [$replica exists {*}$lists]
+        } {} {needs:debug}
+    }
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         

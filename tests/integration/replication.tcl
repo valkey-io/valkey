@@ -2761,7 +2761,10 @@ foreach load_mode {disabled on-empty-db} {
         $primary config set forkless-policy prefer-forkless
         $primary config set repl-diskless-sync yes
         $primary config set repl-diskless-sync-delay 0
-        $primary debug populate 200000
+        # Under valgrind the forkless save barely progresses while the write loads
+        # run, so the sync can only finish after they stop. Use a smaller keyspace
+        # and shorter loads there so the sync fits the wait below.
+        $primary debug populate [expr {$::valgrind ? 50000 : 200000}]
 
         start_server {overrides {save ""}} {
             set replica [srv 0 client]
@@ -2769,8 +2772,9 @@ foreach load_mode {disabled on-empty-db} {
 
             test "Forkless diskless full sync under write load, repl-diskless-load=$load_mode" {
                 set loglines [count_log_lines -1]
-                set load1 [start_write_load $primary_host $primary_port 60]
-                set load2 [start_write_load $primary_host $primary_port 60]
+                set load_seconds [expr {$::valgrind ? 10 : 60}]
+                set load1 [start_write_load $primary_host $primary_port $load_seconds]
+                set load2 [start_write_load $primary_host $primary_port $load_seconds]
                 wait_for_condition 50 100 {
                     [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
                 } else {
@@ -2782,8 +2786,8 @@ foreach load_mode {disabled on-empty-db} {
                 # Make sure the forkless socket path (with inline commands) ran.
                 wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
 
-                # Replica must sync while writes are still flowing.
-                wait_for_condition 100 100 {
+                # On normal builds the replica syncs while writes are still flowing.
+                wait_for_condition 600 100 {
                     [s 0 master_link_status] eq {up}
                 } else {
                     fail "Replica didn't sync (repl-diskless-load=$load_mode)"

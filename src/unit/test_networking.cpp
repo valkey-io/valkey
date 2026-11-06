@@ -209,6 +209,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
 
     /* Cleanup */
     listRelease(server.repl_buffer_blocks);
+    server.repl_buffer_blocks = NULL;
     listRelease(c->reply);
     freeClientReplicationData(c);
     zfree(c);
@@ -335,7 +336,9 @@ TEST_F(NetworkingTest, TestPostWriteToReplica) {
     freeClientReplicationData(c);
     raxFree(server.repl_backlog->blocks_index);
     zfree(server.repl_backlog);
+    server.repl_backlog = NULL;
     listRelease(server.repl_buffer_blocks);
+    server.repl_buffer_blocks = NULL;
     listRelease(c->reply);
     zfree(c);
 }

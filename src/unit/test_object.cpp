@@ -20,8 +20,18 @@ typedef struct objMetadata {
     uint32_t meta_int;
 } objMetadata;
 
+extern "C" void unitTestOnly_objectResetMetadataSize(void);
+
 class ObjectTest : public ::testing::Test {
   protected:
+    /* Other suites (and tests here) set the process-wide metadata size. */
+    void SetUp() override {
+        unitTestOnly_objectResetMetadataSize();
+    }
+    void TearDown() override {
+        unitTestOnly_objectResetMetadataSize();
+    }
+
     robj *createKeyValueObject(const char *k, const char *v) {
         sds key = sdsnew(k);
         robj *obj = createStringObject(v, strlen(v));

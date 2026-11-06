@@ -4607,7 +4607,7 @@ static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct
         *read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
     } else if (!commandCheckArity(*cmd, argc, NULL)) {
         *read_flags |= READ_FLAGS_BAD_ARITY;
-    } else if (server.cluster_enabled) {
+    } else if (server.cluster_enabled && (inMainThread() || !((*cmd)->flags & CMD_MODULE_GETKEYS))) {
         debugServerAssert(*slot == -1 &&
                           !(*read_flags & READ_FLAGS_CROSSSLOT) &&
                           !(*read_flags & READ_FLAGS_NO_KEYS));
@@ -4695,6 +4695,10 @@ int processCommand(client *c) {
             serverAssert(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND);
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
+        if (server.cluster_enabled && cmd && (cmd->flags & CMD_MODULE_GETKEYS) && c->slot == -1 &&
+            !(c->read_flags & (READ_FLAGS_BAD_ARITY | READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT))) {
+            c->slot = clusterSlotByCommand(cmd, c->argv, c->argc, &c->read_flags);
+        }
 
         if (authRequired(c)) {
             /* AUTH and HELLO and no auth commands are valid even in

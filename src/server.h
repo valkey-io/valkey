@@ -3012,7 +3012,7 @@ typedef struct scanOptions {
     long count;      /* COUNT option. */
     sds pat;         /* MATCH pattern. */
     long long type;  /* TYPE filter. */
-    int patlen;      /* MATCH pattern length. */
+    size_t patlen;   /* MATCH pattern length. */
     int use_pattern; /* MATCH is active. */
     int only_keys;   /* NOVALUES/NOSCORES option. */
     int input_slot;  /* SLOT option, or -1. */
@@ -3611,7 +3611,7 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password, robj **err);
 void addAuthErrReply(client *c, robj *err);
 unsigned long ACLGetCommandID(sds cmdname);
 user *ACLGetUserByName(const char *name, size_t namelen);
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix);
+int ACLUserCheckKeyPerm(user *u, const char *key, size_t keylen, int flags, bool is_prefix);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags);
@@ -4127,7 +4127,7 @@ int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResul
 int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
-unsigned short crc16(const char *buf, int len);
+unsigned short crc16(const char *buf, size_t len);
 
 /* Sentinel */
 void initSentinelConfig(void);

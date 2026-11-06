@@ -230,7 +230,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
     }
 
     if (server.aof_state != AOF_OFF) {
-        overhead += sdsAllocSize(server.aof_buf);
+        overhead += sdsAllocSize(server.aof_buf) + sdsAllocSize(server.aof_retry_buf);
     }
 
     if (clusterIsAnySlotExporting()) {

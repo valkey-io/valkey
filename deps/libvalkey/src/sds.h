@@ -30,8 +30,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __SDS_H
-#define __SDS_H
+#ifndef VALKEY_SDS_H
+#define VALKEY_SDS_H
 
 #define SDS_MAX_PREALLOC (1024 * 1024)
 #ifdef _MSC_VER

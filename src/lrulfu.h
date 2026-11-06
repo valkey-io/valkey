@@ -1,5 +1,5 @@
-#ifndef __LRULFU_H__
-#define __LRULFU_H__
+#ifndef VALKEY_LRULFU_H
+#define VALKEY_LRULFU_H
 
 /*
  * Important: include fmacros.h before any system header

@@ -23,7 +23,7 @@
 #define LTTNG_UST_TRACEPOINT_INCLUDE "./trace_cluster.h"
 
 #if !defined(__VALKEY_TRACE_CLUSTER_H__) || defined(LTTNG_UST_TRACEPOINT_HEADER_MULTI_READ)
-#define __VALKEY_TRACE_CLUSTER_H__
+#define VALKEY_TRACE_CLUSTER_H
 
 #include <lttng/tracepoint.h>
 
@@ -133,8 +133,8 @@ LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
 
 #else /* USE_LTTNG */
 
-#ifndef __VALKEY_TRACE_CLUSTER_H__
-#define __VALKEY_TRACE_CLUSTER_H__
+#ifndef VALKEY_TRACE_CLUSTER_H
+#define VALKEY_TRACE_CLUSTER_H
 
 /* avoid compiler warning on empty source file */
 static inline void __valkey_cluster_trace(void) {

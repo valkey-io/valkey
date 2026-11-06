@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __INTSET_H
-#define __INTSET_H
+#ifndef VALKEY_INTSET_H
+#define VALKEY_INTSET_H
 #include <stdint.h>
 
 typedef struct intset {

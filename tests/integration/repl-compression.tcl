@@ -13,6 +13,12 @@ proc replica_line_uncompressed_bytes {primary} {
     return [lindex [replica_line_compression_bytes $primary] 1]
 }
 
+# repl_bypassed_batches= from the replica line of the primary's INFO replication.
+proc replica_line_bypassed_batches {primary} {
+    assert {[regexp {repl_bypassed_batches=([0-9]+)} [$primary info replication] -> bypassed]}
+    return $bypassed
+}
+
 set ::replcompression_zstd_supported 0
 
 # Start a fake primary that completes a size-framed full sync, then sends the
@@ -1384,6 +1390,61 @@ start_server {tags {"repl" "valgrind:skip"} overrides {save "" io-threads 4 repl
                 $replica2 replicaof no one
             }
             $replica1 replicaof no one
+        }
+    }
+}
+
+# Incompressible writes make the primary feed batches uncompressed instead of
+# paying for compression that saves nothing, and compressible writes bring
+# compression back after a probe. The replica decodes both kinds of frame.
+start_server {tags {"repl" "valgrind:skip"} overrides {save "" repl-compression lz4}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test {Incompressible writes are sent uncompressed and compressible writes are compressed again} {
+        start_server {overrides {save "" repl-compression lz4}} {
+            set replica [srv 0 client]
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            wait_for_condition 50 100 {
+                [string match "*repl_compression=lz4*" [$primary info replication]]
+            } else {
+                fail "Compression not active on the replica link"
+            }
+            assert_equal 0 [replica_line_bypassed_batches $primary]
+
+            # Random 16 KiB values: every batch is well above the minimum
+            # judged size and cannot shrink.
+            set urandom [open /dev/urandom rb]
+            for {set i 0} {$i < 200} {incr i} {
+                $primary set "bypass:random:$i" [read $urandom 16384]
+            }
+            close $urandom
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+            assert_morethan [replica_line_bypassed_batches $primary] 0
+
+            # Enough compressible writes to finish any pending bypass and probe.
+            for {set i 0} {$i < 400} {incr i} {
+                $primary set "bypass:text:$i" [string repeat "valkey-compressible-$i " 700]
+            }
+            wait_for_ofs_sync $primary $replica
+
+            # From here on every batch is compressed again.
+            set bypassed_before [replica_line_bypassed_batches $primary]
+            lassign [replica_line_compression_bytes $primary] compressed_before uncompressed_before
+            for {set i 400} {$i < 600} {incr i} {
+                $primary set "bypass:text:$i" [string repeat "valkey-compressible-$i " 700]
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+            assert_equal $bypassed_before [replica_line_bypassed_batches $primary]
+            lassign [replica_line_compression_bytes $primary] compressed_after uncompressed_after
+            set ratio [expr {double($compressed_after - $compressed_before) / ($uncompressed_after - $uncompressed_before)}]
+            assert_lessthan $ratio 0.5
+
+            $replica replicaof no one
         }
     }
 }

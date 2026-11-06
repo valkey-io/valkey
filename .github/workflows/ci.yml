@@ -324,10 +324,12 @@ jobs:
       - name: unit tests in a single process
         # make test-unit runs each test in its own process. run them all in
         # one process, so a test that depends on state left by another fails.
+        timeout-minutes: 60
         run: ./src/unit/valkey-unit-gtests
       - name: unit tests in a single process, shuffled
         # a fixed seed stays deterministic for a given commit while covering
         # an order the default run does not.
+        timeout-minutes: 60
         run: ./src/unit/valkey-unit-gtests --gtest_shuffle --gtest_random_seed=2
 
   build-almalinux8-jemalloc:

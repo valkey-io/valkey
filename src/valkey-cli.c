@@ -2055,6 +2055,8 @@ static sds jsonStringOutput(sds out, const char *p, int len, int mode) {
         while (tmplen--) {
             if (*n == '\\')
                 out = sdscatlen(out, "\\\\", 2);
+            else if (*n == '"' && n != tmp && tmplen != 0) /* not the enclosing quotes */
+                out = sdscatlen(out, "\\\"", 2);
             else
                 out = sdscatlen(out, n, 1);
             n++;

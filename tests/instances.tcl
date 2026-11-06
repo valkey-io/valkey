@@ -255,8 +255,11 @@ proc is_alive pid {
 
 proc stop_instance pid {
     catch {exec kill $pid}
-    # Node might have been stopped in the test
-    catch {exec kill -SIGCONT $pid}
+    # Node might have been stopped in the test. Only resume it in that case;
+    # see kill_server in support/server.tcl for why.
+    if {[process_is_stopped $pid]} {
+        catch {exec kill -SIGCONT $pid}
+    }
     if {$::valgrind} {
         set max_wait 120000
     } else {

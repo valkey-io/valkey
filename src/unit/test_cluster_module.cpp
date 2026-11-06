@@ -55,3 +55,13 @@ TEST(ClusterModuleTest, NormalHeaderLimitAlsoProtectsLightHeaders) {
     EXPECT_EQ((size_t)max_payload_len + normal_overhead, (size_t)UINT32_MAX);
     EXPECT_LE((size_t)max_payload_len + light_overhead, (size_t)UINT32_MAX);
 }
+
+/* Reject oversized messages at the actual cluster-module send boundary.
+ * The tiny payload must never be accessed for an invalid length. */
+TEST(ClusterModuleTest, RejectsOversizedMessageBeforeSending) {
+    const char payload[] = "x";
+    uint32_t first_invalid = maxModulePayloadLen() + 1;
+
+    EXPECT_EQ(clusterSendModuleMessageToTarget(NULL, 0, 1, payload, first_invalid), C_ERR);
+    EXPECT_EQ(clusterSendModuleMessageToTarget(NULL, 0, 1, payload, UINT32_MAX), C_ERR);
+}

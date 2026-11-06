@@ -9655,7 +9655,7 @@ struct COMMAND_ARG SINTERSTORE_Args[] = {
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* SISMEMBER history */
 commandHistory SISMEMBER_History[] = {
-{"9.2.0","Added the `XX` options."},
+{"9.2.0","Added the `XX` option."},
 };
 #endif
 

@@ -986,6 +986,7 @@ class BgIterationTest : public ::testing::Test {
         serverDb *aux = server.db[dbid0];
         server.db[dbid0] = server.db[dbid1];
         server.db[dbid1] = aux;
+        bgIteration_swapdb(dbid0, dbid1);
 
         bgIteration_handleCommandReplication(0, c->cmd, c->argc, c->argv);
         server.in_call--;
@@ -2788,6 +2789,55 @@ TEST_F(BgIterationTest, multiNotReplicatedButDelRecreateAccess) {
 }
 
 
+// A replicated MULTI/EXEC that creates a new (future) key.  This mirrors the sequence that
+//  server.c produces for "MULTI; SET W0 xxx; EXEC" during an eventual (forkless full sync) iteration:
+//   - call(EXEC)   -> bgIteration_blockClientIfRequired(EXEC)
+//   - call(SET)    -> bgIteration_blockClientIfRequired(SET), then the SET executes
+//   - alsoPropagate(SET) -> propagateToBgIteration() sends MULTI, then SET
+//   - afterCommand -> propagatePendingCommands() -> propagateToBgIteration(-1) sends EXEC
+//  The new key must be added to early_iterate_entries exactly once.
+TEST_F(BgIterationTest, multiCreatesNewKey_eventual) {
+    simpleDelItem(14); // W0 (DB1) doesn't exist before iteration
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0); // Items 1 & 2 are in queue (same bucket)
+
+    c = getMultiClient("SET W0 xxx", 1);
+    int dbid = c->db->id;
+    simulateUnblockedWrite_inCall(c); // the EXEC
+
+    server.in_exec = 1;
+    advanceMultiClientToCommand(c, 0); // SET W0 xxx
+    EXPECT_CALL(mock, blockClientInUseOnKeys(c, _, _)).Times(0);
+    bool blocked = bgIteration_blockClientIfRequired(c);
+    EXPECT_FALSE(blocked);
+    server.in_call++;
+    robj *value = dupStringObject(c->argv[2]);
+    setKey(c, c->db, c->argv[1], &value, SETKEY_ADD_OR_UPDATE);
+
+    // alsoPropagate() for the SET: propagateToBgIteration() sends MULTI first, then the SET
+    struct serverCommand *cmd_multi = lookupCommandByCString("multi");
+    bgIteration_handleCommandReplication(dbid, cmd_multi, 1, &shared.multi);
+    bgIteration_handleCommandReplication(dbid, c->cmd, c->argc, c->argv);
+    server.in_call--;
+    server.in_exec = 0;
+
+    // propagatePendingCommands() closes the transaction with EXEC
+    struct serverCommand *cmd_exec = lookupCommandByCString("exec");
+    bgIteration_handleCommandReplication(dbid, cmd_exec, 1, &shared.exec);
+    server.in_call--;
+
+    expectReadKeySequence(it, 1, 2); // already queued (same bucket as key 0)
+    expectReadMultiReplication(it);
+    expectReadReplication(it, c); // SET W0 xxx (c is still advanced to the SET)
+    expectReadExecReplication(it);
+    expectReadKeySequence(it, 3, 13);
+    // W0 (item 14) is skipped: it was created by the replicated transaction
+    expectReadKey(it, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
 // For this test, B0 is added into DB1 - so it exists in both DB 0 and 1.  We will process it
 //  in DB0, but it will be unprocessed in DB1.  See if we track SELECT properly.
 TEST_F(BgIterationTest, multiHandlesSelectProperly) {
@@ -3169,4 +3219,38 @@ TEST_F(BgIterationTest, checkNoKeysWriteIsReplicated) {
 
     expectReadKeySequence(it, 3, LAST_ITEM);
     expectReadComplete(it);
+}
+
+
+// During a save, a write to an unsaved key queues that key ahead of the scan.  Expedited keys
+//  waiting at a feed must not stop the queue target from growing.
+TEST_F(BgIterationTest, queueTargetGrowsWithExpeditedKeysWaiting) {
+    // Start a consistent save, as BGSAVE does.  Capture its feed timer so the test runs the feed.
+    aeTimeProc *feed = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(DoAll(SaveArg<2>(&feed), Return(0)));
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_START, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    ASSERT_NE(feed, nullptr);
+
+    // Before anything is fed, write 3 keys.  All are expedited into the queue.
+    for (int item = 0; item < 3; item++) {
+        client *writer = getWriteClient(item, "xxx");
+        simulateBlockedWrite(writer);
+        freeTestClient(writer);
+    }
+
+    // The client reads one of them.  (The first read doesn't run a feed.)
+    bgIteratorRead(it);
+
+    bgIteratorStatus status;
+    bgIteratorGetStatus(it, &status);
+    ASSERT_EQ(status.queue_length, 2u);
+    unsigned long target = status.queue_length_target;
+
+    // Run one feed.  Everything in the queue was added since the last feed, so the target must grow.
+    feed(NULL, 0, NULL);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_GT(status.queue_length_target, target);
+
+    expectAnythingCleanup(it);
 }

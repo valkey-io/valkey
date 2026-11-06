@@ -491,6 +491,12 @@ start_server {tags {"other"}} {
         assert_error {*unknown subcommand*} {r CONFIG GET_XX}
     }
 
+    test "DEBUG SLOTMIGRATION with missing arguments does not crash" {
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION}
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION PREVENT-PAUSE}
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
+
     test "Extended Redis Compatibility config" {
         # This config is added in Valkey 8.0, shall be deprecated and have no
         # effect in 9.x and be deleted in 10.0.
@@ -759,7 +765,7 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "ext
             r flushall
             r save
             r set x 10
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             waitForBgsave r
 
@@ -774,7 +780,7 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "ext
             r flushdb
             r set x 10
             r expire x 1000
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
             r bgsave
             waitForBgsave r
             r debug reload

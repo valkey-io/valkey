@@ -948,3 +948,27 @@ TEST_F(NetworkingTest, TestSetDeferredReplyNextMergeGuardsIoLastWritten) {
         freeReplyOffloadClient(c);
     }
 }
+
+/* An IO thread can still be writing to a client whose read has completed but
+ * not yet been processed. Finishing the read must keep the connection's update
+ * state postponed for the write, otherwise TLS lets the IO thread's SSL_write
+ * path modify the main thread's event loop. */
+TEST_F(NetworkingTest, TestReadDoneKeepsPostponeWhileWritePending) {
+    fakeConnection *fc = connCreateFake();
+    fc->conn.state = CONN_STATE_CONNECTED;
+    client *c = (client *)zcalloc(sizeof(client));
+    c->conn = &fc->conn;
+    c->io_read_state = CLIENT_COMPLETED_IO;
+    c->io_write_state = CLIENT_PENDING_IO;
+    c->nread = -1; /* EAGAIN on a connected socket: stop after handleReadResult */
+    connSetPostponeUpdateState(c->conn, CONN_POSTPONE_READ | CONN_POSTPONE_WRITE);
+
+    processClientIOReadsDone(c);
+
+    ASSERT_EQ(c->io_read_state, CLIENT_IDLE);
+    ASSERT_EQ(fc->postpone_state, CONN_POSTPONE_WRITE);
+    ASSERT_TRUE(c->conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE);
+
+    zfree(c);
+    connFreeFake(fc);
+}

@@ -623,6 +623,7 @@ start_server {tags {"geo"}} {
     } {} {external:skip}
 
     test {GEOSEARCH BYPOLYGON standard operations} {
+        r del points
         r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87156123068408 "St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
@@ -693,6 +694,14 @@ start_server {tags {"geo"}} {
         r geoadd points 151.2224105000496 -33.87544442350019 "Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
         r geoadd points 151.22953444719315 -33.874838625143106 "The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
         assert_equal {{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia}} [r GEOSEARCH points BYPOLYGON  5 151.2154285314146 -33.867438205607186 151.20024487595015 -33.88138572784347 151.2374118848648 -33.87601765283626 151.19695829592922 -33.87272872054441 151.2278336546125 -33.88345323146266]
+    }
+
+    test {GEOSEARCH BYPOLYGON whose vertex centroid is a pole} {
+        r del points
+        r geoadd points 0 45 a 10 -20 b 0 -60 c
+        set north [r geosearch points BYPOLYGON 4 -90 -30 90 -30 90 85 -90 85]
+        set south [r geosearch points BYPOLYGON 4 -90 -1 90 -1 90 -85 -90 -85]
+        assert_equal {{a b} {b c}} [list [lsort $north] [lsort $south]]
     }
 
     test {GEOSEARCH with exact zero distances} {

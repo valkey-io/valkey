@@ -344,6 +344,86 @@ TEST_F(UtilTest, TestReclaimFilePageCache) {
 #endif
 }
 
+/* stringmatchlen() has two "[...]" class parsers that must stay byte-for-byte
+ * equivalent: an inline one used for every pattern, and a cached one
+ * (parseCharClass(), reached only when the pattern also contains a '*') used
+ * to avoid re-parsing the class on every backtrack position. Both are
+ * static, so they can only be exercised here through the public API, by
+ * comparing the same class matched via each path.
+ *
+ * The trick to force one call down each path while keeping the matched set
+ * identical: append a fixed-length literal suffix after the class, and use a
+ * string exactly as long as "<class><suffix>" requires. A leading '*' can
+ * then only ever bind zero characters (there's no slack for it to consume
+ * without leaving the mandatory suffix unmatched), so "*<class><suffix>"
+ * (cache-eligible: '*' followed later by '[') and "<class><suffix>" (no '*',
+ * always the inline parser) must return identical results for every string
+ * that's the right length. */
+#define CLASS_TEST_MAX_PATTERN 32
+static void assertClassCacheAgreesWithInline(const char *label, const char *classPattern, int classPatternLen, int nocase) {
+    char withStar[CLASS_TEST_MAX_PATTERN];
+    char withoutStar[CLASS_TEST_MAX_PATTERN];
+    int withStarLen = 0;
+    int withoutStarLen = 0;
+
+    withStar[withStarLen++] = '*';
+    memcpy(withStar + withStarLen, classPattern, classPatternLen);
+    withStarLen += classPatternLen;
+    withStar[withStarLen++] = 'X';
+
+    memcpy(withoutStar, classPattern, classPatternLen);
+    withoutStarLen = classPatternLen;
+    withoutStar[withoutStarLen++] = 'X';
+
+    for (int b = 0; b < 256; b++) {
+        char string[2] = {static_cast<char>(b), 'X'};
+        int cached = stringmatchlen(withStar, withStarLen, string, 2, nocase);
+        int inlineResult = stringmatchlen(withoutStar, withoutStarLen, string, 2, nocase);
+        ASSERT_EQ(cached, inlineResult) << "case=" << label << " nocase=" << nocase << " byte=" << b;
+    }
+}
+
+TEST_F(UtilTest, TestStringMatchClassCacheAgreesWithInlineFullByteRange) {
+    /* Plain ranges, including ones spanning the signed/unsigned char
+     * boundary (0x80) that previously diverged between the two parsers. */
+    assertClassCacheAgreesWithInline("a-z", "[a-z]", (int)sizeof("[a-z]") - 1, 0);
+    assertClassCacheAgreesWithInline("a-z nocase", "[a-z]", (int)sizeof("[a-z]") - 1, 1);
+    assertClassCacheAgreesWithInline("a-\\xff", "[a-\xff]", (int)sizeof("[a-\xff]") - 1, 0);
+    assertClassCacheAgreesWithInline("a-\\xff nocase", "[a-\xff]", (int)sizeof("[a-\xff]") - 1, 1);
+    assertClassCacheAgreesWithInline("\\x80-\\xff", "[\x80-\xff]", (int)sizeof("[\x80-\xff]") - 1, 0);
+    assertClassCacheAgreesWithInline("\\x80-\\xff nocase", "[\x80-\xff]", (int)sizeof("[\x80-\xff]") - 1, 1);
+    assertClassCacheAgreesWithInline("reversed \\xff-\\x80", "[\xff-\x80]", (int)sizeof("[\xff-\x80]") - 1, 0);
+
+    /* Negation. */
+    assertClassCacheAgreesWithInline("^a-c", "[^a-c]", (int)sizeof("[^a-c]") - 1, 0);
+    assertClassCacheAgreesWithInline("^a-c nocase", "[^a-c]", (int)sizeof("[^a-c]") - 1, 1);
+    assertClassCacheAgreesWithInline("^\\x80-\\xff", "[^\x80-\xff]", (int)sizeof("[^\x80-\xff]") - 1, 0);
+
+    /* Literal high-byte members, and escapes (case-sensitive even under
+     * nocase, matching the inline parser's existing behavior). */
+    assertClassCacheAgreesWithInline("literal high bytes", "[\x80\x90\xff]", (int)sizeof("[\x80\x90\xff]") - 1, 0);
+    assertClassCacheAgreesWithInline("literal high bytes nocase", "[\x80\x90\xff]",
+                                     (int)sizeof("[\x80\x90\xff]") - 1, 1);
+    assertClassCacheAgreesWithInline("escapes", "[\\a\\b\\c]", (int)sizeof("[\\a\\b\\c]") - 1, 0);
+    assertClassCacheAgreesWithInline("escapes nocase", "[\\a\\b\\c]", (int)sizeof("[\\a\\b\\c]") - 1, 1);
+}
+
+TEST_F(UtilTest, TestStringMatchClassCacheAgreesWithInlineUnterminated) {
+    /* An unterminated class consumes the rest of the pattern as members
+     * (see the inline parser's patternLen==0 fallback), so it has no
+     * trailing anchor to pin the string length the way the helper above
+     * does. Test it directly: both "*[abc" (cache-eligible) and "[abc"
+     * (always inline) must treat every byte identically. */
+    static const char withStar[] = "*[abc";
+    static const char withoutStar[] = "[abc";
+    for (int b = 0; b < 256; b++) {
+        char string[1] = {static_cast<char>(b)};
+        int cached = stringmatchlen(withStar, (int)sizeof(withStar) - 1, string, 1, 0);
+        int inlineResult = stringmatchlen(withoutStar, (int)sizeof(withoutStar) - 1, string, 1, 0);
+        ASSERT_EQ(cached, inlineResult) << "byte=" << b;
+    }
+}
+
 TEST_F(UtilTest, TestWritePointerWithPadding) {
     unsigned char buf[8];
     static int dummy;

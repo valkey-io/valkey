@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "hashtable.h"
 #include "server.h"
 
 typedef enum pathHashReplyMode {
@@ -379,12 +380,18 @@ void phdelCommand(client *c) {
     if (c->argc == 3) {
         deleted = pathHashDeletePath(path_hash, objectGetVal(c->argv[2]));
     } else {
+        if (payload->encoding == OBJ_ENCODING_HASHTABLE)
+            hashtablePauseAutoShrink(objectGetVal(payload));
         for (int i = 3; i < c->argc; i++) {
             if (hashTypeDelete(payload, objectGetVal(c->argv[i]))) {
                 deleted++;
                 path_hash->num_fields--;
             }
         }
+        /* If the payload is empty, it will be removed from the index and freed
+         * by the raxRemove below, so there's no need to restore auto-shrink. */
+        if (payload->encoding == OBJ_ENCODING_HASHTABLE && hashTypeLength(payload) > 0)
+            hashtableResumeAutoShrink(objectGetVal(payload));
     }
     if (c->argc != 3 && hashTypeLength(payload) == 0)
         serverAssert(pathHashDeletePath(path_hash, objectGetVal(c->argv[2])));

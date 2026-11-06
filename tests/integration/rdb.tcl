@@ -381,6 +381,55 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+    foreach bgsave_type {"fork" "forkless"} {
+        foreach scenario {"new key MOVE" "recreated key MOVE" "recreated key COPY"} {
+            test "bgsave $bgsave_type snapshot ignores $scenario done during the save" {
+                r flushall
+                r config set rdb-key-save-delay 0
+                r config set bgsave-default-method $bgsave_type
+                populate 2000 "" 16
+                r set k before-save
+                r config set rdb-key-save-delay 1000
+                r bgsave
+                assert_equal [s rdb_bgsave_in_progress] 1
+
+                switch $scenario {
+                    "new key MOVE" {
+                        r set n created-after-bgsave
+                        assert_equal 1 [r move n 1]
+                    }
+                    "recreated key MOVE" {
+                        r del k
+                        r set k recreated
+                        assert_equal 1 [r move k 1]
+                    }
+                    "recreated key COPY" {
+                        r del k
+                        r set k recreated
+                        assert_equal 1 [r copy k k2]
+                    }
+                }
+                assert_equal [s rdb_bgsave_in_progress] 1
+
+                r config set rdb-key-save-delay 0
+                waitForBgsave r
+                assert_equal [s rdb_last_bgsave_status] "ok"
+
+                # The snapshot holds the dataset as of the start of the save.
+                r debug reload nosave
+                assert_equal 2001 [r dbsize]
+                assert_equal 0 [r exists n]
+                assert_equal 0 [r exists k2]
+                assert_equal before-save [r get k]
+                r select 1
+                assert_equal 0 [r dbsize]
+                r select 9
+            } {OK} {needs:debug}
+        }
+    }
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "forkless bgsave contains expired keys from when save started" {
         
         # Set two keys that expire together

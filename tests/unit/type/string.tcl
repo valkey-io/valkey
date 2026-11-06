@@ -239,6 +239,28 @@ start_server {tags {"string"}} {
         r mget foo{t} baazz{t} bar{t} myset{t}
     } {BAR {} FOO {}}
 
+    test {MGETPXT} {
+        r flushdb
+        r set foo{t} BAR pxat 17344823940230
+        r set bar{t} FOO pxat 17344823940231
+        r mgetpxt foo{t} bar{t}
+    } {{BAR 17344823940230} {FOO 17344823940231}}
+
+    test {MGETPXT against non existing key} {
+        r mgetpxt foo{t} baazz{t} bar{t}
+    } {{BAR 17344823940230} {} {FOO 17344823940231}}
+
+    test {MGETPXT against non-string key} {
+        r sadd myset{t} ciao
+        r sadd myset{t} bau
+        r mgetpxt foo{t} baazz{t} bar{t} myset{t}
+    } {{BAR 17344823940230} {} {FOO 17344823940231} {}}
+
+    test {MGETPXT against a key with no expiration} {
+        r set baz{t} BAZ
+        r mgetpxt foo{t} baz{t} bar{t}
+    } {{BAR 17344823940230} {BAZ -1} {FOO 17344823940231}}
+
     test {GETSET (set new value)} {
         r del foo
         list [r getset foo xyz] [r get foo]
@@ -1040,6 +1062,90 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         r del foo
         r set foo bar pxat [expr [clock milliseconds] + 10000]
         assert_range [r ttl foo] 5 10
+    }
+
+    test "GETPXT after SET PXAT" {
+        r del foo
+        r set foo bar pxat 17344823940230
+        r getpxt foo
+    } {bar 17344823940230}
+
+    test "GETPXT after SET with no expiration" {
+        r del foo
+        r set foo bar
+        r getpxt foo
+    } {bar -1}
+
+    test "GETPXT with no entry" {
+        r del foo
+        r getpxt foo
+    } {}
+
+    test "GETPXT against a non-string key" {
+        r del mykey
+        r sadd mykey ciao
+        assert_error "WRONGTYPE*" {r getpxt mykey}
+    }
+
+    test "GETPXT/MGETPXT against a key that expired" {
+        r debug set-active-expire 0
+        r del foo{t} bar{t}
+        r set foo{t} BAR px 10
+        r set bar{t} FOO
+        after 50
+        assert_equal {} [r getpxt foo{t}]
+        assert_equal {{} {FOO -1}} [r mgetpxt foo{t} bar{t}]
+        assert_equal {OK} [r debug set-active-expire 1]
+    } {} {needs:debug}
+
+    test "GETPXT/MGETPXT report an expiration applied after the value" {
+        r del foo{t} bar{t}
+        r set foo{t} BAR
+        r set bar{t} FOO
+        assert_equal {BAR -1} [r getpxt foo{t}]
+
+        # Applying a TTL to an existing key may reallocate the object, so the
+        # expiration must still be reachable from the value returned by lookup.
+        r pexpireat foo{t} 17344823940230
+        r expireat bar{t} 17344823940
+        assert_equal {BAR 17344823940230} [r getpxt foo{t}]
+        assert_equal {FOO 17344823940000} [r getpxt bar{t}]
+        assert_equal {{BAR 17344823940230} {FOO 17344823940000}} [r mgetpxt foo{t} bar{t}]
+
+        # ... and must disappear again when the TTL is removed.
+        r persist foo{t}
+        assert_equal {BAR -1} [r getpxt foo{t}]
+        assert_equal {{BAR -1} {FOO 17344823940000}} [r mgetpxt foo{t} bar{t}]
+    }
+
+    foreach resp {3 2} {
+        if {[lsearch $::denytags "resp3"] >= 0} {
+            if {$resp == 3} {continue}
+        } elseif {$::force_resp3} {
+            if {$resp == 2} {continue}
+        }
+        r hello $resp
+
+        # GETPXT/MGETPXT reply with an array, so a missing key must be a null
+        # array, not a null bulk string. Only raw mode can tell them apart.
+        r readraw 1
+
+        set nullres {*-1}
+        if {$resp == 3} {set nullres {_}}
+
+        test "GETPXT against non existing key returns a null array in RESP$resp" {
+            r del nonexisting
+            assert_equal $nullres [r getpxt nonexisting]
+        }
+
+        test "MGETPXT against non existing key returns a null array in RESP$resp" {
+            r del nonexisting
+            assert_equal {*1} [r mgetpxt nonexisting]
+            assert_equal $nullres [r read]
+        }
+
+        r readraw 0
+        r hello 2
     }
 
     test "SET EXAT / PXAT Expiration time is expired" {

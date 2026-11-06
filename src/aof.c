@@ -2481,6 +2481,15 @@ int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
     ValkeyModuleIO io;
     moduleValue *mv = objectGetVal(o);
     moduleType *mt = mv->type;
+
+    /* Modules may omit aof_rewrite. This runs in the fork()ed AOF rewrite
+     * child: dereferencing a NULL callback crashes the child. Return an error
+     * so the parent reports a normal failed rewrite. */
+    if (mt->aof_rewrite == NULL) {
+        serverLog(LL_WARNING, "Module type '%s' has no aof_rewrite callback, cannot rewrite", mt->name);
+        return 0;
+    }
+
     moduleInitIOContext(&io, mt, r, key, dbid);
     mt->aof_rewrite(&io, key, mv->value);
     if (io.ctx) {

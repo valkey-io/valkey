@@ -1266,6 +1266,15 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         moduleValue *mv = objectGetVal(o);
         moduleType *mt = mv->type;
 
+        /* Modules may omit rdb_save. BGSAVE and RDB-preamble AOF rewrite run
+         * this in a fork()ed child, so a NULL callback crashes the child. Return
+         * -1 makes the parent report a normal failed save. */
+        if (mt->rdb_save == NULL) {
+            debugServerAssert(rdb != NULL);
+            serverLog(LL_WARNING, "Module type '%s' has no rdb_save callback, cannot serialize", mt->name);
+            return -1;
+        }
+
         /* Write the "module" identifier as prefix, so that we'll be able
          * to call the right module during loading. */
         int retval = rdbSaveLen(rdb, mt->id);
@@ -3328,6 +3337,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             char name[10];
             moduleTypeNameByID(name, moduleid);
             rdbReportCorruptRDB("The RDB file contains module data I can't load: no matching module type '%s'", name);
+            return NULL;
+        }
+        /* Modules may omit rdb_load. Report the data as corrupt instead of
+         * dereferencing the NULL callback. */
+        if (mt->rdb_load == NULL) {
+            rdbReportCorruptRDB("The RDB file contains module data for the module type '%s', "
+                                "which has no rdb_load callback", mt->name);
             return NULL;
         }
         ValkeyModuleIO io;

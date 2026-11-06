@@ -12,6 +12,12 @@
 static ValkeyModuleType *datatype = NULL;
 static int load_encver = 0;
 
+static ValkeyModuleType *NoSaveType = NULL;
+static ValkeyModuleType *NoLoadType = NULL;
+static ValkeyModuleType *NoRewriteType = NULL;
+static ValkeyModuleType *NoFreeType = NULL;
+static ValkeyModuleString *NoFreeValue = NULL;
+
 /* used to test processing events during slow loading */
 static volatile int slow_loading = 0;
 static volatile int is_in_slow_loading = 0;
@@ -259,6 +265,118 @@ int createDataTypeBlockCheck(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     return VALKEYMODULE_OK;
 }
 
+static void *typecb_rdb_load(ValkeyModuleIO *io, int encver) {
+    VALKEYMODULE_NOT_USED(encver);
+    ValkeyModuleString *value = ValkeyModule_LoadString(io);
+    if (ValkeyModule_IsIOError(io)) {
+        if (value) ValkeyModule_FreeString(NULL, value);
+        return NULL;
+    }
+    return value;
+}
+
+static void typecb_rdb_save(ValkeyModuleIO *io, void *value) {
+    ValkeyModule_SaveString(io, (ValkeyModuleString *)value);
+}
+
+static void typecb_free(void *value) {
+    if (value) ValkeyModule_FreeString(NULL, (ValkeyModuleString *)value);
+}
+
+static void typecb_aof_rewrite(ValkeyModuleIO *io, ValkeyModuleString *key, void *value) {
+    VALKEYMODULE_NOT_USED(io);
+    VALKEYMODULE_NOT_USED(key);
+    VALKEYMODULE_NOT_USED(value);
+}
+
+static ValkeyModuleType *typecb_register_type(ValkeyModuleCtx *ctx, const char *name,
+                                              int omit_save, int omit_load, int omit_rewrite, int omit_free) {
+    ValkeyModuleTypeMethods tm = {
+        .version = VALKEYMODULE_TYPE_METHOD_VERSION,
+        .rdb_save = omit_save ? NULL : typecb_rdb_save,
+        .rdb_load = omit_load ? NULL : typecb_rdb_load,
+        .aof_rewrite = omit_rewrite ? NULL : typecb_aof_rewrite,
+        .free = omit_free ? NULL : typecb_free,
+    };
+    return ValkeyModule_CreateDataType(ctx, name, 0, &tm);
+}
+
+static int typecb_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, ValkeyModuleType *mt) {
+    if (argc != 3) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModule_RetainString(ctx, argv[2]);
+    ValkeyModule_ModuleTypeSetValue(key, mt, argv[2]);
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
+static int typecb_set_nosave(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    return typecb_set(ctx, argv, argc, NoSaveType);
+}
+
+static int typecb_set_noload(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    return typecb_set(ctx, argv, argc, NoLoadType);
+}
+
+static int typecb_set_norewrite(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    return typecb_set(ctx, argv, argc, NoRewriteType);
+}
+
+static int typecb_set_nofree(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModule_ModuleTypeSetValue(key, NoFreeType, NoFreeValue);
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
+static int typecb_save_to_string(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    ValkeyModuleType *mt = ValkeyModule_ModuleTypeGetType(key);
+    void *value = ValkeyModule_ModuleTypeGetValue(key);
+    ValkeyModule_CloseKey(key);
+    if (mt == NULL || value == NULL) {
+        ValkeyModule_ReplyWithError(ctx, "ERR no module value at key");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModuleString *serialized = ValkeyModule_SaveDataTypeToString(ctx, value, mt);
+    if (serialized == NULL) {
+        ValkeyModule_ReplyWithError(ctx, "ERR save failed");
+        return VALKEYMODULE_OK;
+    }
+    ValkeyModule_ReplyWithString(ctx, serialized);
+    ValkeyModule_FreeString(ctx, serialized);
+    return VALKEYMODULE_OK;
+}
+
+static int typecb_load_from_string(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+    void *value = ValkeyModule_LoadDataTypeFromStringEncver(argv[1], NoLoadType, 0);
+    if (value == NULL) {
+        ValkeyModule_ReplyWithError(ctx, "ERR load failed");
+        return VALKEYMODULE_OK;
+    }
+    typecb_free(value);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -308,6 +426,29 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "datatype.is_in_slow_loading", datatype_is_in_slow_loading,
                                   "allow-loading", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    /* Module type names must be exactly 9 characters from the type charset. */
+    NoSaveType = typecb_register_type(ctx, "no__save_", 1, 0, 0, 0);
+    NoLoadType = typecb_register_type(ctx, "no__load_", 0, 1, 0, 0);
+    NoRewriteType = typecb_register_type(ctx, "no__rwrt_", 0, 0, 1, 0);
+    NoFreeType = typecb_register_type(ctx, "no__free_", 0, 0, 0, 1);
+    if (NoSaveType == NULL || NoLoadType == NULL || NoRewriteType == NULL || NoFreeType == NULL)
+        return VALKEYMODULE_ERR;
+    NoFreeValue = ValkeyModule_CreateString(NULL, "nofree", 6);
+    if (NoFreeValue == NULL) return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "typecb.setnosave", typecb_set_nosave, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "typecb.setnoload", typecb_set_noload, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "typecb.setnorewrite", typecb_set_norewrite, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "typecb.setnofree", typecb_set_nofree, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "typecb.savetostring", typecb_save_to_string, "readonly", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "typecb.loadfromstring", typecb_load_from_string, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

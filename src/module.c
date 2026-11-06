@@ -7629,6 +7629,10 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
  *   that should be populated with the methods callbacks and structure
  *   version, like in the following example:
  *
+ *   All callbacks are optional. Omitting one does not prevent registration,
+ *   but the operations needing it fail or are skipped instead of crashing:
+ *   persistence, the serialization APIs, and freeing module-owned values.
+ *
  *         ValkeyModuleTypeMethods tm = {
  *             .version = VALKEYMODULE_TYPE_METHOD_VERSION,
  *             .rdb_load = myType_RDBLoadCallBack,
@@ -7636,7 +7640,7 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
  *             .aof_rewrite = myType_AOFRewriteCallBack,
  *             .free = myType_FreeCallBack,
  *
- *             // Optional fields
+ *             // Other optional fields
  *             .digest = myType_DigestCallBack,
  *             .mem_usage = myType_MemUsageCallBack,
  *             .aux_load = myType_AuxRDBLoadCallBack,
@@ -8292,6 +8296,9 @@ void *VM_LoadDataTypeFromStringEncver(const ValkeyModuleString *str, const modul
     ValkeyModuleIO io;
     void *ret;
 
+    /* Modules may omit rdb_load. Return NULL and let the module report the error. */
+    if (mt == NULL || mt->rdb_load == NULL) return NULL;
+
     rioInitWithBuffer(&payload, objectGetVal(str));
     moduleInitIOContext(&io, (moduleType *)mt, &payload, NULL, -1);
 
@@ -8323,6 +8330,9 @@ void *VM_LoadDataTypeFromString(const ValkeyModuleString *str, const moduleType 
 ValkeyModuleString *VM_SaveDataTypeToString(ValkeyModuleCtx *ctx, void *data, const moduleType *mt) {
     rio payload;
     ValkeyModuleIO io;
+
+    /* Modules may omit rdb_save. Return NULL and let the module report the error. */
+    if (mt == NULL || mt->rdb_save == NULL) return NULL;
 
     rioInitWithBuffer(&payload, sdsempty());
     moduleInitIOContext(&io, (moduleType *)mt, &payload, NULL, -1);

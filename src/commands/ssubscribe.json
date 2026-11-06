@@ -8,6 +8,7 @@
         "function": "ssubscribeCommand",
         "command_flags": [
             "PUBSUB",
+            "DENYOOM",
             "NOSCRIPT",
             "LOADING",
             "STALE"

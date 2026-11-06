@@ -77,8 +77,25 @@ int main(int argc, char **argv) {
         setRandomSeedCString(seed_hex, strlen(seed_hex));
     }
 
+    bool shared_process = hasFlag(argc, argv, "--shared-process");
+
     // The following line must be executed to initialize GoogleTest before running the tests.
     ::testing::InitGoogleMock(&argc, argv);
+
+    // The tests are designed to run one per process, and they do not clean up
+    // all the global state they change. Refuse a run that would execute every
+    // test in one process, unless it was asked for. The filter is read from
+    // GoogleTest, so it also covers the GTEST_FILTER environment variable.
+    // gtest-parallel lists the tests and then runs each one with its own filter.
+    const char *filter = GTEST_FLAG_GET(filter).c_str();
+    bool runs_everything = filter[0] == '\0' || strcmp(filter, "*") == 0;
+    if (runs_everything && !shared_process && !GTEST_FLAG_GET(list_tests) &&
+        GTEST_FLAG_GET(internal_run_death_test).empty()) {
+        fprintf(stderr, "Unit tests are designed to run one per process. Use 'make test-unit' to run them all, "
+                        "or choose tests with --gtest_filter=Suite.Test (for example to debug one test in gdb). "
+                        "Pass --shared-process to run several tests in one process anyway.\n");
+        return 2;
+    }
 
     // Set death test style to threadsafe when running under Valgrind
     if (valgrind) {

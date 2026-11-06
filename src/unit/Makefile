@@ -292,11 +292,17 @@ test-unit: valkey-unit-gtests
 	@printf '\033[32mAll UNIT TESTS PASSED!\033[0m\n'
 
 .PHONY: valgrind
+# Run each test in its own valgrind process through gtest-parallel, the same way
+# the "valgrind" job in .github/workflows/daily.yml does, and fail on any
+# valgrind error, matching that job's error check. This Makefile runs from
+# src/unit, so the paths are relative to that directory.
 valgrind: valkey-unit-gtests
-	valgrind $(VALGRIND_ARGS) ./valkey-unit-gtests
+	@rm -f err.*.txt
+	../../deps/gtest-parallel/gtest-parallel --gtest_filter=$(UNIT_TEST_PATTERN)* valgrind -- --track-origins=yes --suppressions=../valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.%p.txt ./valkey-unit-gtests --valgrind
+	@if grep -qlE '0x[0-9A-Fa-f]+:' err.*.txt 2>/dev/null; then grep -lE '0x[0-9A-Fa-f]+:' err.*.txt | xargs cat; exit 1; fi
 
 clean:
-	rm -rf *.o valkey-unit-gtests ../valkey-unit-gtests generated_* $(DEPENDS) .flags wrapped
+	rm -rf *.o valkey-unit-gtests ../valkey-unit-gtests generated_* $(DEPENDS) .flags wrapped err.*.txt
 
 distclean: clean
 	$(MAKE) -C .. distclean

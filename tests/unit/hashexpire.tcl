@@ -4665,7 +4665,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 HINCRBY  hincrby
                 HINCRBYFLOAT hset
             }
-            test "$command is executed on repilca's expired fields" {
+            test "$command is executed on replica's expired fields" {
                 lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
                 # Initialize deferred clients and subscribe to keyspace notifications
                 foreach instance [list $primary $replica] {
@@ -4707,7 +4707,7 @@ start_server {tags {"hashexpire external:skip"}} {
             } {OK} {needs:debug}
         }
 
-        test {HINCRBYFLOAT maintains TTL on repilca's fields} {
+        test {HINCRBYFLOAT maintains TTL on replica's fields} {
             lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
             $primary debug set-active-expire 0
             $primary flushall

@@ -134,6 +134,15 @@ set regression_vectors {
 }
 set rv_idx 0
 
+proc geo_add_members {key members} {
+    r del $key
+    set i 0
+    foreach m $members {
+        r geoadd $key [expr {13.0 + $i * 0.001}] 38.0 $m
+        incr i
+    }
+}
+
 start_server {tags {"geo"}} {
     test {GEO with wrong type src key} {
         r set src{t} wrong_type
@@ -927,6 +936,79 @@ start_server {tags {"geo"}} {
                 fail "place should not be found, debuginfo: $debuginfo, height_new: $height_new width_new: $width_new"
             }
             unset -nocomplain debuginfo
+        }
+    }
+}
+
+start_server {tags {"geo"}} {
+    foreach {encoding max_entries} {listpack 128 btree 0} {
+        # Members get farther from the search center in list order, so ASC
+        # returns them in this order. The first three cover a binary member,
+        # an integer-encoded listpack member and a long member.
+        set long_member [string repeat x 60]
+        set members [list "bin\x00ary" 12345 $long_member]
+        for {set i 0} {$i < 20} {incr i} {lappend members "m:$i"}
+
+        test "GEOSEARCH replies with members - $encoding" {
+            test_config_set r zset-max-listpack-entries $max_entries
+            geo_add_members pts{t} $members
+            assert_encoding $encoding pts{t}
+
+            assert_equal $members [r geosearch pts{t} fromlonlat 13.0 38.0 byradius 100 km asc]
+            assert_equal [lreverse $members] [r geosearch pts{t} fromlonlat 13.0 38.0 byradius 100 km desc]
+            assert_equal [lrange $members 0 2] [r geosearch pts{t} fromlonlat 13.0 38.0 byradius 100 km count 3]
+            assert_equal {m:19 m:18 m:17} [r geosearch pts{t} fromlonlat 13.0 38.0 byradius 100 km count 3 desc]
+            assert_equal [lrange $members 0 2] [r georadius pts{t} 13.0 38.0 100 km count 3 asc]
+
+            set res [r geosearch pts{t} fromlonlat 13.0 38.0 byradius 100 km count 3 any]
+            assert_equal 3 [llength $res]
+            foreach m $res { assert_not_equal -1 [lsearch -exact $members $m] }
+
+            set res [r geosearch pts{t} fromlonlat 13.0 38.0 byradius 100 km count 2 asc withdist withhash withcoord]
+            assert_equal "bin\x00ary" [lindex $res 0 0]
+            assert_equal 12345 [lindex $res 1 0]
+            assert_equal [r zscore pts{t} 12345] [lindex $res 1 2]
+            assert_range [lindex $res 0 1] 0 0.001
+            assert_equal [r geopos pts{t} 12345] [list [lindex $res 1 3]]
+        }
+
+        test "GEOSEARCHSTORE stores members - $encoding" {
+            test_config_set r zset-max-listpack-entries $max_entries
+            geo_add_members pts{t} $members
+            r del dst{t}
+
+            assert_equal 3 [r geosearchstore dst{t} pts{t} fromlonlat 13.0 38.0 byradius 100 km count 3]
+            assert_equal [lsort [lrange $members 0 2]] [lsort [r zrange dst{t} 0 -1]]
+            foreach m [lrange $members 0 2] {
+                assert_equal [r zscore pts{t} $m] [r zscore dst{t} $m]
+            }
+
+            assert_equal 3 [r geosearchstore dst{t} pts{t} fromlonlat 13.0 38.0 byradius 100 km count 3 desc storedist]
+            assert_equal {m:17 m:18 m:19} [r zrange dst{t} 0 -1]
+            set dist [lindex [r geosearch pts{t} fromlonlat 13.0 38.0 byradius 100 km count 1 desc withdist] 0 1]
+            assert_equal $dist [format %.4f [r zscore dst{t} m:19]]
+
+            assert_equal 3 [r georadius pts{t} 13.0 38.0 100 km count 3 asc store dst{t}]
+            assert_equal [lsort [lrange $members 0 2]] [lsort [r zrange dst{t} 0 -1]]
+        }
+
+        test "GEOSEARCHSTORE with the same source and destination key - $encoding" {
+            test_config_set r zset-max-listpack-entries $max_entries
+            geo_add_members pts{t} $members
+            set scores {}
+            foreach m [lrange $members 0 4] { lappend scores [r zscore pts{t} $m] }
+
+            assert_equal 5 [r geosearchstore pts{t} pts{t} fromlonlat 13.0 38.0 byradius 100 km count 5]
+            assert_equal [lsort [lrange $members 0 4]] [lsort [r zrange pts{t} 0 -1]]
+            set i 0
+            foreach m [lrange $members 0 4] {
+                assert_equal [lindex $scores $i] [r zscore pts{t} $m]
+                incr i
+            }
+
+            geo_add_members pts{t} $members
+            assert_equal 23 [r geosearchstore pts{t} pts{t} fromlonlat 13.0 38.0 byradius 100 km storedist]
+            assert_equal $members [r zrange pts{t} 0 -1]
         }
     }
 }

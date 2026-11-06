@@ -332,6 +332,60 @@ start_server {tags {"modules"}} {
         $rd close
     }
     
+    test {Module waiter keeps priority after declining a ready list} {
+        r del k
+        set clients {}
+        set code [catch {
+            foreach name {module first second} {
+                set $name [valkey_deferring_client]
+                lappend clients [set $name]
+                [set $name] client id
+                set ${name}_id [[set $name] read]
+            }
+
+            $module blockonkeys.blpopn k 2 0
+            wait_for_blocked_clients_count 1
+            $first blpop k 0
+            wait_for_blocked_clients_count 2
+            $second blpop k 0
+            wait_for_blocked_clients_count 3
+
+            # The module declines one element. The first BLPOP consumes it,
+            # leaving the module ahead of the second BLPOP for the next push.
+            assert_equal 1 [r lpush k x]
+            wait_for_blocked_clients_count 2
+            assert_match "*flags=N*" [r client list id $first_id]
+            assert_equal {k x} [$first read]
+            assert_match "*flags=b*" [r client list id $module_id]
+            assert_match "*flags=b*" [r client list id $second_id]
+            assert_equal 0 [r exists k]
+
+            assert_equal 2 [r lpush k y z]
+            wait_for_blocked_clients_count 1
+            # Check which client was served before reading: a priority
+            # regression would serve the second BLPOP and leave the module
+            # blocked, so reading the module reply directly would hang.
+            wait_for_condition 100 10 {
+                [string match "*flags=N*" [r client list id $module_id]]
+            } else {
+                fail "Module waiter lost priority to the second BLPOP"
+            }
+            assert_equal {z y} [$module read]
+            assert_match "*flags=b*" [r client list id $second_id]
+            assert_equal 0 [r exists k]
+
+            assert_equal 1 [r lpush k w]
+            wait_for_blocked_clients_count 0
+            assert_equal {k w} [$second read]
+            assert_equal 0 [r exists k]
+        } result options]
+        foreach client $clients {
+            catch {$client close}
+        }
+        wait_for_blocked_clients_count 0
+        if {$code} {return -options $options $result}
+    }
+
     test {Module explicit unblock when blocked on keys} {
         r del k
         r set somekey someval

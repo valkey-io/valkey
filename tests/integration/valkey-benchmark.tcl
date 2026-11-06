@@ -38,6 +38,18 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
         }
 
+        test {benchmark: RESP3 push is not counted as a command reply} {
+            set server [open [list | [info nameofexecutable] tests/support/benchmark-push-server.tcl] r]
+            gets $server port
+            # This mock uses plain TCP, even when the surrounding suite uses TLS.
+            set cmd [list $::VALKEY_BENCHMARK_BIN -h 127.0.0.1 -p $port -c 1 -n 1 -3 --enable-tracking PING]
+            set result [catch {exec {*}$cmd 2>@1} output]
+            catch {close $server}
+            # The PUSH must not finish the request before its error reply.
+            assert_equal 1 $result
+            assert_match {*push-test-command-error*} $output
+        }
+
         test {benchmark: single request completes across write retries} {
             # TLS negotiation can make the first write return zero. Retrying
             # must not count the same request again and exhaust the -n limit.

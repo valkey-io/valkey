@@ -1582,7 +1582,7 @@ void ziplistRandomPairs(unsigned char *zl, unsigned int count, ziplistEntry *key
     /* sort by indexes. */
     qsort(picks, count, sizeof(rand_pick), uintCompare);
 
-    /* fetch the elements form the ziplist into a output array respecting the original order. */
+    /* fetch the elements from the ziplist into an output array respecting the original order. */
     unsigned int zipindex = picks[0].index, pickindex = 0;
     p = ziplistIndex(zl, zipindex);
     while (ziplistGet(p, &key, &klen, &klval) && pickindex < count) {

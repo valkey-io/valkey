@@ -411,6 +411,28 @@ start_server {tags {"geo"}} {
         assert {$result eq {}}
     } 
 
+    set original_max [lindex [r config get zset-max-listpack-entries] 1]
+    r config set zset-max-listpack-entries 0
+    test {GEOHASH batch lookup handles existing, missing and repeated members} {
+        r del geohashbatchtest
+        set query_members {}
+        set expected {}
+        set i 1
+        # Geohashes for coordinates (1, 11) through (6, 16).
+        foreach geohash {s1bwwf2pts0 s41km883560 s461uq8d3p0 s46zeh8eyu0 s4et3f8vk60 s4u7089nf00} {
+            r geoadd geohashbatchtest $i [expr {$i + 10}] m$i
+            lappend query_members m$i missing$i m$i
+            lappend expected $geohash {} $geohash
+            incr i
+        }
+        lappend query_members missing
+        lappend expected {}
+        assert_encoding btree geohashbatchtest
+
+        assert_equal $expected [r geohash geohashbatchtest {*}$query_members]
+    }
+    r config set zset-max-listpack-entries $original_max
+
     test {GEOPOS simple} {
         r del points
         r geoadd points 10 20 a 30 40 b
@@ -434,6 +456,35 @@ start_server {tags {"geo"}} {
         set result [r geopos points]
         assert {$result eq {}}
     }
+
+    set original_max [lindex [r config get zset-max-listpack-entries] 1]
+    r config set zset-max-listpack-entries 0
+    test {GEOPOS batch lookup handles existing, missing and repeated members} {
+        r del geoposbatchtest
+        set query_members {}
+        for {set i 1} {$i <= 6} {incr i} {
+            r geoadd geoposbatchtest $i [expr {$i + 10}] m$i
+            lappend query_members m$i missing$i m$i
+        }
+        lappend query_members missing
+        assert_encoding btree geoposbatchtest
+
+        set result [r geopos geoposbatchtest {*}$query_members]
+        assert_equal 19 [llength $result]
+        set i 1
+        foreach {position missing duplicate} [lrange $result 0 end-1] {
+            assert_equal 2 [llength $position]
+            lassign $position longitude latitude
+            # Geohash encoding quantizes coordinates.
+            assert {abs($longitude - $i) < 0.001}
+            assert {abs($latitude - ($i + 10)) < 0.001}
+            assert_equal {} $missing
+            assert_equal $position $duplicate
+            incr i
+        }
+        assert_equal {} [lindex $result end]
+    }
+    r config set zset-max-listpack-entries $original_max
 
     test {GEODIST simple & unit} {
         r del points

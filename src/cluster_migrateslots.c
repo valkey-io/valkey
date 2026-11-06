@@ -1657,7 +1657,7 @@ bool shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 }
 
 /* Contains the logic run on the child process during the snapshot phase. */
-int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
+int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job, mstime_t expired_before) {
     list *slot_ranges = job->slot_ranges;
     size_t key_count = 0;
     for (int db_num = 0; db_num < server.dbnum; db_num++) {
@@ -1668,7 +1668,7 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
             slotRange *r = (slotRange *)ln->value;
             for (int slot = r->start_slot; slot <= r->end_slot; slot++) {
                 if (rewriteSlotToAppendOnlyFileRio(
-                        aof, db_num, slot, &key_count) == C_ERR) return C_ERR;
+                        aof, db_num, slot, &key_count, expired_before) == C_ERR) return C_ERR;
             }
         }
     }
@@ -1733,6 +1733,20 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
 
     server.slot_migration_pipe_conn = job->client->conn;
 
+    /* Keys that expired well before the fork are not sent to the target.
+     * Any code the parent runs after the fork sees the command time snapshot
+     * or a later one, so it sees these keys as expired too: any access
+     * deletes them and propagates the DEL, which is a no-op on the target.
+     *
+     * The cutoff is one second before the snapshot. If the clock steps back
+     * after the fork, the parent could see a skipped key as live again, and
+     * a write to it would reach a target that does not have the key. The
+     * margin covers small clock corrections, and costs little, since the
+     * keys we want to skip have usually been expired for much longer.
+     *
+     * In import mode the parent does not expire keys, so keep them all. */
+    mstime_t expired_before = server.import_mode ? 0 : commandTimeSnapshot() - 1000;
+
     if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
         /* Child */
         rio aof;
@@ -1744,7 +1758,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
         serverSetProcTitle("valkey-slot-migration-to-target");
         serverSetCpuAffinity(server.bgsave_cpulist);
 
-        int retval = childSnapshotForSyncSlot(&aof, job);
+        int retval = childSnapshotForSyncSlot(&aof, job, expired_before);
         if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE, "Slot migration");

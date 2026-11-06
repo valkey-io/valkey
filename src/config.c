@@ -492,6 +492,9 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
+/* Set while a failed CONFIG SET puts back the old values. */
+static int restoring_backup_config;
+
 void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
         {"list-max-ziplist-entries", 2, 2},
@@ -822,11 +825,13 @@ static void restoreBackupConfig(standardConfig **set_configs,
     int i;
     const char *errstr = "unknown error";
     /* Set all backup values */
+    restoring_backup_config = 1;
     for (i = 0; i < count; i++) {
         if (!performInterfaceSet(set_configs[i], old_values[i], &errstr))
             serverLog(LL_WARNING, "Failed restoring failed CONFIG SET command. Error setting %s to '%s': %s",
                       set_configs[i]->name, old_values[i], errstr);
     }
+    restoring_backup_config = 0;
     /* Apply backup */
     if (apply_fns) {
         for (i = 0; i < count && apply_fns[i] != NULL; i++) {
@@ -2681,6 +2686,21 @@ static int isValidMptcp(int val, const char **err) {
     return 1;
 }
 
+/* A slot export skips keys that were already expired when its snapshot
+ * started. In import mode an import source sees those keys as live, so a write
+ * to one would not reach the target. Don't allow it while an export runs. */
+static int isValidImportMode(int val, const char **err) {
+    /* Putting back the old value is safe: it was allowed when it was set, and
+     * no export can start while CONFIG SET runs. */
+    if (restoring_backup_config) return 1;
+    if (val && !server.import_mode && clusterIsAnySlotExporting()) {
+        *err = "Cannot enable import-mode while a slot migration is exporting slots";
+        return 0;
+    }
+
+    return 1;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -3506,7 +3526,7 @@ standardConfig static_configs[] = {
     createBoolConfig("cluster-slot-stats-enabled", NULL, MODIFIABLE_CONFIG, server.cluster_slot_stats_enabled, 0, NULL, NULL),
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
     createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
-    createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
+    createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, isValidImportMode, NULL),
     createBoolConfig("io-threads-always-active", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.io_threads_always_active, 0, NULL, NULL),
 
     /* String Configs */

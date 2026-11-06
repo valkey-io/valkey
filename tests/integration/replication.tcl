@@ -2491,6 +2491,11 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             set load2 [start_write_load $primary_host $primary_port 10]
             set load3 [start_write_load $primary_host $primary_port 10]
             set load4 [start_write_load $primary_host $primary_port 10]
+            wait_for_condition 50 100 {
+                [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 4
+            } else {
+                fail "Write load handlers didn't connect"
+            }
             after 200
             $replica replicaof $primary_host $primary_port
             wait_for_condition 500 100 {
@@ -2542,6 +2547,11 @@ foreach primary_diskless {yes no} {
                     test "[string toupper $cmd] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
                         set load1 [start_write_load $ph $pp 8]
                         set load2 [start_write_load $ph $pp 8]
+                        wait_for_condition 50 100 {
+                            [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
+                        } else {
+                            fail "Write load handlers didn't connect"
+                        }
                         $primary config set rdb-key-save-delay 100
                         $replica replicaof $ph $pp
                         wait_for_condition 50 100 {
@@ -2761,6 +2771,11 @@ foreach load_mode {disabled on-empty-db} {
                 set loglines [count_log_lines -1]
                 set load1 [start_write_load $primary_host $primary_port 60]
                 set load2 [start_write_load $primary_host $primary_port 60]
+                wait_for_condition 50 100 {
+                    [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
+                } else {
+                    fail "Write load handlers didn't connect"
+                }
                 after 200
                 $replica replicaof $primary_host $primary_port
 

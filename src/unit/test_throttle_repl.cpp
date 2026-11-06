@@ -34,6 +34,11 @@ class ThrottleReplTest : public ::testing::Test {
         memset(&server, 0, sizeof(valkeyServer));
         server.hz = CONFIG_DEFAULT_HZ;
         server.replicas = listCreate();
+        server.client_obuf_limits[CLIENT_TYPE_REPLICA].soft_limit_bytes = COB_LIMIT;
+        server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = COB_LIMIT;
+
+        /* throttle_repl set up */
+        throttleRepl_config.repl_throttling_enabled = 1;
 
         /* monotonic set up */
         origGetMonotonicUs = getMonotonicUs;
@@ -47,31 +52,13 @@ class ThrottleReplTest : public ::testing::Test {
     }
 
     void SetUp() override {
-        /* Per test: some tests change these. */
-        server.client_obuf_limits[CLIENT_TYPE_REPLICA].soft_limit_bytes = COB_LIMIT;
-        server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = COB_LIMIT;
-        server.primary_host = NULL;
-        server.maxmemory = 0;
-
-        throttleRepl_config.repl_throttling_enabled = 1;
-
         replica_steady = createFakeReplicaClient(1);
         replica_steady->repl_data->repl_state = REPLICA_STATE_ONLINE;
         EXPECT_CALL(mock, throttle_getMetrics(_, _)).WillRepeatedly(SetArgPointee<1>(throttleMetrics{}));
         EXPECT_CALL(mock, throttle_getGuardrailSecs(_)).WillRepeatedly(Return(0L));
-
-        /* The event counters are cumulative for the process. */
-        activation_events_at_start = (long)readMetric("repl_throttle_activation_events");
-        more_events_at_start = (long)readMetric("repl_throttle_more_events");
-        less_events_at_start = (long)readMetric("repl_throttle_less_events");
     }
 
     void TearDown() override {
-        /* Remove a throttler a test left installed, so the next test starts without one. */
-        EXPECT_CALL(mock, throttle_deregister(_)).Times(::testing::AnyNumber());
-        throttleRepl_config.repl_throttling_enabled = 0;
-        throttleRepl_adjustThrottling();
-
         freeFakeReplicaClient(replica_steady);
         replica_steady = NULL;
     }
@@ -104,16 +91,11 @@ class ThrottleReplTest : public ::testing::Test {
         return readMetric("repl_throttle_rate");
     }
 
-    /* Compares the events since the start of the test. */
     bool verifyThrottleEvent(long activation_events, long more, long less) {
-        return (long)readMetric("repl_throttle_activation_events") - activation_events_at_start == activation_events &&
-               (long)readMetric("repl_throttle_more_events") - more_events_at_start == more &&
-               (long)readMetric("repl_throttle_less_events") - less_events_at_start == less;
+        return (long)readMetric("repl_throttle_activation_events") == activation_events &&
+               (long)readMetric("repl_throttle_more_events") == more &&
+               (long)readMetric("repl_throttle_less_events") == less;
     }
-
-    long activation_events_at_start = 0;
-    long more_events_at_start = 0;
-    long less_events_at_start = 0;
 
   private:
     /* Snapshot the INFO output and return one field's numeric value (-1 if absent). */

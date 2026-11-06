@@ -11,14 +11,15 @@
  *
  * Space-Saving (Metwally, Agrawal & El Abbadi, 2005) approximates the K most
  * frequent items in a stream using O(K) memory. It keeps K (item, count, error)
- * slots and, for each observation:
- *   1. if the item is already tracked, increment its count;
- *   2. else if a slot is free, insert it with count = 1, error = 0;
+ * slots and, for each observation carrying a non-negative `weight`:
+ *   1. if the item is already tracked, add the weight to its count;
+ *   2. else if a slot is free, insert it with count = weight, error = 0;
  *   3. else evict the smallest-count slot and reuse it: the new item takes
- *      count = min_count + 1, error = min_count.
- * Per-window guarantees: a tracked item's true count is in [count - error,
- * count], and any item whose true frequency exceeds N/K (N = observations in
- * the window) is guaranteed tracked.
+ *      count = min_count + weight, error = min_count.
+ * Weight 1 is the classic unweighted count. Per-window guarantees: a tracked
+ * item's true total weight is in [count - error, count], and any item whose
+ * true share exceeds N/K (N = total weight recorded in the window) is
+ * guaranteed tracked.
  *
  * The tracked item is a (key name, database id) pair — the hot-key identity.
  * Keeping it concrete keeps the hot path free of indirect calls: comparison,
@@ -62,22 +63,36 @@ void spaceSavingManagerReset(spaceSavingManager *m, uint64_t now_us);
  * window. Boundaries are measured from the live window's real start, so a late
  * call cannot shorten the following window. */
 void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us);
-/* Record one observation of (`key`, `dbid`) into the current (live) window.
- * `key` is borrowed — it is copied only if a slot is committed to it. Does NOT
- * rotate: the caller must drive boundaries via spaceSavingManagerRotate() on a
- * timer, keeping this hot path free of any clock read. */
+/* Record one observation of (`key`, `dbid`) into the current (live) window —
+ * the classic unweighted count (weight 1). `key` is borrowed — it is copied
+ * only if a slot is committed to it. Does NOT rotate: the caller must drive
+ * boundaries via spaceSavingManagerRotate() on a timer, keeping this hot path
+ * free of any clock read. */
 void recordSpaceSavingManagerSample(spaceSavingManager *m, sds key, int dbid);
+/* Weighted variant: one observation carrying `weight` (e.g. estimated bytes a
+ * key access moved), of which `weight2` is a caller-chosen component tracked in
+ * a secondary accumulator (e.g. the write-bytes share of an access; pass 0 for
+ * none). The secondary is exact but partial: it counts only observations
+ * recorded into the slot under its current identity, and an eviction restarts
+ * it. Same semantics otherwise. */
+void recordSpaceSavingManagerSampleWeighted(spaceSavingManager *m, sds key, int dbid, uint64_t weight, uint64_t weight2);
 /* Number of items in the last completed (frozen) window. */
 int spaceSavingManagerCount(spaceSavingManager *m);
 /* Read the i-th item of the frozen window (0 <= i < count). Out-params may be
  * NULL; `*key` remains owned by the module and is valid until the next mutating
  * call. Slots are unordered. */
 void spaceSavingManagerAt(spaceSavingManager *m, int i, sds *key, int *dbid, uint64_t *count, uint64_t *error);
+/* Extended read of the i-th frozen item that also returns the secondary
+ * accumulator (0 when never recorded); out-params may be NULL. */
+void spaceSavingManagerAt2(spaceSavingManager *m, int i, sds *key, int *dbid, uint64_t *count, uint64_t *error, uint64_t *count2);
 /* Remove every item for which `pred(key, dbid, arg)` is non-zero, from BOTH the
  * live and frozen windows. */
 void spaceSavingManagerRemoveIf(spaceSavingManager *m, int (*pred)(sds key, int dbid, void *arg), void *arg);
-/* Total observations recorded in the last completed (frozen) window (N). */
+/* Total weight recorded in the last completed (frozen) window (N). */
 uint64_t spaceSavingManagerFrozenTotal(spaceSavingManager *m);
+/* Total weight recorded in the in-progress (live) window so far — partial by
+ * definition; a real-time peek before the freeze. */
+uint64_t spaceSavingManagerLiveTotal(spaceSavingManager *m);
 
 /* Record the sampling percentage that the current (live) window's counts are
  * being gathered under. It travels with the window when it is frozen, so a

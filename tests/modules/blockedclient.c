@@ -1047,24 +1047,63 @@ static void timer_callback(ValkeyModuleCtx *ctx, void *data)
     ValkeyModule_FreeThreadSafeContext(reply_ctx);
 }
 
-/* unblock_by_timer <period_ms> <timeout_ms>
- * period_ms is the period of the timer.
- * timeout_ms is the blocking timeout. */
+/* Held for the controlled tests: no timer may release this handle early. */
+static ValkeyModuleBlockedClient *held_blocked_client = NULL;
+
+/* Complete a manually held block after its timeout path has run. */
+static int release_held_blocked_client(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+{
+    UNUSED(argv);
+    if (argc != 1)
+        return ValkeyModule_WrongArity(ctx);
+    if (held_blocked_client == NULL)
+        return ValkeyModule_ReplyWithError(ctx, "ERR no held blocked client");
+
+    ValkeyModuleBlockedClient *bc = held_blocked_client;
+    held_blocked_client = NULL;
+    if (ValkeyModule_UnblockClient(bc, NULL) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR failed to release blocked client");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* A module block timeout must produce a reply when it wins the race with the timer. */
+static int timeout_callback(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+{
+    UNUSED(argv);
+    UNUSED(argc);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "TIMEOUT");
+}
+
+/* unblock_by_timer <period_ms> <timeout_ms> [with_timeout_callback]
+ * with_timeout_callback defaults to 0 to preserve NULL-callback coverage.
+ * period_ms == 0 holds the handle until release_held_blocked_client is called. */
 int unblock_by_timer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    if (argc != 3)
+    if (argc != 3 && argc != 4)
         return ValkeyModule_WrongArity(ctx);
 
     long long period;
     long long timeout;
+    long long with_timeout_callback = 0;
     if (ValkeyModule_StringToLongLong(argv[1],&period) != VALKEYMODULE_OK)
         return ValkeyModule_ReplyWithError(ctx,"ERR invalid period");
     if (ValkeyModule_StringToLongLong(argv[2],&timeout) != VALKEYMODULE_OK) {
         return ValkeyModule_ReplyWithError(ctx,"ERR invalid timeout");
     }
+    if (argc == 4 && (ValkeyModule_StringToLongLong(argv[3], &with_timeout_callback) != VALKEYMODULE_OK ||
+                      (with_timeout_callback != 0 && with_timeout_callback != 1))) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid timeout callback flag");
+    }
+    if (period == 0 && held_blocked_client != NULL)
+        return ValkeyModule_ReplyWithError(ctx, "ERR a blocked client is already held");
 
-    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, timeout);
-    ValkeyModule_CreateTimer(ctx, period, timer_callback, bc);
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(
+        ctx, NULL, with_timeout_callback ? timeout_callback : NULL, NULL, timeout);
+    if (bc == NULL) return VALKEYMODULE_OK;
+    if (period == 0)
+        held_blocked_client = bc;
+    else
+        ValkeyModule_CreateTimer(ctx, period, timer_callback, bc);
     return VALKEYMODULE_OK;
 }
 
@@ -1163,6 +1202,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "unblock_by_timer", unblock_by_timer, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "release_held_blocked_client", release_held_blocked_client, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "postponed_unmatched_thread", postponed_unmatched_thread, "", 0, 0, 0) == VALKEYMODULE_ERR)

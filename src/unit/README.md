@@ -53,7 +53,8 @@ sudo make install
 
 The unit tests are designed to run one test per process. `make test-unit` runs
 each test in its own process with gtest-parallel. Running the binary with no
-`--gtest_filter` (or with `--gtest_filter=*`) exits with code 2 instead of
+`--gtest_filter`, with `--gtest_filter=*`, or with a filter that only excludes
+tests (such as `--gtest_filter=-Suite.Test`) exits with code 2 instead of
 running every test in one process. To run or debug one test directly, choose it
 with a filter, for example in gdb:
 

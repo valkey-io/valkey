@@ -200,6 +200,7 @@ dataset, so reattachment must never PSYNC using the discarded dataset's offset.
 | Replica migration triggers | Sibling sync | `clusterSetPrimary` fires | Guard discards sibling sync, migration proceeds normally |
 | Operator runs CLUSTER REPLICATE | Sibling sync | `clusterSetPrimary` fires | Guard discards sibling sync, new replication proceeds |
 | Operator runs CLUSTER REPLICATE NO ONE | Sibling sync | Promotion path fires | Guard discards sibling sync, node becomes an empty primary |
+| Operator runs CLUSTER RESET | Sibling sync | Primary node is forgotten | Reset discards sibling sync first, node becomes an empty primary |
 
 **Every failure mode falls back safely.** Worst case is a normal full sync from P, which is the current behavior without this feature.
 

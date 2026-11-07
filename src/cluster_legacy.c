@@ -95,6 +95,7 @@ void resetManualFailover(void);
 void clusterCloseAllSlots(void);
 void clusterSetNodeAsPrimary(clusterNode *n);
 void clusterDelNode(clusterNode *delnode);
+static void clusterDiscardSiblingSyncIfActive(void);
 sds representClusterNodeFlags(sds ci, uint16_t flags);
 sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pairs_count);
 void clusterFreeNodesSlotsInfo(clusterNode *n);
@@ -1782,6 +1783,9 @@ void clusterReset(int hard) {
     dictEntry *de;
     int j;
     bool new_shard = false;
+
+    /* A sibling sync depends on the primary node, which is forgotten below. */
+    clusterDiscardSiblingSyncIfActive();
 
     /* Close slots, reset manual failover state. */
     clusterCloseAllSlots();
@@ -7590,14 +7594,13 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
  * -------------------------------------------------------------------------- */
 
 /* Discard a transient sync-from-replica sibling sync when a topology change
- * supersedes it. Invoked from both the cluster reconfiguration path
- * (clusterSetPrimary) and the CLUSTER REPLICATE NO ONE promotion path; each
- * establishes its own replication target right after (replicationSetPrimary()
- * and replicationUnsetPrimary() respectively), so the sibling state is
- * discarded rather than redirected. This avoids relying on
- * replicationUnsetPrimary()'s internal cleanup, which does not clear the guard
- * flag in every replication state (e.g. REPL_STATE_CONNECT). Safe to call when
- * no sibling sync is in progress. */
+ * supersedes it. Invoked from the cluster reconfiguration path
+ * (clusterSetPrimary), the CLUSTER REPLICATE NO ONE promotion path and
+ * CLUSTER RESET; each establishes its own replication target right after
+ * (replicationSetPrimary() or replicationUnsetPrimary()), so the sibling state
+ * is discarded rather than redirected. Discarding here, before the topology
+ * changes, keeps the reason in the log. Safe to call when no sibling sync is
+ * in progress. */
 static void clusterDiscardSiblingSyncIfActive(void) {
     if (server.cluster_syncing_from_sibling) {
         serverLog(LL_NOTICE, "Sync-from-replica: discarding sibling sync because the topology changed");

@@ -3647,8 +3647,10 @@ void replicationDiscardSiblingSync(void) {
  * primary for this node: there is nothing to fall back to, so the sibling
  * remains the replication target and the guard flag stays set. INFO and the
  * failover checks key off that flag, so it must keep reflecting that the node
- * still depends on the sibling. Callers that need a different target must
- * establish it themselves (see clusterSetPrimary()). */
+ * still depends on the sibling. Reconnects in that state fail the handshake,
+ * which needs the primary's name, and retry until gossip provides a primary.
+ * Callers that need a different target must establish it themselves (see
+ * clusterSetPrimary()), and replicationUnsetPrimary() discards the state. */
 int replicationAbortSiblingSync(void) {
     if (!server.cluster_syncing_from_sibling) return C_OK;
 
@@ -3833,6 +3835,11 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     argc = appendReplCompressionCapabilities(argv, lens, sizeof(argv) / sizeof(*argv), argc,
                                              replCompressionAlgorithm());
     if (server.cluster_syncing_from_sibling) {
+        if (server.cluster->myself->replicaof == NULL) {
+            sdsfree(portstr);
+            *err = sdsnew("Sync-from-replica: no cluster primary known for the sibling handshake");
+            return C_ERR;
+        }
         argv[argc] = "sibling-sync";
         lens[argc++] = strlen("sibling-sync");
         argv[argc] = server.cluster->myself->replicaof->name;
@@ -4656,6 +4663,13 @@ int syncWithPrimaryHandleReceivePingReplyState(connection *conn) {
 int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
     sds err;
     clusterNode *pn = server.cluster_enabled ? server.cluster->myself->replicaof : NULL;
+    /* The sibling attestation below names the cluster primary. Without one
+     * there is nothing to attest, so fail the handshake and let the error
+     * path fall back or retry. */
+    if (server.cluster_syncing_from_sibling && pn == NULL) {
+        err = sdsnew("Sync-from-replica: no cluster primary known for the sibling handshake");
+        goto err;
+    }
     server.repl_sibling_full_sync_safe = server.repl_replica_ro && server.repl_replica_ignore_maxmemory && pn &&
                                          (server.cluster_syncing_from_sibling ||
                                           (!strcmp(server.primary_host, pn->ip) && server.primary_port == getNodeDefaultReplicationPort(pn)));
@@ -5411,6 +5425,11 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
 
 /* Cancel replication, setting the instance as a primary itself. */
 void replicationUnsetPrimary(void) {
+    /* A primary has no replication source, so a sibling sync cannot survive
+     * this. Clear it first: the teardown below runs the abort paths, which
+     * must not see a sibling sync without a cluster primary to fall back to
+     * (CLUSTER RESET removes the primary node before promoting myself). */
+    replicationDiscardSiblingSync();
     if (server.primary_host == NULL) return; /* Nothing to do. */
     replicationInvalidateSiblingDonor();
 

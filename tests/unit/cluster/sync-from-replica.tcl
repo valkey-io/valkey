@@ -1361,3 +1361,32 @@ start_cluster 1 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
         wait_for_log_messages -2 [list "*donor rejected snapshot attestation*"] $lines 1000 10
     }
 }
+
+# CLUSTER RESET forgets the primary node before it promotes myself, so it must
+# discard a sibling sync itself. Separate topology, since the reset node
+# leaves the cluster.
+start_cluster 1 2 {tags {external:skip cluster} overrides {cluster-node-timeout 3000 repl-ping-replica-period 1}} {
+    test "FALLBACK - CLUSTER RESET mid-sync clears the sibling sync state" {
+        set primary_id [R 0 cluster myid]
+        for {set i 0} {$i < 2000} {incr i} {
+            R 0 set "reset:$i" "value:$i"
+        }
+        wait_node_synced 1
+        wait_node_synced 2
+
+        R 2 cluster replicate no one
+        R 2 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 1} rdb-key-save-delay 500
+        R 2 cluster replicate $primary_id
+        wait_sync_from_replica_started 2
+
+        set lines [count_log_lines -2]
+        R 2 cluster reset soft
+
+        assert_equal master [get_info 2 role]
+        assert_equal 0 [get_info 2 sync_from_replica_in_progress]
+        assert_equal none [get_info 2 sync_from_replica_phase]
+        assert_error "*should send CLUSTER FAILOVER to a replica*" {R 2 cluster failover}
+        verify_log_message -2 "*discarding sibling sync because the topology changed*" $lines
+    }
+}

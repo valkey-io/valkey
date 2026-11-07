@@ -5251,12 +5251,12 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         if (config.conn_info.input_dbnum == dbnum) {
             break;
         }
+        char *dots = NULL;
+        valkeyReply *reply = NULL, *migrate_reply = NULL;
         if (cliSelect(&config, source->context) == VALKEY_ERR) {
             success = 0;
             goto next;
         }
-        char *dots = NULL;
-        valkeyReply *reply = NULL, *migrate_reply = NULL;
         reply = CLUSTER_MANAGER_COMMAND(source,
                                         "CLUSTER "
                                         "GETKEYSINSLOT %d %d",

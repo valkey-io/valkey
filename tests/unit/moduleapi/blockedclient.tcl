@@ -293,29 +293,57 @@ foreach call_type {nested normal} {
     }
 
     test {Unblock by timer} {
-        # When the client is unlock, we will get the OK reply.
+        # When the client is unlocked by the timer, we get the OK reply.
         assert_match "OK" [r unblock_by_timer 100 0]
     }
 
-    test {block time is shorter than timer period} {
-        # The blocked-client timeout may not be processed until the module
-        # timer wakes the event loop, so either callback may win.
-        set reply [r unblock_by_timer 100 10]
-        assert {$reply eq "OK" || $reply eq "TIMEOUT"}
+    test {block time is shorter than timer period with NULL timeout callback} {
+        # Preserve the no-timeout-callback crash regression: do not read a reply.
+        set rd [valkey_deferring_client]
+        $rd unblock_by_timer 100 10
         after 120
-        assert_equal PONG [r ping]
+        $rd close
+    }
+
+    test {block naturally times out with NULL timeout callback} {
+        # PING is queued behind the block and can only run after natural timeout.
+        # No timeout reply is expected from a NULL callback.
+        set rd [valkey_deferring_client]
+        $rd unblock_by_timer 0 100
+        $rd ping
+        assert_equal PONG [$rd read]
+        assert_equal OK [r release_held_blocked_client]
+        $rd close
+    }
+
+    test {block naturally times out with a timeout callback} {
+        set rd [valkey_deferring_client]
+        $rd unblock_by_timer 0 100 1
+        assert_equal TIMEOUT [$rd read]
+        assert_equal OK [r release_held_blocked_client]
+        $rd ping
+        assert_equal PONG [$rd read]
+        $rd close
     }
 
     test {CLIENT UNBLOCK invokes the module timeout callback} {
         set rd [valkey_deferring_client]
         $rd client id
         set id [$rd read]
-        $rd unblock_by_timer 1000 0
+        # period 0 keeps the handle until we explicitly release it.
+        $rd unblock_by_timer 0 0 1
         wait_for_blocked_clients_count 1
         assert_equal 1 [r client unblock $id timeout]
         assert_equal TIMEOUT [$rd read]
-        # The timer must still release the handle after the client unblocks.
-        after 1100
+        assert_equal OK [r release_held_blocked_client]
+        # MODULE UNLOAD rejects modules retaining blocked-client handles.
+        # This checks actual cleanup even when only this test is selected.
+        wait_for_condition 50 10 {
+            [catch {r module unload blockedclient} unload_err] == 0
+        } else {
+            fail "blocked-client handle was not released: $unload_err"
+        }
+        assert_equal OK [r module load $testmodule]
         $rd ping
         assert_equal PONG [$rd read]
         $rd close
@@ -323,7 +351,7 @@ foreach call_type {nested normal} {
 
     test {block time is equal to timer period} {
         # Either expiration may run first, but neither may leave the client without a reply.
-        set reply [r unblock_by_timer 100 100]
+        set reply [r unblock_by_timer 100 100 1]
         assert {$reply eq "OK" || $reply eq "TIMEOUT"}
         # If the timeout won, the timer still needs to release the handle.
         after 120

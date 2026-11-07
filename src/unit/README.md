@@ -61,8 +61,8 @@ with a filter, for example in gdb:
 gdb --args ./src/unit/valkey-unit-gtests --gtest_filter=Suite.Test
 ```
 
-To run several tests in one process anyway, pass `--shared-process`. Tests are
-not required to clean up all the global state they change, so such a run can
+A filter that selects several tests runs them in one process. Tests are not
+required to clean up all the global state they change, so such a run can
 fail even when each test passes alone.
 
 ## Tricks in running unit tests

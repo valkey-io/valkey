@@ -1397,6 +1397,7 @@ start_server {tags {"introspection"}} {
                 tls-protocols
                 tls-ciphers
                 tls-ciphersuites
+                tls-groups
                 tls-port
             }
         }

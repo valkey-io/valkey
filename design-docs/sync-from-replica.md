@@ -208,11 +208,12 @@ dataset, so reattachment must never PSYNC using the discarded dataset's offset.
 
 ### Benchmark (AWS EKS c7g.2xlarge, isolated ARM pods, 5GB dataset)
 
-A/B comparison on AWS EKS using the PR image
-`507286591552.dkr.ecr.us-east-1.amazonaws.com/valkey-sync-bench:ef0be19c5-arm64`.
-Each run used fresh P/S/N/runner pods on c7g.2xlarge nodes because this workload
-leaves little post-fork memory headroom for repeatedly reusing the same primary
-on this instance size.
+A/B comparison on AWS EKS. Server build: commit `ef0be19c5`, an earlier head of
+this change, compiled for arm64. Each of P, S, N and the benchmark runner ran in
+its own pod on a dedicated c7g.2xlarge node (8 vCPU Graviton3, 16 GiB). Every
+run used fresh pods because this workload leaves little post-fork memory
+headroom for reusing the same primary on this instance size. Scenario A runs
+with `cluster-prefer-sync-from-replica no` on N, scenario B with `yes`.
 
 Setup: 5M sequential SETs with 1KB values loaded on P. S is fully synced before
 the measurement starts. The measured workload is 1M SETs, 1KB values, 50

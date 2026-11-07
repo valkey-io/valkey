@@ -153,7 +153,7 @@ proc get_myself {idx} {
 # All tests in a single start_cluster block to avoid inter-block cleanup issues.
 # ---------------------------------------------------------------------------
 
-start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 3000}} {
+start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 3000 repl-ping-replica-period 1}} {
 
     # ===== CONFIG DISABLED =====
 
@@ -278,54 +278,39 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
             skip "cluster-prefer-sync-from-replica config is unavailable"
         }
 
-        array set old_config {}
         foreach idx {0 2 3} {
-            set old_config($idx,dual) [lindex [R $idx config get dual-channel-replication-enabled] 1]
-            set old_config($idx,diskless) [lindex [R $idx config get repl-diskless-sync] 1]
-            set old_config($idx,delay) [lindex [R $idx config get repl-diskless-sync-delay] 1]
+            test_config_set [list R $idx] dual-channel-replication-enabled yes
+            test_config_set [list R $idx] repl-diskless-sync yes
+            test_config_set [list R $idx] repl-diskless-sync-delay 0
         }
 
-        try {
-            foreach idx {0 2 3} {
-                R $idx config set dual-channel-replication-enabled yes
-                R $idx config set repl-diskless-sync yes
-                R $idx config set repl-diskless-sync-delay 0
-            }
+        for {set i 0} {$i < 300} {incr i} {
+            R 0 set "{tag0}dual:$i" "value:$i"
+        }
+        wait_node_synced 2
 
-            for {set i 0} {$i < 300} {incr i} {
-                R 0 set "{tag0}dual:$i" "value:$i"
-            }
-            wait_node_synced 2
+        set p0_sync_full_before [get_info 0 sync_full]
+        set s2_sync_full_before [get_info 2 sync_full]
+        set s2_sync_partial_before [get_info 2 sync_partial_ok]
 
-            set p0_sync_full_before [get_info 0 sync_full]
-            set s2_sync_full_before [get_info 2 sync_full]
-            set s2_sync_partial_before [get_info 2 sync_partial_ok]
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
 
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
+        wait_replica_of 3 $primary0_id
+        wait_node_synced 3
 
-            wait_replica_of 3 $primary0_id
-            wait_node_synced 3
+        assert_equal $p0_sync_full_before [get_info 0 sync_full] \
+            "Primary sync_full should not increase -- no BGSAVE on primary"
+        assert_equal [expr $s2_sync_full_before + 1] [get_info 2 sync_full] \
+            "Sibling sync_full should increase by 1 -- BGSAVE on sibling"
+        assert_equal [expr $s2_sync_partial_before + 1] [get_info 2 sync_partial_ok] \
+            "Sibling should accept the dual-channel main PSYNC"
 
-            assert_equal $p0_sync_full_before [get_info 0 sync_full] \
-                "Primary sync_full should not increase -- no BGSAVE on primary"
-            assert_equal [expr $s2_sync_full_before + 1] [get_info 2 sync_full] \
-                "Sibling sync_full should increase by 1 -- BGSAVE on sibling"
-            assert_equal [expr $s2_sync_partial_before + 1] [get_info 2 sync_partial_ok] \
-                "Sibling should accept the dual-channel main PSYNC"
-
-            R 3 readonly
-            for {set i 0} {$i < 300} {incr i} {
-                assert_equal "value:$i" [R 3 get "{tag0}dual:$i"]
-            }
-        } finally {
-            foreach idx {0 2 3} {
-                catch {R $idx config set dual-channel-replication-enabled $old_config($idx,dual)}
-                catch {R $idx config set repl-diskless-sync $old_config($idx,diskless)}
-                catch {R $idx config set repl-diskless-sync-delay $old_config($idx,delay)}
-            }
+        R 3 readonly
+        for {set i 0} {$i < 300} {incr i} {
+            assert_equal "value:$i" [R 3 get "{tag0}dual:$i"]
         }
     }
 
@@ -471,81 +456,76 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         set old_backlog_size [lindex [R 0 config get repl-backlog-size] 1]
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            R 0 config set repl-backlog-size 1kb
+        test_config_set {R 0} repl-backlog-size 1kb
 
-            # Slow down sibling's BGSAVE so writes accumulate behind the RDB.
-            R 2 config set rdb-key-save-delay 500
+        # Slow down sibling's BGSAVE so writes accumulate behind the RDB.
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            # Record counters before this cycle.
-            set p0_sync_full_before [get_info 0 sync_full]
+        # Record counters before this cycle.
+        set p0_sync_full_before [get_info 0 sync_full]
 
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
 
-            # Wait for sibling to start BGSAVE (confirms N connected to S for RDB).
-            wait_for_condition 100 100 {
-                [get_info 2 rdb_bgsave_in_progress] == 1
-            } else {
-                fail "Sibling did not start BGSAVE for writes-during-sync test"
-            }
-
-            # Write 1000 keys to primary during the sibling RDB transfer.
-            # These writes reach S during the RDB transfer. N must apply them from
-            # S before switching back to P, even when P's backlog is tiny.
-            for {set i 0} {$i < 1000} {incr i} {
-                R 0 set "{tag0}during:$i" "written:$i"
-            }
-            # Also test non-idempotent commands (INCR) to detect double-apply.
-            R 0 set "{tag0}incr_test" 0
-            for {set i 0} {$i < 500} {incr i} {
-                R 0 incr "{tag0}incr_test"
-            }
-
-            # Barrier: with a 1kb backlog on P, the switch must not fire while
-            # the burst is still in flight, or P would refuse the PSYNC and the
-            # designed fallback (full sync from P) would fail the sync_full
-            # assertion below. Wait for S to fully drain P's stream while the
-            # slowed BGSAVE still holds N in the RDB-transfer phase, so the
-            # residual handoff gap fits any backlog.
-            set p0_offset [get_info 0 master_repl_offset]
-            wait_for_condition 500 100 {
-                [get_info 2 master_repl_offset] >= $p0_offset
-            } else {
-                fail "Sibling did not drain the write burst before the switch"
-            }
-
-            # Restore normal BGSAVE speed and wait for sync to complete.
-            R 2 config set rdb-key-save-delay $old_delay
-            wait_replica_of 3 $primary0_id 500 200
-            wait_node_synced 3 500 200
-            wait_sync_from_replica_done 3 500 200
-            R 0 config set repl-backlog-size $old_backlog_size
-
-            # Primary should not have done BGSAVE.
-            assert_equal $p0_sync_full_before [get_info 0 sync_full] \
-                "Writes-during-sync: primary sync_full should not increase"
-
-            # All keys written during sync must be present on node 3.
-            R 3 readonly
-            for {set i 0} {$i < 1000} {incr i} {
-                assert_equal "written:$i" [R 3 get "{tag0}during:$i"]
-            }
-
-            # INCR counter must be exactly 500 (no double-apply, no loss).
-            assert_equal "500" [R 3 get "{tag0}incr_test"] \
-                "INCR counter should be exactly 500 -- no double-apply or loss"
-
-            # DBSIZE must match.
-            assert_equal [R 0 dbsize] [R 3 dbsize] \
-                "Writes-during-sync: DBSIZE should match"
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
-            catch {R 0 config set repl-backlog-size $old_backlog_size}
+        # Wait for sibling to start BGSAVE (confirms N connected to S for RDB).
+        wait_for_condition 100 100 {
+            [get_info 2 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "Sibling did not start BGSAVE for writes-during-sync test"
         }
+
+        # Write 1000 keys to primary during the sibling RDB transfer.
+        # These writes reach S during the RDB transfer. N must apply them from
+        # S before switching back to P, even when P's backlog is tiny.
+        for {set i 0} {$i < 1000} {incr i} {
+            R 0 set "{tag0}during:$i" "written:$i"
+        }
+        # Also test non-idempotent commands (INCR) to detect double-apply.
+        R 0 set "{tag0}incr_test" 0
+        for {set i 0} {$i < 500} {incr i} {
+            R 0 incr "{tag0}incr_test"
+        }
+
+        # Barrier: with a 1kb backlog on P, the switch must not fire while
+        # the burst is still in flight, or P would refuse the PSYNC and the
+        # designed fallback (full sync from P) would fail the sync_full
+        # assertion below. Wait for S to fully drain P's stream while the
+        # slowed BGSAVE still holds N in the RDB-transfer phase, so the
+        # residual handoff gap fits any backlog.
+        set p0_offset [get_info 0 master_repl_offset]
+        wait_for_condition 500 100 {
+            [get_info 2 master_repl_offset] >= $p0_offset
+        } else {
+            fail "Sibling did not drain the write burst before the switch"
+        }
+
+        # Restore normal BGSAVE speed and wait for sync to complete.
+        R 2 config set rdb-key-save-delay $old_delay
+        wait_replica_of 3 $primary0_id 500 200
+        wait_node_synced 3 500 200
+        wait_sync_from_replica_done 3 500 200
+        R 0 config set repl-backlog-size $old_backlog_size
+
+        # Primary should not have done BGSAVE.
+        assert_equal $p0_sync_full_before [get_info 0 sync_full] \
+            "Writes-during-sync: primary sync_full should not increase"
+
+        # All keys written during sync must be present on node 3.
+        R 3 readonly
+        for {set i 0} {$i < 1000} {incr i} {
+            assert_equal "written:$i" [R 3 get "{tag0}during:$i"]
+        }
+
+        # INCR counter must be exactly 500 (no double-apply, no loss).
+        assert_equal "500" [R 3 get "{tag0}incr_test"] \
+            "INCR counter should be exactly 500 -- no double-apply or loss"
+
+        # DBSIZE must match.
+        assert_equal [R 0 dbsize] [R 3 dbsize] \
+            "Writes-during-sync: DBSIZE should match"
     }
 
     test "WRITES DURING SYNC - busy primary traffic does not block switch" {
@@ -555,56 +535,51 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        set load_handle ""
-        try {
-            wait_node_synced 2
-            set p0_sync_full_before [get_info 0 sync_full]
-            set s2_sync_full_before [get_info 2 sync_full]
+        wait_node_synced 2
+        set p0_sync_full_before [get_info 0 sync_full]
+        set s2_sync_full_before [get_info 2 sync_full]
 
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
-            wait_sync_from_replica_started 3
-            wait_for_condition 100 100 {
-                [get_info 2 rdb_bgsave_in_progress] == 1
-            } else {
-                fail "Sibling did not start BGSAVE for busy traffic test"
-            }
-
-            set load_handle [start_one_key_write_load [srv 0 host] [srv 0 port] 15 "{tag0}busy-liveness"]
-            wait_for_condition 100 100 {
-                [string match {*name=LOAD_HANDLER*} [R 0 client list]] &&
-                [R 0 exists "{tag0}busy-liveness"] == 1 &&
-                [get_info 3 sync_from_replica_in_progress] == 1
-            } else {
-                fail "Busy traffic did not overlap with sibling sync"
-            }
-            R 2 config set rdb-key-save-delay $old_delay
-
-            wait_replica_of 3 $primary0_id 500 100
-            # Generous budget: this wait runs under active write load and is
-            # much slower on valgrind.
-            wait_sync_from_replica_done 3 500 100
-            wait_node_synced 3 500 100
-            assert_equal $p0_sync_full_before [get_info 0 sync_full] \
-                "Busy traffic: primary sync_full should not increase"
-            assert {[get_info 2 sync_full] > $s2_sync_full_before}
-            assert_equal [srv 0 port] [get_info 3 master_port]
-            assert_equal 0 [get_info 3 sync_from_replica_in_progress]
-        } finally {
-            if {$load_handle ne ""} {
-                stop_write_load $load_handle
-                wait_for_condition 50 100 {
-                    ![string match {*name=LOAD_HANDLER*} [R 0 client list]]
-                } else {
-                    fail "load handler still connected after busy switch test"
-                }
-            }
-            catch {R 2 config set rdb-key-save-delay $old_delay}
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
+        wait_sync_from_replica_started 3
+        wait_for_condition 100 100 {
+            [get_info 2 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "Sibling did not start BGSAVE for busy traffic test"
         }
+
+        set load_handle [start_one_key_write_load [srv 0 host] [srv 0 port] 15 "{tag0}busy-liveness"]
+        test_defer {
+            stop_write_load $load_handle
+            wait_for_condition 50 100 {
+                ![string match {*name=LOAD_HANDLER*} [R 0 client list]]
+            } else {
+                fail "load handler still connected after busy switch test"
+            }
+        }
+        wait_for_condition 100 100 {
+            [string match {*name=LOAD_HANDLER*} [R 0 client list]] &&
+            [R 0 exists "{tag0}busy-liveness"] == 1 &&
+            [get_info 3 sync_from_replica_in_progress] == 1
+        } else {
+            fail "Busy traffic did not overlap with sibling sync"
+        }
+        R 2 config set rdb-key-save-delay $old_delay
+
+        wait_replica_of 3 $primary0_id 500 100
+        # Generous budget: this wait runs under active write load and is
+        # much slower on valgrind.
+        wait_sync_from_replica_done 3 500 100
+        wait_node_synced 3 500 100
+        assert_equal $p0_sync_full_before [get_info 0 sync_full] \
+            "Busy traffic: primary sync_full should not increase"
+        assert {[get_info 2 sync_full] > $s2_sync_full_before}
+        assert_equal [srv 0 port] [get_info 3 master_port]
+        assert_equal 0 [get_info 3 sync_from_replica_in_progress]
     }
 
     # ===== CONCURRENT WRITES - before, during, and after sync =====
@@ -621,67 +596,63 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
         wait_node_synced 2
 
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            # Detach, enable, slow BGSAVE on sibling.
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        # Detach, enable, slow BGSAVE on sibling.
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
 
-            # Phase B: 200 keys during the sync.
-            for {set i 0} {$i < 200} {incr i} {
-                R 0 set "{tag0}cw:during:$i" "during:$i"
-            }
-            # Non-idempotent: INCR 50 times + LPUSH 5 elements.
-            R 0 set "{tag0}cw:counter" 0
-            for {set i 0} {$i < 50} {incr i} {
-                R 0 incr "{tag0}cw:counter"
-            }
-            R 0 lpush "{tag0}cw:list" a b c d e
-
-            # Let sync complete.
-            R 2 config set rdb-key-save-delay $old_delay
-            wait_replica_of 3 $primary0_id
-            wait_node_synced 3
-
-            # Phase C: 50 keys after sync for ongoing replication check.
-            for {set i 0} {$i < 50} {incr i} {
-                R 0 set "{tag0}cw:after:$i" "after:$i"
-            }
-            set offset [get_info 0 master_repl_offset]
-            wait_for_condition 100 100 {
-                [get_info 3 master_repl_offset] >= $offset
-            } else {
-                fail "Node 3 did not catch up for post-sync writes"
-            }
-
-            # Verify all phases.
-            R 3 readonly
-            for {set i 0} {$i < 100} {incr i} {
-                assert_equal "before:$i" [R 3 get "{tag0}cw:before:$i"]
-            }
-            for {set i 0} {$i < 200} {incr i} {
-                assert_equal "during:$i" [R 3 get "{tag0}cw:during:$i"]
-            }
-            for {set i 0} {$i < 50} {incr i} {
-                assert_equal "after:$i" [R 3 get "{tag0}cw:after:$i"]
-            }
-
-            # INCR must be exactly 50 (no double-apply from buffer drain).
-            assert_equal 50 [R 3 get "{tag0}cw:counter"] \
-                "Counter should be 50; duplicate commands would inflate this"
-
-            # List must have 5 elements in LPUSH order (e d c b a).
-            assert_equal 5 [R 3 llen "{tag0}cw:list"]
-            assert_equal "e" [R 3 lindex "{tag0}cw:list" 0]
-            assert_equal "a" [R 3 lindex "{tag0}cw:list" 4]
-
-            assert_equal [R 0 dbsize] [R 3 dbsize]
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
+        # Phase B: 200 keys during the sync.
+        for {set i 0} {$i < 200} {incr i} {
+            R 0 set "{tag0}cw:during:$i" "during:$i"
         }
+        # Non-idempotent: INCR 50 times + LPUSH 5 elements.
+        R 0 set "{tag0}cw:counter" 0
+        for {set i 0} {$i < 50} {incr i} {
+            R 0 incr "{tag0}cw:counter"
+        }
+        R 0 lpush "{tag0}cw:list" a b c d e
+
+        # Let sync complete.
+        R 2 config set rdb-key-save-delay $old_delay
+        wait_replica_of 3 $primary0_id
+        wait_node_synced 3
+
+        # Phase C: 50 keys after sync for ongoing replication check.
+        for {set i 0} {$i < 50} {incr i} {
+            R 0 set "{tag0}cw:after:$i" "after:$i"
+        }
+        set offset [get_info 0 master_repl_offset]
+        wait_for_condition 100 100 {
+            [get_info 3 master_repl_offset] >= $offset
+        } else {
+            fail "Node 3 did not catch up for post-sync writes"
+        }
+
+        # Verify all phases.
+        R 3 readonly
+        for {set i 0} {$i < 100} {incr i} {
+            assert_equal "before:$i" [R 3 get "{tag0}cw:before:$i"]
+        }
+        for {set i 0} {$i < 200} {incr i} {
+            assert_equal "during:$i" [R 3 get "{tag0}cw:during:$i"]
+        }
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal "after:$i" [R 3 get "{tag0}cw:after:$i"]
+        }
+
+        # INCR must be exactly 50 (no double-apply from buffer drain).
+        assert_equal 50 [R 3 get "{tag0}cw:counter"] \
+            "Counter should be 50; duplicate commands would inflate this"
+
+        # List must have 5 elements in LPUSH order (e d c b a).
+        assert_equal 5 [R 3 llen "{tag0}cw:list"]
+        assert_equal "e" [R 3 lindex "{tag0}cw:list" 0]
+        assert_equal "a" [R 3 lindex "{tag0}cw:list" 4]
+
+        assert_equal [R 0 dbsize] [R 3 dbsize]
     }
 
     # ===== RESIDUAL STATE - normal sync after sync-from-replica =====
@@ -780,26 +751,22 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
 
-            wait_sync_from_replica_started 3
-            R 2 config set rdb-key-save-delay $old_delay
-            R 0 set "{tag0}sync-state-marker" "done"
-            wait_replica_of 3 $primary0_id
-            wait_node_synced 3
-            wait_sync_from_replica_done 3
+        wait_sync_from_replica_started 3
+        R 2 config set rdb-key-save-delay $old_delay
+        R 0 set "{tag0}sync-state-marker" "done"
+        wait_replica_of 3 $primary0_id
+        wait_node_synced 3
+        wait_sync_from_replica_done 3
 
-            assert_equal 0 [get_info 3 sync_from_replica_in_progress] \
-                "Guard flag should be cleared after sync completes"
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
-        }
+        assert_equal 0 [get_info 3 sync_from_replica_in_progress] \
+            "Guard flag should be cleared after sync completes"
     }
 
     test "IO THREADS - sibling stream catch-up switches back to primary" {
@@ -812,31 +779,27 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
-            wait_sync_from_replica_started 3
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
+        wait_sync_from_replica_started 3
 
-            for {set i 0} {$i < 100} {incr i} {
-                R 0 set "{tag0}io-thread-catchup:$i" "value:$i"
-            }
-            R 2 config set rdb-key-save-delay $old_delay
-
-            wait_replica_of 3 $primary0_id
-            wait_node_synced 3
-            wait_sync_from_replica_done 3
-
-            assert_equal [srv 0 port] [get_info 3 master_port]
-            assert_equal 0 [get_info 3 sync_from_replica_in_progress]
-            R 3 readonly
-            assert_equal "value:99" [R 3 get "{tag0}io-thread-catchup:99"]
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
+        for {set i 0} {$i < 100} {incr i} {
+            R 0 set "{tag0}io-thread-catchup:$i" "value:$i"
         }
+        R 2 config set rdb-key-save-delay $old_delay
+
+        wait_replica_of 3 $primary0_id
+        wait_node_synced 3
+        wait_sync_from_replica_done 3
+
+        assert_equal [srv 0 port] [get_info 3 master_port]
+        assert_equal 0 [get_info 3 sync_from_replica_in_progress]
+        R 3 readonly
+        assert_equal "value:99" [R 3 get "{tag0}io-thread-catchup:99"]
     }
 
     # ------------------------------------------------------------------
@@ -849,27 +812,23 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
-            wait_sync_from_replica_started 3
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
+        wait_sync_from_replica_started 3
 
-            set code [catch {R 3 cluster failover force} err]
-            assert {$code == 1}
-            assert_match {*syncing from sibling*} $err
+        set code [catch {R 3 cluster failover force} err]
+        assert {$code == 1}
+        assert_match {*syncing from sibling*} $err
 
-            R 2 config set rdb-key-save-delay $old_delay
-            R 0 set "{tag0}failover-block-marker" "done"
-            wait_replica_of 3 $primary0_id
-            wait_node_synced 3
-            wait_sync_from_replica_done 3
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
-        }
+        R 2 config set rdb-key-save-delay $old_delay
+        R 0 set "{tag0}failover-block-marker" "done"
+        wait_replica_of 3 $primary0_id
+        wait_node_synced 3
+        wait_sync_from_replica_done 3
     }
 
     # ===== FAILURE MODES - "every failure mode falls back safely" =====
@@ -881,43 +840,39 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set p0_sync_full_before [get_info 0 sync_full]
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
+        set p0_sync_full_before [get_info 0 sync_full]
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
 
-            # Gate on the RDB transfer being in flight on the sibling.
-            wait_sync_from_replica_started 3
-            wait_for_condition 100 100 {
-                [get_info 2 rdb_bgsave_in_progress] == 1
-            } else {
-                fail "Sibling did not start BGSAVE for the fallback test"
-            }
-
-            # Kill the sibling's replica connections: an instant TCP reset on
-            # the N<->S link without harming the shared cluster. This exercises
-            # the cancelReplicationHandshake -> replicationAbortSiblingSync
-            # fallback path.
-            R 2 client kill type replica
-            R 2 config set rdb-key-save-delay $old_delay
-
-            # N must recover with a normal full sync from P this time.
-            wait_replica_of 3 $primary0_id 500 100
-            wait_node_synced 3 500 100
-            wait_sync_from_replica_done 3 500 100
-
-            assert {[get_info 0 sync_full] > $p0_sync_full_before}
-            assert_equal 0 [get_info 3 sync_from_replica_in_progress]
-            R 3 readonly
-            assert_equal "seedval:1999" [R 3 get "{tag0}seed:1999"]
-            assert_equal [R 0 dbsize] [R 3 dbsize]
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
+        # Gate on the RDB transfer being in flight on the sibling.
+        wait_sync_from_replica_started 3
+        wait_for_condition 100 100 {
+            [get_info 2 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "Sibling did not start BGSAVE for the fallback test"
         }
+
+        # Kill the sibling's replica connections: an instant TCP reset on
+        # the N<->S link without harming the shared cluster. This exercises
+        # the cancelReplicationHandshake -> replicationAbortSiblingSync
+        # fallback path.
+        R 2 client kill type replica
+        R 2 config set rdb-key-save-delay $old_delay
+
+        # N must recover with a normal full sync from P this time.
+        wait_replica_of 3 $primary0_id 500 100
+        wait_node_synced 3 500 100
+        wait_sync_from_replica_done 3 500 100
+
+        assert {[get_info 0 sync_full] > $p0_sync_full_before}
+        assert_equal 0 [get_info 3 sync_from_replica_in_progress]
+        R 3 readonly
+        assert_equal "seedval:1999" [R 3 get "{tag0}seed:1999"]
+        assert_equal [R 0 dbsize] [R 3 dbsize]
     }
 
     test "FALLBACK - sibling link drop during stream catch-up falls back to P" {
@@ -927,63 +882,70 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        set old_load_delay [lindex [R 3 config get key-load-delay] 1]
-        try {
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
-            # Slow N's RDB load too, widening the post-load catch-up window.
-            R 3 config set key-load-delay 100
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        # With a socket-target BGSAVE the sibling holds its buffered stream
+        # until N acknowledges the loaded RDB, so pausing the sibling during
+        # the load keeps N in stream catch-up until the link is dropped.
+        test_config_set {R 2} repl-diskless-sync yes
+        test_config_set {R 2} rdb-key-save-delay 500
+        # Slow N's RDB load and keep it answering INFO while loading.
+        test_config_set {R 3} key-load-delay 100
+        test_config_set {R 3} loading-process-events-interval-bytes 1024
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
 
-            wait_sync_from_replica_started 3
-            wait_for_condition 100 100 {
-                [get_info 2 rdb_bgsave_in_progress] == 1
-            } else {
-                fail "Sibling did not start BGSAVE for the catch-up fallback test"
-            }
-
-            # Burst writes while the transfer is slowed so S holds a fat
-            # buffered stream that N must drain after loading the RDB.
-            for {set i 0} {$i < 1000} {incr i} {
-                R 0 set "{tag0}catchup-fb:$i" "value:$i"
-            }
-            R 2 config set rdb-key-save-delay $old_delay
-
-            # Gate on the stream catch-up phase; this is also the first
-            # explicit assertion of the phase INFO field. The window can be
-            # brief, so a miss (already switched) skips the kill but the
-            # invariants below still hold.
-            set phase_seen ""
-            wait_for_condition 500 20 {
-                [set phase_seen [get_info 3 sync_from_replica_phase]] eq "stream_catchup" ||
-                [get_info 3 sync_from_replica_in_progress] == 0
-            } else {
-                fail "Node did not reach stream catch-up or finish (last phase: $phase_seen)"
-            }
-            if {$phase_seen eq "stream_catchup"} {
-                # Drop the N<->S link mid catch-up: exercises the
-                # replicationHandlePrimaryDisconnection -> abort fallback path.
-                R 2 client kill type replica
-            }
-
-            wait_replica_of 3 $primary0_id 500 100
-            wait_node_synced 3 500 100
-            wait_sync_from_replica_done 3 500 100
-
-            assert_equal 0 [get_info 3 sync_from_replica_in_progress]
-            assert_equal "none" [get_info 3 sync_from_replica_phase]
-            R 3 readonly
-            for {set i 0} {$i < 1000} {incr i} {
-                assert_equal "value:$i" [R 3 get "{tag0}catchup-fb:$i"]
-            }
-            assert_equal [R 0 dbsize] [R 3 dbsize]
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
-            catch {R 3 config set key-load-delay $old_load_delay}
+        wait_sync_from_replica_started 3
+        wait_for_condition 100 100 {
+            [get_info 2 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "Sibling did not start BGSAVE for the catch-up fallback test"
         }
+
+        # Burst writes while the transfer is slowed so S holds a fat
+        # buffered stream for N.
+        for {set i 0} {$i < 1000} {incr i} {
+            R 0 set "{tag0}catchup-fb:$i" "value:$i"
+        }
+        R 2 config set rdb-key-save-delay $old_delay
+
+        # Freeze the sibling while N loads the RDB. N then reaches the
+        # stream catch-up phase and cannot leave it, since no stream byte
+        # arrives. This is also the first explicit assertion of the phase
+        # INFO field.
+        wait_for_condition 500 20 {
+            [get_info 3 loading] == 1
+        } else {
+            fail "Node did not start loading the sibling RDB"
+        }
+        set sibling_pid [srv -2 pid]
+        pause_process $sibling_pid
+        wait_for_condition 500 20 {
+            [get_info 3 sync_from_replica_phase] eq "stream_catchup"
+        } else {
+            fail "Node did not reach stream catch-up (phase: [get_info 3 sync_from_replica_phase])"
+        }
+        assert_equal 1 [get_info 3 sync_from_replica_in_progress]
+
+        # Drop the N<->S link mid catch-up: exercises the
+        # replicationHandlePrimaryDisconnection -> abort fallback path.
+        set lines [count_log_lines -3]
+        R 3 client kill type master
+        wait_for_log_messages -3 {"*aborting sibling sync, falling back to primary*"} $lines 1000 10
+        resume_process $sibling_pid
+
+        wait_replica_of 3 $primary0_id 500 100
+        wait_node_synced 3 500 100
+        wait_sync_from_replica_done 3 500 100
+
+        assert_equal 0 [get_info 3 sync_from_replica_in_progress]
+        assert_equal "none" [get_info 3 sync_from_replica_phase]
+        R 3 readonly
+        for {set i 0} {$i < 1000} {incr i} {
+            assert_equal "value:$i" [R 3 get "{tag0}catchup-fb:$i"]
+        }
+        assert_equal [R 0 dbsize] [R 3 dbsize]
     }
 
     test "FALLBACK - CLUSTER REPLICATE NO ONE mid-sync leaves a clean primary" {
@@ -993,33 +955,29 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set primary0_id [R 0 cluster myid]
-            R 3 cluster replicate $primary0_id
-            wait_sync_from_replica_started 3
+        set primary0_id [R 0 cluster myid]
+        R 3 cluster replicate $primary0_id
+        wait_sync_from_replica_started 3
 
-            # Promote mid-sync: the promotion path must clear the guard flag.
-            detach_node3
-            R 2 config set rdb-key-save-delay $old_delay
+        # Promote mid-sync: the promotion path must clear the guard flag.
+        detach_node3
+        R 2 config set rdb-key-save-delay $old_delay
 
-            assert_equal 0 [get_info 3 sync_from_replica_in_progress] \
-                "Guard flag must clear when leaving replica mode via NO ONE"
-            assert_equal "master" [get_info 3 role]
+        assert_equal 0 [get_info 3 sync_from_replica_in_progress] \
+            "Guard flag must clear when leaving replica mode via NO ONE"
+        assert_equal "master" [get_info 3 role]
 
-            # The node must be able to replicate again afterward.
-            R 3 cluster replicate $primary0_id
-            wait_replica_of 3 $primary0_id
-            wait_node_synced 3
-            wait_sync_from_replica_done 3
-            R 3 readonly
-            assert_equal [R 0 dbsize] [R 3 dbsize]
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
-        }
+        # The node must be able to replicate again afterward.
+        R 3 cluster replicate $primary0_id
+        wait_replica_of 3 $primary0_id
+        wait_node_synced 3
+        wait_sync_from_replica_done 3
+        R 3 readonly
+        assert_equal [R 0 dbsize] [R 3 dbsize]
     }
 
     test "FALLBACK - CLUSTER REPLICATE to another primary mid-sync supersedes the sibling sync" {
@@ -1029,39 +987,35 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         ensure_seed_dataset
         set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
-        try {
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            R 2 config set rdb-key-save-delay 500
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        test_config_set {R 2} rdb-key-save-delay 500
 
-            set primary0_id [R 0 cluster myid]
-            set primary1_id [R 1 cluster myid]
-            R 3 cluster replicate $primary0_id
-            wait_sync_from_replica_started 3
+        set primary0_id [R 0 cluster myid]
+        set primary1_id [R 1 cluster myid]
+        R 3 cluster replicate $primary0_id
+        wait_sync_from_replica_started 3
 
-            # Re-point to the other shard's primary mid-sync: clusterSetPrimary
-            # must discard the transient sibling target.
-            R 3 cluster replicate $primary1_id
-            R 2 config set rdb-key-save-delay $old_delay
+        # Re-point to the other shard's primary mid-sync: clusterSetPrimary
+        # must discard the transient sibling target.
+        R 3 cluster replicate $primary1_id
+        R 2 config set rdb-key-save-delay $old_delay
 
-            wait_replica_of 3 $primary1_id 500 100
-            wait_node_synced 3 500 100
-            wait_sync_from_replica_done 3 500 100
+        wait_replica_of 3 $primary1_id 500 100
+        wait_node_synced 3 500 100
+        wait_sync_from_replica_done 3 500 100
 
-            # P1 has no other replica, so this must be a normal sync from P1;
-            # data must match P1's shard.
-            R 1 set "{aaa}supersede-marker" "from_p1"
-            set offset [get_info 1 master_repl_offset]
-            wait_for_condition 100 100 {
-                [get_info 3 master_repl_offset] >= $offset
-            } else {
-                fail "Node 3 did not replicate from primary 1 after supersede"
-            }
-            R 3 readonly
-            assert_equal "from_p1" [R 3 get "{aaa}supersede-marker"]
-        } finally {
-            catch {R 2 config set rdb-key-save-delay $old_delay}
+        # P1 has no other replica, so this must be a normal sync from P1;
+        # data must match P1's shard.
+        R 1 set "{aaa}supersede-marker" "from_p1"
+        set offset [get_info 1 master_repl_offset]
+        wait_for_condition 100 100 {
+            [get_info 3 master_repl_offset] >= $offset
+        } else {
+            fail "Node 3 did not replicate from primary 1 after supersede"
         }
+        R 3 readonly
+        assert_equal "from_p1" [R 3 get "{aaa}supersede-marker"]
     }
 
     test "FALLBACK - no eligible sibling falls back to normal full sync from P" {
@@ -1119,7 +1073,9 @@ proc observed_replication_offset {observer node_id} {
     return -1
 }
 
-start_cluster 1 3 {tags {external:skip cluster} overrides {cluster-node-timeout 3000}} {
+# A long node timeout keeps the frozen sibling from being flagged PFAIL on
+# slow runners (valgrind) before the selection runs.
+start_cluster 1 3 {tags {external:skip cluster} overrides {cluster-node-timeout 15000 repl-ping-replica-period 1}} {
 
     test "SELECTION - joiner picks the sibling with the highest gossip offset" {
         if {![is_sync_from_replica_implemented]} {
@@ -1138,45 +1094,44 @@ start_cluster 1 3 {tags {external:skip cluster} overrides {cluster-node-timeout 
         set primary0_id [R 0 cluster myid]
         set node2_pid [srv -2 pid]
 
-        set paused 0
-        try {
-            # Freeze sibling 2 so its gossiped offset stops advancing, then
-            # push sibling 1 ahead with a write burst.
-            pause_process $node2_pid
-            set paused 1
-            set frozen_offset [observed_replication_offset 3 $sibling2_id]
-            for {set i 0} {$i < 500} {incr i} {
-                R 0 set "sel:gap:$i" "value:$i"
-            }
-
-            # Wait until the joiner-to-be observes sibling 1 strictly ahead of
-            # the frozen sibling 2, so the selection has a deterministic winner.
-            wait_for_condition 100 100 {
-                [observed_replication_offset 3 $sibling1_id] > $frozen_offset
-            } else {
-                fail "Gossip did not propagate sibling 1's offset lead"
-            }
-
-            detach_node3
-            R 3 config set cluster-prefer-sync-from-replica yes
-            set lines [count_log_lines -3]
-            R 3 cluster replicate $primary0_id
-
-            # The selection log names the chosen sibling.
-            wait_for_log_messages -3 [list "*selected sibling $sibling1_id*"] $lines 1000 10
-
-            wait_replica_of 3 $primary0_id
-            wait_node_synced 3
-            wait_sync_from_replica_done 3
-            R 3 readonly
-            assert_equal "value:499" [R 3 get "sel:gap:499"]
-        } finally {
-            if {$paused} {
-                resume_process $node2_pid
-            }
+        # Freeze sibling 2 so its gossiped offset stops advancing, then
+        # push sibling 1 ahead with a write burst.
+        pause_process $node2_pid
+        set frozen_offset [observed_replication_offset 3 $sibling2_id]
+        for {set i 0} {$i < 500} {incr i} {
+            R 0 set "sel:gap:$i" "value:$i"
         }
 
+        # Wait until the joiner-to-be observes sibling 1 strictly ahead of
+        # the frozen sibling 2, so the selection has a deterministic winner.
+        wait_for_condition 100 100 {
+            [observed_replication_offset 3 $sibling1_id] > $frozen_offset
+        } else {
+            fail "Gossip did not propagate sibling 1's offset lead"
+        }
+
+        detach_node3
+        R 3 config set cluster-prefer-sync-from-replica yes
+        # The frozen sibling must still be a candidate, so that the offset
+        # comparison picks the winner rather than the failure flags.
+        set node2 [cluster_get_node_by_id 3 $sibling2_id]
+        if {[cluster_has_flag $node2 fail?] || [cluster_has_flag $node2 fail]} {
+            fail "Node 3 flagged the frozen sibling ([dict get $node2 flags]) before the selection"
+        }
+        set lines [count_log_lines -3]
+        R 3 cluster replicate $primary0_id
+
+        # The selection log names the chosen sibling.
+        wait_for_log_messages -3 [list "*selected sibling $sibling1_id*"] $lines 1000 10
+
+        wait_replica_of 3 $primary0_id
+        wait_node_synced 3
+        wait_sync_from_replica_done 3
+        R 3 readonly
+        assert_equal "value:499" [R 3 get "sel:gap:499"]
+
         # Let the frozen sibling rejoin cleanly before the suite tears down.
+        resume_process $node2_pid
         wait_node_synced 2
         wait_for_cluster_state ok
     }
@@ -1253,15 +1208,12 @@ start_cluster 1 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
         set sibling_syncs [get_info 1 sync_full]
         # Reject the handshake as an older or incompatible donor would.
         R 1 acl setuser default -replconf
-        try {
-            R 2 cluster replicate $primary_id
-            wait_node_synced 2
-            assert {[get_info 0 sync_full] > $primary_syncs}
-            assert_equal $sibling_syncs [get_info 1 sync_full]
-            assert_equal [R 0 get safety:0] [R 2 get safety:0]
-        } finally {
-            R 1 acl setuser default +replconf
-        }
+        test_defer {R 1 acl setuser default +replconf}
+        R 2 cluster replicate $primary_id
+        wait_node_synced 2
+        assert {[get_info 0 sync_full] > $primary_syncs}
+        assert_equal $sibling_syncs [get_info 1 sync_full]
+        assert_equal [R 0 get safety:0] [R 2 get safety:0]
     }
 
     test "DONOR SAFETY - Authoritative full sync restores sibling eligibility" {
@@ -1291,16 +1243,13 @@ start_cluster 1 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
     test "DONOR SAFETY - Unsafe config disconnects an attested sync client" {
         set donor [valkey [srv -1 host] [srv -1 port] 0 $::tls]
-        try {
-            assert_equal OK [$donor replconf sibling-sync $primary_id]
-            R 1 config set replica-ignore-maxmemory no
-            assert_error "*" {$donor ping}
-            R 1 config set replica-ignore-maxmemory yes
-            assert_error "*Sibling snapshot is not consistent*" {R 1 replconf sibling-sync $primary_id}
-        } finally {
-            catch {$donor close}
-            R 1 config set replica-ignore-maxmemory yes
-        }
+        test_defer {$donor close}
+        test_defer {R 1 config set replica-ignore-maxmemory yes}
+        assert_equal OK [$donor replconf sibling-sync $primary_id]
+        R 1 config set replica-ignore-maxmemory no
+        assert_error "*" {$donor ping}
+        R 1 config set replica-ignore-maxmemory yes
+        assert_error "*Sibling snapshot is not consistent*" {R 1 replconf sibling-sync $primary_id}
     }
 }
 

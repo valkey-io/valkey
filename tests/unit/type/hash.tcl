@@ -78,6 +78,35 @@ start_server {tags {"hash"}} {
         assert_error {*value is out of range*} {r hrandfield myhash -9223372036854775808}
     } {}
 
+    test "HRANDFIELD with <count> on case variants of one field" {
+        r del ordinary{t} variants{t}
+        set ordinary {}
+        set variants {}
+        # The variants are 10000 distinct spellings of "aaaaaaaaaaaaaa" in mixed case.
+        for {set i 0} {$i < 10000} {incr i} {
+            binary scan [binary format I $i] B32 bits
+            lappend ordinary x[format %013d $i] 1
+            lappend variants [string map {0 a 1 A} [string range $bits 18 end]] 1
+        }
+        r hset ordinary{t} {*}$ordinary
+        r hset variants{t} {*}$variants
+
+        # Take the fastest of several runs so one stall on a slow host does not fail the test.
+        foreach key {ordinary variants} {
+            set ${key}_usec {}
+            for {set j 0} {$j < 3} {incr j} {
+                r config resetstat
+                r hrandfield $key{t} 5000
+                regexp {usec=(\d+)} [cmdrstat hrandfield r] _ usec
+                lappend ${key}_usec $usec
+            }
+        }
+        set ordinary_usec [tcl::mathfunc::min {*}$ordinary_usec]
+        set variants_usec [tcl::mathfunc::min {*}$variants_usec]
+        r del ordinary{t} variants{t}
+        assert_lessthan $variants_usec [expr {10 * $ordinary_usec + 100000}]
+    } {} {needs:config-resetstat}
+
     test "HRANDFIELD with <count> against nonexistent key" {
         r hrandfield nonexisting_key 100
     } {}

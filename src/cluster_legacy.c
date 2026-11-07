@@ -253,6 +253,14 @@ static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
 static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_LEN,
               "Incorrect length to read to identify type");
 
+/* Upper bound on the length of an inbound packet, checked from the header so
+ * a peer can't make us buffer a huge packet of a type that is never that big.
+ * A PING carries at most 65535 gossip sections (6.8MB) plus extensions that
+ * are small for any sane human nodename and availability zone. Unknown types
+ * are capped too. Pub/Sub and module messages are exempt: their payload comes
+ * from a client and can legitimately be much larger. */
+#define CLUSTERMSG_MAX_LEN (16 * 1024 * 1024)
+
 /* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
  * clusterNode structures. */
 dictType clusterNodesDictType = {
@@ -3521,8 +3529,13 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * It is also possible that the sender is a primary in a different
      * shard and our primary just had its last slot migrated to the
      * sender. In this case we don't reconfigure ourselves as a replica
-     * of the sender. */
-    if (new_primary && cur_primary->numslots == 0) {
+     * of the sender.
+     *
+     * cur_primary is NULL for a replica whose primary is unknown, for
+     * example after the primary was deleted from the nodes table. Such a
+     * shard owns no slots. Unassigned slots match the NULL cur_primary in
+     * the loop above, which is how new_primary gets set in that case. */
+    if (new_primary && (!cur_primary || cur_primary->numslots == 0)) {
         if (server.cluster_allow_replica_migration || are_in_same_shard) {
             serverLog(LL_NOTICE,
                       "Configuration change detected. Reconfiguring myself "
@@ -5038,6 +5051,13 @@ void clusterLinkConnectHandler(connection *conn) {
     serverLog(LL_DEBUG, "Connecting with Node %.40s at %s:%d", node->name, node->ip, node->cport);
 }
 
+static inline int isClusterMsgLengthTooLarge(uint16_t type, uint32_t totlen) {
+    type &= ~CLUSTERMSG_MODIFIER_MASK;
+    if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD || type == CLUSTERMSG_TYPE_MODULE)
+        return 0;
+    return totlen > CLUSTERMSG_MAX_LEN;
+}
+
 /* Performs sanity check on the message signature and length depending on the type. */
 static inline int isClusterMsgSignatureAndLengthValid(clusterMsgHeader *hdr) {
     if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
@@ -5045,6 +5065,7 @@ static inline int isClusterMsgSignatureAndLengthValid(clusterMsgHeader *hdr) {
     uint32_t totlen = ntohl(hdr->totlen);
     uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
     if (totlen < minlen) return 0;
+    if (isClusterMsgLengthTooLarge(type, totlen)) return 0;
     return 1;
 }
 
@@ -5088,7 +5109,7 @@ void clusterFindCompletePackets(char *rcvbuf,
         uint16_t type = ntohs(hdr->type);
         uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
 
-        if (totlen < minlen) {
+        if (totlen < minlen || isClusterMsgLengthTooLarge(type, totlen)) {
             *complete_bytes = offset; /* preserve any valid prefix already scanned */
             *result = CLUSTER_IO_BAD_LENGTH;
             return;

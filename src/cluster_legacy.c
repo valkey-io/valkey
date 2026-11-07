@@ -5671,6 +5671,16 @@ static inline bool nodeSupportsLightMsgHdrForModule(clusterNode *n) {
            (n->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED);
 }
 
+/* Return whether the payload fits in the cluster bus's 32-bit length field,
+ * including the normal message header and the in-memory send-block prefix.
+ * The normal header is larger than the light header, so this limit is safe
+ * regardless of the destination node's negotiated message format. */
+int clusterModuleMessageLengthValid(uint32_t len) {
+    size_t overhead = offsetof(clusterMsgSendBlock, data) + CLUSTERMSG_MIN_LEN +
+                      offsetof(clusterMsgModule, bulk_data);
+    return (size_t)len <= (size_t)UINT32_MAX - overhead;
+}
+
 /* Create a MODULE message block.
  *
  * If is_light is 1, then build a message block with `clusterMsgLight` struct else `clusterMsg`. */
@@ -5754,6 +5764,7 @@ int clusterSendModuleMessageToTarget(const char *target,
         if (node == NULL || node->link == NULL) return C_ERR;
     }
 
+    if (!clusterModuleMessageLengthValid(len)) return C_ERR;
     clusterSendModule(target ? node->link : NULL, module_id, type, payload, len);
     return C_OK;
 }

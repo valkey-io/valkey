@@ -580,7 +580,7 @@ start_server {tags {"acl external:skip"}} {
         r rpush allowed:src c b a
 
         # A dedicated client, because deleting the user below kills it.
-        set r3 [valkey_client]
+        set r3 [redis_client]
         $r3 auth test-sort-store nopass
 
         # A destination spelling an option that takes arguments hides the later

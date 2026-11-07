@@ -298,18 +298,36 @@ foreach call_type {nested normal} {
     }
 
     test {block time is shorter than timer period} {
-        # This command does not have the reply.
-        set rd [valkey_deferring_client]
-        $rd unblock_by_timer 100 10
-        # Wait for the client to unlock.
+        # The blocked-client timeout may not be processed until the module
+        # timer wakes the event loop, so either callback may win.
+        set reply [r unblock_by_timer 100 10]
+        assert {$reply eq "OK" || $reply eq "TIMEOUT"}
         after 120
+        assert_equal PONG [r ping]
+    }
+
+    test {CLIENT UNBLOCK invokes the module timeout callback} {
+        set rd [valkey_deferring_client]
+        $rd client id
+        set id [$rd read]
+        $rd unblock_by_timer 1000 0
+        wait_for_blocked_clients_count 1
+        assert_equal 1 [r client unblock $id timeout]
+        assert_equal TIMEOUT [$rd read]
+        # The timer must still release the handle after the client unblocks.
+        after 1100
+        $rd ping
+        assert_equal PONG [$rd read]
         $rd close
     }
 
     test {block time is equal to timer period} {
-        # These time is equal, they will be unlocked in the same event loop,
-        # when the client is unlock, we will get the OK reply from timer.
-        assert_match "OK" [r unblock_by_timer 100 100]
+        # Either expiration may run first, but neither may leave the client without a reply.
+        set reply [r unblock_by_timer 100 100]
+        assert {$reply eq "OK" || $reply eq "TIMEOUT"}
+        # If the timeout won, the timer still needs to release the handle.
+        after 120
+        assert_equal PONG [r ping]
     }
     
     test {Unmatched POSTPONED_LEN reply from a thread safe context does not crash the server} {

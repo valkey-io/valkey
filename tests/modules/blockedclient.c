@@ -1047,6 +1047,14 @@ static void timer_callback(ValkeyModuleCtx *ctx, void *data)
     ValkeyModule_FreeThreadSafeContext(reply_ctx);
 }
 
+/* A module block timeout must produce a reply even when it wins the race with the timer. */
+static int timeout_callback(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+{
+    UNUSED(argv);
+    UNUSED(argc);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "TIMEOUT");
+}
+
 /* unblock_by_timer <period_ms> <timeout_ms>
  * period_ms is the period of the timer.
  * timeout_ms is the blocking timeout. */
@@ -1063,7 +1071,7 @@ int unblock_by_timer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
         return ValkeyModule_ReplyWithError(ctx,"ERR invalid timeout");
     }
 
-    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, timeout);
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, timeout_callback, NULL, timeout);
     ValkeyModule_CreateTimer(ctx, period, timer_callback, bc);
     return VALKEYMODULE_OK;
 }

@@ -880,6 +880,14 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
     autoMemoryCollect(ctx);
     poolAllocRelease(ctx);
     if (ctx->postponed_arrays) {
+        /* Fill the placeholders, since a NULL node left in the reply list
+         * crashes the server when the reply is written. A thread safe context
+         * may be freed after its client was unblocked, so its placeholders are
+         * filled in moduleHandleBlockedClients() instead. */
+        if (!(ctx->flags & VALKEYMODULE_CTX_THREAD_SAFE)) {
+            for (int i = 0; i < ctx->postponed_arrays_count; i++)
+                setDeferredArrayLen(ctx->client, ctx->postponed_arrays[i], 0);
+        }
         zfree(ctx->postponed_arrays);
         ctx->postponed_arrays_count = 0;
         serverLog(LL_WARNING,
@@ -7911,8 +7919,11 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                              void *privdata,
                                              int flags) {
     client *c = ctx->client;
-    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL) {
-        /* Early return if duplicate block attempt or client is not normal. */
+    int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
+    int type = getClientType(c);
+    bool can_block = type == CLIENT_TYPE_NORMAL ||
+                     (type == CLIENT_TYPE_PUBSUB && c->resp != 2 && !is_keyspace_notification);
+    if (c->flag.blocked || !can_block) {
         errno = ENOTSUP;
         return NULL;
     }
@@ -7922,7 +7933,6 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
         errno = EINVAL;
         return NULL;
     }
-    int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
     int islua = scriptIsRunning();
     int ismulti = server.in_exec;
     serverAssert(!c->flag.deny_blocking || (islua || ismulti));
@@ -8589,6 +8599,14 @@ void moduleHandleBlockedClients(void) {
              * replies to send to the client in a thread safe context.
              * We need to glue such replies to the client output buffer and
              * free the temporary client we just used for the replies. */
+            listIter li;
+            listNode *reply_ln;
+            listRewind(bc->reply_client->reply, &li);
+            while ((reply_ln = listNext(&li))) {
+                /* The module can no longer set the length of a postponed
+                 * reply once it unblocked the client. */
+                if (!listNodeValue(reply_ln)) setDeferredArrayLen(bc->reply_client, reply_ln, 0);
+            }
             AddReplyFromClient(c, bc->reply_client);
         }
         moduleReleaseTempClient(bc->reply_client);
@@ -13892,6 +13910,7 @@ int *VM_GetCommandKeysWithFlags(ValkeyModuleCtx *ctx,
         if (out_flags) (*out_flags)[i] = moduleConvertKeySpecsFlags(result.keys[i].flags, 0);
     }
 
+    getKeysFreeResult(&result);
     return res;
 }
 

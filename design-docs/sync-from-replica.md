@@ -264,6 +264,8 @@ sync_from_replica_in_progress:1
 sync_from_replica_phase:handshake|rdb_transfer|rdb_loading|stream_catchup|none
 ```
 
+`handshake` covers every state before the RDB transfer, including waiting to reconnect. `rdb_loading` is reported whenever the node is loading the RDB, also when a disk-based load runs inside the transfer state.
+
 **Log messages:**
 ```text
 [NOTICE] Sync-from-replica: selected sibling <node-id> at offset <X> (primary at <Y>, gap <delta>)

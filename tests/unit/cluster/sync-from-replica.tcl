@@ -915,10 +915,11 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
         # arrives. This is also the first explicit assertion of the phase
         # INFO field.
         wait_for_condition 500 20 {
-            [get_info 3 loading] == 1
+            [getInfoProperty [set info [R 3 info all]] loading] == 1
         } else {
             fail "Node did not start loading the sibling RDB"
         }
+        assert_equal rdb_loading [getInfoProperty $info sync_from_replica_phase]
         set sibling_pid [srv -2 pid]
         pause_process $sibling_pid
         wait_for_condition 500 20 {

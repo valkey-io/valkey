@@ -6486,15 +6486,16 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
     if (watched_keys) *watched_keys = wkeys;
 }
 
-/* Report coarse sync-from-replica phases from server.repl_state. The default
- * "rdb_loading" covers local loading states between transfer completion and
- * connected stream catch-up that are not represented by a single repl_state. */
+/* Report coarse sync-from-replica phases. A disk-based load runs inside the
+ * transfer state, so check loading first. Every state before the transfer,
+ * including waiting to reconnect, reports "handshake". */
 static const char *syncFromReplicaPhase(void) {
     if (!server.cluster_syncing_from_sibling) return "none";
-    if (server.repl_state == REPL_STATE_TRANSFER) return "rdb_transfer";
-    if (server.repl_state >= REPL_STATE_CONNECTING && server.repl_state < REPL_STATE_TRANSFER) return "handshake";
+    if (server.loading) return "rdb_loading";
+    if (server.repl_state == REPL_STATE_TRANSFER || server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RDB_LOAD)
+        return "rdb_transfer";
     if (server.repl_state == REPL_STATE_CONNECTED) return "stream_catchup";
-    return "rdb_loading";
+    return "handshake";
 }
 
 /* Create the string returned by the INFO command. This is decoupled

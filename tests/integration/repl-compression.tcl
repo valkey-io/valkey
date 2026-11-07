@@ -738,8 +738,11 @@ start_server {tags {"repl"} overrides {save ""}} {
                 $primary save
 
                 set rdb_payload [read_binary_file [server_rdb_path $primary]]
-                set codec_hex [expr {$mode eq "zstd" ? "02" : "01"}]
-                set corrupt_stream [binary format H* "56435301${codec_hex}0002"]
+                if {$mode eq "zstd"} {
+                    set corrupt_stream [binary format H* "56435301020002"]
+                } else {
+                    set corrupt_stream [binary format H* "56435301010002"]
+                }
                 append corrupt_stream [string repeat "\x00" 64]
 
                 set fake_pid ""
@@ -751,6 +754,22 @@ start_server {tags {"repl"} overrides {save ""}} {
                         set replica_loglines [count_log_lines 0]
                         $replica replicaof 127.0.0.1 $fake_port
 
+                        # Hold the RDB until the replica has buffered the corrupt
+                        # main-channel stream, so the buffered path always runs. The
+                        # fake primary sends the RDB only on RELEASE. Otherwise a
+                        # fixed timer could let the load finish first, and the
+                        # steady-state path would decode the stream instead.
+                        wait_for_condition 100 100 {
+                            [s 0 replicas_repl_buffer_size] > 0
+                        } else {
+                            fail "Replica did not buffer the main-channel stream"
+                        }
+                        set ctl [socket 127.0.0.1 $fake_port]
+                        fconfigure $ctl -translation binary
+                        puts -nonewline $ctl "RELEASE\r\n"
+                        flush $ctl
+                        gets $ctl
+                        close $ctl
                         wait_for_log_messages 0 {"*Dual-channel replication stream decompression failure*"} \
                             $replica_loglines 100 100
                         wait_for_condition 50 100 {

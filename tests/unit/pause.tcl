@@ -421,8 +421,13 @@ start_server {tags {"pause network"}} {
             }
 
             r config set busy-reply-threshold 10
+            set loglines [count_log_lines 0]
             set rd [valkey_deferring_client]
             $rd eval_ro {while true do end} 0
+            # With io-threads, a command read in the same I/O batch as the
+            # script runs only after the script ends, so don't talk to the
+            # replica until the script has entered busy mode.
+            wait_for_log_messages 0 {"*Slow script detected*"} $loglines 1000 10
             wait_for_condition 50 100 {
                 [catch {r ping} e] == 1
             } else {

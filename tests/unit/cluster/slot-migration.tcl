@@ -111,6 +111,19 @@ proc node_seen_healthy_by_all {node_id} {
     return 1
 }
 
+# Returns 1 when every node in the cluster sees $node_id as a replica.
+proc node_seen_as_replica_by_all {node_id} {
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        set node [cluster_get_node_by_id $j $node_id]
+        # A node turned into an empty node no longer knows the whole cluster.
+        if {$node eq {}} continue
+        if {![cluster_has_flag $node slave]} {
+            return 0
+        }
+    }
+    return 1
+}
+
 # Give the shard back to $primary with a manual failover.
 proc failback {primary} {
     set primary_id [R $primary CLUSTER MYID]
@@ -118,6 +131,18 @@ proc failback {primary} {
         [node_seen_healthy_by_all $primary_id] == 1
     } else {
         fail "node $primary_id is still flagged as failing by some node"
+    }
+    # Every node must also have seen $primary turn into a replica before it
+    # takes the shard back. A node refreshes its migrating/importing states
+    # for a shard only when it sees a replica->primary role change or a slot
+    # bitmap change in that shard. An empty shard's bitmap never changes, so
+    # a node that missed the demotion (its last packet from $primary predates
+    # it) sees no role change on the promotion either and would keep its open
+    # slots pointed at the old primary forever.
+    wait_for_condition 100 100 {
+        [node_seen_as_replica_by_all $primary_id] == 1
+    } else {
+        fail "node $primary_id is not yet seen as a replica by all nodes"
     }
     assert_equal {OK} [R $primary cluster failover]
     wait_for_role $primary master
@@ -352,6 +377,11 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Empty-shard migration target is auto-updated after failover in target shard" {
         test_defer_fail { normalize_cluster $shard_pairs }
+        # Open slot 609 if the previous test did not run (e.g. --only runs).
+        if {[get_open_slots 0] eq ""} {
+            assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+            assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
+        }
         # Trigger an auto-failover from R6 to R7
         fail_server 6 7
         # Validate final states
@@ -370,6 +400,11 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Empty-shard migration source is auto-updated after failover in source shard" {
         test_defer_fail { normalize_cluster $shard_pairs }
+        # Open slot 609 if the previous tests did not run (e.g. --only runs).
+        if {[get_open_slots 0] eq ""} {
+            assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+            assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
+        }
         # Trigger an auto-failover from R0 to R3
         fail_server 0 3
         # Validate final states

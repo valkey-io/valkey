@@ -486,6 +486,9 @@ void debugCommand(client *c) {
             "    Setting it to 0 disables expiring keys in background when they are not",
             "    accessed (otherwise the behavior). Setting it to 1 reenables back the",
             "    default.",
+            "SWEEP-TRACKING-TABLE",
+            "    Synchronously sweep the whole tracking table until every ID left in it",
+            "    references a connected client.",
             "QUICKLIST-PACKED-THRESHOLD <size>",
             "    Sets the threshold for elements to be inserted as plain vs packed nodes",
             "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
@@ -632,9 +635,11 @@ void debugCommand(client *c) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
         server.cluster_drop_packet_filter = packet_type;
+        serverLog(LL_NOTICE, "Setting drop-cluster-packet-filter to %ld", packet_type);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "close-cluster-link-on-packet-drop") && c->argc == 3) {
         server.debug_cluster_close_link_on_packet_drop = atoi(objectGetVal(c->argv[2]));
+        serverLog(LL_NOTICE, "Setting close-cluster-link-on-packet-drop to %d", atoi(objectGetVal(c->argv[2])));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-random-ping") && c->argc == 3) {
         server.debug_cluster_disable_random_ping = atoi(objectGetVal(c->argv[2]));
@@ -898,6 +903,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "sweep-tracking-table") && c->argc == 2) {
+        trackingSweepFull();
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "quicklist-packed-threshold") && c->argc == 3) {
         int memerr;

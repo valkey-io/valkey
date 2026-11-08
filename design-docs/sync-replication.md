@@ -303,7 +303,7 @@ Writes are never reported as successful until they commit. While a fault is bein
 
 **Two errors with different meanings:**
 
-* **`CLUSTERDOWN`**: the write was rejected before it executed. It definitely didn't happen and is safe to retry.  
+* **`NOREPLICAS`**: the write was rejected before it executed. It definitely didn't happen and is safe to retry.  
 * **`UNCOMMITTED`**: the write executed on the primary but couldn't be committed, so **its outcome is unknown**. It may still commit later, for example when a replica that already received it is promoted into the sync replica set, or it may be lost in a failover. Clients should treat it like a timeout: retry only idempotent operations, or read the key back to check.
 
 A primary that steps down while replies are held also returns `UNCOMMITTED` for them, because the new primary decides whether those writes survive.

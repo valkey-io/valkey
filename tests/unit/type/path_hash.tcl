@@ -932,7 +932,8 @@ start_server {tags {pathhash}} {
         test_config_set r hash-max-listpack-value 64
         foreach limit {0 4 512} {
             test_config_set r hash-max-listpack-entries $limit
-            r del threshold-tree threshold-restored
+            r del threshold-tree
+            r del threshold-restored
             set expected [dict create]
             foreach count [list [expr {max(1, $limit - 1)}] [expr {max(1, $limit)}] [expr {$limit + 1}]] {
                 set fields {}

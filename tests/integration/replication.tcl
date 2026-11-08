@@ -2799,3 +2799,61 @@ foreach load_mode {disabled on-empty-db} {
         }
     }
 }
+
+# A forkless full sync writes the RDB to the replica's socket from the save
+# thread. A script that writes a key it did not declare waits on the main thread
+# until the save thread has written that key, so a replica that stops reading
+# must not stall the primary.
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0 rdbcompression no repl-timeout 10}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    $primary debug populate 50000 key 1000
+
+    start_server {overrides {save {}}} {
+        set replica [srv 0 client]
+        set replica_pid [srv 0 pid]
+
+        test "A stalled replica during forkless sync does not stall the primary" {
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 500 10 {
+                [s -1 rdb_current_bgsave_type] eq "forkless"
+            } else {
+                fail "Forkless sync didn't start"
+            }
+            pause_process $replica_pid
+
+            # Scripts that write keys the save has not reached, without
+            # declaring them
+            set rd [valkey_deferring_client -1]
+            foreach k {7 1234 5000 9999 15000 19999 30000 49999} {
+                $rd eval {return server.call('append', ARGV[1], 'x')} 0 key:$k
+            }
+            $rd flush
+            after 200
+
+            set start [clock milliseconds]
+            assert_equal PONG [$primary ping]
+            set elapsed [expr {[clock milliseconds] - $start}]
+
+            resume_process $replica_pid
+            foreach k {7 1234 5000 9999 15000 19999 30000 49999} {
+                assert_equal 1001 [$rd read]
+            }
+            $rd close
+            # The primary waits at most a second for the stalled replica (far
+            # less than repl-timeout) before dropping it from the sync.
+            assert_lessthan $elapsed 2000
+            verify_log_message -1 "*stopped reading while a command waits*" 0
+
+            # The dropped replica resyncs and ends up with the same data.
+            wait_for_condition 500 100 {
+                [s 0 master_link_status] eq "up"
+            } else {
+                fail "Replica did not resync after being dropped"
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+        } {} {needs:debug}
+    }
+}

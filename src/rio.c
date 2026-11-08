@@ -664,7 +664,10 @@ static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
              * of short writes. */
             size_t nwritten = 0;
             while (nwritten != count) {
+                atomic_store_explicit(&r->io.connset.inflight_since, getMonotonicUs(), memory_order_relaxed);
+                atomic_store_explicit(&r->io.connset.inflight_conn, r->io.connset.conns[j], memory_order_release);
                 retval = connWrite(r->io.connset.conns[j], p + nwritten, count - nwritten);
+                atomic_store_explicit(&r->io.connset.inflight_conn, NULL, memory_order_relaxed);
                 if (retval <= 0) {
                     /* With blocking sockets, which is the sole user of this
                      * rio target, EWOULDBLOCK is returned only because of
@@ -742,6 +745,23 @@ void rioInitWithConnset(rio *r, connection **conns, int numconns) {
     r->io.connset.pos = 0;
     r->io.connset.buf = sdsempty();
     r->io.connset.net_output_bytes = 0;
+    atomic_store_explicit(&r->io.connset.inflight_conn, NULL, memory_order_relaxed);
+    atomic_store_explicit(&r->io.connset.inflight_since, 0, memory_order_relaxed);
+}
+
+/* Return the connection on which a blocking write has made no progress for at
+ * least min_ms, or NULL. May be called from a thread other than the writer
+ * while the connset is in use: it tells a peer that stopped reading apart from
+ * one that is merely slow, since a stalled write() returns only when the send
+ * timeout fires. The result may be stale by one write: it can hide a stall
+ * briefly, or name a connection whose write did stall for min_ms but has just
+ * completed. */
+connection *rioConnsetStalledConn(rio *r, uint64_t min_ms) {
+    connection *conn = atomic_load_explicit(&r->io.connset.inflight_conn, memory_order_acquire);
+    if (conn == NULL) return NULL;
+    uint64_t since = atomic_load_explicit(&r->io.connset.inflight_since, memory_order_relaxed);
+    if (elapsedMs(since) < min_ms) return NULL;
+    return conn;
 }
 
 /* release the rio stream. */

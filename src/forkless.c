@@ -8,6 +8,14 @@
 static const void *PROCESS_COMPLETE_ITEM = (void *)-1;
 static const int SNAPSHOT_FILE_CLOSE_MONITOR_INTERVAL_MS = 200;
 static const int REPLICATION_MONITOR_INTERVAL_MS = 100;
+/* How long a write to a replica may make no progress while a command on the
+ * main thread waits for the key being written, before the replica is dropped
+ * from the sync. Until then the primary serves nothing, so its availability is
+ * put ahead of one replica's sync: a replica that pauses its reads for longer
+ * (a slow fsync during a disk-based load, for example) is treated as dead and
+ * resyncs. Stalled replicas are dropped one at a time, so with N of them the
+ * wait is about N times this. Without the cutoff it lasts up to repl-timeout. */
+static const uint64_t STALLED_REPLICA_CUTOFF_MS = 1000;
 
 typedef struct {
     rio save_rio; /* Must be 1st to permit cast from rio back to forklessSaveInfo */
@@ -31,6 +39,8 @@ typedef struct {
             int rdbver;
             sds header_buf;
             sds footer_buf;
+            _Atomic bool connset_live; /* save_rio is a connset the bg thread writes through. */
+            connection *stalled_conn;  /* Last connection shut down for stalling (main thread). */
         } repl;
     } u;
 } forklessSaveInfo;
@@ -270,7 +280,10 @@ static void *forklessSaveProcessor(void *arg) {
         err = initConnset(saveInfo);
         serverLog(LL_DEBUG, "forkless-save: connset init %s, %d clients remain",
                   err == C_OK ? "OK" : "FAILED", (int)listLength(saveInfo->u.repl.clients));
-        if (err == C_OK) err = writeSyncPreamble(saveInfo);
+        if (err == C_OK) {
+            atomic_store_explicit(&saveInfo->u.repl.connset_live, true, memory_order_release);
+            err = writeSyncPreamble(saveInfo);
+        }
     }
 
     saveInfo->save_rio.check_abort_between_writes = forklessSaveShouldAbort;
@@ -415,6 +428,7 @@ static void *forklessSaveProcessor(void *arg) {
         }
         if (!terminated && listLength(saveInfo->u.repl.clients) == 0) err = C_ERR;
 
+        atomic_store_explicit(&saveInfo->u.repl.connset_live, false, memory_order_release);
         rioFreeConnset(&saveInfo->save_rio);
     }
 
@@ -960,6 +974,35 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
     return true;
 }
 
+/* Called on the main thread, repeatedly, while a command waits for the bg
+ * thread to hand back a key it holds (a script wrote a key it did not declare,
+ * see bgIteration_blockClientIfRequired). The bg thread hands a key back once
+ * it has written it, so while its write to a replica that stopped reading is
+ * stuck, nothing hands the key back until the send timeout (repl-timeout)
+ * fires, and the primary serves nothing for that long. Once the write has made
+ * no progress for STALLED_REPLICA_CUTOFF_MS, shut down that replica's socket:
+ * the write fails at once, the bg thread drops the replica (it will resync) and
+ * goes on with the others. Only the raw socket is shut down, since the bg thread
+ * is inside the connection's write (for TLS, inside SSL_write); the client
+ * itself is freed later on the main thread as for any dropped replica. */
+static void forklessSaveMainThreadBlocked(void *privdata) {
+    serverAssert(onServerMainThread());
+    forklessSaveInfo *saveInfo = privdata;
+    serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+
+    if (!atomic_load_explicit(&saveInfo->u.repl.connset_live, memory_order_acquire)) return;
+    connection *conn = rioConnsetStalledConn(&saveInfo->save_rio, STALLED_REPLICA_CUTOFF_MS);
+    if (conn == NULL || conn == saveInfo->u.repl.stalled_conn) return;
+    saveInfo->u.repl.stalled_conn = conn;
+
+    client *c = connGetPrivateData(conn);
+    serverLog(LL_WARNING,
+              "forkless-save: replica %s (client %llu) stopped reading while a command waits for the key being "
+              "sent to it, dropping it from the sync.",
+              replicationGetReplicaName(c), (unsigned long long)c->id);
+    shutdown(conn->fd, SHUT_RDWR);
+}
+
 int forklessSaveToSockets(int req, int rdbver) {
     serverAssert(onServerMainThread());
     serverAssert(currentForklessSave == NULL);
@@ -1045,6 +1088,7 @@ int forklessSaveToSockets(int req, int rdbver) {
         serverLog(LL_WARNING, "forkless-save: error creating iterator");
         goto werr;
     }
+    bgIteratorSetMainThreadBlockedFunc(saveInfo->iterator, forklessSaveMainThreadBlocked);
     currentForklessSave = saveInfo;
     iteratorOwnsIncomingReplication = true;
 

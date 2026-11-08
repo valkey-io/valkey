@@ -187,6 +187,18 @@ void bgIteratorTerminate(bgIterator *iter);
 bool bgIteratorIsTerminating(bgIterator *iter);
 
 
+/* Optional callback: the main thread is blocked, synchronously waiting for an item an iterator
+ * holds to be handed back (a script wrote a key it did not declare, see
+ * bgIteration_blockClientIfRequired).  It is called repeatedly, on the main thread, until the wait
+ * ends, so it must be cheap.  The iteration client can use it to make sure the item comes back
+ * promptly, e.g. by giving up on a peer that stopped reading.
+ *
+ * PRIVDATA:    this pointer is for data private to the iteration client. */
+typedef void (*bgIteratorMainThreadBlockedFunc)(void *privdata);
+
+void bgIteratorSetMainThreadBlockedFunc(bgIterator *iter, bgIteratorMainThreadBlockedFunc fn);
+
+
 typedef enum {
     /* Indicates that the iteration has completed normally.  No more items to read.
      * If replication is enabled, on completion, the final replication offset is recorded in

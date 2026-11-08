@@ -364,6 +364,9 @@ struct bgIterator {
     bgIteratorCleanupFunc cleanup;   // Optional cleanup function to be run on main thread
     void *privdata;                  // Client's private data to be passed to cleanup function
 
+    // Optional callback, run on the main thread while it is blocked waiting for items to come back
+    bgIteratorMainThreadBlockedFunc main_thread_blocked;
+
     int iteration_flags;                 // Consistent and/or Replication
     int iteration_type;                  // Full scan or cluster slot
     uint32_t consistent_modification_id; // iterator epoch at time of iterator creation
@@ -1590,7 +1593,8 @@ static bool receiveItemsBackFromOneIterator(bgIterator *it) {
 }
 
 /* Process each iterator's return_to_main_thread queue
- * If `blocking` is true, continue reading until at least one queue was not empty. */
+ * If `blocking` is true, continue reading until at least one queue was not empty.  While blocked,
+ * each iterator's main_thread_blocked callback is given a chance to get its items back. */
 static void receiveItemsBackFromIterators(bool blocking) {
     serverAssert(hasMainThreadExclusivity());
     listIter li;
@@ -1602,7 +1606,14 @@ static void receiveItemsBackFromIterators(bool blocking) {
             bgIterator *it = listNodeValue(node);
             processedItems |= receiveItemsBackFromOneIterator(it);
         }
-        if (blocking && !processedItems) usleep(100); // Short sleep before retry
+        if (blocking && !processedItems) {
+            listRewind(allIterators, &li);
+            while ((node = listNext(&li)) != NULL) {
+                bgIterator *it = listNodeValue(node);
+                if (it->main_thread_blocked) it->main_thread_blocked(it->privdata);
+            }
+            usleep(100); // Short sleep before retry
+        }
     } while (blocking && !processedItems);
 }
 
@@ -2020,6 +2031,7 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->repldone = repldone;
     it->cleanup = cleanup;
     it->privdata = privdata;
+    it->main_thread_blocked = NULL;
     it->items_for_iterator = mutexQueueCreate();
     it->return_to_main_thread = mutexQueueCreate();
 
@@ -2168,6 +2180,13 @@ void bgIteratorTerminate(bgIterator *it) {
 // PUBLIC API
 bool bgIteratorIsTerminating(bgIterator *it) {
     return it->terminated;
+}
+
+
+// PUBLIC API
+void bgIteratorSetMainThreadBlockedFunc(bgIterator *it, bgIteratorMainThreadBlockedFunc fn) {
+    serverAssert(hasMainThreadExclusivity());
+    it->main_thread_blocked = fn;
 }
 
 

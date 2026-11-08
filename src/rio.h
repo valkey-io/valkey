@@ -34,6 +34,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <sys/types.h>
 #include <stdint.h>
 #include "sds.h"
@@ -140,6 +141,11 @@ struct _rio {
             off_t pos;
             sds buf;
             size_t net_output_bytes; /* Total bytes written across all connections. */
+            /* The connection a blocking write is in progress on, and when it
+             * started (monotonic us). Published for another thread, see
+             * rioConnsetStalledConn(). */
+            _Atomic(connection *) inflight_conn;
+            _Atomic uint64_t inflight_since;
         } connset;
     } io;
 };
@@ -283,4 +289,5 @@ void rioInitWithConnset(rio *r, connection **conns, int numconns);
 void rioFreeConnset(rio *r);
 void rioFreeConnectionFromConnset(rio *r, connection *conn_to_free);
 int rioConnsetConnErrno(rio *r, connection *conn);
+connection *rioConnsetStalledConn(rio *r, uint64_t min_ms);
 #endif

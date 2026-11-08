@@ -2084,6 +2084,25 @@ TEST_F(BgIterationTest, earlyTerminationFromChild) {
 }
 
 
+// The main thread may terminate an iterator that its client has already closed (e.g. a forkless
+//  save cancelled after the background thread has failed).  The items released by the termination
+//  are then returned behind ITER_CLOSED.
+TEST_F(BgIterationTest, earlyTerminationFromMainAfterChildClose) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+    expectReadKey(it, 1);
+    simulateFlushDB(0, 1); // queues a FLUSHDB barrier item
+
+    bgIteratorClose(it);     // background thread initiates the termination
+    bgIteratorTerminate(it); // main thread terminates before receiving ITER_CLOSED
+
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_TRUE(cleanupTerminated);
+}
+
+
 // Edge case.  Executing a command (like SUNIONSTORE) which REPLACES the first key and reads the
 //  second key.  In this case, bgIteration will get notified of the key deletion during execution of
 //  SETUNIONSTORE.  Given that both keys are in the future (not iterated yet), we'll allow the

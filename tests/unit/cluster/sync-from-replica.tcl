@@ -63,11 +63,16 @@ proc wait_replica_of {idx target_node_id {maxtries 200} {delay 100}} {
 }
 
 # Wait until an instance finishes sync and any transient sibling handoff clears.
+# The link status and the sibling flag must come from ONE INFO snapshot: the
+# delayed switch to the primary clears the flag and reconnects in a single
+# step, so pairing the link from one INFO reply with the flag from a later one
+# can catch a stale pre-switch link status and return while the node is still
+# reconnecting to the primary.
 proc wait_node_synced {idx {maxtries 300} {delay 100}} {
     wait_for_condition $maxtries $delay {
-        [get_info $idx master_link_status] eq {up} &&
-        ([get_info $idx sync_from_replica_in_progress] eq "" ||
-         [get_info $idx sync_from_replica_in_progress] == 0)
+        [getInfoProperty [set info [R $idx info replication]] master_link_status] eq {up} &&
+        ([getInfoProperty $info sync_from_replica_in_progress] eq "" ||
+         [getInfoProperty $info sync_from_replica_in_progress] == 0)
     } else {
         fail "Node $idx did not finish sync in time"
     }

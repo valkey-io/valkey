@@ -1359,20 +1359,7 @@ void clusterCommandCancelSlotMigrations(client *c) {
         return;
     }
 
-    /* Once failover is granted the target may take the slots at any moment,
-     * so the export has to stay paused until the takeover is seen or the
-     * pause times out, as on connection loss. Cancelling it would unpause
-     * and lose the writes accepted in between. */
-    listRewind(server.cluster->slot_migration_jobs, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        slotMigrationJob *job = ln->value;
-        if (job->state == SLOT_EXPORT_FAILOVER_GRANTED) {
-            addReplyError(c, "Failover already granted to the target, slot "
-                             "migrations can no longer be cancelled");
-            return;
-        }
-    }
-
+    int granted = 0;
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
@@ -1380,17 +1367,39 @@ void clusterCommandCancelSlotMigrations(client *c) {
             job->type == SLOT_MIGRATION_IMPORT) {
             continue;
         }
+        /* Once failover is granted the target may take the slots at any
+         * moment, so the export has to stay paused until the takeover is seen
+         * or the pause times out, as on connection loss. Cancelling it would
+         * unpause and lose the writes accepted in between. Cancelling the
+         * other exports is safe: writes stay paused while any job holds a
+         * pause (see slotExportTryUnpause). */
+        if (job->state == SLOT_EXPORT_FAILOVER_GRANTED) {
+            granted++;
+            continue;
+        }
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
     }
     sds client_info = catClientInfoShortString(sdsempty(), c,
                                                server.hide_user_data_from_log);
-    serverLog(LL_NOTICE,
-              "Canceled all in progress slot migrations (user request from "
-              "'%s')",
-              client_info);
+    if (granted) {
+        serverLog(LL_NOTICE,
+                  "Canceled in progress slot migrations except %d that "
+                  "already granted failover to the target (user request from "
+                  "'%s')",
+                  granted, client_info);
+        addReplyErrorFormat(c,
+                            "%d slot migration(s) already granted failover to "
+                            "the target and cannot be cancelled, the others "
+                            "were cancelled",
+                            granted);
+    } else {
+        serverLog(LL_NOTICE,
+                  "Canceled all in progress slot migrations (user request from "
+                  "'%s')",
+                  client_info);
+        addReply(c, shared.ok);
+    }
     sdsfree(client_info);
-    addReply(c, shared.ok);
-    return;
 }
 
 /* Handler for connect callbacks during slot migration job connection. */

@@ -1587,7 +1587,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # The cancel was refused, so the source stayed paused until the
         # target took the slot
-        assert_match "*already granted*" $cancel_reply
+        assert_match "*already granted failover*" $cancel_reply
         assert_equal "slot_migration_in_progress" $paused_after_cancel
         assert_match "MOVED 0 *" $set_reply
         wait_for_migration_field 0 $jobname state success
@@ -1597,6 +1597,58 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         # Cleanup for the next test
         set_debug_prevent_pause 0
         assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id]
+        wait_for_migration 0 0
+    }
+
+    test "Cancel with a granted export still cancels the other exports" {
+        set source_pid [srv 0 pid]
+        set target_pid [srv -2 pid]
+        set other_pid [srv -1 pid]
+
+        # Freeze the second target, so that its export stays at the start
+        set_debug_prevent_pause 1
+        pause_process $other_pid
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id SLOTSRANGE 1 1 NODE $node1_id]
+        set jobname [get_job_name 0 0]
+        set other_jobname [get_job_name 0 1]
+
+        # Bring the first export to failover-granted, as in the test above
+        wait_for_migration_field 0 $jobname state waiting-to-pause
+        wait_for_migration_field 2 $jobname state waiting-for-paused
+        pause_process $target_pid
+        assert_match "OK" [R 0 DEBUG SLOTMIGRATION PREVENT-PAUSE 0]
+        wait_for_migration_field 0 $jobname state failover-paused
+        pause_process $source_pid
+        resume_process $target_pid
+        wait_for_migration_field 2 $jobname state failover-requested
+        pause_process $target_pid
+        resume_process $source_pid
+        wait_for_migration_field 0 $jobname state failover-granted
+
+        # Only the granted export survives the cancel, and writes stay paused
+        catch {R 0 CLUSTER CANCELSLOTMIGRATIONS} cancel_reply
+        assert_equal "cancelled" [dict get [get_migration_by_name 0 $other_jobname] state]
+        assert_equal "failover-granted" [dict get [get_migration_by_name 0 $jobname] state]
+        assert_equal "slot_migration_in_progress" [s -0 paused_reason]
+        assert_match "*1 slot migration(s) already granted failover*" $cancel_reply
+
+        # The granted export completes, and the cancelled one leaves its slot
+        resume_process $target_pid
+        resume_process $other_pid
+        wait_for_migration 2 0
+        wait_for_migration_field 0 $jobname state success
+        assert_match "none" [s -0 paused_reason]
+        assert_equal 1 [is_slot_migrated 0 1]
+        wait_for_condition 50 100 {
+            [get_migration_by_name 1 $other_jobname] eq "" ||
+            [dict get [get_migration_by_name 1 $other_jobname] state] in {failed cancelled}
+        } else {
+            fail "Import of slot 1 on node 1 did not end"
+        }
+
+        # Cleanup for the next test
+        set_debug_prevent_pause 0
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id]
         wait_for_migration 0 0
     }

@@ -44,10 +44,41 @@ static int markSlotsAssignedToMyShard(unsigned char *assigned_slots, int start_s
     return assigned_slots_count;
 }
 
-static uint64_t getSlotStat(int slot, slotStatType stat_type) {
+/* Key counts for the slots first_slot..first_slot+N-1, summed over all
+ * databases. counts[i] is the count of slot first_slot+i. When counts is NULL,
+ * key counts are computed per slot with countKeysInSlot(). */
+typedef struct {
+    unsigned int *counts;
+    int first_slot;
+} slotKeyCounts;
+
+/* Fills key_counts with the key counts of slots startslot..endslot, summed over
+ * all databases. Databases are the outer loop so that each database's array of
+ * per-slot hashtables is read sequentially, which is cache and prefetch
+ * friendly. Iterating slots in the outer loop would read one entry from every
+ * database's array per slot, a cache miss per database once several databases
+ * hold keys. Databases without keys are skipped. */
+static void collectKeyCounts(slotKeyCounts *key_counts, int startslot, int endslot) {
+    key_counts->first_slot = startslot;
+    key_counts->counts = zcalloc(sizeof(unsigned int) * (endslot - startslot + 1));
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (kvstoreSize(db->keys) == 0) continue;
+        for (int slot = startslot; slot <= endslot; slot++) {
+            key_counts->counts[slot - startslot] += countKeysInSlotForDb(slot, db);
+        }
+    }
+}
+
+static unsigned int getSlotKeyCount(const slotKeyCounts *key_counts, int slot) {
+    if (key_counts->counts == NULL) return countKeysInSlot(slot);
+    return key_counts->counts[slot - key_counts->first_slot];
+}
+
+static uint64_t getSlotStat(int slot, slotStatType stat_type, const slotKeyCounts *key_counts) {
     uint64_t slot_stat = 0;
     switch (stat_type) {
-    case KEY_COUNT: slot_stat = countKeysInSlot(slot); break;
+    case KEY_COUNT: slot_stat = getSlotKeyCount(key_counts, slot); break;
     case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
     case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
     case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
@@ -79,13 +110,13 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     return (entry_b.stat > entry_a.stat) - (entry_b.stat < entry_a.stat);
 }
 
-static int collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
+static int collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc, const slotKeyCounts *key_counts) {
     int i = 0;
 
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
         if (doesSlotBelongToMyShard(slot)) {
             slot_stats[i].slot = slot;
-            slot_stats[i].stat = getSlotStat(slot, order_by);
+            slot_stats[i].stat = getSlotStat(slot, order_by, key_counts);
             i++;
         }
     }
@@ -93,14 +124,14 @@ static int collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType or
     return i;
 }
 
-static void addReplySlotStat(client *c, int slot) {
+static void addReplySlotStat(client *c, int slot, const slotKeyCounts *key_counts) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
     addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
                                                           : 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
-    addReplyLongLong(c, countKeysInSlot(slot));
+    addReplyLongLong(c, getSlotKeyCount(key_counts, slot));
 
     /* Any additional metrics aside from key-count come with a performance trade-off,
      * and are aggregated and returned based on its server config. */
@@ -117,19 +148,22 @@ static void addReplySlotStat(client *c, int slot) {
 /* Adds reply for the SLOTSRANGE variant.
  * Response is ordered in ascending slot number. */
 static void addReplySlotsRange(client *c, unsigned char *assigned_slots, int startslot, int endslot, int len) {
+    slotKeyCounts key_counts = {0};
+    collectKeyCounts(&key_counts, startslot, endslot);
     addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
 
     for (int slot = startslot; slot <= endslot; slot++) {
-        if (assigned_slots[slot]) addReplySlotStat(c, slot);
+        if (assigned_slots[slot]) addReplySlotStat(c, slot, &key_counts);
     }
+    zfree(key_counts.counts);
 }
 
-static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], int num_slots_assigned, long limit) {
+static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], int num_slots_assigned, long limit, const slotKeyCounts *key_counts) {
     int len = min(limit, num_slots_assigned);
     addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
 
     for (int i = 0; i < len; i++) {
-        addReplySlotStat(c, slot_stats[i].slot);
+        addReplySlotStat(c, slot_stats[i].slot, key_counts);
     }
 }
 
@@ -194,13 +228,18 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
  * Response is ordered based on the sort result. */
 static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int desc) {
     slotStatForSort slot_stats[CLUSTER_SLOTS];
-    int num_slots_assigned = collectAndSortSlotStats(slot_stats, order_by, desc);
-    addReplySortedSlotStats(c, slot_stats, num_slots_assigned, limit);
+    /* Sorting by key-count needs the count of every slot, which is cheapest in
+     * one pass. Otherwise only the LIMIT slots in the reply need a key count. */
+    slotKeyCounts key_counts = {0};
+    if (order_by == KEY_COUNT) collectKeyCounts(&key_counts, 0, CLUSTER_SLOTS - 1);
+    int num_slots_assigned = collectAndSortSlotStats(slot_stats, order_by, desc, &key_counts);
+    addReplySortedSlotStats(c, slot_stats, num_slots_assigned, limit, &key_counts);
+    zfree(key_counts.counts);
 }
 
 /* Resets applicable slot statistics. */
 void clusterSlotStatReset(int slot) {
-    /* key-count is exempt, as it is queried separately through `countKeysInSlot()`. */
+    /* key-count is exempt, as it is computed from the keyspace when queried. */
     memset(&server.cluster->slot_stats[slot], 0, sizeof(slotStat));
 }
 

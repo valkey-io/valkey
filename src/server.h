@@ -2134,6 +2134,8 @@ struct valkeyServer {
     int config_databases;                        /* Total number of configured DBs in standalone */
     int config_databases_cluster;                /* Total number of configured DBs in cluster mode */
     int dbnum;                                   /* Total number of initialized DBs */
+    int *created_db_ids;                         /* Ids of non-NULL server.db[] entries, ascending */
+    int created_db_count;                        /* Number of entries in created_db_ids */
     int supervised;                              /* 1 if supervised, 0 otherwise. */
     int supervised_mode;                         /* See SUPERVISED_* */
     int daemonize;                               /* True if running as a daemon */
@@ -4592,6 +4594,17 @@ serverDb *createDatabase(int id);
 int dbHasNoKeys(int dbid);
 bool dbsHaveNoKeys(void);
 serverDb *createDatabaseIfNeeded(int id);
+serverDb *createDatabaseInArrayIfNeeded(serverDb **dbarray, int id);
+void trackCreatedDatabase(int id);
+
+/* Iterates over the databases that exist in server.db[], in ascending id order.
+ * Databases are created lazily, and the NULL entries of server.db[] are not
+ * visited. 'db' is a serverDb * declared by the caller. The loop body must not
+ * create databases, because that inserts into the list being iterated. */
+#define forEachCreatedDb(db)                                                                           \
+    for (int _cdb_idx = 0;                                                                             \
+         _cdb_idx < server.created_db_count && ((db) = server.db[server.created_db_ids[_cdb_idx]], 1); \
+         _cdb_idx++)
 void swapMainDbWithTempDb(serverDb **tempDb);
 sds getVersion(void);
 void debugPauseProcess(void);

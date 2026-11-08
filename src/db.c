@@ -1882,7 +1882,7 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
     for (int i = 0; i < server.dbnum; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
-        if (server.db[i] == NULL) server.db[i] = createDatabase(i);
+        if (server.db[i] == NULL) createDatabaseIfNeeded(i);
         serverDb aux = *server.db[i];
         serverDb *activedb = server.db[i], *newdb = tempDb[i];
 

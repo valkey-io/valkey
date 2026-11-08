@@ -1504,14 +1504,17 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
     test "Export unpauses when cancelled" {
         assert_does_not_resync {
-            # Lower manual failover timeout for this test
-            test_config_set {R 0} cluster-manual-failover-timeout 100
-
-            # Use debug command to prevent failover
-            set_debug_prevent_failover 1
+            # Freeze the target before the source pauses, so that the source
+            # stays in failover-paused without a failover request
+            set_debug_prevent_pause 1
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
-            wait_for_migration_field 0 $jobname state failover-granted
+            wait_for_migration_field 0 $jobname state waiting-to-pause
+            wait_for_migration_field 2 $jobname state waiting-for-paused
+            set target_pid [srv -2 pid]
+            pause_process $target_pid
+            assert_match "OK" [R 0 DEBUG SLOTMIGRATION PREVENT-PAUSE 0]
+            wait_for_migration_field 0 $jobname state failover-paused
 
             assert_match "slot_migration_in_progress" [s -0 paused_reason]
             assert_match "write" [s -0 paused_actions]
@@ -1519,14 +1522,83 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Cancel the job
             assert_match "OK" [R 0 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_migration_field 0 $jobname state cancelled
+            resume_process $target_pid
             wait_for_migration_field 2 $jobname state failed
 
             assert_match "none" [s -0 paused_reason]
 
             # Cleanup for the next test
-            set_debug_prevent_failover 0
+            set_debug_prevent_pause 0
             assert_match "OK" [R 0 FLUSHDB SYNC]
         }
+    }
+
+    test "Cancel after failover is granted does not lose acknowledged writes" {
+        set key "$0_slot_tag:granted"
+        assert_match "OK" [R 0 SET $key old]
+        set source_pid [srv 0 pid]
+        set target_pid [srv -2 pid]
+
+        # Stop the target before the source pauses
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
+        set jobname [get_job_name 0 0]
+        wait_for_migration_field 0 $jobname state waiting-to-pause
+        wait_for_migration_field 2 $jobname state waiting-for-paused
+        pause_process $target_pid
+        assert_match "OK" [R 0 DEBUG SLOTMIGRATION PREVENT-PAUSE 0]
+        wait_for_migration_field 0 $jobname state failover-paused
+
+        # Let the target request failover, and stop it again before it reads
+        # FAILOVER-GRANTED
+        pause_process $source_pid
+        resume_process $target_pid
+        wait_for_migration_field 2 $jobname state failover-requested
+        pause_process $target_pid
+        resume_process $source_pid
+        wait_for_migration_field 0 $jobname state failover-granted
+
+        catch {R 0 CLUSTER CANCELSLOTMIGRATIONS} cancel_reply
+        set paused_after_cancel [s -0 paused_reason]
+
+        # Write to the slot and wait for the replica, unless the write is
+        # held by the pause
+        set rd [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
+        $rd SET $key new
+        $rd WAIT 1 2000
+        $rd flush
+        wait_for_condition 50 100 {
+            [R 0 GET $key] eq "new" || [s -0 blocked_clients] == 1
+        } else {
+            fail "SET was neither served nor held by the pause"
+        }
+
+        # The target takes the slot it was granted
+        resume_process $target_pid
+        wait_for_migration 2 0
+        catch {$rd read} set_reply
+        catch {$rd read} wait_reply
+        $rd close
+
+        # A write the source acknowledged must not be lost
+        if {$set_reply eq "OK" && $wait_reply >= 1} {
+            assert_equal "new" [R 2 GET $key]
+        }
+
+        # The cancel was refused, so the source stayed paused until the
+        # target took the slot
+        assert_match "*already granted*" $cancel_reply
+        assert_equal "slot_migration_in_progress" $paused_after_cancel
+        assert_match "MOVED 0 *" $set_reply
+        wait_for_migration_field 0 $jobname state success
+        wait_for_migration_field 2 $jobname state success
+        assert_match "none" [s -0 paused_reason]
+
+        # Cleanup for the next test
+        set_debug_prevent_pause 0
+        assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id]
+        wait_for_migration 0 0
     }
 
     test "Blocked clients are sent MOVED after export completion" {

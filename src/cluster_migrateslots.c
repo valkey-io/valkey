@@ -1359,6 +1359,20 @@ void clusterCommandCancelSlotMigrations(client *c) {
         return;
     }
 
+    /* Once failover is granted the target may take the slots at any moment,
+     * so the export has to stay paused until the takeover is seen or the
+     * pause times out, as on connection loss. Cancelling it would unpause
+     * and lose the writes accepted in between. */
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = ln->value;
+        if (job->state == SLOT_EXPORT_FAILOVER_GRANTED) {
+            addReplyError(c, "Failover already granted to the target, slot "
+                             "migrations can no longer be cancelled");
+            return;
+        }
+    }
+
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;

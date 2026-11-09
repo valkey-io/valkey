@@ -101,6 +101,7 @@ JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
 FPCONV_LIB := ../../deps/fpconv/libfpconv.a
 LZ4_LIB := ../../deps/lz4/liblz4.a
+CROARING_LIB := ../../deps/croaring/libcroaring.a
 TLS_LIBS := ../../deps/libvalkey/lib/libvalkey_tls.a -lssl -lcrypto
 PKG_CONFIG ?= pkg-config
 GTEST_CFLAGS ?=
@@ -224,6 +225,7 @@ LD_LIBS := $(HIREDIS_LIB) \
 	$(HDR_HISTOGRAM_LIB) \
 	$(FPCONV_LIB) \
 	$(LZ4_LIB) \
+	$(CROARING_LIB) \
 	$(ZSTD_LD_LIBS)
 
 # Add libbacktrace support if enabled

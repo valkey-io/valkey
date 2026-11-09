@@ -196,6 +196,7 @@ if (APPLE)
         "${WRAPPED_VALKEY_LIB}"
         fpconv
         lz4
+        croaring
         lualib
         hdr_histogram
         valkey::valkey
@@ -210,6 +211,7 @@ else ()
         valkeylib-gtest
         fpconv
         lz4
+        croaring
         lualib
         hdr_histogram
         valkey::valkey
@@ -259,6 +261,7 @@ if (APPLE)
     target_link_libraries(valkey-unit-gtests-objs PRIVATE
         fpconv
         lz4
+        croaring
         lualib
         hdr_histogram
         valkey::valkey

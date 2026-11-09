@@ -31,7 +31,7 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4
+DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4 croaring
 NODEPS:=clean distclean
 CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out $(NODEPS),$(MAKECMDGOALS)),,yes))
 
@@ -257,7 +257,7 @@ ifdef OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/lz4
+FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/lz4 -I../deps/croaring
 
 # Zstandard support is disabled by default.
 BUILD_ZSTD ?= no
@@ -770,7 +770,7 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
-	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/lz4/liblz4.a $(FINAL_LIBS) $(LUA_LDFLAGS)
+	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/lz4/liblz4.a ../deps/croaring/libcroaring.a $(FINAL_LIBS) $(LUA_LDFLAGS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)

@@ -362,21 +362,28 @@ test "Raft proto: PRE_VOTE granted after node-timeout even with randomized elect
     }
 }
 
-test "Raft proto: invalid INSTALL_SNAPSHOT is rejected without changing state" {
+test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]
         set node_id [R 0 CLUSTER MYID]
         set leader_id [string repeat "d" 40]
         set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
         set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set c_id [string repeat "c" 40]
+        set c_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
 
-        # Join the fake leader's cluster as a follower.
+        # Join the fake leader's cluster as a follower, together with a fake
+        # node C. Say HELLO again once the node knows the leader and C, so
+        # that their links are associated with them.
         set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
         raft_send $fd "MEET cluster"
         assert_match "ADD_ME*" [raft_recv $fd]
-        raft_send $fd "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        raft_send $fd "AE $leader_id 1 0 0 3 3\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter\n1 NODE_JOIN $c_id $c_addr voter"
         assert_match "AE_ACK 1 1 *" [raft_recv $fd]
-        assert_equal 2 [CI 0 cluster_raft_last_applied]
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
+        raft_send $fd "HELLO $leader_id $leader_addr"
+        assert_match "HI *" [raft_recv $fd]
+        set fd_c [raft_connect_fake_node 127.0.0.1 $cport $c_id $c_addr]
 
         # A snapshot with an unknown node flag is rejected with a failed
         # AE_ACK, and the node keeps its state.
@@ -385,10 +392,36 @@ test "Raft proto: invalid INSTALL_SNAPSHOT is rejected without changing state" {
         append snapshot "\n$node_id $node_addr master,bogus - 0 0 1 connected"
         raft_send $fd $snapshot
         assert_match "AE_ACK 1 0 *" [raft_recv $fd]
-        assert_equal 2 [CI 0 cluster_raft_last_applied]
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
         assert_equal 0 [CI 0 cluster_slots_assigned]
         assert_equal 1 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
 
+        # A valid snapshot without C removes C and closes its link. The leak
+        # check at shutdown catches links that aren't freed.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 10 *" $reply
+        assert_equal 10 [CI 0 cluster_raft_last_applied]
+        assert_equal 16384 [CI 0 cluster_slots_assigned]
+        assert_no_match "*$c_id*" [R 0 CLUSTER NODES]
+        wait_for_condition 50 100 {[catch {read $fd_c}] || [eof $fd_c]} else {
+            fail "C's link was not closed"
+        }
+
+        # A snapshot without the sender is rejected.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 20 1"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0-16383"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 0 *" $reply
+        assert_equal 10 [CI 0 cluster_raft_last_applied]
+        assert_match "*$leader_id*" [R 0 CLUSTER NODES]
+        assert_equal 1 [count_log_message 0 "the sender isn't included"]
+
+        close $fd_c
         close $fd
     }
 }

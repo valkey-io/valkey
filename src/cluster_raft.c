@@ -2001,13 +2001,16 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         return 1;
     }
 
-    /* Check all node lines before changing any state. If one is invalid,
-     * reject the snapshot. The leader sends it again later. */
+    /* Check all node lines before changing any state. If one is invalid, or
+     * the sender isn't included, reject the snapshot. The leader sends it
+     * again later. */
+    bool sender_included = false;
     for (int i = 0; i < config_line_count; i++) {
         if (sdslen(config_lines[i]) == 0) continue;
         int largc;
         sds *largv = sdssplitargs(config_lines[i], &largc);
         bool valid = largv && clusterValidateNodeLine(largv, largc) == C_OK;
+        if (valid && !memcmp(largv[0], argv[1], CLUSTER_NAMELEN)) sender_included = true;
         if (largv) sdsfreesplitres(largv, largc);
         if (!valid) {
             serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid node line: %s",
@@ -2015,6 +2018,11 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
             return 1;
         }
+    }
+    if (!sender_included) {
+        serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        return 1;
     }
 
     /* Clear slots and shards — snapshot will re-assign them. */
@@ -2070,14 +2078,6 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             int in_snapshot = dictFind(snapshot_nodes, name) != NULL;
             sdsfree(name);
             if (in_snapshot) continue;
-            if (node->link) {
-                node->link->node = NULL;
-                node->link = NULL;
-            }
-            if (node->inbound_link) {
-                node->inbound_link->node = NULL;
-                node->inbound_link = NULL;
-            }
             clusterDelNode(node);
         }
         dictReleaseIterator(di);

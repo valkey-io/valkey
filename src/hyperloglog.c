@@ -38,6 +38,7 @@
 #include "intrinsics.h"
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <math.h>
 
 #ifdef HAVE_AVX2

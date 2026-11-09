@@ -6,6 +6,30 @@ proc get_no_writes_function_code {args} {
     return [format "#!%s name=%s\nserver.register_function{function_name='%s', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
 }
 
+start_server {tags {"scripting external:skip"}} {
+    # This test must run on a fresh server before any FUNCTION LOAD has
+    # executed, so it lives in its own start_server block.
+    test {FUNCTION - NUL byte in shebang engine name does not crash on first function load} {
+        # sdsnsplitargs decodes \xNN in quoted strings, so "lua\x00zz" produces
+        # an sds with a NUL at position 3. Without the fix, the per-engine
+        # stats entry is stored under that 6-byte key. libraryLink() looks it
+        # up under the registered engine name "LUA", gets NULL, and fires
+        # serverAssert(stats). The bug only manifests on the very first
+        # FUNCTION LOAD after startup, before any earlier load has created the
+        # "LUA" stats entry. Store a key before the attempt; if the server
+        # crashes the connection drops and the read below returns empty.
+        r set pre_crash_sentinel alive
+        catch {
+            r function load "#!\"lua\\x00zz\" name=nultest\nserver.register_function('nulfunc', function(KEYS, ARGV) return 1 end)"
+        }
+        # If the server crashed the connection may be dead; catch the read
+        # error and leave sentinel empty so the assert below fires gracefully.
+        set sentinel {}
+        catch {set sentinel [r get pre_crash_sentinel]}
+        assert_equal $sentinel alive
+    }
+}
+
 start_server {tags {"scripting"}} {
     test {FUNCTION - Basic usage} {
         r function load [get_function_code LUA test test {return 'hello'}]
@@ -352,6 +376,27 @@ start_server {tags {"scripting"}} {
             r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
         }
         r function flush
+    }
+
+    test {FUNCTION - lazy free of restored-over functions does not touch a recreated Lua state} {
+        test_config_set r lazyfree-lazy-user-flush yes
+        r function flush sync
+        set empty_dump [r function dump]
+        for {set i 0} {$i < 65} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r multi
+        r function restore $empty_dump flush
+        r function flush sync
+        r function load [get_function_code LUA test test {return 'hello'}]
+        r exec
+        wait_for_condition 50 100 {
+            [s lazyfree_pending_objects] == 0
+        } else {
+            fail "lazyfree isn't done"
+        }
+        catch {r fcall test 0} res
+        assert_equal $res hello
     }
 
     test {FUNCTION - test function wrong argument} {
@@ -830,6 +875,24 @@ start_server {tags {"scripting"}} {
         }
         r function list
     } {{library_name lib engine LUA functions {{name f1 description {some desc} flags {}}}}}
+
+    test {LIBRARIES - named arguments repeated in another case do not leak} {
+        r function flush sync
+        set before [s used_memory]
+        catch {
+            r function load replace {#!lua name=lib
+                server.register_function{
+                    function_name=('x'):rep(1000000),
+                    Function_name=('x'):rep(1000000),
+                    description=('x'):rep(1000000),
+                    Description=('x'):rep(1000000),
+                }
+            }
+        } e
+        assert_match {*must get a callback argument*} $e
+        r function flush sync
+        assert_lessthan [expr {[s used_memory] - $before}] 500000
+    }
 
     test {LIBRARIES - deleting a function frees its long description} {
         r function flush

@@ -2466,6 +2466,49 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {}}} {
     }
 }
 
+# A -1 primary_initial_offset is also what a SYNC fallback leaves (the primary
+# rejected PSYNC). That is not a forkless sync, so the RDB repl-id/offset must
+# not be required: the replica loads it and replicates in pre_psync mode.
+start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
+    set src [srv 0 client]
+    $src set k v
+    # Attach a throwaway replica so the save carries repl aux fields for a
+    # replid the replica under test has never seen.
+    start_server {overrides {save ""}} {
+        [srv 0 client] replicaof [srv -1 host] [srv -1 port]
+        wait_for_sync [srv 0 client]
+        waitForBgsave $src
+        $src save
+        [srv 0 client] replicaof no one
+    }
+    set payload [read_binary_file [server_rdb_path $src]]
+    start_server {overrides {save ""}} {
+        foreach load_mode {disabled swapdb} {
+            test "Replica still syncs after a PSYNC to SYNC fallback (repl-diskless-load $load_mode)" {
+                set payload_file [tmpfile fake-primary-payload]
+                write_binary_file $payload_file $payload
+                set port [find_available_port $::baseport $::portcount]
+                set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                             $port $payload_file [string length $payload] "" "-ERR unknown command 'PSYNC'" &]
+                wait_for_condition 50 50 {
+                    [ping_server 127.0.0.1 $port]
+                } else {
+                    fail "Failed to start fake primary"
+                }
+                set replica [srv 0 client]
+                $replica config set repl-diskless-load $load_mode
+                set loglines [count_log_lines 0]
+                $replica replicaof 127.0.0.1 $port
+                wait_for_log_messages 0 {"*Retrying with SYNC*"} $loglines 100 100
+                wait_for_log_messages 0 {"*PRIMARY <-> REPLICA sync: Finished with success*"} $loglines 100 100
+                assert_equal v [$replica get k]
+                $replica replicaof no one
+                catch {exec kill $pid}
+            }
+        }
+    }
+}
+
 # Live writes that arrive after the bg iterator has finished scanning the
 # keyspace, but before the replica has come online, are not captured by the
 # iterator and cannot yet be served from the shared replication buffer. They

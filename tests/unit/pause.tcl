@@ -51,6 +51,7 @@ start_server {tags {"pause network"}} {
         #   more restrictive than the second 'PAUSE WRITE' and pause-client feature
         #   preserve most restrictive configuration among multiple settings.
         set rd [valkey_deferring_client]
+        test_defer {$rd close}
         $rd SET FOO BAR
 
         set test_start_time [clock milliseconds]
@@ -60,7 +61,6 @@ start_server {tags {"pause network"}} {
         $rd get FOO
         set elapsed [expr {[clock milliseconds]-$test_start_time}]
         assert_lessthan 200 $elapsed
-        $rd close
     }
 
     test "Test new pause time is smaller than old one, then old time preserved" {

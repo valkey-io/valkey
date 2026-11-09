@@ -44,11 +44,9 @@
  * At the same time the elements are added to an ordered index mapping scores
  * to elements (so elements are sorted by scores in this "view").
  *
- * Note that the element string is shared between the hash table and the
- * ordered index in order to save memory. The element is freed only in
- * orderedIndexItemFree(). The hash table has no value free method set.
- * So we should always remove an element from the hash table, and later from
- * the ordered index. */
+ * The hash table and ordered index share each item's allocation. The hash
+ * table does not free items, so an item must be removed from both structures
+ * before the ordered index item is freed. */
 
 #include "server.h"
 #include "ordered_index.h"
@@ -108,7 +106,9 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         char *s = objectGetVal(min);
         size_t len = sdslen(s);
+        if (len == 0) return C_ERR;
         if (s[0] == '(') {
+            if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->min = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
             spec->minex = 1;
@@ -122,7 +122,9 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         char *s = objectGetVal(max);
         size_t len = sdslen(s);
+        if (len == 0) return C_ERR;
         if (s[0] == '(') {
+            if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->max = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
             spec->maxex = 1;
@@ -216,10 +218,11 @@ double zzlGetScore(unsigned char *sptr) {
  * The structural layout (member, score, member, score, ...) must already have
  * been validated by lpValidateIntegrityAndDups. Returns 1 if all scores are
  * valid, 0 if a NAN score is found. This guards against crafted RESTORE
- * payloads: zslInsertNode() asserts the score is not NAN, so a NAN score in a
- * listpack zset would crash the server when it is later converted to a
- * skiplist. The skiplist RDB format rejects NAN scores at load time; this is
- * the equivalent check for the listpack format. */
+ * payloads: the ordered index packs each score into a sortable 8-byte key
+ * and asserts the score is not NAN, so a NAN score in a listpack zset
+ * would crash the server when it is later converted to the ordered index
+ * encoding. The ordered index RDB format rejects NAN scores at
+ * load time; this is the equivalent check for the listpack format. */
 int zzlValidateScores(unsigned char *zl) {
     unsigned char *eptr = lpSeek(zl, 0), *sptr;
     while (eptr != NULL) {
@@ -1560,6 +1563,7 @@ typedef struct {
 #define OPVAL_DIRTY_SDS 1
 #define OPVAL_DIRTY_LL 2
 #define OPVAL_VALID_LL 4
+#define OPVAL_ESTR_IS_SDS 8
 
 /* Store value retrieved from the iterator. */
 typedef struct {
@@ -1694,7 +1698,13 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
         } else if (op->encoding == OBJ_ENCODING_HASHTABLE) {
             void *next;
             if (!hashtableNext(it->ht.iter, &next)) return 0;
-            val->ele = next;
+            /* Expose the member as a buffer, not as val->ele. Zset lookups
+             * rewrite the sds header of their key while they run, and this
+             * member belongs to the keyspace, where a forkless save may be
+             * reading it at the same time. */
+            val->estr = next;
+            val->elen = sdslen(next);
+            val->flags |= OPVAL_ESTR_IS_SDS;
             val->score = 1.0;
         } else if (op->encoding == OBJ_ENCODING_LISTPACK) {
             if (it->lp.p == NULL) return 0;
@@ -1772,7 +1782,8 @@ static int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
     if (op->type == OBJ_SET) {
         char *str = val->ele ? val->ele : (char *)val->estr;
         size_t len = val->ele ? sdslen(val->ele) : val->elen;
-        if (setTypeIsMemberAux(op->subject, str, len, val->ell, val->ele != NULL)) {
+        int str_is_sds = val->ele != NULL || (val->flags & OPVAL_ESTR_IS_SDS);
+        if (setTypeIsMemberAux(op->subject, str, len, val->ell, str_is_sds)) {
             *score = 1.0;
             return 1;
         } else {
@@ -2184,9 +2195,13 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                      * iterating, so explicitly check for equal object. */
                     if (src[j].subject == src[0].subject) {
                         value = zval.score * src[j].weight;
+                        /* As for the first input and in the union case, a NaN
+                         * weighted score (0*inf) counts as 0. */
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else if (zuiFind(&src[j], &zval, &value)) {
                         value *= src[j].weight;
+                        if (isnan(value)) value = 0;
                         zunionInterAggregate(&score, value, aggregate);
                     } else {
                         break;
@@ -2666,11 +2681,10 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
                                  long limit,
                                  int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
 
     /* For invalid offset, return directly. */
-    if (offset > 0 && offset >= (long)zsetLength(zobj)) {
+    if (offset < 0 || offset >= (long)zsetLength(zobj)) {
         handler->finalizeResultEmission(handler, 0);
         return;
     }
@@ -2900,8 +2914,13 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                                long limit,
                                int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
+
+    /* For invalid offset, return directly. */
+    if (offset < 0 || offset >= (long)zsetLength(zobj)) {
+        handler->finalizeResultEmission(handler, 0);
+        return;
+    }
 
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
@@ -3368,12 +3387,11 @@ void genericZpopCommand(client *c,
     int idx;
     robj *key = NULL;
     robj *zobj = NULL;
-    sds ele;
     double score;
 
     if (deleted) *deleted = 0;
 
-    /* Check type and break on the first error, otherwise identify candidate. */
+    /* Check type and break on the first error; otherwise, identify candidate. */
     idx = 0;
     while (idx < keyc) {
         key = keyv[idx++];
@@ -3409,6 +3427,11 @@ void genericZpopCommand(client *c,
 
     /* Remove the element. */
     do {
+        sds ele = NULL;
+        OrderedIndexItem *popped = NULL;
+        const char *reply_ele;
+        size_t reply_ele_len;
+
         if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(zobj);
             unsigned char *eptr, *sptr;
@@ -3429,26 +3452,24 @@ void genericZpopCommand(client *c,
             sptr = lpNext(zl, eptr);
             serverAssertWithInfo(c, zobj, sptr != NULL);
             score = zzlGetScore(sptr);
+            serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
+            reply_ele = ele;
+            reply_ele_len = sdslen(ele);
         } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(zobj);
             OrderedIndex *oi = zs->oi;
-            OrderedIndexItem *zln;
 
-            /* Get the first or last element in the sorted set. */
-            zln = (where == ZSET_MAX ? orderedIndexGetLast(oi) : orderedIndexGetFirst(oi));
+            popped = (where == ZSET_MAX ? orderedIndexPopLast(oi) : orderedIndexPopFirst(oi));
 
-            /* There must be an element in the sorted set. */
-            serverAssertWithInfo(c, zobj, zln != NULL);
-            const char *ele_ptr;
-            size_t ele_len;
-            orderedIndexItemGetElement(zln, &ele_ptr, &ele_len);
-            ele = sdsnewlen(ele_ptr, ele_len);
-            score = orderedIndexItemGetScore(zln);
+            serverAssertWithInfo(c, zobj, popped != NULL);
+            /* The detached item is also the hashtable entry. Remove it before freeing it. */
+            serverAssertWithInfo(c, zobj, hashtableDelete(zs->ht, popped));
+            orderedIndexItemGetElement(popped, &reply_ele, &reply_ele_len);
+            score = orderedIndexItemGetScore(popped);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
 
-        serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
         server.dirty++;
 
         if (result_count == 0) { /* Do this only for the first iteration. */
@@ -3460,9 +3481,12 @@ void genericZpopCommand(client *c,
         if (use_nested_array) {
             addReplyArrayLen(c, 2);
         }
-        addReplyBulkCBuffer(c, ele, sdslen(ele));
+        addReplyBulkCBuffer(c, reply_ele, reply_ele_len);
         addReplyDouble(c, score);
-        sdsfree(ele);
+        if (popped)
+            orderedIndexItemFree(popped);
+        else
+            sdsfree(ele);
         ++result_count;
     } while (--rangelen);
 
@@ -3792,7 +3816,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
             /* Try to add the object to the hashtable. If it already exists
-             * free it, otherwise increment the number of objects we have
+             * free it; otherwise, increment the number of objects we have
              * in the result hashtable. */
             sds skey = zsetSdsFromListpackEntry(&key);
             if (!hashtableAdd(ht, skey)) {

@@ -389,7 +389,7 @@ int streamCompareID(streamID *a, streamID *b) {
 
 /* Retrieves the ID of the stream edge entry. An edge is either the first or
  * the last ID in the stream, and may be a tombstone. To filter out tombstones,
- * set the'skip_tombstones' argument to 1. */
+ * set the 'skip_tombstones' argument to 1. */
 void streamGetEdgeID(stream *s, int first, int skip_tombstones, streamID *edge_id) {
     streamIterator si;
     int64_t numfields;
@@ -477,10 +477,14 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
 
     size_t lp_bytes = 0;      /* Total bytes in the tail listpack. */
     unsigned char *lp = NULL; /* Tail listpack pointer. */
+    /* What the rax holds for the key this call writes, NULL if it holds nothing.
+     * Only used to skip a raxInsert storing a pointer the rax already has. */
+    unsigned char *rax_lp = NULL;
 
     if (!raxEOF(&ri)) {
         /* Get a reference to the tail node listpack. */
         lp = ri.data;
+        rax_lp = ri.data;
         lp_bytes = lpBytes(lp);
     }
     raxStop(&ri);
@@ -542,7 +546,8 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         if (new_node) {
             /* Shrink extra pre-allocated memory */
             lp = lpShrinkToFit(lp);
-            if (ri.data != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+            if (rax_lp != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+            rax_lp = NULL; /* the rest of this call writes rax_key, a new key */
             lp = NULL;
         }
     }
@@ -570,7 +575,6 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
             lp = lpAppend(lp, (unsigned char *)field, sdslen(field));
         }
         lp = lpAppendInteger(lp, 0); /* primary entry zero terminator. */
-        raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
         /* The first entry we insert, has obviously the same fields of the
          * primary entry. */
         flags |= STREAM_ITEM_FLAG_SAMEFIELDS;
@@ -651,7 +655,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     lp = lpAppendInteger(lp, lp_count);
 
     /* Insert back into the tree in order to update the listpack pointer. */
-    if (ri.data != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
+    if (rax_lp != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
     s->length++;
     s->entries_added++;
     s->last_id = id;
@@ -1035,7 +1039,7 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
 /* Initialize the stream iterator, so that we can call iterating functions
  * to get the next items. This requires a corresponding streamIteratorStop()
  * at the end. The 'rev' parameter controls the direction. If it's zero the
- * iteration is from the start to the end element (inclusive), otherwise
+ * iteration is from the start to the end element (inclusive); otherwise,
  * if rev is non-zero, the iteration is reversed.
  *
  * Once the iterator is initialized, we iterate like this:
@@ -1102,7 +1106,7 @@ void streamIteratorStart(streamIterator *si, stream *s, streamID *start, streamI
 }
 
 /* Return 1 and store the current item ID at 'id' if there are still
- * elements within the iteration range, otherwise return 0 in order to
+ * elements within the iteration range; otherwise, return 0 in order to
  * signal the iteration terminated. */
 int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
     while (1) { /* Will stop when element > stop_key or end of radix tree. */
@@ -1464,7 +1468,14 @@ void streamReplyWithCGLag(client *c, stream *s, streamCG *cg) {
     } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
         /* No fragmentation ahead means that the group's logical reads counter
          * is valid for performing the lag calculation. */
-        lag = (long long)s->entries_added - cg->entries_read;
+        if (!s->length || streamCompareID(&cg->last_id, &s->first_id) < 0) {
+            /* The group is positioned before the first entry, so entries it
+             * hasn't read may have been trimmed (XTRIM doesn't update
+             * max_deleted_entry_id). Everything left in the stream is unread. */
+            lag = (long long)s->length;
+        } else {
+            lag = (long long)s->entries_added - cg->entries_read;
+        }
         valid = 1;
     } else {
         /* Attempt to retrieve the group's last ID logical read counter. */
@@ -1925,7 +1936,7 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
 /* Parse a stream ID in the format given by clients to the server, that is
  * <ms>-<seq>, and converts it into a streamID structure. If
  * the specified ID is invalid C_ERR is returned and an error is reported
- * to the client, otherwise C_OK is returned. The ID may be in incomplete
+ * to the client; otherwise, C_OK is returned. The ID may be in incomplete
  * form, just stating the milliseconds time part of the stream. In such a case
  * the missing part is set according to the value of 'missing_seq' parameter.
  *
@@ -2109,6 +2120,14 @@ void xaddCommand(client *c) {
      * database. */
     if (parsed_args.id_given && parsed_args.seq_given && parsed_args.id.ms == 0 && parsed_args.id.seq == 0) {
         addReplyError(c, "The ID specified in XADD must be greater than 0-0");
+        return;
+    }
+
+    /* Same for elements streamAppendItem would refuse as too large. */
+    size_t totelelen = 0;
+    for (int j = field_pos; j < c->argc; j++) totelelen += sdslen(objectGetVal(c->argv[j]));
+    if (totelelen > STREAM_LISTPACK_MAX_SIZE) {
+        addReplyError(c, "Elements are too large to be stored");
         return;
     }
 
@@ -2602,7 +2621,7 @@ static void streamFreeConsumerVoid(void *sc) {
 
 /* Create a new consumer group in the context of the stream 's', having the
  * specified name, last server ID and reads counter. If a consumer group with
- * the same name already exists NULL is returned, otherwise the pointer to the
+ * the same name already exists NULL is returned; otherwise, the pointer to the
  * consumer group is returned. */
 streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, long long entries_read) {
     if (s->cgroups == NULL) s->cgroups = raxNew();
@@ -2630,7 +2649,7 @@ void streamFreeCGVoid(void *cg) {
 }
 
 /* Lookup the consumer group in the specified stream and returns its
- * pointer, otherwise if there is no such group, NULL is returned. */
+ * pointer; otherwise, if there is no such group, NULL is returned. */
 streamCG *streamLookupCG(stream *s, sds groupname) {
     if (s->cgroups == NULL) return NULL;
     void *cg = NULL;
@@ -2904,7 +2923,7 @@ void xsetidCommand(client *c) {
 
     /* If the stream has at least one item, we want to check that the user
      * is setting a last ID that is equal or greater than the current top
-     * item, otherwise the fundamental ID monotonicity assumption is violated. */
+     * item; otherwise, the fundamental ID monotonicity assumption is violated. */
     if (s->length > 0) {
         streamID maxid;
         streamLastValidID(s, &maxid);
@@ -3209,7 +3228,7 @@ void xpendingCommand(client *c) {
  * 4. FORCE:
  *      Creates the pending message entry in the PEL even if certain
  *      specified IDs are not already in the PEL assigned to a different
- *      client. However the message must be exist in the stream, otherwise
+ *      client. However the message must be exist in the stream; otherwise,
  *      the IDs of nonexistent messages are ignored.
  *
  * 5. JUSTID:
@@ -3395,7 +3414,7 @@ void xclaimCommand(client *c) {
                 if (nack->consumer) raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
             }
             nack->delivery_time = deliverytime;
-            /* Set the delivery attempts counter if given, otherwise
+            /* Set the delivery attempts counter if given; otherwise,
              * autoincrement unless JUSTID option provided */
             if (retrycount >= 0) {
                 nack->delivery_count = retrycount;

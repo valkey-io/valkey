@@ -1936,7 +1936,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
 int ValkeyModule_OnUnload(void *arg) {
     UNUSED(arg);
-    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", getConnectionTypeName(CONN_TYPE_RDMA));
+    serverLog(LL_NOTICE, "Connection type %s cannot be unloaded", getConnectionTypeName(CONN_TYPE_RDMA));
     return VALKEYMODULE_ERR;
 }
 

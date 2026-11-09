@@ -2113,7 +2113,7 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  *                 patterns using prefixmatchlen rather than a full string match.
  *
  * This function returns ACL_OK if the key matches at least one pattern that allows the requested
- * operations; otherwise ACL_DENIED_KEY.
+ * operations; otherwise, ACL_DENIED_KEY.
  */
 static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags, bool is_prefix) {
     /* The selector can access any key */
@@ -2149,7 +2149,7 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     return ACL_DENIED_KEY;
 }
 
-/* Checks if the provided selector selector has access specified in flags
+/* Checks if the provided selector has access specified in flags
  * to all keys in the keyspace. For example, CMD_KEY_READ access requires either
  * '%R~*', '~*', or allkeys to be granted to the selector. Returns 1 if all
  * the access flags are satisfied with this selector or 0 otherwise.
@@ -2242,7 +2242,7 @@ static inline int shouldRestrictCmd(struct serverCommand *cmd) {
 /* Check if the command is ready to be executed according to the
  * ACLs associated with the specified selector.
  *
- * If the selector can execute the command ACL_OK is returned, otherwise
+ * If the selector can execute the command ACL_OK is returned; otherwise,
  * ACL_DENIED_CMD, ACL_DENIED_KEY, ACL_DENIED_CHANNEL or ACL_DENIED_DB is returned: the first in case the
  * command cannot be executed because the selector is not allowed to run such
  * command, the second, third and fourth if the command is denied because the selector is trying
@@ -2480,7 +2480,7 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
 /* Check if the channel can be accessed by the client according to
  * the ACLs associated with the specified user.
  *
- * If the user can access the key, ACL_OK is returned, otherwise
+ * If the user can access the key, ACL_OK is returned; otherwise,
  * ACL_DENIED_CHANNEL is returned. */
 int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
     /* If there is no associated user, the connection can run anything. */
@@ -2824,7 +2824,7 @@ cleanup:
  * the user definition to a list for later loading.
  *
  * The rules are tested for validity and if there obvious syntax errors
- * the function returns C_ERR and does nothing, otherwise C_OK is returned
+ * the function returns C_ERR and does nothing; otherwise, C_OK is returned
  * and the user is appended to the list.
  *
  * Note that this function cannot stop in case of commands that are not found
@@ -2884,7 +2884,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 
 /* This function will load the configured users appended to the server
  * configuration via ACLAppendUserForLoading(). On loading errors it will
- * log an error and return C_ERR, otherwise C_OK will be returned. */
+ * log an error and return C_ERR; otherwise, C_OK will be returned. */
 static int ACLLoadConfiguredUsers(void) {
     listIter li;
     listNode *ln;
@@ -3275,7 +3275,7 @@ static sds ACLLoadFromFile(const char *filename) {
         zfree(acl_args);
 
         /* Apply the rule to the new users set only if so far there
-         * are no errors, otherwise it's useless since we are going
+         * are no errors; otherwise, it's useless since we are going
          * to discard the new users set anyway. */
         if (sdslen(errors) != 0) {
             sdsfreesplitres(argv, argc);
@@ -3591,6 +3591,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
 
     if (server.acllog_max_len == 0) {
         trimACLLogEntriesToMaxLen();
+        sdsfree(object);
         return;
     }
 
@@ -3648,7 +3649,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
         }
     }
 
-    /* If there is a match update the entry, otherwise add it as a
+    /* If there is a match update the entry; otherwise, add it as a
      * new one. */
     if (match) {
         /* We update a few fields of the existing entry and bump the
@@ -4301,13 +4302,15 @@ void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
  * When the user is omitted it means that we are trying to authenticate
  * against the default user. */
 void authCommand(client *c) {
+    /* Redact every argument before the syntax check, since a rejected command
+     * is still shown in MONITOR and the commandlog. */
+    for (int j = 1; j < c->argc; j++) redactClientCommandArgument(c, j);
+
     /* Only two or three argument forms are allowed. */
     if (c->argc > 3) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
-    /* Always redact the second argument */
-    redactClientCommandArgument(c, 1);
 
     /* Handle the two different forms here. The form with two arguments
      * will just use "default" as username. */
@@ -4327,7 +4330,6 @@ void authCommand(client *c) {
     } else {
         username = c->argv[1];
         password = c->argv[2];
-        redactClientCommandArgument(c, 2);
     }
 
     robj *err = NULL;

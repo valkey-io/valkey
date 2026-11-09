@@ -121,7 +121,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     event_log->next_index = 0;
     int keySpaceAll = ValkeyModule_GetKeyspaceNotificationFlagsAll();
     if (!(keySpaceAll & VALKEYMODULE_NOTIFY_LOADED)) {
-        // VALKEYMODULE_NOTIFY_LOADED event are not supported we can not start
+        // VALKEYMODULE_NOTIFY_LOADED event are not supported we cannot start
         return VALKEYMODULE_ERR;
     }
     if (ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_LOADED,

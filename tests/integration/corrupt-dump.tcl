@@ -878,5 +878,30 @@ test {corrupt payload: stream with duplicate consumer PEL entry} {
     }
 }
 
+test {corrupt payload: string length overflows the allocation size} {
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        # This is a RDB_TYPE_STRING (type 0, RDB version 8, also work for 4.0)
+        # payload, declaring a string of 0xFFFFFFFFFFFFFFF0 bytes.
+        # A 64 bit string length close to SIZE_MAX. sds allocates the string
+        # together with its header and its null terminator, so the size
+        # computation overflows and _sdsnewlen() asserts.
+        catch {r restore key 0 "\x00\x81\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xF0\x08\x00\x53\x71\x85\x40\x12\x82\x45\x85"} err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*rdbGenericLoadStringObject failed allocating*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: LZF string length overflows the allocation size} {
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        # Same as above, but for the LZF encoding (RDB_ENC_LZF), where the
+        # declared uncompressed length sizes the destination buffer.
+        catch {r restore key 0 "\x00\xC3\x01\x81\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xF0\x08\x00\x59\xFF\x1A\x56\xBC\xDC\x1B\x43"} err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*rdbLoadLzfStringObject failed allocating*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
 } ;# tags
 

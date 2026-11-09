@@ -41,6 +41,37 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         # Verify the follower caught up to the leader's applied index.
         assert {[CI 1 cluster_raft_last_applied] >= $leader_applied}
     }
+
+    test "Raft snapshot: new leader catches up a follower behind its trim point" {
+        # A new leader starts at next_index = last + 1 for each follower and
+        # steps back on rejection. For a follower behind the trim point, it
+        # must step back past the trimmed boundary and send a snapshot,
+        # rather than an AE with an unknown previous term.
+        # Stop R2 instead of pausing it, so it doesn't receive the new
+        # entries from data buffered on its links when it comes back.
+        catch {R 2 shutdown}
+        for {set j 0} {$j < 140} {incr j} {
+            R 0 config set cluster-announce-hostname "host-b-$j.com"
+        }
+        wait_for_condition 50 100 {
+            [CI 1 cluster_raft_last_applied] == [CI 0 cluster_raft_last_applied] &&
+            [CI 1 cluster_raft_log_entries] < 128
+        } else {
+            fail "follower did not trim log (entries=[CI 1 cluster_raft_log_entries])"
+        }
+
+        # Make R1 the leader: stop R0 and restart R2, which votes for R1.
+        pause_process [srv 0 pid]
+        restart_server -2 true false
+        wait_for_condition 100 200 {
+            [CI 1 cluster_raft_role] eq "leader" &&
+            [CI 2 cluster_raft_last_applied] == [CI 1 cluster_raft_last_applied]
+        } else {
+            fail "R2 did not catch up with the new leader (R2=[CI 2 cluster_raft_last_applied] R1=[CI 1 cluster_raft_last_applied] role=[CI 1 cluster_raft_role])"
+        }
+        assert_equal 1 [count_log_message -2 "Installed snapshot"]
+        resume_process [srv 0 pid]
+    }
 }
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {

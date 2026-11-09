@@ -174,6 +174,8 @@ typedef struct {
     raftLogEntry **log;
     uint64_t log_count;
     uint64_t log_alloc;
+    uint64_t log_trim_index; /* Index of the last entry trimmed from the log, 0 = none */
+    uint64_t log_trim_term;  /* Term of that entry */
 
     /* Pending proposals waiting for commit. */
     list *pending_proposals; /* list of raftPendingProposal */
@@ -1300,8 +1302,9 @@ static raftLogEntry *raftLogGet(uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
     if (rs->log_count == 0 || index == 0 || index > raftLogLastIndex()) return NULL;
     uint64_t base = rs->log[0]->index;
-    if (index < base) return NULL;
-    return rs->log[index - base];
+    if (index < base || index - base >= rs->log_count) return NULL;
+    raftLogEntry *e = rs->log[index - base];
+    return e->index == index ? e : NULL;
 }
 
 /* Truncate the log from the given index onwards (inclusive). */
@@ -1327,6 +1330,8 @@ static void raftLogTrimApplied(void) {
     uint64_t applied_in_log = rs->last_applied - base + 1;
     if (applied_in_log <= RAFT_LOG_TRIM_KEEP * 2) return;
     uint64_t trim_count = applied_in_log - RAFT_LOG_TRIM_KEEP;
+    rs->log_trim_index = rs->log[trim_count - 1]->index;
+    rs->log_trim_term = rs->log[trim_count - 1]->term;
     for (uint64_t i = 0; i < trim_count; i++) {
         raftLogFree(rs->log[i]);
     }
@@ -1350,6 +1355,7 @@ static uint64_t raftLogTermAt(uint64_t index) {
     /* Entry not in log — if it's at the snapshot boundary, use snapshot_term. */
     clusterRaftState *rs = RAFT_STATE();
     if (index == rs->last_applied) return rs->snapshot_term;
+    if (index == rs->log_trim_index) return rs->log_trim_term;
     return 0;
 }
 
@@ -1672,12 +1678,15 @@ static void raftLogApply(raftLogEntry *e) {
 static void raftApplyCommitted(void) {
     clusterRaftState *rs = RAFT_STATE();
     while (rs->last_applied < rs->commit_index) {
-        rs->last_applied++;
-        raftLogEntry *e = raftLogGet(rs->last_applied);
-        if (e) {
-            rs->snapshot_term = e->term;
-            raftLogApply(e);
+        raftLogEntry *e = raftLogGet(rs->last_applied + 1);
+        if (!e) {
+            serverLog(LL_WARNING, "Committed entry %llu is missing from the log.",
+                      (unsigned long long)(rs->last_applied + 1));
+            break;
         }
+        rs->last_applied++;
+        rs->snapshot_term = e->term;
+        raftLogApply(e);
     }
     raftLogTrimApplied();
 }
@@ -1816,8 +1825,12 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
             rs->todo_retry_proposals = 1;
     }
 
-    /* Log consistency check: verify prev_log_index/term match. */
-    if (prev_log_index > 0 && raftLogTermAt(prev_log_index) != prev_log_term) {
+    /* Log consistency check: verify prev_log_index/term match. An unknown
+     * term (0) only matches at last_applied, where an old nodes.conf may lack
+     * snapshotTerm. */
+    uint64_t local_prev_term = raftLogTermAt(prev_log_index);
+    if (prev_log_index > 0 && (local_prev_term != prev_log_term ||
+                               (local_prev_term == 0 && prev_log_index != rs->last_applied))) {
         clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
         return 1;
     }
@@ -1829,13 +1842,13 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         sds *eargv = sdssplitlen(entry_lines[i], sdslen(entry_lines[i]), " ", 1, &eargc);
         if (!eargv || eargc < 3) {
             if (eargv) sdsfreesplitres(eargv, eargc);
-            continue;
+            break;
         }
         uint64_t e_term = strtoull(eargv[0], NULL, 10);
         int e_type_int = raftEntryTypeByName(eargv[1]);
         if (e_type_int < 0) {
             sdsfreesplitres(eargv, eargc);
-            continue;
+            break;
         }
         uint8_t e_type = e_type_int;
         sds e_data = sdsjoinsds(eargv + 2, eargc - 2, " ", 1);
@@ -1847,11 +1860,18 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
             raftLogTruncateFrom(new_index);
             existing = NULL;
         }
-        if (!existing) {
-            raftLogAppend(raftLogCreate(e_term, new_index, e_type, e_data));
-        } else {
-            sdsfree(e_data); /* Already have this entry. */
+        if (existing || new_index <= rs->last_applied) {
+            sdsfree(e_data); /* Already have this entry, or applied and trimmed. */
+            continue;
         }
+        if (new_index != raftLogLastIndex() + 1) {
+            /* Not contiguous with our log; don't leave a hole. */
+            serverLog(LL_WARNING, "AE entry %llu doesn't follow our last log index %llu.",
+                      (unsigned long long)new_index, (unsigned long long)raftLogLastIndex());
+            sdsfree(e_data);
+            break;
+        }
+        raftLogAppend(raftLogCreate(e_term, new_index, e_type, e_data));
     }
 
     /* Update commit index and apply. */
@@ -1987,6 +2007,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     /* Clear raft log. */
     for (uint64_t i = 0; i < rs->log_count; i++) raftLogFree(rs->log[i]);
     rs->log_count = 0;
+    rs->log_trim_index = 0;
+    rs->log_trim_term = 0;
 
     /* clusterLoadNodeLine() only adds flags and replica links to a node that
      * already exists. Reset them first so that the snapshot fully defines the
@@ -4324,6 +4346,8 @@ static void clusterRaftResetCluster(int hard) {
     rs->commit_index = 0;
     rs->last_applied = 0;
     rs->log_count = 0;
+    rs->log_trim_index = 0;
+    rs->log_trim_term = 0;
     rs->role = RAFT_ROLE_LEADER;
     rs->failover_time = 0;
     clusterRaftCancelManualFailover();

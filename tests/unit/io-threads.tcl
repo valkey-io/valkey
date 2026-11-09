@@ -171,3 +171,34 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         assert_equal {PONG} [r ping]
     }
 }
+
+proc ignite_io_threads_by_load {} {
+    for {set i 0} {$i < 60} {incr i} {
+        r debug sleep 0.1
+        if {[getInfoProperty [r info server] io_threads_active] eq 1} return
+    }
+    fail "IO threads did not ignite under main-thread load"
+}
+
+proc assert_io_threads_stay_idle {ms} {
+    set end [expr {[clock milliseconds] + $ms}]
+    while {[clock milliseconds] < $end} {
+        assert_equal 0 [getInfoProperty [r info server] io_threads_active]
+        after 100
+    }
+}
+
+start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {enable-debug-command {yes} io-threads 4}} {
+    test {IO threads stay idle after scaling back to one thread} {
+        ignite_io_threads_by_load
+        wait_for_io_threads_to_go_idle
+        assert_io_threads_stay_idle 2000
+        ignite_io_threads_by_load
+    }
+
+    test {IO threads stay idle after CONFIG SET io-threads while active} {
+        ignite_io_threads_by_load
+        assert_equal {OK} [r config set io-threads 3]
+        assert_io_threads_stay_idle 2000
+    }
+}

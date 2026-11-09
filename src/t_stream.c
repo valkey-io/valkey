@@ -2061,53 +2061,42 @@ void streamRewriteTrimArgument(client *c, stream *s, int trim_strategy, int idx)
  * the trim that will run on the replay side is fully deterministic
  * and the LIMIT cap can no longer fire.
  * More critically, when the migration tool sends the rewritten command
- * without marking it as 'mustObeyClient', the destination DB will return an error.*/
-void streamRewriteStripLimit(client *c, int limit_idx) {
-    /* limit_idx points at the "LIMIT" token; limit_idx + 1 is the count. */
-    serverAssert(limit_idx > 0 && limit_idx + 1 < c->argc);
-    serverAssert(c->argv != c->original_argv);
-
-    robj *limit_tok = c->argv[limit_idx];
-    robj *limit_val = c->argv[limit_idx + 1];
-
-    c->argv_len_sum -= getStringObjectLen(limit_tok);
-    c->argv_len_sum -= getStringObjectLen(limit_val);
-
-    /* Intentionally shrink the argv vector by dropping the two "LIMIT <count>" slots,
-     * shifting the tail (everything after them) two slots left. */
-    int tail = c->argc - (limit_idx + 2);
-    if (tail > 0) {
-        memmove(&c->argv[limit_idx],
-                &c->argv[limit_idx + 2],
-                sizeof(robj *) * tail);
-    }
-
-    c->argc -= 2;
-    c->argv[c->argc] = NULL;
-    c->argv[c->argc + 1] = NULL;
-
-    decrRefCount(limit_tok);
-    decrRefCount(limit_val);
-}
-
-/* LIMIT may be repeated, so drop every "LIMIT <count>" in argv[limit_idx..end),
+ * without marking it as 'mustObeyClient', the destination DB will return an error.
+ *
+ * LIMIT may be repeated, so drop every "LIMIT <count>" in argv[limit_idx..end),
  * where limit_idx is the first LIMIT token and 'end' is one past the last option
  * argument. Every option argument was parsed as a keyword, '~', '=', an integer or a
  * stream ID, so a "LIMIT" string among them can only be a LIMIT token. The rewritten
  * trim argument may be integer encoded, hence the sdsEncodedObject() check.
  * Returns the number of arguments removed. */
 static int streamRewriteStripAllLimits(client *c, int limit_idx, int end) {
-    int removed = 0;
+    serverAssert(limit_idx > 0 && limit_idx + 1 < end && end <= c->argc);
+    serverAssert(c->argv != c->original_argv);
+
+    /* Compact argv in a single pass. Shifting the tail once per pair is
+     * quadratic in the number of pairs. */
+    int dst = limit_idx;
     int j = limit_idx;
-    while (j < end - removed) {
+    while (j < end) {
         robj *o = c->argv[j];
         if (sdsEncodedObject(o) && !strcasecmp(objectGetVal(o), "limit")) {
-            streamRewriteStripLimit(c, j);
-            removed += 2;
+            serverAssert(j + 1 < end);
+            robj *limit_val = c->argv[j + 1];
+            c->argv_len_sum -= getStringObjectLen(o);
+            c->argv_len_sum -= getStringObjectLen(limit_val);
+            decrRefCount(o);
+            decrRefCount(limit_val);
+            j += 2;
         } else {
+            c->argv[dst++] = o;
             j++;
         }
     }
+
+    int removed = end - dst;
+    memmove(&c->argv[dst], &c->argv[end], sizeof(robj *) * (c->argc - end));
+    c->argc -= removed;
+    memset(&c->argv[c->argc], 0, sizeof(robj *) * removed);
     return removed;
 }
 

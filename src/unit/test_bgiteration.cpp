@@ -2093,6 +2093,9 @@ TEST_F(BgIterationTest, earlyTerminationFromMainAfterChildClose) {
     expectReadKey(it, 0);
     expectReadKey(it, 1);
     simulateFlushDB(0, 1); // queues a FLUSHDB barrier item
+    bgIteratorStatus status;
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 1u);
 
     bgIteratorClose(it);     // background thread initiates the termination
     bgIteratorTerminate(it); // main thread terminates before receiving ITER_CLOSED

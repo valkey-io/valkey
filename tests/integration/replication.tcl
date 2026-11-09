@@ -2522,7 +2522,8 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
 
 foreach primary_diskless {yes no} {
     foreach replica_load [expr {$primary_diskless eq "yes" ? {disabled on-empty-db} : {disabled on-empty-db swapdb}}] {
-        # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels the save.
+        # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels a diskless
+        # (socket) save. A to-disk save is cancelled by any FLUSHDB.
         foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}
                             {1 {copy db1:3 db1:copy3 db 1}} {1 {copy db1:4 dst4 db 3 db 3}} {1 {move db1:5 7}}
                             {1 {swapdb 2 3}}} {

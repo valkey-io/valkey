@@ -33,6 +33,7 @@
 #include "intrinsics.h"
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <math.h>
 
 /* The HyperLogLog implementation is based on the following ideas:

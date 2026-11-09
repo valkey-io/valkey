@@ -1590,7 +1590,10 @@ static bool receiveItemsBackFromOneIterator(bgIterator *it) {
             }
         }
         if (n > 0) {
-            prepareAndProcessReturnedItems(it, n, batchPool);
+        if (closeItem) batchPool[n++] = closeItem;
+        if (n > 0) {
+            prepareAndProcessReturnedItems(n, batchPool, it);
+        }
         }
         if (closeItem) processReturnOfItemToMainThread(it, closeItem);
         fifoRelease(poppedFifo);

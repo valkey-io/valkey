@@ -2836,11 +2836,15 @@ foreach load_mode {disabled on-empty-db} {
 
                 # New keys, and overwrites and deletes in batches as the scan
                 # advances, so they hit both scanned and unscanned keys.
-                foreach scanned {0 1500 3000 4500 6000} {
+                foreach scanned {0 1000 2000 3000 4000} {
                     wait_for_condition 300 100 {
                         [s -1 current_save_keys_processed] >= $scanned
                     } else {
                         fail "Scan didn't reach $scanned keys"
+                    }
+                    # Hold the rest of the scan open for the last batch and the write loads.
+                    if {$scanned == 4000} {
+                        $primary config set rdb-key-save-delay 20000
                     }
                     for {set i 0} {$i < 200} {incr i} {
                         $primary set new:$scanned:$i $i
@@ -2848,8 +2852,6 @@ foreach load_mode {disabled on-empty-db} {
                         $primary del key:[expr {$scanned + 2 * $i + 1}]
                     }
                 }
-                # Hold the rest of the scan open for the write loads.
-                $primary config set rdb-key-save-delay 20000
 
                 # Two concurrent write loads, until 2 MB of writes have been inlined.
                 set base_offset [s -1 master_repl_offset]

@@ -2519,6 +2519,7 @@ void initServerConfig(void) {
     server.primary = NULL;
     server.cached_primary = NULL;
     server.primary_initial_offset = -1;
+    server.primary_initial_offset_in_rdb = false;
     server.repl_state = REPL_STATE_NONE;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;

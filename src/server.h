@@ -37,6 +37,7 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "bitmap_roaring.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -827,7 +828,8 @@ typedef enum {
 #define OBJ_MODULE 5    /* Module object. */
 #define OBJ_STREAM 6    /* Stream object. */
 #define OBJ_PATH_HASH 7 /* Path hash object. */
-#define OBJ_TYPE_MAX 8  /* Maximum number of object types */
+#define OBJ_BITMAP 8    /* Bitmap object. */
+#define OBJ_TYPE_MAX 9  /* Maximum number of object types */
 
 typedef struct ValkeyModuleType moduleType;
 
@@ -851,6 +853,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
 #define OBJ_ENCODING_LISTPACK2 12 /* Encoded as a listpack with metadata tag */
 #define OBJ_ENCODING_PATH_HASH 13 /* Path hash backed by a radix tree */
+#define OBJ_ENCODING_ROARING 14   /* Bitmap stored as a Roaring bitmap */
 
 #define OBJ_REFCOUNT_BITS 29
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
@@ -4274,6 +4277,9 @@ void setbitCommand(client *c);
 void getbitCommand(client *c);
 void bitfieldCommand(client *c);
 void bitfieldroCommand(client *c);
+void bitconvertCommand(client *c);
+void rexportCommand(client *c);
+void rimportCommand(client *c);
 void setrangeCommand(client *c);
 void getrangeCommand(client *c);
 void incrCommand(client *c);

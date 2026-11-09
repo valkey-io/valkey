@@ -31,6 +31,37 @@ const char *COMMAND_GROUP_STR[] = {
 const char *commandGroupStr(int index) {
     return COMMAND_GROUP_STR[index];
 }
+/********** BITCONVERT ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* BITCONVERT history */
+#define BITCONVERT_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* BITCONVERT tips */
+#define BITCONVERT_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* BITCONVERT key specs */
+keySpec BITCONVERT_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* BITCONVERT target argument table */
+struct COMMAND_ARG BITCONVERT_target_Subargs[] = {
+{MAKE_ARG("bitmap",ARG_TYPE_PURE_TOKEN,-1,"BITMAP",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("string",ARG_TYPE_PURE_TOKEN,-1,"STRING",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* BITCONVERT argument table */
+struct COMMAND_ARG BITCONVERT_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("target",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=BITCONVERT_target_Subargs},
+};
+
 /********** BITCOUNT ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -281,6 +312,55 @@ keySpec GETBIT_Keyspecs[1] = {
 struct COMMAND_ARG GETBIT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("offset",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** R_EXPORT ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* R_EXPORT history */
+#define R_EXPORT_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* R_EXPORT tips */
+#define R_EXPORT_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* R_EXPORT key specs */
+keySpec R_EXPORT_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* R_EXPORT argument table */
+struct COMMAND_ARG R_EXPORT_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** R_IMPORT ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* R_IMPORT history */
+#define R_IMPORT_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* R_IMPORT tips */
+#define R_IMPORT_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* R_IMPORT key specs */
+keySpec R_IMPORT_Keyspecs[1] = {
+{NULL,CMD_KEY_OW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* R_IMPORT argument table */
+struct COMMAND_ARG R_IMPORT_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("payload",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /********** SETBIT ********************/
@@ -12769,12 +12849,15 @@ struct COMMAND_ARG WATCH_Args[] = {
 /* Main command table */
 struct COMMAND_STRUCT serverCommandTable[] = {
 /* bitmap */
+{MAKE_CMD("bitconvert","Converts a string to a bitmap, or a bitmap to a string. Creates an empty bitmap for a missing key.","O(N) where N is the length of the string, or the size of the bitmap plus the length of the string it converts to.","9.3.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITCONVERT_History,0,BITCONVERT_Tips,0,bitconvertCommand,3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,BITCONVERT_Keyspecs,1,NULL,2),.args=BITCONVERT_Args},
 {MAKE_CMD("bitcount","Counts the number of set bits (population counting) in a string.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITCOUNT_History,2,BITCOUNT_Tips,0,bitcountCommand,-2,CMD_READONLY,ACL_CATEGORY_BITMAP|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,BITCOUNT_Keyspecs,1,NULL,2),.args=BITCOUNT_Args},
 {MAKE_CMD("bitfield","Performs arbitrary bitfield integer operations on strings.","O(1) for each subcommand specified","3.2.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITFIELD_History,0,BITFIELD_Tips,0,bitfieldCommand,-2,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,BITFIELD_Keyspecs,1,bitfieldGetKeys,2),.args=BITFIELD_Args},
 {MAKE_CMD("bitfield_ro","Performs arbitrary read-only bitfield integer operations on strings.","O(1) for each subcommand specified","6.0.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITFIELD_RO_History,0,BITFIELD_RO_Tips,0,bitfieldroCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_BITMAP|ACL_CATEGORY_FAST|ACL_CATEGORY_READ,NULL,BITFIELD_RO_Keyspecs,1,NULL,2),.args=BITFIELD_RO_Args},
 {MAKE_CMD("bitop","Performs bitwise operations on multiple strings, and stores the result.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITOP_History,0,BITOP_Tips,0,bitopCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,BITOP_Keyspecs,2,NULL,3),.args=BITOP_Args},
 {MAKE_CMD("bitpos","Finds the first set (1) or clear (0) bit in a string.","O(N)","2.8.7",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITPOS_History,1,BITPOS_Tips,0,bitposCommand,-3,CMD_READONLY,ACL_CATEGORY_BITMAP|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,BITPOS_Keyspecs,1,NULL,3),.args=BITPOS_Args},
 {MAKE_CMD("getbit","Returns a bit value by offset.","O(1)","2.2.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,GETBIT_History,0,GETBIT_Tips,0,getbitCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_BITMAP|ACL_CATEGORY_FAST|ACL_CATEGORY_READ,NULL,GETBIT_Keyspecs,1,NULL,2),.args=GETBIT_Args},
+{MAKE_CMD("r.export","Returns the set bits of a bitmap or a string as a Roaring bitmap in the portable serialization format.","O(N) where N is the size of the serialized bitmap, or the length of the string for a string.","9.3.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,R_EXPORT_History,0,R_EXPORT_Tips,0,rexportCommand,2,CMD_READONLY,ACL_CATEGORY_BITMAP|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,R_EXPORT_Keyspecs,1,NULL,1),.args=R_EXPORT_Args},
+{MAKE_CMD("r.import","Creates a bitmap from a Roaring bitmap in the portable serialization format.","O(N) where N is the size of the serialized bitmap.","9.3.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,R_IMPORT_History,0,R_IMPORT_Tips,0,rimportCommand,3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,R_IMPORT_Keyspecs,1,NULL,2),.args=R_IMPORT_Args},
 {MAKE_CMD("setbit","Sets or clears the bit at offset of the string value. Creates the key if it doesn't exist.","O(1)","2.2.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,SETBIT_History,0,SETBIT_Tips,0,setbitCommand,4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,SETBIT_Keyspecs,1,NULL,3),.args=SETBIT_Args},
 /* cluster */
 {MAKE_CMD("asking","Signals that a cluster client is following an -ASK redirect.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,ASKING_History,0,ASKING_Tips,0,askingCommand,1,CMD_FAST,ACL_CATEGORY_CONNECTION|ACL_CATEGORY_FAST,NULL,ASKING_Keyspecs,0,NULL,0)},

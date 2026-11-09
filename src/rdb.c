@@ -797,6 +797,11 @@ int rdbGetObjectType(robj *o, int rdbver) {
             return RDB_TYPE_PATH_HASH;
         else
             return -1; /* can't be stored in old RDB */
+    case OBJ_BITMAP:
+        if (rdbver >= 82)
+            return RDB_TYPE_BITMAP;
+        else
+            return -1; /* can't be stored in old RDB */
     case OBJ_MODULE: return RDB_TYPE_MODULE_2;
     default: serverPanic("Unknown object type");
     }
@@ -1213,6 +1218,15 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             }
             raxStop(&ri);
         }
+    } else if (objectGetType(o) == OBJ_BITMAP) {
+        /* The length in bytes, then the bits as a portable Roaring bitmap. */
+        if ((n = rdbSaveLen(rdb, bitmapRoaringLen(o))) == -1) return -1;
+        nwritten += n;
+        sds payload = bitmapRoaringSerialize(o);
+        n = rdbSaveRawString(rdb, (unsigned char *)payload, sdslen(payload));
+        sdsfree(payload);
+        if (n == -1) return -1;
+        nwritten += n;
     } else if (objectGetType(o) == OBJ_PATH_HASH) {
         pathHashObject *path_hash = objectGetVal(o);
         if ((n = rdbSaveLen(rdb, raxSize(path_hash->index))) == -1) return -1;
@@ -2599,6 +2613,17 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         if (hashTypeLength(o) == 0) {
             decrRefCount(o);
             if (error) *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
+            return NULL;
+        }
+    } else if (rdbtype == RDB_TYPE_BITMAP) {
+        uint64_t bytes = rdbLoadLen(rdb, NULL);
+        if (bytes == RDB_LENERR) return NULL;
+        sds payload = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+        if (payload == NULL) return NULL;
+        o = bitmapRoaringDeserialize(payload, sdslen(payload), bytes);
+        sdsfree(payload);
+        if (o == NULL) {
+            rdbReportCorruptRDB("Invalid bitmap");
             return NULL;
         }
     } else if (rdbtype == RDB_TYPE_PATH_HASH) {

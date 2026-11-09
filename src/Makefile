@@ -521,6 +521,7 @@ ENGINE_SERVER_OBJ = \
 	bgiteration.o \
     bio.o \
     bitops.o \
+    bitmap_roaring.o \
     blocked.o \
     call_reply.o \
     childinfo.o \

@@ -275,6 +275,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
         streamIteratorStop(&si);
     } else if (objectGetType(o) == OBJ_PATH_HASH) {
         pathHashTypeDigest(digest, o);
+    } else if (objectGetType(o) == OBJ_BITMAP) {
+        bitmapRoaringDigest(digest, o);
     } else if (objectGetType(o) == OBJ_MODULE) {
         ValkeyModuleDigest md = {{0}, {0}, keyobj, db->id};
         moduleValue *mv = objectGetVal(o);
@@ -1283,6 +1285,9 @@ void serverLogObjectDebugInfo(const robj *o) {
     } else if (objectGetType(o) == OBJ_PATH_HASH) {
         serverLog(LL_WARNING, "Path hash path count: %llu",
                   (unsigned long long)raxSize(((pathHashObject *)objectGetVal(o))->index));
+    } else if (objectGetType(o) == OBJ_BITMAP) {
+        serverLog(LL_WARNING, "Bitmap length: %zu, set bits: %llu", bitmapRoaringLen(o),
+                  (unsigned long long)bitmapRoaringCardinality(o));
     }
 #endif
 }

@@ -571,6 +571,40 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Slot migration keeps bitmaps and their lengths" {
+        assert_does_not_resync {
+            set empty "$16383_slot_tag:bm_empty"
+            set clear "$16383_slot_tag:bm_clear"
+            set full "$16383_slot_tag:bm_full"
+            # An empty bitmap, one whose last bit is clear, and one whose last
+            # bit is set.
+            assert_equal 1 [R 2 BITCONVERT $empty BITMAP]
+            assert_equal 1 [R 2 BITCONVERT $clear BITMAP]
+            R 2 SETBIT $clear 5 1
+            R 2 SETBIT $clear 70000 0
+            R 2 R.IMPORT $full [R 2 R.EXPORT $clear]
+            R 2 SETBIT $full 99999 1
+            set digests {}
+            foreach k [list $empty $clear $full] { lappend digests [R 2 DEBUG DIGEST-VALUE $k] }
+
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            wait_for_migration 0 16383
+
+            foreach k [list $empty $clear $full] d $digests {
+                assert_equal bitmap [R 0 TYPE $k]
+                assert_equal $d [R 0 DEBUG DIGEST-VALUE $k]
+            }
+            assert_equal 0 [R 0 BITCOUNT $empty]
+            assert_equal 1 [R 0 BITCOUNT $clear]
+            assert_equal 70007 [R 0 BITPOS $clear 0 -1 -1 BIT]
+
+            # Cleanup for next test
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+        }
+    } {} {needs:debug}
+
     test "Slot migration DBSIZE after migration" {
         assert_does_not_resync {
             # Populate data before migration

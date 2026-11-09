@@ -7968,6 +7968,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     srandom(time(NULL) ^ getpid() ^ tv.tv_usec);
     init_genrand64(((long long)tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
     crc64_init();
+    bitmapRoaringInit();
 
     /* Store umask value. Because umask(2) only offers a set-and-get API we have
      * to reset it and restore it back. We do this early to avoid a potential

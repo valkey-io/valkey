@@ -252,6 +252,7 @@ typedef struct {
     uint64_t next_index;
     uint64_t match_index;
     mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
+    mstime_t last_snapshot_time;          /* Last time we sent INSTALL_SNAPSHOT to this peer */
     unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
 } clusterNodeRaftData;
 
@@ -1721,10 +1722,8 @@ static void clusterRaftSendInstallSnapshot(clusterLink *link, clusterNode *node)
     serverLog(LL_NOTICE, "Sent INSTALL_SNAPSHOT to %.40s (last_applied=%llu, term=%llu).",
               node->name, (unsigned long long)rs->last_applied,
               (unsigned long long)rs->snapshot_term);
-    /* Set next_index past the snapshot so we don't re-send on next heartbeat.
-     * If the snapshot is lost, the follower won't ACK, eventually the link
-     * goes stale, and we'll retry after reconnection. */
-    RAFT_NODE(node)->next_index = rs->last_applied + 1;
+    /* next_index is updated by the AE_ACK sent after installing it. */
+    RAFT_NODE(node)->last_snapshot_time = monotonicMs();
 }
 
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
@@ -1736,7 +1735,10 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     /* If the follower needs entries we've already trimmed, send a snapshot. */
     uint64_t first_available = rs->log_count > 0 ? rs->log[0]->index : rs->last_applied + 1;
     if (next < first_available) {
-        clusterRaftSendInstallSnapshot(link, node);
+        /* Don't resend it on every heartbeat while the follower installs it,
+         * but resend it if it's lost. */
+        if (monotonicMs() - rd->last_snapshot_time > server.cluster_node_timeout / 2)
+            clusterRaftSendInstallSnapshot(link, node);
         return;
     }
 

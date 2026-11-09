@@ -362,6 +362,37 @@ test "Raft proto: PRE_VOTE granted after node-timeout even with randomized elect
     }
 }
 
+test "Raft proto: invalid INSTALL_SNAPSHOT is rejected without changing state" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+
+        # Join the fake leader's cluster as a follower.
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        raft_send $fd "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK 1 1 *" [raft_recv $fd]
+        assert_equal 2 [CI 0 cluster_raft_last_applied]
+
+        # A snapshot with an unknown node flag is rejected with a failed
+        # AE_ACK, and the node keeps its state.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
+        append snapshot "\n$node_id $node_addr master,bogus - 0 0 1 connected"
+        raft_send $fd $snapshot
+        assert_match "AE_ACK 1 0 *" [raft_recv $fd]
+        assert_equal 2 [CI 0 cluster_raft_last_applied]
+        assert_equal 0 [CI 0 cluster_slots_assigned]
+        assert_equal 1 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
+
+        close $fd
+    }
+}
+
 test "Raft proto: PRE_VOTE granted when no leader lease is active" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]

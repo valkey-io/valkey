@@ -1981,7 +1981,6 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
 /* INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<node lines> */
 static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count) {
-    UNUSED(link);
     if (argc < 5) return 1;
     if (sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
 
@@ -2000,6 +1999,22 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     if (snap_index <= rs->last_applied) {
         rs->todo_send_ae_ack = 1;
         return 1;
+    }
+
+    /* Check all node lines before changing any state. If one is invalid,
+     * reject the snapshot. The leader sends it again later. */
+    for (int i = 0; i < config_line_count; i++) {
+        if (sdslen(config_lines[i]) == 0) continue;
+        int largc;
+        sds *largv = sdssplitargs(config_lines[i], &largc);
+        bool valid = largv && clusterValidateNodeLine(largv, largc) == C_OK;
+        if (largv) sdsfreesplitres(largv, largc);
+        if (!valid) {
+            serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid node line: %s",
+                      argv[1], config_lines[i]);
+            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+            return 1;
+        }
     }
 
     /* Clear slots and shards — snapshot will re-assign them. */
@@ -2030,18 +2045,16 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         dictReleaseIterator(di);
     }
 
-    /* Parse snapshot node lines — updates existing nodes, creates new ones. */
+    /* Load the validated node lines — updates existing nodes, creates new
+     * ones. Only an invalid address can still fail here, and the state is
+     * already partly replaced. */
     dict *snapshot_nodes = dictCreate(&clusterNodesDictType);
     for (int i = 0; i < config_line_count; i++) {
         if (sdslen(config_lines[i]) == 0) continue;
         int largc;
         sds *largv = sdssplitargs(config_lines[i], &largc);
-        if (!largv || largc < 8) {
-            if (largv) sdsfreesplitres(largv, largc);
-            continue;
-        }
         if (clusterLoadNodeLine(largv, largc, snapshot_nodes) == C_ERR) {
-            serverPanic("Corrupt INSTALL_SNAPSHOT: failed to load node line.");
+            serverPanic("Corrupt INSTALL_SNAPSHOT: failed to load node line: %s", config_lines[i]);
         }
         sdsfreesplitres(largv, largc);
     }

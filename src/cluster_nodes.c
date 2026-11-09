@@ -758,6 +758,85 @@ fmterr:
     serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
 }
 
+/* Map a flag name in a node line to its flag bits. Returns C_ERR for an
+ * unknown name. */
+static int clusterParseNodeFlag(const char *name, int *flag) {
+    if (!strcasecmp(name, "myself")) {
+        *flag = CLUSTER_NODE_MYSELF;
+    } else if (!strcasecmp(name, "master") || !strcasecmp(name, "primary")) {
+        *flag = CLUSTER_NODE_PRIMARY;
+    } else if (!strcasecmp(name, "slave") || !strcasecmp(name, "replica")) {
+        *flag = CLUSTER_NODE_REPLICA;
+    } else if (!strcasecmp(name, "fail?")) {
+        *flag = CLUSTER_NODE_PFAIL;
+    } else if (!strcasecmp(name, "fail")) {
+        *flag = CLUSTER_NODE_FAIL;
+    } else if (!strcasecmp(name, "handshake")) {
+        *flag = CLUSTER_NODE_HANDSHAKE;
+    } else if (!strcasecmp(name, "noaddr")) {
+        *flag = CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL;
+    } else if (!strcasecmp(name, "nofailover")) {
+        *flag = CLUSTER_NODE_NOFAILOVER;
+    } else if (!strcasecmp(name, "learner")) {
+        *flag = CLUSTER_NODE_LEARNER;
+    } else if (!strcasecmp(name, "noflags")) {
+        *flag = 0;
+    } else {
+        return C_ERR;
+    }
+    return C_OK;
+}
+
+/* Parse a slot field of a node line: a slot, a range "start-stop", or a
+ * migration "[slot->-<node-id>]" / "[slot-<-<node-id>]". For a migration,
+ * *direction is '>' or '<' and *node_id points into field; otherwise
+ * *direction is 0. Doesn't modify field. Returns C_OK/C_ERR. */
+static int clusterParseSlotField(const char *field, int *start, int *stop, char *direction, const char **node_id) {
+    const char *p;
+    if (field[0] == '[') {
+        p = strchr(field, '-');
+        if (p == NULL || (p[1] != '>' && p[1] != '<') || p[2] != '-') return C_ERR;
+        *start = *stop = atoi(field + 1);
+        *direction = p[1];
+        *node_id = p + 3;
+        const char *end = strchr(*node_id, ']');
+        if (end == NULL || verifyClusterNodeId(*node_id, end - *node_id) == C_ERR) return C_ERR;
+    } else {
+        *direction = 0;
+        *start = atoi(field);
+        *stop = (p = strchr(field, '-')) != NULL ? atoi(p + 1) : *start;
+    }
+    if (*start < 0 || *start >= CLUSTER_SLOTS || *stop < 0 || *stop >= CLUSTER_SLOTS) return C_ERR;
+    return C_OK;
+}
+
+/* Check a node line without changing any state, so a set of lines can be
+ * validated before any of them is loaded. The address isn't checked. Returns
+ * C_OK/C_ERR. */
+int clusterValidateNodeLine(sds *argv, int argc) {
+    if (argc < 8) return C_ERR;
+    if (verifyClusterNodeId(argv[0], sdslen(argv[0])) == C_ERR) return C_ERR;
+    if (argv[3][0] != '-' && verifyClusterNodeId(argv[3], sdslen(argv[3])) == C_ERR) return C_ERR;
+    int count;
+    sds *flags = sdssplitlen(argv[2], sdslen(argv[2]), ",", 1, &count);
+    if (flags == NULL) return C_ERR;
+    for (int i = 0; i < count; i++) {
+        int flag;
+        if (clusterParseNodeFlag(flags[i], &flag) == C_ERR) {
+            sdsfreesplitres(flags, count);
+            return C_ERR;
+        }
+    }
+    sdsfreesplitres(flags, count);
+    for (int j = 8; j < argc; j++) {
+        int start, stop;
+        char direction;
+        const char *node_id;
+        if (clusterParseSlotField(argv[j], &start, &stop, &direction, &node_id) == C_ERR) return C_ERR;
+    }
+    return C_OK;
+}
+
 /* Parse a single node description line (same format as CLUSTER NODES output).
  * Creates or updates the node in the cluster state. argv/argc are the
  * space-split fields of the line. If nodes_seen is non-NULL, checks for
@@ -801,35 +880,19 @@ int clusterLoadNodeLine(sds *argv, int argc, dict *nodes_seen) {
         /* Parse flags */
         p = s = argv[2];
         while (p) {
+            int flag;
             p = strchr(s, ',');
             if (p) *p = '\0';
-            if (!strcasecmp(s, "myself")) {
+            if (clusterParseNodeFlag(s, &flag) == C_ERR) {
+                serverLog(LL_WARNING, "Unknown node flag \"%s\"", s);
+                goto fmterr;
+            }
+            if (flag & CLUSTER_NODE_MYSELF) {
                 serverAssert(server.cluster->myself == NULL);
                 server.cluster->myself = n;
-                n->flags |= CLUSTER_NODE_MYSELF;
-            } else if (!strcasecmp(s, "master") || !strcasecmp(s, "primary")) {
-                n->flags |= CLUSTER_NODE_PRIMARY;
-            } else if (!strcasecmp(s, "slave") || !strcasecmp(s, "replica")) {
-                n->flags |= CLUSTER_NODE_REPLICA;
-            } else if (!strcasecmp(s, "fail?")) {
-                n->flags |= CLUSTER_NODE_PFAIL;
-            } else if (!strcasecmp(s, "fail")) {
-                n->flags |= CLUSTER_NODE_FAIL;
-                if (clusterCurrentBus->setNodeFailed) clusterCurrentBus->setNodeFailed(n);
-            } else if (!strcasecmp(s, "handshake")) {
-                n->flags |= CLUSTER_NODE_HANDSHAKE;
-            } else if (!strcasecmp(s, "noaddr")) {
-                n->flags |= (CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL);
-                if (clusterCurrentBus->setNodeFailed) clusterCurrentBus->setNodeFailed(n);
-            } else if (!strcasecmp(s, "nofailover")) {
-                n->flags |= CLUSTER_NODE_NOFAILOVER;
-            } else if (!strcasecmp(s, "learner")) {
-                n->flags |= CLUSTER_NODE_LEARNER;
-            } else if (!strcasecmp(s, "noflags")) {
-                /* nothing to do */
-            } else {
-                serverPanic("Unknown flag in %s cluster config file", SERVER_TITLE);
             }
+            n->flags |= flag;
+            if ((flag & CLUSTER_NODE_FAIL) && clusterCurrentBus->setNodeFailed) clusterCurrentBus->setNodeFailed(n);
             if (p) s = p + 1;
         }
 
@@ -884,48 +947,22 @@ int clusterLoadNodeLine(sds *argv, int argc, dict *nodes_seen) {
         /* Populate hash slots served by this instance. */
         for (j = 8; j < argc; j++) {
             int start, stop;
-
-            if (argv[j][0] == '[') {
+            char direction;
+            const char *node_id;
+            if (clusterParseSlotField(argv[j], &start, &stop, &direction, &node_id) == C_ERR) goto fmterr;
+            if (direction) {
                 /* Here we handle migrating / importing slots */
-                int slot;
-                char direction;
-                clusterNode *cn;
-
-                p = strchr(argv[j], '-');
-                serverAssert(p != NULL);
-                *p = '\0';
-                direction = p[1]; /* Either '>' or '<' */
-                slot = atoi(argv[j] + 1);
-                if (slot < 0 || slot >= CLUSTER_SLOTS) {
-                    goto fmterr;
-                }
-                p += 3;
-
-                char *pr = strchr(p, ']');
-                size_t node_len = pr - p;
-                if (pr == NULL || verifyClusterNodeId(p, node_len) == C_ERR) {
-                    goto fmterr;
-                }
-                cn = clusterLookupNode(p, CLUSTER_NAMELEN);
+                clusterNode *cn = clusterLookupNode(node_id, CLUSTER_NAMELEN);
                 if (!cn) {
-                    cn = createClusterNode(p, 0);
+                    cn = createClusterNode((char *)node_id, 0);
                     clusterAddNode(cn);
                 }
                 if (direction == '>') {
-                    setMigratingSlotDest(slot, cn);
+                    setMigratingSlotDest(start, cn);
                 } else {
-                    setImportingSlotSource(slot, cn);
+                    setImportingSlotSource(start, cn);
                 }
                 continue;
-            } else if ((p = strchr(argv[j], '-')) != NULL) {
-                *p = '\0';
-                start = atoi(argv[j]);
-                stop = atoi(p + 1);
-            } else {
-                start = stop = atoi(argv[j]);
-            }
-            if (start < 0 || start >= CLUSTER_SLOTS || stop < 0 || stop >= CLUSTER_SLOTS) {
-                goto fmterr;
             }
             while (start <= stop) clusterAddSlot(n, start++);
         }

@@ -345,7 +345,7 @@ void sortCommandGeneric(client *c, int readonly) {
     case OBJ_LIST: vectorlen = listTypeLength(sortval); break;
     case OBJ_SET: vectorlen = setTypeSize(sortval); break;
     case OBJ_ZSET: vectorlen = zsetLength(sortval); break;
-    default: vectorlen = 0; serverPanic("Bad SORT type"); /* Avoid GCC warning */
+    default: serverPanic("Bad SORT type");
     }
 
     /* Perform LIMIT start,count sanity checking.
@@ -436,10 +436,7 @@ void sortCommandGeneric(client *c, int readonly) {
 
             /* Each element occupies two listpack entries (member, score). */
             if (rangelen > 0) {
-                if (desc)
-                    eptr = lpSeek(zl, -2 - (2 * start));
-                else
-                    eptr = lpSeek(zl, 2 * start);
+                eptr = desc ? lpSeek(zl, -2 - (2 * start)) : lpSeek(zl, 2 * start);
                 serverAssertWithInfo(c, sortval, eptr != NULL);
                 sptr = lpNext(zl, eptr);
             }
@@ -450,10 +447,11 @@ void sortCommandGeneric(client *c, int readonly) {
                 vector[j].u.score = 0;
                 vector[j].u.cmpobj = NULL;
                 j++;
-                if (desc)
+                if (desc) {
                     zzlPrev(zl, &eptr, &sptr);
-                else
+                } else {
                     zzlNext(zl, &eptr, &sptr);
+                }
             }
         } else if (sortval->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(sortval);

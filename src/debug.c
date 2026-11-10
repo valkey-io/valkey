@@ -2622,7 +2622,8 @@ void printCrashReport(void) {
 
         _exit(0);
     } else if (pid > 0) {
-        waitChild(pid, 10 * 1000000);
+        if (waitChild(pid, 10 * 1000000))
+            serverLogRawFromHandler(LL_WARNING, "Crash report child timed out and was killed. INFO, client, modules and config debug output may be incomplete.");
     } else {
         serverLogRawFromHandler(LL_WARNING, "Skipped INFO, client, modules and config debug output: fork failed.");
     }

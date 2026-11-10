@@ -803,8 +803,7 @@ versa) requires removing nodes.conf.
 The `nodes.conf` file IS the snapshot. The node lines represent the
 fully applied cluster state at `lastApplied`. Entries at or before
 `lastApplied` are not stored — only their cumulative effect (the cluster
-state) is retained. Entries after `lastApplied` (uncommitted tail) are
-stored as log lines.
+state) is retained. Entries after `lastApplied` are stored as log lines.
 
 This corresponds to the Raft paper's snapshot mechanism (§7), where:
 
@@ -812,28 +811,37 @@ This corresponds to the Raft paper's snapshot mechanism (§7), where:
 - **`snapshotTerm`** = `lastIncludedTerm` (term of that entry)
 
 `snapshotTerm` is needed because the entry at `lastApplied` is no longer
-in the log. When the leader sends AE with `prev_log_index = lastApplied`,
-the follower must verify `prev_log_term` against `snapshotTerm` rather
-than looking up a log entry that no longer exists.
+in the log. When the leader sends AE whose previous entry is the one at
+`lastApplied`, the follower verifies its term against `snapshotTerm`.
 
 Note: the standard Raft paper persists the full log (or log from the
-snapshot point). We don't — we only persist uncommitted entries. This
-is why `snapshotTerm` must be explicitly stored in the vars line,
+snapshot point). We don't — we only persist entries after `lastApplied`.
+This is why `snapshotTerm` must be explicitly stored in the vars line,
 whereas in a textbook implementation it could be read from the log.
+
+Terms start at 1, so a term of 0 always means an unknown entry. A node
+refuses to start if `nodes.conf` contains a log entry with term 0, has
+`lastApplied` without `snapshotTerm`, or has a `currentTerm` lower than
+`snapshotTerm`.
 
 ### In-memory log trimming
 
-The leader trims committed entries from the in-memory log to bound
-memory usage. The trim keeps a fixed number of recent committed entries
-(currently 64) for slow followers to catch up via normal AE. Trimming
-happens in batches (triggered when applied entries exceed 2× the keep
-threshold).
+Each node trims applied entries from its in-memory log to bound memory
+usage. It keeps the 64 most recent applied entries, so that slow
+followers can catch up through normal AE, and trims in batches when
+there are more than 128. The term of the last trimmed entry is
+remembered, so a follower can still be checked against the entry just
+before the first one in memory.
+
+A follower rejects an AE whose previous entry it doesn't know, and only
+appends entries that directly follow its last log entry, so its log
+never has gaps. On rejection, the leader steps back, and once it needs
+an entry it has trimmed, it sends a snapshot instead.
 
 ### InstallSnapshot
 
-When a follower's `next_index` falls behind the leader's first available
-log entry (entries have been trimmed), the leader sends `INSTALL_SNAPSHOT`
-instead of AE. The message contains:
+When a follower needs entries that the leader has trimmed, the leader
+sends `INSTALL_SNAPSHOT` instead of AE. The message contains:
 
     INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>
     <node line 1>
@@ -842,17 +850,30 @@ instead of AE. The message contains:
 
 The follower processes the snapshot by:
 
-1. Parsing node lines to create/update cluster state.
-2. Removing nodes not present in the snapshot.
-3. Promoting from joiner to follower if its own NODE_JOIN is included.
-4. Setting `lastApplied`, `commitIndex`, and `snapshotTerm` to the
-   snapshot's values.
-5. Recomputing `cluster->size` (quorum).
-6. Clearing the in-memory log (all entries are superseded).
+1. Checking all node lines before changing anything. If a line is
+   invalid, for example because it has an unknown flag, or the sender
+   isn't included, the snapshot is rejected with a failed AE_ACK and the
+   follower keeps its state.
+2. Replacing its cluster state with the node lines: nodes are created or
+   updated, and nodes not present in the snapshot are removed.
+3. Updating local state for slots whose owner changed, as when applying
+   a slot change: completed importing and migrating markers are cleared,
+   and keys in slots it no longer owns are deleted.
+4. Promoting from joiner to follower if its own NODE_JOIN is included.
+5. Setting `lastApplied` and `snapshotTerm` to the snapshot's values,
+   clearing the in-memory log (all entries are superseded), and
+   recomputing the number of voters (quorum).
+6. Scheduling an automatic failover if it is a replica and its primary
+   is failed in the snapshot.
 
-After sending a snapshot, the leader advances `next_index` for that peer
-to `lastApplied + 1` to avoid re-sending on the next heartbeat. The
-follower's AE_ACK confirms or corrects this.
+Slot migration markers (`[slot->…]` and `[slot-<-…]`) aren't part of the
+snapshot, since they are local to a shard and propagated through
+replication.
+
+The leader keeps resending the snapshot until the follower acknowledges
+that it has installed it, at most every half node timeout. A lost
+snapshot is therefore resent, but a slow follower doesn't get one on
+every heartbeat.
 
 ### No-op entry on election
 

@@ -1,6 +1,6 @@
 # One XADD with one huge >4GiB field (reduced from 5GB for CI memory limits)
 # Must exceed 2^32 to require more than 32 bits to address
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 run_solo {violations} {
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {XADD one huge field} {
@@ -18,7 +18,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # One XADD with one huge (exactly nearly) 4GB field
 # This uncovers the overflow in lpEncodeGetType
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {XADD one huge field - 1} {
         r config set proto-max-bulk-len 10000000000 ;#10gb
@@ -47,7 +47,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
 }
 
 # Add over 4GB to a single stream listpack (one XADD command)
-# Expected to fail resulting in an empty stream
+# Expected to fail without creating the stream
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {single XADD big fields} {
         r write "*23\r\n\$4\r\nXADD\r\n\$1\r\nS\r\n\$1\r\n*\r\n"
@@ -59,6 +59,22 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         catch {r read} err
         assert_match {*too large*} $err
         r xlen S
+    } {0}
+}
+
+# A refused XADD must not create the key, since nothing is propagated
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {XADD over the size limit does not create the key} {
+        # Two 512MiB values plus the field names are just over the 1GiB limit
+        r write "*7\r\n\$4\r\nXADD\r\n\$1\r\nS\r\n\$1\r\n*\r\n"
+        for {set j 0} {$j<2} {incr j} {
+            r write "\$1\r\n$j\r\n"
+            write_big_bulk 536870912 "" yes
+        }
+        r flush
+        catch {r read} err
+        assert_match {*too large*} $err
+        r exists S
     } {0}
 }
 
@@ -89,6 +105,38 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         r object encoding H1
     } {hashtable}
 }
+
+# A 2^31 byte length is negative as an int
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {SADD the same 2GiB member twice} {
+        r config set proto-max-bulk-len 10000000000 ;#10gb
+        r config set client-query-buffer-limit 10000000000 ;#10gb
+        for {set j 0} {$j < 2} {incr j} {
+            r write "*3\r\n\$4\r\nSADD\r\n\$1\r\nS\r\n"
+            write_big_bulk 2147483648 ;#2gb
+        }
+        r scard S
+    } {1}
+}
+
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {Evict a key with a 2GiB name} {
+        r config set proto-max-bulk-len 10000000000 ;#10gb
+        r config set client-query-buffer-limit 10000000000 ;#10gb
+        r write "*3\r\n\$3\r\nSET\r\n"
+        write_big_bulk 2147483648 "" yes ;#2gb
+        r write "\$1\r\nv\r\n"
+        r flush
+        assert_equal OK [r read]
+        r config set maxmemory-policy allkeys-lru
+        r config set maxmemory 1mb
+        wait_for_condition 50 100 {
+            [r dbsize] == 0
+        } else {
+            fail "key was not evicted"
+        }
+    }
+}
 } ;# run_solo
 
 # SORT which stores an integer encoded element into a list.
@@ -104,3 +152,21 @@ start_server [list overrides [list save ""] ] {
         r llen mylist
     } {2} {cluster:skip}
 }
+
+# SORT BY substitution with a set member >= 2^31 bytes.
+# lookupKeyByPattern() kept the prefix, element, and postfix lengths as int.
+# A member of INT_MAX+2 bytes makes prefixlen+sublen+postfixlen overflow
+# to a negative int, which sign-extends to ~2^64 as size_t and causes an OOM panic.
+run_solo {sort-subst-overflow} {
+start_server [list overrides [list save ""] tags {"sort large-memory"}] {
+    test {SORT BY with a >=2^31-byte element does not overflow and crash} {
+        r config set proto-max-bulk-len 3000000000
+        r config set client-query-buffer-limit 3000000000
+        r write "*3\r\n\$4\r\nSADD\r\n\$6\r\nbigset\r\n"
+        write_big_bulk 2147483649 ;# INT_MAX + 2 bytes, which is >= 2^31
+        # weight_<member> does not exist; the important thing is no crash.
+        r sort bigset by weight_* limit 0 0
+        r ping
+    } {PONG} {cluster:skip}
+}
+} ;# run_solo

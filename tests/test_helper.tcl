@@ -345,6 +345,7 @@ proc cleanup {} {
     catch {exec rm -rf {*}[glob tests/tmp/nodes.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/rdb-slot-import-*]}
     if {!$::quiet} {puts "OK"}
 }
 
@@ -1131,7 +1132,7 @@ proc is_mptcp_available {} {
 }
 
 # With the parallel test running multiple server instances at the same time
-# we need a fast enough computer, otherwise a lot of tests may generate
+# we need a fast enough computer; otherwise, a lot of tests may generate
 # false positives.
 # If the computer is too slow we revert the sequential test without any
 # parallelism, that is, clients == 1.

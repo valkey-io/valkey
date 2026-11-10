@@ -11,7 +11,7 @@ start_server {tags {"acl external:skip"}} {
         r ACL USERS
     } {default newuser}
 
-    test {Usernames can not contain spaces or null characters} {
+    test {Usernames cannot contain spaces or null characters} {
         catch {r ACL setuser "a a"} err
         set err
     } {*Usernames can't contain spaces or null characters*}
@@ -833,6 +833,15 @@ start_server {tags {"acl external:skip"}} {
         assert {[llength [r ACL LOG]] == 0}
     }
 
+    test {ACLLOG - zero max length does not leak refused script keys} {
+        test_config_set r acllog-max-len 0
+        set before [s used_memory]
+        r AUTH antirez foo
+        r EVAL {for i = 1, 200 do server.pcall('set', ARGV[1], '1') end} 0 [string repeat x 100000]
+        r AUTH default ""
+        assert_lessthan [expr {[s used_memory] - $before}] 5000000
+    }
+
     test {ACL LOG entries are limited to a maximum amount} {
         r ACL LOG RESET
         r CONFIG SET acllog-max-len 5
@@ -918,7 +927,7 @@ start_server {tags {"acl external:skip"}} {
        assert_match "*ACL GENPASS argument must be the number*" $err2
     }
 
-    test {Default user can not be removed} {
+    test {Default user cannot be removed} {
        catch {r ACL deluser default} err
        set err
     } {ERR The 'default' user cannot be removed}
@@ -1175,7 +1184,7 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         r PUBLISH hello world
     }
 
-    test {default: with config acl-pubsub-default resetchannels after reset, can not access any channels} {
+    test {default: with config acl-pubsub-default resetchannels after reset, cannot access any channels} {
         r CONFIG SET acl-pubsub-default resetchannels
         r ACL setuser default reset on nopass ~* +@all
         assert_error {*NOPERM*channel*} {r SUBSCRIBE foo}

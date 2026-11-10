@@ -911,7 +911,7 @@ static void cliInitHelp(void) {
     dict *groups;
 
     if (cliConnect(CC_QUIET) == VALKEY_ERR) {
-        /* Can not connect to the server, but we still want to provide
+        /* Cannot connect to the server, but we still want to provide
          * help, generate it only from the static cli_commands.c data instead. */
         groups = dictCreate(&groupsdt);
         cliLegacyInitHelp(groups);
@@ -1165,7 +1165,10 @@ static sds addHintForArgument(sds hint, cliCommandArg *arg) {
     }
 
     /* Surround an optional arg with brackets, unless it's partially matched. */
-    if ((arg->flags & CMD_ARG_OPTIONAL) && !arg->matched) {
+    /* We store this in a variable since arg->matched flag would be reset inside
+     * addHintForRepeatedArgument() which is being called in this codepath. */
+    int optional_unmatched = (arg->flags & CMD_ARG_OPTIONAL) && !arg->matched;
+    if (optional_unmatched) {
         hint = sdscat(hint, "[");
     }
 
@@ -1205,7 +1208,7 @@ static sds addHintForArgument(sds hint, cliCommandArg *arg) {
 
     hint = addHintForRepeatedArgument(hint, arg);
 
-    if ((arg->flags & CMD_ARG_OPTIONAL) && !arg->matched) {
+    if (optional_unmatched) {
         hint = sdscat(hint, "]");
     }
 
@@ -2169,13 +2172,20 @@ static int cliReadReply(int output_raw_strings) {
     valkeyReply *reply;
     sds out = NULL;
     int output = 1;
+    int status;
 
     if (config.last_reply) {
         freeReplyObject(config.last_reply);
         config.last_reply = NULL;
     }
 
-    if (valkeyGetReply(context, &_reply) != VALKEY_OK) {
+    /* libvalkey returns a RESP3 attribute as its own reply, ahead of the reply
+     * it describes. Attributes are not part of the reply, so skip them. */
+    while ((status = valkeyGetReply(context, &_reply)) == VALKEY_OK &&
+           ((valkeyReply *)_reply)->type == VALKEY_REPLY_ATTR) {
+        freeReplyObject(_reply);
+    }
+    if (status != VALKEY_OK) {
         if (config.blocking_state_aborted) {
             config.blocking_state_aborted = 0;
             config.monitor_mode = 0;
@@ -2427,7 +2437,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             /* When a push callback is set, valkeyGetReply (libvalkey) loops until
              * an in-band message is received, but these commands are confirmed
              * using push replies only. There is one push reply per channel if
-             * channels are specified, otherwise at least one. */
+             * channels are specified; otherwise, at least one. */
             num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
             /* Unset our default PUSH handler so this works in RESP2/RESP3 */
             valkeySetPushCallback(context, NULL);
@@ -2438,7 +2448,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             replicaMode(0);
             config.replica_mode = 0;
             zfree(argvlen);
-            return VALKEY_ERR; /* Error = replilcaMode lost connection to primary */
+            return VALKEY_ERR; /* Error = replicaMode lost connection to primary */
         }
 
         /* Read response, possibly skipping pubsub/push messages. */
@@ -2569,6 +2579,9 @@ static valkeyReply *reconnectingValkeyCommand(valkeyContext *c, const char *fmt,
 
 static int parseOptions(int argc, char **argv) {
     int i;
+    /* parseEnv() runs first, so auth may already hold VALKEYCLI_AUTH. Only a
+     * password set by -a or -u below should trigger the warning. */
+    char *env_auth = config.conn_info.auth;
 
     for (i = 1; i < argc; i++) {
         int lastarg = i == argc - 1;
@@ -2703,7 +2716,12 @@ static int parseOptions(int argc, char **argv) {
             config.hotkeys_count = HOTKEYS_COUNT;
         } else if (!strcmp(argv[i], "--hotkeys-count") && !lastarg) {
             config.hotkeys = 1;
-            config.hotkeys_count = atoi(argv[++i]);
+            int count = atoi(argv[++i]);
+            if (count <= 0) {
+                fprintf(stderr, "Invalid hotkeys count. Must be a positive integer.\n");
+                exit(1);
+            }
+            config.hotkeys_count = count;
         } else if (!strcmp(argv[i], "--eval") && !lastarg) {
             config.eval = argv[++i];
         } else if (!strcmp(argv[i], "--ldb")) {
@@ -2903,7 +2921,7 @@ static int parseOptions(int argc, char **argv) {
         exit(1);
     }
 
-    if (!config.no_auth_warning && config.conn_info.auth != NULL) {
+    if (!config.no_auth_warning && config.conn_info.auth != env_auth) {
         fputs("Warning: Using a password with '-a' or '-u' option on the command"
               " line interface may not be safe.\n",
               stderr);
@@ -5233,12 +5251,12 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         if (config.conn_info.input_dbnum == dbnum) {
             break;
         }
+        char *dots = NULL;
+        valkeyReply *reply = NULL, *migrate_reply = NULL;
         if (cliSelect(&config, source->context) == VALKEY_ERR) {
             success = 0;
             goto next;
         }
-        char *dots = NULL;
-        valkeyReply *reply = NULL, *migrate_reply = NULL;
         reply = CLUSTER_MANAGER_COMMAND(source,
                                         "CLUSTER "
                                         "GETKEYSINSLOT %d %d",
@@ -6242,7 +6260,7 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
             return n;
         }
     }
-    /* Can not be reached */
+    /* Cannot be reached */
     assert(0);
     /* Make compiler happy */
     return 0;
@@ -9984,6 +10002,7 @@ void testHint(const char *input) {
 
     sds hint = getHintForInput(input);
     printf("%s\n", hint);
+    sdsfree(hint);
     exit(0);
 }
 

@@ -6,12 +6,14 @@
 
 #include "generated_wrappers.hpp"
 
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
 extern "C" {
 #include "compression.h"
 #include "compression_stream.h"
+#include "rdb_transcoder.h"
 #include "server.h"
 #include "zmalloc.h"
 }
@@ -1793,4 +1795,57 @@ TEST(replCompression, pushReaderDrainsBufferedOutputWithoutMoreInput) {
     sdsfree(out);
     freeReplTestStream(&test_stream);
     zfree(payload);
+}
+
+/* The disk-based full sync feeds the transcoder only the RDB body, so nothing
+ * may follow the source frame. Trailing bytes, whether they arrive with the
+ * frame end or in a later write, must fail the transcode rather than be
+ * dropped or trip the push reader's resume assertion. */
+TEST(CompressionTest, rdbTranscoderRejectsBytesAfterSourceFrame) {
+    const char *payload = "transcoder-frame-body";
+    const char *trailer = "TRAILER";
+    const size_t ntargets = 1 + sizeof(testCompressionAlgos) / sizeof(testCompressionAlgos[0]);
+
+    for (size_t si = 0; si < sizeof(testCompressionAlgos) / sizeof(testCompressionAlgos[0]); si++) {
+        compressionAlgo src = testCompressionAlgos[si];
+        DynamicBuf frame;
+        dynamicBufInit(&frame);
+        streamWriter w;
+        ASSERT_EQ(streamWriterInit(&w, src, true, emitToDynamicBuf, &frame), C_OK);
+        ASSERT_EQ(streamWriterWrite(&w, payload, strlen(payload)), C_OK);
+        ASSERT_EQ(streamWriterFinish(&w), C_OK);
+        streamWriterFree(&w);
+        const size_t frame_len = sdslen((sds)frame.data);
+        sds with_trailer = sdscatlen(sdsnewlen(frame.data, frame_len), trailer, strlen(trailer));
+
+        for (size_t ti = 0; ti < ntargets; ti++) {
+            compressionAlgo target = ti == 0 ? ALGO_NONE : testCompressionAlgos[ti - 1];
+            if (target == src) continue; /* Verbatim route never decodes the frame. */
+            for (int wi = 0; wi < 2; wi++) {
+                bool same_write = wi == 0;
+                char trace[64];
+                snprintf(trace, sizeof(trace), "src=%d target=%d same_write=%d", (int)src, (int)target, same_write);
+                SCOPED_TRACE(trace);
+                DynamicBuf out;
+                dynamicBufInit(&out);
+                rdbTranscoder t;
+                rdbTranscoderInit(&t, target, false, emitToDynamicBuf, &out);
+                if (same_write) {
+                    EXPECT_EQ(rdbTranscoderWrite(&t, with_trailer, sdslen(with_trailer)), C_ERR);
+                } else {
+                    /* The trailer spans two writes, as it does when the receive
+                     * loop reads it in more than one chunk. */
+                    ASSERT_EQ(rdbTranscoderWrite(&t, frame.data, frame_len), C_OK);
+                    EXPECT_EQ(rdbTranscoderWrite(&t, trailer, 3), C_ERR);
+                    EXPECT_EQ(rdbTranscoderWrite(&t, trailer + 3, strlen(trailer) - 3), C_ERR);
+                }
+                EXPECT_TRUE(t.failed);
+                EXPECT_EQ(rdbTranscoderFinish(&t), C_ERR);
+                rdbTranscoderFree(&t);
+                dynamicBufFree(&out);
+            }
+        }
+        sdsfree(with_trailer);
+        dynamicBufFree(&frame);
+    }
 }

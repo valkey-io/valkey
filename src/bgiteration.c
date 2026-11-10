@@ -26,12 +26,9 @@ static bool isScriptCallWriteCmd(struct serverCommand *cmd) {
  * write commands, blocking them from modifying the format while the background thread might be
  * operating on the item.
  *  - PFCOUNT - modifies the underlying string (and is replicated!)
- *  - LINDEX/LRANGE/LPOS - may modify quicklist by LZF compress/uncompress */
+ *  - SORT_RO may modify the encoding (#4698) */
 static bool isFormatChangingCommand(struct serverCommand *cmd) {
     return ((cmd->proc == pfcountCommand) ||
-            (cmd->proc == lindexCommand) ||
-            (cmd->proc == lrangeCommand) ||
-            (cmd->proc == lposCommand) ||
             (cmd->proc == sortroCommand));
 }
 
@@ -398,6 +395,16 @@ struct bgIterator {
 
     bool cur_cmd_may_replicate; // Used only in main thread during command processing
 
+    /* When a key is deleted (expire/evict):
+     *   1. bgIteration_keyDelete() is called
+     *   2. the key is physically deleted
+     *   3. replication is generated
+     * At replication time (step 3) we need to know whether each iterator had already processed the
+     * deleted key.  keyDelete() removes the dbEntry from early_iterate_entries immediately (step 1)
+     * to avoid a dangling pointer.  This flag records if the entry was in early_iterate_entries. */
+    bool last_key_delete_was_early; // Used only in main thread during command processing
+    unsigned long added_since_feed; // Items queued outside of feedIterator since its last call
+
     // Variables maintaining runtime statistics
     unsigned long dbentries_queued;         // Updated by main thread
     unsigned long dbentries_processed;      // Updated by client thread
@@ -460,13 +467,6 @@ static uint32_t bgIteration_epoch = 1;
  * should respect the setting of cur_cmd_may_replicate. */
 static bool iteratorReplicationFlagsWereUpdated;
 
-/* When a key is deleted (expire/evict):
- *   1. bgIteration_keyDelete() is called
- *   2. the key is physically deleted
- *   3. replication is generated
- * At the time of replication, we need the (deleted) dbEntry pointer to be able to check
- * early_iterated_entries.  This variable stores the pointer from the last call of keyDelete() */
-static dbEntry *dbEntryPtrOfLastKeyDelete;
 
 /* BgIteration debug captures BgIteration activity to a large sds buffer.  When an iterator is
  * completed, the entire buffer is written to a file in the current working directory.  Note that
@@ -967,13 +967,16 @@ static sds createEntryString(int dbid, dbEntry *de) {
 
 
 static void feedIterator(bgIterator *it, monotime end_time_us) {
-    unsigned int initial_queue_len = mutexQueueLength(it->items_for_iterator);
-
     /* The queue size dynamically adjusts using an AIMD approach.  If we have left over stuff from
      * the prior call to feedIterator, reduce by half the remaining size.  If the queue ran dry
-     * and we have time left (at the end of this function), additively increase the queue length. */
-    if (initial_queue_len > 2 && it->item_count_target >= initial_queue_len) {
-        it->item_count_target -= initial_queue_len / 2;
+     * and we have time left (at the end of this function), additively increase the queue length.
+     * Items added since the prior call (expedited keys, replication) aren't left over, as the
+     * queue may have run dry before they were added. */
+    unsigned long queue_len = mutexQueueLength(it->items_for_iterator);
+    unsigned long left_over = (queue_len > it->added_since_feed) ? queue_len - it->added_since_feed : 0;
+    it->added_since_feed = 0;
+    if (left_over > 2 && it->item_count_target >= left_over) {
+        it->item_count_target -= left_over / 2;
     }
 
     // Now do some feeding
@@ -1074,7 +1077,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
     }
 
     // Smart logic to dynamically adjust the size of the queue
-    if (initial_queue_len == 0 && have_time && it->item_count_target < BGITER_QUEUE_MAX_LENGTH) {
+    if (left_over == 0 && have_time && it->item_count_target < BGITER_QUEUE_MAX_LENGTH) {
         it->item_count_target += BGITER_QUEUE_INCREASE_INCR;
     }
 }
@@ -1093,6 +1096,7 @@ static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_db
     bgIteratorItem *item = makeDbEntryItem(isClonedEntry ? cloneEntry : earlyEntry, dbid, isClonedEntry);
 
     it->dbentries_queued++;
+    it->added_since_feed++;
     if (isClonedEntry) it->dbentry_clones_queued++;
 
     if (it->barrier_items == 0) {
@@ -1566,16 +1570,26 @@ static void prepareAndProcessReturnedItems(bgIterator *it, int n, bgIteratorItem
 // Returns true if we process at least one item from a given iterator's return_to_main_thread queue.
 static bool receiveItemsBackFromOneIterator(bgIterator *it) {
     bgIteratorItem *batchPool[PREFETCH_BATCH_SIZE];
+    bgIteratorItem *closeItem = NULL;
     int n = 0;
     fifo *poppedFifo = mutexQueuePopAll(it->return_to_main_thread, false);
     if (poppedFifo != NULL) {
         while (fifoLength(poppedFifo) > 0) {
-            fifoPop(poppedFifo, (void **)&batchPool[n++]);
+            bgIteratorItem *item;
+            fifoPop(poppedFifo, (void **)&item);
+            /* A termination after the close can queue items behind ITER_CLOSED.  ITER_CLOSED
+             * releases the iterator, so it must be processed last. */
+            if ((int)item->type == BGITERATOR_ITEMEXT_ITER_CLOSED) {
+                closeItem = item;
+                continue;
+            }
+            batchPool[n++] = item;
             if (n == PREFETCH_BATCH_SIZE) {
                 prepareAndProcessReturnedItems(it, n, batchPool);
                 n = 0;
             }
         }
+        if (closeItem) batchPool[n++] = closeItem;
         if (n > 0) {
             prepareAndProcessReturnedItems(it, n, batchPool);
         }
@@ -1802,6 +1816,7 @@ static void handleSwapdb(int db1, int db2) {
             item->dbid = db1;
             item->u.dbid2 = db2;
             it->swapdb_queued++;
+            it->added_since_feed++;
             it->barrier_items++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
@@ -1848,6 +1863,7 @@ static void handleFlushdb(int dbid) {
             item->type = BGITERATOR_ITEM_FLUSHDB;
             item->dbid = dbid;
             it->flushdb_queued++;
+            it->added_since_feed++;
             it->barrier_items++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
@@ -2033,6 +2049,8 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->completed = false;
     it->terminated = false;
     it->cur_cmd_may_replicate = false;
+    it->last_key_delete_was_early = false;
+    it->added_since_feed = 0;
 
     it->dbentries_queued = 0;
     it->dbentries_processed = 0;
@@ -2177,7 +2195,7 @@ bgIteratorItem *bgIteratorRead(bgIterator *it) {
          * Without this, a unit test could get stuck waiting on the completion event because
          * feed won't get invoked.  For production, feed is called regularly from the main thread.
          * Note - this is checking that the exact same thread is used and shouldn't count modules. */
-        if (onServerMainThread()) bgIteration_feedIterators_task(NULL, 0, NULL);
+        if (onServerMainThread()) bgIteration_feedIterators();
     } else {
         it->client_is_active = true;
     }
@@ -2271,8 +2289,6 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
     dbEntry *de = dbFind(server.db[dbid], (sds)key);
     serverAssert(de != NULL); // This API should be called BEFORE removal from main dict
 
-    dbEntryPtrOfLastKeyDelete = de; // save for check at replication time
-
     // For consistent iterators, we need to make sure the item gets written before delete
     listIter li;
     listNode *node;
@@ -2287,6 +2303,11 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
                 addEarlyIterationKey(it, de, dbid); // (may also add to inUseEntries)
             }
         }
+
+        /* Since the key is being removed from the main dictionary, also remove it from the
+         * early_iterate_entries (if it was there) and save the early iterate status for use during
+         * the replication of the DEL. */
+        it->last_key_delete_was_early = hashtableDelete(it->early_iterate_entries, de);
     }
 
     /* We might be within the context of a command execution.  This happens if the key is found to
@@ -2302,6 +2323,12 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
 // PUBLIC API
 void bgIteration_flushall(void) {
     handleFlushdb(-1);
+}
+
+
+// PUBLIC API
+void bgIteration_swapdb(int db1, int db2) {
+    if (bgIteration_iterationActive()) handleSwapdb(db1, db2);
 }
 
 
@@ -2445,14 +2472,6 @@ void bgIteration_handleCommandReplication(int dbid,
         sdsfree(sdsArgv);
     }
 
-    if (cmd->proc == swapdbCommand) {
-        // All iterators and clients must be informed of swapdb
-        int id1, id2;
-        // command has been processed, but Valkey allows "swapdb 0 0" (which can be ignored)
-        if (getParamsForSwapdb(argc, argv, NULL, &id1, &id2))
-            handleSwapdb(id1, id2);
-    }
-
     /* In the case that a key is touched in a different DB (COPY/MOVE) the key is recorded as
      *  a "special" key and than handled below. */
     int special_dbid = 0;
@@ -2520,7 +2539,11 @@ void bgIteration_handleCommandReplication(int dbid,
                  *       handle it as a "missing key" below.  If we were to try to handle it as a
                  *       standard "missing key", we would get the DBID incorrect. */
 
-            } else if (listLength(curCmdMissingKeys) > 0) {
+            } else if (listLength(curCmdMissingKeys) > 0 &&
+                       cmd->proc != multiCommand && cmd->proc != execCommand) {
+                /* MULTI/EXEC are ignored because they are injected around a transaction by
+                 * propagateToBgIteration without passing through bgIteration_blockClientIfRequired.
+                 * curCmdMissingKeys holds the keys of a command inside the transaction. */
                 listIter missingIt;
                 listNode *missingNode;
                 listRewind(curCmdMissingKeys, &missingIt);
@@ -2601,12 +2624,16 @@ void bgIteration_handleCommandReplication(int dbid,
                     // Here we know that the DEL is related to the running command
                     shouldReplicateDelCommand = it->cur_cmd_may_replicate;
                 } else {
-                    // Otherwise, it's something like active expiration or eviction (unrelated)
-                    if (iteratorHasPassedKey(it, dbid, key, dbEntryPtrOfLastKeyDelete)) {
+                    /* Otherwise, it's something like active expiration or eviction (unrelated).
+                     * Replicate the DEL if the iterator had already accounted for this key: either
+                     * the scan has passed its position, or it was expedited early.  The
+                     * early-expedite signal was captured into it->last_key_delete_was_early in
+                     * bgIteration_keyDelete before the entry was removed from early_iterate_entries. */
+                    if (it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) ||
+                        it->last_key_delete_was_early) {
                         shouldReplicateDelCommand = true;
                     }
                 }
-                hashtableDelete(it->early_iterate_entries, dbEntryPtrOfLastKeyDelete); // just try delete (might not be here)
             }
         }
 
@@ -2632,6 +2659,7 @@ void bgIteration_handleCommandReplication(int dbid,
             item->u.repl.replication_size = replicationItemSize(item);
             bufferedReplicationBytes += item->u.repl.replication_size;
             it->replication_queued++;
+            it->added_since_feed++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
     } // allIterators loop

@@ -47,9 +47,18 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         # steps back on rejection. For a follower behind the trim point, it
         # must step back past the trimmed boundary and send a snapshot,
         # rather than an AE with an unknown previous term.
+        # R2 starts importing slot 0 from R0. The migration completes while
+        # R2 is down, so R2 learns about it from the snapshot and must clear
+        # its importing marker, which isn't part of the snapshot.
+        set r0_id [R 0 cluster myid]
+        set r2_id [R 2 cluster myid]
+        assert_equal OK [R 2 cluster setslot 0 importing $r0_id]
+        assert_equal OK [R 0 cluster setslot 0 migrating $r2_id]
+
         # Stop R2 instead of pausing it, so it doesn't receive the new
         # entries from data buffered on its links when it comes back.
         catch {R 2 shutdown}
+        assert_equal OK [R 0 cluster setslot 0 node $r2_id]
         for {set j 0} {$j < 140} {incr j} {
             R 0 config set cluster-announce-hostname "host-b-$j.com"
         }
@@ -70,6 +79,9 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
             fail "R2 did not catch up with the new leader (R2=[CI 2 cluster_raft_last_applied] R1=[CI 1 cluster_raft_last_applied] role=[CI 1 cluster_raft_role])"
         }
         assert_equal 1 [count_log_message -2 "Installed snapshot"]
+        set myself_line [lsearch -inline [split [R 2 cluster nodes] "\n"] "*myself*"]
+        assert_no_match {*\[0-<-*} $myself_line
+        assert_equal 0 [lindex $myself_line 8]
         resume_process [srv 0 pid]
     }
 }

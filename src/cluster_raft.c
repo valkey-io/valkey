@@ -392,6 +392,7 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
 static void clusterRaftSendPreVoteRequest(clusterLink *link, uint64_t term);
 static void clusterRaftUnblockMeet(clusterNode *node);
 static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only);
+static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, clusterNode *new_owner);
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only);
@@ -2025,7 +2026,10 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         return 1;
     }
 
-    /* Clear slots and shards — snapshot will re-assign them. */
+    /* Clear slots and shards — snapshot will re-assign them. Remember the
+     * old owners to update the local slot state afterwards. */
+    clusterNode **old_owners = zmalloc(sizeof(server.cluster->slots));
+    memcpy(old_owners, server.cluster->slots, sizeof(server.cluster->slots));
     for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
     dictEmpty(server.cluster->shards, NULL);
 
@@ -2066,6 +2070,14 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         }
         sdsfreesplitres(largv, largc);
     }
+
+    /* Do what applying the skipped slot changes would have done locally. The
+     * old owners are still valid, since nodes are only deleted below. */
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (old_owners[j] != server.cluster->slots[j])
+            clusterRaftUpdateLocalSlotState(j, old_owners[j], server.cluster->slots[j]);
+    }
+    zfree(old_owners);
 
     /* Remove nodes not present in the snapshot. */
     {
@@ -3721,6 +3733,38 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     zfree(filtered);
 }
 
+/* Update the local state of a slot that moves from old_owner to new_owner
+ * (either may be NULL): delete the keys in a slot we no longer own, and
+ * clear the migrating and importing markers that the move completes. The
+ * markers are local to the shard and not part of the snapshot, so this is
+ * done both when applying a slot change and when installing a snapshot. */
+static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, clusterNode *new_owner) {
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    if (old_owner == myself || new_owner == myself) RAFT_STATE()->todo_save_config = 1;
+    /* DELSLOTS keeps the keys and markers, like gossip. */
+    if (!new_owner) return;
+
+    /* Only while still bound, like gossip. */
+    if (old_owner == myself && new_owner != myself) {
+        serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
+        delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+    }
+
+    /* Target is this shard, not necessarily myself. */
+    if (new_owner == my_primary && getImportingSlotSource(slot)) {
+        setImportingSlotSource(slot, NULL);
+        RAFT_STATE()->todo_save_config = 1;
+    }
+
+    /* Clear migrating only if the slot left our shard. */
+    if (getMigratingSlotDest(slot) && old_owner &&
+        !memcmp(old_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) &&
+        memcmp(new_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
+        setMigratingSlotDest(slot, NULL);
+        RAFT_STATE()->todo_save_config = 1;
+    }
+}
+
 /* Apply (or validate) a SLOT_CHANGE entry.
  * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
  * Ranges use the same format as nodes.conf: "0-5460" or "5461".
@@ -3759,41 +3803,10 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
         }
         for (int j = start; j <= end; j++) {
             clusterNode *old_owner = server.cluster->slots[j];
-            clusterNode *my_primary = clusterNodeGetPrimary(myself);
-
-            if (info.target_node) {
-                /* Same owner: do not touch migrating/importing. */
-                if (old_owner == info.target_node) continue;
-
-                /* Only while still bound, like gossip. DELSLOTS orphans stay. */
-                if (old_owner == myself && info.target_node != myself) {
-                    serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
-                              j, myself->name);
-                    delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
-                }
-
-                /* Target is this shard, not necessarily myself. */
-                if (info.target_node == my_primary && getImportingSlotSource(j)) {
-                    setImportingSlotSource(j, NULL);
-                    RAFT_STATE()->todo_save_config = 1;
-                }
-
-                /* Clear migrating only if the slot left our shard. */
-                if (getMigratingSlotDest(j) && old_owner &&
-                    !memcmp(old_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) &&
-                    memcmp(info.target_node->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
-                    setMigratingSlotDest(j, NULL);
-                    RAFT_STATE()->todo_save_config = 1;
-                }
-
-                if (info.target_node == myself || old_owner == myself)
-                    RAFT_STATE()->todo_save_config = 1;
-                if (old_owner) clusterDelSlot(j);
-                clusterAddSlot(info.target_node, j);
-            } else {
-                if (old_owner == myself) RAFT_STATE()->todo_save_config = 1;
-                clusterDelSlot(j);
-            }
+            if (old_owner == info.target_node) continue;
+            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
+            if (old_owner) clusterDelSlot(j);
+            if (info.target_node) clusterAddSlot(info.target_node, j);
         }
     }
     goto done;

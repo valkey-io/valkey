@@ -1099,7 +1099,7 @@ int unblock_by_timer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(
         ctx, NULL, with_timeout_callback ? timeout_callback : NULL, NULL, timeout);
-    if (bc == NULL) return VALKEYMODULE_OK;
+    if (bc == NULL) return ValkeyModule_ReplyWithError(ctx, "ERR block failed");
     if (period == 0)
         held_blocked_client = bc;
     else

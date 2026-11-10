@@ -2522,12 +2522,20 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
 
 foreach primary_diskless {yes no} {
     foreach replica_load [expr {$primary_diskless eq "yes" ? {disabled on-empty-db} : {disabled on-empty-db swapdb}}] {
-        # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels a diskless
-        # (socket) save. A to-disk save is cancelled by any FLUSHDB.
+        # {db command}: FLUSHDB targets the small db1, since flushing most keys cancels the save.
         foreach inline_cmd {{0 {swapdb 0 1}} {1 {flushdb}} {1 {move db1:1 2}} {1 {copy db1:2 dst db 2}}
                             {1 {copy db1:3 db1:copy3 db 1}} {1 {copy db1:4 dst4 db 3 db 3}} {1 {move db1:5 7}}
                             {1 {swapdb 2 3}}} {
             lassign $inline_cmd cmd_db cmd
+            # A to-disk save is cancelled by any FLUSHDB, so those variants can't replay the
+            # command inside the running sync. They assert the cancel and the fresh full sync
+            # that follows instead, and are named accordingly so a CI failure reads correctly.
+            set cancels_to_disk_save [expr {$cmd eq "flushdb" && $primary_diskless eq "no"}]
+            if {$cancels_to_disk_save} {
+                set test_name "FLUSHDB during forkless sync cancels the to-disk save and resyncs"
+            } else {
+                set test_name "[string toupper $cmd] during forkless sync replays correctly"
+            }
             start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
                 set primary [srv 0 client]
                 set ph [srv 0 host]
@@ -2545,7 +2553,7 @@ foreach primary_diskless {yes no} {
                     set replica [srv 0 client]
                     $replica config set repl-diskless-load $replica_load
 
-                    test "[string toupper $cmd] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
+                    test "$test_name (primary diskless=$primary_diskless, replica load=$replica_load)" {
                         set load1 [start_write_load $ph $pp 8]
                         set load2 [start_write_load $ph $pp 8]
                         wait_for_condition 50 100 {
@@ -2564,7 +2572,7 @@ foreach primary_diskless {yes no} {
                         $primary select $cmd_db
                         assert_not_equal 0 [$primary {*}$cmd]
                         $primary select 0
-                        if {$cmd eq "flushdb" && $primary_diskless eq "no"} {
+                        if {$cancels_to_disk_save} {
                             # The FLUSHDB cancels the to-disk save at once. rdb_bgsave_in_progress
                             # only clears on the 200ms snapshot-end poll, so reading it right after
                             # the reply is racy. Wait for the cancel in the log instead.

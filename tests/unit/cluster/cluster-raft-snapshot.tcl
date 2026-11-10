@@ -265,8 +265,16 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         assert_equal 1 [CI 0 cluster_size]
 
         # A node joining it as a voter is counted in the size.
+        # A reset node has an empty log, so its last log term must be 0.
+        # Otherwise it would claim a newer log than it has in elections.
         restart_server -1 true false
         R 1 cluster reset hard
+        set nodes_conf [file join [lindex [R 1 config get dir] 1] [lindex [R 1 config get cluster-config-file] 1]]
+        wait_for_condition 50 100 {
+            [string match "*lastApplied 0 snapshotTerm 0*" [exec cat $nodes_conf]]
+        } else {
+            fail "snapshotTerm was not reset: [exec grep vars $nodes_conf]"
+        }
         set r1_id [R 1 cluster myid]
         R 0 cluster meet 127.0.0.1 [srv -1 port]
         raft_add_voter [srv 0 client] $r1_id

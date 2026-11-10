@@ -4393,6 +4393,7 @@ static void clusterRaftResetCluster(int hard) {
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     rs->commit_index = 0;
     rs->last_applied = 0;
+    rs->snapshot_term = 0;
     rs->log_count = 0;
     rs->log_trim_index = 0;
     rs->log_trim_term = 0;
@@ -4427,6 +4428,7 @@ static void clusterRaftResetCluster(int hard) {
     }
 
     clearCachedClusterSlotsResponse();
+    rs->todo_save_config = 1;
     serverLog(LL_NOTICE, "Cluster %s reset, now I'm %.40s",
               hard ? "hard" : "soft", myself->name);
 }

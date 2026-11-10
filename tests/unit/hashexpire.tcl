@@ -1617,7 +1617,7 @@ start_server {tags {"hashexpire"}} {
             r HEXPIRE myhash{t} 200 FIELDS 1 f1
 
             # Verify initial TTL state
-            set mem_before [r MEMORY USAGE myhash{t}]
+            set mem_before [memory_usage myhash{t}]
             assert_equal "v1 v2" [r HMGET myhash{t} f1 f2]
             assert_morethan [r HTTL myhash{t} FIELDS 1 f1] 100
             assert_equal -1 [r HTTL myhash{t} FIELDS 1 f2]
@@ -1636,7 +1636,7 @@ start_server {tags {"hashexpire"}} {
             }
 
             # Verify field values and TTLs are preserved
-            set memory_after [r MEMORY USAGE $newhash]
+            set memory_after [memory_usage $newhash]
             assert_equal "v1 v2" [r HMGET $newhash f1 f2]
             assert_morethan [r HTTL $newhash FIELDS 1 f1] 100
             assert_equal -1 [r HTTL $newhash FIELDS 1 f2]
@@ -1644,6 +1644,7 @@ start_server {tags {"hashexpire"}} {
             if {$cmd eq "RESTORE"} {
                 assert_equal 2 [get_keys r]
                 assert_equal 2 [get_keys_with_volatile_items r]
+                assert_equal [r OBJECT ENCODING myhash{t}] [r OBJECT ENCODING $newhash]
             } else {
                 assert_equal 1 [get_keys r]
                 assert_equal 1 [get_keys_with_volatile_items r]
@@ -1665,7 +1666,10 @@ start_server {tags {"hashexpire"}} {
         r copy myhash{t} nwhash{t}
 
         # Verify initial TTL state
-        assert_equal [r MEMORY USAGE myhash{t}] [r MEMORY USAGE nwhash{t}]
+        # memory_usage skips the strict check under libc malloc, where MEMORY
+        # USAGE of the copy can differ by an allocator chunk.
+        assert_equal [r OBJECT ENCODING myhash{t}] [r OBJECT ENCODING nwhash{t}]
+        assert_equal [memory_usage myhash{t}] [memory_usage nwhash{t}]
         assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
         assert_equal "v1 v3 v4" [r HMGET nwhash{t} f1 f3 f4]
         assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f1] [r HEXPIRETIME nwhash{t} FIELDS 1 f1] 

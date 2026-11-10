@@ -520,9 +520,14 @@ run_solo {defrag} {
         if {$type eq "standalone"} { ;# skip in cluster mode
         test "Active defrag big list: $type" {
             r flushdb sync
-            r config resetstat
             r config set hz 100
             r config set activedefrag no
+            # Reset stats only after disabling defrag: a defrag run left over
+            # from the previous test may otherwise add to
+            # total_active_defrag_time after the reset, making the
+            # "defrag not started" wait below pass before defrag actually
+            # started working.
+            r config resetstat
             r config set active-defrag-max-scan-fields 1000
             r config set active-defrag-threshold-lower 5
             r config set active-defrag-cycle-min 65

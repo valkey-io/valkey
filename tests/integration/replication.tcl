@@ -2236,6 +2236,67 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
     }
 }
 
+# Path hash keys must survive a forkless diskless full sync like every other
+# type: the forkless save inlines updates into the RDB stream, so the replica
+# must end up identical to the primary, not merely unit-level serialized.
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    # Plain keys alongside path hash keys, so the transferred RDB mixes types.
+    for {set i 0} {$i < 100} {incr i} { $primary set key:$i val:$i }
+
+    # A few paths per key, including hierarchical prefixes. One path holds
+    # 600 fields, past the default hash-max-listpack-entries (512), so its
+    # field map uses the hashtable encoding, plus a binary path/field/value
+    # group.
+    foreach path {a ab abc b} {
+        $primary phset tree1 $path fields 1 data path:$path
+    }
+    for {set i 0} {$i < 600} {incr i} {
+        $primary phset tree2 p fields 1 field:$i value:$i
+    }
+    set binfield [binary format H* 66ff]
+    set binvalue [binary format H* 0076ff]
+    $primary phset tree2 [binary format H* 00ff] fields 1 $binfield $binvalue
+    set digest [$primary debug digest]
+    set primary_dbsize [$primary dbsize]
+
+    start_server {overrides {save {}}} {
+        set replica [srv 0 client]
+
+        test "Forkless full sync transfers path hash keys intact" {
+            set loglines [count_log_lines -1]
+            $replica replicaof $primary_host $primary_port
+
+            # The forkless socket path (diskless transfer, inlined updates) ran.
+            wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+
+            wait_for_sync $replica
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal 102 [$replica dbsize]
+            assert_equal $primary_dbsize [$replica dbsize]
+            assert_equal $digest [$replica debug digest]
+
+            # Path hash structure and values read back identically.
+            foreach key {tree1 tree2} {
+                assert_equal [$primary phpathcount $key] [$replica phpathcount $key]
+            }
+            foreach {key path} {tree1 a tree1 ab tree1 abc tree1 b tree2 p} {
+                # The promoted field map iterates in hash order, which is
+                # seeded per process, so compare contents order-independently.
+                assert_equal [lsort [$primary phgetall $key $path]] [lsort [$replica phgetall $key $path]]
+            }
+            assert_equal [$primary phget tree2 p field:0 field:299 missing] \
+                [$replica phget tree2 p field:0 field:299 missing]
+            assert_equal [list $binvalue] \
+                [$replica phget tree2 [binary format H* 00ff] $binfield]
+        } {} {needs:debug}
+    }
+}
+
 start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     test "Functions-only full sync falls back to fork" {
         set loglines [count_log_lines 0]

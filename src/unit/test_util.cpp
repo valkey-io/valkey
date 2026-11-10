@@ -460,6 +460,7 @@ TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
         {"Pacific/Chatham", 12 * 3600 + 2700, 13 * 3600 + 2700},
         {"Pacific/Kiritimati", 14 * 3600, 14 * 3600},
         {"Etc/GMT+12", -12 * 3600, -12 * 3600},
+        {"Antarctica/Troll", 2 * 3600, 0}, /* two-hour DST: +00:00 in winter, +02:00 in summer */
     };
 
     const time_t instants[] = {jan15, jul15, dec31, jan1};

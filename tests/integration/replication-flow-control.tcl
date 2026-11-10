@@ -16,15 +16,14 @@ start_server {tags {"repl network external:skip cluster:skip"} overrides {save "
                 fail "replica offset didn't match in time"
             }
             assert_equal $value [$replica get flow-control:127]
-            set reads_after [getInfoProperty [$replica info stats] io_threaded_reads_processed]
-
+            set reads_before_pings [getInfoProperty [$replica info stats] io_threaded_reads_processed]
 
             # Verify that I/O thread reads are active for ordinary clients.
             for {set i 0} {$i < 20} {incr i} {
                 assert_equal PONG [$replica ping]
             }
-            set client_reads [getInfoProperty [$replica info stats] io_threaded_reads_processed]
-            assert_morethan $client_reads $reads_after
+            set reads_after_pings [getInfoProperty [$replica info stats] io_threaded_reads_processed]
+            assert_morethan $reads_after_pings $reads_before_pings
         }
     }
 }

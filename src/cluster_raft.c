@@ -1830,12 +1830,10 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
             rs->todo_retry_proposals = 1;
     }
 
-    /* Log consistency check: verify prev_log_index/term match. An unknown
-     * term (0) only matches at last_applied, where an old nodes.conf may lack
-     * snapshotTerm. */
+    /* Log consistency check: verify prev_log_index/term match. Entries have
+     * term >= 1, so 0 means we don't know the entry and never matches. */
     uint64_t local_prev_term = raftLogTermAt(prev_log_index);
-    if (prev_log_index > 0 && (local_prev_term != prev_log_term ||
-                               (local_prev_term == 0 && prev_log_index != rs->last_applied))) {
+    if (prev_log_index > 0 && (local_prev_term == 0 || local_prev_term != prev_log_term)) {
         clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
         return 1;
     }
@@ -1851,7 +1849,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         }
         uint64_t e_term = strtoull(eargv[0], NULL, 10);
         int e_type_int = raftEntryTypeByName(eargv[1]);
-        if (e_type_int < 0) {
+        if (e_term == 0 || e_type_int < 0) {
             sdsfreesplitres(eargv, eargc);
             break;
         }
@@ -3420,6 +3418,10 @@ static int clusterRaftParseLogLine(sds *argv, int argc) {
         return C_ERR;
     }
     uint64_t term = strtoull(argv[3], NULL, 10);
+    if (term == 0) {
+        serverLog(LL_WARNING, "Corrupt raft log line at index %llu: term 0.", (unsigned long long)index);
+        return C_ERR;
+    }
     int type = raftEntryTypeByName(argv[4]);
     if (type < 0) {
         serverLog(LL_WARNING, "Corrupt raft log line at index %llu: unknown type '%s'.",
@@ -3445,6 +3447,11 @@ static void clusterRaftPostLoad(void) {
      * the leader will update it via AE. For now, ensure it's consistent. */
     if (rs->commit_index < rs->last_applied)
         rs->commit_index = rs->last_applied;
+    /* The log consistency check relies on knowing the term at last_applied. */
+    if (rs->last_applied > 0 && rs->snapshot_term == 0) {
+        serverPanic("Corrupt cluster config: lastApplied %llu without snapshotTerm.",
+                    (unsigned long long)rs->last_applied);
+    }
     /* Schedule a full rewrite to produce a clean file (removes any
      * incomplete trailing line from a short write). */
     rs->todo_save_config = 1;

@@ -267,6 +267,23 @@ start_server {tags {"bitmap"}} {
         bitmap_twin bitpos KEY 1 9999
     }
 
+    test {Bitmap: BITPOS 0 finds a clear bit after a long run of ones} {
+        # Runs longer than the words read first, so that the search bisects.
+        foreach clear {1100 2111 3000 8003 40000 70001} {
+            bitmap_del plain roar
+            r set plain [string repeat "\xff" 10000]
+            r setbit plain $clear 0
+            r setbit plain 100000 1
+            r restore roar 0 [r dump plain]
+            r bitconvert roar bitmap
+            assert_equal $clear [bitmap_twin bitpos KEY 0]
+            bitmap_twin bitpos KEY 0 5 -1
+            bitmap_twin bitpos KEY 0 [expr {$clear / 8 - 100}] -1
+            bitmap_twin bitpos KEY 0 3 [expr {$clear + 1}] bit
+            bitmap_twin bitpos KEY 0 3 [expr {$clear - 1}] bit
+        }
+    }
+
     test {Bitmap: BITOP} {
         foreach op {and or xor not} {
             bitmap_del pa{t} pb{t} pc{t}
@@ -309,6 +326,30 @@ start_server {tags {"bitmap"}} {
         # Only strings give a string.
         r bitop or sdest{t} pa{t} pb{t}
         assert_equal string [r type sdest{t}]
+    }
+
+    test {Bitmap: BITOP OR and XOR of many sparse sources} {
+        # Enough sources that pairing them leaves an odd count at some level.
+        foreach n {3 5 6 7 11} {
+            foreach op {or xor} {
+                set pkeys {}
+                set rkeys {}
+                for {set j 0} {$j < $n} {incr j} {
+                    bitmap_del p$j{t}
+                    bitmap_new r$j{t}
+                    for {set i 0} {$i < 50} {incr i} {
+                        set bit [expr {int(rand() * 500000)}]
+                        r setbit p$j{t} $bit 1
+                        r setbit r$j{t} $bit 1
+                    }
+                    lappend pkeys p$j{t}
+                    lappend rkeys r$j{t}
+                }
+                assert_equal [r bitop $op pdest{t} {*}$pkeys] [r bitop $op rdest{t} {*}$rkeys]
+                assert_equal bitmap [r type rdest{t}]
+                assert_equal [r get pdest{t}] [bitmap_bytes rdest{t}]
+            }
+        }
     }
 
     test {Bitmap: BITOP with only empty sources deletes the destination} {
@@ -419,6 +460,10 @@ start_server {tags {"bitmap"}} {
         assert_error {*out of range for a bitmap*} {r setbit k [expr {1 << 32}] 1}
         assert_error {*out of range for a bitmap*} {r bitfield k set u8 [expr {(1 << 32) - 4}] 1}
         assert_equal bitmap [r type k]
+        # Reads past the last bit see zeros.
+        r setbit k [expr {(1 << 32) - 1}] 1
+        assert_equal 16 [r bitfield_ro k get u8 [expr {(1 << 32) - 4}]]
+        assert_equal {1 0} [r bitfield_ro k get u1 [expr {(1 << 32) - 1}] get i64 [expr {1 << 32}]]
         r del k
     }
 

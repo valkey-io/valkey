@@ -253,6 +253,14 @@ static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
 static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_LEN,
               "Incorrect length to read to identify type");
 
+/* Upper bound on the length of an inbound packet, checked from the header so
+ * a peer can't make us buffer a huge packet of a type that is never that big.
+ * A PING carries at most 65535 gossip sections (6.8MB) plus extensions that
+ * are small for any sane human nodename and availability zone. Unknown types
+ * are capped too. Pub/Sub and module messages are exempt: their payload comes
+ * from a client and can legitimately be much larger. */
+#define CLUSTERMSG_MAX_LEN (16 * 1024 * 1024)
+
 /* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
  * clusterNode structures. */
 dictType clusterNodesDictType = {
@@ -3008,7 +3016,9 @@ int verifyGossipSectionNodeIds(clusterMsgDataGossip *g, uint16_t count) {
 int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip *)hdr->data.ping.gossip;
-    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+    /* A node still in handshake has a random name and is not known yet, so it
+     * must not be trusted to introduce new nodes. */
+    clusterNode *sender = link->node && !nodeInHandshake(link->node) ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
 
     /* Abort if the gossip contains invalid node IDs to avoid adding incorrect information to
      * the nodes dictionary. An invalid ID indicates memory corruption on the sender side. */
@@ -3520,8 +3530,13 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * It is also possible that the sender is a primary in a different
      * shard and our primary just had its last slot migrated to the
      * sender. In this case we don't reconfigure ourselves as a replica
-     * of the sender. */
-    if (new_primary && cur_primary->numslots == 0) {
+     * of the sender.
+     *
+     * cur_primary is NULL for a replica whose primary is unknown, for
+     * example after the primary was deleted from the nodes table. Such a
+     * shard owns no slots. Unassigned slots match the NULL cur_primary in
+     * the loop above, which is how new_primary gets set in that case. */
+    if (new_primary && (!cur_primary || cur_primary->numslots == 0)) {
         if (server.cluster_allow_replica_migration || are_in_same_shard) {
             serverLog(LL_NOTICE,
                       "Configuration change detected. Reconfiguring myself "
@@ -3753,6 +3768,17 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     return totlen;
 }
 
+/* Values received from peers are persisted to nodes.conf, so ignore any that
+ * clusterLoadConfig() would reject. */
+static char *getLoadableStringExtension(char *value) {
+    return isValidAuxString(value, strlen(value)) ? value : NULL;
+}
+
+static char *getLoadableIpExtension(char *value, int af) {
+    struct in6_addr addr;
+    return inet_pton(af, value, &addr) == 1 ? value : NULL;
+}
+
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. Returns 1 if the link is still valid after
  * processing, or 0 if the link was freed due to invalid data. */
@@ -3774,19 +3800,19 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         uint16_t type = ntohs(ext->type);
         if (type == CLUSTERMSG_EXT_TYPE_HOSTNAME) {
             clusterMsgPingExtHostname *hostname_ext = (clusterMsgPingExtHostname *)&(ext->ext[0].hostname);
-            ext_hostname = hostname_ext->hostname;
+            ext_hostname = getLoadableStringExtension(hostname_ext->hostname);
         } else if (type == CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME) {
             clusterMsgPingExtHumanNodename *humannodename_ext =
                 (clusterMsgPingExtHumanNodename *)&(ext->ext[0].human_nodename);
-            ext_humannodename = humannodename_ext->human_nodename;
+            ext_humannodename = getLoadableStringExtension(humannodename_ext->human_nodename);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV4) {
             clusterMsgPingExtClientIpV4 *clientipv4_ext =
                 (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].announce_client_ipv4);
-            ext_clientipv4 = clientipv4_ext->announce_client_ipv4;
+            ext_clientipv4 = getLoadableIpExtension(clientipv4_ext->announce_client_ipv4, AF_INET);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV6) {
             clusterMsgPingExtClientIpV6 *clientipv6_ext =
                 (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
-            ext_clientipv6 = clientipv6_ext->announce_client_ipv6;
+            ext_clientipv6 = getLoadableIpExtension(clientipv6_ext->announce_client_ipv6, AF_INET6);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_PORT) {
             clusterMsgPingExtClientPort *clientport_ext =
                 (clusterMsgPingExtClientPort *)&(ext->ext[0].announce_client_port);
@@ -3816,7 +3842,7 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE) {
             clusterMsgPingExtAvailabilityZone *availability_zone_ext =
                 (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
-            ext_availability_zone = availability_zone_ext->availability_zone;
+            ext_availability_zone = getLoadableStringExtension(availability_zone_ext->availability_zone);
         } else if (type == CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY) {
             clusterMsgPingExtReplicaPriority *priority_ext = (clusterMsgPingExtReplicaPriority *)&(ext->ext[0].replica_priority);
             ext_replica_priority = ntohl(priority_ext->replica_priority);
@@ -4352,8 +4378,7 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* If this is a MEET packet from an unknown node, we still process
-                 * the gossip section here since we have to trust the sender because
-                 * of the message type. */
+                 * the gossip section here, but only to update nodes we already know. */
                 if (!clusterProcessGossipSection(msg, link)) return 0;
             } else if (sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
                 /* The MEET packet is from a known node, after the handshake timeout, so the sender
@@ -5027,6 +5052,13 @@ void clusterLinkConnectHandler(connection *conn) {
     serverLog(LL_DEBUG, "Connecting with Node %.40s at %s:%d", node->name, node->ip, node->cport);
 }
 
+static inline int isClusterMsgLengthTooLarge(uint16_t type, uint32_t totlen) {
+    type &= ~CLUSTERMSG_MODIFIER_MASK;
+    if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD || type == CLUSTERMSG_TYPE_MODULE)
+        return 0;
+    return totlen > CLUSTERMSG_MAX_LEN;
+}
+
 /* Performs sanity check on the message signature and length depending on the type. */
 static inline int isClusterMsgSignatureAndLengthValid(clusterMsgHeader *hdr) {
     if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
@@ -5034,6 +5066,7 @@ static inline int isClusterMsgSignatureAndLengthValid(clusterMsgHeader *hdr) {
     uint32_t totlen = ntohl(hdr->totlen);
     uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
     if (totlen < minlen) return 0;
+    if (isClusterMsgLengthTooLarge(type, totlen)) return 0;
     return 1;
 }
 
@@ -5077,7 +5110,7 @@ void clusterFindCompletePackets(char *rcvbuf,
         uint16_t type = ntohs(hdr->type);
         uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
 
-        if (totlen < minlen) {
+        if (totlen < minlen || isClusterMsgLengthTooLarge(type, totlen)) {
             *complete_bytes = offset; /* preserve any valid prefix already scanned */
             *result = CLUSTER_IO_BAD_LENGTH;
             return;
@@ -5102,6 +5135,7 @@ void clusterReadHandler(connection *conn) {
     clusterMsgHeader *hdr;
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
+    size_t totread = 0;
 
     /* A worker read job is still in flight or its completion hasn't been
      * consumed yet. Do not touch the framed packets or rcvbuf from the main
@@ -5115,7 +5149,10 @@ void clusterReadHandler(connection *conn) {
      * queue full), fall back to the synchronous path below. */
     if (trySendClusterReadToIOThreads(link) == C_OK) return;
 
-    while (1) { /* Read as long as there is data to read. */
+    /* Bounded like clusterWriteHandler(), so a peer that keeps the socket
+     * readable cannot hold the main thread. The rest is read on the next
+     * event. */
+    while (totread < NET_MAX_WRITES_PER_EVENT) {
         rcvbuflen = link->rcvbuf_len;
         if (rcvbuflen < RCVBUF_MIN_READ_LEN) {
             /* First, obtain the first 16 bytes to get the full message
@@ -5174,6 +5211,7 @@ void clusterReadHandler(connection *conn) {
             link->rcvbuf_len += nread;
             hdr = (clusterMsgHeader *)link->rcvbuf;
             rcvbuflen += nread;
+            totread += nread;
         }
 
         /* Total length obtained? Process this packet. */
@@ -8616,7 +8654,12 @@ void clusterCommandSetSlot(client *c) {
             }
         }
 
-        if (num_eligible_replicas != 0) {
+        if (num_eligible_replicas != 0 && c->flag.deny_blocking) {
+            /* The client cannot block (MULTI, scripts), so it cannot wait for
+             * the acks. Apply the change now and replicate it afterwards, the
+             * way WAIT returns immediately for such clients. */
+            forceCommandPropagation(c, PROPAGATE_REPL);
+        } else if (num_eligible_replicas != 0) {
             forceCommandPropagation(c, PROPAGATE_REPL);
             /* We are a primary and this is the first time we see this `SETSLOT`
              * command. Force-replicate the command to all of our replicas

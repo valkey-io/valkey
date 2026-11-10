@@ -34,6 +34,8 @@
 #include "bio.h"
 #include "script.h"
 #include "cluster_migrateslots.h"
+#include "forkless.h"
+#include "bgiteration.h"
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
@@ -173,7 +175,7 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
          * because allocating and deallocating this object is costly
          * (according to the profiler, not my fantasy. Remember:
          * premature optimization bla bla bla. */
-        int klen = sdslen(key);
+        size_t klen = sdslen(key);
         if (klen > EVPOOL_CACHED_SDS_SIZE) {
             pool[k].key = sdsdup(key);
         } else {
@@ -233,6 +235,10 @@ size_t freeMemoryGetNotCountedMemory(void) {
 
     if (clusterIsAnySlotExporting()) {
         overhead += clusterGetTotalSlotExportBufferMemory();
+    }
+
+    if (forklessIteratorOwnsIncomingReplication()) {
+        overhead += bgIteration_memoryInuseForReplication();
     }
 
     return overhead;

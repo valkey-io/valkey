@@ -477,10 +477,14 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
 
     size_t lp_bytes = 0;      /* Total bytes in the tail listpack. */
     unsigned char *lp = NULL; /* Tail listpack pointer. */
+    /* What the rax holds for the key this call writes, NULL if it holds nothing.
+     * Only used to skip a raxInsert storing a pointer the rax already has. */
+    unsigned char *rax_lp = NULL;
 
     if (!raxEOF(&ri)) {
         /* Get a reference to the tail node listpack. */
         lp = ri.data;
+        rax_lp = ri.data;
         lp_bytes = lpBytes(lp);
     }
     raxStop(&ri);
@@ -542,7 +546,8 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         if (new_node) {
             /* Shrink extra pre-allocated memory */
             lp = lpShrinkToFit(lp);
-            if (ri.data != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+            if (rax_lp != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+            rax_lp = NULL; /* the rest of this call writes rax_key, a new key */
             lp = NULL;
         }
     }
@@ -570,7 +575,6 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
             lp = lpAppend(lp, (unsigned char *)field, sdslen(field));
         }
         lp = lpAppendInteger(lp, 0); /* primary entry zero terminator. */
-        raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
         /* The first entry we insert, has obviously the same fields of the
          * primary entry. */
         flags |= STREAM_ITEM_FLAG_SAMEFIELDS;
@@ -651,7 +655,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     lp = lpAppendInteger(lp, lp_count);
 
     /* Insert back into the tree in order to update the listpack pointer. */
-    if (ri.data != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
+    if (rax_lp != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
     s->length++;
     s->entries_added++;
     s->last_id = id;
@@ -1464,7 +1468,14 @@ void streamReplyWithCGLag(client *c, stream *s, streamCG *cg) {
     } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
         /* No fragmentation ahead means that the group's logical reads counter
          * is valid for performing the lag calculation. */
-        lag = (long long)s->entries_added - cg->entries_read;
+        if (!s->length || streamCompareID(&cg->last_id, &s->first_id) < 0) {
+            /* The group is positioned before the first entry, so entries it
+             * hasn't read may have been trimmed (XTRIM doesn't update
+             * max_deleted_entry_id). Everything left in the stream is unread. */
+            lag = (long long)s->length;
+        } else {
+            lag = (long long)s->entries_added - cg->entries_read;
+        }
         valid = 1;
     } else {
         /* Attempt to retrieve the group's last ID logical read counter. */
@@ -2109,6 +2120,14 @@ void xaddCommand(client *c) {
      * database. */
     if (parsed_args.id_given && parsed_args.seq_given && parsed_args.id.ms == 0 && parsed_args.id.seq == 0) {
         addReplyError(c, "The ID specified in XADD must be greater than 0-0");
+        return;
+    }
+
+    /* Same for elements streamAppendItem would refuse as too large. */
+    size_t totelelen = 0;
+    for (int j = field_pos; j < c->argc; j++) totelelen += sdslen(objectGetVal(c->argv[j]));
+    if (totelelen > STREAM_LISTPACK_MAX_SIZE) {
+        addReplyError(c, "Elements are too large to be stored");
         return;
     }
 

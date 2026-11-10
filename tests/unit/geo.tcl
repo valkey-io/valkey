@@ -223,6 +223,22 @@ start_server {tags {"geo"}} {
         set err
     } {*valid*}
 
+    test {GEOADD out of range coordinates} {
+        r del range_check
+        # Valid longitudes are limited to [-180,+180]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -190 40.747533 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check 190 40.747533 "out of range"}
+        # Valid latitudes are limited to [-85.05112878,+85.05112878]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 -86 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 86 "out of range"}
+        # The failing pair is reported even when it is not the first one.
+        assert_error "*invalid longitude,latitude pair 181.000000,38.000000*" {
+            r geoadd range_check -73.9454966 40.747533 "in range" 181 38 "out of range"
+        }
+        # GEOADD is all-or-nothing
+        assert_equal 0 [r exists range_check]
+    }
+
     test {GEOADD multi add} {
         r geoadd nyc -73.9733487 40.7648057 "central park n/q/r" -73.9903085 40.7362513 "union square" -74.0131604 40.7126674 "wtc one" -73.7858139 40.6428986 "jfk" -73.9375699 40.7498929 "q4" -73.9564142 40.7480973 4545
     } {6}
@@ -459,6 +475,20 @@ start_server {tags {"geo"}} {
         assert {$m eq {}}
     }
 
+    test {GEODIST invalid unit} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*unsupported unit*" {r geodist points Palermo Catania yards}
+    }
+
+    test {GEODIST too many arguments} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*syntax error*" {r geodist points Palermo Catania km extra}
+    }
+
     test {GEORADIUS STORE option: syntax error} {
         r del points{t}
         r geoadd points{t} 13.361389 38.115556 "Palermo" \
@@ -622,7 +652,31 @@ start_server {tags {"geo"}} {
         assert_lessthan [expr {[s used_memory] - $before}] 262144
     } {} {external:skip}
 
+    test {GEORADIUS/GEOSEARCH out of range coordinates} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo"
+
+        assert_error "*invalid longitude,latitude pair*" {r georadius points 181 38 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r georadius_ro points 13 86 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 181 38 byradius 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 13 86 bybox 100 100 km}
+        # A bad vertex is reported wherever it appears in the polygon.
+        assert_error "*invalid longitude,latitude pair 181.000000,40.000000*" {
+            r geosearch points bypolygon 3 13 38 14 39 181 40
+        }
+    }
+
+    test {GEOSEARCHSTORE out of range coordinates} {
+        r del points{t} dest{t}
+        r geoadd points{t} 13.361389 38.115556 "Palermo"
+        assert_error "*invalid longitude,latitude pair*" {
+            r geosearchstore dest{t} points{t} fromlonlat 181 38 byradius 100 km
+        }
+        assert_equal 0 [r exists dest{t}]
+    }
+
     test {GEOSEARCH BYPOLYGON standard operations} {
+        r del points
         r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87156123068408 "St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
@@ -693,6 +747,14 @@ start_server {tags {"geo"}} {
         r geoadd points 151.2224105000496 -33.87544442350019 "Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
         r geoadd points 151.22953444719315 -33.874838625143106 "The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
         assert_equal {{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia}} [r GEOSEARCH points BYPOLYGON  5 151.2154285314146 -33.867438205607186 151.20024487595015 -33.88138572784347 151.2374118848648 -33.87601765283626 151.19695829592922 -33.87272872054441 151.2278336546125 -33.88345323146266]
+    }
+
+    test {GEOSEARCH BYPOLYGON whose vertex centroid is a pole} {
+        r del points
+        r geoadd points 0 45 a 10 -20 b 0 -60 c
+        set north [r geosearch points BYPOLYGON 4 -90 -30 90 -30 90 85 -90 85]
+        set south [r geosearch points BYPOLYGON 4 -90 -1 90 -1 90 -85 -90 -85]
+        assert_equal {{a b} {b c}} [list [lsort $north] [lsort $south]]
     }
 
     test {GEOSEARCH with exact zero distances} {

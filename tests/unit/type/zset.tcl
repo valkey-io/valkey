@@ -4184,7 +4184,7 @@ start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
     }
 
     test {ZSET btree leaf compaction pauses while a child process exists} {
-        r config set rdb-key-save-delay 1000000
+        test_config_set r rdb-key-save-delay 1000000
         r del z1{t} z2{t}
         set n 12000
 
@@ -4197,6 +4197,7 @@ start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
         assert_encoding btree z1{t}
         assert_encoding btree z2{t}
         r debug dict-resizing 0
+        test_defer {r debug dict-resizing 1}
         assert_no_match "*Hash table 1 stats*" [r debug htstats-key z1{t}]
         assert_no_match "*Hash table 1 stats*" [r debug htstats-key z2{t}]
         assert_equal [r memory usage z1{t}] [r memory usage z2{t}]
@@ -4235,8 +4236,5 @@ start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
         set m2b [r memory usage z2{t}]
         assert_lessthan [expr {abs($m1b - $m2b)}] 4096
         assert_lessthan $m1b [expr {$m1 - 16384}]
-
-        r debug dict-resizing 1
-        r config set rdb-key-save-delay 0
-    } {OK} {needs:debug needs:local-process}
+    } {} {needs:debug needs:local-process}
 }

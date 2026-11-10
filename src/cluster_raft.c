@@ -3452,6 +3452,11 @@ static void clusterRaftPostLoad(void) {
         serverPanic("Corrupt cluster config: lastApplied %llu without snapshotTerm.",
                     (unsigned long long)rs->last_applied);
     }
+    /* We can't have applied an entry from a later term than our current one. */
+    if (rs->current_term < rs->snapshot_term) {
+        serverPanic("Corrupt cluster config: currentTerm %llu is lower than snapshotTerm %llu.",
+                    (unsigned long long)rs->current_term, (unsigned long long)rs->snapshot_term);
+    }
     /* Schedule a full rewrite to produce a clean file (removes any
      * incomplete trailing line from a short write). */
     rs->todo_save_config = 1;

@@ -2265,7 +2265,19 @@ void logCurrentClient(client *cc, const char *title) {
 
 #if defined(HAVE_PROC_MAPS)
 
+#include <sys/uio.h>
+
 #define MEMTEST_MAX_REGIONS 128
+
+/* Returns 0 if reading the byte at addr would fault. Since glibc 2.42, thread
+ * stack guard pages may be installed with MADV_GUARD_INSTALL: /proc/self/maps
+ * shows them as part of the rw stack mapping, but touching them faults. */
+static int memtestIsReadable(size_t addr) {
+    char c;
+    struct iovec local = {&c, 1}, remote = {(void *)addr, 1};
+    if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == 1) return 1;
+    return errno != EFAULT; /* If the probe itself isn't available, test the page. */
+}
 
 /* A non destructive memory test executed during segfault. */
 int memtest_test_linux_anonymous_maps(void) {
@@ -2276,6 +2288,7 @@ int memtest_test_linux_anonymous_maps(void) {
     size_t start_vect[MEMTEST_MAX_REGIONS];
     size_t size_vect[MEMTEST_MAX_REGIONS];
     int regions = 0, j;
+    size_t page_size = sysconf(_SC_PAGESIZE);
 
     int fd = openDirectLogFiledes();
     if (fd == -1) return 0;
@@ -2302,6 +2315,9 @@ int memtest_test_linux_anonymous_maps(void) {
 
         start_addr = strtoul(start, NULL, 16);
         end_addr = strtoul(end, NULL, 16);
+        /* Skip guard pages at the start of the region (the low end of a thread stack). */
+        while (start_addr < end_addr && !memtestIsReadable(start_addr)) start_addr += page_size;
+        if (start_addr >= end_addr) continue;
         size = end_addr - start_addr;
 
         start_vect[regions] = start_addr;
@@ -2374,12 +2390,18 @@ static void parkThread(void) {
 }
 
 /* Parks the other server threads (main, IO and bio, see registerServerThread()).
- * Called once, by printCrashReport(). The result is saved in
+ * Called once, by doFastMemoryTest(). The result is saved in
  * server_threads_parked. */
 static void parkThreads(void) {
     pid_t tids[SERVER_THREADS_MAX];
     size_t len = 0;
     pid_t self = (pid_t)syscall(SYS_gettid);
+
+    /* A fork child is single threaded; the tids it inherited are the parent's. */
+    if (server.in_fork_child != CHILD_TYPE_NONE) {
+        server_threads_parked = 1;
+        return;
+    }
 
     for (int j = 0; j < SERVER_THREADS_MAX; j++) {
         pid_t tid = atomic_load_explicit(&server_thread_tids[j], memory_order_relaxed);
@@ -2393,9 +2415,10 @@ static void parkThreads(void) {
 
     parking_thread_tid = self;
     if (!ThreadsManager_runOnThreads(tids, len, parkThread)) return;
-    server_threads_parked = 1;
-    serverLogFromHandler(LL_WARNING, "Parked %lu of %lu other server threads",
-                         (unsigned long)atomic_load_explicit(&parked_threads_count, memory_order_relaxed),
+    /* runOnThreads() also returns after a timeout, so count the parked threads. */
+    size_t parked = atomic_load_explicit(&parked_threads_count, memory_order_relaxed);
+    server_threads_parked = parked == len;
+    serverLogFromHandler(LL_WARNING, "Parked %lu of %lu other server threads", (unsigned long)parked,
                          (unsigned long)len);
 }
 #endif /* __linux__ */
@@ -2405,8 +2428,8 @@ void doFastMemoryTest(void) {
     if (server.memcheck_enabled) {
         /* Test memory */
         serverLogRawFromHandler(LL_WARNING | LL_RAW, "\n------ FAST MEMORY TEST ------\n");
-        /* The test overwrites memory, so the other server threads must be
-         * stopped. printCrashReport() parked them, unless it failed. */
+        /* The test overwrites memory, so the other server threads must be stopped. */
+        parkThreads();
         if (!server_threads_parked) {
             serverLogRawFromHandler(LL_WARNING | LL_RAW, "Skipped, the other server threads couldn't be stopped.\n");
             return;
@@ -2600,12 +2623,6 @@ void removeSigSegvHandlers(void) {
 
 void printCrashReport(void) {
     server.crashed = 1;
-#ifdef __linux__
-    /* Stop the other server threads before collecting the report, so they
-     * don't change what it reads, and stop serving clients. The stack traces
-     * were already logged: parked threads can't report theirs. */
-    parkThreads();
-#endif
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 

@@ -95,7 +95,7 @@ tags {"valgrind:skip"} {
         }
     }
 
-    # The crash report parks the other server threads right after the stack traces
+    # The crash report parks the other server threads before the memory test, and only for it
     if {$system_name eq {linux}} {
         foreach memcheck {yes no} {
             set server_path [tmpdir server2c.log]
@@ -103,20 +103,21 @@ tags {"valgrind:skip"} {
                 test "Crash report parks the other server threads (crash-memcheck-enabled $memcheck)" {
                     catch {r debug segfault}
                     wait_for_log_messages 0 {"*BUG REPORT END*"} 0 300 100
-                    # The other server threads (the IO thread and the bio threads) are all parked, once.
-                    set line [lindex [wait_for_log_messages 0 {"*Parked * other server threads*"} 0 1 100] 0]
-                    assert {[regexp {Parked (\d+) of (\d+) other server threads} $line -> parked total]}
-                    assert_equal $total $parked
-                    assert_morethan_equal $total 2
-                    assert_equal 1 [count_log_message 0 "Parked .* other server threads"]
-                    assert_equal 0 [count_log_message 0 "waiting threads timed out"]
-                    # After the stack traces and before the rest of the report.
-                    set log [exec cat [srv 0 stdout]]
-                    set parked_at [string first "Parked " $log]
-                    assert {[string first "STACK TRACE DONE" $log] < $parked_at}
-                    assert {$parked_at < [string first "INFO OUTPUT" $log]}
-                    if {$memcheck} {
-                        assert_equal 1 [count_log_message 0 "Fast memory test PASSED"]
+                    if {!$memcheck} {
+                        assert_equal 0 [count_log_message 0 "Parked .* other server threads"]
+                    } else {
+                        # The other server threads (the IO thread and the bio threads) are all parked, once.
+                        set line [lindex [wait_for_log_messages 0 {"*Parked * other server threads*"} 0 1 100] 0]
+                        assert {[regexp {Parked (\d+) of (\d+) other server threads} $line -> parked total]}
+                        assert_equal $total $parked
+                        assert_morethan_equal $total 2
+                        assert_equal 1 [count_log_message 0 "Parked .* other server threads"]
+                        assert_equal 0 [count_log_message 0 "waiting threads timed out"]
+                        # After the rest of the report, right before the memory test runs.
+                        set log [exec cat [srv 0 stdout]]
+                        set parked_at [string first "Parked " $log]
+                        assert {[string first "FAST MEMORY TEST" $log] < $parked_at}
+                        assert {$parked_at < [string first "Fast memory test PASSED" $log]}
                     }
                 }
             }

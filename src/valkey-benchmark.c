@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 #include <time.h>
 #include <sys/time.h>
 #include <signal.h>
@@ -574,9 +575,9 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
 
 /* Generate range begin/end values for the current request. */
 static void getRangeValues(long long *beg, long long *end) {
-    int space = config.keyspacelen - config.count;
+    long long space = config.keyspacelen - config.count;
     if (space <= 0) space = 1;
-    *beg = random() % space;
+    *beg = (long long)(rand62() % (uint64_t)space);
     *end = *beg + config.count - 1;
 }
 
@@ -651,7 +652,7 @@ static void appendRangeCommand(sds *obuf) {
         for (int i = 1; i < PLACEHOLDER_COUNT; i++) {
             if (strstr(s, PLACEHOLDERS[i])) {
                 if (!shset[i]) {
-                    snprintf(shbuf[i], sizeof(shbuf[i]), "%llu",
+                    snprintf(shbuf[i], sizeof(shbuf[i]), "%012llu",
                              (unsigned long long)nextRandKey(&seq[i]));
                     shset[i] = 1;
                 }
@@ -664,7 +665,7 @@ static void appendRangeCommand(sds *obuf) {
         /* __rand_int__ (PLACEHOLDERS[0]): independent value per occurrence. */
         while (strstr(s, PLACEHOLDERS[0])) {
             char v[24];
-            snprintf(v, sizeof(v), "%llu", (unsigned long long)nextRandKey(&seq[0]));
+            snprintf(v, sizeof(v), "%012llu", (unsigned long long)nextRandKey(&seq[0]));
             s = sdsReplaceFirst(s, PLACEHOLDERS[0], v);
         }
 
@@ -675,8 +676,10 @@ static void appendRangeCommand(sds *obuf) {
 
     char *cmd;
     int len = valkeyFormatCommandArgv(&cmd, config.range_argc, av, avl);
-    *obuf = sdscatlen(*obuf, cmd, len);
-    free(cmd);
+    if (len >= 0) {
+        *obuf = sdscatlen(*obuf, cmd, len);
+        free(cmd);
+    }
     for (int a = 0; a < config.range_argc; a++) sdsfree(subst[a]);
 }
 
@@ -1157,6 +1160,11 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             sdssetlen(c->obuf, c->prefixlen);
             for (int p = 0; p < config.pipeline; p++) {
                 appendRangeCommand(&c->obuf);
+            }
+
+            /* Scan generated commands for {tag} in cluster mode */
+            if (config.cluster_mode && c->stagptr) {
+                scanClusterTags(c, c->obuf + c->prefixlen);
             }
         } else {
             /* Standard mode */
@@ -2015,8 +2023,15 @@ int parseOptions(int argc, char **argv) {
 
         } else if (!strcmp(argv[i], "--count")) {
             if (lastarg) goto invalid;
-            config.count = atoi(argv[++i]);
-            if (config.count < 1) config.count = 1;
+            const char *next = argv[++i];
+            char *endptr;
+            errno = 0;
+            long long val = strtoll(next, &endptr, 10);
+            if (endptr == next || *endptr != '\0' || errno == ERANGE || val < 1 || val > INT_MAX) {
+                fprintf(stderr, "Invalid value for --count: '%s' must be a positive integer\n", next);
+                exit(1);
+            }
+            config.count = (int)val;
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);

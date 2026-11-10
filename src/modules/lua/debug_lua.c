@@ -64,7 +64,7 @@ void ldbDisable(void) {
 }
 
 static char **split_text_by_lines(const char *text, size_t len, int *lines) {
-    ValkeyModule_Assert(text != NULL && len > 0);
+    ValkeyModule_Assert(text != NULL);
 
     int count = 1;
     for (size_t i = 0; i < len; i++) {

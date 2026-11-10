@@ -6,8 +6,7 @@ tags {external:skip cluster singledb} {
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters, like start_cluster
-    # does with --cluster-raft.
+    # Nodes join as learners. Make all three voters.
     raft_promote_start_cluster_voters 3
     test "Raft snapshot: follower catches up via snapshot after leader trims log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
@@ -133,8 +132,7 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters, like start_cluster
-    # does with --cluster-raft.
+    # Nodes join as learners. Make all three voters.
     raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins leader with compacted log (via restart)" {
         assert_equal "leader" [CI 0 cluster_raft_role]
@@ -183,8 +181,7 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters, like start_cluster
-    # does with --cluster-raft.
+    # Nodes join as learners. Make all three voters.
     raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins when leader has trimmed log" {
         assert_equal "leader" [CI 0 cluster_raft_role]

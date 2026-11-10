@@ -27,14 +27,20 @@ proc bitmap_twin {args} {
     return $rres
 }
 
-# Returns the bytes of the bitmap at 'key'.
+# Returns the bytes of the bitmap at 'key'. It works on a copy, made with
+# DUMP and RESTORE rather than COPY so that the key may be in any slot.
 proc bitmap_bytes {key} {
     r del bitmap_bytes_tmp
-    r copy $key bitmap_bytes_tmp
+    r restore bitmap_bytes_tmp 0 [r dump $key]
     r bitconvert bitmap_bytes_tmp string
     set bytes [r get bitmap_bytes_tmp]
     r del bitmap_bytes_tmp
     return $bytes
+}
+
+# Deletes each key with its own DEL, so that the keys may be in any slot.
+proc bitmap_del {args} {
+    foreach key $args { r del $key }
 }
 
 proc bitmap_assert_same_value {} {
@@ -53,7 +59,7 @@ proc roaring_array_payload {key values} {
 
 start_server {tags {"bitmap"}} {
     test {Bitmap: bit writes keep the type of their key} {
-        r del s b m
+        bitmap_del s b m
         r set s "foobar"
         bitmap_new b
         foreach k {s b m} {
@@ -115,7 +121,7 @@ start_server {tags {"bitmap"}} {
         r del list
         r rpush list a
         foreach cmd {{setbit list 0 1} {getbit list 0} {bitcount list} {bitpos list 1}
-                     {bitfield list get u8 0} {bitfield_ro list get u8 0} {bitop or k list}
+                     {bitfield list get u8 0} {bitfield_ro list get u8 0} {bitop or list list}
                      {bitconvert list bitmap} {r.export list}} {
             assert_error {*WRONGTYPE*} {r {*}$cmd}
         }
@@ -196,7 +202,7 @@ start_server {tags {"bitmap"}} {
         assert_match {pmessage * __keyevent@*__:set marker} [$rd read]
         $rd close
         r config set notify-keyspace-events $old
-        r del k marker
+        bitmap_del k marker
     }
 
     test {Bitmap: BITCONVERT keeps the time to live in both directions} {
@@ -230,7 +236,7 @@ start_server {tags {"bitmap"}} {
         # A run of ones covering more than a whole chunk of 65536 bits.
         r setrange plain 50000 [string repeat "\xff" 8750]
         r del roar
-        r copy plain roar
+        r restore roar 0 [r dump plain]
         r bitconvert roar bitmap
         bitmap_assert_same_value
         set len [r strlen plain]
@@ -254,9 +260,9 @@ start_server {tags {"bitmap"}} {
     }
 
     test {Bitmap: BITPOS 0 on a bitmap of all ones} {
-        r del plain roar
+        bitmap_del plain roar
         r set plain [string repeat "\xff" 10000]
-        r copy plain roar
+        r restore roar 0 [r dump plain]
         r bitconvert roar bitmap
         bitmap_twin bitpos KEY 0
         bitmap_twin bitpos KEY 0 0 -1
@@ -267,64 +273,64 @@ start_server {tags {"bitmap"}} {
 
     test {Bitmap: BITOP} {
         foreach op {and or xor not} {
-            r del pa pb pc
-            bitmap_new ra rb rc
+            bitmap_del pa{t} pb{t} pc{t}
+            bitmap_new ra{t} rb{t} rc{t}
             for {set i 0} {$i < 300} {incr i} {
-                foreach {p q} {pa ra pb rb pc rc} {
+                foreach {p q} {pa{t} ra{t} pb{t} rb{t} pc{t} rc{t}} {
                     set bit [expr {int(rand() * 100000)}]
                     r setbit $p $bit 1
                     r setbit $q $bit 1
                 }
             }
             if {$op eq {not}} {
-                set plen [r bitop $op pdest pa]
-                set rlen [r bitop $op rdest ra]
+                set plen [r bitop $op pdest{t} pa{t}]
+                set rlen [r bitop $op rdest{t} ra{t}]
             } else {
-                set plen [r bitop $op pdest pa pb pc nokey]
-                set rlen [r bitop $op rdest ra rb rc nokey]
+                set plen [r bitop $op pdest{t} pa{t} pb{t} pc{t} nokey{t}]
+                set rlen [r bitop $op rdest{t} ra{t} rb{t} rc{t} nokey{t}]
             }
             assert_equal $plen $rlen
-            assert_equal string [r type pdest]
-            assert_equal bitmap [r type rdest]
-            assert_equal [r get pdest] [bitmap_bytes rdest]
-            assert_equal [r bitcount pdest] [r bitcount rdest]
+            assert_equal string [r type pdest{t}]
+            assert_equal bitmap [r type rdest{t}]
+            assert_equal [r get pdest{t}] [bitmap_bytes rdest{t}]
+            assert_equal [r bitcount pdest{t}] [r bitcount rdest{t}]
             # The destination as a source, for strings and bitmaps.
             if {$op eq {not}} {
-                r bitop $op pa pa
-                r bitop $op ra ra
+                r bitop $op pa{t} pa{t}
+                r bitop $op ra{t} ra{t}
             } else {
-                r bitop $op pa pa pb
-                r bitop $op ra ra rb
+                r bitop $op pa{t} pa{t} pb{t}
+                r bitop $op ra{t} ra{t} rb{t}
             }
-            assert_equal [r get pa] [bitmap_bytes ra]
+            assert_equal [r get pa{t}] [bitmap_bytes ra{t}]
         }
         # A bitmap among string sources gives a bitmap, which GET rejects.
-        r bitop or mixed pa rb pc
-        assert_equal bitmap [r type mixed]
-        assert_error {*WRONGTYPE*} {r get mixed}
-        r bitop or pdest pa pb pc
-        assert_equal [r get pdest] [bitmap_bytes mixed]
+        r bitop or mixed{t} pa{t} rb{t} pc{t}
+        assert_equal bitmap [r type mixed{t}]
+        assert_error {*WRONGTYPE*} {r get mixed{t}}
+        r bitop or pdest{t} pa{t} pb{t} pc{t}
+        assert_equal [r get pdest{t}] [bitmap_bytes mixed{t}]
         # Only strings give a string.
-        r bitop or sdest pa pb
-        assert_equal string [r type sdest]
+        r bitop or sdest{t} pa{t} pb{t}
+        assert_equal string [r type sdest{t}]
     }
 
     test {Bitmap: BITOP with only empty sources deletes the destination} {
-        bitmap_new empty
-        r set dest x
-        assert_equal 0 [r bitop or dest empty nokey]
-        assert_equal 0 [r exists dest]
-        r set dest x
-        assert_equal 0 [r bitop not dest empty]
-        assert_equal 0 [r exists dest]
-        r set dest x
-        assert_equal 0 [r bitop and dest nokey1 nokey2]
-        assert_equal 0 [r exists dest]
+        bitmap_new empty{t}
+        r set dest{t} x
+        assert_equal 0 [r bitop or dest{t} empty{t} nokey{t}]
+        assert_equal 0 [r exists dest{t}]
+        r set dest{t} x
+        assert_equal 0 [r bitop not dest{t} empty{t}]
+        assert_equal 0 [r exists dest{t}]
+        r set dest{t} x
+        assert_equal 0 [r bitop and dest{t} nokey1{t} nokey2{t}]
+        assert_equal 0 [r exists dest{t}]
         # A string destination becomes a bitmap, and loses its TTL.
-        r set dest x ex 1000
-        r setbit empty 3 1
-        assert_equal 1 [r bitop or dest empty]
-        assert_equal {bitmap -1} [list [r type dest] [r ttl dest]]
+        r set dest{t} x ex 1000
+        r setbit empty{t} 3 1
+        assert_equal 1 [r bitop or dest{t} empty{t}]
+        assert_equal {bitmap -1} [list [r type dest{t}] [r ttl dest{t}]]
     }
 
     test {Bitmap: BITFIELD} {
@@ -356,14 +362,14 @@ start_server {tags {"bitmap"}} {
     }
 
     test {Bitmap: COPY makes an independent copy} {
-        r del k2
-        bitmap_new k
-        r setbit k 5 1
-        r copy k k2
-        assert_equal bitmap [r type k2]
-        r setbit k2 6 1
-        assert_equal 0 [r getbit k 6]
-        assert_equal 1 [r getbit k2 6]
+        r del k2{t}
+        bitmap_new k{t}
+        r setbit k{t} 5 1
+        r copy k{t} k2{t}
+        assert_equal bitmap [r type k2{t}]
+        r setbit k2{t} 6 1
+        assert_equal 0 [r getbit k{t} 6]
+        assert_equal 1 [r getbit k2{t} 6]
     }
 
     test {Bitmap: DUMP and RESTORE} {
@@ -467,7 +473,7 @@ start_server {tags {"bitmap"}} {
 
     test {Bitmap: R.EXPORT and R.IMPORT round trip} {
         foreach type {string bitmap} {
-            r del k copy
+            bitmap_del k copy
             if {$type eq {bitmap}} { bitmap_new k }
             for {set i 0} {$i < 2000} {incr i} {
                 r setbit k [expr {int(rand() * 3000000)}] 1
@@ -508,22 +514,22 @@ start_server {tags {"bitmap"}} {
     }
 
     test {Bitmap: a script that disables replication propagates nothing} {
-        r del sm sf
-        bitmap_new sb
+        r del sm{t} sf{t}
+        bitmap_new sb{t}
         set repl [attach_to_replication_stream]
         r eval {
             server.set_repl(server.REPL_NONE)
             server.call('setbit', KEYS[1], 5, 1)
             server.call('setbit', KEYS[2], 5, 1)
             server.call('bitfield', KEYS[3], 'overflow', 'fail', 'incrby', 'u8', 800, 300)
-        } 3 sb sm sf
+        } 3 sb{t} sm{t} sf{t}
         r set marker 1
         assert_replication_stream $repl {
             {select *}
             {set marker 1}
         }
         close_replication_stream $repl
-        assert_equal {bitmap string string} [list [r type sb] [r type sm] [r type sf]]
+        assert_equal {bitmap string string} [list [r type sb{t}] [r type sm{t}] [r type sf{t}]]
     } {} {needs:repl}
 
     test {Bitmap: RESTORE rejects an invalid bitmap} {
@@ -549,18 +555,18 @@ start_server {tags {"bitmap large-memory"}} {
     test {Bitmap: results past 2^32 - 1 bits are strings} {
         set old [lindex [r config get proto-max-bulk-len] 1]
         r config set proto-max-bulk-len 1073741824
-        r del k big
-        r setbit k [expr {1 << 32}] 0
-        assert_equal string [r type k]
+        r del k{t} big{t}
+        r setbit k{t} [expr {1 << 32}] 0
+        assert_equal string [r type k{t}]
         # A BITOP with a bitmap source, but too long for a bitmap.
-        r setbit big [expr {1 << 32}] 1
-        bitmap_new b
-        r setbit b 3 1
-        assert_equal [expr {(1 << 29) + 1}] [r bitop or k big b]
-        assert_equal string [r type k]
-        assert_equal 2 [r bitcount k]
-        assert_error {*too long for a bitmap*} {r bitconvert k bitmap}
-        r del k big b
+        r setbit big{t} [expr {1 << 32}] 1
+        bitmap_new b{t}
+        r setbit b{t} 3 1
+        assert_equal [expr {(1 << 29) + 1}] [r bitop or k{t} big{t} b{t}]
+        assert_equal string [r type k{t}]
+        assert_equal 2 [r bitcount k{t}]
+        assert_error {*too long for a bitmap*} {r bitconvert k{t} bitmap}
+        r del k{t} big{t} b{t}
         r config set proto-max-bulk-len $old
     }
 }

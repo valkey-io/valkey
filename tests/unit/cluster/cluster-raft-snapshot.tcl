@@ -83,6 +83,48 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         assert_equal 0 [lindex $myself_line 8]
         resume_process [srv 0 pid]
     }
+
+    test "Raft snapshot: follower catches up after losing a snapshot" {
+        # Pick the leader and a follower.
+        wait_for_condition 100 100 {
+            [lsearch [list [CI 0 cluster_raft_role] [CI 1 cluster_raft_role] [CI 2 cluster_raft_role]] leader] >= 0
+        } else {
+            fail "no leader"
+        }
+        set l [lsearch [list [CI 0 cluster_raft_role] [CI 1 cluster_raft_role] [CI 2 cluster_raft_role]] leader]
+        set f [expr {($l + 1) % 3}]
+        set f_id [R $f cluster myid]
+        set installed_before [count_log_message -$f "Installed snapshot"]
+
+        # The leader sends a snapshot to the paused follower, which only gets
+        # it into its socket buffer.
+        pause_process [srv -$f pid]
+        set sent_before [count_log_message -$l "Sent INSTALL_SNAPSHOT to $f_id"]
+        for {set j 0} {$j < 140} {incr j} {
+            R $l config set cluster-announce-hostname "host-d-$j.com"
+        }
+        wait_for_condition 100 100 {
+            [count_log_message -$l "Sent INSTALL_SNAPSHOT to $f_id"] > $sent_before
+        } else {
+            fail "leader did not send a snapshot (log entries=[CI $l cluster_raft_log_entries])"
+        }
+
+        # It isn't resent on every heartbeat, only after node-timeout/2.
+        set sent [count_log_message -$l "Sent INSTALL_SNAPSHOT to $f_id"]
+        after 1000
+        assert_range [count_log_message -$l "Sent INSTALL_SNAPSHOT to $f_id"] $sent [expr {$sent + 1}]
+
+        # Lose the snapshot by killing the follower before it reads it.
+        exec kill -9 [srv -$f pid]
+        restart_server -$f true false
+        wait_for_condition 100 200 {
+            [CI $f cluster_raft_last_applied] == [CI $l cluster_raft_last_applied]
+        } else {
+            fail "follower did not catch up (follower=[CI $f cluster_raft_last_applied] leader=[CI $l cluster_raft_last_applied])"
+        }
+        assert_equal [expr {$installed_before + 1}] [count_log_message -$f "Installed snapshot"]
+        assert_morethan [count_log_message -$l "Sent INSTALL_SNAPSHOT to $f_id"] $sent
+    }
 }
 
 start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {

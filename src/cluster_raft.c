@@ -2140,6 +2140,11 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->todo_connect_nodes = 1;
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
+    /* If our primary is failed, schedule a failover, as applying its
+     * NODE_FAIL would have done. */
+    if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
+        rs->todo_schedule_failover = 1;
+    }
     return 1;
 }
 

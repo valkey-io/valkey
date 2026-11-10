@@ -86,6 +86,51 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
     }
 }
 
+start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
+
+    # Nodes join as learners. Make the primaries voters. The test takes R0
+    # and its replica R4 down, which leaves a majority whether or not R4 is
+    # a voter.
+    raft_promote_start_cluster_voters 4
+    test "Raft snapshot: replica fails over after learning from a snapshot that its primary failed" {
+        # R4 is down while its primary R0 fails, so it skips the NODE_FAIL
+        # entry and learns about the failure from a snapshot.
+        set r0_id [R 0 cluster myid]
+        assert_equal $r0_id [lindex [lsearch -inline [split [R 4 cluster nodes] "\n"] "*myself*"] 3]
+        catch {R 4 shutdown}
+
+        pause_process [srv 0 pid]
+        wait_for_condition 100 100 {
+            [string match "*fail*" [lindex [raft_cluster_nodes_line [srv -1 client] $r0_id] 2]]
+        } else {
+            fail "R0 was not marked as failed"
+        }
+
+        # Generate entries until R4 is behind the trim point of every voter.
+        set applied [CI 1 cluster_raft_last_applied]
+        for {set j 0} {$j < 140} {incr j} {
+            R 1 config set cluster-announce-hostname "host-c-$j.com"
+        }
+        wait_for_condition 100 100 {
+            [CI 1 cluster_raft_last_applied] >= $applied + 140 &&
+            [CI 1 cluster_raft_log_entries] < 128 &&
+            [CI 2 cluster_raft_log_entries] < 128 &&
+            [CI 3 cluster_raft_log_entries] < 128
+        } else {
+            fail "log was not trimmed (entries=[CI 1 cluster_raft_log_entries])"
+        }
+
+        restart_server -4 true false
+        wait_for_condition 100 200 {
+            [s -4 role] eq "master"
+        } else {
+            fail "R4 did not fail over (role=[s -4 role])"
+        }
+        assert_equal 1 [count_log_message -4 "Installed snapshot"]
+        resume_process [srv 0 pid]
+    }
+}
+
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
     # Nodes join as learners. Make all three voters, like start_cluster

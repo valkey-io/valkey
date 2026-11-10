@@ -2594,6 +2594,9 @@ static int waitChild(pid_t pid, long long timeout) {
     return 0;
 }
 
+/* Set in the child forked by printCrashReport(). */
+static volatile sig_atomic_t in_crash_report_child = 0;
+
 void printCrashReport(void) {
     server.crashed = 1;
     /* The parts below allocate, take locks and call module code, so they may
@@ -2602,6 +2605,7 @@ void printCrashReport(void) {
      * them. */
     pid_t pid = forkFromHandler();
     if (pid == 0) {
+        in_crash_report_child = 1;
         /* Log INFO and CLIENT LIST */
         logServerInfo();
 
@@ -2629,6 +2633,10 @@ void printCrashReport(void) {
 
 void bugReportEnd(int killViaSignal, int sig) {
     struct sigaction act;
+
+    /* A crash or assert in the crash report child ends only the child. The
+     * parent goes on with the report and logs its end. */
+    if (in_crash_report_child) _exit(1);
 
     serverLogFromHandler(LL_WARNING | LL_RAW,
                          "\n=== %s BUG REPORT END. Make sure to include from START to END. ===\n\n"

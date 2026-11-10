@@ -479,14 +479,10 @@ TEST_F(SdsTest, TestSdssplitargs) {
      * quotes and after a backslash in double quotes. */
     sargv = sdssplitargs("a\377b \"\377\" '\377' \"\\\377\"", &len);
     ASSERT_EQ(4, len);
-    ASSERT_EQ(3u, sdslen(sargv[0]));
-    ASSERT_EQ(0, memcmp("a\377b", sargv[0], 3));
-    ASSERT_EQ(1u, sdslen(sargv[1]));
-    ASSERT_EQ('\377', sargv[1][0]);
-    ASSERT_EQ(1u, sdslen(sargv[2]));
-    ASSERT_EQ('\377', sargv[2][0]);
-    ASSERT_EQ(1u, sdslen(sargv[3]));
-    ASSERT_EQ('\377', sargv[3][0]);
+    ASSERT_TRUE(sdslen(sargv[0]) == 3 && memcmp(sargv[0], "a\377b", 3) == 0);
+    ASSERT_TRUE(sdslen(sargv[1]) == 1 && sargv[1][0] == '\377');
+    ASSERT_TRUE(sdslen(sargv[2]) == 1 && sargv[2][0] == '\377');
+    ASSERT_TRUE(sdslen(sargv[3]) == 1 && sargv[3][0] == '\377');
     sdsfreesplitres(sargv, len);
 }
 

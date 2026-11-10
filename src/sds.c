@@ -1032,11 +1032,11 @@ int hex_digit_to_int(char c) {
     }
 }
 
-static inline bool isPtrExceedingEnd(const char *ptr, size_t len, const char *end) {
+static inline bool isPtrExceedingEnd(const void *ptr, size_t len, const void *end) {
     if (end == NULL) {
         return false;
     }
-    return (ptr + len) >= end;
+    return ((const char *)ptr + len) >= (const char *)end;
 }
 
 /* Helper function for sdssplitargs that parses a single argument. It
@@ -1046,7 +1046,7 @@ static inline bool isPtrExceedingEnd(const char *ptr, size_t len, const char *en
  * characters that were parsed. If the argument can't be parsed, it
  * returns 0. */
 static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char *dst) {
-    const char *p = arg;
+    const unsigned char *p = (const unsigned char *)arg;
     int inq = 0;  /* set to 1 if we are in "quotes" */
     int insq = 0; /* set to 1 if we are in 'single quotes' */
     int done = 0;
@@ -1073,14 +1073,14 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
                 case 't': new_char = '\t'; break;
                 case 'b': new_char = '\b'; break;
                 case 'a': new_char = '\a'; break;
-                default: new_char = (unsigned char)*(p + 1); break;
+                default: new_char = (*(p + 1)); break;
                 }
                 p += 2;
             } else if (*p == '"') {
                 inq = 0;
                 p++;
             } else {
-                new_char = (unsigned char)*p;
+                new_char = *p;
                 p++;
             }
         } else if (insq) {
@@ -1094,7 +1094,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
                 insq = 0;
                 p++;
             } else {
-                new_char = (unsigned char)*p;
+                new_char = *p;
                 p++;
             }
         } else {
@@ -1106,7 +1106,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             case '\0': done = 1; break;
             case '"': inq = 1; break;
             case '\'': insq = 1; break;
-            default: new_char = (unsigned char)*p; break;
+            default: new_char = *p; break;
             }
             if (*p != '\0') {
                 p++;
@@ -1128,7 +1128,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             }
         }
     }
-    return p - arg;
+    return p - (const unsigned char *)arg;
 }
 
 /* Split a line into arguments, where every argument can be in the

@@ -2041,17 +2041,20 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
 
     /* clusterLoadNodeLine() only adds flags and replica links to a node that
      * already exists. Reset them first so that the snapshot fully defines the
-     * new state. MIGRATE_TO isn't part of the node lines, so keep it. A joiner
-     * keeps MEET until it finds itself in the snapshot. */
+     * new state. MIGRATE_TO isn't part of the node lines, but loading them
+     * sets it again, as when loading nodes.conf. A joiner keeps MEET until it
+     * finds itself in the snapshot. */
     {
         dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
-            int keep = CLUSTER_NODE_MYSELF | CLUSTER_NODE_MIGRATE_TO;
+            int keep = CLUSTER_NODE_MYSELF;
             if (node == myself && rs->role == RAFT_ROLE_JOINER) keep |= CLUSTER_NODE_MEET;
             node->flags &= keep;
             node->replicaof = NULL;
+            zfree(node->replicas);
+            node->replicas = NULL;
             node->num_replicas = 0;
         }
         dictReleaseIterator(di);

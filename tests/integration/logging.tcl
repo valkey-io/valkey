@@ -95,9 +95,12 @@ tags {"valgrind:skip"} {
         }
     }
 
-    # The crash report parks the other server threads before the memory test, and only for it
+    # The crash report parks the other server threads before the memory test, and only for it.
+    # The memory test reads AddressSanitizer's shadow memory, which ASAN rejects, so skip it there.
+    set asan_build [expr {[catch {exec grep -q -a "__asan_init" $::VALKEY_SERVER_BIN}] == 0}]
     if {$system_name eq {linux}} {
         foreach memcheck {yes no} {
+            if {$memcheck && $asan_build} continue
             set server_path [tmpdir server2c.log]
             start_server [list overrides [list dir $server_path crash-memcheck-enabled $memcheck io-threads 2]] {
                 test "Crash report parks the other server threads (crash-memcheck-enabled $memcheck)" {

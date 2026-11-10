@@ -2270,8 +2270,10 @@ void logCurrentClient(client *cc, const char *title) {
 #define MEMTEST_MAX_REGIONS 128
 
 /* Returns 0 if reading the byte at addr would fault. Since glibc 2.42, thread
- * stack guard pages may be installed with MADV_GUARD_INSTALL: /proc/self/maps
- * shows them as part of the rw stack mapping, but touching them faults. */
+ * stack guard pages may be installed with MADV_GUARD_INSTALL. They are not
+ * separate mappings, so /proc/self/maps shows them inside an rw region (possibly
+ * in its middle, when stacks mapped next to each other are merged), but touching
+ * them faults. */
 static int memtestIsReadable(size_t addr) {
     char c;
     struct iovec local = {&c, 1}, remote = {(void *)addr, 1};
@@ -2298,7 +2300,7 @@ int memtest_test_linux_anonymous_maps(void) {
         closeDirectLogFiledes(fd);
         return 0;
     }
-    while (fgets(line, sizeof(line), fp) != NULL) {
+    while (regions < MEMTEST_MAX_REGIONS && fgets(line, sizeof(line), fp) != NULL) {
         char *start, *end, *p = line;
 
         start = p;
@@ -2315,18 +2317,24 @@ int memtest_test_linux_anonymous_maps(void) {
 
         start_addr = strtoul(start, NULL, 16);
         end_addr = strtoul(end, NULL, 16);
-        /* Skip guard pages at the start of the region (the low end of a thread stack). */
-        while (start_addr < end_addr && !memtestIsReadable(start_addr)) start_addr += page_size;
-        if (start_addr >= end_addr) continue;
-        size = end_addr - start_addr;
 
-        start_vect[regions] = start_addr;
-        size_vect[regions] = size;
-        snprintf(logbuf, sizeof(logbuf), "*** Preparing to test memory region %lx (%lu bytes)\n",
-                 (unsigned long)start_vect[regions], (unsigned long)size_vect[regions]);
-        if (write(fd, logbuf, strlen(logbuf)) == -1) { /* Nothing to do. */
+        /* Test only the readable runs of pages, skipping guard pages. */
+        size_t addr = start_addr;
+        while (addr < end_addr && regions < MEMTEST_MAX_REGIONS) {
+            while (addr < end_addr && !memtestIsReadable(addr)) addr += page_size;
+            size_t run = addr;
+            while (addr < end_addr && memtestIsReadable(addr)) addr += page_size;
+            if (addr == run) continue;
+            size = addr - run;
+
+            start_vect[regions] = run;
+            size_vect[regions] = size;
+            snprintf(logbuf, sizeof(logbuf), "*** Preparing to test memory region %lx (%lu bytes)\n",
+                     (unsigned long)start_vect[regions], (unsigned long)size_vect[regions]);
+            if (write(fd, logbuf, strlen(logbuf)) == -1) { /* Nothing to do. */
+            }
+            regions++;
         }
-        regions++;
     }
 
     int errors = 0;
@@ -2382,10 +2390,12 @@ static _Atomic size_t parked_threads_count = 0;
 /* THREADS_SIGNAL callback that parks the thread it runs on forever. */
 static void parkThread(void) {
     if (syscall(SYS_gettid) == parking_thread_tid) return;
-    atomic_fetch_add_explicit(&parked_threads_count, 1, memory_order_relaxed);
-    ThreadsManager_markDone();
     sigset_t mask;
     sigfillset(&mask);
+    atomic_fetch_add_explicit(&parked_threads_count, 1, memory_order_relaxed);
+    /* The thread can still be preempted before it enters sigsuspend(); accepted,
+     * the worst case is a wrong fast memory test result. */
+    ThreadsManager_markDone();
     for (;;) sigsuspend(&mask);
 }
 

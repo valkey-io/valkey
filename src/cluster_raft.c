@@ -2026,12 +2026,13 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         return 1;
     }
 
-    /* Clear slots and shards — snapshot will re-assign them. Remember the
-     * old owners to update the local slot state afterwards. */
+    /* Clear slots — the snapshot will re-assign them. Remember the old owners
+     * to update the local slot state afterwards. Shard membership is kept:
+     * loading a node line moves a node whose shard id changed, and removed
+     * nodes leave their shard. */
     clusterNode **old_owners = zmalloc(sizeof(server.cluster->slots));
     memcpy(old_owners, server.cluster->slots, sizeof(server.cluster->slots));
     for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
-    dictEmpty(server.cluster->shards, NULL);
 
     /* Clear raft log. */
     for (uint64_t i = 0; i < rs->log_count; i++) raftLogFree(rs->log[i]);

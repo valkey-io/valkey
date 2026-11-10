@@ -4,6 +4,20 @@ source tests/support/cluster_raft.tcl
 
 tags {external:skip cluster singledb} {
 
+# The node IDs in each shard of CLUSTER SHARDS, sorted, for comparing the
+# shard membership seen by different nodes.
+proc shard_members {id} {
+    set shards {}
+    foreach shard [R $id cluster shards] {
+        set ids {}
+        foreach node [dict get $shard nodes] {
+            lappend ids [dict get $node id]
+        }
+        lappend shards [lsort $ids]
+    }
+    return [lsort $shards]
+}
+
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
     # Nodes join as learners. Make all three voters.
@@ -39,6 +53,8 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
         # Verify the follower caught up to the leader's applied index.
         assert {[CI 1 cluster_raft_last_applied] >= $leader_applied}
+        assert_morethan [count_log_message -1 "Installed snapshot"] 0
+        assert_equal [shard_members 0] [shard_members 1]
     }
 
     test "Raft snapshot: new leader catches up a follower behind its trim point" {
@@ -168,6 +184,7 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
             fail "R4 did not fail over (role=[s -4 role])"
         }
         assert_equal 1 [count_log_message -4 "Installed snapshot"]
+        assert_equal [shard_members 1] [shard_members 4]
         resume_process [srv 0 pid]
     }
 }

@@ -111,8 +111,13 @@ int main(void) {
     struct tm local, utc, tm;
     localtime_r(&t, &local);
     gmtime_r(&t, &utc);
-    long utc_offset = (local.tm_hour - utc.tm_hour) * 3600L + (local.tm_min - utc.tm_min) * 60L;
-    if (local.tm_yday != utc.tm_yday) utc_offset += (local.tm_yday - utc.tm_yday > 0) ? 86400L : -86400L;
+    long utc_offset = (local.tm_hour - utc.tm_hour) * 3600L + (local.tm_min - utc.tm_min) * 60L + (local.tm_sec - utc.tm_sec);
+    /* Same clamp as utcOffsetFromLocaltime(): a day-of-year difference of more
+     * than one day can only be the year wrap. */
+    int day_diff = local.tm_yday - utc.tm_yday;
+    if (day_diff > 1) day_diff = -1;
+    if (day_diff < -1) day_diff = 1;
+    utc_offset += day_diff * 86400L;
 
     char buf[1024];
     nolocks_localtime(&tm, t, utc_offset);

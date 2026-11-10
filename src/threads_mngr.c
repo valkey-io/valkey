@@ -107,6 +107,10 @@ __attribute__((noinline)) int ThreadsManager_runOnThreads(pid_t *tids, size_t ti
     return 1;
 }
 
+void ThreadsManager_markDone(void) {
+    atomic_fetch_add_explicit(&g_num_threads_done, 1, memory_order_relaxed);
+}
+
 /*============================ Internal functions implementations ========================== */
 
 
@@ -174,6 +178,10 @@ int ThreadsManager_runOnThreads(pid_t *tids, size_t tids_len, run_on_thread_cb c
     UNUSED(tids_len);
     UNUSED(callback);
     return 1;
+}
+
+void ThreadsManager_markDone(void) {
+    /* DO NOTHING */
 }
 
 #endif /* __linux__ */

@@ -322,6 +322,7 @@ static void flushPendingIOResponses(int blocking) {
 /* Define a cleanup function that will clean all thread resources */
 void cleanupThreadResources(void *dummy) {
     UNUSED(dummy);
+    unregisterServerThread();
 
     /* Blocking flush: ensure all pending jobs are sent before thread dies */
     flushPendingIOResponses(1);
@@ -380,6 +381,7 @@ static void *IOThreadMain(void *myid) {
 
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
+    registerServerThread();
     serverSetCpuAffinity(server.server_cpulist);
     thread_id = (int)id;
     initSharedQueryBuf();

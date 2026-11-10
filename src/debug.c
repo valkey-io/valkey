@@ -78,6 +78,15 @@ typedef ucontext_t sigcontext_t;
 #include <mach/mach.h>
 #endif
 
+#if defined(__linux__)
+#include <sys/syscall.h>
+
+/* Kernel tids of the main, IO and bio threads, see registerServerThread().
+ * 0 marks a free slot. */
+#define SERVER_THREADS_MAX (1 + IO_THREADS_MAX_NUM + 16)
+static _Atomic pid_t server_thread_tids[SERVER_THREADS_MAX];
+#endif
+
 /* Globals */
 static int bug_report_start = 0; /* True if bug report header was already logged. */
 static pthread_mutex_t bug_report_start_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -2324,38 +2333,89 @@ int memtest_test_linux_anonymous_maps(void) {
 }
 #endif /* HAVE_PROC_MAPS */
 
-static void killMainThread(void) {
-    int err;
-    if (pthread_self() != server.main_thread_id && pthread_cancel(server.main_thread_id) == 0) {
-        if ((err = pthread_join(server.main_thread_id, NULL)) != 0) {
-            serverLog(LL_WARNING, "main thread cannot be joined: %s", strerror(err));
-        } else {
-            serverLog(LL_WARNING, "main thread terminated");
-        }
+/* Records the calling thread as one of the server's own threads (main, IO or
+ * bio), so the crash handler parks it before any other thread. */
+void registerServerThread(void) {
+#ifdef __linux__
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    for (int j = 0; j < SERVER_THREADS_MAX; j++) {
+        pid_t expected = 0;
+        if (atomic_compare_exchange_strong(&server_thread_tids[j], &expected, tid)) return;
     }
+#endif
 }
 
-/* Kill the running threads (other than current) in an unclean way. This function
- * should be used only when it's critical to stop the threads for some reason.
- * Currently the server does this only on crash (for instance on SIGSEGV) in order
- * to perform a fast memory check without other threads messing with memory. */
-void killThreads(void) {
-    killMainThread();
-    bioKillThreads();
-    killIOThreads();
+/* Undoes registerServerThread() for a thread that exits. */
+void unregisterServerThread(void) {
+#ifdef __linux__
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    for (int j = 0; j < SERVER_THREADS_MAX; j++) {
+        pid_t expected = tid;
+        if (atomic_compare_exchange_strong(&server_thread_tids[j], &expected, 0)) return;
+    }
+#endif
 }
+
+#ifdef __linux__
+/* Result of parkThreads(): set if the other server threads are parked. */
+static volatile sig_atomic_t server_threads_parked = 0;
+/* The thread calling parkThreads(), which parkThread() skips. */
+static volatile pid_t parking_thread_tid = 0;
+static _Atomic size_t parked_threads_count = 0;
+
+/* THREADS_SIGNAL callback that parks the thread it runs on forever. */
+static void parkThread(void) {
+    if (syscall(SYS_gettid) == parking_thread_tid) return;
+    atomic_fetch_add_explicit(&parked_threads_count, 1, memory_order_relaxed);
+    ThreadsManager_markDone();
+    sigset_t mask;
+    sigfillset(&mask);
+    for (;;) sigsuspend(&mask);
+}
+
+/* Parks the other server threads (main, IO and bio, see registerServerThread()).
+ * Called once, by printCrashReport(). The result is saved in
+ * server_threads_parked. */
+static void parkThreads(void) {
+    pid_t tids[SERVER_THREADS_MAX];
+    size_t len = 0;
+    pid_t self = (pid_t)syscall(SYS_gettid);
+
+    for (int j = 0; j < SERVER_THREADS_MAX; j++) {
+        pid_t tid = atomic_load_explicit(&server_thread_tids[j], memory_order_relaxed);
+        if (tid != 0 && tid != self) tids[len++] = tid;
+    }
+
+    if (len == 0) {
+        server_threads_parked = 1; /* Nothing to park. */
+        return;
+    }
+
+    parking_thread_tid = self;
+    if (!ThreadsManager_runOnThreads(tids, len, parkThread)) return;
+    server_threads_parked = 1;
+    serverLogFromHandler(LL_WARNING, "Parked %lu of %lu other server threads",
+                         (unsigned long)atomic_load_explicit(&parked_threads_count, memory_order_relaxed),
+                         (unsigned long)len);
+}
+#endif /* __linux__ */
 
 void doFastMemoryTest(void) {
 #if defined(HAVE_PROC_MAPS)
     if (server.memcheck_enabled) {
         /* Test memory */
-        serverLogRaw(LL_WARNING | LL_RAW, "\n------ FAST MEMORY TEST ------\n");
-        killThreads();
+        serverLogRawFromHandler(LL_WARNING | LL_RAW, "\n------ FAST MEMORY TEST ------\n");
+        /* The test overwrites memory, so the other server threads must be
+         * stopped. printCrashReport() parked them, unless it failed. */
+        if (!server_threads_parked) {
+            serverLogRawFromHandler(LL_WARNING | LL_RAW, "Skipped, the other server threads couldn't be stopped.\n");
+            return;
+        }
         if (memtest_test_linux_anonymous_maps()) {
-            serverLogRaw(LL_WARNING | LL_RAW, "!!! MEMORY ERROR DETECTED! Check your memory ASAP !!!\n");
+            serverLogRawFromHandler(LL_WARNING | LL_RAW, "!!! MEMORY ERROR DETECTED! Check your memory ASAP !!!\n");
         } else {
-            serverLogRaw(LL_WARNING | LL_RAW, "Fast memory test PASSED, however your memory can still be broken. "
-                                              "Please run a memory test for several hours if possible.\n");
+            serverLogRawFromHandler(LL_WARNING | LL_RAW, "Fast memory test PASSED, however your memory can still be broken. "
+                                                         "Please run a memory test for several hours if possible.\n");
         }
     }
 #endif /* HAVE_PROC_MAPS */
@@ -2540,6 +2600,12 @@ void removeSigSegvHandlers(void) {
 
 void printCrashReport(void) {
     server.crashed = 1;
+#ifdef __linux__
+    /* Stop the other server threads before collecting the report, so they
+     * don't change what it reads, and stop serving clients. The stack traces
+     * were already logged: parked threads can't report theirs. */
+    parkThreads();
+#endif
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 

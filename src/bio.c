@@ -262,6 +262,7 @@ void *bioProcessBackgroundJobs(void *arg) {
     sigset_t sigset;
 
     valkey_set_thread_title(bwd->bio_worker_title);
+    registerServerThread();
 
     serverSetCpuAffinity(server.bio_cpulist);
 
@@ -359,25 +360,6 @@ unsigned long bioPendingJobsOfType(int type) {
 void bioDrainWorker(int type) {
     while (bioPendingJobsOfType(type) > 0) {
         usleep(100);
-    }
-}
-
-/* Kill the running bio threads in an unclean way. This function should be
- * used only when it's critical to stop the threads for some reason.
- * Currently the server does this only on crash (for instance on SIGSEGV) in order
- * to perform a fast memory check without other threads messing with memory. */
-void bioKillThreads(void) {
-    int err;
-
-    for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
-        if (pthread_equal(bwd->bio_thread_id, pthread_self())) continue;
-        if (bwd->bio_thread_id && pthread_cancel(bwd->bio_thread_id) == 0) {
-            if ((err = pthread_join(bwd->bio_thread_id, NULL)) != 0) {
-                serverLog(LL_WARNING, "Bio worker thread #%zu cannot be joined: %s", bioWorkerNum(bwd), strerror(err));
-            } else {
-                serverLog(LL_WARNING, "Bio worker thread #%zu terminated", bioWorkerNum(bwd));
-            }
-        }
     }
 }
 

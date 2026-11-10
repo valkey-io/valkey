@@ -2072,14 +2072,18 @@ void clusterFailAllSlotExportsWithMessage(char *message) {
     }
 }
 
+/* Finished jobs have no client buffers. Sum over the non-terminal exports
+ * in the index so memory accounting does not scan the finished job history. */
 size_t clusterGetTotalSlotExportBufferMemory(void) {
+    refreshSlotMigrationIndex();
     listNode *ln;
     listIter li;
-    listRewind(server.cluster->slot_migration_jobs, &li);
+    listRewind(slot_migration_index.exports, &li);
     size_t result = 0;
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
-        if (job->type != SLOT_MIGRATION_EXPORT || job->client == NULL) continue;
+        serverAssert(job->type == SLOT_MIGRATION_EXPORT);
+        if (job->client == NULL) continue;
         result += getClientOutputBufferMemoryUsage(job->client);
     }
     return result;

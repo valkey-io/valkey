@@ -2439,20 +2439,25 @@ static void clusterRaftInit(void) {
 static void clusterRaftInitLast(void) {
     clusterListenerInit();
 
-    /* A singleton (no peers) is not yet in the raft log — mark with MEET
-     * to prevent it from committing entries before joining a cluster.
-     * Cleared when our own NODE_JOIN is applied (in a multi-node cluster). */
-    if (dictSize(server.cluster->nodes) <= 1) {
+    /* A singleton (no peers) that has never been in a raft log is marked
+     * with MEET, to prevent it from committing entries before joining a
+     * cluster. Cleared when our own NODE_JOIN is applied (in a multi-node
+     * cluster). A singleton that has been in a log, e.g. after the other
+     * nodes were forgotten, keeps its state and elects itself, since the
+     * election timeout only runs when there are other nodes. */
+    clusterRaftState *rs = RAFT_STATE();
+    if (dictSize(server.cluster->nodes) <= 1 && rs->last_applied == 0) {
         myself->flags |= CLUSTER_NODE_MEET;
         server.cluster->size = 0;
+    } else if (dictSize(server.cluster->nodes) == 1 && nodeIsVoter(myself)) {
+        clusterRaftStartElection();
     }
 
     /* Fresh single-node cluster: become leader immediately. */
-    clusterRaftState *rs = RAFT_STATE();
     if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
         myself->flags &= ~CLUSTER_NODE_LEARNER;
         rs->role = RAFT_ROLE_LEADER;
-        rs->current_term = 1;
+        if (rs->current_term == 0) rs->current_term = 1;
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
         serverLog(LL_NOTICE, "Single-node cluster: becoming Raft leader (term %llu).",
                   (unsigned long long)rs->current_term);

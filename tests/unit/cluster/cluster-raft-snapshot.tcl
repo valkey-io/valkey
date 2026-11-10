@@ -223,4 +223,52 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
     }
 }
 
+start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
+
+    test "Raft snapshot: singleton that has been in a cluster keeps its term and size on restart" {
+        assert_equal "leader" [CI 0 cluster_raft_role]
+        set r1_id [R 1 cluster myid]
+        set r2_id [R 2 cluster myid]
+
+        # Leave R0 alone. Demote the replicas first if they are voters, so
+        # that R0 can commit the forgets on its own.
+        foreach id [list $r1_id $r2_id] {
+            catch {R 0 cluster delvoter $id}
+        }
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 1
+        } else {
+            fail "replicas were not demoted (size=[CI 0 cluster_size])"
+        }
+        catch {R 1 shutdown nosave}
+        catch {R 2 shutdown nosave}
+        assert_equal OK [R 0 cluster forget $r1_id]
+        assert_equal OK [R 0 cluster forget $r2_id]
+        assert_equal 1 [CI 0 cluster_known_nodes]
+        assert_morethan [CI 0 cluster_raft_last_applied] 0
+        set term [CI 0 cluster_raft_current_term]
+
+        restart_server 0 true false
+        wait_for_condition 100 100 {
+            [CI 0 cluster_raft_role] eq "leader"
+        } else {
+            fail "R0 didn't become leader (role=[CI 0 cluster_raft_role])"
+        }
+        assert_morethan [CI 0 cluster_raft_current_term] $term
+        assert_equal 1 [CI 0 cluster_size]
+
+        # A node joining it as a voter is counted in the size.
+        restart_server -1 true false
+        R 1 cluster reset hard
+        set r1_id [R 1 cluster myid]
+        R 0 cluster meet 127.0.0.1 [srv -1 port]
+        raft_add_voter [srv 0 client] $r1_id
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 2
+        } else {
+            fail "joined voter not counted (size=[CI 0 cluster_size])"
+        }
+    }
+}
+
 } ;# tags

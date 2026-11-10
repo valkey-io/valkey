@@ -2052,12 +2052,13 @@ static sds jsonStringOutput(sds out, const char *p, int len, int mode) {
         sds tmp = sdscatrepr(sdsempty(), p, len);
         int tmplen = sdslen(tmp);
         char *n = tmp;
-        while (tmplen--) {
+        for (int i = 0; i < tmplen; i++, n++) {
             if (*n == '\\')
                 out = sdscatlen(out, "\\\\", 2);
+            else if (*n == '"' && i > 0 && i < tmplen - 1)
+                out = sdscatlen(out, "\\\"", 2);
             else
                 out = sdscatlen(out, n, 1);
-            n++;
         }
 
         sdsfree(tmp);

@@ -1221,6 +1221,63 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
     }
 }
 
+set server_path [tmpdir "aclload.acl"]
+exec cp -f tests/assets/user.acl $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "external:skip"]] {
+    set aclfile [file join $server_path "user.acl"]
+
+    proc write_acl_file {path users} {
+        set fd [open $path w]
+        foreach user $users {
+            puts $fd $user
+        }
+        close $fd
+    }
+
+    # The client running the tests is never disconnected by a reload, since it
+    # is not a pub/sub client.
+    test {ACL LOAD disconnects default user clients subscribed to revoked channels} {
+        write_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        set rd [valkey_deferring_client]
+        $rd SUBSCRIBE secret
+        $rd read
+
+        set rd_pattern [valkey_deferring_client]
+        $rd_pattern PSUBSCRIBE *
+        $rd_pattern read
+
+        set rd_public [valkey_deferring_client]
+        $rd_public SUBSCRIBE public
+        $rd_public read
+
+        write_acl_file $aclfile {
+            "user default on nopass ~* resetchannels &public +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        r AUTH alice alice
+        r PUBLISH secret test-message
+        catch {$rd read} e
+        assert_match {*I/O error*} $e
+        catch {$rd_pattern read} e
+        assert_match {*I/O error*} $e
+
+        # A subscription the new rules still allow survives the reload.
+        r PUBLISH public test-message
+        assert_equal {message public test-message} [$rd_public read]
+
+        $rd close
+        $rd_pattern close
+        $rd_public close
+    }
+}
+
 set server_path [tmpdir "resetchannels.acl"]
 exec cp -f tests/assets/nodefaultuser.acl $server_path
 exec cp -f tests/assets/default.conf $server_path

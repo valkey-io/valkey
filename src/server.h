@@ -2094,6 +2094,9 @@ struct valkeyServer {
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
     uint32_t debug_cluster_disable_random_ping : 1;
+    /* Debug config that adds an artificial delay, in milliseconds, before a replica
+     * schedules its failover election. Used to make election order deterministic in tests. */
+    mstime_t debug_cluster_failover_delay;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */

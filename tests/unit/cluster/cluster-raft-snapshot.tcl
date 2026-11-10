@@ -240,12 +240,19 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         } else {
             fail "replicas were not demoted (size=[CI 0 cluster_size])"
         }
-        catch {R 1 shutdown nosave}
-        catch {R 2 shutdown nosave}
+        # Pause the replicas while they are forgotten, so that R0 still has
+        # links to them, and check that the links are freed.
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
         assert_equal OK [R 0 cluster forget $r1_id]
         assert_equal OK [R 0 cluster forget $r2_id]
         assert_equal 1 [CI 0 cluster_known_nodes]
         assert_morethan [CI 0 cluster_raft_last_applied] 0
+        assert_equal 0 [s 0 mem_cluster_links]
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
+        catch {R 1 shutdown nosave}
+        catch {R 2 shutdown nosave}
         set term [CI 0 cluster_raft_current_term]
 
         restart_server 0 true false

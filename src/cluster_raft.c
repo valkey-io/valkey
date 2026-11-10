@@ -184,6 +184,8 @@ typedef struct {
     list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
     list *deferred_meets; /* Inbound MEET messages drained once we're in a multi-member cluster */
 
+    clusterLink *processing_link; /* Link whose message is being processed, or NULL */
+
     /* Deferred work for beforeSleep. */
     unsigned int todo_update_slot_coverage : 1;
     unsigned int todo_invalidate_slots_cache : 1;
@@ -3067,6 +3069,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         goto done;
     }
 
+    RAFT_STATE()->processing_link = link;
     if (!strcasecmp(argv[0], "HELLO")) {
         ret = clusterRaftProcessHello(link, argc, argv);
     } else if (!strcasecmp(argv[0], "HI")) {
@@ -3187,6 +3190,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
 
     sdsfreesplitres(argv, argc);
 done:
+    RAFT_STATE()->processing_link = NULL;
     if (lines) sdsfreesplitres(lines, line_count);
     return ret;
 }
@@ -4112,11 +4116,14 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
     bool was_voter = nodeIsVoter(node);
 
-    /* Detach link before deleting so clusterReadHandler can detect
-     * that the node it was talking to is gone. */
-    if (node->link) {
-        node->link->node = NULL;
-        node->link = NULL;
+    /* clusterDelNode() frees the node's links. If we're processing a message
+     * from one of them, detach it instead, so the message handler can detect
+     * that the node it was talking to is gone and free the link. */
+    clusterLink *link = rs->processing_link;
+    if (link && link->node == node) {
+        if (node->link == link) node->link = NULL;
+        if (node->inbound_link == link) node->inbound_link = NULL;
+        link->node = NULL;
     }
     clusterDelNode(node);
     if (was_voter && server.cluster->size > 0) server.cluster->size--;

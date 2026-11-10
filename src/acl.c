@@ -4360,6 +4360,11 @@ void aclCommand(client *c) {
             }
         }
 
+        /* acl-offload: an IO thread may still be reading a role that was bound
+         * to a member earlier, so drain the threads before freeing it, as
+         * ACL DELUSER does. */
+        aclOffloadBumpEpoch();
+        aclOffloadQuiesce();
         int deleted = 0;
         for (int j = 2; j < c->argc; j++) {
             sds rolename = objectGetVal(c->argv[j]);

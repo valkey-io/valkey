@@ -185,8 +185,7 @@ start_server {tags {"bitmap"}} {
 
     test {Bitmap: BITCONVERT keyspace events} {
         r del k
-        set old [lindex [r config get notify-keyspace-events] 1]
-        r config set notify-keyspace-events En$
+        test_config_set r notify-keyspace-events En$
         set rd [valkey_deferring_client]
         psubscribe $rd {__keyevent@*}
         r bitconvert k bitmap
@@ -201,7 +200,6 @@ start_server {tags {"bitmap"}} {
         assert_match {pmessage * __keyevent@*__:new marker} [$rd read]
         assert_match {pmessage * __keyevent@*__:set marker} [$rd read]
         $rd close
-        r config set notify-keyspace-events $old
         bitmap_del k marker
     }
 
@@ -219,11 +217,9 @@ start_server {tags {"bitmap"}} {
     test {Bitmap: BITCONVERT to string respects proto-max-bulk-len} {
         bitmap_new k
         r setbit k [expr {8 * 2000000}] 1
-        set old [lindex [r config get proto-max-bulk-len] 1]
-        r config set proto-max-bulk-len 1048576
+        test_config_set r proto-max-bulk-len 1048576
         assert_error {*proto-max-bulk-len*} {r bitconvert k string}
         assert_equal bitmap [r type k]
-        r config set proto-max-bulk-len $old
         r del k
     }
 
@@ -417,15 +413,13 @@ start_server {tags {"bitmap"}} {
     }
 
     test {Bitmap: a bitmap cannot hold bits past 2^32 - 1} {
-        set old [lindex [r config get proto-max-bulk-len] 1]
-        r config set proto-max-bulk-len 1073741824
+        test_config_set r proto-max-bulk-len 1073741824
         bitmap_new k
         r setbit k 1 1
         assert_error {*out of range for a bitmap*} {r setbit k [expr {1 << 32}] 1}
         assert_error {*out of range for a bitmap*} {r bitfield k set u8 [expr {(1 << 32) - 4}] 1}
         assert_equal bitmap [r type k]
         r del k
-        r config set proto-max-bulk-len $old
     }
 
     test {Bitmap: R.EXPORT writes the portable format, from strings and bitmaps} {
@@ -503,7 +497,7 @@ start_server {tags {"bitmap"}} {
     test {Bitmap: R.IMPORT respects proto-max-bulk-len} {
         set last [roaring_array_payload 65535 {65535}]
         set old [lindex [r config get proto-max-bulk-len] 1]
-        r config set proto-max-bulk-len 1048576
+        test_config_set r proto-max-bulk-len 1048576
         assert_error {*proto-max-bulk-len*} {r r.import k $last}
         r config set proto-max-bulk-len $old
         if {$old >= (1 << 29)} {
@@ -542,19 +536,18 @@ start_server {tags {"bitmap"}} {
         # Claim a length of one byte, too short for bit 100.
         set bad [string replace $dump 1 1 "\x01"]
         r debug set-skip-checksum-validation 1
+        test_defer {r debug set-skip-checksum-validation 0}
         assert_error {*Bad data format*} {r restore k2 0 $bad}
         # A corrupted serialization (its cookie).
         set bad [string replace $dump 5 5 "\x07"]
         assert_error {*Bad data format*} {r restore k2 0 $bad}
-        r debug set-skip-checksum-validation 0
         assert_equal 0 [r exists k2]
     } {} {needs:debug}
 }
 
 start_server {tags {"bitmap large-memory"}} {
     test {Bitmap: results past 2^32 - 1 bits are strings} {
-        set old [lindex [r config get proto-max-bulk-len] 1]
-        r config set proto-max-bulk-len 1073741824
+        test_config_set r proto-max-bulk-len 1073741824
         r del k{t} big{t}
         r setbit k{t} [expr {1 << 32}] 0
         assert_equal string [r type k{t}]
@@ -567,7 +560,6 @@ start_server {tags {"bitmap large-memory"}} {
         assert_equal 2 [r bitcount k{t}]
         assert_error {*too long for a bitmap*} {r bitconvert k{t} bitmap}
         r del k{t} big{t} b{t}
-        r config set proto-max-bulk-len $old
     }
 }
 

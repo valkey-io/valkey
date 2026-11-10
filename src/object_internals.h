@@ -18,42 +18,46 @@
 
 #include "server.h"
 
-/* The serverObject struct is variable in size. It has several static fields that are always present,
- * followed by several optional variable-sized fields. The static fields are `type` through `refcount`
- * in the struct-defined order:
+/* The serverObject struct is variable in size. It has several static fields
+ * that are always present, followed by several optional variable-sized fields.
+ * The static fields are `type` through `refcount` in the struct-defined order:
  *
  *    +------+----------+-----+-----------+-----------+-----------+----------+----
  *    | type | encoding | lru | hasexpire | hasembkey | hasembval | refcount | ...
  *    +------+----------+-----+-----------+-----------+-----------+----------+----
  *
- * The optional variable-sized embedded data has 2 possible layouts. If value is embedded (hasembval == 1)
- *  the `val_ptr` pointer is not used - instead the val data is embedded:
+ * The optional variable-sized embedded data has 2 possible layouts. If the
+ * value is embedded (hasembval == 1) the `val_ptr` pointer is not used.
+ * Instead the value data is embedded:
  *
- *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
- *    | type | encoding | lru | has* flags | refcount | expire | metadata | key_header_size | key sds | value data |
- *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
- *                                                      ^        ^          ^                 ^         ^
- *                                                      |        |          |                 |         |
- *                                                      |        |          |                 |         +--- present because hasembval == 1
- *                                                      |        |          |                 |
- *                                                      |        +----------+-----------------+--- present if hasembkey == 1
- *                                                      |
- *                                                      |
- *                                                      +--- present if hasexpire == 1
+ *    +-----------------+----------+--------+----------+------------+-----+-------+
+ *    | type, encoding, | refcount | expire | metadata | key header | key | value |
+ *    | lru, has* flags |          |        |          | size       | sds | data  |
+ *    +-----------------+----------+--------+----------+------------+-----+-------+
+ *                                   ^        ^          ^            ^     ^
+ *                                   |        |          |            |     |
+ *                                   |        |          |            |     +-- present because
+ *                                   |        |          |            |         hasembval == 1
+ *                                   |        |          |            |
+ *                                   |        +----------+------------+-- present if
+ *                                   |                                     hasembkey == 1
+ *                                   |
+ *                                   +-- present if hasexpire == 1
  *
- * Otherwise value is not embedded and we use the `val_ptr` pointer:
+ * Otherwise the value is not embedded and the `val_ptr` pointer is used:
  *
- *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
- *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | metadata | key_header_size | key sds |
- *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
- *                                                      ^         ^        ^          ^                 ^
- *                                                      |         |        |          |                 |
- *                                                      |         |        +----------+-----------------+--- present if hasembkey == 1
- *                                                      |         |
- *                                                      |         |
- *                                                      |         +--- present if hasexpire == 1
- *                                                      |
- *                                                      +--- present because hasembval == 0
+ *    +-----------------+----------+---------+--------+----------+------------+-----+
+ *    | type, encoding, | refcount | val_ptr | expire | metadata | key header | key |
+ *    | lru, has* flags |          |         |        |          | size       | sds |
+ *    +-----------------+----------+---------+--------+----------+------------+-----+
+ *                                   ^         ^        ^          ^            ^
+ *                                   |         |        |          |            |
+ *                                   |         |        +----------+------------+-- present if
+ *                                   |         |                                   hasembkey == 1
+ *                                   |         |
+ *                                   |         +-- present if hasexpire == 1
+ *                                   |
+ *                                   +-- present because hasembval == 0
  */
 
 struct serverObject {

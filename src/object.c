@@ -177,6 +177,9 @@ void objectCopyMetadata(robj *dst, const robj *src) {
     memcpy(dst_md, src_md, object_metadata_size);
 }
 
+/* The cast from robjStatic to robj is aliasing-safe because this function
+ * writes the memory through the correct type (struct serverObject). Callers
+ * only use the returned robj pointer, never the robjStatic buffer itself. */
 robj *initStaticStringObject(robjStatic *buf, void *ptr) {
     robj *o = (robj *)buf;
     o->refcount = OBJ_STATIC_REFCOUNT;

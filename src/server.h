@@ -875,9 +875,7 @@ typedef union {
 char *getObjectTypeName(robj *);
 
 /* Initialize a stack-allocated robjStatic as a static raw string and return
- * a pointer usable as robj*. The cast through robjStatic is aliasing-safe
- * because initStaticStringObject writes the memory through the correct type
- * internally (struct serverObject* in object.c). */
+ * a pointer usable as robj*. */
 robj *initStaticStringObject(robjStatic *buf, void *ptr);
 
 struct evictionPoolEntry; /* Defined in evict.c */

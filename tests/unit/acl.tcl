@@ -1219,6 +1219,51 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         # Verify server is still running
         assert_equal [r PING] "PONG"
     }
+
+    test {ACL LOAD disconnects default user clients subscribed to revoked channels} {
+        set dir [lindex [r CONFIG GET dir] 1]
+        set aclfile [lindex [r CONFIG GET aclfile] 1]
+        set aclpath [file join $dir $aclfile]
+
+        set fd [open $aclpath w]
+        puts $fd "user default on nopass ~* &* +@all"
+        puts $fd "user alice on >alice ~* &* +@all"
+        close $fd
+        r ACL LOAD
+
+        set rd [valkey_deferring_client]
+        $rd SUBSCRIBE secret
+        $rd read
+
+        set rd_pattern [valkey_deferring_client]
+        $rd_pattern PSUBSCRIBE *
+        $rd_pattern read
+
+        set rd_public [valkey_deferring_client]
+        $rd_public SUBSCRIBE public
+        $rd_public read
+
+        set fd [open $aclpath w]
+        puts $fd "user default on nopass ~* resetchannels &public +@all"
+        puts $fd "user alice on >alice ~* &* +@all"
+        close $fd
+        r ACL LOAD
+
+        r AUTH alice alice
+        r PUBLISH secret test-message
+        catch {$rd read} e
+        assert_match {*I/O error*} $e
+        catch {$rd_pattern read} e
+        assert_match {*I/O error*} $e
+
+        # A subscription the new rules still allow survives the reload.
+        r PUBLISH public test-message
+        assert_equal {message public test-message} [$rd_public read]
+
+        $rd close
+        $rd_pattern close
+        $rd_public close
+    }
 }
 
 set server_path [tmpdir "resetchannels.acl"]

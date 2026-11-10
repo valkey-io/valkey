@@ -42,8 +42,8 @@
 - CI uses `clang-format-18` across `*.c`, `*.h`, `*.cpp`, and `*.hpp` files.
 - When touching C/C++ sources or headers, run `clang-format-18 -i` on the modified files before finalizing when the tool is available.
 - Use comments for non-obvious behavior and rationale, not for restating code.
-- New source files need the BSD-3-Clause license header; so do material changes (over ~100 lines) to a file that lacks one.
-- When adding a new `.c` file under `src/`, add it to `CMakeLists.txt` as well as the Makefile.
+- New source files need the Valkey license header (the `Copyright (c) Valkey Contributors` snippet with `SPDX-License-Identifier: BSD-3-Clause` from `DEVELOPMENT_GUIDE.md`); so do material changes to a file that lacks one. Be generous in what counts as a material change.
+- When adding a new `.c` file under `src/`, add it to the matching list in `cmake/Modules/SourceFiles.cmake` (e.g. `VALKEY_SERVER_SRCS`) as well as to the object list in `src/Makefile` (e.g. `ENGINE_SERVER_OBJ`).
 
 ## Design guidelines
 - Avoid adding a config when a heuristic can decide; add one only for an explicit trade-off (for example CPU vs memory).
@@ -55,7 +55,7 @@
 - Data-structure and low-level logic changes usually belong in `src/unit/` (C++ gtest).
 - End-to-end behavior changes usually belong in `tests/` (Tcl integration tests).
 - If behavior or commands change, check whether related documentation also needs updating. User-facing changes are documented in [valkey-doc](https://github.com/valkey-io/valkey-doc).
-- New or modified commands need matching updates to their `src/commands/*.json` definition.
+- New or modified commands need matching updates to their `src/commands/*.json` definition, and the regenerated `src/commands.def` (`make -C src commands.def`) must be committed with them.
 
 ## Files to avoid touching unless required
 - Do not commit local runtime artifacts such as `dump.rdb`, `nodes.conf`, `*.log`, or ad hoc cluster directories unless the task explicitly requires them.

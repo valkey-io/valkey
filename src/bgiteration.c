@@ -1570,16 +1570,26 @@ static void prepareAndProcessReturnedItems(bgIterator *it, int n, bgIteratorItem
 // Returns true if we process at least one item from a given iterator's return_to_main_thread queue.
 static bool receiveItemsBackFromOneIterator(bgIterator *it) {
     bgIteratorItem *batchPool[PREFETCH_BATCH_SIZE];
+    bgIteratorItem *closeItem = NULL;
     int n = 0;
     fifo *poppedFifo = mutexQueuePopAll(it->return_to_main_thread, false);
     if (poppedFifo != NULL) {
         while (fifoLength(poppedFifo) > 0) {
-            fifoPop(poppedFifo, (void **)&batchPool[n++]);
+            bgIteratorItem *item;
+            fifoPop(poppedFifo, (void **)&item);
+            /* A termination after the close can queue items behind ITER_CLOSED.  ITER_CLOSED
+             * releases the iterator, so it must be processed last. */
+            if ((int)item->type == BGITERATOR_ITEMEXT_ITER_CLOSED) {
+                closeItem = item;
+                continue;
+            }
+            batchPool[n++] = item;
             if (n == PREFETCH_BATCH_SIZE) {
                 prepareAndProcessReturnedItems(it, n, batchPool);
                 n = 0;
             }
         }
+        if (closeItem) batchPool[n++] = closeItem;
         if (n > 0) {
             prepareAndProcessReturnedItems(it, n, batchPool);
         }

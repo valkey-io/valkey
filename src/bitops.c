@@ -1413,6 +1413,10 @@ void bitfieldGeneric(client *c, int flags) {
         }
     }
 
+    /* Creating or extending the key is a change even when every operation
+     * failed (OVERFLOW FAIL): the length is part of the value, so the command
+     * must still reach replicas and the AOF. */
+    if (dirty && !changes) changes = 1;
     if (changes) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);

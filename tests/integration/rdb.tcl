@@ -225,19 +225,18 @@ start_server_and_kill_it [list "dir" $server_path] {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "Test FLUSHALL aborts bgsave $bgsave_type" {
             # 5000 keys with 1ms sleep per key should take 5 second
             r config set rdb-key-save-delay 1000
             populate 5000
             assert_lessthan 999 [s rdb_changes_since_last_save]
-            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r config set forkless-policy $policy
             r bgsave
             assert_equal [s rdb_bgsave_in_progress] 1
             
             # Verify we're testing the right save type while it's running
-            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
-            assert_equal [s rdb_current_bgsave_type] $expected_type
+            assert_equal [s rdb_current_bgsave_type] $bgsave_type
 
             # Use this opportunity to also test the "bad arg" reply.
             assert_error {ERR*} {r flushall bad_arg}
@@ -257,10 +256,10 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave $bgsave_type resets the change counter" {
             r config set rdb-key-save-delay 0
-            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r config set forkless-policy $policy
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 0
@@ -270,16 +269,15 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             assert_equal [s rdb_changes_since_last_save] 0
             
             # Verify we tested the right save type
-            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
-            assert_equal [s rdb_last_bgsave_type] $expected_type
+            assert_equal [s rdb_last_bgsave_type] $bgsave_type
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave $bgsave_type metrics are correct after success" {
             set saves_before [s rdb_saves]
             populate 100 "" 16
-            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r config set forkless-policy $policy
             r bgsave
             waitForBgsave r
             assert {[s rdb_saves] == $saves_before + 1}
@@ -293,11 +291,11 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave $bgsave_type metrics are correct after failure" {
             set saves_before [s rdb_saves]
             populate 1000 "" 16
-            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r config set forkless-policy $policy
             r config set rdb-key-save-delay 10000000
             if {$bgsave_type eq "forkless"} {
                 # Inject a failure to make the save fail: a directory whose name
@@ -335,13 +333,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave cancel aborts $bgsave_type save" {
             # Generating RDB will take some 100 seconds
             r config set rdb-key-save-delay 1000000
             populate 100 "" 16
 
-            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r config set forkless-policy $policy
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 1
@@ -350,8 +348,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             }
             
             # Verify we're testing the right save type
-            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
-            assert_equal [s rdb_current_bgsave_type] $expected_type
+            assert_equal [s rdb_current_bgsave_type] $bgsave_type
             
             if {$bgsave_type ne "forkless"} {
                 set fork_child_pid [get_child_pid 0]
@@ -619,6 +616,42 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         assert {[s rdb_last_bgsave_status] ne "err"}
         r set k v
         assert_equal [r get k] v
+    } {} {needs:debug}
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
+    test "ZINTERCARD on a set source during forkless bgsave does not corrupt the snapshot" {
+        # A zset lookup marks its key by rewriting the sds header, which makes
+        # an SDS_TYPE_5 (under 32 bytes) member read as empty. Members over 20
+        # bytes are LZF compressed on save, which keeps the saver slower than
+        # ZINTERCARD so the two pass each other on the same member. The extra
+        # zset member makes s the smaller source, which ZINTERCARD iterates.
+        r eval {
+            for i = 1, 50000 do
+                local m = string.format('member-padding-%010d', i)
+                redis.call('sadd', 's', m)
+                redis.call('zadd', 'z', 0, m)
+            end
+            redis.call('zadd', 'z', 0, 'extra')
+        } 0
+        assert_encoding hashtable s
+        assert_encoding btree z
+        set digest [r debug digest-value s]
+
+        # The race is timing dependent, so give it several saves to show up.
+        for {set i 0} {$i < 10} {incr i} {
+            r bgsave
+            set rounds 0
+            while {[s rdb_bgsave_in_progress]} {
+                if {[incr rounds] > 1000} { fail "forkless bgsave did not finish" }
+                for {set j 0} {$j < 10} {incr j} { r zintercard 2 s z }
+            }
+            assert_equal ok [s rdb_last_bgsave_status]
+            # Two corrupted members load as duplicates, so the reload fails.
+            catch {r debug reload nosave} err
+            assert_equal OK $err
+            assert_equal $digest [r debug digest-value s]
+        }
     } {} {needs:debug}
 }
 
@@ -1610,13 +1643,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    foreach first_type {fork forkless} {
-        foreach second_type {fork forkless} {
+    foreach {first_policy first_type} {require-fork fork prefer-forkless forkless} {
+        foreach {second_policy second_type} {require-fork fork prefer-forkless forkless} {
             test "$first_type bgsave blocks $second_type bgsave" {
                 r config set rdb-key-save-delay 1000000
                 populate 100 "" 16
 
-                r config set forkless-policy [expr {$first_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+                r config set forkless-policy $first_policy
                 r bgsave
                 wait_for_condition 50 100 {
                     [s rdb_bgsave_in_progress] == 1
@@ -1625,7 +1658,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 }
                 assert_equal [s rdb_current_bgsave_type] $first_type
 
-                r config set forkless-policy [expr {$second_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+                r config set forkless-policy $second_policy
                 assert_error "ERR Background save already in progress" {r bgsave}
 
                 r bgsave cancel
@@ -1833,7 +1866,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "scriptbackup
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "failed bgsave $bgsave_type prevents writes" {
             # Make sure the server saves an RDB on shutdown
             r config set save "900 1"
@@ -1841,7 +1874,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             r config set rdb-key-save-delay 10000000
             populate 1000
             r set x x
-            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r config set forkless-policy $policy
             if {$bgsave_type eq "forkless"} {
                 # Inject a failure to make the save fail: a directory whose name
                 # collides with the RDB file makes the final rename fail. We
@@ -1895,7 +1928,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 # Remove the blocking directory so the recovery save can succeed.
                 file delete [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
             }
-            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r config set forkless-policy $policy
             r bgsave
             waitForBgsave r
 
@@ -1990,6 +2023,90 @@ start_server {overrides {forkless-infrastructure-enabled yes forkless-policy pre
             assert_equal [lindex [r config get forkless-policy] 1] $v
         }
         assert_error "*argument*" {r config set forkless-policy require-forkless}
+    }
+}
+
+# The inline-replication opcode runs the command it carries through a fake
+# client with ACL checks bypassed, so a command that is neither a write nor
+# may-replicate (here an admin CONFIG SET) must be rejected, not executed.
+set inband_path [tmpdir "server.rdb-inband-opcode"]
+start_server [list overrides [list "dir" $inband_path] keep_persistence true] {
+    r set somekey someval
+    r save
+}
+set inband_dump [file join $inband_path dump.rdb]
+
+# Drop the trailing EOF opcode + CRC, append 0xF2 (RDB_OPCODE_UPDATE) + the RESP
+# command + a fresh EOF + an all-zero checksum (cksum==0 disables CRC validation).
+set fd [open $inband_dump rb]
+fconfigure $fd -translation binary
+set data [read $fd]
+close $fd
+binary scan [string index $data end-8] c eof_byte
+if {[expr {$eof_byte & 0xff}] != 0xff} {
+    error "Expected RDB EOF opcode 0xFF before checksum"
+}
+set prefix [string range $data 0 end-9]
+set inline "\xF2*4\r\n\$6\r\nCONFIG\r\n\$3\r\nSET\r\n\$3\r\ndir\r\n\$4\r\n/tmp\r\n"
+set tail "\xFF\x00\x00\x00\x00\x00\x00\x00\x00"
+set fd [open $inband_dump wb]
+fconfigure $fd -translation binary
+puts -nonewline $fd $prefix$inline$tail
+close $fd
+
+start_server_and_kill_it [list "dir" $inband_path "rdb-version-check" "relaxed"] {
+    test {Server rejects an on-disk RDB whose inline opcode carries a non-replicable command} {
+        wait_for_condition 50 100 {
+            [string match {*inline command*not a replicable write*} \
+                [exec tail -20 < [dict get $srv stdout]]]
+        } else {
+            fail "Server loaded an RDB whose inline opcode carried a non-replicable command"
+        }
+    }
+}
+
+set foreign_update_path [tmpdir "server.rdb-foreign-update-opcode"]
+start_server [list overrides [list dir $foreign_update_path] keep_persistence true] {
+    r set existing value
+    r save
+}
+set foreign_update_dump [file join $foreign_update_path dump.rdb]
+set fd [open $foreign_update_dump rb]
+fconfigure $fd -translation binary
+set data [read $fd]
+close $fd
+set prefix "REDIS0011[string range $data 9 end-9]"
+set inline "\xF2*3\r\n\$3\r\nSET\r\n\$8\r\ninjected\r\n\$3\r\nyes\r\n"
+set tail "\xFF\x00\x00\x00\x00\x00\x00\x00\x00"
+set fd [open $foreign_update_dump wb]
+fconfigure $fd -translation binary
+puts -nonewline $fd $prefix$inline$tail
+close $fd
+
+start_server_and_kill_it [list dir $foreign_update_path rdb-version-check relaxed] {
+    test "Server rejects opcode 242 in a REDIS-magic RDB" {
+        wait_for_condition 50 100 {
+            [string match {*foreign type or opcode 242*} [exec tail -20 < [dict get $srv stdout]]]
+        } else {
+            fail "Server accepted opcode 242 in a REDIS-magic RDB"
+        }
+    }
+}
+
+set old_update_path [tmpdir "server.rdb-old-update-opcode"]
+set old_update_dump [file join $old_update_path dump.rdb]
+set fd [open $old_update_dump wb]
+fconfigure $fd -translation binary
+puts -nonewline $fd "VALKEY080[string range $data 9 end-9]$inline$tail"
+close $fd
+
+start_server_and_kill_it [list dir $old_update_path rdb-version-check relaxed] {
+    test "Server rejects opcode 242 in an RDB older than version 81" {
+        wait_for_condition 50 100 {
+            [string match {*Opcode 242 requires RDB version 81 or newer*} [exec tail -20 < [dict get $srv stdout]]]
+        } else {
+            fail "Server accepted opcode 242 in an old RDB version"
+        }
     }
 }
 

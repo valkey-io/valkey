@@ -470,12 +470,14 @@ typedef enum {
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
 #define REPLICA_CAPA_LZ4 (1 << 4)               /* Accepts LZ4 streaming-compressed replication payloads. */
 #define REPLICA_CAPA_ZSTD (1 << 5)              /* Accepts Zstd streaming-compressed replication payloads. */
+#define REPLICA_CAPA_INBAND_REPL (1 << 6)       /* Supports RDB_OPCODE_UPDATE for inline replication. */
 #define REPLICA_CAPA_COMPRESSION_MASK (REPLICA_CAPA_LZ4 | REPLICA_CAPA_ZSTD)
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
 #define REPLICA_CAPA_LZ4_STR "lz4"                             /* Accepts LZ4 streaming-compressed replication payloads. */
 #define REPLICA_CAPA_ZSTD_STR "zstd"                           /* Accepts Zstd streaming-compressed replication payloads. */
+#define REPLICA_CAPA_INBAND_REPL_STR "inband-repl"             /* Supports RDB_OPCODE_UPDATE for inline replication. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -1002,6 +1004,7 @@ typedef struct functionsLibCtx functionsLibCtx;
 typedef struct rdbLoadingCtx {
     serverDb **dbarray;
     functionsLibCtx *functions_lib_ctx;
+    client *update_client; /* Fake client for executing inline replication commands during RDB load. */
 } rdbLoadingCtx;
 
 typedef sds (*rdbAuxFieldEncoder)(int flags);
@@ -1286,6 +1289,8 @@ typedef struct ClientFlags {
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
+    uint64_t forkless_managed : 1;         /* Client is owned by forkless save. Written only on the
+                                            * main thread. The save thread only reads it */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */
@@ -1350,6 +1355,8 @@ typedef struct ClientReplicationData {
     char *replica_addr;                  /* Optionally given by REPLCONF ip-address */
     int replica_version;                 /* Version on the form 0xMMmmpp. */
     short replica_capa;                  /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
+    _Atomic(int) forkless_pending_close; /* Main thread asks the forkless save to hand this replica
+                                          * back for closing. Atomic (relaxed) since both threads access it without a lock. */
     short replica_req;                   /* Replica requirements: REPLICA_REQ_* */
     uint64_t associated_rdb_client_id;   /* The client id of this replica's rdb connection */
     time_t rdb_client_disconnect_time;   /* Time of the first freeClient call on this client. Used for delaying free. */
@@ -1531,11 +1538,12 @@ typedef struct client {
 /* Forward declaration */
 bool isImportSlotMigrationJob(slotMigrationJob *job);
 
-/* Absolute postpone mask from client IO offload state (not artificial READ hold). */
+/* Absolute postpone mask from client IO offload state and forkless ownership (not artificial READ hold). */
 static inline int clientConnPostponeMaskFromIOState(client *c) {
     int mask = 0;
     if (c->io_read_state != CLIENT_IDLE) mask |= CONN_POSTPONE_READ;
     if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+    if (c->flag.forkless_managed) mask |= CONN_POSTPONE_WRITE;
     return mask;
 }
 
@@ -1991,47 +1999,53 @@ struct valkeyServer {
     off_t loading_process_events_interval_bytes;
     time_t loading_process_events_interval_ms;
     /* Fields used only for stats */
-    time_t stat_starttime;                         /* Server start time */
-    long long stat_numcommands;                    /* Number of processed commands */
-    long long stat_numconnections;                 /* Number of connections received */
-    long long stat_expiredkeys;                    /* Number of expired keys */
-    long long stat_expiredfields;                  /* Number of expired hash fields */
-    double stat_expired_keys_stale_perc;           /* Percentage of keys probably expired */
-    double stat_expired_keys_with_vola_stale_perc; /* Percentage of keys probably expired */
-    long long stat_expired_time_cap_reached_count; /* Early expire cycle stops.*/
-    long long stat_expire_cycle_time_used;         /* Cumulative microseconds used. */
-    long long stat_evictedkeys;                    /* Number of evicted keys (maxmemory) */
-    long long stat_evictedclients;                 /* Number of evicted clients */
-    long long stat_evictedscripts;                 /* Number of evicted lua scripts. */
-    long long stat_total_eviction_exceeded_time;   /* Total time over the memory limit, unit us */
-    monotime stat_last_eviction_exceeded_time;     /* Timestamp of current eviction start, unit us */
-    long long stat_keyspace_hits;                  /* Number of successful lookups of keys */
-    long long stat_keyspace_misses;                /* Number of failed lookups of keys */
-    long long stat_active_defrag_hits;             /* number of allocations moved */
-    long long stat_active_defrag_misses;           /* number of allocations scanned but not moved */
-    long long stat_active_defrag_key_hits;         /* number of keys with moved allocations */
-    long long stat_active_defrag_key_misses;       /* number of keys scanned and not moved */
-    long long stat_active_defrag_scanned;          /* number of dictEntries scanned */
-    long long stat_total_active_defrag_time;       /* Total time memory fragmentation over the limit, unit us */
-    monotime stat_last_active_defrag_time;         /* Timestamp of current active defrag start */
-    size_t stat_peak_memory;                       /* Max used memory record */
-    long long stat_aof_rewrites;                   /* number of aof file rewrites performed */
-    long long stat_aofrw_consecutive_failures;     /* The number of consecutive failures of aofrw */
-    long long stat_rdb_saves;                      /* number of rdb saves performed */
-    long long stat_fork_time;                      /* Time needed to perform latest fork() */
-    double stat_fork_rate;                         /* Fork rate in GB/sec. */
-    long long stat_total_forks;                    /* Total count of fork. */
-    long long stat_rejected_conn;                  /* Clients rejected because of maxclients */
-    long long stat_rejected_priority_conn;         /* Prioritized clients rejected because of maxclients */
-    long long stat_num_active_priority_clients;    /* Number of active prioritized clients */
-    long long stat_sync_full;                      /* Number of full resyncs with replicas. */
-    long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
-    long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
-    commandlog commandlog[COMMANDLOG_TYPE_NUM];    /* Logs of commands. */
-    struct malloc_stats cron_malloc_stats;         /* sampled in serverCron(). */
-    long long stat_net_input_bytes;                /* Bytes read from network. */
-    long long stat_net_output_bytes;               /* Bytes written to network. */
-    long long stat_net_repl_input_bytes;           /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
+    time_t stat_starttime;                                 /* Server start time */
+    long long stat_numcommands;                            /* Number of processed commands */
+    long long stat_numconnections;                         /* Number of connections received */
+    long long stat_expiredkeys;                            /* Number of expired keys */
+    long long stat_expiredfields;                          /* Number of expired hash fields */
+    double stat_expired_keys_stale_perc;                   /* Percentage of keys probably expired */
+    double stat_expired_keys_with_vola_stale_perc;         /* Percentage of keys probably expired */
+    long long stat_expired_time_cap_reached_count;         /* Early expire cycle stops.*/
+    long long stat_expire_cycle_time_used;                 /* Cumulative microseconds used. */
+    long long stat_evictedkeys;                            /* Number of evicted keys (maxmemory) */
+    long long stat_evictedclients;                         /* Number of evicted clients */
+    long long stat_evictedscripts;                         /* Number of evicted lua scripts. */
+    long long stat_total_eviction_exceeded_time;           /* Total time over the memory limit, unit us */
+    monotime stat_last_eviction_exceeded_time;             /* Timestamp of current eviction start, unit us */
+    long long stat_keyspace_hits;                          /* Number of successful lookups of keys */
+    long long stat_keyspace_misses;                        /* Number of failed lookups of keys */
+    long long stat_active_defrag_hits;                     /* number of allocations moved */
+    long long stat_active_defrag_misses;                   /* number of allocations scanned but not moved */
+    long long stat_active_defrag_key_hits;                 /* number of keys with moved allocations */
+    long long stat_active_defrag_key_misses;               /* number of keys scanned and not moved */
+    long long stat_active_defrag_scanned;                  /* number of dictEntries scanned */
+    long long stat_total_active_defrag_time;               /* Total time memory fragmentation over the limit, unit us */
+    monotime stat_last_active_defrag_time;                 /* Timestamp of current active defrag start */
+    size_t stat_peak_memory;                               /* Max used memory record */
+    long long stat_aof_rewrites;                           /* number of aof file rewrites performed */
+    long long stat_aofrw_consecutive_failures;             /* The number of consecutive failures of aofrw */
+    long long stat_rdb_saves;                              /* number of rdb saves performed */
+    long long stat_fork_time;                              /* Time needed to perform latest fork() */
+    double stat_fork_rate;                                 /* Fork rate in GB/sec. */
+    long long stat_total_forks;                            /* Total count of fork. */
+    long long stat_forkless_fallbacks_module;              /* Forkless fallbacks caused by loaded modules. */
+    long long stat_forkless_fallbacks_slot_import;         /* Forkless fallbacks caused by slot imports. */
+    long long stat_forkless_fallbacks_exclude_data;        /* Forkless fallbacks caused by data-excluding RDB requests. */
+    long long stat_forkless_fallbacks_missing_inband_repl; /* Forkless fallbacks caused by missing inline replication support. */
+    long long stat_forkless_fallbacks_compression;         /* Forkless fallbacks caused by stream compression. */
+    long long stat_forkless_fallbacks_old_rdb_version;     /* Forkless fallbacks caused by an old RDB version. */
+    long long stat_rejected_conn;                          /* Clients rejected because of maxclients */
+    long long stat_rejected_priority_conn;                 /* Prioritized clients rejected because of maxclients */
+    long long stat_num_active_priority_clients;            /* Number of active prioritized clients */
+    long long stat_sync_full;                              /* Number of full resyncs with replicas. */
+    long long stat_sync_partial_ok;                        /* Number of accepted PSYNC requests. */
+    long long stat_sync_partial_err;                       /* Number of unaccepted PSYNC requests. */
+    commandlog commandlog[COMMANDLOG_TYPE_NUM];            /* Logs of commands. */
+    struct malloc_stats cron_malloc_stats;                 /* sampled in serverCron(). */
+    long long stat_net_input_bytes;                        /* Bytes read from network. */
+    long long stat_net_output_bytes;                       /* Bytes written to network. */
+    long long stat_net_repl_input_bytes;                   /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
     /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
     long long stat_net_repl_output_bytes;
     long long stat_net_cluster_slot_import_bytes;       /* Bytes read from slot import sources. */
@@ -2195,7 +2209,7 @@ struct valkeyServer {
     time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;            /* Time used by last RDB save run. */
     time_t rdb_save_time_start;           /* Current RDB save start time. */
-    rdbBgsaveType rdb_bgsave_scheduled;   /* BGSAVE when possible if non-zero. */
+    int rdb_bgsave_scheduled;             /* BGSAVE when possible if true. */
     rdbWriteTarget rdb_write_target;      /* Type of save by active child. */
     rdbBgsaveType cur_bgsave_type;        /* Current bgsave type. */
     rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */
@@ -2343,6 +2357,8 @@ struct valkeyServer {
      * the server->primary client structure. */
     char primary_replid[CONFIG_RUN_ID_SIZE + 1];   /* Primary PSYNC runid. */
     long long primary_initial_offset;              /* Primary PSYNC offset. */
+    bool primary_initial_offset_in_rdb;            /* Set on +FULLRESYNC <replid> -1: start offset
+                                                    * comes from the RDB repl-offset aux field. */
     int repl_replica_lazy_flush;                   /* Lazy FLUSHALL before loading DB? */
     monotime repl_full_sync_start_time;            /* Monotonic time when full sync started. */
     long long repl_full_sync_complete_duration_ms; /* Duration of the last successful full sync in ms. */
@@ -2748,6 +2764,13 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  * This is the meaning of the flags:
  *
  * CMD_WRITE:       Write command (may modify the key space).
+ *                  WARNING: a command marked CMD_WRITE (or CMD_MAY_REPLICATE)
+ *                  is accepted by the RDB inline-replication opcode
+ *                  (RDB_OPCODE_UPDATE) and will be executed through a fake
+ *                  client, with ACL checks bypassed, when such an RDB is
+ *                  loaded - including a persisted dump.rdb or AOF preamble, not
+ *                  only a live replication stream. Only mark a command with
+ *                  these flags if it is safe to run unconditionally on load.
  *
  * CMD_READONLY:    Commands just reading from keys without changing the content.
  *                  Note that commands that don't read from the keyspace such as
@@ -2798,6 +2821,11 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  *                      EVAL, which may execute write commands, which are replicated,
  *                      or may just execute read commands. A command cannot be marked
  *                      both CMD_WRITE and CMD_MAY_REPLICATE
+ *                      WARNING: like CMD_WRITE, a command marked CMD_MAY_REPLICATE
+ *                      is accepted by the RDB inline-replication opcode and runs
+ *                      on load through a fake client with ACL checks bypassed. Only
+ *                      mark a command with it if it is safe to run unconditionally
+ *                      on load.
  *
  * CMD_SENTINEL:    This command is present in sentinel mode.
  *
@@ -3510,6 +3538,7 @@ int bg_unlink(const char *filename);
 /* AOF persistence */
 void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
+sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);
 void aofRemoveTempFile(pid_t childpid, int from_signal);
 int rewriteAppendOnlyFileBackground(void);
 int loadAppendOnlyFiles(aofManifest *am);

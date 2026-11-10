@@ -125,6 +125,22 @@ start_server {tags {"hll"}} {
         }
     } {} {needs:pfdebug}
 
+    test {PFMERGE into a short sparse HLL does not abort when deltalen is zero} {
+        # hll_dst: header (16 bytes) + XZERO(65){0x40,0x40} + XZERO(16319){0x7f,0xbe}
+        # = 20 bytes, stored as SDS_TYPE_5.  With hll-sparse-max-bytes below the
+        # string length the sdsResize() guard is skipped.  Updating register 0 in
+        # the XZERO(65) produces VAL(count,1)+ZERO(64) -- same 2 bytes as the XZERO,
+        # so deltalen == 0.  The SDS_TYPE_5 branch of sdsIncrLen() rejected zero
+        # increment and aborted the server.
+        set hdr [binary format a4c4x8 HYLL {1 0 0 0}]
+        r set hll_dst{t} "$hdr\x40\x40\x7f\xbe"
+        # hll_src: VAL(1,1)={0x80} + XZERO(16383)={0x7f,0xfe}, total 19 bytes
+        r set hll_src{t} "$hdr\x80\x7f\xfe"
+        test_config_set r hll-sparse-max-bytes 0
+        r pfmerge hll_dst{t} hll_src{t}
+        assert_equal 1 [r pfcount hll_dst{t}]
+    }
+
     test {HyperLogLog sparse encoding stress test} {
         for {set x 0} {$x < 1000} {incr x} {
             r del hll1
@@ -154,6 +170,20 @@ start_server {tags {"hll"}} {
         catch {r pfcount hll} e
         set e
     } {*INVALIDOBJ*}
+
+    test {Corrupted sparse HyperLogLogs are detected: Truncated XZERO at tail} {
+        r del hll
+        r pfadd hll
+        # Invalidate the cached cardinality, then three ZEROs of 64, a ZERO
+        # of 63 and the first byte of an XZERO that the NUL terminator would
+        # complete to 16129 registers.
+        r setrange hll 15 "\x80\x3f\x3f\x3f\x3e\x7f"
+        assert_error {*INVALIDOBJ*} {r pfadd hll a}
+        assert_error {*INVALIDOBJ*} {r pfcount hll}
+        assert_error {*INVALIDOBJ*} {r pfmerge hll hll}
+        assert_error {*INVALIDOBJ*} {r pfdebug todense hll}
+        assert_error {*INVALIDOBJ*} {r pfdebug decode hll}
+    } {} {needs:pfdebug}
 
     test {PFADD propagates elements applied before a corrupted sparse HLL error} {
         # A sparse HLL whose single XZERO opcode covers only registers 0..8191.

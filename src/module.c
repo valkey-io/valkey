@@ -578,17 +578,23 @@ void *VM_TryAlloc(size_t bytes) {
     return ztrymalloc_usable(bytes, NULL);
 }
 
+static bool moduleCallocOverflows(size_t nmemb, size_t size) {
+    return size && nmemb > SIZE_MAX / size;
+}
+
 /* Use like calloc(). Memory allocated with this function is reported in
  * INFO memory, used for keys eviction according to maxmemory settings
  * and in general is taken into account as memory allocated by the server.
  * You should avoid using calloc() directly. */
 void *VM_Calloc(size_t nmemb, size_t size) {
+    if (moduleCallocOverflows(nmemb, size)) serverPanic("ValkeyModule_Calloc(%zu, %zu) overflows", nmemb, size);
     return zcalloc_usable(nmemb * size, NULL);
 }
 
 /* Similar to VM_Calloc, but returns NULL in case of allocation failure, instead
  * of panicking. */
 void *VM_TryCalloc(size_t nmemb, size_t size) {
+    if (moduleCallocOverflows(nmemb, size)) return NULL;
     return ztrycalloc_usable(nmemb * size, NULL);
 }
 
@@ -4457,8 +4463,19 @@ void VM_CloseKey(ValkeyModuleKey *key) {
     zfree(key);
 }
 
-/* Return the type of the key. If the key pointer is NULL then
- * VALKEYMODULE_KEYTYPE_EMPTY is returned. */
+/* Return the type of the key as one of the following:
+ *
+ * - VALKEYMODULE_KEYTYPE_EMPTY
+ * - VALKEYMODULE_KEYTYPE_STRING
+ * - VALKEYMODULE_KEYTYPE_LIST
+ * - VALKEYMODULE_KEYTYPE_HASH
+ * - VALKEYMODULE_KEYTYPE_SET
+ * - VALKEYMODULE_KEYTYPE_ZSET
+ * - VALKEYMODULE_KEYTYPE_MODULE
+ * - VALKEYMODULE_KEYTYPE_STREAM
+ * - VALKEYMODULE_KEYTYPE_PATH_HASH
+ *
+ * If the key pointer is NULL then VALKEYMODULE_KEYTYPE_EMPTY is returned. */
 int VM_KeyType(ValkeyModuleKey *key) {
     if (key == NULL || key->value == NULL) return VALKEYMODULE_KEYTYPE_EMPTY;
     /* We map between defines so that we are free to change the internal
@@ -9614,14 +9631,16 @@ void moduleReleaseGIL(void) {
  *  - VALKEYMODULE_NOTIFY_EVICTED: Eviction events
  *  - VALKEYMODULE_NOTIFY_STREAM: Stream events
  *  - VALKEYMODULE_NOTIFY_MODULE: Module types events
- *  - VALKEYMODULE_NOTIFY_KEYMISS: Key-miss events
+ *  - VALKEYMODULE_NOTIFY_PATH_HASH: Path hash events
+ *  - VALKEYMODULE_NOTIFY_NEW: New key events
+ *  - VALKEYMODULE_NOTIFY_KEY_MISS: Key-miss events
  *                                Notice, key-miss event is the only type
  *                                of event that is fired from within a read command.
  *                                Performing VM_Call with a write command from within
  *                                this notification is wrong and discourage. It will
  *                                cause the read command that trigger the event to be
  *                                replicated to the AOF/Replica.
- *  - VALKEYMODULE_NOTIFY_ALL: All events (Excluding VALKEYMODULE_NOTIFY_KEYMISS)
+ *  - VALKEYMODULE_NOTIFY_ALL: All events (Excluding VALKEYMODULE_NOTIFY_KEY_MISS and VALKEYMODULE_NOTIFY_NEW)
  *  - VALKEYMODULE_NOTIFY_LOADED: A special notification available only for modules,
  *                               indicates that the key was loaded from persistence.
  *                               Notice, when this event fires, the given key
@@ -13904,6 +13923,14 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
     if (is_static && handle) {
         dlclose(handle);
         handle = NULL;
+    }
+
+    /* 'prefer-forkless' allows a non-forkless module but will always fall back to fork */
+    if (server.forkless_policy == FORKLESS_POLICY_PREFER_FORKLESS &&
+        !(ctx.module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS)) {
+        serverLog(LL_WARNING, "%sModule %s does not declare VALKEYMODULE_OPTIONS_HANDLE_FORKLESS; "
+                              "with forkless-policy 'prefer-forkless', forkless operations will fall back to fork.",
+                  is_static ? "Static " : "", display_name);
     }
 
     /* Module loaded! Register it. */

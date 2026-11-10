@@ -3144,7 +3144,10 @@ start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluste
         wait_for_log_messages 0 {"*forkless save cancelled*"} $loglines 50 100
         R 0 config set rdb-key-save-delay 0
         wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: fork"} $loglines 50 100
-        wait_for_condition 50 100 {
+        # The replica may reconnect and trigger the fork-based BGSAVE before
+        # the rdb-key-save-delay reset above lands, in which case the forked
+        # child keeps delaying every key, so give the resync a generous budget.
+        wait_for_condition 50 1000 {
             [getInfoProperty [R 2 info replication] master_link_status] eq "up"
         } else {
             fail "Replica didn't resync"

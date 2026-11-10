@@ -716,6 +716,8 @@ typedef struct blockedAsyncHandle {
 blockedAsyncHandle *blockClientAsync(client *c) {
     blockedAsyncHandle *h = zmalloc(sizeof(*h));
     h->client_id = c->id;
+    initClientBlockingState(c);
+    c->bstate->timeout = 0;
     blockClient(c, BLOCKED_ASYNC);
     return h;
 }

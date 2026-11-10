@@ -70,6 +70,15 @@ start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval
         # election at the same time (same epoch). But if they do, we make
         # sure there is no failover timeout.
 
+        # The rank-based delay (0.5 seconds per failed primary) is not always
+        # enough to keep the elections apart: when the first replica wins, the
+        # remaining replicas can drop their failed primary rank at the same
+        # instant and then both start an election in the same epoch, splitting
+        # the votes so that neither reaches the quorum and the attempt expires.
+        # Stagger the elections explicitly so each runs alone in its epoch.
+        R 8 debug cluster-failover-delay 3000
+        R 9 debug cluster-failover-delay 6000
+
         # Killing there primary nodes.
         pause_process [srv 0 pid]
         pause_process [srv -1 pid]

@@ -2466,6 +2466,49 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {}}} {
     }
 }
 
+# A -1 primary_initial_offset is also what a SYNC fallback leaves (the primary
+# rejected PSYNC). That is not a forkless sync, so the RDB repl-id/offset must
+# not be required: the replica loads it and replicates in pre_psync mode.
+start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
+    set src [srv 0 client]
+    $src set k v
+    # Attach a throwaway replica so the save carries repl aux fields for a
+    # replid the replica under test has never seen.
+    start_server {overrides {save ""}} {
+        [srv 0 client] replicaof [srv -1 host] [srv -1 port]
+        wait_for_sync [srv 0 client]
+        waitForBgsave $src
+        $src save
+        [srv 0 client] replicaof no one
+    }
+    set payload [read_binary_file [server_rdb_path $src]]
+    start_server {overrides {save ""}} {
+        foreach load_mode {disabled swapdb} {
+            test "Replica still syncs after a PSYNC to SYNC fallback (repl-diskless-load $load_mode)" {
+                set payload_file [tmpfile fake-primary-payload]
+                write_binary_file $payload_file $payload
+                set port [find_available_port $::baseport $::portcount]
+                set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                             $port $payload_file [string length $payload] "" "-ERR unknown command 'PSYNC'" &]
+                wait_for_condition 50 50 {
+                    [ping_server 127.0.0.1 $port]
+                } else {
+                    fail "Failed to start fake primary"
+                }
+                set replica [srv 0 client]
+                $replica config set repl-diskless-load $load_mode
+                set loglines [count_log_lines 0]
+                $replica replicaof 127.0.0.1 $port
+                wait_for_log_messages 0 {"*Retrying with SYNC*"} $loglines 100 100
+                wait_for_log_messages 0 {"*PRIMARY <-> REPLICA sync: Finished with success*"} $loglines 100 100
+                assert_equal v [$replica get k]
+                $replica replicaof no one
+                catch {exec kill $pid}
+            }
+        }
+    }
+}
+
 # Live writes that arrive after the bg iterator has finished scanning the
 # keyspace, but before the replica has come online, are not captured by the
 # iterator and cannot yet be served from the shared replication buffer. They
@@ -2491,6 +2534,11 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             set load2 [start_write_load $primary_host $primary_port 10]
             set load3 [start_write_load $primary_host $primary_port 10]
             set load4 [start_write_load $primary_host $primary_port 10]
+            wait_for_condition 50 100 {
+                [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 4
+            } else {
+                fail "Write load handlers didn't connect"
+            }
             after 200
             $replica replicaof $primary_host $primary_port
             wait_for_condition 500 100 {
@@ -2505,6 +2553,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             stop_write_load $load2
             stop_write_load $load3
             stop_write_load $load4
+            wait_load_handlers_disconnected -1
             wait_for_ofs_sync $primary $replica
             assert_equal [$primary dbsize] [$replica dbsize]
             assert_equal [$primary debug digest] [$replica debug digest]
@@ -2541,6 +2590,11 @@ foreach primary_diskless {yes no} {
                     test "[string toupper $cmd] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
                         set load1 [start_write_load $ph $pp 8]
                         set load2 [start_write_load $ph $pp 8]
+                        wait_for_condition 50 100 {
+                            [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
+                        } else {
+                            fail "Write load handlers didn't connect"
+                        }
                         $primary config set rdb-key-save-delay 100
                         $replica replicaof $ph $pp
                         wait_for_condition 50 100 {
@@ -2561,6 +2615,7 @@ foreach primary_diskless {yes no} {
                         after 800
                         stop_write_load $load1
                         stop_write_load $load2
+                        wait_load_handlers_disconnected -1
                         wait_for_ofs_sync $primary $replica
                         assert_equal [$primary debug digest] [$replica debug digest]
                         assert_equal 0 [s -1 total_forks]
@@ -2759,6 +2814,11 @@ foreach load_mode {disabled on-empty-db} {
                 set loglines [count_log_lines -1]
                 set load1 [start_write_load $primary_host $primary_port 60]
                 set load2 [start_write_load $primary_host $primary_port 60]
+                wait_for_condition 50 100 {
+                    [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
+                } else {
+                    fail "Write load handlers didn't connect"
+                }
                 after 200
                 $replica replicaof $primary_host $primary_port
 
@@ -2774,6 +2834,7 @@ foreach load_mode {disabled on-empty-db} {
 
                 stop_write_load $load1
                 stop_write_load $load2
+                wait_load_handlers_disconnected -1
                 wait_for_ofs_sync $primary $replica
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal [$primary debug digest] [$replica debug digest]

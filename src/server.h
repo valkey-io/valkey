@@ -2380,6 +2380,8 @@ struct valkeyServer {
      * the server->primary client structure. */
     char primary_replid[CONFIG_RUN_ID_SIZE + 1];   /* Primary PSYNC runid. */
     long long primary_initial_offset;              /* Primary PSYNC offset. */
+    bool primary_initial_offset_in_rdb;            /* Set on +FULLRESYNC <replid> -1: start offset
+                                                    * comes from the RDB repl-offset aux field. */
     int repl_replica_lazy_flush;                   /* Lazy FLUSHALL before loading DB? */
     monotime repl_full_sync_start_time;            /* Monotonic time when full sync started. */
     long long repl_full_sync_complete_duration_ms; /* Duration of the last successful full sync in ms. */

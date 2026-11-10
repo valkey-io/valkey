@@ -1308,6 +1308,21 @@ start_server {tags {"scripting external:skip large-memory"}} {
 }
 
 start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - server.error_reply with a string larger than 2GB} {
+        # The formatted "-<msg>" error is longer than INT_MAX, which vsnprintf() rejects.
+        # With jemalloc, the short error_reply() leaves "-PRIME" in the allocation that a failed
+        # vsnprintf() would hand back unwritten, so the bug yields "ERR PRIME", not "ERR ".
+        run_script {
+            local s = string.rep("a", 1024 * 1024)
+            for i=1,9 do s = s .. s end
+            s = s .. s .. s .. s
+            server.error_reply("-PRIME")
+            return {#s, server.error_reply(s)["err"]}
+        } 0
+    } {2147483648 {ERR }}
+}
+
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Test long escape sequences for strings} {
         r eval {
             -- Generate 1gb '==...==' separator
@@ -1389,6 +1404,58 @@ start_server {tags {"scripting"}} {
         $rd close
 
         assert_match {*killed by user*} $res
+    }
+
+    test {Timed out read-only scripts can be killed by SCRIPT KILL even when use nested coroutines} {
+        set rd [valkey_deferring_client]
+        r config set lua-time-limit 10
+        run_script_on_connection $rd {
+            local function spin() while true do end end
+            local function mid() while true do coroutine.resume(coroutine.create(spin)) end end
+            while true do coroutine.resume(coroutine.create(mid)) end
+        } 0
+
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+        assert_match {BUSY*} $e
+
+        kill_script
+
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 0
+        } else {
+            fail "Can't wait for script to be killed"
+        }
+        assert_equal [r ping] "PONG"
+
+        catch {$rd read} res
+        $rd close
+
+        assert_match {*killed by user*} $res
+    }
+
+    test {Timed out scripts are detected even when each coroutine runs briefly} {
+        set rd [valkey_deferring_client]
+        r config set lua-time-limit 10
+        run_script_on_connection $rd {
+            local function spin() for i=1,10000 do end end
+            local function mid() for i=1,50 do coroutine.resume(coroutine.create(spin)) end end
+            for i=1,50 do coroutine.resume(coroutine.create(mid)) end
+        } 0
+
+        # The script only runs for a moment, so poll often.
+        wait_for_condition 500 10 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+        assert_match {BUSY*} $e
+
+        $rd read
+        $rd close
     }
 
     test {Timed out script does not cause a false dead client} {
@@ -1859,6 +1926,16 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r write "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
         r flush
         assert_match {*PONG*} [r read]
+        reconnect
+    }
+
+    test {Test scripting debug with an empty script} {
+        r script debug sync
+        assert_match {{* Stopped at 1, stop reason = step over} *} [r eval "\r\n" 0]
+        r write "*1\r\n\$4\r\nstep\r\n"
+        r flush
+        assert_equal {<endsession>} [r read]
+        assert_equal {} [r read]
         reconnect
     }
 }

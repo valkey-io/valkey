@@ -1692,10 +1692,14 @@ void clusterInitLast(void) {
     }
 }
 
+/* Request a best-effort failover to a fully synchronized replica on shutdown.
+ * Only known cluster nodes without NOFAILOVER are eligible.
+ * Skip failover if any connected replica is older than 9.0.
+ * The caller must flush replica output buffers before exiting. */
 void clusterAutoFailoverOnShutdown(void) {
     if (!nodeIsPrimary(myself)) return;
 
-    /* Find the first best replica, that is, the replica with the largest offset. */
+    /* Find a fully synchronized replica without NOFAILOVER. */
     int legacy_replica = 0;
     client *best_replica = NULL;
     listIter replicas_iter;
@@ -1713,7 +1717,8 @@ void clusterAutoFailoverOnShutdown(void) {
         if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
             replica->repl_data->repl_ack_off == server.primary_repl_offset &&
             replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
-            best_replica = replica;
+            clusterNode *node = clusterLookupNode(replica->repl_data->replica_nodeid, CLUSTER_NAMELEN);
+            if (node && !clusterNodeIsNoFailover(node)) best_replica = replica;
         }
     }
 

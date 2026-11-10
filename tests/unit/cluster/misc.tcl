@@ -191,8 +191,12 @@ proc get_nodes_conf_path {srv_idx} {
 # failure and it will cause cluster config file save to fail at the rename.
 proc create_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
-    if {[file exists $cluster_conf_path]} { exec rm -rf $cluster_conf_path }
-    exec mkdir -p $cluster_conf_path
+    # Retry: a background config save can recreate nodes.conf between the rm and the mkdir.
+    wait_for_condition 50 100 {
+        ![catch {exec rm -rf $cluster_conf_path; exec mkdir -p $cluster_conf_path}]
+    } else {
+        fail "Could not create folder $cluster_conf_path"
+    }
 }
 
 # Remove the folder (or nodes.conf) that we created from create_nodes_conf_folder.

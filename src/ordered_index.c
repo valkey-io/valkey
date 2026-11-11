@@ -722,7 +722,7 @@ int orderedIndexGetHeight(const OrderedIndex *oi) {
 }
 
 unsigned long orderedIndexGetNumLeaves(const OrderedIndex *oi) {
-    return fbtreeNumLeaves((fbtreeIndex *)oi);
+    return fbtreeNumLeaves((const fbtreeIndex *)oi);
 }
 
 int orderedIndexVerifyIntegrity(const OrderedIndex *oi, char *errmsg, size_t errmsg_len) {

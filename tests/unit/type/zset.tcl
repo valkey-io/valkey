@@ -4189,7 +4189,9 @@ start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
     }
 
     test {ZSET btree leaf compaction pauses while a child process exists} {
-        test_config_set r rdb-key-save-delay 1000000
+        # 10 s per key: the child must outlive the removals below even on a
+        # slow runner, and it is killed as soon as the check is done.
+        test_config_set r rdb-key-save-delay 10000000
         r del z1{t} z2{t}
         set n 12000
 

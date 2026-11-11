@@ -396,6 +396,19 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         assert_equal 0 [CI 0 cluster_slots_assigned]
         assert_equal 1 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
 
+        # So are snapshots with a duplicate node or a myself flag.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected"
+        foreach bad [list "\n$node_id $node_addr master - 0 0 1 connected" \
+                          "\n$c_id $c_addr myself,master - 0 0 1 connected"] {
+            raft_send $fd "$snapshot$bad"
+            while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+            assert_match "AE_ACK 1 0 *" $reply
+        }
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
+        assert_equal 3 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
+
         # A valid snapshot without C removes C and closes its link. The leak
         # check at shutdown catches links that aren't freed. The snapshot
         # covers all slots, so the cluster becomes ok, and CLUSTER SLOTS

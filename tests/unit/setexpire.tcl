@@ -3021,3 +3021,187 @@ start_server {tags {"setexpire needs:repl external:skip"}} {
         }
     }
 }
+
+start_server {tags {"setexpire external:skip"}} {
+    test {MULTI/EXEC uses one time for set member expiration} {
+        flush_and_disable_active_expiry
+        r SADDEX myset PX 100 MEMBERS 1 m1
+        r MULTI
+        r DEBUG SLEEP 0.2
+        r SISMEMBER myset m1
+        assert_equal {OK 1} [r EXEC]
+        assert_equal 0 [r SISMEMBER myset m1]
+    } {} {needs:debug}
+
+    test {A script uses one time for set member expiration} {
+        flush_and_disable_active_expiry
+        r DEBUG set-disable-deny-scripts 1
+        test_defer {r DEBUG set-disable-deny-scripts 0}
+        set res [r EVAL {
+            redis.call("SADDEX", KEYS[1], "PX", 100, "MEMBERS", 1, "m1")
+            redis.call("DEBUG", "SLEEP", 0.2)
+            return redis.call("SISMEMBER", KEYS[1], "m1")
+        } 1 myset]
+        assert_equal 1 $res
+        assert_equal 0 [r SISMEMBER myset m1]
+    } {} {needs:debug}
+
+    test {WATCH fires when active expiry reclaims a set member} {
+        flush_and_disable_active_expiry
+        r SADD myset keep
+        r SADDEX myset PX 1 MEMBERS 1 m1
+        r WATCH myset
+        r DEBUG SET-ACTIVE-EXPIRE 1
+        wait_for_condition 100 10 {
+            [r SCARD myset] == 1
+        } else {
+            fail "m1 was not reclaimed"
+        }
+        r MULTI
+        r PING
+        r EXEC
+    } {} {needs:debug}
+
+    test {Client tracking is notified when active expiry reclaims a set member} {
+        flush_and_disable_active_expiry
+        set rd [valkey_deferring_client]
+        $rd CLIENT ID
+        set redir_id [$rd read]
+        $rd SUBSCRIBE __redis__:invalidate
+        $rd read
+        r CLIENT TRACKING on BCAST REDIRECT $redir_id NOLOOP
+        r SADD myset keep
+        r SADDEX myset PX 1 MEMBERS 1 m1
+        r DEBUG SET-ACTIVE-EXPIRE 1
+        assert_equal {myset} [lindex [$rd read] 2]
+        $rd close
+        r CLIENT TRACKING off
+    } {OK} {needs:debug}
+
+    foreach cmd {MOVE SWAPDB} {
+        test "$cmd keeps member TTLs and active expiry of the moved set" {
+            flush_and_disable_active_expiry
+            r SELECT 9
+            r FLUSHDB
+            r SELECT 0
+            r SADD myset keep
+            r SADDEX myset PX 500 MEMBERS 1 m1
+            r SADDEX myset PX 600000 MEMBERS 1 m2
+            if {$cmd eq "MOVE"} {
+                assert_equal 1 [r MOVE myset 9]
+            } else {
+                r SWAPDB 0 9
+            }
+            r SELECT 9
+            assert_range [set_member_ttl r myset m2] 1 600
+            assert_equal 1 [get_keys_with_volatile_items r 9]
+            r DEBUG SET-ACTIVE-EXPIRE 1
+            wait_for_condition 100 100 {
+                [r SCARD myset] == 2
+            } else {
+                fail "active expiry did not reclaim m1 after $cmd"
+            }
+            r FLUSHDB
+            r SELECT 0
+            assert_equal 0 [get_keys_with_volatile_items r 0]
+        } {} {needs:debug singledb:skip}
+    }
+
+    test {SINTERCARD LIMIT does not count an expired member} {
+        flush_and_disable_active_expiry
+        r SADD s1{t} a b c
+        r SADD s2{t} a b c
+        make_members_expired r s1{t} {a}
+        assert_equal 2 [r SINTERCARD 2 s1{t} s2{t} LIMIT 3]
+        assert_equal 2 [r SINTERCARD 1 s1{t} LIMIT 3]
+        assert_equal 1 [r SINTERCARD 2 s1{t} s2{t} LIMIT 1]
+    } {} {needs:debug}
+
+    test {Key expiry of a volatile set untracks the key} {
+        r FLUSHALL
+        r SADDEX myset PX 600000 MEMBERS 1 a
+        assert_equal 1 [get_keys_with_volatile_items r]
+        r PEXPIRE myset 10
+        wait_for_condition 100 10 {
+            [r EXISTS myset] == 0
+        } else {
+            fail "the key did not expire"
+        }
+        assert_equal 0 [get_keys_with_volatile_items r]
+    }
+
+    test {SADDEX rejects an out-of-range expire time} {
+        r FLUSHALL
+        foreach {unit value} {EX -10 PX -50 EXAT -1 PXAT -1 EX 9223372036854775807 PX 9223372036854775807} {
+            assert_error "ERR invalid expire time in 'saddex' command" \
+                {r SADDEX myset $unit $value MEMBERS 1 a}
+        }
+        assert_equal 0 [r EXISTS myset]
+    }
+
+    foreach encoding {listpack hashtable} {
+        test "RESTORE rejects a truncated or negative-expiry SET_2 payload - $encoding" {
+            r FLUSHALL
+            use_set_encoding $encoding
+            r DEBUG SET-SKIP-CHECKSUM-VALIDATION 1
+            # The header announces two members, but the payload carries one.
+            set truncated [binary format cc 24 2]
+            append truncated [binary format c 2] aa [binary format w -1] [binary format sw 82 0]
+            assert_error "*Bad data format*" {r RESTORE myset 0 $truncated}
+            assert_error "*Bad data format*" {r RESTORE myset 0 [set2_payload {aa -2}]}
+            assert_equal 0 [r EXISTS myset]
+            r DEBUG SET-SKIP-CHECKSUM-VALIDATION 0
+            use_set_encoding listpack
+        } {OK} {needs:debug}
+    }
+}
+
+start_server {tags {"setexpire needs:repl external:skip"}} {
+    start_server {} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+        attach_replica $primary $replica $primary_host $primary_port
+
+        test {A writable replica accepts SADD and SPEXPIRE on a hidden member} {
+            $primary FLUSHALL
+            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            $replica config set replica-read-only no
+            $primary SADD myset keep m1
+            make_members_expired $primary myset {m1}
+            wait_for_ofs_sync $primary $replica
+            assert_equal 2 [$replica SCARD myset]
+            assert_equal 0 [$replica SISMEMBER myset m1]
+
+            assert_equal 1 [$replica SADD myset m1]
+            assert_equal 1 [$replica SISMEMBER myset m1]
+            assert_equal -1 [set_member_ttl $replica myset m1]
+            assert_equal {1} [$replica SPEXPIRE myset 600000 MEMBERS 1 m1]
+            assert_range [set_member_ttl $replica myset m1] 1 600
+
+            $replica config set replica-read-only yes
+            $primary FLUSHALL
+            $primary DEBUG SET-ACTIVE-EXPIRE 1
+        } {OK} {needs:debug}
+
+        test {SMOVE and SORT STORE over a hidden member store the same result on the replica} {
+            $primary FLUSHALL
+            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            $primary SADD src{t} live gone
+            make_members_expired $primary src{t} {gone}
+            $primary SADD dst{t} other
+            wait_for_ofs_sync $primary $replica
+            assert_equal 2 [$replica SCARD src{t}]
+
+            assert_equal 0 [$primary SMOVE src{t} dst{t} gone]
+            assert_equal 1 [$primary SORT src{t} ALPHA STORE l{t}]
+            wait_for_ofs_sync $primary $replica
+            assert_equal {other} [$replica SMEMBERS dst{t}]
+            assert_equal [$primary SCARD dst{t}] [$replica SCARD dst{t}]
+            assert_equal {live} [$replica LRANGE l{t} 0 -1]
+
+            $primary DEBUG SET-ACTIVE-EXPIRE 1
+        } {OK} {needs:debug}
+    }
+}

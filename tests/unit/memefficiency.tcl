@@ -181,7 +181,7 @@ run_solo {defrag} {
                 # slow CI runners can still substantially delay the while-blocked cron. Keep enough latency
                 # headroom while the fragmentation and hit assertions above verify that defrag made progress.
                 if {!$::no_latency} {
-                    assert {$max_latency <= 1000}
+                    assert {$max_latency <= 500}
                 }
             }
             } ;# Active defrag - AOF loading

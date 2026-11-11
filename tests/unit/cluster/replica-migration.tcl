@@ -51,13 +51,6 @@ proc test_migrated_replica {type} {
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration yes
 
-        # Make server 4 (the freshest replica) win deterministically: servers 3/7
-        # hold off their elections, while rank #0 server 4 keeps only its small
-        # rank-based delay. Unlike unstable, no delay is set on server 4 since
-        # this branch has no best ranked replica fast path to bypass it.
-        R 3 debug cluster-failover-delay 3000
-        R 7 debug cluster-failover-delay 3000
-
         if {$type == "shutdown"} {
             # Shutdown primary 0.
             catch {R 0 shutdown nosave}
@@ -162,12 +155,6 @@ proc test_nonempty_replica {type} {
         R 7 config set cluster-allow-replica-migration yes
         R 7 cluster replicate [R 0 cluster myid]
 
-        # Make server 4 (the freshest replica) win deterministically: server 7
-        # holds off its election, while rank #0 server 4 keeps only its small
-        # rank-based delay. Unlike unstable, no delay is set on server 4 since
-        # this branch has no best ranked replica fast path to bypass it.
-        R 7 debug cluster-failover-delay 3000
-
         if {$type == "shutdown"} {
             # Shutdown primary 0.
             catch {R 0 shutdown nosave}
@@ -255,13 +242,6 @@ proc test_sub_replica {type} {
         R 7 config set cluster-replica-validity-factor 0
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration no
-
-        # Make server 4 (the freshest replica) win deterministically: servers 3/7
-        # hold off their elections, while rank #0 server 4 keeps only its small
-        # rank-based delay. Unlike unstable, no delay is set on server 4 since
-        # this branch has no best ranked replica fast path to bypass it.
-        R 3 debug cluster-failover-delay 3000
-        R 7 debug cluster-failover-delay 3000
 
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000

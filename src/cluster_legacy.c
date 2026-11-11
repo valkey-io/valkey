@@ -5045,10 +5045,6 @@ void clusterHandleReplicaFailover(void) {
          * elected in rank to avoid the vote conflicts. */
         server.cluster->failover_failed_primary_rank = clusterGetFailedPrimaryRank();
         server.cluster->failover_auth_time += server.cluster->failover_failed_primary_rank * 500;
-        /* We add another artificial delay for testing, as a way to make the
-         * election order deterministic. It is 0 unless set by DEBUG
-         * CLUSTER-FAILOVER-DELAY. */
-        server.cluster->failover_auth_time += server.debug_cluster_failover_delay;
         /* However if this is a manual failover, no delay is needed. */
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = now;

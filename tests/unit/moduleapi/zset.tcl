@@ -167,6 +167,59 @@ start_server {tags {"modules"}} {
     }
     r config set zset-max-listpack-entries 128
 
+    test "Module zset write through the open key ends the range iteration - listpack" {
+        r del k
+        r zadd k 1 a 2 b 3 c 4 d 5 e
+        assert_equal listpack [r object encoding k]
+        # Every write reallocates or shifts the listpack the iterator points
+        # into. The iteration must end instead of following the old pointer.
+        assert_equal {1 {} 0} [r zset.writewhilewalking k first rem a b c]
+        assert_equal {1 {} 0} [r zset.writewhilewalking k last add x y z]
+        assert_equal {1 {} 0} [r zset.writewhilewalking k first incrby d e]
+        assert_equal {x 0 y 0 z 0 d 5 e 6} [r zrange k 0 -1 withscores]
+    }
+
+    r config set zset-max-listpack-entries 0
+    set members {}
+    for {set i 0} {$i < 2000} {incr i} {
+        lappend members $i [format m%04d $i]
+    }
+
+    test "Module zset write through the open key ends the range iteration - btree, emptied leaf" {
+        r del k
+        r zadd k {*}$members
+        assert_equal btree [r object encoding k]
+        # Removing the first 100 members empties the leaf that holds the
+        # iterator's current element, so the leaf is freed.
+        set first100 {}
+        for {set i 0} {$i < 100} {incr i} {
+            lappend first100 [format m%04d $i]
+        }
+        assert_equal {1 {} 0} [r zset.writewhilewalking k first rem {*}$first100]
+        assert_equal 1900 [r zcard k]
+        assert_equal m0100 [lindex [r zrange k 0 0] 0]
+    }
+
+    test "Module zset write through the open key ends the range iteration - btree, compacted leaves" {
+        r del k
+        r zadd k {*}$members
+        assert_equal btree [r object encoding k]
+        # Removing two of every three members leaves the leaves sparse without
+        # emptying any of them, so the delete path compacts them and frees the
+        # surplus leaves, among them the one holding the last element m1999,
+        # which is never removed itself.
+        set scattered {}
+        for {set i 1} {$i < 1998} {incr i} {
+            if {$i % 3 != 0} {
+                lappend scattered [format m%04d $i]
+            }
+        }
+        assert_equal {1 {} 0} [r zset.writewhilewalking k last rem {*}$scattered]
+        assert_equal [expr {2000 - [llength $scattered]}] [r zcard k]
+        assert_equal m1999 [lindex [r zrange k -1 -1] 0]
+    }
+    r config set zset-max-listpack-entries 128
+
     test "Unload the module - zset" {
         assert_equal {OK} [r module unload zset]
     }

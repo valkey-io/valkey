@@ -5104,11 +5104,17 @@ int moduleZsetAddFlagsFromCoreFlags(int flags) {
  * * The key was not opened for writing.
  * * The key is of the wrong type.
  * * 'score' double value is not a number (NaN).
- */
+ *
+ * If a range iteration is active on this key (see
+ * ValkeyModule_ZsetFirstInScoreRange() and the related functions), this call
+ * ends it, as ValkeyModule_ZsetRangeStop() would. */
 int VM_ZsetAdd(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, int *flagsptr) {
     int in_flags = 0, out_flags = 0;
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value && objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
+    /* The range iterator points into the sorted set, so a change to the set
+     * could leave it dangling. End the iteration first. */
+    VM_ZsetRangeStop(key);
     if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_ZSET);
     if (flagsptr) in_flags = moduleZsetAddFlagsToCoreFlags(*flagsptr);
     if (zsetAdd(key->value, score, objectGetVal(ele), in_flags, &out_flags, NULL) == 0) {
@@ -5137,6 +5143,7 @@ int VM_ZsetIncrby(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, i
     int in_flags = 0, out_flags = 0;
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value && objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
+    VM_ZsetRangeStop(key); /* See VM_ZsetAdd(). */
     if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_ZSET);
     if (flagsptr) in_flags = moduleZsetAddFlagsToCoreFlags(*flagsptr);
     in_flags |= ZADD_IN_INCR;
@@ -5166,10 +5173,14 @@ int VM_ZsetIncrby(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, i
  * The 'deleted' argument can be NULL if the caller is not interested
  * to know if the element was really removed.
  *
- * Empty keys will be handled correctly by doing nothing. */
+ * Empty keys will be handled correctly by doing nothing.
+ *
+ * If a range iteration is active on this key, this call ends it, as
+ * ValkeyModule_ZsetRangeStop() would. */
 int VM_ZsetRem(ValkeyModuleKey *key, ValkeyModuleString *ele, int *deleted) {
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value && objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
+    VM_ZsetRangeStop(key); /* See VM_ZsetAdd(). */
     if (key->value != NULL && zsetDel(key->value, objectGetVal(ele))) {
         if (deleted) *deleted = 1;
         moduleDelKeyIfEmpty(key);
@@ -5278,7 +5289,15 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
  *
  * 'minex' and 'maxex' parameters, if true, respectively set up a range
  * where the min and max value are exclusive (not included) instead of
- * inclusive. */
+ * inclusive.
+ *
+ * The iteration ends when ValkeyModule_ZsetRangeStop() is called, or when
+ * the sorted set is changed through this key with ValkeyModule_ZsetAdd(),
+ * ValkeyModule_ZsetIncrby() or ValkeyModule_ZsetRem(). After that,
+ * ValkeyModule_ZsetRangeEndReached() returns true and
+ * ValkeyModule_ZsetRangeCurrentElement() returns NULL; start a new range to
+ * continue. A change made in any other way, for example with
+ * ValkeyModule_Call(), is not detected: stop the iteration before it. */
 int VM_ZsetFirstInScoreRange(ValkeyModuleKey *key, double min, double max, int minex, int maxex) {
     return zsetInitScoreRange(key, min, max, minex, maxex, 1);
 }
@@ -5341,7 +5360,9 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
  * 'min' and 'max' should be provided as two ValkeyModuleString objects
  * in the same format as the parameters passed to the ZRANGEBYLEX command.
  * The function does not take ownership of the objects, so they can be released
- * ASAP after the iterator is setup. */
+ * ASAP after the iterator is setup.
+ *
+ * The iteration ends as described for ValkeyModule_ZsetFirstInScoreRange(). */
 int VM_ZsetFirstInLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModuleString *max) {
     return zsetInitLexRange(key, min, max, 1);
 }

@@ -215,6 +215,57 @@ int zset_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* ZSET.WRITEWHILEWALKING key first|last rem|add|incrby member [member ...]
+ *
+ * Seeks the first (or last) element of the full score range and then, with
+ * the range iteration still active, writes every listed member through the
+ * same open key: ZsetRem removes it, ZsetAdd sets its score to 0, ZsetIncrby
+ * adds 1 to its score. Replies with an array of three items: the end-reached
+ * flag after the writes, the current element or null, and the number of
+ * steps (ZsetRangeNext after first, ZsetRangePrev after last) that still
+ * moved.
+ */
+int zset_writewhilewalking(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 5) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
+    if (ValkeyModule_KeyType(key) != VALKEYMODULE_KEYTYPE_ZSET)
+        return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
+
+    size_t len;
+    const char *dir = ValkeyModule_StringPtrLen(argv[2], &len);
+    int last = !strcasecmp(dir, "last");
+    if (!last && strcasecmp(dir, "first")) return ValkeyModule_ReplyWithError(ctx, "ERR direction must be first or last");
+    const char *op = ValkeyModule_StringPtrLen(argv[3], &len);
+    if (strcasecmp(op, "rem") && strcasecmp(op, "add") && strcasecmp(op, "incrby"))
+        return ValkeyModule_ReplyWithError(ctx, "ERR operation must be rem, add or incrby");
+
+    int rc = last ? ValkeyModule_ZsetLastInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                       VALKEYMODULE_POSITIVE_INFINITE, 0, 0)
+                  : ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                        VALKEYMODULE_POSITIVE_INFINITE, 0, 0);
+    if (rc != VALKEYMODULE_OK) return ValkeyModule_ReplyWithError(ctx, "ERR range init failed");
+
+    for (int i = 4; i < argc; i++) {
+        if (!strcasecmp(op, "rem"))
+            rc = ValkeyModule_ZsetRem(key, argv[i], NULL);
+        else if (!strcasecmp(op, "add"))
+            rc = ValkeyModule_ZsetAdd(key, 0, argv[i], NULL);
+        else
+            rc = ValkeyModule_ZsetIncrby(key, 1, argv[i], NULL, NULL);
+        if (rc != VALKEYMODULE_OK) return ValkeyModule_ReplyWithError(ctx, "ERR write failed");
+    }
+
+    ValkeyModule_ReplyWithArray(ctx, 3);
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ZsetRangeEndReached(key));
+    zset_walk_reply_current(ctx, key);
+    long long steps = 0;
+    while (last ? ValkeyModule_ZsetRangePrev(key) : ValkeyModule_ZsetRangeNext(key)) steps++;
+    ValkeyModule_ReplyWithLongLong(ctx, steps);
+    ValkeyModule_ZsetRangeStop(key);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -246,6 +297,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.walk", zset_walk, "readonly",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.writewhilewalking", zset_writewhilewalking, "write",
                                   1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 

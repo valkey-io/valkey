@@ -607,6 +607,46 @@ tags "modules" {
                     assert_equal [$replica propagate-test.obeyed] 2
                 }
 
+                test {module RM_Call of HSETEX KEEPTTL over the last expired field} {
+                    $master module load $miscmodule
+                    $replica module load $miscmodule
+                    $master debug set-active-expire 0
+                    $master config set appendonly yes
+                    waitForBgrewriteaof $master
+
+                    foreach {encoding max_entries} {listpack 128 hashtable 0} {
+                        foreach instance [list $master $replica] {
+                            $instance config set hash-max-listpack-entries $max_entries
+                        }
+                        # Without '!' only the field expiration is propagated, so the expired value
+                        # must not come back, and a replicated FNX must still apply.
+                        foreach {cmd args expected} {
+                            rm_call {KEEPTTL FIELDS 1 f1 new} {}
+                            rm_call_replicate {KEEPTTL FIELDS 1 f1 new} new
+                            rm_call_replicate {FNX KEEPTTL FIELDS 1 f1 new} new
+                        } {
+                            $master del h1
+                            $master hsetex h1 PX 1 FIELDS 1 f1 old
+                            after 10
+                            assert_equal $encoding [$master object encoding h1]
+                            assert_equal 1 [$master test.$cmd hsetex h1 {*}$args]
+                            assert_equal new [$master hget h1 f1]
+
+                            wait_for_ofs_sync $master $replica
+                            assert_equal $expected [$replica hget h1 f1]
+                            $master debug loadaof
+                            assert_equal $expected [$master hget h1 f1]
+                        }
+                    }
+
+                    $master del h1
+                    $master config set appendonly no
+                    foreach instance [list $master $replica] {
+                        $instance config set hash-max-listpack-entries 128
+                    }
+                    $master debug set-active-expire 1
+                }
+
                 test {module notification on set} {
                     set repl [attach_to_replication_stream]
 

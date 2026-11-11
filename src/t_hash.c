@@ -1790,6 +1790,7 @@ void hsetexCommand(client *c) {
     int need_rewrite_argv = 0;
     robj **keepttl_fields = NULL;
     int expired_overwritten = 0;
+    int drop_keepttl = 0;
 
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
@@ -1872,7 +1873,7 @@ void hsetexCommand(client *c) {
         new_argv[new_argc++] = shared.hdel;
         new_argv[new_argc++] = c->argv[1];
         incrRefCount(c->argv[1]);
-    } else if (need_rewrite_argv) {
+    } else if (need_rewrite_argv && !(flags & ARGS_KEEPTTL)) {
         /* We use new_argv for rewrite */
         new_argv = zmalloc(sizeof(robj *) * c->argc);
         // Copy optional args (skip NX/XX/FNX/FXX)
@@ -1933,12 +1934,37 @@ void hsetexCommand(client *c) {
                 expired_overwritten++;
             }
 
-            if (need_rewrite_argv) {
+            if (need_rewrite_argv && !(flags & ARGS_KEEPTTL)) {
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
                 new_argv[new_argc++] = c->argv[i + 1];
                 incrRefCount(c->argv[i + 1]);
             }
+        }
+    }
+
+    /* If an expired field was overwritten and no field kept a TTL, KEEPTTL did nothing, so we propagate the
+     * command without it. The replica then clears the stale TTL itself, without the HDEL below. This is checked
+     * after the writes, so it matches how hashTypeSet() treated each field. */
+    if (flags & ARGS_KEEPTTL) {
+        if (expired_overwritten > 0) {
+            drop_keepttl = 1;
+            for (i = fields_index; i < c->argc && hashTypeHasVolatileFields(o); i += 2) {
+                mstime_t expiry;
+                if (hashTypeGetExpiry(o, objectGetVal(c->argv[i]), &expiry) == C_OK && expiry != EXPIRY_NONE) {
+                    drop_keepttl = 0;
+                    break;
+                }
+            }
+        }
+        if (drop_keepttl || need_rewrite_argv) {
+            need_rewrite_argv = 1;
+            new_argv = zmalloc(sizeof(robj *) * c->argc);
+            new_argv[new_argc++] = c->argv[0];
+            new_argv[new_argc++] = c->argv[1];
+            if (!drop_keepttl) new_argv[new_argc++] = shared.keepttl;
+            for (i = fields_index - 2; i < c->argc; i++) new_argv[new_argc++] = c->argv[i];
+            for (i = 0; i < new_argc; i++) incrRefCount(new_argv[i]);
         }
     }
 
@@ -1956,11 +1982,16 @@ void hsetexCommand(client *c) {
              * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field, so
              * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side. */
             if (keepttl_fields != NULL) {
-                /* Propagate individual fields deletions */
-                int idx = 0;
-                while (idx < expired_overwritten) {
-                    idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
-                                                   &keepttl_fields[idx], c->slot);
+                /* Without KEEPTTL the replica clears the TTL itself, unless replication is disabled (RM_Call without '!') */
+                if (drop_keepttl && server.replication_allowed) {
+                    for (i = 0; i < expired_overwritten; i++) decrRefCount(keepttl_fields[i]);
+                } else {
+                    /* Propagate individual fields deletions */
+                    int idx = 0;
+                    while (idx < expired_overwritten) {
+                        idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
+                                                       &keepttl_fields[idx], c->slot);
+                    }
                 }
                 zfree(keepttl_fields);
                 keepttl_fields = NULL;

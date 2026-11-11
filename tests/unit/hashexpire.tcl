@@ -4860,6 +4860,39 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {v2} [$replica hget myhash f1]
             $primary debug set-active-expire 1
         } {OK} {needs:debug}
+
+        foreach {encoding max_entries} {listpack 128 hashtable 0} {
+            test "HSETEX KEEPTTL over the last expired field keeps the key TTL on the replica - $encoding" {
+                lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+                $primary debug set-active-expire 0
+                foreach instance [list $primary $replica] {
+                    $instance config set hash-max-listpack-entries $max_entries
+                }
+
+                $primary hsetex myhash PX 1 fields 1 f1 v1
+                $primary expire myhash 1000
+                wait_for_condition 50 100 {
+                    [$primary httl myhash fields 1 f1] == -2
+                } else {
+                    fail "Field was not logically expired on primary"
+                }
+                wait_for_ofs_sync $primary $replica
+                assert_equal $encoding [$primary object encoding myhash]
+                assert_equal $encoding [$replica object encoding myhash]
+
+                $primary hsetex myhash KEEPTTL fields 1 f1 v2
+                wait_for_ofs_sync $primary $replica
+
+                assert_equal {v2} [$replica hget myhash f1]
+                assert_equal {-1} [$replica httl myhash fields 1 f1]
+                assert_range [$primary ttl myhash] 900 1000
+                assert_range [$replica ttl myhash] 900 1000
+                foreach instance [list $primary $replica] {
+                    $instance config set hash-max-listpack-entries 128
+                }
+                $primary debug set-active-expire 1
+            } {OK} {needs:debug}
+        }
     }
 }
 
@@ -5696,6 +5729,78 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
             r debug loadaof
             assert_equal 0 [r hexists myhash live]
             assert_equal 1 [r exists myhash]
+        }
+
+        test "HSETEX KEEPTTL over the last expired field keeps the key TTL when loading the AOF - $encoding" {
+            setup_expired_field_aof
+            r hdel myhash live
+            r expire myhash 1000
+            assert_encoding $encoding myhash
+
+            set repl [attach_to_replication_stream]
+            r hsetex myhash KEEPTTL FIELDS 1 expired v2
+            assert_replication_stream $repl {
+                {select *}
+                {hsetex myhash FIELDS 1 expired v2}
+            }
+            close_replication_stream $repl
+
+            r debug loadaof
+            assert_equal v2 [r hget myhash expired]
+            assert_equal -1 [r httl myhash FIELDS 1 expired]
+            assert_range [r ttl myhash] 900 1000
+        }
+
+        test "HSETEX FNX KEEPTTL over an expired field drops KEEPTTL and FNX from the propagated command - $encoding" {
+            setup_expired_field_aof
+
+            set repl [attach_to_replication_stream]
+            r hsetex myhash FNX KEEPTTL FIELDS 1 expired v2
+            assert_replication_stream $repl {
+                {select *}
+                {hsetex myhash FIELDS 1 expired v2}
+            }
+            close_replication_stream $repl
+        }
+
+        test "HSETEX KEEPTTL over expired and live fields keeps the live TTL when loading the AOF - $encoding" {
+            setup_expired_field_aof
+            r expire myhash 1000
+
+            set repl [attach_to_replication_stream]
+            r hsetex myhash KEEPTTL FIELDS 2 expired v2 live v2
+            assert_replication_stream $repl {
+                {multi}
+                {select *}
+                {hdel myhash expired}
+                {hsetex myhash KEEPTTL FIELDS 2 expired v2 live v2}
+                {exec}
+            }
+            close_replication_stream $repl
+
+            r debug loadaof
+            assert_equal -1 [r httl myhash FIELDS 1 expired]
+            assert_morethan [r httl myhash FIELDS 1 live] 0
+            assert_range [r ttl myhash] 900 1000
+        }
+
+        foreach {mode reloaded} {REPL_NONE {} REPL_AOF v2} {
+            test "HSETEX KEEPTTL over an expired field from a script with $mode - $encoding" {
+                setup_expired_field_aof
+
+                set repl [attach_to_replication_stream]
+                r eval "server.set_repl(server.$mode)
+                        return server.call('hsetex', KEYS\[1\], 'KEEPTTL', 'FIELDS', 1, 'expired', 'v2')" 1 myhash
+                r set marker 1
+                assert_replication_stream $repl {
+                    {select *}
+                    {set marker 1}
+                }
+                close_replication_stream $repl
+
+                r debug loadaof
+                assert_equal $reloaded [r hget myhash expired]
+            }
         }
     }
 }

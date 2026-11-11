@@ -101,6 +101,12 @@ start_server {tags {"scripting"}} {
         r get x
     } {}
 
+    test {EVAL - Return or raise error table with a metatable that raises error} {
+        catch {run_script {return setmetatable({err='x'}, {__index=function() error('boom') end})} 0}
+        catch {run_script {error(setmetatable({}, {__index=function() error('boom') end}))} 0}
+        r ping
+    } {PONG}
+
     test {EVAL - Lua integer -> Redis protocol type conversion} {
         run_script {return 100.5} 0
     } {100}
@@ -1052,6 +1058,12 @@ start_server {tags {"scripting"}} {
         r del scriptkey:wt
     }
 
+    test {server.log() keeps a multi-line message in one log record} {
+        set loglines [count_log_lines 0]
+        run_script {redis.log(redis.LOG_WARNING, 'before\r\nafter')} 0
+        verify_log_message 0 "*<lua> before  after*" $loglines
+    } {} {external:skip}
+
     test {Correct handling of reused argv (issue #1939)} {
         run_script {
               for i = 0, 10 do
@@ -1296,6 +1308,21 @@ start_server {tags {"scripting external:skip large-memory"}} {
 }
 
 start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - server.error_reply with a string larger than 2GB} {
+        # The formatted "-<msg>" error is longer than INT_MAX, which vsnprintf() rejects.
+        # With jemalloc, the short error_reply() leaves "-PRIME" in the allocation that a failed
+        # vsnprintf() would hand back unwritten, so the bug yields "ERR PRIME", not "ERR ".
+        run_script {
+            local s = string.rep("a", 1024 * 1024)
+            for i=1,9 do s = s .. s end
+            s = s .. s .. s .. s
+            server.error_reply("-PRIME")
+            return {#s, server.error_reply(s)["err"]}
+        } 0
+    } {2147483648 {ERR }}
+}
+
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Test long escape sequences for strings} {
         r eval {
             -- Generate 1gb '==...==' separator
@@ -1338,7 +1365,7 @@ start_server {tags {"scripting external:skip large-memory"}} {
 # Start a new server since the last test in this stanza will kill the
 # instance at all.
 start_server {tags {"scripting"}} {
-    test {Timedout read-only scripts can be killed by SCRIPT KILL} {
+    test {Timed out read-only scripts can be killed by SCRIPT KILL} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {while true do end} 0
@@ -1351,7 +1378,7 @@ start_server {tags {"scripting"}} {
         $rd close
     }
 
-    test {Timedout read-only scripts can be killed by SCRIPT KILL even when use pcall} {
+    test {Timed out read-only scripts can be killed by SCRIPT KILL even when use pcall} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {local f = function() while 1 do redis.call('ping') end end while 1 do pcall(f) end} 0
@@ -1379,7 +1406,59 @@ start_server {tags {"scripting"}} {
         assert_match {*killed by user*} $res
     }
 
-    test {Timedout script does not cause a false dead client} {
+    test {Timed out read-only scripts can be killed by SCRIPT KILL even when use nested coroutines} {
+        set rd [valkey_deferring_client]
+        r config set lua-time-limit 10
+        run_script_on_connection $rd {
+            local function spin() while true do end end
+            local function mid() while true do coroutine.resume(coroutine.create(spin)) end end
+            while true do coroutine.resume(coroutine.create(mid)) end
+        } 0
+
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+        assert_match {BUSY*} $e
+
+        kill_script
+
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 0
+        } else {
+            fail "Can't wait for script to be killed"
+        }
+        assert_equal [r ping] "PONG"
+
+        catch {$rd read} res
+        $rd close
+
+        assert_match {*killed by user*} $res
+    }
+
+    test {Timed out scripts are detected even when each coroutine runs briefly} {
+        set rd [valkey_deferring_client]
+        r config set lua-time-limit 10
+        run_script_on_connection $rd {
+            local function spin() for i=1,10000 do end end
+            local function mid() for i=1,50 do coroutine.resume(coroutine.create(spin)) end end
+            for i=1,50 do coroutine.resume(coroutine.create(mid)) end
+        } 0
+
+        # The script only runs for a moment, so poll often.
+        wait_for_condition 500 10 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+        assert_match {BUSY*} $e
+
+        $rd read
+        $rd close
+    }
+
+    test {Timed out script does not cause a false dead client} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
@@ -1427,13 +1506,13 @@ start_server {tags {"scripting"}} {
         $rd close
     }
 
-    test {Timedout script link is still usable after Lua returns} {
+    test {Timed out script link is still usable after Lua returns} {
         r config set lua-time-limit 10
         run_script {for i=1,100000 do redis.call('ping') end return 'ok'} 0
         r ping
     } {PONG}
 
-    test {Timedout scripts and unblocked command} {
+    test {Timed out scripts and unblocked command} {
         # make sure a command that's allowed during BUSY doesn't trigger an unblocked command
 
         # enable AOF to also expose an assertion if the bug would happen
@@ -1481,7 +1560,7 @@ start_server {tags {"scripting"}} {
         r DEBUG set-disable-deny-scripts 0
     } {OK} {external:skip needs:debug}
 
-    test {Timedout scripts that modified data can't be killed by SCRIPT KILL} {
+    test {Timed out scripts that modified data can't be killed by SCRIPT KILL} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {redis.call('set',KEYS[1],'y'); while true do end} 1 x
@@ -1496,7 +1575,7 @@ start_server {tags {"scripting"}} {
 
     # Note: keep this test at the end of this server stanza because it
     # kills the server.
-    test {SHUTDOWN NOSAVE can kill a timedout script anyway} {
+    test {SHUTDOWN NOSAVE can kill a timed out script anyway} {
         # The server should be still unresponding to normal commands.
         catch {r ping} e
         assert_match {BUSY*} $e
@@ -1724,6 +1803,26 @@ start_server {tags {"scripting external:skip"}} {
     }
 }
 
+start_server {tags {"scripting external:skip tls:skip"}} {
+    test {Forked scripting debug session does not suspend save points} {
+        set rd [valkey_deferring_client]
+        $rd script debug yes
+        assert_equal OK [$rd read]
+        $rd eval {return 'hello'} 0
+        assert_match {*Stopped at*} [$rd read]
+
+        r config set save "1 1"
+        r set foo bar
+        wait_for_condition 50 100 {
+            [s rdb_changes_since_last_save] == 0
+        } else {
+            fail "Save point did not fire while a forked debug session was open"
+        }
+        $rd close
+        r config set save ""
+    }
+}
+
 start_server {tags {"scripting needs:debug external:skip"}} {
     test {Test scripting debug protocol parsing} {
         r script debug sync
@@ -1794,6 +1893,49 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r write $cmd
         r flush
         assert_match {*<value>*somearg*} [r read]
+        reconnect
+    }
+
+    test {Test scripting debug command larger than one read} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        # The debugger reads 1024 bytes at a time, so this command arrives in two reads.
+        set arg [string repeat x 1020]
+        r write "*2\r\n\$5\r\nprint\r\n\$1020\r\n$arg\r\n"
+        r flush
+        r read
+        reconnect
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test scripting debug input buffer is cleared after max client buffer error} {
+        r script debug sync
+        r eval {pcall(function()
+                    server.breakpoint()
+                    return 1
+                end)
+                server.breakpoint()
+                return 'done'} 0
+        r write "*1\r\n\$8\r\ncontinue\r\n"
+        r flush
+        r read
+        # pcall catches the buffer limit error, so the script stops at the second breakpoint.
+        r write "*[string repeat x [expr {1 << 20}]]"
+        r flush
+        assert_match {*Stopped at 6*} [r read]
+        r write "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
+        r flush
+        assert_match {*PONG*} [r read]
+        reconnect
+    }
+
+    test {Test scripting debug with an empty script} {
+        r script debug sync
+        assert_match {{* Stopped at 1, stop reason = step over} *} [r eval "\r\n" 0]
+        r write "*1\r\n\$4\r\nstep\r\n"
+        r flush
+        assert_equal {<endsession>} [r read]
+        assert_equal {} [r read]
         reconnect
     }
 }

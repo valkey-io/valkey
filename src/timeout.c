@@ -33,7 +33,7 @@
 
 /* ========================== Clients timeouts ============================= */
 
-/* Check if this blocked client timedout (does nothing if the client is
+/* Check if this blocked client timed out (does nothing if the client is
  * not blocked right now). If so send a reply, unblock it, and return 1.
  * Otherwise, 0 is returned and no operation is performed. */
 int checkBlockedClientTimeout(client *c, mstime_t now) {

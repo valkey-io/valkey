@@ -2907,3 +2907,74 @@ TEST_F(OrderedIndexTest, HtConsistency_ByLex_EmptyRange) {
     sdsfree(max);
     simHtFree(&simulatedHt);
 }
+
+/* ========== Inline Leaf Compaction Through the Index ========== */
+
+/* Scattered deletes through the interface must re-pack leaves. Measured by
+ * the structure estimate, which counts leaves exactly, against a twin index
+ * that ran the same deletes with compaction parked. */
+TEST_F(OrderedIndexTest, DeleteKeepsLeavesPacked) {
+    const int N = 5000;
+    size_t mem[2];
+    for (int parked = 0; parked < 2; parked++) {
+        OrderedIndexItem **items = (OrderedIndexItem **)zmalloc(sizeof(OrderedIndexItem *) * N);
+        for (int i = 0; i < N; i++) {
+            char b[32];
+            int n = snprintf(b, sizeof(b), "e%06d", i);
+            items[i] = orderedIndexInsert(oi, (double)(i * 7919 % 1000), b, (size_t)n);
+        }
+
+        /* Delete 60% in a scattered order. */
+        orderedIndexSetCompactionAllowed(!parked);
+        for (int i = 0; i < N; i++) {
+            if (i % 5 == 1 || i % 5 == 3) continue;
+            orderedIndexDelete(oi, items[i]);
+        }
+        orderedIndexSetCompactionAllowed(1);
+        zfree(items);
+
+        VERIFY_INTEGRITY(oi);
+        EXPECT_EQ(orderedIndexLength(oi), (unsigned long)N * 2 / 5);
+        mem[parked] = orderedIndexEstimateStructureMemory(oi);
+
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
+    }
+    EXPECT_LT(mem[0] * 3, mem[1] * 2);
+}
+
+/* A score update is a delete followed by an insert, so a churn of score
+ * updates must not let the leaf count drift upward: every leaf that a
+ * reinsertion splits is paid back by compaction where the deletes land.
+ * Compared against a twin that ran the same churn with compaction parked. */
+TEST_F(OrderedIndexTest, UpdateScoreChurnKeepsLeavesBounded) {
+    const int N = 5000;
+    const int UPDATES = 100000;
+    size_t mem[2];
+    for (int parked = 0; parked < 2; parked++) {
+        OrderedIndexItem **items = (OrderedIndexItem **)zmalloc(sizeof(OrderedIndexItem *) * N);
+        for (int i = 0; i < N; i++) {
+            char b[32];
+            int n = snprintf(b, sizeof(b), "m%06d", i);
+            items[i] = orderedIndexInsert(oi, (double)i, b, (size_t)n);
+        }
+
+        uint32_t seed = 100000;
+        orderedIndexSetCompactionAllowed(!parked);
+        for (int u = 0; u < UPDATES; u++) {
+            int i = test_rand_range(&seed, 0, N - 1);
+            double score = (double)test_rand_range(&seed, 0, 999999);
+            items[i] = orderedIndexUpdateScore(oi, items[i], score);
+        }
+        orderedIndexSetCompactionAllowed(1);
+        zfree(items);
+
+        VERIFY_INTEGRITY(oi);
+        EXPECT_EQ(orderedIndexLength(oi), (unsigned long)N);
+        mem[parked] = orderedIndexEstimateStructureMemory(oi);
+
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
+    }
+    EXPECT_LT(mem[0] * 10, mem[1] * 9);
+}

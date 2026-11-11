@@ -8,6 +8,8 @@
 
 #include "generated_wrappers.hpp"
 
+#include "fake_connection.hpp"
+
 extern "C" {
 #include "throttle.h"
 static monotime fakeGetMonotonicUs(void);
@@ -20,6 +22,20 @@ static bool fakeWriteCriteria(client *c, void *priv_data) {
 }
 
 static monotime fakeMonotimeUs;
+
+/* Stands in for processPendingCommandAndInputBuffer() executing every queued command. */
+static int drainCommandQueue(client *c) {
+    c->flag.pending_command = 0;
+    c->cmd_queue.off = c->cmd_queue.len;
+    return C_OK;
+}
+
+/* Stands in for processPendingCommandAndInputBuffer() throttling the next queued command. */
+static int rethrottleClient(client *c) {
+    c->cmd_queue.off = c->cmd_queue.len;
+    c->conn->read_handler = NULL;
+    return C_OK;
+}
 
 static monotime fakeGetMonotonicUs(void) {
     return fakeMonotimeUs;
@@ -617,6 +633,95 @@ TEST_F(ThrottleTest, removeClient) {
     throttle_deregister(t);
     freeFakeClient(c1);
     freeFakeClient(c2);
+}
+
+/* The IO-thread read path can call processPendingCommandAndInputBuffer() again on a client
+ * whose command was just throttled. throttle_checked is still set, so processCommand() would
+ * skip the throttle check and execute the command, and the throttler would execute it again on
+ * release. */
+TEST_F(ThrottleTest, throttledClientIsNotReprocessed) {
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(Return(1));
+    client *c = createFakeClient(1, true);
+    EXPECT_TRUE(throttle_throttleClientIfNeeded(c));
+    EXPECT_TRUE(clientIsThrottled(c));
+
+    EXPECT_CALL(mock, processCommand(_)).Times(0);
+    EXPECT_EQ(processPendingCommandAndInputBuffer(c), C_OK);
+    EXPECT_TRUE(clientIsThrottled(c));
+    EXPECT_EQ(c->flag.pending_command, 1ULL);
+
+    EXPECT_CALL(mock, aeDeleteTimeEvent(_, _)).WillOnce(Return(AE_OK));
+    throttle_removeClient(c);
+    throttle_deregister(t);
+    freeFakeClient(c);
+}
+
+/* handleReadJobs() leaves READ postponed on an RDMA connection while a skipped throttled client
+ * still has commands in cmd_queue. Once the throttler releases the client and the queue is
+ * drained, READ must be released, or the RDMA read handler never runs again. If the client was
+ * throttled again, READ must stay postponed, since RDMA update_state would spin on unread data
+ * with no read handler. */
+static void releaseThrottledRdmaClient(MockValkey &mock, client *c, int (*process)(client *c), int expected_postpone, int expected_updates) {
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    ConnectionType rdma_like = *fakeConnType();
+    rdma_like.sync_handlers_in_update_state = 1;
+    fakeConnection *fc = connCreateFake();
+    fc->conn.type = &rdma_like;
+    fc->conn.read_handler = (ConnectionCallbackFunc)1;
+
+    zfree(c->conn);
+    c->conn = &fc->conn;
+    c->cmd_queue.len = 2;
+    c->cmd_queue.off = 1;
+
+    server.unblocked_clients = listCreate();
+    server.clients_index = raxNew();
+    uint64_t id = htonu64(c->id);
+    raxInsert(server.clients_index, (unsigned char *)&id, sizeof(id), c, NULL);
+
+    EXPECT_TRUE(throttle_throttleClientIfNeeded(c));
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
+    EXPECT_EQ(fc->postpone_state, CONN_POSTPONE_READ);
+
+    throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+    EXPECT_EQ(timeProc(server.el, 1, clientData), AE_NOMORE);
+
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Invoke(process));
+    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+    processUnblockedClients();
+    EXPECT_EQ(fc->postpone_state, expected_postpone);
+    EXPECT_EQ(fc->update_calls, expected_updates);
+
+    raxFree(server.clients_index);
+    server.clients_index = NULL;
+    listRelease(server.unblocked_clients);
+    server.unblocked_clients = NULL;
+    throttle_deregister(t);
+    connFreeFake(fc);
+    c->conn = NULL;
+}
+
+TEST_F(ThrottleTest, releasedClientResumesTransportReads) {
+    client *c = createFakeClient(1, true);
+    releaseThrottledRdmaClient(mock, c, drainCommandQueue, 0, 1);
+    freeFakeClient(c);
+}
+
+TEST_F(ThrottleTest, rethrottledClientKeepsTransportReadsPostponed) {
+    client *c = createFakeClient(1, true);
+    releaseThrottledRdmaClient(mock, c, rethrottleClient, CONN_POSTPONE_READ, 0);
+    freeFakeClient(c);
 }
 
 /* ---- Death tests ---- */

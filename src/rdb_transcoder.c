@@ -139,8 +139,13 @@ static int rdbTranscoderRun(rdbTranscoder *t, const uint8_t *data, size_t len) {
             }
         }
         if (r == STREAM_PUSH_READER_NEED_OUTPUT) continue;
-        /* OK: input consumed. FRAME_DONE: the frame ended; the caller has already
-         * excluded any trailing bytes, so there is nothing more to feed. */
+        /* The caller feeds only the RDB body, so nothing may follow the frame.
+         * The reader keeps any such bytes pending, and feeding it again would
+         * trip its resume assertion, so fail the transcode instead. */
+        if (r == STREAM_PUSH_READER_FRAME_DONE && streamPushReaderHasPendingDecode(&t->reader)) {
+            t->failed = true;
+            return C_ERR;
+        }
         break;
     }
     return C_OK;

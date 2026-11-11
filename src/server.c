@@ -184,7 +184,7 @@ void filterInvalidLogfmtChar(char *safemsg, size_t safemsglen, const char *msg) 
     safemsg[index] = '\0';
 }
 
-/* Low level logging. To use only for very big messages, otherwise
+/* Low level logging. To use only for very big messages; otherwise,
  * serverLog() is to prefer. */
 void serverLogRaw(int level, const char *msg) {
     const int syslogLevelMap[] = {LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING};
@@ -385,7 +385,7 @@ void dictHashtableDestructor(void *val) {
 
 /* Returns 1 when keys match */
 int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
+    size_t l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
@@ -780,7 +780,7 @@ hashtableType hashWithVolatileItemsHashtableType = {
 
 /* Hashtable type without destructor */
 hashtableType sdsReplyHashtableType = {
-    .hashFunction = dictSdsCaseHash,
+    .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare};
 
 /* Keylist hash table type has unencoded Objects as keys and
@@ -891,6 +891,9 @@ void updateDictResizePolicy(void) {
     } else {
         hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
     }
+    /* Leaf compaction in B+tree sorted sets rewrites node pages the same way
+     * a rehash does, so it follows the same fork-aware policy. */
+    orderedIndexSetCompactionAllowed(server.in_fork_child == CHILD_TYPE_NONE && !hasActiveChildProcess());
 }
 
 const char *strChildType(int type) {
@@ -937,7 +940,7 @@ int isMutuallyExclusiveChildType(int type) {
 
 /* Returns true when we're inside a long command that yielded to the event loop. */
 int isInsideYieldingLongCommand(void) {
-    return scriptIsTimedout() || server.busy_module_yield_flags;
+    return scriptIsTimedOut() || server.busy_module_yield_flags;
 }
 
 /* Return true if this instance has persistence completely turned off:
@@ -1472,7 +1475,7 @@ void updateCachedTime(int update_daylight_info) {
  * otherwise we need to update cache times so the same cached time will be used all over
  * the execution unit.
  * update_cached_time - if 0, will not update the cached time even if required.
- * us - if not zero, use this time for cached time, otherwise get current time. */
+ * us - if not zero, use this time for cached time; otherwise, get current time. */
 void enterExecutionUnit(int update_cached_time, ustime_t us) {
     if (server.execution_nesting++ == 0 && update_cached_time) {
         if (us == 0) {
@@ -1550,7 +1553,7 @@ void cronUpdateMemoryStats(void) {
 
     run_with_period(100) {
         /* Sample the RSS and other metrics here since this is a relatively slow call.
-         * We must sample the zmalloc_used at the same time we take the rss, otherwise
+         * We must sample the zmalloc_used at the same time we take the rss; otherwise,
          * the frag ratio calculate may be off (ratio of two samples at different times) */
         server.cron_malloc_stats.process_rss = zmalloc_get_rss();
         server.cron_malloc_stats.zmalloc_used = zmalloc_used_memory();
@@ -1699,10 +1702,16 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
-    if (hasActiveChildProcess() || scriptingEngineDebuggerPendingChildren()) {
+    int had_child = hasActiveChildProcess();
+    if (had_child || scriptingEngineDebuggerPendingChildren()) {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
-    } else if (!isSaveInProgress()) {
+    }
+
+    /* Forked script debugging sessions are not the active child, and an idle
+     * one can live indefinitely, so they must not postpone the save points and
+     * the automatic AOF rewrite. */
+    if (!had_child && !hasActiveSaveOrChild()) {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now. */
         for (j = 0; j < server.saveparamslen; j++) {
@@ -1780,7 +1789,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Cleanup expired MIGRATE cached sockets. */
     run_with_period(1000) {
-        migrateCloseTimedoutSockets();
+        migrateCloseTimedOutSockets();
     }
 
     /* Resize tracking keys table if needed. This is also done at every
@@ -1805,7 +1814,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * because we want to give priority to RDB savings for replication. */
     if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
-        if (rdbStartBgsave(server.rdb_bgsave_scheduled) == C_OK) server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+        if (rdbStartBgsave(resolveBgsaveType()) == C_OK) server.rdb_bgsave_scheduled = 0;
     }
 
     /* TLS auto-reload if enabled (only when TLS is built-in). */
@@ -2513,6 +2522,7 @@ void initServerConfig(void) {
     server.primary = NULL;
     server.cached_primary = NULL;
     server.primary_initial_offset = -1;
+    server.primary_initial_offset_in_rdb = false;
     server.repl_state = REPL_STATE_NONE;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
@@ -2614,7 +2624,7 @@ int restartServer(client *c, int flags, mstime_t delay) {
     /* Close all file descriptors, with the exception of stdin, stdout, stderr
      * which are useful if we restart a server which is not daemonized. */
     for (j = 3; j < (int)server.maxclients + 1024; j++) {
-        /* Test the descriptor validity before closing it, otherwise
+        /* Test the descriptor validity before closing it; otherwise,
          * Valgrind issues a warning on close(). */
         if (fcntl(j, F_GETFD) != -1) close(j);
     }
@@ -2952,6 +2962,12 @@ void resetServerStats(void) {
     server.stat_fork_time = 0;
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
+    server.stat_forkless_fallbacks_module = 0;
+    server.stat_forkless_fallbacks_slot_import = 0;
+    server.stat_forkless_fallbacks_exclude_data = 0;
+    server.stat_forkless_fallbacks_missing_inband_repl = 0;
+    server.stat_forkless_fallbacks_compression = 0;
+    server.stat_forkless_fallbacks_old_rdb_version = 0;
     server.stat_rejected_conn = 0;
     server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
@@ -3193,7 +3209,7 @@ void initServer(void) {
     server.rdb_pipe_numconns_writing = 0;
     server.rdb_pipe_buff = NULL;
     server.rdb_pipe_bufflen = 0;
-    server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+    server.rdb_bgsave_scheduled = 0;
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
@@ -3927,12 +3943,22 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
 
     if (!shouldPropagate(target)) return;
 
-    /* Don't propagate commands on slot migration clients, these will be proxied
-     * in replicationFeedStreamFromPrimaryStream().
+    /* Don't propagate what executing a command of a slot import client produces,
+     * the stream of that client will be proxied in commandProcessed().
+     *
+     * Only suppress it while a command is executing: call() sets executing_client
+     * for the whole call tree. Anything propagated while the import client is the
+     * current client but no command is executing (e.g. the evictions done by
+     * performEvictions() in processCommand()) is a decision of this node that is
+     * not part of the proxied stream, so it must reach our replicas like any other
+     * eviction. Note that c->flag.executing_command can't be used instead, it is
+     * cleared before call() propagates the command.
      *
      * However, if we need to propagate to AOF, we should still do that. */
     bool propagate_aof = (target & PROPAGATE_AOF) && server.aof_state != AOF_OFF;
-    if (server.current_client != NULL && server.current_client->slot_migration_job) {
+    client *cc = server.current_client;
+    if (cc != NULL && cc->slot_migration_job && isImportSlotMigrationJob(cc->slot_migration_job) &&
+        server.executing_client != NULL) {
         if (!propagate_aof) return;
         /* Disable propagation to replication (just do the AOF) */
         target &= ~PROPAGATE_REPL;
@@ -4044,7 +4070,8 @@ static void propagatePendingCommands(void) {
  * Must stay an OR of every condition below - never drop one as an
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
-    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags ||
+           bgIteration_iterationActive();
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4471,7 +4498,7 @@ void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...) {
     va_start(ap, fmt);
     sds s = sdscatvprintf(sdsempty(), fmt, ap);
     va_end(ap);
-    /* Make sure there are no newlines in the string, otherwise invalid protocol
+    /* Make sure there are no newlines in the string; otherwise, invalid protocol
      * is emitted (The args come from the user, they may contain any character). */
     sdsmapchars(s, "\r\n", "  ", 2);
     rejectCommandSds(c, s, notify_modules);
@@ -4536,7 +4563,7 @@ int commandCheckExistence(client *c, sds *err) {
             sdscatprintf(*err, "unknown command '%.128s', with args beginning with: %s", (char *)objectGetVal(c->argv[0]), args);
         sdsfree(args);
     }
-    /* Make sure there are no newlines in the string, otherwise invalid protocol
+    /* Make sure there are no newlines in the string; otherwise, invalid protocol
      * is emitted (The args come from the user, they may contain any character). */
     sdsmapchars(*err, "\r\n", "  ", 2);
     return 0;
@@ -4631,11 +4658,9 @@ void unprepareCommand(client *c) {
 int processCommand(client *c) {
     serverAssert(!c->flag.blocked && !c->flag.unblocked);
 
-    if (!scriptIsTimedout()) {
+    if (!scriptIsTimedOut()) {
         /* Both EXEC and scripts call call() directly so there should be
-         * no way in_exec or scriptIsRunning() is 1.
-         * That is unless lua_timedout, in which case client may run
-         * some commands. */
+         * no way in_exec or scriptIsRunning() is 1. */
         serverAssert(!server.in_exec);
         serverAssert(!scriptIsRunning());
     }
@@ -4888,7 +4913,7 @@ int processCommand(client *c) {
             return C_OK;
         }
 
-        /* Save out_of_memory result at command start, otherwise if we check OOM
+        /* Save out_of_memory result at command start; otherwise, if we check OOM
          * in the first write within script, memory used by lua stack and
          * arguments might interfere. We need to save it for EXEC and module
          * calls too, since these can call EVAL, but avoid saving it during an
@@ -4979,7 +5004,7 @@ int processCommand(client *c) {
 
     /* when a busy job is being done (script / module)
      * Only allow a limited number of commands.
-     * Note that we need to allow the transactions commands, otherwise clients
+     * Note that we need to allow the transactions commands; otherwise, clients
      * sending a transaction with pipelining without error checking, may have
      * the MULTI plus a few initial commands refused, then the timeout
      * condition resolves, and the bottom-half of the transaction gets
@@ -6891,6 +6916,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "pubsubshard_channels:%llu\r\n", kvstoreSize(server.pubsubshard_channels),
                 "latest_fork_usec:%lld\r\n", server.stat_fork_time,
                 "total_forks:%lld\r\n", server.stat_total_forks,
+                "forkless_fallbacks_module:%lld\r\n", server.stat_forkless_fallbacks_module,
+                "forkless_fallbacks_slot_import:%lld\r\n", server.stat_forkless_fallbacks_slot_import,
+                "forkless_fallbacks_exclude_data:%lld\r\n", server.stat_forkless_fallbacks_exclude_data,
+                "forkless_fallbacks_missing_inband_repl:%lld\r\n", server.stat_forkless_fallbacks_missing_inband_repl,
+                "forkless_fallbacks_compression:%lld\r\n", server.stat_forkless_fallbacks_compression,
+                "forkless_fallbacks_old_rdb_version:%lld\r\n", server.stat_forkless_fallbacks_old_rdb_version,
                 "migrate_cached_sockets:%zu\r\n", dictSize(server.migrate_cached_sockets),
                 "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
                 "active_defrag_hits:%lld\r\n", server.stat_active_defrag_hits,
@@ -8148,7 +8179,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     server.supervised = serverIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) {
-        /* We need to reset server.pid after daemonize(), otherwise the
+        /* We need to reset server.pid after daemonize(); otherwise, the
          * log printing role will always be the child. */
         daemonize();
         server.pid = getpid();
@@ -8264,13 +8295,13 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
+ * INCREX specific command extended options - BYINT/BYFLOAT/LBOUND/UBOUND/SATURATE/ENX/PERSIST
  * DELEX specific command extended options - IFEQ/IFNE
- * INCREX specific command extended options - BYINT/BYFLOAT
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj, pointer to pointer of incrby obj, and command_type
- * which can be COMMAND_*.
+ * pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
+ * lbound obj, pointer to pointer of ubound obj, and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
@@ -8280,7 +8311,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
@@ -8291,12 +8322,14 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
             !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
+            !(command_type == COMMAND_INCREX && (*flags & ARGS_SET_NX)) && /* except for INCREX */
             (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_SET_XX)) && /* except for INCREX */
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_XX;
@@ -8344,17 +8377,21 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_KEEPTTL;
-        } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
+        } else if (!strcasecmp(opt,"PERSIST") &&
+                   (command_type == COMMAND_GET || command_type == COMMAND_HGET || command_type == COMMAND_INCREX) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
                    !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
-                   !(*flags & ARGS_KEEPTTL))
+                   !(*flags & ARGS_KEEPTTL) &&
+                   !(*flags & ARGS_ENX) &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PERSIST)))
         {
             *flags |= ARGS_PERSIST;
         } else if ((opt[0] == 'e' || opt[0] == 'E') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EX)))
         {
             *flags |= ARGS_EX;
             *expire = next;
@@ -8364,7 +8401,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PX)))
         {
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
@@ -8377,7 +8415,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EXAT)))
         {
             *flags |= ARGS_EXAT;
             *expire = next;
@@ -8389,7 +8428,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next)
+                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next &&
+                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PXAT)))
         {
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;
@@ -8420,6 +8460,26 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
             *flags |= ARGS_BYFLOAT;
             if (incrby_val) *incrby_val = next;
             j++;
+        } else if (!strcasecmp(opt, "LBOUND") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_LBOUND) && next)
+        {
+            *flags |= ARGS_LBOUND;
+            if (lbound_val) *lbound_val = next;
+            j++;
+        } else if (!strcasecmp(opt, "UBOUND") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_UBOUND) && next)
+        {
+            *flags |= ARGS_UBOUND;
+            if (ubound_val) *ubound_val = next;
+            j++;
+        } else if (!strcasecmp(opt, "SATURATE") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_SATURATE))
+        {
+            *flags |= ARGS_SATURATE;
+        } else if (!strcasecmp(opt, "ENX") && command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_PERSIST) && !(*flags & ARGS_ENX))
+        {
+            *flags |= ARGS_ENX;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;

@@ -22,9 +22,9 @@ set paused_pid [srv 0 pid]
 set paused_pid1 [srv -1 pid]
 set paused_pid2 [srv -2 pid]
 test "Killing majority of master nodes" {
-    pause_process $paused_pid
-    pause_process $paused_pid1
-    pause_process $paused_pid2
+    pause_process_persistent $paused_pid
+    pause_process_persistent $paused_pid1
+    pause_process_persistent $paused_pid2
 }
 
 test "Cluster should eventually be down" {

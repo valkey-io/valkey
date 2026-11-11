@@ -3,6 +3,7 @@ set ::live_member_ttl 100
 proc flush_and_disable_active_expiry {} {
     r FLUSHALL
     r DEBUG SET-ACTIVE-EXPIRE 0
+    test_defer {r DEBUG SET-ACTIVE-EXPIRE 1}
 }
 
 proc create_numbered_set {key n} {

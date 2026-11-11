@@ -445,23 +445,26 @@ run_solo {defrag} {
     proc test_defrag_later_type_change {type} {
         set key "{t}big"
         set src "{t}h"
-        foreach {kind how populate replace} {
-            set RENAME {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {r rename $src $key}
-            zset RENAME {for i=1,200000 do redis.call('zadd', KEYS[1], i, i) end} {r rename $src $key}
-            list RENAME {for i=1,200000 do redis.call('rpush', KEYS[1], i) end} {r rename $src $key}
-            set {DEL then HSET} {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {
+        foreach {kind with how populate replace} {
+            set hash RENAME {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {r rename $src $key}
+            zset hash RENAME {for i=1,200000 do redis.call('zadd', KEYS[1], i, i) end} {r rename $src $key}
+            list hash RENAME {for i=1,200000 do redis.call('rpush', KEYS[1], i) end} {r rename $src $key}
+            zset set RENAME {for i=1,200000 do redis.call('zadd', KEYS[1], i, i) end} {r rename $src $key}
+            list set RENAME {for i=1,200000 do redis.call('rpush', KEYS[1], i) end} {r rename $src $key}
+            set hash {DEL then HSET} {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {
                 r multi
                 r del $key
                 r hset $key a 1 b 2
                 r exec
             }
         } {
-            test "Active Defrag replaces a deferred $kind with a hash via $how: $type" {
+            test "Active Defrag replaces a deferred $kind with a $with via $how: $type" {
                 r flushall
                 r config set hash-max-listpack-entries 1
+                r config set set-max-listpack-entries 1
                 r config set list-max-listpack-size 3 ;# enough quicklist nodes to defer the list
                 r eval $populate 1 $key
-                r hset $src a 1 b 2
+                if {$with eq "hash"} {r hset $src a 1 b 2} else {r sadd $src a b}
                 assert_encoding hashtable $src
 
                 # Defrag regardless of fragmentation, slowly, so the key is
@@ -479,7 +482,7 @@ run_solo {defrag} {
                 }
 
                 # Replace the key while its scan is in progress. The next
-                # deferred step resumes on the hash with the old cursor.
+                # deferred step resumes on the $with with the old cursor.
                 eval $replace
                 assert_encoding hashtable $key
                 set steps [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
@@ -489,7 +492,11 @@ run_solo {defrag} {
                     fail "defrag did not move past the replaced key"
                 }
                 r config set activedefrag no
-                assert_equal {1 2} [r hmget $key a b]
+                if {$with eq "hash"} {
+                    assert_equal {1 2} [r hmget $key a b]
+                } else {
+                    assert_equal {a b} [lsort [r smembers $key]]
+                }
             }
         }
     }

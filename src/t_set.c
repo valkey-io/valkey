@@ -515,7 +515,8 @@ size_t setTypeScanDefrag(robj *o, size_t cursor, void *(*defragfn)(void *)) {
         size_t cursor;
         bool in_vset_phase;
     } state;
-    struct setDefragCursor *st = (struct setDefragCursor *)cursor;
+    /* The deferred defrag cursor is shared by all types, so resume only from our own. */
+    struct setDefragCursor *st = (cursor == (size_t)&state) ? &state : NULL;
 
     if (st == NULL) {
         hashtable *relocated = hashtableDefragTables(objectGetVal(o), defragfn);

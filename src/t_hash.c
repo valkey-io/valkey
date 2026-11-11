@@ -1920,15 +1920,15 @@ void hsetexCommand(client *c) {
             changes++;
 
             if (expired) {
-                /* When KEEPTTL is used, we need to track all fields to propagate hdel per each of them
-                 * Replicas will not ignore expired fields on the replication stream. This is why we have to explicitly delete them,
-                 * so the replica will take the new field expiration time. */
+                /* When KEEPTTL is used, we need to track all field/value pairs to propagate them in a HSET.
+                 * Replicas will not ignore expired fields on the replication stream. This is why we have to explicitly
+                 * clear their TTL, so the replica will take the new field expiration time. */
                 if ((flags & ARGS_KEEPTTL)) {
                     if (keepttl_fields == NULL) {
-                        keepttl_fields = zmalloc(sizeof(robj *) * num_fields);
+                        keepttl_fields = zmalloc(sizeof(robj *) * num_fields * 2);
                     }
-                    keepttl_fields[expired_overwritten] = c->argv[i];
-                    incrRefCount(c->argv[i]);
+                    keepttl_fields[expired_overwritten * 2] = c->argv[i];
+                    keepttl_fields[expired_overwritten * 2 + 1] = c->argv[i + 1];
                 }
                 expired_overwritten++;
             }
@@ -1951,17 +1951,11 @@ void hsetexCommand(client *c) {
         if (expired_overwritten > 0) {
             server.stat_expiredfields += expired_overwritten;
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-            /* Propagate deletions for expired/non-existent fields in batches.
-             * When KEEPTTL is used the replica has noway telling if, at the time the primary was executing the command,
-             * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field, so
-             * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side. */
+            /* When KEEPTTL is used the replica has no way telling if, at the time the primary was executing the command,
+             * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field and
+             * keep its TTL, so we need to clear the TTL on the replica side explicitly. */
             if (keepttl_fields != NULL) {
-                /* Propagate individual fields deletions */
-                int idx = 0;
-                while (idx < expired_overwritten) {
-                    idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
-                                                   &keepttl_fields[idx], c->slot);
-                }
+                propagateExpiredFieldsOverwrite(c->db, c->argv[1], expired_overwritten, keepttl_fields, c->slot);
                 zfree(keepttl_fields);
                 keepttl_fields = NULL;
             }

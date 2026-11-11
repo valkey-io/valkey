@@ -183,7 +183,7 @@ typedef struct {
 
     /* Pending MEET callbacks waiting for NODE_JOIN commit. */
     list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
-    list *deferred_meets; /* Inbound MEET messages drained once we're in a multi-member cluster */
+    list *deferred_meets; /* Names (sds) of nodes whose MEET we answer once we're in a multi-member cluster */
 
     clusterLink *processing_link; /* Link whose message is being processed, or NULL */
 
@@ -395,6 +395,7 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
 static void clusterRaftSendPreVoteRequest(clusterLink *link, uint64_t term);
 static void clusterRaftUnblockMeet(clusterNode *node);
 static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only);
+static void clusterRaftProcessDeferredMeets(void);
 static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, clusterNode *new_owner);
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
@@ -742,11 +743,30 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
     } else {
         /* Already a joiner (stepped down for another node). Defer until
          * we join a cluster and can invite the sender. */
-        listAddNodeTail(rs->deferred_meets, link);
+        listAddNodeTail(rs->deferred_meets, sdsnewlen(sender->name, CLUSTER_NAMELEN));
         serverLog(LL_NOTICE, "Deferring MEET from %.40s (waiting to join cluster).", sender->name);
     }
 
     return 1;
+}
+
+/* Answer the MEETs we deferred while we were a joiner, now that we're in a
+ * cluster. A node that has disconnected or been removed since is skipped. */
+static void clusterRaftProcessDeferredMeets(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (listLength(rs->deferred_meets) == 0 || !clusterRaftHasPeerMembers()) return;
+    listIter li;
+    listNode *ln;
+    listRewind(rs->deferred_meets, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        sds name = listNodeValue(ln);
+        clusterNode *node = clusterLookupNode(name, CLUSTER_NAMELEN);
+        if (node && node->inbound_link) {
+            clusterRaftSendBare(node->inbound_link, "WELCOME");
+            clusterRaftInvitePeer(node);
+        }
+    }
+    listEmpty(rs->deferred_meets);
 }
 
 /* ADDME handler: the peer stepped down and wants us to add them. */
@@ -1447,20 +1467,7 @@ static void raftLogApply(raftLogEntry *e) {
                 clusterAddNodeToShard(joined->shard_id, joined);
                 rs->todo_save_config = 1;
 
-                /* Process deferred MEET messages now that we're in a cluster. */
-                if (clusterRaftHasPeerMembers() && listLength(rs->deferred_meets) > 0) {
-                    listIter dli;
-                    listNode *dln;
-                    listRewind(rs->deferred_meets, &dli);
-                    while ((dln = listNext(&dli)) != NULL) {
-                        clusterLink *mlink = listNodeValue(dln);
-                        if (mlink->node) {
-                            clusterRaftSendBare(mlink, "WELCOME");
-                            clusterRaftInvitePeer(mlink->node);
-                        }
-                    }
-                    listEmpty(rs->deferred_meets);
-                }
+                clusterRaftProcessDeferredMeets();
             }
             rs->todo_invalidate_slots_cache = 1;
             rs->todo_connect_nodes = 1;
@@ -1981,6 +1988,16 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     return 1;
 }
 
+/* True for a node that we know of but isn't in the log yet, and so isn't in
+ * the snapshot with these node IDs. */
+static bool clusterRaftIsLocalOnlyNode(clusterNode *node, dict *snapshot_ids) {
+    if (!(node->flags & (CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE))) return false;
+    sds name = sdsnewlen(node->name, CLUSTER_NAMELEN);
+    bool in_snapshot = dictFind(snapshot_ids, name) != NULL;
+    sdsfree(name);
+    return !in_snapshot;
+}
+
 /* INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<node lines> */
 static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count) {
     if (argc < 5) return 1;
@@ -2028,7 +2045,6 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             return 1;
         }
     }
-    dictRelease(seen);
     if (!sender_included) {
         serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
         clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
@@ -2054,12 +2070,15 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
      * already exists. Reset them first so that the snapshot fully defines the
      * new state. MIGRATE_TO isn't part of the node lines, but loading them
      * sets it again, as when loading nodes.conf. A joiner keeps JOINING until it
-     * finds itself in the snapshot. */
+     * finds itself in the snapshot. Nodes that we know of but that aren't in
+     * the log yet (JOINING or HANDSHAKE) are left out of snapshots, so if the
+     * snapshot doesn't include them, they are kept as they are. */
     {
         dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
+            if (node != myself && clusterRaftIsLocalOnlyNode(node, seen)) continue;
             int keep = CLUSTER_NODE_MYSELF;
             if (node == myself && rs->role == RAFT_ROLE_JOINER) keep |= CLUSTER_NODE_JOINING;
             node->flags &= keep;
@@ -2105,11 +2124,12 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             sds name = sdsnewlen(node->name, CLUSTER_NAMELEN);
             int in_snapshot = dictFind(snapshot_nodes, name) != NULL;
             sdsfree(name);
-            if (in_snapshot) continue;
+            if (in_snapshot || clusterRaftIsLocalOnlyNode(node, seen)) continue;
             clusterDelNode(node);
         }
         dictReleaseIterator(di);
     }
+    dictRelease(seen);
     /* If we were a joiner and the snapshot includes us (our NODE_JOIN was
      * committed), promote to learner or follower, same as
      * raftLogApply(NODE_JOIN). Otherwise sync the role with our voter or
@@ -2160,6 +2180,9 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
         rs->todo_schedule_failover = 1;
     }
+    /* Answer MEETs deferred while we were a joiner, as when our own
+     * NODE_JOIN is applied. */
+    clusterRaftProcessDeferredMeets();
     return 1;
 }
 
@@ -2443,6 +2466,7 @@ static void clusterRaftInit(void) {
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
     rs->deferred_meets = listCreate();
+    listSetFreeMethod(rs->deferred_meets, sdsfreeVoid);
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
@@ -4416,6 +4440,7 @@ static void clusterRaftResetCluster(int hard) {
         zfree(pm);
         listDelNode(rs->pending_meets, ln);
     }
+    listEmpty(rs->deferred_meets);
     rs->current_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);

@@ -459,6 +459,52 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
     }
 }
 
+test "Raft proto: MEET deferred by a joiner is answered after a snapshot" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+        set d_id [string repeat "c" 40]
+        set d_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
+        set e_id [string repeat "b" 40]
+        set e_addr "127.0.0.1:9993@19993,,tls-port=0,shard-id=[string repeat 9 40]"
+
+        # The node steps down to joiner for the fake leader. A fake singleton
+        # D then MEETs it, which it defers until it's in the cluster.
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set fd_d [raft_connect_fake_node 127.0.0.1 $cport $d_id $d_addr]
+        raft_send $fd_d "MEET singleton"
+        wait_for_condition 50 100 {
+            [count_log_message 0 "Deferring MEET from $d_id"] == 1
+        } else {
+            fail "MEET from D was not deferred"
+        }
+
+        # The node joins through a snapshot. D isn't in it, since it isn't in
+        # the log, but the node answers its MEET.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 10 *" $reply
+        assert_equal "WELCOME" [raft_recv $fd_d]
+
+        # Applying the next NODE_JOIN doesn't touch the deferred MEET again.
+        raft_send $fd "AE $leader_id 1 10 1 11 1\n1 NODE_JOIN $e_id $e_addr learner"
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 11 *" $reply
+        assert_equal PONG [R 0 PING]
+
+        close $fd_d
+        close $fd
+    }
+}
+
 test "Raft proto: PRE_VOTE granted when no leader lease is active" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]

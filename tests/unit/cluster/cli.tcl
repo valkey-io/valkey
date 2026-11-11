@@ -480,23 +480,20 @@ start_cluster 1 2 {} {
         # Result should be 1 due to stderr output
         assert_equal $result 1
         assert_match {*unable to send CLUSTER RESET*} $output
-        # The error string for the refused connection is platform dependent
-        # (macOS 26 reports "setsockopt(TCP_NODELAY): Invalid argument" instead
-        # of "Connection refused"), so match the cli's own message instead.
-        assert_match {*Could not connect to Valkey at*} $output
+        assert_match {*Connection refused*} $output
 
         # Check for success message
         assert_match {*\[OK\] Node*removed from the cluster*} $output
 
-        # Verify the deleted node is no longer known by the remaining
-        # reachable nodes. The exact cluster_known_nodes counts depend on
-        # whether the previous del-node tests ran, so check that the node
-        # id is gone instead; this also holds when this test runs alone.
+        # Verify cluster state after deletion:
+        # - Node0 (primary): only node left, knows only itself
+        # - Node1 (deleted in test 2): still standalone
+        # - Node2 (deleted in test 3): shutdown, can't check
         wait_for_condition 1000 50 {
-            ![string match "*$node3_id*" [R 0 CLUSTER NODES]] &&
-            ![string match "*$node3_id*" [R 1 CLUSTER NODES]]
+            [CI 0 cluster_known_nodes] == 1 &&
+            [CI 1 cluster_known_nodes] == 1
         } else {
-            fail "Deleted node is still known by the cluster"
+            fail "Nodes don't have expected cluster state"
         }
     }
 } ;# stop servers

@@ -1050,19 +1050,27 @@ static void timer_callback(ValkeyModuleCtx *ctx, void *data)
 /* Held for the controlled tests: no timer may release this handle early. */
 static ValkeyModuleBlockedClient *held_blocked_client = NULL;
 
-/* Complete a manually held block after its timeout path has run. */
+/* Complete a manually held block after its timeout path has run.
+ * Optionally invoke the timer callback to test late timer completion. */
 static int release_held_blocked_client(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    UNUSED(argv);
-    if (argc != 1)
+    if (argc != 1 && argc != 2)
         return ValkeyModule_WrongArity(ctx);
+
+    long long fire_timer = 0;
+    if (argc == 2 && (ValkeyModule_StringToLongLong(argv[1], &fire_timer) != VALKEYMODULE_OK || fire_timer != 1))
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid timer flag");
+
     if (held_blocked_client == NULL)
         return ValkeyModule_ReplyWithError(ctx, "ERR no held blocked client");
 
     ValkeyModuleBlockedClient *bc = held_blocked_client;
     held_blocked_client = NULL;
-    if (ValkeyModule_UnblockClient(bc, NULL) != VALKEYMODULE_OK)
+    if (fire_timer) {
+        timer_callback(ctx, bc);
+    } else if (ValkeyModule_UnblockClient(bc, NULL) != VALKEYMODULE_OK) {
         return ValkeyModule_ReplyWithError(ctx, "ERR failed to release blocked client");
+    }
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 

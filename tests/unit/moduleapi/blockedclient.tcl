@@ -317,13 +317,16 @@ foreach call_type {nested normal} {
         assert_equal OK [r release_held_blocked_client]
     }
 
-    test {block naturally times out with a timeout callback} {
+    test {timeout reply precedes the late timer callback} {
         set rd [valkey_deferring_client]
         test_defer {$rd close}
+        # No timer is scheduled: the blocking timeout must reply first.
         $rd unblock_by_timer 0 100 1
         test_defer {catch {r release_held_blocked_client}}
         assert_equal TIMEOUT [$rd read]
-        assert_equal OK [r release_held_blocked_client]
+        # Now invoke the real timer callback after the client was detached.
+        assert_equal OK [r release_held_blocked_client 1]
+        # An obsolete timer reply must not leak into subsequent commands.
         $rd ping
         assert_equal PONG [$rd read]
     }
@@ -352,14 +355,6 @@ foreach call_type {nested normal} {
         assert_equal PONG [$rd read]
     }
 
-    test {block time is equal to timer period} {
-        # Either expiration may run first, but neither may leave the client without a reply.
-        set reply [r unblock_by_timer 100 100 1]
-        assert {$reply eq "OK" || $reply eq "TIMEOUT"}
-        # If the timeout won, the timer still needs to release the handle.
-        after 120
-        assert_equal PONG [r ping]
-    }
     
     test {Unmatched POSTPONED_LEN reply from a thread safe context does not crash the server} {
         assert_equal {} [r postponed_unmatched_thread]

@@ -69,6 +69,22 @@ test "SENTINEL PRIMARIES returns a list of monitored primaries" {
     assert_morethan_equal [llength [S 0 SENTINEL PRIMARIES]] 1
 }
 
+test "SENTINEL GET-PRIMARY-ADDR-BY-NAME returns null for an unknown primary" {
+    set protocols {2 3}
+    if {$::force_resp3} {
+        set protocols {3}
+    }
+    foreach resp $protocols {
+        set rd [valkey_client sentinel 0]
+        $rd hello $resp
+        $rd readraw 1
+        set expected [expr {$resp == 2 ? {*-1} : {_}}]
+        assert_equal $expected [$rd SENTINEL GET-PRIMARY-ADDR-BY-NAME nosuchprimary]
+        assert_equal $expected [$rd SENTINEL GET-MASTER-ADDR-BY-NAME nosuchprimary]
+        $rd close
+    }
+}
+
 test "SENTINEL SENTINELS returns a list of sentinel instances" {
      assert_morethan_equal [llength [S 0 SENTINEL SENTINELS mymaster]] 1
 }

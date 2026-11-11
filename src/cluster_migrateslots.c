@@ -818,6 +818,9 @@ void clusterCommandSyncSlotsFinish(client *c) {
 
     addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    /* The job may have finished here already, e.g. a replicated FLUSHALL fails
+     * the job on the replica before the primary sends FINISH for it. */
+    if (isSlotMigrationJobFinished(job)) return;
     finishSlotMigrationJob(job, target_state, message);
 }
 

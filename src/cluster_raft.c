@@ -2047,6 +2047,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     }
     if (!sender_included) {
         serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
+        dictRelease(seen);
         clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
         return 1;
     }

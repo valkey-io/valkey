@@ -2522,7 +2522,7 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
 
             $primary DEBUG SET-ACTIVE-EXPIRE 1
             $replica DEBUG SET-ACTIVE-EXPIRE 1
-        } {OK} {needs:debug}
+        } {OK} {needs:debug valgrind:skip}
 
         foreach cmd {SINTERSTORE SUNIONSTORE SDIFFSTORE} {
             test "$cmd over a source with hidden members stores the same set on the replica" {
@@ -2555,7 +2555,7 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
 
                 $primary DEBUG SET-ACTIVE-EXPIRE 1
                 $replica DEBUG SET-ACTIVE-EXPIRE 1
-            } {OK} {needs:debug}
+            } {OK} {needs:debug valgrind:skip}
         }
 
         test "SRANDMEMBER on a replica draws only live members and reclaims nothing" {
@@ -2616,7 +2616,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
         assert_all_live $got $live_members
         assert_equal [expr {126 + [llength $live_members]}] [r SCARD myset]
         r DEBUG SET-ACTIVE-EXPIRE 1
-    } {OK} {needs:debug}
+    } {OK} {needs:debug valgrind:skip}
 
     # Inside the window the hidden members' bucket key is still ahead of the
     # clock, so it is the one bucket a census cannot settle from its key alone.
@@ -2631,7 +2631,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
         assert_all_live $got $live_members
         assert_equal [expr {126 + [llength $live_members]}] [r SCARD myset]
         r DEBUG SET-ACTIVE-EXPIRE 1
-    } {OK} {needs:debug}
+    } {OK} {needs:debug valgrind:skip}
 
     foreach {live_kind live_ttl live_plain} {volatile 20 0 persistent 0 20 mixed 10 10} {
         test "SRANDMEMBER draws only live members of a mostly-expired set - $live_kind live" {

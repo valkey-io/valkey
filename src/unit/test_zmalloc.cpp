@@ -66,3 +66,30 @@ TEST_F(ZmallocTest, TestZmallocCacheAlignedAllocAndFree) {
     ASSERT_GE(usable_size, 123u);
     ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
+
+TEST_F(ZmallocTest, TestZmallocExternalUsedMemory) {
+    size_t used_memory_before = zmalloc_used_memory();
+    size_t external_memory_before = zmalloc_used_external_memory();
+
+    ASSERT_EQ(zmalloc_increase_used_memory_external(123), 0);
+    ASSERT_EQ(zmalloc_used_external_memory(), external_memory_before + 123);
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before + 123);
+
+    ASSERT_EQ(zmalloc_decrease_used_memory_external(123), 0);
+    ASSERT_EQ(zmalloc_used_external_memory(), external_memory_before);
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
+}
+
+TEST_F(ZmallocTest, TestZmallocExternalUsedMemoryBounds) {
+    size_t external_memory_before = zmalloc_used_external_memory();
+
+    ASSERT_EQ(zmalloc_decrease_used_memory_external(external_memory_before + 1), -1);
+    if (external_memory_before == 0) {
+        ASSERT_EQ(zmalloc_increase_used_memory_external(1), 0);
+        ASSERT_EQ(zmalloc_increase_used_memory_external(SIZE_MAX), -1);
+        ASSERT_EQ(zmalloc_decrease_used_memory_external(1), 0);
+    } else {
+        ASSERT_EQ(zmalloc_increase_used_memory_external(SIZE_MAX - external_memory_before + 1), -1);
+    }
+    ASSERT_EQ(zmalloc_used_external_memory(), external_memory_before);
+}

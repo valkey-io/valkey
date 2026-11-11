@@ -1,0 +1,36 @@
+{
+    "INFO": {
+        "summary": "Returns information about configuration parameters matching the given patterns.",
+        "complexity": "O(N) when N is the number of configuration parameters provided",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": -3,
+        "container": "CONFIG",
+        "function": "configInfoCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "arguments": [
+            {
+                "name": "pattern",
+                "type": "string",
+                "multiple": true
+            }
+        ],
+        "reply_schema": {
+            "type": "array",
+            "description": "Configuration parameter information.",
+            "items": {
+                "type": "object"
+            }
+        }
+    }
+}

@@ -1,0 +1,836 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include "server.h"
+
+typedef enum pathHashReplyMode {
+    PATH_HASH_REPLY_PATH,
+    PATH_HASH_REPLY_LENGTH,
+} pathHashReplyMode;
+
+typedef enum pathHashValueMode {
+    PATH_HASH_VALUES_NONE,
+    PATH_HASH_VALUES_ALL,
+    PATH_HASH_VALUES_FIELDS,
+} pathHashValueMode;
+
+typedef struct pathHashMatch {
+    size_t path_len;
+    robj *payload;
+} pathHashMatch;
+
+typedef struct pathHashMatchList {
+    pathHashMatch *items;
+    size_t len;
+    size_t cap;
+    size_t head;
+    size_t limit;
+    size_t max_path_len;
+} pathHashMatchList;
+
+#define PATH_HASH_DELETE_CHUNK_SIZE 256
+#define PATH_HASH_DELETE_CHUNK_BYTES (64 * 1024)
+
+static void freePathHashPayload(void *data) {
+    decrRefCount(data);
+}
+
+robj *createPathHashObject(void) {
+    pathHashObject *path_hash = zmalloc(sizeof(*path_hash));
+    path_hash->index = raxNew();
+    path_hash->num_fields = 0;
+    robj *o = createObject(OBJ_PATH_HASH, path_hash);
+    objectSetEncoding(o, OBJ_ENCODING_PATH_HASH);
+    return o;
+}
+
+void freePathHashObject(robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
+    raxFreeWithCallback(path_hash->index, freePathHashPayload);
+    zfree(path_hash);
+}
+
+robj *pathHashTypeDup(robj *o) {
+    pathHashObject *source = objectGetVal(o);
+    robj *copy = createPathHashObject();
+    pathHashObject *target = objectGetVal(copy);
+    raxIterator iter;
+
+    raxStart(&iter, source->index);
+    raxSeek(&iter, "^", NULL, 0);
+    while (raxNext(&iter)) {
+        robj *payload = hashTypeDup(iter.data);
+        serverAssert(raxInsert(target->index, iter.key, iter.key_len, payload, NULL));
+    }
+    raxStop(&iter);
+    target->num_fields = source->num_fields;
+    return copy;
+}
+
+size_t pathHashTypeMemUsage(robj *o, size_t sample_size) {
+    pathHashObject *path_hash = objectGetVal(o);
+    size_t size = sizeof(*path_hash) + raxAllocSize(path_hash->index);
+    size_t payload_size = 0;
+    size_t samples = 0;
+    raxIterator iter;
+
+    raxStart(&iter, path_hash->index);
+    raxSeek(&iter, "^", NULL, 0);
+    while (samples < sample_size && raxNext(&iter)) {
+        payload_size += objectComputeSize(NULL, iter.data, sample_size, -1);
+        samples++;
+    }
+    raxStop(&iter);
+    if (samples) size += (double)payload_size / samples * raxSize(path_hash->index);
+    return size;
+}
+
+void pathHashTypeDigest(unsigned char *digest, robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
+    raxIterator paths;
+
+    raxStart(&paths, path_hash->index);
+    raxSeek(&paths, "^", NULL, 0);
+    while (raxNext(&paths)) {
+        hashTypeIterator fields;
+        hashTypeInitIterator(paths.data, &fields);
+        while (hashTypeNext(&fields) != C_ERR) {
+            unsigned char entry_digest[20] = {0};
+            sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
+            sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
+            mixDigest(entry_digest, paths.key, paths.key_len);
+            mixDigest(entry_digest, field, sdslen(field));
+            mixDigest(entry_digest, value, sdslen(value));
+            xorDigest(digest, entry_digest, sizeof(entry_digest));
+            sdsfree(field);
+            sdsfree(value);
+        }
+        hashTypeResetIterator(&fields);
+    }
+    raxStop(&paths);
+}
+
+static robj *pathHashLookupPayload(robj *o, robj *path) {
+    if (o == NULL) return NULL;
+    pathHashObject *path_hash = objectGetVal(o);
+    void *payload = NULL;
+    sds pathstr = objectGetVal(path);
+    if (!raxFind(path_hash->index, (unsigned char *)pathstr, sdslen(pathstr), &payload)) return NULL;
+    return payload;
+}
+
+static void pathHashReplyPayload(client *c, robj *payload) {
+    /* A payload is a field/value map, so reply like HGETALL does: a map in
+     * RESP3 and a flat array in RESP2. */
+    addReplyMapLen(c, hashTypeLength(payload));
+    hashTypeIterator iter;
+    hashTypeInitIterator(payload, &iter);
+    while (hashTypeNext(&iter) != C_ERR) {
+        addReplyBulkSds(c, hashTypeCurrentObjectNewSds(&iter, OBJ_HASH_FIELD));
+        addReplyBulkSds(c, hashTypeCurrentObjectNewSds(&iter, OBJ_HASH_VALUE));
+    }
+    hashTypeResetIterator(&iter);
+}
+
+static void pathHashReplyField(client *c, robj *payload, robj *field) {
+    robj *value = payload ? hashTypeGetValueObject(payload, objectGetVal(field)) : NULL;
+    if (value) {
+        addReplyBulk(c, value);
+        decrRefCount(value);
+    } else {
+        addReplyNull(c);
+    }
+}
+
+static void pathHashReplyFields(client *c, robj *payload, robj **fields, long numfields) {
+    addReplyArrayLen(c, numfields);
+    for (long i = 0; i < numfields; i++) pathHashReplyField(c, payload, fields[i]);
+}
+
+static void pathHashReplyMatch(client *c,
+                               robj *query,
+                               size_t path_len,
+                               robj *payload,
+                               pathHashReplyMode reply_mode,
+                               pathHashValueMode value_mode,
+                               robj **fields,
+                               long numfields) {
+    if (value_mode != PATH_HASH_VALUES_NONE) addReplyArrayLen(c, 2);
+    if (reply_mode == PATH_HASH_REPLY_LENGTH)
+        addReplyLongLong(c, path_len);
+    else
+        addReplyBulkCBuffer(c, objectGetVal(query), path_len);
+
+    if (value_mode == PATH_HASH_VALUES_ALL)
+        pathHashReplyPayload(c, payload);
+    else if (value_mode == PATH_HASH_VALUES_FIELDS)
+        pathHashReplyFields(c, payload, fields, numfields);
+}
+
+static robj *pathHashCreatePayload(pathHashObject *path_hash, robj *path) {
+    robj *payload = createHashObject();
+    sds pathstr = objectGetVal(path);
+    /* The caller has already checked that this path does not exist. */
+    serverAssert(raxInsert(path_hash->index, (unsigned char *)pathstr, sdslen(pathstr), payload, NULL));
+    return payload;
+}
+
+static void pathHashSetField(pathHashObject *path_hash, robj *payload, robj *field, robj *value) {
+    bool expired_overwritten = false;
+    int updated = hashTypeSet(payload,
+                              objectGetVal(field),
+                              objectGetVal(value),
+                              EXPIRY_NONE,
+                              HASH_SET_COPY,
+                              &expired_overwritten);
+    serverAssert(!expired_overwritten);
+    if (!updated) path_hash->num_fields++;
+}
+
+/* Validate one or more groups in the following form before the caller emits
+ * replies or applies mutations:
+ *
+ *     path FIELDS numfields field [value] [field [value] ...]
+ *
+ * Values are present for PHMSET and omitted for PHMGET. */
+static int pathHashValidateFieldGroups(client *c, int with_values, long long *total_fields) {
+    int stride = with_values ? 2 : 1;
+    int argpos = 2;
+    *total_fields = 0;
+
+    while (argpos < c->argc) {
+        if (argpos + 2 >= c->argc || strcasecmp(objectGetVal(c->argv[argpos + 1]), "fields")) goto syntax;
+
+        long numfields;
+        if (getRangeLongFromObjectOrReply(c, c->argv[argpos + 2], 1, LONG_MAX, &numfields, NULL) != C_OK)
+            return C_ERR;
+
+        int fields_index = argpos + 3;
+        int remaining = c->argc - fields_index;
+        if (numfields > remaining / stride) goto syntax;
+
+        argpos = fields_index + numfields * stride;
+        *total_fields += numfields;
+    }
+    return C_OK;
+
+syntax:
+    addReplyErrorObject(c, shared.syntaxerr);
+    return C_ERR;
+}
+
+void phsetCommand(client *c) {
+    int fnx = 0, fxx = 0;
+    int argpos = 3;
+    if (argpos < c->argc && !strcasecmp(objectGetVal(c->argv[argpos]), "fnx")) {
+        fnx = 1;
+        argpos++;
+    } else if (argpos < c->argc && !strcasecmp(objectGetVal(c->argv[argpos]), "fxx")) {
+        fxx = 1;
+        argpos++;
+    }
+    if (argpos + 2 > c->argc || strcasecmp(objectGetVal(c->argv[argpos]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+    long numfields;
+    if (getRangeLongFromObjectOrReply(c, c->argv[argpos + 1], 1, LONG_MAX, &numfields, NULL) != C_OK) return;
+    int fields_index = argpos + 2;
+    int remaining = c->argc - fields_index;
+    if ((remaining & 1) || numfields != remaining / 2) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
+    if (fnx || fxx) {
+        for (long i = 0; i < numfields; i++) {
+            int field_exists = payload && hashTypeExists(payload, objectGetVal(c->argv[fields_index + i * 2]));
+            if ((fnx && field_exists) || (fxx && !field_exists)) {
+                addReplyNull(c);
+                return;
+            }
+        }
+    }
+
+    /* Build the payload before publishing the tree to keyspace subscribers. */
+    int created_tree = 0;
+    if (o == NULL) {
+        o = createPathHashObject();
+        created_tree = 1;
+    }
+    pathHashObject *path_hash = objectGetVal(o);
+    if (payload == NULL) {
+        payload = pathHashCreatePayload(path_hash, c->argv[2]);
+    }
+    for (long i = 0; i < numfields; i++)
+        pathHashSetField(path_hash, payload, c->argv[fields_index + i * 2], c->argv[fields_index + i * 2 + 1]);
+
+    /* Publish the key only now that it carries the field: dbAdd() fires the
+     * "new" keyspace event and module subscribers run synchronously. */
+    if (created_tree) dbAdd(c->db, c->argv[1], &o);
+
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phset", c->argv[1], c->db->id);
+    server.dirty += numfields;
+    addReply(c, shared.ok);
+}
+
+void phmsetCommand(client *c) {
+    long long assignments;
+    if (pathHashValidateFieldGroups(c, 1, &assignments) != C_OK) return;
+
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    int created_tree = 0;
+    if (o == NULL) {
+        o = createPathHashObject();
+        created_tree = 1;
+    }
+    pathHashObject *path_hash = objectGetVal(o);
+    for (int argpos = 2; argpos < c->argc;) {
+        long long numfields;
+        serverAssert(getLongLongFromObject(c->argv[argpos + 2], &numfields) == C_OK);
+        int fields_index = argpos + 3;
+        robj *payload = pathHashLookupPayload(o, c->argv[argpos]);
+        if (payload == NULL) {
+            payload = pathHashCreatePayload(path_hash, c->argv[argpos]);
+        }
+        for (long long i = 0; i < numfields; i++)
+            pathHashSetField(path_hash, payload, c->argv[fields_index + i * 2], c->argv[fields_index + i * 2 + 1]);
+        argpos = fields_index + numfields * 2;
+    }
+    if (created_tree) dbAdd(c->db, c->argv[1], &o);
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phmset", c->argv[1], c->db->id);
+    server.dirty += assignments;
+    addReply(c, shared.ok);
+}
+
+void phgetCommand(client *c) {
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
+    pathHashReplyFields(c, payload, c->argv + 3, c->argc - 3);
+}
+
+void phmgetCommand(client *c) {
+    long long total_fields;
+    if (pathHashValidateFieldGroups(c, 0, &total_fields) != C_OK) return;
+
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    addReplyArrayLen(c, total_fields);
+    for (int argpos = 2; argpos < c->argc;) {
+        long long numfields;
+        serverAssert(getLongLongFromObject(c->argv[argpos + 2], &numfields) == C_OK);
+        int fields_index = argpos + 3;
+        robj *payload = pathHashLookupPayload(o, c->argv[argpos]);
+        for (long long i = 0; i < numfields; i++) pathHashReplyField(c, payload, c->argv[fields_index + i]);
+        argpos = fields_index + numfields;
+    }
+}
+
+void phgetallCommand(client *c) {
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
+    if (payload)
+        pathHashReplyPayload(c, payload);
+    else
+        addReply(c, shared.emptymap[c->resp]);
+}
+
+void phpathexistsCommand(client *c) {
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    addReplyLongLong(c, pathHashLookupPayload(o, c->argv[2]) != NULL);
+}
+
+/* Remove one exact path and account for all fields in its payload. */
+static int pathHashDeletePath(pathHashObject *path_hash, sds path) {
+    void *payload = NULL;
+    if (!raxRemove(path_hash->index, (unsigned char *)path, sdslen(path), &payload)) return 0;
+    path_hash->num_fields -= hashTypeLength(payload);
+    decrRefCount(payload);
+    return 1;
+}
+
+void phdelCommand(client *c) {
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    if (o == NULL) {
+        addReply(c, shared.czero);
+        return;
+    }
+    pathHashObject *path_hash = objectGetVal(o);
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
+    if (payload == NULL) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    long long deleted = 0;
+    if (c->argc == 3) {
+        deleted = pathHashDeletePath(path_hash, objectGetVal(c->argv[2]));
+    } else {
+        for (int i = 3; i < c->argc; i++) {
+            if (hashTypeDelete(payload, objectGetVal(c->argv[i]))) {
+                deleted++;
+                path_hash->num_fields--;
+            }
+        }
+    }
+    if (c->argc != 3 && hashTypeLength(payload) == 0)
+        serverAssert(pathHashDeletePath(path_hash, objectGetVal(c->argv[2])));
+    if (deleted) {
+        bool keyremoved = raxSize(path_hash->index) == 0;
+        if (keyremoved) dbDelete(c->db, c->argv[1]);
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+    addReplyLongLong(c, deleted);
+}
+
+static int pathHashParseMatchOptions(client *c,
+                                     int start,
+                                     pathHashReplyMode *reply_mode,
+                                     pathHashValueMode *value_mode,
+                                     robj ***fields,
+                                     long *numfields,
+                                     long *count,
+                                     long *maxpathlen,
+                                     bool *exclude_self) {
+    *reply_mode = PATH_HASH_REPLY_PATH;
+    *value_mode = PATH_HASH_VALUES_NONE;
+    *fields = NULL;
+    *numfields = 0;
+    *exclude_self = false;
+    *count = -1;
+    *maxpathlen = -1;
+    for (int i = start; i < c->argc;) {
+        char *arg = objectGetVal(c->argv[i]);
+        if (!strcasecmp(arg, "lengths")) {
+            if (*reply_mode == PATH_HASH_REPLY_LENGTH) goto syntax;
+            *reply_mode = PATH_HASH_REPLY_LENGTH;
+            i++;
+        } else if (!strcasecmp(arg, "withvalues")) {
+            if (*value_mode != PATH_HASH_VALUES_NONE) goto syntax;
+            *value_mode = PATH_HASH_VALUES_ALL;
+            i++;
+        } else if (!strcasecmp(arg, "fields")) {
+            if (*value_mode != PATH_HASH_VALUES_NONE || i + 1 >= c->argc) goto syntax;
+            long field_count;
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, &field_count, NULL) != C_OK)
+                return C_ERR;
+            if (field_count > c->argc - i - 2) goto syntax;
+            *value_mode = PATH_HASH_VALUES_FIELDS;
+            *numfields = field_count;
+            *fields = c->argv + i + 2;
+            i += 2 + field_count;
+        } else if (!strcasecmp(arg, "count")) {
+            if (*count != -1 || i + 1 >= c->argc) goto syntax;
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, count, NULL) != C_OK)
+                return C_ERR;
+            i += 2;
+        } else if (!strcasecmp(arg, "excludeself")) {
+            if (*exclude_self) goto syntax;
+            *exclude_self = true;
+            i++;
+        } else if (!strcasecmp(arg, "maxpathlen")) {
+            if (*maxpathlen != -1 || i + 1 >= c->argc) goto syntax;
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 0, LONG_MAX, maxpathlen, NULL) != C_OK)
+                return C_ERR;
+            i += 2;
+        } else {
+            goto syntax;
+        }
+    }
+    return C_OK;
+
+syntax:
+    addReplyErrorObject(c, shared.syntaxerr);
+    return C_ERR;
+}
+
+static int pathHashCollectMatch(size_t path_len, void *data, void *context) {
+    pathHashMatchList *matches = context;
+    if (path_len > matches->max_path_len) return 0;
+    if (matches->len == matches->cap) {
+        if (matches->cap < matches->limit) {
+            size_t new_cap = matches->cap ? matches->cap * 2 : 8;
+            if (new_cap > matches->limit) new_cap = matches->limit;
+            matches->cap = new_cap;
+            matches->items = zrealloc(matches->items, matches->cap * sizeof(*matches->items));
+        } else {
+            /* COUNT retains the deepest matches in this circular buffer. */
+            matches->items[matches->head] = (pathHashMatch){path_len, data};
+            matches->head = (matches->head + 1) % matches->cap;
+            return 1;
+        }
+    }
+    size_t index = (matches->head + matches->len) % matches->cap;
+    matches->items[index] = (pathHashMatch){path_len, data};
+    matches->len++;
+    return 1;
+}
+
+void phprefixesCommand(client *c) {
+    pathHashReplyMode reply_mode;
+    pathHashValueMode value_mode;
+    robj **fields;
+    long numfields;
+    long count, maxpathlen;
+    bool exclude_self;
+    if (pathHashParseMatchOptions(c, 3, &reply_mode, &value_mode, &fields, &numfields, &count, &maxpathlen, &exclude_self) !=
+        C_OK)
+        return;
+
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    if (o == NULL) {
+        addReply(c, shared.emptyarray);
+        return;
+    }
+    pathHashObject *path_hash = objectGetVal(o);
+    sds query = objectGetVal(c->argv[2]);
+    pathHashMatchList matches = {
+        .items = NULL,
+        .len = 0,
+        .cap = 0,
+        .head = 0,
+        .limit = count == -1 ? SIZE_MAX : (size_t)count,
+        .max_path_len = maxpathlen == -1 ? SIZE_MAX : (size_t)maxpathlen,
+    };
+    if (exclude_self) {
+        /* A strict prefix of an empty query cannot exist. Avoid underflow. */
+        if (sdslen(query) == 0) {
+            addReply(c, shared.emptyarray);
+            return;
+        }
+        if (matches.max_path_len >= sdslen(query)) matches.max_path_len = sdslen(query) - 1;
+    }
+    raxForEachPrefix(path_hash->index, (unsigned char *)query, sdslen(query), pathHashCollectMatch, &matches);
+    addReplyArrayLen(c, matches.len);
+    for (size_t i = 0; i < matches.len; i++) {
+        size_t index = (matches.head + matches.len - 1 - i) % matches.cap;
+        pathHashReplyMatch(c,
+                           c->argv[2],
+                           matches.items[index].path_len,
+                           matches.items[index].payload,
+                           reply_mode,
+                           value_mode,
+                           fields,
+                           numfields);
+    }
+    zfree(matches.items);
+}
+
+static int pathHashPathHasPrefix(const unsigned char *path,
+                                 size_t path_len,
+                                 const unsigned char *prefix,
+                                 size_t prefix_len) {
+    return path_len >= prefix_len && memcmp(path, prefix, prefix_len) == 0;
+}
+
+void phpathdelCommand(client *c) {
+    bool withsubpaths = c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "withsubpaths");
+    if (c->argc != 3 && !withsubpaths) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    if (o == NULL) {
+        addReply(c, shared.czero);
+        return;
+    }
+    pathHashObject *path_hash = objectGetVal(o);
+    sds path = objectGetVal(c->argv[2]);
+    size_t path_len = sdslen(path);
+    bool delete_all = withsubpaths && path_len == 0;
+    long long deleted = 0;
+    if (!withsubpaths) {
+        deleted = pathHashDeletePath(path_hash, path);
+    } else if (delete_all) {
+        deleted = raxSize(path_hash->index);
+    } else {
+        /* Deletion invalidates the iterator, so collect a bounded number of path
+         * copies before removing them. The index stores a shared prefix once, so
+         * the copies are bounded in bytes as well as in count. This bounds temporary
+         * path copies only; the complete matching subtree is still deleted
+         * synchronously by this command. */
+        while (1) {
+            sds paths[PATH_HASH_DELETE_CHUNK_SIZE];
+            size_t chunk_len = 0, chunk_bytes = 0;
+            raxIterator iter;
+            raxStart(&iter, path_hash->index);
+            raxSeek(&iter, ">=", (unsigned char *)path, path_len);
+            while (chunk_len < PATH_HASH_DELETE_CHUNK_SIZE && chunk_bytes < PATH_HASH_DELETE_CHUNK_BYTES &&
+                   raxNext(&iter) &&
+                   pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)path, path_len)) {
+                paths[chunk_len++] = sdsnewlen(iter.key, iter.key_len);
+                chunk_bytes += iter.key_len;
+            }
+            raxStop(&iter);
+            if (chunk_len == 0) break;
+
+            for (size_t i = 0; i < chunk_len; i++) {
+                void *payload = NULL;
+                serverAssert(raxRemove(path_hash->index, (unsigned char *)paths[i], sdslen(paths[i]), &payload));
+                path_hash->num_fields -= hashTypeLength(payload);
+                decrRefCount(payload);
+                sdsfree(paths[i]);
+            }
+            deleted += chunk_len;
+        }
+    }
+    if (deleted) {
+        bool keyremoved = delete_all || raxSize(path_hash->index) == 0;
+        if (keyremoved) dbDelete(c->db, c->argv[1]);
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_PATH_HASH, "phpathdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+    addReplyLongLong(c, deleted);
+}
+
+static int pathHashHexDigit(unsigned char byte) {
+    if (byte >= '0' && byte <= '9') return byte - '0';
+    if (byte >= 'a' && byte <= 'f') return byte - 'a' + 10;
+    if (byte >= 'A' && byte <= 'F') return byte - 'A' + 10;
+    return -1;
+}
+
+static sds pathHashDecodeCursor(client *c, robj *cursor, int *initial) {
+    sds encoded = objectGetVal(cursor);
+    size_t len = sdslen(encoded);
+    if (len == 1 && encoded[0] == '0') {
+        *initial = 1;
+        return sdsempty();
+    }
+    *initial = 0;
+    if (len < 2 || encoded[0] != '1' || encoded[1] != ':' || ((len - 2) & 1)) goto invalid;
+    sds decoded = sdsnewlen(NULL, (len - 2) / 2);
+    for (size_t i = 2; i < len; i += 2) {
+        int high = pathHashHexDigit(encoded[i]);
+        int low = pathHashHexDigit(encoded[i + 1]);
+        if (high < 0 || low < 0) {
+            sdsfree(decoded);
+            goto invalid;
+        }
+        decoded[(i - 2) / 2] = (high << 4) | low;
+    }
+    return decoded;
+
+invalid:
+    addReplyError(c, "invalid cursor");
+    return NULL;
+}
+
+static sds pathHashEncodeCursor(const unsigned char *path, size_t len) {
+    static const char hex[] = "0123456789abcdef";
+    sds cursor = sdsnewlen(NULL, 2 + len * 2);
+    cursor[0] = '1';
+    cursor[1] = ':';
+    for (size_t i = 0; i < len; i++) {
+        cursor[2 + i * 2] = hex[path[i] >> 4];
+        cursor[3 + i * 2] = hex[path[i] & 0xf];
+    }
+    return cursor;
+}
+
+/* Validate both scan commands before looking up the key or path. */
+static int pathHashParseScanOptions(client *c, int start, int paths, scanOptions *opts, robj **prefix) {
+    *opts = (scanOptions){.count = 10, .type = LLONG_MAX, .input_slot = -1, .match_slot = -1};
+    *prefix = NULL;
+    int count_seen = 0, filter_seen = 0;
+    for (int i = start; i < c->argc; i += 2) {
+        char *arg = objectGetVal(c->argv[i]);
+        if (i + 1 >= c->argc) goto syntax;
+        if (!strcasecmp(arg, "count") && !count_seen) {
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, &opts->count, NULL) != C_OK)
+                return C_ERR;
+            count_seen = 1;
+        } else if (!strcasecmp(arg, paths ? "prefix" : "match") && !filter_seen) {
+            filter_seen = 1;
+            if (paths) {
+                *prefix = c->argv[i + 1];
+            } else {
+                opts->pat = objectGetVal(c->argv[i + 1]);
+                opts->patlen = sdslen(opts->pat);
+                opts->use_pattern = !(opts->patlen == 1 && opts->pat[0] == '*');
+            }
+        } else {
+            goto syntax;
+        }
+    }
+    return C_OK;
+syntax:
+    addReplyErrorObject(c, shared.syntaxerr);
+    return C_ERR;
+}
+
+/* Scan only the field map of an exact path, using the Hash scan cursor. */
+void phscanCommand(client *c) {
+    unsigned long long cursor;
+    if (parseScanCursorOrReply(c, objectGetVal(c->argv[3]), &cursor) != C_OK) return;
+    scanOptions opts;
+    robj *prefix;
+    if (pathHashParseScanOptions(c, 4, 0, &opts, &prefix) != C_OK) return;
+
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    robj *payload = pathHashLookupPayload(o, c->argv[2]);
+    if (payload == NULL) {
+        addReply(c, shared.emptyscan);
+        return;
+    }
+    scanGenericCommandWithOptions(c, payload, cursor, &opts, NULL);
+}
+
+void phpathscanCommand(client *c) {
+    scanOptions opts;
+    robj *prefix_arg;
+    if (pathHashParseScanOptions(c, 3, 1, &opts, &prefix_arg) != C_OK) return;
+    long count = opts.count;
+
+    int initial;
+    sds previous = pathHashDecodeCursor(c, c->argv[2], &initial);
+    if (previous == NULL) return;
+    sds prefix = prefix_arg ? objectGetVal(prefix_arg) : NULL;
+    size_t prefix_len = prefix ? sdslen(prefix) : 0;
+    if (!initial && prefix &&
+        !pathHashPathHasPrefix((unsigned char *)previous, sdslen(previous), (unsigned char *)prefix, prefix_len)) {
+        sdsfree(previous);
+        addReplyError(c, "cursor does not belong to the requested prefix");
+        return;
+    }
+
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) {
+        sdsfree(previous);
+        return;
+    }
+    if (o == NULL) {
+        sdsfree(previous);
+        addReplyArrayLen(c, 2);
+        addReplyBulkCBuffer(c, "0", 1);
+        addReply(c, shared.emptyarray);
+        return;
+    }
+
+    pathHashObject *path_hash = objectGetVal(o);
+    raxIterator iter;
+    raxStart(&iter, path_hash->index);
+    if (!initial)
+        raxSeek(&iter, ">", (unsigned char *)previous, sdslen(previous));
+    else if (prefix)
+        raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
+    else
+        raxSeek(&iter, "^", NULL, 0);
+
+    sds *entries = NULL;
+    size_t returned = 0, cap = 0;
+    while (returned < (size_t)count && raxNext(&iter)) {
+        if (prefix && !pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len)) break;
+        if (returned == cap) {
+            cap = cap ? cap * 2 : 16;
+            if (cap > (size_t)count) cap = count;
+            entries = zrealloc(entries, cap * sizeof(*entries));
+        }
+        entries[returned] = sdsnewlen(iter.key, iter.key_len);
+        returned++;
+    }
+    /* Stopping exactly at COUNT does not mean there is more to scan, so look
+     * one entry ahead instead of making the client discover the end of the
+     * traversal with an extra empty call. */
+    int has_more = 0;
+    if (returned == (size_t)count && raxNext(&iter))
+        has_more = !prefix || pathHashPathHasPrefix(iter.key, iter.key_len, (unsigned char *)prefix, prefix_len);
+    sds next_cursor = has_more ? pathHashEncodeCursor((unsigned char *)entries[returned - 1],
+                                                      sdslen(entries[returned - 1]))
+                               : sdsnew("0");
+    raxStop(&iter);
+    sdsfree(previous);
+
+    addReplyArrayLen(c, 2);
+    addReplyBulkSds(c, next_cursor);
+    addReplyArrayLen(c, returned);
+    for (size_t i = 0; i < returned; i++) {
+        addReplyBulkCBuffer(c, entries[i], sdslen(entries[i]));
+        sdsfree(entries[i]);
+    }
+    zfree(entries);
+}
+
+/* Count stored paths with a byte prefix; an empty prefix counts the whole tree. */
+size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len) {
+    pathHashObject *path_hash = objectGetVal(o);
+    if (prefix_len == 0) return raxSize(path_hash->index);
+
+    size_t count = 0;
+    raxIterator iter;
+    raxStart(&iter, path_hash->index);
+    raxSeek(&iter, ">=", (unsigned char *)prefix, prefix_len);
+    while (raxNext(&iter) && pathHashPathHasPrefix(iter.key, iter.key_len, prefix, prefix_len)) count++;
+    raxStop(&iter);
+    return count;
+}
+
+void phpathcountCommand(client *c) {
+    sds prefix = NULL;
+    if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[2]), "prefix")) {
+        prefix = objectGetVal(c->argv[3]);
+    } else if (c->argc != 2) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_PATH_HASH)) return;
+    if (o == NULL) {
+        addReply(c, shared.czero);
+        return;
+    }
+    addReplyLongLong(c, pathHashTypeCount(o, (unsigned char *)prefix, prefix ? sdslen(prefix) : 0));
+}
+
+int rewritePathHashObject(rio *r, robj *key, robj *o) {
+    pathHashObject *path_hash = objectGetVal(o);
+    raxIterator paths;
+
+    raxStart(&paths, path_hash->index);
+    raxSeek(&paths, "^", NULL, 0);
+    while (raxNext(&paths)) {
+        hashTypeIterator fields;
+        hashTypeInitIterator(paths.data, &fields);
+        while (hashTypeNext(&fields) != C_ERR) {
+            sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
+            sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
+            int ok = rioWriteBulkCount(r, '*', 7) && rioWriteBulkString(r, "PHSET", 5) &&
+                     rioWriteBulkObject(r, key) && rioWriteBulkString(r, (char *)paths.key, paths.key_len) &&
+                     rioWriteBulkString(r, "FIELDS", 6) && rioWriteBulkLongLong(r, 1) &&
+                     rioWriteBulkString(r, field, sdslen(field)) && rioWriteBulkString(r, value, sdslen(value));
+            sdsfree(field);
+            sdsfree(value);
+            if (!ok) {
+                hashTypeResetIterator(&fields);
+                raxStop(&paths);
+                return 0;
+            }
+        }
+        hashTypeResetIterator(&fields);
+    }
+    raxStop(&paths);
+    return 1;
+}

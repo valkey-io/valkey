@@ -91,6 +91,7 @@
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define CLI_AUTH_ENV "VALKEYCLI_AUTH"
 #define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_USER_ENV "VALKEYCLI_USER"
 #define CLI_HOST_ENV "VALKEYCLI_HOST"
 #define CLI_PORT_ENV "VALKEYCLI_PORT"
 #define CLI_CLUSTER_YES_ENV "VALKEYCLI_CLUSTER_YES"
@@ -104,8 +105,8 @@
 
 #define CLUSTER_MANAGER_INVALID_HOST_ARG                        \
     "[ERR] Invalid arguments: you need to pass either a valid " \
-    "address (ie. 120.0.0.1:7000) or space separated IP "       \
-    "and port (ie. 120.0.0.1 7000)\n"
+    "address (ie. 120.0.0.1:7000 or [::1]:7000) or space "      \
+    "separated IP and port (ie. 120.0.0.1 7000)\n"
 #define CLUSTER_MANAGER_MODE() (config.cluster_manager_command.name != NULL)
 #define CLUSTER_MANAGER_PRIMARIES_COUNT(nodes, replicas) ((nodes) / ((replicas) + 1))
 #define CLUSTER_MANAGER_COMMAND(n, ...) (valkeyCommand((n)->context, __VA_ARGS__))
@@ -910,7 +911,7 @@ static void cliInitHelp(void) {
     dict *groups;
 
     if (cliConnect(CC_QUIET) == VALKEY_ERR) {
-        /* Can not connect to the server, but we still want to provide
+        /* Cannot connect to the server, but we still want to provide
          * help, generate it only from the static cli_commands.c data instead. */
         groups = dictCreate(&groupsdt);
         cliLegacyInitHelp(groups);
@@ -1164,7 +1165,10 @@ static sds addHintForArgument(sds hint, cliCommandArg *arg) {
     }
 
     /* Surround an optional arg with brackets, unless it's partially matched. */
-    if ((arg->flags & CMD_ARG_OPTIONAL) && !arg->matched) {
+    /* We store this in a variable since arg->matched flag would be reset inside
+     * addHintForRepeatedArgument() which is being called in this codepath. */
+    int optional_unmatched = (arg->flags & CMD_ARG_OPTIONAL) && !arg->matched;
+    if (optional_unmatched) {
         hint = sdscat(hint, "[");
     }
 
@@ -1204,7 +1208,7 @@ static sds addHintForArgument(sds hint, cliCommandArg *arg) {
 
     hint = addHintForRepeatedArgument(hint, arg);
 
-    if ((arg->flags & CMD_ARG_OPTIONAL) && !arg->matched) {
+    if (optional_unmatched) {
         hint = sdscat(hint, "]");
     }
 
@@ -2168,13 +2172,20 @@ static int cliReadReply(int output_raw_strings) {
     valkeyReply *reply;
     sds out = NULL;
     int output = 1;
+    int status;
 
     if (config.last_reply) {
         freeReplyObject(config.last_reply);
         config.last_reply = NULL;
     }
 
-    if (valkeyGetReply(context, &_reply) != VALKEY_OK) {
+    /* libvalkey returns a RESP3 attribute as its own reply, ahead of the reply
+     * it describes. Attributes are not part of the reply, so skip them. */
+    while ((status = valkeyGetReply(context, &_reply)) == VALKEY_OK &&
+           ((valkeyReply *)_reply)->type == VALKEY_REPLY_ATTR) {
+        freeReplyObject(_reply);
+    }
+    if (status != VALKEY_OK) {
         if (config.blocking_state_aborted) {
             config.blocking_state_aborted = 0;
             config.monitor_mode = 0;
@@ -2381,7 +2392,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                           !strcasecmp(command, "sunsubscribe"));
     if (!strcasecmp(command, "sync") || !strcasecmp(command, "psync")) config.replica_mode = 1;
 
-    /* When the user manually calls SCRIPT DEBUG, setup the activation of
+    /* When the user manually calls SCRIPT DEBUG, set up the activation of
      * debugging mode on the next eval if needed. */
     if (argc == 3 && !strcasecmp(argv[0], "script") && !strcasecmp(argv[1], "debug")) {
         if (!strcasecmp(argv[2], "yes") || !strcasecmp(argv[2], "sync")) {
@@ -2397,7 +2408,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         config.output = OUTPUT_RAW;
     }
 
-    /* Setup argument length */
+    /* Set up argument length */
     argvlen = zmalloc(argc * sizeof(size_t));
     for (j = 0; j < argc; j++) argvlen[j] = sdslen(argv[j]);
 
@@ -2426,7 +2437,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             /* When a push callback is set, valkeyGetReply (libvalkey) loops until
              * an in-band message is received, but these commands are confirmed
              * using push replies only. There is one push reply per channel if
-             * channels are specified, otherwise at least one. */
+             * channels are specified; otherwise, at least one. */
             num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
             /* Unset our default PUSH handler so this works in RESP2/RESP3 */
             valkeySetPushCallback(context, NULL);
@@ -2437,7 +2448,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             replicaMode(0);
             config.replica_mode = 0;
             zfree(argvlen);
-            return VALKEY_ERR; /* Error = replilcaMode lost connection to primary */
+            return VALKEY_ERR; /* Error = replicaMode lost connection to primary */
         }
 
         /* Read response, possibly skipping pubsub/push messages. */
@@ -2568,6 +2579,9 @@ static valkeyReply *reconnectingValkeyCommand(valkeyContext *c, const char *fmt,
 
 static int parseOptions(int argc, char **argv) {
     int i;
+    /* parseEnv() runs first, so auth may already hold VALKEYCLI_AUTH. Only a
+     * password set by -a or -u below should trigger the warning. */
+    char *env_auth = config.conn_info.auth;
 
     for (i = 1; i < argc; i++) {
         int lastarg = i == argc - 1;
@@ -2702,7 +2716,12 @@ static int parseOptions(int argc, char **argv) {
             config.hotkeys_count = HOTKEYS_COUNT;
         } else if (!strcmp(argv[i], "--hotkeys-count") && !lastarg) {
             config.hotkeys = 1;
-            config.hotkeys_count = atoi(argv[++i]);
+            int count = atoi(argv[++i]);
+            if (count <= 0) {
+                fprintf(stderr, "Invalid hotkeys count. Must be a positive integer.\n");
+                exit(1);
+            }
+            config.hotkeys_count = count;
         } else if (!strcmp(argv[i], "--eval") && !lastarg) {
             config.eval = argv[++i];
         } else if (!strcmp(argv[i], "--ldb")) {
@@ -2902,7 +2921,7 @@ static int parseOptions(int argc, char **argv) {
         exit(1);
     }
 
-    if (!config.no_auth_warning && config.conn_info.auth != NULL) {
+    if (!config.no_auth_warning && config.conn_info.auth != env_auth) {
         fputs("Warning: Using a password with '-a' or '-u' option on the command"
               " line interface may not be safe.\n",
               stderr);
@@ -2939,6 +2958,10 @@ static void parseEnv(void) {
     }
     if (auth != NULL) {
         config.conn_info.auth = auth;
+    }
+    char *user = getenv(CLI_USER_ENV);
+    if (user != NULL) {
+        config.conn_info.user = user;
     }
     char *host = getenv(CLI_HOST_ENV);
     if (host != NULL) {
@@ -3007,6 +3030,8 @@ static void usage(int err) {
             "                     variable to pass this password more safely\n"
             "                     (if both are used, this argument takes precedence).\n"
             "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+            "                     You can also use the " CLI_USER_ENV " environment variable\n"
+            "                     (if both are used, this argument takes precedence).\n"
             "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
             "  --askpass          Force user to input password with mask from STDIN.\n"
             "                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
@@ -3049,7 +3074,7 @@ static void usage(int err) {
     fprintf(target,
             "  --latency          Enter a special mode continuously sampling latency.\n"
             "                     If you use this mode in an interactive session it runs\n"
-            "                     forever displaying real-time stats. Otherwise if --raw or\n"
+            "                     forever displaying real-time stats. Otherwise, if --raw or\n"
             "                     --csv is specified, or if you redirect the output to a non\n"
             "                     TTY, it samples the latency for 1 second (you can use\n"
             "                     -i to change the interval), then produces a single output\n"
@@ -3768,7 +3793,7 @@ clusterManagerCommandDef clusterManagerCommands[] = {
     {"add-node", clusterManagerCommandAddNode, 2, "new_host:new_port existing_host:existing_port",
      "replica,primaries-id <arg>"},
     {"del-node", clusterManagerCommandDeleteNode, 2, "host:port node_id", NULL},
-    {"call", clusterManagerCommandCall, -2, "host:port command arg arg .. arg", "only-primaries,only-replicas"},
+    {"call", clusterManagerCommandCall, -2, "host:port command arg arg ... arg", "only-primaries,only-replicas"},
     {"set-timeout", clusterManagerCommandSetTimeout, 2, "host:port milliseconds", NULL},
     {"import", clusterManagerCommandImport, 1, "host:port",
      "from <arg>,from-user <arg>,from-pass <arg>,from-askpass,copy,replace"},
@@ -3847,13 +3872,21 @@ static int parseClusterNodeAddress(char *addr, char **ip_ptr, int *port_ptr, int
         *c = '\0';
         if (bus_port_ptr != NULL) *bus_port_ptr = atoi(c + 1);
     }
-    c = strrchr(addr, ':');
-    if (c != NULL) {
+
+    if (addr[0] == '[') {
+        /* [IPv6]:port */
+        c = strchr(addr, ']');
+        if (c == NULL || c[1] != ':') return 0;
+        *c = '\0';
+        *ip_ptr = addr + 1;
+        *port_ptr = atoi(c + 2);
+    } else {
+        c = strrchr(addr, ':');
+        if (c == NULL) return 0;
         *c = '\0';
         *ip_ptr = addr;
-        *port_ptr = atoi(++c);
-    } else
-        return 0;
+        *port_ptr = atoi(c + 1);
+    }
     return 1;
 }
 
@@ -5218,12 +5251,12 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         if (config.conn_info.input_dbnum == dbnum) {
             break;
         }
+        char *dots = NULL;
+        valkeyReply *reply = NULL, *migrate_reply = NULL;
         if (cliSelect(&config, source->context) == VALKEY_ERR) {
             success = 0;
             goto next;
         }
-        char *dots = NULL;
-        valkeyReply *reply = NULL, *migrate_reply = NULL;
         reply = CLUSTER_MANAGER_COMMAND(source,
                                         "CLUSTER "
                                         "GETKEYSINSLOT %d %d",
@@ -6227,7 +6260,7 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
             return n;
         }
     }
-    /* Can not be reached */
+    /* Cannot be reached */
     assert(0);
     /* Make compiler happy */
     return 0;
@@ -8136,7 +8169,7 @@ static int clusterManagerCommandSetTimeout(int argc, char **argv) {
             err = "";
         else
             need_free = 1;
-        clusterManagerLogErr("ERR setting node-timeout for %s:%d: %s\n", n->ip, n->port, err);
+        clusterManagerLogErr("ERR setting cluster-node-timeout for %s:%d: %s\n", n->ip, n->port, err);
         if (need_free) zfree(err);
         err_count++;
     }
@@ -9969,6 +10002,7 @@ void testHint(const char *input) {
 
     sds hint = getHintForInput(input);
     printf("%s\n", hint);
+    sdsfree(hint);
     exit(0);
 }
 

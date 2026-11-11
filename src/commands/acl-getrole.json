@@ -1,0 +1,88 @@
+{
+    "GETROLE": {
+        "summary": "Returns the ACL rules of an ACL role.",
+        "complexity": "O(N). Where N is the number of rules defined for the role.",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": 3,
+        "container": "ACL",
+        "function": "aclCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "A set of ACL rule definitions for the role.",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "commands": {
+                            "description": "Root selector's commands.",
+                            "type": "string"
+                        },
+                        "keys": {
+                            "description": "Root selector's keys.",
+                            "type": "string"
+                        },
+                        "channels": {
+                            "description": "Root selector's channels.",
+                            "type": "string"
+                        },
+                        "databases": {
+                            "description": "Root selector's databases.",
+                            "type": "string"
+                        },
+                        "selectors": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "commands": {
+                                        "type": "string"
+                                    },
+                                    "keys": {
+                                        "type": "string"
+                                    },
+                                    "channels": {
+                                        "type": "string"
+                                    },
+                                    "databases": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        },
+                        "users": {
+                            "description": "List of usernames assigned to this role.",
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                {
+                    "description": "Role not found.",
+                    "type": "null"
+                }
+            ]
+        },
+        "arguments": [
+            {
+                "name": "rolename",
+                "type": "string"
+            }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

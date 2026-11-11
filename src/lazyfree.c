@@ -1,4 +1,5 @@
 #include "server.h"
+#include "ordered_index.h"
 #include "bio.h"
 #include "functions.h"
 #include "cluster.h"
@@ -141,9 +142,9 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
-    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(obj);
-        return zslGetLength(zs->zsl);
+        return orderedIndexLength(zs->oi);
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
@@ -171,6 +172,9 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
             raxStop(&ri);
         }
         return effort;
+    } else if (obj->type == OBJ_PATH_HASH) {
+        pathHashObject *path_hash = objectGetVal(obj);
+        return path_hash->index->numnodes + path_hash->num_fields;
     } else if (obj->type == OBJ_MODULE) {
         size_t effort = moduleGetFreeEffort(key, obj, dbid);
         /* If the module's free_effort returns 0, we will use asynchronous free
@@ -257,9 +261,15 @@ void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_ca
     }
 }
 
-/* Free functions ctx, if the functions ctx contains enough functions, free it in async way. */
+/* Free functions ctx, if the functions ctx contains enough functions, free it in async way.
+ *
+ * Without engine_callbacks, the functions still live in the engines' current
+ * environment, e.g. the ctx replaced by FUNCTION RESTORE FLUSH. The main thread
+ * may reset and recreate that environment before a background job runs, and
+ * the Lua engine can get the new state at the old address, so the job would
+ * unref functions that now belong to someone else. Free those synchronously. */
 void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
-    if (functionsLibCtxFunctionsLen(functions_lib_ctx) > LAZYFREE_THRESHOLD) {
+    if (engine_callbacks && functionsLibCtxFunctionsLen(functions_lib_ctx) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, functionsLibCtxFunctionsLen(functions_lib_ctx),
                                   memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 2, functions_lib_ctx, engine_callbacks);

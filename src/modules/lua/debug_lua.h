@@ -29,8 +29,6 @@ int ldbIsStepEnabled(void);
 void ldbSetStepMode(int enable);
 
 int ldbRepl(lua_State *lua);
-void ldbGenerateDebuggerCommandsArray(lua_State *lua,
-                                      const ValkeyModuleScriptingEngineDebuggerCommand **commands,
-                                      size_t *commands_len);
+void ldbGenerateDebuggerCommandsArray(const ValkeyModuleScriptingEngineDebuggerCommand **commands, size_t *commands_len);
 
 #endif /* _LUA_DEBUG_H_ */

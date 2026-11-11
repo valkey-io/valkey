@@ -38,6 +38,24 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
         }
 
+        test {benchmark: single request completes across write retries} {
+            # TLS negotiation can make the first write return zero. Retrying
+            # must not count the same request again and exhaust the -n limit.
+            foreach opts {{} {--rps 10}} {
+                set cmd [valkeybenchmark $master_host $master_port "-c 1 -n 1 $opts INCR counter"]
+                common_bench_setup $cmd
+                assert_equal 1 [r get counter]
+                assert_match {*calls=1,*} [cmdstat incr]
+            }
+        }
+
+        test {benchmark: rate-limited clients resume pending requests} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 --rps 10 INCR counter"]
+            common_bench_setup $cmd
+            assert_equal 10 [r get counter]
+            assert_match {*calls=10,*} [cmdstat incr]
+        }
+
         test {benchmark: connecting using URI set,get} {
             set cmd [valkeybenchmarkuri $master_host $master_port "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
@@ -114,6 +132,33 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_equal 3 [r get foo]
             assert_equal 9 [r get bar]
             assert_match  {*calls=12,*} [cmdstat incr]
+        }
+
+        test {benchmark: sequence with a missing command errors out cleanly} {
+            # These are rejected before connecting, so the closed port must fail
+            # the same way.
+            set closed_port [find_available_port [expr {$::baseport - 64}] 32]
+            foreach args {"10000" "10000 ;" ";" "10000 ; INCR foo" "INCR foo ; 10000" \
+                          "; INCR foo" "INCR foo ; ; INCR bar"} {
+                foreach {desc host port} [list "live server" $master_host $master_port \
+                                               "closed port" 127.0.0.1 $closed_port] {
+                    set cmd [valkeybenchmark $host $port $args]
+                    set code [catch { exec {*}$cmd 2>@1 } output opt]
+                    assert_equal 1 $code "$desc: $args"
+                    set errcode [dict get $opt -errorcode]
+                    assert_equal CHILDSTATUS [lindex $errcode 0] "$desc: $args"
+                    assert_equal 1 [lindex $errcode 2] "$desc: $args"
+                    assert_match "*Invalid command sequence: a command is missing*" $output "$desc: $args"
+                }
+            }
+        }
+
+        test {benchmark: trailing separator is accepted} {
+            # A trailing ";" ends the last command, it does not start an empty one.
+            set cmd [valkeybenchmark $master_host $master_port "-n 4 -- incr foo ;"]
+            common_bench_setup $cmd
+            assert_equal 4 [r get foo]
+            assert_match {*calls=4,*} [cmdstat incr]
         }
 
         test {benchmark: arbitrary command with data placeholder} {
@@ -216,6 +261,27 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert {[llength $keys] > 0}
             foreach key $keys {
                 assert_equal "Book, Part 1" [r get $key]
+            }
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset CSV with a lone quote as the last field} {
+            # The opening and closing quote checks both match the same byte,
+            # which must not be stripped as a quoted empty value.
+            set csv_data "id,content\n1,\"\n"
+            set csv_file [tmpfile "lone_quote.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ \"__field:content__\""]
+            common_bench_setup $cmd
+
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            foreach key $keys {
+                assert_equal "\"" [r get $key]
             }
             file delete $csv_file
         }
@@ -460,6 +526,42 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set cmd [valkeybenchmark $master_host $master_port "-r 5 -n 5 --duration 1 -t set"]
             catch { exec {*}$cmd } error
             assert_match "*Options -n and --duration are mutually exclusive*" $error
+        }
+
+        test {benchmark: -r rejects overflow value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 99999999999999999999 -n 5 -t set"]
+            catch { exec {*}$cmd } error
+            assert_match "*must be between 0 and 999999999999*" $error
+        }
+
+        test {benchmark: -r rejects non-numeric value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r abc -n 5 -t set"]
+            catch { exec {*}$cmd } error
+            assert_match "*is not a valid number*" $error
+        }
+
+        test {benchmark: function_load with more functions than fit in the script buffer} {
+            set cmd [valkeybenchmark $master_host $master_port "-n 1 -c 1 -t function_load --num-functions 20000"]
+            catch { exec {*}$cmd 2>@1 } output
+            # The server rejects the script for exceeding Lua's 200 local variable limit.
+            # Getting that reply means the benchmark generated and sent it without crashing.
+            assert_match "*Error from server*" $output
+        }
+
+        test {benchmark: -r with large keyspace generates keys above 2^31} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 999999999999 -n 100 -t set"]
+            common_bench_setup $cmd
+            set keys [r keys *]
+            set found_large 0
+            foreach key $keys {
+                set num [string range $key 4 end]
+                scan $num %lld num
+                if {$num > 2147483647} {
+                    set found_large 1
+                    break
+                }
+            }
+            assert_equal 1 $found_large
         }
 
         test {benchmark: warmup applies to all tests in multi-test run} {

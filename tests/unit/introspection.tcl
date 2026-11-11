@@ -93,6 +93,51 @@ start_server {tags {"introspection"}} {
         }
     }
 
+    # Get client tot-mem excluding query buffer (qbuf + qbuf-free)
+    proc get_client_mem_no_qbuf {info} {
+        set tot [get_field_in_client_info $info "tot-mem"]
+        set qbuf [get_field_in_client_info $info "qbuf"]
+        set qbuf_free [get_field_in_client_info $info "qbuf-free"]
+        return [expr {$tot - $qbuf - $qbuf_free}]
+    }
+
+    test {CLIENT INFO tot-mem includes watched key memory} {
+        set mem1 [get_client_mem_no_qbuf [r client info]]
+
+        r watch [string repeat "x" 50000]
+        set mem2 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+        r unwatch
+        set mem3 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem3] 10000
+    }
+
+    foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+        test "CLIENT INFO tot-mem includes pubsub channel/pattern memory - $subscribe $unsubscribe" {
+            set rd [valkey_deferring_client]
+            $rd client id
+            set rd_id [$rd read]
+
+            set info1 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem1 [get_client_mem_no_qbuf $info1]
+
+            $rd $subscribe [string repeat "x" 50000]
+            $rd read
+            set info2 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem2 [get_client_mem_no_qbuf $info2]
+            assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+            $rd $unsubscribe
+            $rd read
+            set info3 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem3 [get_client_mem_no_qbuf $info3]
+            assert_morethan_equal [expr $mem2 - $mem3] 10000
+
+            $rd close
+        }
+    }
+
     test {CLIENT LIST with ADDR filter} {
         set client_info [r client info]
         regexp {addr=([^ ]+)} $client_info match myaddr
@@ -945,38 +990,7 @@ start_server {tags {"introspection"}} {
         assert_error "ERR timeout is negative" {r client pause -1}
     }
 
-    test "CLIENT KILL close the client connection during bgsave" {
-        # Start a slow bgsave, trigger an active fork.
-        r flushall
-        r set k v
-        r config set rdb-key-save-delay 10000000
-        r bgsave
-        wait_for_condition 1000 10 {
-            [s rdb_bgsave_in_progress] eq 1
-        } else {
-            fail "bgsave did not start in time"
-        }
 
-        # Kill (close) the connection
-        r client kill skipme no
-
-        # In the past, client connections needed to wait for bgsave
-        # to end before actually closing, now they are closed immediately.
-        assert_error "*I/O error*" {r ping} ;# get the error very quickly
-        assert_equal "PONG" [r ping]
-
-        # Make sure the bgsave is still in progress
-        assert_equal [s rdb_bgsave_in_progress] 1
-
-        # Stop the child before we proceed to the next test
-        r config set rdb-key-save-delay 0
-        r flushall
-        wait_for_condition 1000 10 {
-            [s rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "bgsave did not stop in time"
-        }
-    } {} {needs:save}
 
     test "CLIENT REPLY OFF/ON: disable all commands reply" {
         set rd [valkey_deferring_client]
@@ -1088,6 +1102,22 @@ start_server {tags {"introspection"}} {
             }
             catch {r hello $resp AUTH not-real not-a-password} _
             assert_match "*\"hello\"*\"$resp\"*\"AUTH\"*\"(redacted)\"*\"(redacted)\"*" [$rd read]
+        }
+        $rd close
+    } {0} {needs:repl}
+
+    test {MONITOR redacts credentials of rejected commands} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ; # Discard the OK
+
+        catch {r hello 4 AUTH not-real not-a-password} _
+        catch {r hello 3 AUTH not-a-password} _
+        catch {r auth not-real not-a-password extra} _
+        catch {r migrate [srv 0 host] [srv 0 port] key 9 5000 bogus AUTH not-a-password} _
+
+        for {set i 0} {$i < 4} {incr i} {
+            assert_no_match {*not-a-password*} [$rd read]
         }
         $rd close
     } {0} {needs:repl}
@@ -1348,6 +1378,7 @@ start_server {tags {"introspection"}} {
             rdma-rx-size
             rdma-bind
             rdma-port
+            forkless-infrastructure-enabled
         }
 
         if {!$::tls} {
@@ -1649,7 +1680,7 @@ start_server {tags {"introspection"}} {
                 # Get the tot-net-out of the replica before sending the command.
                 set info_list [$primary client list]
                 foreach info [split $info_list "\r\n"] {
-                    if {[string match "* flags=S *" $info]} {
+                    if {[string match "* flags=*S* *" $info]} {
                         set out_before [get_field_in_client_info $info "tot-net-out"]
                         break
                     }
@@ -1662,7 +1693,7 @@ start_server {tags {"introspection"}} {
                 # Get the tot-net-out of the replica after sending the command.
                 set info_list [$primary client list]
                 foreach info [split $info_list "\r\n"] {
-                    if {[string match "* flags=S *" $info]} {
+                    if {[string match "* flags=*S* *" $info]} {
                         set out_after [get_field_in_client_info $info "tot-net-out"]
                         break
                     }
@@ -2051,6 +2082,36 @@ test {CONFIG REWRITE handles large unsigned memory config values} {
     }
 } {} {external:skip}
 
+# A sysfs attribute reports a size of 4096 but reads back far fewer bytes,
+# which gives a deterministic short read of the old config file.
+test {CONFIG REWRITE fails when the old config file reads short} {
+    set sysfs_file /sys/kernel/mm/transparent_hugepage/enabled
+    if {![file readable $sysfs_file] || [file size $sysfs_file] <= [string length [exec cat $sysfs_file]]} {
+        skip "$sysfs_file is missing or does not read short"
+    }
+    start_server {tags {"introspection"}} {
+        set config_file [srv 0 config_file]
+        file rename $config_file $config_file.bak
+        file link -symbolic $config_file $sysfs_file
+        catch {r config rewrite} err
+        file delete $config_file
+        file rename $config_file.bak $config_file
+        assert_match {ERR Rewriting config file: *} $err
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE keeps a replicaof host with a newline on one line} {
+    start_server {tags {"introspection"}} {
+        set host "127.0.0.1 1\nmaxmemory 1234567\n#"
+        r replicaof $host 1
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get replicaof] 1] "$host 1"
+    }
+} {} {external:skip}
+
 test {SIGNED MEMORY CONFIG allows negative number} {
     start_server {tags {"introspection"}} {
         r config set slot-migration-max-failover-repl-bytes -1
@@ -2070,3 +2131,38 @@ test {CONFIG hash-seed is immutable and settable at startup} {
         }
     }
 } {} {external:skip}
+
+start_server {overrides {forkless-infrastructure-enabled yes} tags {"introspection" "external:skip"}} {
+    foreach bgsave_type {"fork" "forkless"} {
+        test "CLIENT KILL close the client connection during bgsave - $bgsave_type" {
+            r flushall
+            r set k v
+            r config set rdb-key-save-delay 10000000
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r bgsave
+            wait_for_condition 1000 10 {
+                [s rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "bgsave did not start in time"
+            }
+
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
+            assert_equal [s rdb_current_bgsave_type] $expected_type
+
+            r client kill skipme no
+
+            assert_error "*I/O error*" {r ping}
+            assert_equal "PONG" [r ping]
+
+            assert_equal [s rdb_bgsave_in_progress] 1
+
+            r config set rdb-key-save-delay 0
+            r flushall
+            wait_for_condition 1000 10 {
+                [s rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "bgsave did not stop in time"
+            }
+        } {} {needs:save}
+    }
+}

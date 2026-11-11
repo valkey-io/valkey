@@ -77,7 +77,7 @@ test "Write data while slave #10 is paused and can't receive it" {
     assert {[R 10 read] eq {OK OK}}
 
     # Kill the master so that a reconnection will not be possible.
-    pause_process $paused_pid
+    pause_process_persistent $paused_pid
 }
 
 test "Wait for instance #5 (and not #10) to turn into a master" {

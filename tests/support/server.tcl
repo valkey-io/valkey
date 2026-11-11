@@ -175,7 +175,7 @@ proc ping_server {host port} {
     return $retval
 }
 
-# Return 1 if the server at the specified addr is reachable by PING, otherwise
+# Return 1 if the server at the specified addr is reachable by PING; otherwise,
 # returns 0. Performs a try every 50 milliseconds for the specified number
 # of retries.
 proc server_is_up {host port retrynum} {
@@ -348,7 +348,7 @@ proc spawn_server {executable config_file stdout stderr args} {
     }
 
     if {$::valgrind} {
-        set pid [exec valgrind --track-origins=yes --trace-children=yes --suppressions=[pwd]/src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full {*}$cmd >> $stdout 2>> $stderr &]
+        set pid [exec valgrind --fair-sched=try --track-origins=yes --trace-children=yes --suppressions=[pwd]/src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full {*}$cmd >> $stdout 2>> $stderr &]
     } elseif ($::stack_logging) {
         set pid [exec /usr/bin/env MallocStackLogging=1 MallocLogFile=/tmp/malloc_log.txt {*}$cmd >> $stdout 2>> $stderr &]
     } else {
@@ -449,7 +449,7 @@ proc run_external_server_test {code overrides} {
         dict set saved_config $param [lindex [r config get $param] 1]
         r config set $param $val
 
-        # If we enable appendonly, wait for for rewrite to complete. This is
+        # If we enable appendonly, wait for rewrite to complete. This is
         # required for tests that begin with a bg* command which will fail if
         # the rewriteaof operation is not completed at this point.
         if {$param == "appendonly" && $val == "yes"} {
@@ -677,6 +677,7 @@ proc start_server {options {code undefined}} {
         # for availability. Other test clients may grab the port before we
         # are able to do it for example.
         if {$port_busy} {
+            set previous_ready_count 0
             puts "Port $port was already busy, trying another port..."
             set port [find_available_port $::baseport $::portcount]
             if {$::tls} {
@@ -710,6 +711,8 @@ proc start_server {options {code undefined}} {
             set err {}
             append err [exec cat $stdout] "\n" [exec cat $stderr]
             start_server_error $executable $config_file $err
+            set ::singledb $old_singledb
+            set ::tags [lrange $::tags 0 end-[llength $tags]]
             return
         }
         set server_started 1

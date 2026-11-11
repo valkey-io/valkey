@@ -191,7 +191,7 @@ int list_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
 /* LIST.INSERT key index value
  *
- * If index is negative, value is inserted after, otherwise before the element
+ * If index is negative, value is inserted after; otherwise, before the element
  * at index.
  */
 int list_insert(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {

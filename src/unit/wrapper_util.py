@@ -5,8 +5,12 @@ Utility functions for parsing '__wrap_' C function signatures from header files 
 Extracts return types, parameters, and function pointers, producing Method and Arg namedtuples.
 This structured data is used by generate-wrappers.py to create MockValkey and RealValkey classes
 for gtest-based tests.
+
+It also holds the symbol renaming logic used on macOS, shared by generate-redefine-syms.py
+(Makefile build) and wrap-objects.py (CMake build).
 """
 import re
+import subprocess
 from collections import namedtuple
 
 Method = namedtuple("Method", "ret_type name full_args arg_string args")
@@ -118,3 +122,44 @@ def find_wrapper_functions_in_header(header_file_name):
             ))
 
     return methods
+
+
+def defined_text_symbols(nm, object_file):
+    """
+    Return the set of global text symbols defined by 'object_file'.
+
+    'nm' is the nm program to run, for example 'llvm-nm'.
+    """
+    output = subprocess.run(
+        [nm, "--defined-only", "--extern-only", object_file],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    symbols = set()
+    for line in output.splitlines():
+        fields = line.split()
+        # Format: <address> T <symbol>
+        if len(fields) == 3 and fields[1] == "T":
+            symbols.add(fields[2])
+    return symbols
+
+
+def redefine_syms_lines(methods, defined_symbols):
+    """
+    Return the symbol renaming rules for llvm-objcopy '--redefine-syms', one
+    line per wrapped function:
+      * defined in the object file -> ___real_<name>
+      * referenced only            -> ___wrap_<name>
+
+    This emulates the linker '--wrap' option, which the macOS linker lacks.
+    """
+    lines = []
+    for method in methods:
+        # On macOS, C symbols carry a leading underscore.
+        if method.name in defined_symbols or "_" + method.name in defined_symbols:
+            lines.append("_{0} ___real_{0}\n".format(method.name))
+        else:
+            lines.append("_{0} ___wrap_{0}\n".format(method.name))
+    return lines

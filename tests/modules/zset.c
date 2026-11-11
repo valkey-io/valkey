@@ -1,6 +1,8 @@
 #include "valkeymodule.h"
 #include <math.h>
 #include <errno.h>
+#include <stdlib.h>
+#include <strings.h>
 
 #define UNUSED(V) ((void) V)
 
@@ -156,6 +158,63 @@ int zset_members(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+static void zset_walk_reply_current(ValkeyModuleCtx *ctx, ValkeyModuleKey *key) {
+    double score;
+    ValkeyModuleString *ele = ValkeyModule_ZsetRangeCurrentElement(key, &score);
+    if (ele)
+        ValkeyModule_ReplyWithString(ctx, ele);
+    else
+        ValkeyModule_ReplyWithNull(ctx);
+}
+
+/* ZSET.WALK key score|lex|score-last|lex-last min max pattern
+ *
+ * Seeks the first (or, with a -last type, the last) element of the range,
+ * then applies 'pattern' one character at a time ('n' = ZsetRangeNext,
+ * 'p' = ZsetRangePrev, 'e' = ZsetRangeEndReached). Replies with the current
+ * element after the seek and after each step, END for a step that did not
+ * move, or the flag value for 'e'.
+ */
+int zset_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 6) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    if (key == NULL) return ValkeyModule_ReplyWithError(ctx, "ERR no such key");
+
+    size_t len;
+    const char *type = ValkeyModule_StringPtrLen(argv[2], &len);
+    int rc;
+    if (!strcasecmp(type, "score") || !strcasecmp(type, "score-last")) {
+        double min = strtod(ValkeyModule_StringPtrLen(argv[3], &len), NULL);
+        double max = strtod(ValkeyModule_StringPtrLen(argv[4], &len), NULL);
+        rc = !strcasecmp(type, "score") ? ValkeyModule_ZsetFirstInScoreRange(key, min, max, 0, 0)
+                                        : ValkeyModule_ZsetLastInScoreRange(key, min, max, 0, 0);
+    } else if (!strcasecmp(type, "lex") || !strcasecmp(type, "lex-last")) {
+        rc = !strcasecmp(type, "lex") ? ValkeyModule_ZsetFirstInLexRange(key, argv[3], argv[4])
+                                      : ValkeyModule_ZsetLastInLexRange(key, argv[3], argv[4]);
+    } else {
+        return ValkeyModule_ReplyWithError(ctx, "ERR range type must be score, lex, score-last or lex-last");
+    }
+    if (rc != VALKEYMODULE_OK) return ValkeyModule_ReplyWithError(ctx, "ERR range init failed");
+
+    const char *pattern = ValkeyModule_StringPtrLen(argv[5], &len);
+    ValkeyModule_ReplyWithArray(ctx, len + 1);
+    zset_walk_reply_current(ctx, key);
+    for (size_t i = 0; i < len; i++) {
+        if (pattern[i] == 'e') {
+            ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ZsetRangeEndReached(key));
+            continue;
+        }
+        int moved = (pattern[i] == 'p') ? ValkeyModule_ZsetRangePrev(key) : ValkeyModule_ZsetRangeNext(key);
+        if (moved)
+            zset_walk_reply_current(ctx, key);
+        else
+            ValkeyModule_ReplyWithSimpleString(ctx, "END");
+    }
+    ValkeyModule_ZsetRangeStop(key);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -183,6 +242,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.members", zset_members, "readonly",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.walk", zset_walk, "readonly",
                                   1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 

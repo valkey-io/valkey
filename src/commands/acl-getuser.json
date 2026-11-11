@@ -19,6 +19,10 @@
             [
                 "9.1.0",
                 "Added database permission rules."
+            ],
+            [
+                "9.2.0",
+                "Added roles."
             ]
         ],
         "command_flags": [
@@ -88,6 +92,13 @@
                                         "type": "string"
                                     }
                                 }
+                            }
+                        },
+                        "roles": {
+                            "description": "List of role names assigned to this user.",
+                            "type": "array",
+                            "items": {
+                                "type": "string"
                             }
                         }
                     }

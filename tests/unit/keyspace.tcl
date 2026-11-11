@@ -51,6 +51,16 @@ start_server {tags {"keyspace"}} {
         assert_equal {} [r keys *]
     }
 
+    test {KEYS on a flushed DB does not leak a rehashing pause} {
+        r set foo bar
+        r flushdb sync
+        # The pause counter is an int16_t, so 32768 leaked pauses wrap it.
+        r eval {for i = 1, 32768 do server.call('keys', '*') end} 0
+        r set foo bar
+        r del foo
+        assert_equal PONG [r ping]
+    }
+
     test "DEL against expired key" {
         r debug set-active-expire 0
         r setex keyExpire 1 valExpire
@@ -130,7 +140,7 @@ start_server {tags {"keyspace"}} {
         append res [r get mykey2{t}]
     } {foobar}
 
-    test {RENAME against non existing source key} {
+    test {RENAME against nonexistent source key} {
         catch {r rename nokey{t} foobar{t}} err
         format $err
     } {ERR*}
@@ -145,7 +155,7 @@ start_server {tags {"keyspace"}} {
         r renamenx mykey mykey
     } {0}
 
-    test {RENAME where source and dest key are the same (non existing)} {
+    test {RENAME where source and dest key are the same (nonexistent)} {
         r del mykey
         catch {r rename mykey mykey} err
         format $err
@@ -318,7 +328,7 @@ foreach {type large} [array get largevalue] {
         for {set j 0} {$j < 130} {incr j} {
             r zadd zset2{t} [randomInt 50] ele-[randomInt 10]
         }
-        assert_encoding skiplist zset2{t}
+        assert_encoding btree zset2{t}
         r copy zset2{t} newzset2{t}
         set digest [debug_digest_value zset2{t}]
         assert_equal $digest [debug_digest_value newzset2{t}]

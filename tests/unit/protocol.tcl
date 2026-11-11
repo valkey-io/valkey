@@ -99,6 +99,35 @@ start_server {tags {"protocol network"}} {
         assert_error "*unbalanced*" {r read}
     }
 
+    test "Inline command with an embedded NUL byte is rejected" {
+        reconnect
+        # A raw NUL byte is not valid in the inline protocol. The server must
+        # fail explicitly instead of silently truncating the command at the
+        # NUL (sdssplitargs() treats it as end of input), and close the
+        # connection like it does for other inline protocol errors.
+        r write "set foo bar\x00 ex 100\r\n"
+        r flush
+        assert_error "*NUL*" {r read}
+        wait_for_condition 100 10 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Connection not closed after embedded NUL protocol error"
+        }
+        # The truncated command must not have been executed.
+        reconnect
+        assert_equal 0 [r exists foo]
+    }
+
+    test {Inline command with a quoted \x00 escape still works} {
+        reconnect
+        # The quoted hex escape is the supported way to embed binary data in
+        # the inline protocol and must not be affected by the NUL rejection.
+        r write "set foo \"bar\\x00baz\"\r\n"
+        r flush
+        assert_equal "OK" [r read]
+        assert_equal 7 [r strlen foo]
+    }
+
     test "Check CRLF when parsing the querybuf" {
         # Command) SET key value
         # RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
@@ -312,6 +341,28 @@ start_server {tags {"protocol network"}} {
         r multi
         r incrbyfloat k 1.0
         assert_equal [r exec] 2
+    }
+
+    test "Partial command after blocking command is completed on unblock" {
+        reconnect
+        set rd [valkey_deferring_client]
+        $rd client id
+        set cid [$rd read]
+        $rd write "*3\r\n\$5\r\nBLPOP\r\n\$6\r\nmylist\r\n\$1\r\n0\r\n*3\r\n\$3\r\nSET\r\n\$3\r\n"
+        $rd flush
+        wait_for_blocked_client
+        $rd write "key\r\n\$5\r\nvalue\r\n"
+        $rd flush
+        wait_for_condition 50 100 {
+            [regexp {qbuf=([1-9][0-9]*)} [r client list id $cid]]
+        } else {
+            fail "completion bytes never reached the query buffer"
+        }
+        r rpush mylist item
+        assert_equal {mylist item} [$rd read]
+        assert_equal "OK" [$rd read]
+        assert_equal "value" [r get key]
+        $rd close
     }
 
 }

@@ -78,7 +78,36 @@ start_server {tags {"hash"}} {
         assert_error {*value is out of range*} {r hrandfield myhash -9223372036854775808}
     } {}
 
-    test "HRANDFIELD with <count> against non existing key" {
+    test "HRANDFIELD with <count> on case variants of one field" {
+        r del ordinary{t} variants{t}
+        set ordinary {}
+        set variants {}
+        # The variants are 10000 distinct spellings of "aaaaaaaaaaaaaa" in mixed case.
+        for {set i 0} {$i < 10000} {incr i} {
+            binary scan [binary format I $i] B32 bits
+            lappend ordinary x[format %013d $i] 1
+            lappend variants [string map {0 a 1 A} [string range $bits 18 end]] 1
+        }
+        r hset ordinary{t} {*}$ordinary
+        r hset variants{t} {*}$variants
+
+        # Take the fastest of several runs so one stall on a slow host does not fail the test.
+        foreach key {ordinary variants} {
+            set ${key}_usec {}
+            for {set j 0} {$j < 3} {incr j} {
+                r config resetstat
+                r hrandfield $key{t} 5000
+                regexp {usec=(\d+)} [cmdrstat hrandfield r] _ usec
+                lappend ${key}_usec $usec
+            }
+        }
+        set ordinary_usec [tcl::mathfunc::min {*}$ordinary_usec]
+        set variants_usec [tcl::mathfunc::min {*}$variants_usec]
+        r del ordinary{t} variants{t}
+        assert_lessthan $variants_usec [expr {10 * $ordinary_usec + 100000}]
+    } {} {needs:config-resetstat}
+
+    test "HRANDFIELD with <count> against nonexistent key" {
         r hrandfield nonexisting_key 100
     } {}
 
@@ -89,7 +118,7 @@ start_server {tags {"hash"}} {
         r hrandfield myhash 0
     } {*0}
 
-    test "HRANDFIELD with <count> against non existing key - emptyarray" {
+    test "HRANDFIELD with <count> against nonexistent key - emptyarray" {
         r hrandfield nonexisting_key 100
     } {*0}
 
@@ -269,7 +298,7 @@ start_server {tags {"hash"}} {
         set _ $err
     } {}
 
-    test {HGET against non existing key} {
+    test {HGET against nonexistent key} {
         set rv {}
         lappend rv [r hget smallhash __123123123__]
         lappend rv [r hget bighash __123123123__]
@@ -342,9 +371,9 @@ start_server {tags {"hash"}} {
         r hmset bighash {*}$args
     } {OK}
 
-    test {HMGET against non existing key and fields} {
+    test {HMGET against nonexistent key and fields} {
         set rv {}
-        lappend rv [r hmget doesntexist __123123123__ __456456456__]
+        lappend rv [r hmget nonexistent __123123123__ __456456456__]
         lappend rv [r hmget smallhash __123123123__ __456456456__]
         lappend rv [r hmget bighash __123123123__ __456456456__]
         set _ $rv
@@ -401,6 +430,28 @@ start_server {tags {"hash"}} {
         }
         set _ $err
     } {}
+
+    set original_max [lindex [r config get hash-max-listpack-entries] 1]
+    r config set hash-max-listpack-entries 0
+    test {HMGET uses hashtable batch lookup} {
+        r del hmgetbatchtest
+        for {set i 1} {$i <= 128} {incr i} {
+            r hset hmgetbatchtest [format "f%02d" $i] [format "v%02d" $i]
+        }
+
+        assert_encoding hashtable hmgetbatchtest
+        assert_equal {v01} [r hmget hmgetbatchtest f01]
+        assert_equal {v01 {} v01 v04} [r hmget hmgetbatchtest f01 missing f01 f04]
+
+        set fields {missing}
+        set expected [list {}]
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend fields [format "f%02d" $i]
+            lappend expected [format "v%02d" $i]
+        }
+        assert_equal $expected [r hmget hmgetbatchtest {*}$fields]
+    }
+    r config set hash-max-listpack-entries $original_max
 
     test {HKEYS - small hash} {
         lsort [r hkeys smallhash]
@@ -567,7 +618,7 @@ start_server {tags {"hash"}} {
         r debug object smallhash
     } {*hashtable*} {needs:debug}
 
-    test {HINCRBY against non existing database key} {
+    test {HINCRBY against nonexistent database key} {
         r del htest
         list [r hincrby htest foo 2]
     } {2}
@@ -579,7 +630,7 @@ start_server {tags {"hash"}} {
         assert_error "*value is not a*" {r hincrbyfloat incrhash field v}
     }
 
-    test {HINCRBY against non existing hash key} {
+    test {HINCRBY against nonexistent hash key} {
         set rv {}
         r hdel smallhash tmp
         r hdel bighash tmp
@@ -643,12 +694,12 @@ start_server {tags {"hash"}} {
         set e
     } {*overflow*}
 
-    test {HINCRBYFLOAT against non existing database key} {
+    test {HINCRBYFLOAT against nonexistent database key} {
         r del htest
         list [r hincrbyfloat htest foo 2.5]
     } {2.5}
 
-    test {HINCRBYFLOAT against non existing hash key} {
+    test {HINCRBYFLOAT against nonexistent hash key} {
         set rv {}
         r hdel smallhash tmp
         r hdel bighash tmp
@@ -739,7 +790,7 @@ start_server {tags {"hash"}} {
         set _ $err
     } {}
 
-    test {HSTRLEN against non existing field} {
+    test {HSTRLEN against nonexistent field} {
         set rv {}
         lappend rv [r hstrlen smallhash __123123123__]
         lappend rv [r hstrlen bighash __123123123__]
@@ -938,4 +989,258 @@ start_server {tags {"hash"}} {
         assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
+
+    test {HINCRBYFLOAT rejects a NaN increment} {
+        r del hfoo
+        assert_error "*value is not a valid float*" {r hincrbyfloat hfoo field nan}
+    }
+
+    test {HINCRBYFLOAT with an infinite field value} {
+        r del hfoo
+        r hset hfoo field inf
+        assert_error "*increment would produce NaN or Infinity*" {r hincrbyfloat hfoo field 1}
+        assert_equal inf [r hget hfoo field]
+        # An infinite increment is dropped before the result is ever computed.
+        assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field -inf}
+        assert_equal inf [r hget hfoo field]
+    } {} {valgrind:skip}
+
+    # The following tests target the exact-length reply header fast path of
+    # HGETALL/HKEYS/HVALS: when a hash has no volatile (TTL-bearing) fields the
+    # aggregate header is emitted up front instead of via a deferred node.
+    foreach proto {2 3} {
+        foreach enc {listpack hashtable} {
+            test "HGETALL/HKEYS/HVALS exact-length header - $enc - RESP$proto" {
+                set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+                set original_max_value [lindex [r config get hash-max-listpack-value] 1]
+                with_cleanup {
+                    r hello $proto
+                    if {$enc eq "hashtable"} {
+                        r config set hash-max-listpack-entries 16
+                    } else {
+                        r config set hash-max-listpack-entries 128
+                        r config set hash-max-listpack-value 64
+                    }
+                    r del myhash
+                    unset -nocomplain expect
+                    array set expect {}
+                    for {set i 0} {$i < 100} {incr i} {
+                        r hset myhash field:$i value:$i
+                        set expect(field:$i) value:$i
+                    }
+                    assert_encoding $enc myhash
+                    set res [r hgetall myhash]
+                    assert_equal 100 [expr {[llength $res] / 2}]
+                    foreach {k v} $res {
+                        assert_equal $expect($k) $v
+                    }
+                    assert_equal [lsort [array names expect]] [lsort [r hkeys myhash]]
+                    assert_equal 100 [llength [r hvals myhash]]
+                } {
+                    r config set hash-max-listpack-entries $original_max_entries
+                    r config set hash-max-listpack-value $original_max_value
+                    r hello 2
+                }
+            }
+        }
+    }
+
+    test {HGETALL fused bulk reply boundaries} {
+        with_config hash-max-listpack-entries 0 {
+            r del myhash
+            foreach len {0 9 10 31 32 511 512 513} {
+                r hset myhash len:$len [string repeat x $len]
+            }
+            assert_encoding hashtable myhash
+            set res [dict create {*}[r hgetall myhash]]
+            foreach len {0 9 10 31 32 511 512 513} {
+                assert_equal [string repeat x $len] [dict get $res len:$len]
+            }
+        }
+    }
+
+    test {HGETALL fused bulk reply crosses the static reply buffer boundary} {
+        # Every field and value uses the fused path. With fixed-size elements,
+        # one value straddles the end of the 16 KB static buffer and spills into
+        # the reply list.
+        with_config hash-max-listpack-entries 0 {
+            r del myhash
+            set value [string repeat x 128]
+            for {set i 0} {$i < 128} {incr i} {
+                r hset myhash [format "field:%03d" $i] $value
+            }
+            assert_encoding hashtable myhash
+            set res [r hgetall myhash]
+            assert_equal 128 [expr {[llength $res] / 2}]
+            foreach {k v} $res {
+                assert_equal 9 [string length $k]
+                assert_equal $value $v
+            }
+        }
+    }
+
+    test {HGETALL/HKEYS/HVALS on a hash with volatile fields (deferred header path)} {
+        set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+        with_cleanup {
+            r config set hash-max-listpack-entries 16
+            r del myhash
+            for {set i 0} {$i < 100} {incr i} {
+                r hset myhash field:$i value:$i
+            }
+            assert_encoding hashtable myhash
+            # A TTL far in the future: the fields stay alive, but their presence
+            # forces the deferred-length slow path.
+            assert_equal {1} [r hexpire myhash 1000 FIELDS 1 field:0]
+            set res [r hgetall myhash]
+            assert_equal 100 [expr {[llength $res] / 2}]
+            foreach {k v} $res {
+                assert_equal "value:[string range $k 6 end]" $v
+            }
+            assert_equal 100 [llength [r hkeys myhash]]
+            assert_equal 100 [llength [r hvals myhash]]
+        } {
+            r config set hash-max-listpack-entries $original_max_entries
+        }
+    }
+
+    foreach enc {listpack hashtable} {
+        test "HGETALL exact-length path after the last field TTL is removed - $enc" {
+            set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+            set original_max_value [lindex [r config get hash-max-listpack-value] 1]
+            with_cleanup {
+                if {$enc eq "hashtable"} {
+                    r config set hash-max-listpack-entries 0
+                } else {
+                    r config set hash-max-listpack-entries 128
+                    r config set hash-max-listpack-value 64
+                }
+                r del myhash
+                r hset myhash field:0 value:0 field:1 value:1
+                assert_encoding $enc myhash
+                assert_equal {1} [r hexpire myhash 1000 FIELDS 1 field:0]
+                assert_equal {1} [r hpersist myhash FIELDS 1 field:0]
+                set res [dict create {*}[r hgetall myhash]]
+                assert_equal value:0 [dict get $res field:0]
+                assert_equal value:1 [dict get $res field:1]
+                assert_equal {field:0 field:1} [lsort [r hkeys myhash]]
+                assert_equal {value:0 value:1} [lsort [r hvals myhash]]
+            } {
+                r config set hash-max-listpack-entries $original_max_entries
+                r config set hash-max-listpack-value $original_max_value
+            }
+        }
+    }
+}
+
+start_server {config "minimal.conf" tags {"hash" "external:skip"} overrides {io-threads 4 io-threads-always-active yes hash-max-listpack-entries 0}} {
+    test "HGETALL correctness with io-threads" {
+        r del hgetallhash
+        set value [string repeat x 128]
+        for {set i 0} {$i < 100} {incr i} {
+            r hset hgetallhash field:$i $value
+        }
+        assert_encoding hashtable hgetallhash
+
+        set rd [valkey_deferring_client]
+        with_cleanup {
+            $rd hgetall hgetallhash
+            $rd flush
+            set res [dict create {*}[$rd read]]
+            assert_equal 100 [dict size $res]
+            foreach v [dict values $res] {
+                assert_equal $value $v
+            }
+        } {
+            $rd close
+        }
+    }
+
+    test "Hash nested prefetch - HGET correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r hset myhash "field:$i" "value:$i"
+        }
+        assert_encoding hashtable myhash
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd hget myhash "field:$i"
+        }
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal "value:$i" [$rd read]
+        }
+        $rd close
+    }
+
+    test "Hash nested prefetch - HMGET multi-field correctness" {
+        set rd [valkey_deferring_client]
+        $rd hmget myhash field:0 field:1 field:2 field:3 field:4
+        $rd flush
+        set result [$rd read]
+        assert_equal [list value:0 value:1 value:2 value:3 value:4] $result
+        $rd close
+    }
+
+    test "Hash nested prefetch - HDEL correctness with pipelined commands" {
+        set rd [valkey_deferring_client]
+        $rd hget myhash field:10
+        $rd hdel myhash field:199
+        $rd hget myhash field:199
+        $rd flush
+        assert_equal "value:10" [$rd read]
+        assert_equal 1 [$rd read]
+        assert_equal {} [$rd read]
+        $rd close
+    }
+
+    test "Hash nested prefetch - correctness with a forced multi-key batch" {
+        set server_pid [s process_id]
+
+        # Suspend the server while the commands are sent so they are all read
+        # together, which is the case where the prefetch batch holds several keys
+        # and the nested walk is interleaved across them.
+        set clients {}
+        for {set c 0} {$c < 16} {incr c} {
+            lappend clients [valkey_deferring_client]
+        }
+        pause_process $server_pid
+        set idx 0
+        foreach rd $clients {
+            $rd hget myhash "field:$idx"
+            $rd flush
+            incr idx
+        }
+        resume_process $server_pid
+
+        set idx 0
+        foreach rd $clients {
+            assert_equal "value:$idx" [$rd read]
+            incr idx
+        }
+        foreach rd $clients { $rd close }
+    }
+
+    test "Hash nested prefetch - large non-embedded values exercise value phase" {
+        set big [string repeat "x" 512]
+        for {set i 0} {$i < 200} {incr i} {
+            r hset bighash "field:$i" "$big:$i"
+        }
+        assert_encoding hashtable bighash
+
+        set clients {}
+        for {set c 0} {$c < 8} {incr c} {
+            set rd [valkey_deferring_client]
+            lappend clients $rd
+            for {set i 0} {$i < 100} {incr i} {
+                $rd hget bighash "field:[expr {$i % 200}]"
+            }
+            $rd flush
+        }
+        foreach rd $clients {
+            for {set i 0} {$i < 100} {incr i} {
+                assert_equal "$big:$i" [$rd read]
+            }
+            $rd close
+        }
+    }
 }

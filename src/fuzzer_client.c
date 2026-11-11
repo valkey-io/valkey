@@ -728,7 +728,7 @@ static int runClients(const char *host, int port, int commands_num, int clients_
 
 /* Run fuzzer clients with specified parameters
  * This function is called by valkey-benchmark when fuzz mode is enabled */
-int runFuzzerClients(const char *host, int port, int commands_num, int clients_num, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags) {
+int runFuzzerClients(const char *host, int port, int commands_num, int clients_num, int cluster_mode, long long num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags) {
     /* Set log level from parameter */
     if (log_level) {
         if (strcmp(log_level, "none") == 0) {

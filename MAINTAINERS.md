@@ -31,6 +31,7 @@ Committers listed in alphabetical order by their github ID.
 | Committer           | GitHub ID          | Affiliation |
 | ------------------- | ------------------ | ----------- |
 | Jim Brunner         | @JimB123           | Amazon      |
+| Rain Valentine      | @rainsupreme       | Amazon      |
 | Ricardo Dias        | @rjd15372          | Percona     |
 | Sarthak Aggarwal    | @sarthakaggarwal97 | Amazon      |
 

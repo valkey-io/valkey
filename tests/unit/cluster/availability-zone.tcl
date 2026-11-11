@@ -1,23 +1,3 @@
-proc read_file {path} {
-    set fd [open $path r]
-    set data [read $fd]
-    close $fd
-    return $data
-}
-
-proc file_has_pattern {path pattern} {
-    if {![file exists $path]} {
-        return 0
-    }
-    return [regexp $pattern [read_file $path]]
-}
-
-proc cluster_nodes_conf_path {id} {
-    set dir [lindex [R $id config get dir] 1]
-    set conf [lindex [R $id config get cluster-config-file] 1]
-    return [file join $dir $conf]
-}
-
 start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval 100}} {
     test "Availability zone appears in SLOTS/SHARDS" {
         set slots_resp [R 0 CLUSTER SLOTS]

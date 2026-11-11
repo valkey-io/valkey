@@ -262,7 +262,7 @@ proc test_scan {type} {
         }
     }
 
-    foreach enc {listpack skiplist} {
+    foreach enc {listpack btree} {
         test "{$type} ZSCAN with encoding $enc" {
             # Create the Sorted Set
             r del zset
@@ -304,6 +304,64 @@ proc test_scan {type} {
             set res [r zscan zset 0 count 1000 noscores]
             assert_equal [lsort $keys2] [lsort [lindex $res 1]]
         }
+    }
+
+    test "{$type} ZSCAN with binary members and different COUNT values" {
+        r del zset
+        set elements {}
+        set expected {}
+        set expected_match {}
+        for {set j 0} {$j < 200} {incr j} {
+            set member "member:$j\x00tail"
+            lappend elements $j $member
+            lappend expected [list $member $j]
+            if {[string match "member:1*" $member]} {
+                lappend expected_match [list $member $j]
+            }
+        }
+        r zadd zset {*}$elements
+        assert_encoding btree zset
+
+        foreach count {10 100 1000} {
+            set cursor 0
+            set actual {}
+            while 1 {
+                set res [r zscan zset $cursor count $count]
+                set cursor [lindex $res 0]
+                foreach {member score} [lindex $res 1] {
+                    lappend actual [list $member $score]
+                }
+                if {$cursor == 0} break
+            }
+            assert_equal [lsort -unique $expected] [lsort -unique $actual]
+
+            set cursor 0
+            set actual_match {}
+            while 1 {
+                set res [r zscan zset $cursor match "member:1*" count $count]
+                set cursor [lindex $res 0]
+                foreach {member score} [lindex $res 1] {
+                    lappend actual_match [list $member $score]
+                }
+                if {$cursor == 0} break
+            }
+            assert_equal [lsort -unique $expected_match] [lsort -unique $actual_match]
+
+            set cursor 0
+            set actual_match_noscores {}
+            while 1 {
+                set res [r zscan zset $cursor match "member:1*" count $count noscores]
+                set cursor [lindex $res 0]
+                foreach member [lindex $res 1] {
+                    lappend actual_match_noscores $member
+                }
+                if {$cursor == 0} break
+            }
+            assert_equal [lsort -unique [lmap pair $expected_match {lindex $pair 0}]] [lsort -unique $actual_match_noscores]
+        }
+
+        set res [r zscan zset 0 count 1000 noscores]
+        assert_equal [lsort -unique [lmap pair $expected {lindex $pair 0}]] [lsort -unique [lindex $res 1]]
     }
 
     test "{$type} SCAN guarantees check under write load" {
@@ -458,6 +516,55 @@ proc test_scan {type} {
 
         set keys [lsort -unique $keys]
         assert_equal 100 [llength $keys]
+    }
+
+    # Tests specific to cluster mode
+    if {$type == "cluster"} {
+        test "{cluster} SCAN returns keys present for the whole iteration when another slot is freed" {
+            # Keys in {t2} are present before the iteration starts and are never
+            # touched, so a full iteration must return all of them. Emptying {t3}
+            # partway through frees its hashtable, and kvstoreScan then skips it. The
+            # hashtable cursor is only meaningful for the hashtable it came from, so
+            # it has to be reset when moving on, or it is applied to the next slot and
+            # the buckets before it are never visited.
+            r flushdb
+            set slot_a [r cluster keyslot "{t3}"]
+            set slot_b [r cluster keyslot "{t2}"]
+            assert {$slot_a < $slot_b}
+            for {set j 0} {$j < 400} {incr j} {
+                r set "{t3}-$j" v
+                r set "{t2}-$j" v
+            }
+
+            # Scan until the cursor is parked partway through the first slot.
+            set cursor 0
+            set keys {}
+            while 1 {
+                set res [r scan $cursor count 5]
+                set cursor [lindex $res 0]
+                lappend keys {*}[lindex $res 1]
+                if {$cursor == 0} {
+                    fail "scan ended before reaching a mid-slot cursor"
+                }
+                if {($cursor & 16383) == $slot_a && ($cursor >> 14) != 0} break
+            }
+
+            # Emptying the slot frees its hashtable, so the next call skips it. The
+            # deleted keys may or may not be returned, but {t2} is unaffected.
+            for {set j 0} {$j < 400} {incr j} {
+                r del "{t3}-$j"
+            }
+
+            while 1 {
+                set res [r scan $cursor count 5]
+                set cursor [lindex $res 0]
+                lappend keys {*}[lindex $res 1]
+                if {$cursor == 0} break
+            }
+
+            set keys [lsort -unique $keys]
+            assert_equal 400 [llength [lsearch -all -inline -glob $keys "{t2}-*"]]
+        }
     }
 }
 

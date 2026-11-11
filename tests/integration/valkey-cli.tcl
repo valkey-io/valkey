@@ -354,10 +354,50 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal "foo\nbar" [run_cli lrange list 0 -1]
     }
 
+    test "Non-interactive non-TTY CLI: RESP3 attribute is skipped" {
+        set reply "Some real reply following the attribute"
+        assert_equal $reply [run_cli -3 debug protocol attrib]
+        assert_equal "\"$reply\"" [run_cli -3 --csv debug protocol attrib]
+        assert_equal "\"$reply\"" [run_cli -3 --json debug protocol attrib]
+    } {} {needs:debug}
+
     test_nontty_cli "--eval should not crash valkey-cli" {
         set scriptfile [write_tmpfile "return { 1 }"]
         assert_equal "1" [run_cli --eval $scriptfile]
         file delete $scriptfile
+    }
+
+    test_nontty_cli "VALKEYCLI_USER environment variable" {
+        r ACL setuser clienv on >mypass ~* +@all
+        set ::env(VALKEYCLI_USER) clienv
+        # Username comes from the env var; only -a is passed on the command line.
+        assert_equal "OK" [run_cli -a mypass --no-auth-warning set envkey envval]
+        assert_equal "envval" [r get envkey]
+
+        # A --user flag on the command line overrides VALKEYCLI_USER.
+        set ::env(VALKEYCLI_USER) nonexistent
+        assert_equal "OK" [run_cli --user clienv -a mypass --no-auth-warning set envkey2 envval2]
+        assert_equal "envval2" [r get envkey2]
+
+        unset ::env(VALKEYCLI_USER)
+        r ACL deluser clienv
+    }
+
+    test_nontty_cli "VALKEYCLI_AUTH does not trigger the command line password warning" {
+        r ACL setuser clienv on >mypass ~* +@all
+        set warning "Warning: Using a password with '-a' or '-u' option on the command line interface may not be safe."
+        set cmd [valkeycli [srv host] [srv port] [list -n $::dbnum --user clienv]]
+
+        assert_equal "OK" [exec env VALKEYCLI_AUTH=mypass {*}$cmd set envkey envval 2>@1]
+
+        # -a on the command line still warns and overrides VALKEYCLI_AUTH.
+        assert_equal "$warning\nOK" [exec env VALKEYCLI_AUTH=wrongpass {*}$cmd -a mypass set envkey envval 2>@1]
+
+        # So does a password in a -u URI.
+        set uri [valkeycliuri "redis://clienv:mypass@" [srv host] [srv port] [list -n $::dbnum]]
+        assert_equal "$warning\nOK" [exec env VALKEYCLI_AUTH=wrongpass {*}$uri set envkey envval 2>@1]
+
+        r ACL deluser clienv
     }
 
 if {!$::tls} { ;# fake_redis_node doesn't support TLS
@@ -579,6 +619,10 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_error "*Unrecognized option or bad number*" {run_cli -X}
 
         assert_error "*tag not match*" {run_cli_with_input_pipe X "echo foo" set key wrong_tag}
+    }
+
+    test "Option --hotkeys-count rejects a negative count" {
+        assert_error "*Invalid hotkeys count*" {run_cli --hotkeys-count -1}
     }
 
     test "DUMP RESTORE with -x option" {

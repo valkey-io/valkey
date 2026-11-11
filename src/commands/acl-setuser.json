@@ -19,6 +19,10 @@
             [
                 "9.1.0",
                 "Added database permission rules."
+            ],
+            [
+                "9.2.0",
+                "Added the `role=` rule for assigning roles to a user."
             ]
         ],
         "command_flags": [

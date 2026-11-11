@@ -150,7 +150,7 @@ static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
 /* The link to a sentinelValkeyInstance. When we have the same set of Sentinels
  * monitoring many primaries, we have different instances representing the
  * same Sentinels, one per primary, and we need to share the libvalkey connections
- * among them. Otherwise if 5 Sentinels are monitoring 100 primaries we create
+ * among them. Otherwise, if 5 Sentinels are monitoring 100 primaries we create
  * 500 outgoing connections instead of 5.
  *
  * So this structure represents a reference counted link in terms of the two
@@ -273,7 +273,7 @@ struct sentinelState {
     int tilt;                          /* Are we in TILT mode? */
     int total_tilt;                    /* Number of tilt. */
     int running_scripts;               /* Number of scripts in execution right now. */
-    mstime_t tilt_start_time;          /* When TITL started. */
+    mstime_t tilt_start_time;          /* When TILT started. */
     mstime_t previous_time;            /* Last time we ran the time handler. */
     list *scripts_queue;               /* Queue of user scripts to execute. */
     char *announce_ip;                 /* IP addr that is gossiped to other sentinels if
@@ -907,7 +907,7 @@ void sentinelCollectTerminatedScripts(void) {
             sj->pid = 0;
             sj->start_time = mstime() + sentinelScriptRetryDelay(sj->retry_num);
         } else {
-            /* Otherwise let's remove the script, but log the event if the
+            /* Otherwise, let's remove the script, but log the event if the
              * execution did not terminated in the best of the ways. */
             if (bysignal || exitcode != 0) {
                 sentinelEvent(LL_WARNING, "-script-error", NULL, "%s %d %d", sj->argv[0], bysignal, exitcode);
@@ -921,7 +921,7 @@ void sentinelCollectTerminatedScripts(void) {
 
 /* Kill scripts in timeout, they'll be collected by the
  * sentinelCollectTerminatedScripts() function. */
-void sentinelKillTimedoutScripts(void) {
+void sentinelKillTimedOutScripts(void) {
     listNode *ln;
     listIter li;
     mstime_t now = mstime();
@@ -1045,7 +1045,7 @@ void instanceLinkCloseConnection(instanceLink *link, valkeyAsyncContext *c) {
 }
 
 /* Decrement the refcount of a link object, if it drops to zero, actually
- * free it and return NULL. Otherwise don't do anything and return the pointer
+ * free it and return NULL. Otherwise, don't do anything and return the pointer
  * to the object.
  *
  * If we are not going to free the link and ri is not NULL, we rebind all the
@@ -1093,7 +1093,7 @@ instanceLink *releaseInstanceLink(instanceLink *link, sentinelValkeyInstance *ri
  * detection and so forth.
  *
  * Return C_OK if a matching Sentinel was found in the context of a
- * different primary and sharing was performed. Otherwise C_ERR
+ * different primary and sharing was performed. Otherwise, C_ERR
  * is returned. */
 int sentinelTryConnectionSharing(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_SENTINEL);
@@ -1445,7 +1445,7 @@ const char *sentinelValkeyInstanceTypeStr(sentinelValkeyInstance *ri) {
  * remove our old entry and add a new one for the same ID but with the new
  * address.
  *
- * The function returns 1 if the matching Sentinel was removed, otherwise
+ * The function returns 1 if the matching Sentinel was removed; otherwise,
  * 0 if there was no Sentinel with this ID. */
 int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *runid) {
     dictIterator *di;
@@ -1468,7 +1468,7 @@ int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *run
 }
 
 /* Search an instance with the same runid, ip and port into a dictionary
- * of instances. Return NULL if not found, otherwise return the instance
+ * of instances. Return NULL if not found; otherwise, return the instance
  * pointer.
  *
  * runid or addr can be NULL. In such a case the search is performed only
@@ -1482,7 +1482,7 @@ sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances,
     serverAssert(addr || runid); /* User must pass at least one search param. */
     if (addr != NULL) {
         /* Try to resolve addr. If hostnames are used, we're accepting an ri_addr
-         * that contains an hostname only and can still be matched based on that.
+         * that contains a hostname only and can still be matched based on that.
          */
         ri_addr = createSentinelAddr(addr, port, 1);
         if (!ri_addr) return NULL;
@@ -1586,7 +1586,7 @@ int sentinelResetPrimariesByPattern(char *pattern, int flags) {
  * This is used to handle the +switch-primary event.
  *
  * The function returns C_ERR if the address can't be resolved for some
- * reason. Otherwise C_OK is returned.  */
+ * reason. Otherwise, C_OK is returned.  */
 int sentinelResetPrimaryAndChangeAddress(sentinelValkeyInstance *primary, char *hostname, int port) {
     sentinelAddr *oldaddr, *newaddr;
     sentinelAddr **replicas = NULL;
@@ -2658,7 +2658,8 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
     /* Handle replicas replicating to a different primary address. */
     if ((ri->flags & SRI_REPLICA) && role == SRI_REPLICA &&
         (ri->replica_primary_port != ri->primary->addr->port ||
-         !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host))) {
+         (ri->replica_primary_host &&
+          !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host)))) {
         mstime_t wait_time = ri->primary->failover_timeout;
 
         /* Make sure the primary is sane before reconfiguring this instance
@@ -2913,7 +2914,7 @@ void sentinelReceiveHelloMessages(valkeyAsyncContext *c, void *reply, void *priv
  * sentinel_ip,sentinel_port,sentinel_runid,current_epoch,
  * primary_name,primary_ip,primary_port,primary_config_epoch.
  *
- * Returns C_OK if the PUBLISH was queued correctly, otherwise
+ * Returns C_OK if the PUBLISH was queued correctly; otherwise,
  * C_ERR is returned. */
 int sentinelSendHello(sentinelValkeyInstance *ri) {
     char ip[NET_IP_STR_LEN];
@@ -2926,7 +2927,7 @@ int sentinelSendHello(sentinelValkeyInstance *ri) {
 
     if (ri->link->disconnected) return C_ERR;
 
-    /* Use the specified announce address if specified, otherwise try to
+    /* Use the specified announce address if specified; otherwise, try to
      * obtain our own IP address. */
     if (sentinel.announce_ip) {
         announce_ip = sentinel.announce_ip;
@@ -2999,7 +3000,7 @@ int sentinelSendPing(sentinelValkeyInstance *ri) {
         ri->link->pending_commands++;
         ri->link->last_ping_time = mstime();
         /* We update the active ping time only if we received the pong for
-         * the previous ping, otherwise we are technically waiting since the
+         * the previous ping; otherwise, we are technically waiting since the
          * first ping that did not receive a reply. */
         if (ri->link->act_ping_time == 0) ri->link->act_ping_time = ri->link->last_ping_time;
         return 1;
@@ -3778,7 +3779,7 @@ void sentinelCommand(client *c) {
             "    failover.",
             "CONFIG SET param value [param value ...]",
             "    Set a global Sentinel configuration parameter.",
-            "CONFIG GET <param> [param param param ...]",
+            "CONFIG GET param [param ...]",
             "    Get global Sentinel configuration parameter.",
             "DEBUG [<param> <value> ...]",
             "    Show a list of configurable time parameters and their values (milliseconds).",
@@ -3816,7 +3817,8 @@ void sentinelCommand(client *c) {
             "    Show a list of Sentinel instances for this primary and their state.",
             "SET <primary-name> <option> <value> [<option> <value> ...]",
             "    Set configuration parameters for certain primaries.",
-            "SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
+            "SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) "
+            "[(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...]",
             "    Simulate a Sentinel crash.",
             NULL,
         };
@@ -3865,7 +3867,7 @@ void sentinelCommand(client *c) {
          * one time per epoch.
          *
          * runid is "*" if we are not seeking for a vote from the Sentinel
-         * in order to elect the failover leader. Otherwise it is set to the
+         * in order to elect the failover leader. Otherwise, it is set to the
          * runid we want the Sentinel to vote if it did not already voted.
          */
         sentinelValkeyInstance *ri;
@@ -3886,7 +3888,7 @@ void sentinelCommand(client *c) {
         if (!sentinel.tilt && ri && (ri->flags & SRI_S_DOWN) && (ri->flags & SRI_PRIMARY)) isdown = 1;
 
         /* Vote for the primary (or fetch the previous vote) if the request
-         * includes a runid, otherwise the sender is not seeking for a vote. */
+         * includes a runid; otherwise, the sender is not seeking for a vote. */
         if (ri && ri->flags & SRI_PRIMARY && strcasecmp(objectGetVal(c->argv[5]), "*")) {
             leader = sentinelVoteLeader(ri, (uint64_t)req_epoch, objectGetVal(c->argv[5]), &leader_epoch);
         }
@@ -3985,7 +3987,7 @@ void sentinelCommand(client *c) {
         }
 
         /* If resolve-hostnames is used, actual DNS resolution may take place.
-         * Otherwise just validate address.
+         * Otherwise, just validate address.
          */
         if (anetResolve(NULL, objectGetVal(c->argv[3]), ip, sizeof(ip), sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) ==
             ANET_ERR) {
@@ -4116,7 +4118,8 @@ void sentinelCommand(client *c) {
         dictReleaseIterator(di);
         if (primaries_local != sentinel.primaries) dictRelease(primaries_local);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "simulate-failure")) {
-        /* SENTINEL SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP] */
+        /* SENTINEL SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP)
+         * [(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...] */
         int j;
 
         sentinel.simfailure_flags = SENTINEL_SIMFAILURE_NONE;
@@ -4632,7 +4635,7 @@ void sentinelSimFailureCrash(void) {
 /* Vote for the sentinel with 'req_runid' or return the old vote if already
  * voted for the specified 'req_epoch' or one greater.
  *
- * If a vote is not available returns NULL, otherwise return the Sentinel
+ * If a vote is not available returns NULL; otherwise, return the Sentinel
  * runid and populate the leader_epoch with the epoch of the vote. */
 char *sentinelVoteLeader(sentinelValkeyInstance *primary, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
     if (req_epoch > sentinel.current_epoch) {
@@ -4935,7 +4938,7 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     return C_OK;
 }
 
-/* Setup the primary state to start a failover. */
+/* Set up the primary state to start a failover. */
 void sentinelStartFailover(sentinelValkeyInstance *primary) {
     serverAssert(primary->flags & SRI_PRIMARY);
 
@@ -4997,7 +5000,7 @@ int sentinelStartFailoverIfNeeded(sentinelValkeyInstance *primary) {
  *    This is pretty much black magic but the idea is, the primary was not
  *    available so the replica may be lagging, but not over a certain time.
  *    Anyway we'll select the best replica according to replication offset.
- * 5) Replica priority can't be zero, otherwise the replica is discarded.
+ * 5) Replica priority can't be zero; otherwise, the replica is discarded.
  *
  * Among all the replicas matching the above conditions we select the replica
  * with, in order of sorting key:
@@ -5009,7 +5012,7 @@ int sentinelStartFailoverIfNeeded(sentinelValkeyInstance *primary) {
  * Basically if runid is the same, the replica that processed more commands
  * from the primary is selected.
  *
- * The function returns the pointer to the selected replica, otherwise
+ * The function returns the pointer to the selected replica; otherwise,
  * NULL if no suitable replica was found.
  */
 
@@ -5068,7 +5071,7 @@ sentinelValkeyInstance *sentinelSelectReplica(sentinelValkeyInstance *primary) {
         if (replica->replica_priority == 0) continue;
 
         /* If the primary is in SDOWN state we get INFO for replicas every second.
-         * Otherwise we get it with the usual period so we need to account for
+         * Otherwise, we get it with the usual period so we need to account for
          * a larger delay. */
         if (primary->flags & SRI_S_DOWN)
             info_validity_time = sentinel_ping_period * 5;
@@ -5354,7 +5357,7 @@ void sentinelFailoverStateMachine(sentinelValkeyInstance *ri) {
 /* Abort a failover in progress:
  *
  * This function can only be called before the promoted replica acknowledged
- * the replica -> primary switch. Otherwise the failover can't be aborted and
+ * the replica -> primary switch. Otherwise, the failover can't be aborted and
  * will reach its end (possibly by timeout). */
 void sentinelAbortFailover(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_FAILOVER_IN_PROGRESS);
@@ -5468,7 +5471,7 @@ void sentinelTimer(void) {
     sentinelHandleDictOfValkeyInstances(sentinel.primaries);
     sentinelRunPendingScripts();
     sentinelCollectTerminatedScripts();
-    sentinelKillTimedoutScripts();
+    sentinelKillTimedOutScripts();
 
     /* We continuously change the frequency of the server "timer interrupt"
      * in order to desynchronize every Sentinel from every other.

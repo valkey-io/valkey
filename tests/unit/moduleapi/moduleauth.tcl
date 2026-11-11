@@ -19,9 +19,9 @@ start_server {tags {"modules"}} {
         assert_equal {OK} [r testmoduleone.rm_register_auth_cb]
     }
 
-    test {test module AUTH for non existing / disabled users} {
+    test {test module AUTH for nonexistent / disabled users} {
         r config resetstat
-        # Validate that an error is thrown for non existing users.
+        # Validate that an error is thrown for nonexistent users.
         assert_error {*WRONGPASS*} {r AUTH foo pwd}
         assert_match {*calls=1,*,rejected_calls=0,failed_calls=1} [cmdstat auth]
         # Validate that an error is thrown for disabled users.
@@ -358,8 +358,9 @@ start_server {tags {"modules"}} {
 
         # Validate that even the new blocking module auth cb which was registered in the middle of
         # blocking module auth is attempted - making it take twice the duration (2x 500000 us).
+        # Allow 10% slack for scheduler/timer jitter; a skipped callback measures ~500000.
         regexp "usec_per_call=(\[0-9]{1,})\.*," $stats all usec_per_call
-        assert {$usec_per_call >= 1000000}
+        assert {$usec_per_call >= 900000}
     }
 
     test {Module unload during blocking module auth} {

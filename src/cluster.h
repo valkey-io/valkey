@@ -68,7 +68,9 @@ void clusterUpdateMyselfHostname(void);
 void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
 void clusterUpdateMyselfAvailabilityZone(void);
+void clusterUpdateMyselfReplicaPriority(void);
 
+int clusterPublishMessageLengthValid(robj *channel, robj *message);
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
 void clusterBroadcastPong(int target);
 
@@ -137,7 +139,7 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
 clusterNode *getNodeByQuery(client *c, int *error_code);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
-void migrateCloseTimedoutSockets(void);
+void migrateCloseTimedOutSockets(void);
 unsigned int keyHashSlot(const char *key, int keylen);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
@@ -151,9 +153,9 @@ sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 
-unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
-void clusterSaveConfigOrDie(int do_fsync);
+int clusterSaveConfigFromBio(sds content, bool do_fsync);
+void clusterSaveConfigOrDie(bool do_fsync);
 int clusterDelSlot(int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);

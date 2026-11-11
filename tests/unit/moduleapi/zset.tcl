@@ -167,6 +167,21 @@ start_server {tags {"modules"}} {
     }
     r config set zset-max-listpack-entries 128
 
+    foreach {enc max_entries} {listpack 128 btree 0} {
+        test "Module key handle closes cleanly after a Call turns its string into a $enc zset" {
+            r config set zset-max-listpack-entries $max_entries
+            r del k src
+            r set k [string repeat x 300]
+            r zadd src 1 a 2 b 3 c
+            assert_equal $enc [r object encoding src]
+            # Key type 1 is STRING, 5 is ZSET.
+            assert_equal {1 5} [r zset.close_after_call k src]
+            assert_equal {a b c} [r zrange k 0 -1]
+            assert_equal PONG [r ping]
+        }
+    }
+    r config set zset-max-listpack-entries 128
+
     test "Unload the module - zset" {
         assert_equal {OK} [r module unload zset]
     }

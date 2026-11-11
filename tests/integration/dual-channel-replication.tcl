@@ -1377,6 +1377,85 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     }
 }
 
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set repl-diskless-sync-delay 0
+
+    $primary config set rdbcompression no
+
+    # A large set that is slow to copy, and enough keys for the replica to stay
+    # in the RDB load for as long as we need when it uses key-load-delay.
+    for {set j 0} {$j < 300} {incr j} {
+        set members {}
+        for {set i 0} {$i < 1000} {incr i} {
+            lappend members "$j:$i"
+        }
+        $primary sadd bigset {*}$members
+    }
+    $primary debug populate 3000 key 1024
+
+    start_server {} {
+        set replica [srv 0 client]
+
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set loading-process-events-interval-bytes 1024
+        # Keep the replica in the RDB load until all the commands are buffered.
+        $replica config set key-load-delay 100000
+
+        test "Replica primary link killed while streaming the local replication buffer" {
+            set loglines [count_log_lines 0]
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 500 100 {
+                [s 0 loading] eq 1
+            } else {
+                fail "replica didn't start loading the RDB in time"
+            }
+
+            # The replica buffers these commands while it loads the RDB. They
+            # are slow and large enough for the replica to serve clients several
+            # times when it streams the buffer into memory.
+            $primary set streaming-started 1
+            set padding [string repeat x 1024]
+            for {set i 0} {$i < 100} {incr i} {
+                $primary sunionstore $padding bigset
+            }
+            wait_for_condition 500 100 {
+                [s 0 replicas_repl_buffer_size] >= 100 * 1024
+            } else {
+                fail "replica didn't buffer the commands in time"
+            }
+            assert_equal 1 [s 0 loading]
+
+            # Let the replica finish the load, and kill the primary link once it
+            # started streaming the buffer.
+            $replica config set key-load-delay 0
+            wait_for_condition 1000 10 {
+                ![catch {$replica exists streaming-started} e] && $e == 1
+            } else {
+                fail "replica didn't start streaming the local buffer in time"
+            }
+            assert_equal 1 [$replica client kill type primary]
+
+            # The replica aborts the sync and connects to the primary again.
+            wait_for_log_messages 0 {"*Failed to stream local replication buffer into memory*"} $loglines 100 100
+            wait_for_condition 500 100 {
+                [s 0 master_link_status] eq "up"
+            } else {
+                fail "replica didn't sync with the primary again"
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+            # The replica continued with a partial resynchronization.
+            assert_equal 1 [s -1 sync_full]
+        }
+    }
+}
+
 test "Test dual-channel-replication replica can lazyfree the local buffer" {
     start_server {tags {"dual-channel-replication external:skip"}} {
         set primary [srv 0 client]

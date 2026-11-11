@@ -607,21 +607,18 @@ start_multiple_servers 3 [list overrides $base_conf] {
         # Result should be 1 due to stderr output
         assert_equal $result 1
         assert_match {*unable to send CLUSTER RESET*} $output
-        # The connect error text is platform-dependent: with a connect
-        # timeout, macOS can report "setsockopt(TCP_NODELAY): Invalid
-        # argument" instead of "Connection refused", so only assert that
-        # connecting to the shutdown node failed.
-        assert_match "*Could not connect to Valkey at 127.0.0.1:[srv -2 port]*" $output
+        assert_match {*Connection refused*} $output
 
         # Check for success message
         assert_match {*\[OK\] Node*removed from the cluster*} $output
 
-        # Verify the deleted node is forgotten by both reachable nodes.
-        # Exact cluster_known_nodes counts would depend on whether the
-        # previous del-node test ran, so don't assert them here.
+        # Verify cluster state after deletion:
+        # - Node0 (primary): only node left, knows only itself
+        # - Node1 (deleted in test 2): still standalone
+        # - Node2 (deleted in test 3): shutdown, can't check
         wait_for_condition 1000 50 {
-            ![string match "*$node3_id*" [R 0 CLUSTER NODES]] &&
-            ![string match "*$node3_id*" [R 1 CLUSTER NODES]]
+            [CI 0 cluster_known_nodes] == 1 &&
+            [CI 1 cluster_known_nodes] == 1
         } else {
             fail "Nodes don't have expected cluster state"
         }

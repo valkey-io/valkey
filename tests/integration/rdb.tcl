@@ -274,6 +274,82 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     }
 
     foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
+        test "FLUSHALL after bgsave $bgsave_type finished keeps the change counter correct" {
+            # With save points, FLUSHALL saves the dataset synchronously.
+            test_config_set r save "900 1"
+            test_config_set r lua-time-limit 10
+            r config set rdb-key-save-delay 0
+            r config set forkless-policy $policy
+            # Start from a saved, empty dataset.
+            r flushall
+            populate 100
+            set dir [lindex [r config get dir] 1]
+            set loglines [count_log_lines 0]
+
+            # The server doesn't handle the end of the bgsave while a script is
+            # running. Send FLUSHALL in the same write as the script, so it runs
+            # right after the script, before the server handles the end.
+            set rd [valkey_deferring_client]
+            if {$bgsave_type eq "fork"} {
+                $rd write [format_command bgsave]
+            } else {
+                # The forkless save writes its file in the main thread.
+                r bgsave
+                wait_for_log_messages 0 {"*created background thread to perform snapshot file close and rename*"} $loglines 2000 1
+            }
+            $rd write [format_command eval {while true do end} 0]
+            $rd write [format_command flushall]
+            $rd write [format_command set foo bar]
+            $rd flush
+            wait_for_condition 50 100 {
+                [catch {r ping} e] == 1
+            } else {
+                fail "Can't wait for script to start running"
+            }
+
+            # Wait for the bgsave to finish its file.
+            if {$bgsave_type eq "fork"} {
+                set line [lindex [wait_for_log_messages 0 {"*Background saving started by pid*"} $loglines 100 100] 0]
+                regexp {started by pid ([0-9]+)} $line -> child_pid
+                wait_for_condition 50 100 {
+                    ![process_is_alive $child_pid]
+                } else {
+                    fail "bgsave child did not exit"
+                }
+            } else {
+                wait_for_condition 50 100 {
+                    [glob -nocomplain -directory $dir temp-forkless-*.rdb] eq {}
+                } else {
+                    fail "bgsave file was not renamed"
+                }
+            }
+
+            r script kill
+            if {$bgsave_type eq "fork"} {
+                assert_match {*started*} [$rd read]
+            }
+            assert_error {*killed*} {$rd read}
+            assert_equal OK [$rd read]
+            assert_equal OK [$rd read]
+            $rd close
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 0
+            } else {
+                fail "bgsave not done"
+            }
+            # The bgsave finished before FLUSHALL, so FLUSHALL didn't stop it.
+            if {$bgsave_type eq "fork"} {
+                verify_log_message 0 "*Background saving terminated with success*" $loglines
+            } else {
+                verify_log_message 0 "*forkless save complete*" $loglines
+            }
+            assert_equal [s rdb_last_bgsave_type] $bgsave_type
+            # Only the write after FLUSHALL is not saved.
+            assert_equal [s rdb_changes_since_last_save] 1
+        }
+    }
+
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave $bgsave_type metrics are correct after success" {
             set saves_before [s rdb_saves]
             populate 100 "" 16

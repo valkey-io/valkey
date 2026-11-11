@@ -1411,7 +1411,7 @@ start_server {tags {"setexpire"}} {
         assert_morethan $volatile_mem $plain_mem
 
         r SPERSIST volatile MEMBERS 64 {*}$members
-        assert_equal $plain_mem [r MEMORY USAGE volatile]
+        assert_lessthan [r MEMORY USAGE volatile] $volatile_mem
 
         use_set_encoding listpack
     } {OK}

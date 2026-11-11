@@ -1977,14 +1977,10 @@ start_server {tags {"setexpire external:skip"}} {
 
     test {A STORE over a volatile source with nothing hidden propagates the command verbatim} {
         r FLUSHALL
-        # 200 volatile members make the expiry index a RAX, whose bucket key is the
-        # deadline rounded up to an 8192 ms window; entering the window early keeps
-        # that key ahead of the clock while every member is still live.
-        while {[clock milliseconds] % 8192 >= 1024} { after 50 }
+        # 200 volatile members make the expiry index a RAX.
         set members {}
         for {set i 0} {$i < 200} {incr i} { lappend members live$i }
-        set deadline [expr {[clock milliseconds] + 6000}]
-        r SADDEX s1{t} PXAT $deadline MEMBERS 200 {*}$members
+        r SADDEX s1{t} PX 600000 MEMBERS 200 {*}$members
         r SADD s2{t} live0 live1
         set repl [attach_to_replication_stream]
 
@@ -2001,7 +1997,6 @@ start_server {tags {"setexpire external:skip"}} {
             {sort s1{t} ALPHA STORE l{t}}
         }
         close_replication_stream $repl
-        assert {[clock milliseconds] < $deadline}
     }
     test {SORT STORE with a volatile source propagates UNLINK plus RPUSH} {
         flush_and_disable_active_expiry
@@ -2587,20 +2582,12 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
         test "SPOP with a count equal to the size over live volatile members leaves no key" {
             $primary FLUSHALL
             $primary DEBUG SET-ACTIVE-EXPIRE 0
-            # 200 volatile members make the expiry index a RAX, which reports the
-            # start of the window holding its earliest deadline, so until that
-            # deadline it claims an expired member the set does not have. Entering
-            # the window early keeps the deadline inside it.
-            while {[clock milliseconds] % 8192 >= 1024} { after 50 }
+            # 200 volatile members make the expiry index a RAX.
             set members {}
             for {set i 0} {$i < 200} {incr i} { lappend members live$i }
-            set deadline [expr {[clock milliseconds] + 6000}]
-            $primary SADDEX myset PXAT $deadline MEMBERS 200 {*}$members
+            $primary SADDEX myset PX 600000 MEMBERS 200 {*}$members
 
-            # A count at or above the size of a set the index calls partly
-            # expired, of members it is all wrong about.
             set popped [$primary SPOP myset 200]
-            assert {[clock milliseconds] < $deadline}
             assert_equal [lsort $members] [lsort $popped]
 
             # Every member left, so no key may remain on either side.

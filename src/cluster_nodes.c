@@ -1005,7 +1005,7 @@ int clusterSaveConfig(int do_fsync) {
     mstime_t latency;
 
     /* Get the nodes description and concatenate protocol-specific vars.
-     * Filter HANDSHAKE (unidentified) and MEET (uncommitted/uncontacted)
+     * Filter HANDSHAKE (unidentified) and JOINING (raft: not yet committed)
      * nodes — both represent incomplete join attempts that should not
      * persist across restarts. */
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_JOINING, 0);

@@ -18,11 +18,12 @@
  * - The first log entry referencing any node is its NODE_JOIN. Other
  *   entry types (SLOT_CHANGE, SET_REPLICA_OF, etc.) are only proposed
  *   after the node's NODE_JOIN is in the log.
- * - CLUSTER_NODE_MEET means "not yet in the raft log" — set on all
- *   nodes (including myself) at creation, cleared on NODE_JOIN apply.
+ * - CLUSTER_NODE_JOINING means "not yet in the raft log" — set on all
+ *   nodes (including myself) at creation, cleared on NODE_JOIN apply. It's
+ *   never persisted in nodes.conf or sent in snapshots.
  *
  * Constraints:
- * - AE, PRE_VOTE_REQ, and VOTE_REQ are never sent to nodes with CLUSTER_NODE_MEET.
+ * - AE, PRE_VOTE_REQ, and VOTE_REQ are never sent to nodes with CLUSTER_NODE_JOINING.
  *   This prevents AE from arriving before MEET on the same link. Learners receive
  *   AE but are excluded from PRE_VOTE_REQ, VOTE_REQ, and quorum accounting.
  * - Configuration (quorum) takes effect on apply, not on append.
@@ -264,7 +265,7 @@ static bool nodeIsLearner(clusterNode *n) {
     return n->flags & CLUSTER_NODE_LEARNER;
 }
 static bool nodeIsVoter(clusterNode *n) {
-    return !(n->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_LEARNER));
+    return !(n->flags & (CLUSTER_NODE_JOINING | CLUSTER_NODE_LEARNER));
 }
 
 /* --------------------------------------------------------------------------
@@ -355,7 +356,7 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *n = dictGetVal(de);
-        if (n->flags & CLUSTER_NODE_MEET) continue;
+        if (n->flags & CLUSTER_NODE_JOINING) continue;
         long long off = (n == myself) ? getNodeReplicationOffset(myself)
                                       : n->repl_offset;
         msg = sdscatlen(msg, " ", 1);
@@ -422,13 +423,13 @@ static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
 }
 
-/* True if there are any nodes other than myself without the MEET flag. */
+/* True if there are any nodes other than myself without the JOINING flag. */
 static bool clusterRaftHasPeerMembers(void) {
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (node != myself && !(node->flags & CLUSTER_NODE_MEET)) {
+        if (node != myself && !(node->flags & CLUSTER_NODE_JOINING)) {
             dictReleaseIterator(di);
             return true;
         }
@@ -629,7 +630,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
 
     clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
     if (!sender) {
-        sender = createClusterNode(sender_name, CLUSTER_NODE_MEET | CLUSTER_NODE_PRIMARY);
+        sender = createClusterNode(sender_name, CLUSTER_NODE_JOINING | CLUSTER_NODE_PRIMARY);
         clusterAddNode(sender);
     }
 
@@ -699,7 +700,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
     /* If we're the leader, send AE immediately to minimize commit latency
      * after a reconnection (especially in 2-node clusters). */
     if (rs->role == RAFT_ROLE_LEADER && link->node &&
-        !(link->node->flags & CLUSTER_NODE_MEET)) {
+        !(link->node->flags & CLUSTER_NODE_JOINING)) {
         clusterRaftSendAppendEntries(link, link->node);
     }
 
@@ -1431,12 +1432,12 @@ static void raftLogApply(raftLogEntry *e) {
                 /* Update address for existing node. */
                 clusterNodeParseAddressString(existing, argv[1]);
             }
-            /* On first official join, clear MEET and mark voter/learner. */
+            /* On first official join, clear JOINING and mark voter/learner. */
             clusterNode *joined = existing ? existing : clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             bool first_join = false;
-            if (joined && (!existing || (joined->flags & CLUSTER_NODE_MEET))) {
+            if (joined && (!existing || (joined->flags & CLUSTER_NODE_JOINING))) {
                 first_join = true;
-                joined->flags &= ~CLUSTER_NODE_MEET;
+                joined->flags &= ~CLUSTER_NODE_JOINING;
                 if (learner) {
                     joined->flags |= CLUSTER_NODE_LEARNER;
                 } else {
@@ -1707,9 +1708,9 @@ static void raftApplyCommitted(void) {
 static void clusterRaftSendInstallSnapshot(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
     /* Strip MYSELF flag so the receiver doesn't adopt our identity.
-     * Filter MEET-flagged nodes (NODE_JOIN not yet committed). */
+     * Filter JOINING nodes (NODE_JOIN not yet committed). */
     myself->flags &= ~CLUSTER_NODE_MYSELF;
-    sds config = clusterGenNodesDescription(NULL, CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE, 0);
+    sds config = clusterGenNodesDescription(NULL, CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE, 0);
     myself->flags |= CLUSTER_NODE_MYSELF;
     sds msg = wireNewMsg("INSTALL_SNAPSHOT");
     msg = sdscatlen(msg, " ", 1);
@@ -1782,7 +1783,7 @@ static void clusterRaftBroadcastAppendEntries(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
-        if (node->flags & CLUSTER_NODE_MEET) continue;
+        if (node->flags & CLUSTER_NODE_JOINING) continue;
         if (!node->link) continue;
         clusterRaftSendAppendEntries(node->link, node);
     }
@@ -1917,7 +1918,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
      * between 0 and non-zero (replica finishes sync or starts resync). */
     if (prev_offset != follower_repl_offset &&
         (prev_offset == 0 || follower_repl_offset == 0) &&
-        !(node->flags & CLUSTER_NODE_MEET)) {
+        !(node->flags & CLUSTER_NODE_JOINING)) {
         clusterRaftBroadcastNodeOffset(node, follower_repl_offset);
     }
 
@@ -2043,7 +2044,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     /* clusterLoadNodeLine() only adds flags and replica links to a node that
      * already exists. Reset them first so that the snapshot fully defines the
      * new state. MIGRATE_TO isn't part of the node lines, but loading them
-     * sets it again, as when loading nodes.conf. A joiner keeps MEET until it
+     * sets it again, as when loading nodes.conf. A joiner keeps JOINING until it
      * finds itself in the snapshot. */
     {
         dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -2051,7 +2052,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
             int keep = CLUSTER_NODE_MYSELF;
-            if (node == myself && rs->role == RAFT_ROLE_JOINER) keep |= CLUSTER_NODE_MEET;
+            if (node == myself && rs->role == RAFT_ROLE_JOINER) keep |= CLUSTER_NODE_JOINING;
             node->flags &= keep;
             node->replicaof = NULL;
             zfree(node->replicas);
@@ -2107,7 +2108,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         int found = dictFind(snapshot_nodes, mykey) != NULL;
         sdsfree(mykey);
         if (found) {
-            myself->flags &= ~CLUSTER_NODE_MEET;
+            myself->flags &= ~CLUSTER_NODE_JOINING;
             rs->role = nodeIsLearner(myself) ? RAFT_ROLE_LEARNER : RAFT_ROLE_FOLLOWER;
             serverLog(LL_NOTICE, "Promoted from joiner to %s (via snapshot).",
                       nodeIsLearner(myself) ? "learner" : "follower");
@@ -2441,14 +2442,14 @@ static void clusterRaftInitLast(void) {
     clusterListenerInit();
 
     /* A singleton (no peers) that has never been in a raft log is marked
-     * with MEET, to prevent it from committing entries before joining a
+     * JOINING, to prevent it from committing entries before joining a
      * cluster. Cleared when our own NODE_JOIN is applied (in a multi-node
      * cluster). A singleton that has been in a log, e.g. after the other
      * nodes were forgotten, keeps its state and elects itself, since the
      * election timeout only runs when there are other nodes. */
     clusterRaftState *rs = RAFT_STATE();
     if (dictSize(server.cluster->nodes) <= 1 && rs->last_applied == 0) {
-        myself->flags |= CLUSTER_NODE_MEET;
+        myself->flags |= CLUSTER_NODE_JOINING;
         server.cluster->size = 0;
     } else if (dictSize(server.cluster->nodes) == 1 && nodeIsVoter(myself)) {
         clusterRaftStartElection();
@@ -2643,7 +2644,7 @@ static void clusterRaftCron(void) {
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
             if (node == myself || !node->link) continue;
-            if (node->flags & CLUSTER_NODE_MEET) continue;
+            if (node->flags & CLUSTER_NODE_JOINING) continue;
             /* link->ctime and data_received are wall-clock (mstime) times. */
             mstime_t link_age = mstime() - node->link->ctime;
             if ((node->data_received < node->link->ctime && link_age > stale) ||
@@ -2972,7 +2973,7 @@ static void clusterRaftPrepareShutdown(void) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
         if (nodeFailed(node)) continue;
-        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_LEARNER)) continue;
+        if (node->flags & (CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_LEARNER)) continue;
         uint64_t mi = RAFT_NODE(node)->match_index;
         if (!best || mi > best_match) {
             best = node;
@@ -3249,7 +3250,7 @@ static void clusterRaftUpdateMyself(int old_flags) {
     clearCachedClusterSlotsResponse();
     /* Don't propose NODE_INFO before our own NODE_JOIN is in the log,
      * or if our IP is not yet known. */
-    if ((myself->flags & CLUSTER_NODE_MEET) || myself->ip[0] == '\0') return;
+    if ((myself->flags & CLUSTER_NODE_JOINING) || myself->ip[0] == '\0') return;
     /* Propose NODE_INFO to propagate the change to other nodes. */
     sds data = clusterRaftBuildMyNodeInfo();
     sds entry = sdsnew("NODE_INFO ");
@@ -4041,7 +4042,7 @@ static RaftProposalResult clusterRaftApplyAddVoter(sds data, int validate_only) 
     }
 
     clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
-    if (!node || (node->flags & CLUSTER_NODE_MEET) || !nodeIsLearner(node)) {
+    if (!node || (node->flags & CLUSTER_NODE_JOINING) || !nodeIsLearner(node)) {
         sdsfreesplitres(argv, argc);
         return RAFT_RESULT_REJECTED;
     }
@@ -4075,7 +4076,7 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     }
 
     clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
-    if (!node || (node->flags & CLUSTER_NODE_MEET) || nodeIsLearner(node) ||
+    if (!node || (node->flags & CLUSTER_NODE_JOINING) || nodeIsLearner(node) ||
         server.cluster->size <= 1 ||
         memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
         sdsfreesplitres(argv, argc);
@@ -4328,7 +4329,7 @@ static void clusterRaftMeet(const char *ip, int port, int cport, void *ctx, void
     dictReleaseIterator(di);
 
     if (!already) {
-        clusterNode *n = createClusterNode(NULL, CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE);
+        clusterNode *n = createClusterNode(NULL, CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE);
         memcpy(n->ip, norm_ip, sizeof(n->ip));
         if (server.tls_cluster) {
             n->tls_port = port;
@@ -4414,7 +4415,7 @@ static void clusterRaftResetCluster(int hard) {
     rs->failover_time = 0;
     clusterRaftCancelManualFailover();
     server.cluster->size = 0;
-    myself->flags |= CLUSTER_NODE_MEET;
+    myself->flags |= CLUSTER_NODE_JOINING;
     myself->flags &= ~CLUSTER_NODE_LEARNER;
 
     /* Hard reset: change node ID. */

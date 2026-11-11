@@ -382,8 +382,8 @@ WELCOME and inviting the sender.
 
 ### AE suppression during joining
 
-AE and VOTE_REQ are not sent to nodes with the CLUSTER_NODE_MEET
-flag (not yet in the raft log). This prevents a race where AE
+AE and VOTE_REQ are not sent to nodes that aren't in the raft log
+yet. This prevents a race where AE
 arrives before MEET on the same link, causing the receiver to step
 down prematurely and defer the MEET.
 
@@ -969,8 +969,8 @@ immediately starts a real election (skipping pre-vote) without waiting
 for the election timeout.
 (See Ongaro dissertation §3.10.)
 
-Nodes in handshake or with the MEET flag are excluded as transfer
-targets.
+Nodes in handshake or not yet in the raft log are excluded as
+transfer targets.
 
 ## Future Work
 

@@ -1008,7 +1008,7 @@ int clusterSaveConfig(int do_fsync) {
      * Filter HANDSHAKE (unidentified) and MEET (uncommitted/uncontacted)
      * nodes — both represent incomplete join attempts that should not
      * persist across restarts. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET, 0);
+    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_JOINING, 0);
     if (clusterCurrentBus->appendVarsLine)
         ci = clusterCurrentBus->appendVarsLine(ci);
     /* CRC over snapshot (node lines + vars), before log lines. */

@@ -178,6 +178,15 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd RANDOMKEY
         assert_equal QUEUED [$rd read]
 
+        # A primary ignores the manual failover request of a node it does not
+        # yet see as its replica, as can be the case right after a failover.
+        set primary_srv [expr {1 - $replica_srv}]
+        wait_for_condition 1000 50 {
+            [cluster_node_is_replica_of $primary_srv [R $replica_srv CLUSTER MYID] [R $primary_srv CLUSTER MYID]]
+        } else {
+            fail "Primary does not see the other node as its replica"
+        }
+
         # Failover: the replica takes over, primary becomes a replica
         R $replica_srv CLUSTER FAILOVER
         wait_for_condition 1000 50 {

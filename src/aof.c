@@ -2776,6 +2776,7 @@ int rewriteAppendOnlyFileBackground(void) {
     if (sdslen(server.aof_buf) > 0) {
         serverLog(LL_WARNING, "Can't start AOF rewrite while pending AOF data could not be flushed");
         server.aof_lastbgrewrite_status = C_ERR;
+        server.stat_aofrw_consecutive_failures++;
         return C_ERR;
     }
     if (openNewIncrAofForAppend() != C_OK) {

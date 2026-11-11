@@ -247,6 +247,9 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
 /* Return the internal height of the data structure (tree levels). */
 int orderedIndexGetHeight(const OrderedIndex *oi);
 
+/* Return the number of leaf nodes currently allocated. */
+unsigned long orderedIndexGetNumLeaves(const OrderedIndex *oi);
+
 /* Verify structural integrity. Returns 1 if valid, 0 if corrupt.
  * On failure, a description is written to errmsg. */
 int orderedIndexVerifyIntegrity(const OrderedIndex *oi, char *errmsg, size_t errmsg_len);

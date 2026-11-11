@@ -1746,8 +1746,7 @@ start_server {tags {"setexpire external:skip"}} {
         r SADD myset keepme
         set repl [attach_to_replication_stream]
 
-        set at_ms [expr {[clock milliseconds] + 500}]
-        r SADDEX myset PXAT $at_ms MEMBERS 2 m1 m2
+        r SADDEX myset PX 500 MEMBERS 2 m1 m2
         wait_for_condition 100 100 {
             [r SCARD myset] == 1
         } else {
@@ -1755,12 +1754,12 @@ start_server {tags {"setexpire external:skip"}} {
         }
         r SADD marker x
 
-        assert_replication_stream $repl [subst {
+        assert_replication_stream $repl {
             {select *}
-            {saddex myset PXAT $at_ms MEMBERS 2 m1 m2}
+            {saddex myset PXAT * MEMBERS 2 m1 m2}
             {srem myset m1 m2}
             {sadd marker x}
-        }]
+        }
         close_replication_stream $repl
     }
 
@@ -1768,8 +1767,7 @@ start_server {tags {"setexpire external:skip"}} {
         r FLUSHALL
         set repl [attach_to_replication_stream]
 
-        set at_ms [expr {[clock milliseconds] + 500}]
-        r SADDEX myset PXAT $at_ms MEMBERS 1 m1
+        r SADDEX myset PX 500 MEMBERS 1 m1
         wait_for_condition 100 100 {
             [r EXISTS myset] == 0
         } else {
@@ -1777,14 +1775,14 @@ start_server {tags {"setexpire external:skip"}} {
         }
 
         # lazyfree-lazy-expire (default yes) makes the key deletion an UNLINK.
-        assert_replication_stream $repl [subst {
+        assert_replication_stream $repl {
             {select *}
-            {saddex myset PXAT $at_ms MEMBERS 1 m1}
+            {saddex myset PXAT * MEMBERS 1 m1}
             {multi}
             {srem myset m1}
             {unlink myset}
             {exec}
-        }]
+        }
         close_replication_stream $repl
     }
 

@@ -1529,6 +1529,52 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Export in failover-granted only accepts the slot claim of the target" {
+        assert_does_not_resync {
+            # Keep the export in failover-granted long enough for node 1 to
+            # ping node 0.
+            test_config_set {R 0} cluster-manual-failover-timeout 10000
+            assert_match "OK" [R 0 SET $0_slot_tag:key value]
+
+            # Make sure node 1 has a lower epoch than node 0
+            R 0 CLUSTER BUMPEPOCH
+            wait_for_cluster_propagation
+            assert_morethan [CI 0 cluster_my_epoch] [CI 1 cluster_my_epoch]
+
+            # Use debug command to prevent failover
+            set_debug_prevent_failover 1
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
+            set jobname [get_job_name 0 0]
+            wait_for_migration_field 0 $jobname state failover-granted
+
+            # Node 1 is not the target and claims the slot with a lower epoch.
+            # Node 0 rejects the claim and node 1 gives up on the slot.
+            set loglines [count_log_lines 0]
+            assert_match "OK" [R 1 CLUSTER SETSLOT 0 NODE $node1_id]
+            wait_for_log_messages 0 [list "*Mismatch in topology information for sender node $node1_id*"] $loglines 100 100
+            wait_for_condition 100 100 {
+                ![is_slot_migrated 1 0]
+            } else {
+                fail "Node 1 still claims slot 0"
+            }
+            assert_equal 1 [is_slot_migrated 0 0]
+            assert_match "1" [R 0 CLUSTER COUNTKEYSINSLOT 0]
+            assert_match "failover-granted" [dict get [get_migration_by_name 0 $jobname] state]
+
+            # Complete the job
+            set_debug_prevent_failover 0
+            wait_for_migration_field 0 $jobname state success
+            wait_for_migration_field 2 $jobname state success
+            wait_for_migration 2 0
+            assert_match "1" [R 2 CLUSTER COUNTKEYSINSLOT 0]
+
+            # Cleanup for the next test
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id]
+            wait_for_migration 0 0
+        }
+    }
+
     test "Blocked clients are sent MOVED after export completion" {
         assert_does_not_resync {
             # Start with a BLPOP that will block for the duration of the migration,

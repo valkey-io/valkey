@@ -721,6 +721,10 @@ int orderedIndexGetHeight(const OrderedIndex *oi) {
     return (int)fbtreeHeight((const fbtreeIndex *)oi);
 }
 
+unsigned long orderedIndexGetNumLeaves(const OrderedIndex *oi) {
+    return fbtreeNumLeaves((fbtreeIndex *)oi);
+}
+
 int orderedIndexVerifyIntegrity(const OrderedIndex *oi, char *errmsg, size_t errmsg_len) {
     return fbtreeDebugValidate((fbtreeIndex *)oi, false, errmsg, errmsg_len) ? 1 : 0;
 }

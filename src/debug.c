@@ -440,8 +440,6 @@ void debugCommand(client *c) {
             "    When set to 1, the cluster link is closed after dropping a packet based on the filter.",
             "DISABLE-CLUSTER-RANDOM-PING <0|1>",
             "    Disable sending cluster ping to a random node every second.",
-            "CLUSTER-FAILOVER-DELAY <milliseconds>",
-            "    Artificial delay added before a replica schedules its failover election. Default is 0.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -627,15 +625,6 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "disable-cluster-random-ping") && c->argc == 3) {
         server.debug_cluster_disable_random_ping = atoi(c->argv[2]->ptr);
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "cluster-failover-delay") && c->argc == 3) {
-        long long delay;
-        if (getLongLongFromObjectOrReply(c, c->argv[2], &delay, NULL) != C_OK) return;
-        if (delay < 0) {
-            addReplyError(c, "delay must be a non-negative integer");
-            return;
-        }
-        server.debug_cluster_failover_delay = delay;
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
         robj *val;

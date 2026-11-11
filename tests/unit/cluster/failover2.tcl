@@ -16,8 +16,17 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 
     test "Wait for failover" {
+        # Both replicas can win an election one right after the other. The
+        # first winner is then demoted and has to resync from the second, and
+        # until that sync is done it is not allowed to fail over. So wait for
+        # one of them to be the primary and the other to be in sync with it.
         wait_for_condition 1000 50 {
-            [s -3 role] == "master" || [s -6 role] == "master"
+            ([s -3 role] == "master" &&
+             [s -6 master_port] == [srv -3 port] &&
+             [s -6 master_link_status] == "up") ||
+            ([s -6 role] == "master" &&
+             [s -3 master_port] == [srv -6 port] &&
+             [s -3 master_link_status] == "up")
         } else {
             fail "No failover detected"
         }

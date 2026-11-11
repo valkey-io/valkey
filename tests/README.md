@@ -218,6 +218,22 @@ Both authors and reviewers should check new or changed tests against it.
     (SDOWN flag, new leader, reconnected instance) with a generous budget rather
     than acting immediately.
 
+19. **Don't assert exact memory sizes.** `MEMORY USAGE` is built from the
+    allocator's usable size of each allocation it measures, and `used_memory`
+    in `INFO` keeps a running total of those sizes, so both depend on the
+    allocator. glibc malloc can return 16 bytes more for one of two allocations
+    of the same size, so two keys with identical content can differ. Compare a
+    structural property instead: `OBJECT ENCODING`, the element count, or a
+    `DEBUG OBJECT` field. If the test must compare sizes, allow a tolerance of
+    16 bytes per allocation that can differ (the `RESTORE` and `COPY` tests in
+    `tests/unit/hashexpire.tcl` show the `assert_range` pattern). For a set,
+    hash or sorted set above the listpack limit, `MEMORY USAGE` scales the
+    average of five sampled elements to the element count, so each differing
+    sample adds `16 * count / 5` bytes on top; `SAMPLES 0` sums every element,
+    and the sum still differs. The daily `test-ubuntu-libc-malloc` and
+    `test-sanitizer-undefined` jobs build with glibc malloc; a pull request to
+    `unstable` runs them only with the `run-extra-tests` label.
+
 When a test does flake in CI, fix the synchronization rather than retrying; the
 next slower runner will find the same gap.
 

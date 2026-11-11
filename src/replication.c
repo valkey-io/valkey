@@ -2837,8 +2837,7 @@ static int replicaCheckFullSyncOffsetFromRdb(rdbSaveInfo *rsi) {
     /* Only a forkless sync sends -1 in +FULLRESYNC and its offset inside the RDB.
      * Dual channel sync also has -1 here, but gets its offset from the main channel,
      * not the RDB, so it is validated elsewhere. */
-    if (server.primary_initial_offset != -1 || server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE)
-        return C_OK;
+    if (!server.primary_initial_offset_in_rdb || server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) return C_OK;
     if (!rsi->repl_id_is_set || rsi->repl_offset < 0 ||
         memcmp(rsi->repl_id, server.primary_replid, CONFIG_RUN_ID_SIZE) != 0) {
         serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: the RDB doesn't carry a valid offset for replication ID %s",
@@ -2856,7 +2855,7 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         /* A forkless (socket) full sync signalled its offset as -1 in
          * +FULLRESYNC; adopt the real offset from the RDB repl-offset aux field
          * now that the RDB is loaded. */
-        if (server.primary_initial_offset == -1) server.primary_initial_offset = rsi->repl_offset;
+        if (server.primary_initial_offset_in_rdb) server.primary_initial_offset = rsi->repl_offset;
         replicationCreatePrimaryClient(server.repl_transfer_s, rsi->repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
         server.repl_down_since = 0;
@@ -4086,6 +4085,7 @@ int replicaSendPsyncCommand(connection *conn) {
      * right value, so that this information will be propagated to the
      * client structure representing the primary into server.primary. */
     server.primary_initial_offset = -1;
+    server.primary_initial_offset_in_rdb = false;
 
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         /* While in dual channel replication, we should use our prepared repl id and offset. */
@@ -4184,6 +4184,7 @@ int replicaProcessPsyncReply(connection *conn) {
             memcpy(server.primary_replid, replid, offset - replid - 1);
             server.primary_replid[CONFIG_RUN_ID_SIZE] = '\0';
             server.primary_initial_offset = strtoll(offset, NULL, 10);
+            server.primary_initial_offset_in_rdb = (server.primary_initial_offset == -1);
             serverLog(LL_NOTICE, "Full resync from primary: %s:%lld", server.primary_replid,
                       server.primary_initial_offset);
         }

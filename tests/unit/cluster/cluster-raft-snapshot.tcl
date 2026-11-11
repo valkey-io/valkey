@@ -157,7 +157,9 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         assert_equal $r0_id [lindex [lsearch -inline [split [R 4 cluster nodes] "\n"] "*myself*"] 3]
         catch {R 4 shutdown}
 
-        pause_process [srv 0 pid]
+        # Stop R0 instead of pausing it, so that it also catches up through a
+        # snapshot when it comes back.
+        catch {R 0 shutdown}
         wait_for_condition 100 100 {
             [string match "*fail*" [lindex [raft_cluster_nodes_line [srv -1 client] $r0_id] 2]]
         } else {
@@ -186,7 +188,18 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         }
         assert_equal 1 [count_log_message -4 "Installed snapshot"]
         assert_equal [shard_members 1] [shard_members 4]
-        resume_process [srv 0 pid]
+
+        # R0 learns from a snapshot that its replica took over its slots. It
+        # stays in the same shard, so it must not delete the shard's keys.
+        set r4_id [R 4 cluster myid]
+        restart_server 0 true false
+        wait_for_condition 100 200 {
+            [count_log_message 0 "Installed snapshot"] == 1 &&
+            [lindex [lsearch -inline [split [R 0 cluster nodes] "\n"] "*myself*"] 3] eq $r4_id
+        } else {
+            fail "R0 did not become a replica of R4"
+        }
+        assert_equal 0 [count_log_message 0 "Deleting keys in dirty slot"]
     }
 }
 

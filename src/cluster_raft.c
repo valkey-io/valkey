@@ -3770,8 +3770,8 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
 }
 
 /* Update the local state of a slot that moves from old_owner to new_owner
- * (either may be NULL): delete the keys in a slot we no longer own, and
- * clear the migrating and importing markers that the move completes. The
+ * (either may be NULL): delete the keys in a slot that has left our shard,
+ * and clear the migrating and importing markers that the move completes. The
  * markers are local to the shard and not part of the snapshot, so this is
  * done both when applying a slot change and when installing a snapshot. */
 static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, clusterNode *new_owner) {
@@ -3780,8 +3780,9 @@ static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, cl
     /* DELSLOTS keeps the keys and markers, like gossip. */
     if (!new_owner) return;
 
-    /* Only while still bound, like gossip. */
-    if (old_owner == myself && new_owner != myself) {
+    /* Only while still bound, like gossip. A slot that moves to another node
+     * in our shard, e.g. our replica that took over, keeps its keys. */
+    if (old_owner == myself && memcmp(new_owner->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
         serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
         delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
     }

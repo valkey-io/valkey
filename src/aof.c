@@ -1496,7 +1496,13 @@ int loadSingleAppendOnlyFile(char *filename) {
                 goto readerr;
             }
         }
-        if (buf[0] == '#') continue; /* Skip annotations */
+        if (buf[0] == '#') { /* Skip annotations */
+            /* A line without a newline at the end of the file is a torn annotation.
+             * Treat it as a short read. Otherwise the next write would be appended
+             * to the torn line, and the next load would fail. */
+            if (feof(fp)) goto readerr;
+            continue;
+        }
         if (buf[0] != '*') goto fmterr;
         if (buf[1] == '\0') goto readerr;
         argc = atoi(buf+1);

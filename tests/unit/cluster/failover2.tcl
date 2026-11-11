@@ -64,16 +64,32 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000 cluster-replica-no-failover yes}} {
     test "Primaries will not time out then they are elected in the same epoch" {
         # Since we have the delay time, so these node may not initiate the
         # election at the same time (same epoch). But if they do, we make
         # sure there is no failover timeout.
 
         # Killing there primary nodes.
+        set paused_ids [list [R 0 cluster myid] [R 1 cluster myid] [R 2 cluster myid]]
         pause_process [srv 0 pid]
         pause_process [srv -1 pid]
         pause_process [srv -2 pid]
+
+        # Wait until every remaining node sees all the paused primaries as fail
+        # before letting the replicas start their elections. A replica that has
+        # not yet received all the FAIL messages underestimates its failed
+        # primary rank, and can then start its election in the same epoch as
+        # another replica and split the votes, so that neither of them can win
+        # before the failover timeout.
+        foreach id $paused_ids {
+            for {set j 3} {$j < 10} {incr j} {
+                wait_node_marked_fail $j $id
+            }
+        }
+        R 7 CONFIG SET cluster-replica-no-failover no
+        R 8 CONFIG SET cluster-replica-no-failover no
+        R 9 CONFIG SET cluster-replica-no-failover no
 
         # Wait for the failover
         wait_for_condition 1000 50 {

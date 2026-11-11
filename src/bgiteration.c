@@ -403,6 +403,7 @@ struct bgIterator {
      * deleted key.  keyDelete() removes the dbEntry from early_iterate_entries immediately (step 1)
      * to avoid a dangling pointer.  This flag records if the entry was in early_iterate_entries. */
     bool last_key_delete_was_early; // Used only in main thread during command processing
+    unsigned long added_since_feed; // Items queued outside of feedIterator since its last call
 
     // Variables maintaining runtime statistics
     unsigned long dbentries_queued;         // Updated by main thread
@@ -966,13 +967,16 @@ static sds createEntryString(int dbid, dbEntry *de) {
 
 
 static void feedIterator(bgIterator *it, monotime end_time_us) {
-    unsigned int initial_queue_len = mutexQueueLength(it->items_for_iterator);
-
     /* The queue size dynamically adjusts using an AIMD approach.  If we have left over stuff from
      * the prior call to feedIterator, reduce by half the remaining size.  If the queue ran dry
-     * and we have time left (at the end of this function), additively increase the queue length. */
-    if (initial_queue_len > 2 && it->item_count_target >= initial_queue_len) {
-        it->item_count_target -= initial_queue_len / 2;
+     * and we have time left (at the end of this function), additively increase the queue length.
+     * Items added since the prior call (expedited keys, replication) aren't left over, as the
+     * queue may have run dry before they were added. */
+    unsigned long queue_len = mutexQueueLength(it->items_for_iterator);
+    unsigned long left_over = (queue_len > it->added_since_feed) ? queue_len - it->added_since_feed : 0;
+    it->added_since_feed = 0;
+    if (left_over > 2 && it->item_count_target >= left_over) {
+        it->item_count_target -= left_over / 2;
     }
 
     // Now do some feeding
@@ -1073,7 +1077,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
     }
 
     // Smart logic to dynamically adjust the size of the queue
-    if (initial_queue_len == 0 && have_time && it->item_count_target < BGITER_QUEUE_MAX_LENGTH) {
+    if (left_over == 0 && have_time && it->item_count_target < BGITER_QUEUE_MAX_LENGTH) {
         it->item_count_target += BGITER_QUEUE_INCREASE_INCR;
     }
 }
@@ -1092,6 +1096,7 @@ static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_db
     bgIteratorItem *item = makeDbEntryItem(isClonedEntry ? cloneEntry : earlyEntry, dbid, isClonedEntry);
 
     it->dbentries_queued++;
+    it->added_since_feed++;
     if (isClonedEntry) it->dbentry_clones_queued++;
 
     if (it->barrier_items == 0) {
@@ -1565,16 +1570,26 @@ static void prepareAndProcessReturnedItems(bgIterator *it, int n, bgIteratorItem
 // Returns true if we process at least one item from a given iterator's return_to_main_thread queue.
 static bool receiveItemsBackFromOneIterator(bgIterator *it) {
     bgIteratorItem *batchPool[PREFETCH_BATCH_SIZE];
+    bgIteratorItem *closeItem = NULL;
     int n = 0;
     fifo *poppedFifo = mutexQueuePopAll(it->return_to_main_thread, false);
     if (poppedFifo != NULL) {
         while (fifoLength(poppedFifo) > 0) {
-            fifoPop(poppedFifo, (void **)&batchPool[n++]);
+            bgIteratorItem *item;
+            fifoPop(poppedFifo, (void **)&item);
+            /* A termination after the close can queue items behind ITER_CLOSED.  ITER_CLOSED
+             * releases the iterator, so it must be processed last. */
+            if ((int)item->type == BGITERATOR_ITEMEXT_ITER_CLOSED) {
+                closeItem = item;
+                continue;
+            }
+            batchPool[n++] = item;
             if (n == PREFETCH_BATCH_SIZE) {
                 prepareAndProcessReturnedItems(it, n, batchPool);
                 n = 0;
             }
         }
+        if (closeItem) batchPool[n++] = closeItem;
         if (n > 0) {
             prepareAndProcessReturnedItems(it, n, batchPool);
         }
@@ -1801,6 +1816,7 @@ static void handleSwapdb(int db1, int db2) {
             item->dbid = db1;
             item->u.dbid2 = db2;
             it->swapdb_queued++;
+            it->added_since_feed++;
             it->barrier_items++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
@@ -1847,6 +1863,7 @@ static void handleFlushdb(int dbid) {
             item->type = BGITERATOR_ITEM_FLUSHDB;
             item->dbid = dbid;
             it->flushdb_queued++;
+            it->added_since_feed++;
             it->barrier_items++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
@@ -2033,6 +2050,7 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->terminated = false;
     it->cur_cmd_may_replicate = false;
     it->last_key_delete_was_early = false;
+    it->added_since_feed = 0;
 
     it->dbentries_queued = 0;
     it->dbentries_processed = 0;
@@ -2177,7 +2195,7 @@ bgIteratorItem *bgIteratorRead(bgIterator *it) {
          * Without this, a unit test could get stuck waiting on the completion event because
          * feed won't get invoked.  For production, feed is called regularly from the main thread.
          * Note - this is checking that the exact same thread is used and shouldn't count modules. */
-        if (onServerMainThread()) bgIteration_feedIterators_task(NULL, 0, NULL);
+        if (onServerMainThread()) bgIteration_feedIterators();
     } else {
         it->client_is_active = true;
     }
@@ -2641,6 +2659,7 @@ void bgIteration_handleCommandReplication(int dbid,
             item->u.repl.replication_size = replicationItemSize(item);
             bufferedReplicationBytes += item->u.repl.replication_size;
             it->replication_queued++;
+            it->added_since_feed++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
     } // allIterators loop

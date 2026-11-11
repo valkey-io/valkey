@@ -1879,7 +1879,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||

@@ -223,6 +223,11 @@ void orderedIndexDismissMemory(OrderedIndex *oi);
  * included; callers account for them by sampling the items they hold. */
 size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi);
 
+/* Deletes re-pack sparse leaves inline. Pass false to park that while a fork
+ * child shares this process's pages (copy-on-write cost), true to resume.
+ * Applies to all indexes, like hashtableSetResizePolicy(). */
+void orderedIndexSetCompactionAllowed(int allowed);
+
 /* Defrag the index's own top-level struct. All node and item allocations are
  * handled incrementally by orderedIndexScanDefrag. Returns the index pointer,
  * updated if the struct was relocated. */

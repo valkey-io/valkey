@@ -1895,6 +1895,35 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
 
         r debug loadaof
         assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
+        r flushall
+    }
+
+    test {XADD/XTRIM strip every repeated LIMIT when rewriting for propagation} {
+        set aof [get_last_incr_aof_path r]
+        set aof_offset [file size $aof]
+        r config set stream-node-max-entries 10
+
+        for {set j 0} {$j < 100} {incr j} {
+            r XADD mystream * xitem v
+        }
+
+        # The last LIMIT wins. A LIMIT below the node size (10) trims nothing.
+        r XADD mystream MAXLEN ~ 55 LIMIT 5 LIMIT 30 * xitem v
+        assert_equal 71 [r xlen mystream]
+        r XADD mystream LIMIT 5 MAXLEN ~ 55 LIMIT 6 LIMIT 30 NOMKSTREAM * xitem v
+        assert_equal 62 [r xlen mystream]
+        assert_equal 10 [r XTRIM mystream MAXLEN ~ 50 LIMIT 5 LIMIT 30]
+        assert_equal 52 [r xlen mystream]
+
+        set fp [open $aof r]
+        fconfigure $fp -translation binary
+        seek $fp $aof_offset
+        set blob [read $fp]
+        close $fp
+        assert_equal -1 [string first "LIMIT" $blob]
+
+        r debug loadaof
+        assert_equal 52 [r xlen mystream]
     }
 }
 

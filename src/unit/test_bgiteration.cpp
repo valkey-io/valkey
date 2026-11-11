@@ -2084,6 +2084,28 @@ TEST_F(BgIterationTest, earlyTerminationFromChild) {
 }
 
 
+// The main thread may terminate an iterator that its client has already closed (e.g. a forkless
+//  save cancelled after the background thread has failed).  The items released by the termination
+//  are then returned behind ITER_CLOSED.
+TEST_F(BgIterationTest, earlyTerminationFromMainAfterChildClose) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+    expectReadKey(it, 1);
+    simulateFlushDB(0, 1); // queues a FLUSHDB barrier item
+    bgIteratorStatus status;
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 1u);
+
+    bgIteratorClose(it);     // background thread initiates the termination
+    bgIteratorTerminate(it); // main thread terminates before receiving ITER_CLOSED
+
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_TRUE(cleanupTerminated);
+}
+
+
 // Edge case.  Executing a command (like SUNIONSTORE) which REPLACES the first key and reads the
 //  second key.  In this case, bgIteration will get notified of the key deletion during execution of
 //  SETUNIONSTORE.  Given that both keys are in the future (not iterated yet), we'll allow the
@@ -3219,4 +3241,38 @@ TEST_F(BgIterationTest, checkNoKeysWriteIsReplicated) {
 
     expectReadKeySequence(it, 3, LAST_ITEM);
     expectReadComplete(it);
+}
+
+
+// During a save, a write to an unsaved key queues that key ahead of the scan.  Expedited keys
+//  waiting at a feed must not stop the queue target from growing.
+TEST_F(BgIterationTest, queueTargetGrowsWithExpeditedKeysWaiting) {
+    // Start a consistent save, as BGSAVE does.  Capture its feed timer so the test runs the feed.
+    aeTimeProc *feed = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(DoAll(SaveArg<2>(&feed), Return(0)));
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_START, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    ASSERT_NE(feed, nullptr);
+
+    // Before anything is fed, write 3 keys.  All are expedited into the queue.
+    for (int item = 0; item < 3; item++) {
+        client *writer = getWriteClient(item, "xxx");
+        simulateBlockedWrite(writer);
+        freeTestClient(writer);
+    }
+
+    // The client reads one of them.  (The first read doesn't run a feed.)
+    bgIteratorRead(it);
+
+    bgIteratorStatus status;
+    bgIteratorGetStatus(it, &status);
+    ASSERT_EQ(status.queue_length, 2u);
+    unsigned long target = status.queue_length_target;
+
+    // Run one feed.  Everything in the queue was added since the last feed, so the target must grow.
+    feed(NULL, 0, NULL);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_GT(status.queue_length_target, target);
+
+    expectAnythingCleanup(it);
 }

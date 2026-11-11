@@ -1,6 +1,5 @@
-# Commands whose keys are found by genericGetKeys() (a getkeys proc that reads
-# the key count with atoi()) must not be redirected for a key count the command
-# itself rejects: every node should give the same reply.
+# Commands whose keys are found by genericGetKeys() must not be
+# redirected for a key count the command itself rejects.
 
 start_cluster 2 0 {tags {external:skip cluster}} {
 

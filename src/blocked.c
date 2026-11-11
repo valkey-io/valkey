@@ -315,6 +315,7 @@ void replyToBlockedClientTimedOut(client *c) {
         } else {
             serverPanic("Unknown wait command %s in replyToBlockedClientTimedOut().", c->cmd->declared_name);
         }
+        updateStatsOnUnblock(c, 0, 0, 0);
     } else if (c->bstate->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c, 0);
     } else {

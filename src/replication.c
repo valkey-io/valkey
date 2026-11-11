@@ -5804,7 +5804,6 @@ void unblockClientWaitingReplicas(client *c) {
     serverAssert(c->bstate->client_waiting_acks_list_node);
     listDelNode(server.clients_waiting_acks, c->bstate->client_waiting_acks_list_node);
     c->bstate->client_waiting_acks_list_node = NULL;
-    updateStatsOnUnblock(c, 0, 0, 0);
 }
 
 /* Check if there are clients blocked in WAIT, WAITAOF, or WAIT_PREREPL
@@ -5828,6 +5827,7 @@ void processClientsWaitingReplicas(void) {
 
         if (is_wait_aof && c->bstate->numlocal && !server.aof_enabled) {
             addReplyError(c, "WAITAOF cannot be used when numlocal is set but appendonly is disabled.");
+            updateStatsOnUnblock(c, 0, 0, 0);
             unblockClient(c, 1);
             continue;
         }
@@ -5877,6 +5877,9 @@ void processClientsWaitingReplicas(void) {
             addReplyLongLong(c, numreplicas);
         }
 
+        /* A command that executes again after the wait (CLUSTER SETSLOT) updates
+         * the stats when it is called. */
+        if (!c->flag.pending_command) updateStatsOnUnblock(c, 0, 0, 0);
         unblockClient(c, 1);
     }
 }

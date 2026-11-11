@@ -25,9 +25,10 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
     test "Raft snapshot: follower catches up via snapshot after leader trims log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
 
-        # Pause a follower before generating entries so its next_index
-        # falls behind the leader's trim point.
-        pause_process [srv -1 pid]
+        # Stop a follower before generating entries so it falls behind the
+        # leader's trim point. Stop it instead of pausing it, so it doesn't
+        # catch up from entries buffered on its links when it comes back.
+        catch {R 1 shutdown}
 
         # Generate enough committed entries to trigger log trimming (>128).
         for {set j 0} {$j < 140} {incr j} {
@@ -42,7 +43,7 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         }
         set leader_applied [CI 0 cluster_raft_last_applied]
 
-        resume_process [srv -1 pid]
+        restart_server -1 true false
 
         # Follower should catch up via snapshot.
         wait_for_condition 50 200 {

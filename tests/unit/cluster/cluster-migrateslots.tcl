@@ -3159,8 +3159,10 @@ start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluste
         # A forkless BGSAVE has no child process, so the export does not wait
         # for it, but serverFork() still refuses to fork while it runs. The
         # export then takes its fork-failure path.
-        R 1 debug populate 1000 {fk} 10
-        R 1 config set rdb-key-save-delay 10000
+        R 1 debug populate 100 {fk} 10
+        # Hold 'bgsave' (1s * 100 = 100s) until the fork fails.
+        # It is released after fork failure us confirmed.
+        R 1 config set rdb-key-save-delay 1000000
         R 1 bgsave
         assert_equal 1 [getInfoProperty [R 1 info persistence] rdb_bgsave_in_progress]
         assert_equal forkless [getInfoProperty [R 1 info persistence] rdb_current_bgsave_type]
@@ -3168,9 +3170,11 @@ start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set loglines [count_log_lines -1]
         assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 1 16383]
-        wait_for_log_messages -1 {"*failed to start slot snapshot*"} $loglines 100 100
+        wait_for_log_messages -1 {"*Can't begin slot migration snapshot in background: fork: Operation already in progress*"} $loglines 100 100
         wait_for_migration_field 1 $jobname state failed
+        assert_equal 1 [getInfoProperty [R 1 info persistence] rdb_bgsave_in_progress]
 
+        # Release the save.
         R 1 config set rdb-key-save-delay 0
         waitForBgsave [Rn 1]
 

@@ -4183,6 +4183,9 @@ start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
         } 1 $key $n $mod $rem
     }
 
+# libc malloc can return a different usable size for the same request, and
+# the sampled MEMORY USAGE estimate multiplies that by the member count.
+if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {ZSET btree leaf compaction pauses while a child process exists} {
         test_config_set r rdb-key-save-delay 1000000
         r del z1{t} z2{t}
@@ -4237,4 +4240,5 @@ start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
         assert_lessthan [expr {abs($m1b - $m2b)}] 4096
         assert_lessthan $m1b [expr {$m1 - 16384}]
     } {} {needs:debug needs:local-process}
+} ;# if jemalloc
 }

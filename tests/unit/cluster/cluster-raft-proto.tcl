@@ -397,10 +397,14 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         assert_equal 1 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
 
         # A valid snapshot without C removes C and closes its link. The leak
-        # check at shutdown catches links that aren't freed.
+        # check at shutdown catches links that aren't freed. The snapshot
+        # covers all slots, so the cluster becomes ok, and CLUSTER SLOTS
+        # isn't served from a cache populated before the install.
+        assert_equal fail [CI 0 cluster_state]
+        assert_equal {} [R 0 CLUSTER SLOTS]
         set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
-        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
-        append snapshot "\n$node_id $node_addr master - 0 0 1 connected"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 1-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0"
         raft_send $fd $snapshot
         while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
         assert_match "AE_ACK 1 1 10 *" $reply
@@ -410,6 +414,22 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         wait_for_condition 50 100 {[catch {read $fd_c}] || [eof $fd_c]} else {
             fail "C's link was not closed"
         }
+        wait_for_condition 50 100 {[CI 0 cluster_state] eq "ok"} else {
+            fail "cluster state not updated after the install"
+        }
+        assert_equal 2 [llength [R 0 CLUSTER SLOTS]]
+
+        # Installing a snapshot that doesn't change the owner of a slot keeps
+        # the sharded pubsub subscriptions in it.
+        assert_equal 0 [R 0 CLUSTER KEYSLOT 06S]
+        set rd [valkey_deferring_client]
+        $rd ssubscribe 06S
+        $rd read
+        raft_send $fd "[string map {" 10 1" " 15 1"} $snapshot]"
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 15 *" $reply
+        assert_equal {06S 1} [R 0 PUBSUB SHARDNUMSUB 06S]
+        $rd close
 
         # A snapshot without the sender is rejected.
         set snapshot "INSTALL_SNAPSHOT $leader_id 1 20 1"
@@ -417,7 +437,7 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         raft_send $fd $snapshot
         while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
         assert_match "AE_ACK 1 0 *" $reply
-        assert_equal 10 [CI 0 cluster_raft_last_applied]
+        assert_equal 15 [CI 0 cluster_raft_last_applied]
         assert_match "*$leader_id*" [R 0 CLUSTER NODES]
         assert_equal 1 [count_log_message 0 "the sender isn't included"]
 

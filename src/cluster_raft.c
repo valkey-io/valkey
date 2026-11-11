@@ -2028,12 +2028,13 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     }
 
     /* Clear slots — the snapshot will re-assign them. Remember the old owners
-     * to update the local slot state afterwards. Shard membership is kept:
-     * loading a node line moves a node whose shard id changed, and removed
-     * nodes leave their shard. */
+     * to update the local slot state afterwards, and keep the sharded pubsub
+     * subscriptions until we know which slots changed owner. Shard membership
+     * is kept: loading a node line moves a node whose shard id changed, and
+     * removed nodes leave their shard. */
     clusterNode **old_owners = zmalloc(sizeof(server.cluster->slots));
     memcpy(old_owners, server.cluster->slots, sizeof(server.cluster->slots));
-    for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
+    for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlotKeepChannels(j);
 
     /* Clear raft log. */
     for (uint64_t i = 0; i < rs->log_count; i++) raftLogFree(rs->log[i]);
@@ -2079,8 +2080,10 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     /* Do what applying the skipped slot changes would have done locally. The
      * old owners are still valid, since nodes are only deleted below. */
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
-        if (old_owners[j] != server.cluster->slots[j])
+        if (old_owners[j] != server.cluster->slots[j]) {
+            removeChannelsInSlot(j);
             clusterRaftUpdateLocalSlotState(j, old_owners[j], server.cluster->slots[j]);
+        }
     }
     zfree(old_owners);
 
@@ -2142,6 +2145,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->todo_connect_nodes = 1;
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
+    rs->todo_update_slot_coverage = 1;
+    rs->todo_invalidate_slots_cache = 1;
     /* If our primary is failed, schedule a failover, as applying its
      * NODE_FAIL would have done. */
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {

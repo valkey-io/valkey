@@ -164,6 +164,7 @@ void clusterNodeIterReset(ClusterNodeIterator *iter);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
+int clusterDelSlotKeepChannels(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 
 bool isAnySlotInManualImportingState(void);

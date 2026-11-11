@@ -177,6 +177,10 @@ start_server {tags {"modules"}} {
         assert_equal {1 {} 0} [r zset.writewhilewalking k last add x y z]
         assert_equal {1 {} 0} [r zset.writewhilewalking k first incrby d e]
         assert_equal {x 0 y 0 z 0 d 5 e 6} [r zrange k 0 -1 withscores]
+        # A lex range owns parsed bounds; removing every member deletes the
+        # key while the range is active, and the bounds must still be freed.
+        assert_equal {1 {} 0} [r zset.writewhilewalking k lex rem x y z d e]
+        assert_equal 0 [r exists k]
     }
 
     r config set zset-max-listpack-entries 0

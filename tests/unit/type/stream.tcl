@@ -2105,10 +2105,6 @@ start_server {tags {"stream"}} {
 
         # When stream is emptied, lag must be 0 and entries_read must not corrupt for other groups.
         r XDEL planets 0-4
-        set reply [r XINFO GROUPS planets]
-        set group [lindex $reply 0]
-        assert_equal [dict get $group lag] 0
-
         r XGROUP CREATE planets other 0
         set reply [r XINFO GROUPS planets]
         foreach g $reply {

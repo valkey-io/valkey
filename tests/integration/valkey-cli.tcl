@@ -361,6 +361,56 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal "\"$reply\"" [run_cli -3 --json debug protocol attrib]
     } {} {needs:debug}
 
+    test_nontty_cli "JSON output escapes a RESP3 map key that is an aggregate" {
+        # A Lua table used as a table key becomes an array (or map) key of a
+        # RESP3 map. JSON keys must be strings, so the formatted key has to be
+        # escaped. Every map below has exactly one key, so the order is fixed.
+        set script {redis.setresp(3); local k={'a'}; local t={}; t[k]=1; return {map=t}}
+        assert_equal {{"[\"a\"]":1}} [run_cli -3 --json eval $script 0]
+        assert_equal {{"[\"a\"]":1}} [run_cli -3 --quoted-json eval $script 0]
+
+        set script {redis.setresp(3); local k={map={x='y'}}; local t={}; t[k]=1; return {map=t}}
+        assert_equal {{"{\"x\":\"y\"}":1}} [run_cli -3 --json eval $script 0]
+        assert_equal {{"{\"x\":\"y\"}":1}} [run_cli -3 --quoted-json eval $script 0]
+
+        # Check that the quoting delivers a"b and a\b to the server.
+        assert_equal {["a\"b"]} [run_cli -3 --json eval {return {'a"b'}} 0]
+        assert_equal {["a\\b"]} [run_cli -3 --json eval {return {'a\\b'}} 0]
+
+        set script {redis.setresp(3); local k={'a"b'}; local t={}; t[k]=1; return {map=t}}
+        assert_equal {{"[\"a\\\"b\"]":1}} [run_cli -3 --json eval $script 0]
+        set script {redis.setresp(3); local k={'a\\b'}; local t={}; t[k]=1; return {map=t}}
+        assert_equal {{"[\"a\\\\b\"]":1}} [run_cli -3 --json eval $script 0]
+    }
+
+    test_nontty_cli "JSON output escapes a RESP3 map string key containing a quote or backslash" {
+        # HGETALL with -3 replies with a RESP3 map whose keys are bulk strings,
+        # so " and \ in a field must be escaped in the JSON key. Each hash has
+        # exactly one field, so the order is fixed.
+        r hset jsonplainkey {ab} v
+        assert_equal 2 [string length [lindex [r hkeys jsonplainkey] 0]]
+        assert_equal {{"ab":"v"}} [run_cli -3 --json hgetall jsonplainkey]
+        assert_equal {{"ab":"v"}} [run_cli -3 --quoted-json hgetall jsonplainkey]
+
+        r hset jsondqkey {a"b} v
+        assert_equal 3 [string length [lindex [r hkeys jsondqkey] 0]]
+        assert_equal {{"a\"b":"v"}} [run_cli -3 --json hgetall jsondqkey]
+
+        # A key that is already wrapped in quotes is still escaped, not passed
+        # through as if it were quoted.
+        r hset jsonqwkey {"ab"} v
+        assert_equal 4 [string length [lindex [r hkeys jsonqwkey] 0]]
+        assert_equal {{"\"ab\"":"v"}} [run_cli -3 --json hgetall jsonqwkey]
+
+        r hset jsonbskey {a\b} v
+        assert_equal 3 [string length [lindex [r hkeys jsonbskey] 0]]
+        assert_equal {{"a\\b":"v"}} [run_cli -3 --json hgetall jsonbskey]
+    }
+
+    test "Non-interactive non-TTY CLI: JSON output of RESP3 map with non-string scalar keys" {
+        assert_equal {{"0":false,"1":true,"2":false}} [run_cli -3 --json debug protocol map]
+    } {} {needs:debug}
+
     test_nontty_cli "--eval should not crash valkey-cli" {
         set scriptfile [write_tmpfile "return { 1 }"]
         assert_equal "1" [run_cli --eval $scriptfile]

@@ -2104,13 +2104,10 @@ static sds cliFormatReplyJson(sds out, valkeyReply *r, int mode) {
             } else {
                 /* According to JSON spec, JSON map keys must be strings,
                  * and in RESP3, they can be other types.
-                 * The first one(cliFormatReplyJson) is to convert non string type to string
-                 * The Second one(escapeJsonString) is to escape the converted string */
+                 * Format the key as JSON text first, then quote and escape that
+                 * text so aggregate keys (which contain quotes) stay valid JSON. */
                 sds keystr = cliFormatReplyJson(sdsempty(), key, mode);
-                if (keystr[0] == '"')
-                    out = sdscatsds(out, keystr);
-                else
-                    out = sdscatfmt(out, "\"%S\"", keystr);
+                out = escapeJsonString(out, keystr, sdslen(keystr));
                 sdsfree(keystr);
             }
             out = sdscat(out, ":");

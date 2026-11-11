@@ -1848,12 +1848,13 @@ static void handleFlushdb(int dbid) {
 
         if (should_abort_iterators || it->iteration_flags & BGITERATOR_FLAG_CONSISTENT) {
             if (!it->terminated) bgIteratorTerminate(it);
-        } else {
+        } else if (!it->completed && !it->terminated) {
             /* In this (limited) case, we're only flushing a single DB that contains < half the
              * keys.  We don't want to kill a full-sync replication.  We will just continue with
              * iteration, knowing that a replication client will also receive the FLUSHDB on the
              * replication stream.  There's no need to worry about the items themselves.  Since
-             * we've incremented the refcount, the items still in queue won't be physically deleted. */
+             * we've incremented the refcount, the items still in queue won't be physically deleted.
+             * An iterator that has completed or terminated doesn't read any further items. */
 
             // Send a flushdb event to notify the client
             if (BGITERATION_DEBUG) {

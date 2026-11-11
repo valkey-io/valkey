@@ -2690,6 +2690,29 @@ TEST_F(BgIterationTest, flushDB_flushOne) {
 }
 
 
+// Flushing a DB with <= half of the data after the iterator has completed.  The client stops reading
+//  at COMPLETE, so a FLUSHDB item must not be queued behind it.
+TEST_F(BgIterationTest, flushDB_flushOneAfterComplete) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    bgIteratorStatus status;
+
+    expectReadKeySequence(it, 0, LAST_ITEM);
+    bgIteration_feedIterators(); // COMPLETE is queued
+    bgIteratorItem *item = bgIteratorRead(it);
+    ASSERT_EQ(item->type, BGITERATOR_ITEM_COMPLETE);
+
+    simulateFlushDB(0);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 0u);
+
+    bgIteratorClose(it);
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_FALSE(cleanupTerminated);
+}
+
+
 /* A multi with one future and one past key must expedite and replicate. */
 TEST_F(BgIterationTest, multiTwoKeysFirstFuture) {
     bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,

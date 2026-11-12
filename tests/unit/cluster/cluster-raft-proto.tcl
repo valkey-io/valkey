@@ -459,6 +459,44 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
     }
 }
 
+test "Raft proto: entries are persisted before they are trimmed" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set last 2
+        raft_send $fd "AE $leader_id 1 0 0 $last 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+
+        # Commit batches of entries. After the second batch, nodes.conf is
+        # rewritten. The third batch is only appended to it, and applying it
+        # trims the log past the start of that batch.
+        foreach count {98 2 90} {
+            set ae "AE $leader_id 1 $last 1 [expr {$last + $count}] $count"
+            for {set j 0} {$j < $count} {incr j} {
+                append ae "\n1 NODE_INFO $leader_id $leader_addr noflags"
+            }
+            raft_send $fd $ae
+            incr last $count
+            while {![string match "AE_ACK 1 1 $last *" [set reply [raft_recv $fd]]]} {}
+        }
+        assert_equal $last [CI 0 cluster_raft_last_applied]
+        close $fd
+
+        # All committed entries must be in nodes.conf, so the node starts
+        # after a crash.
+        exec kill -9 [srv 0 pid]
+        restart_server 0 true false
+        assert_equal $last [expr {[CI 0 cluster_raft_last_applied] + [CI 0 cluster_raft_log_entries]}]
+    }
+}
+
 test "Raft proto: MEET deferred by a joiner is answered after a snapshot" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]

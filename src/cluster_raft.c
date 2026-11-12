@@ -1700,7 +1700,6 @@ static void raftApplyCommitted(void) {
         rs->snapshot_term = e->term;
         raftLogApply(e);
     }
-    raftLogTrimApplied();
 }
 
 /* --------------------------------------------------------------------------
@@ -2890,6 +2889,9 @@ static void clusterRaftBeforeSleep(bool blocked) {
         rs->todo_persist_log = 0;
         clusterRaftPersistNewLogEntries(rs->persist_log_from);
     }
+    /* Only trim once new entries are persisted. An incremental append only
+     * writes the entries still in the log. */
+    raftLogTrimApplied();
 
     /* Singleton leader: commit after persistence (quorum = 1). */
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 &&

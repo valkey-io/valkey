@@ -67,3 +67,8 @@ void ThreadsManager_init(void);
  **/
 
 int ThreadsManager_runOnThreads(pid_t *tids, size_t tids_len, run_on_thread_cb callback);
+
+/** Marks the calling thread as done. For a callback that doesn't return (e.g. it
+ * parks its thread), so ThreadsManager_runOnThreads() doesn't wait for it until
+ * the timeout. The callback must not return after calling it. */
+void ThreadsManager_markDone(void);

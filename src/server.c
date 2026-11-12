@@ -3078,6 +3078,8 @@ serverDb *createDatabaseIfNeeded(int id) {
 }
 
 void initServer(void) {
+    registerServerThread();
+
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 #ifdef USE_LIBBACKTRACE

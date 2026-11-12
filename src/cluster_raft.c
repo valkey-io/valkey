@@ -1384,6 +1384,18 @@ static uint64_t raftLogTermAt(uint64_t index) {
     return 0;
 }
 
+/* Reset the optional fields of a node's address string, so that the ones
+ * missing from the next address string we load end up cleared. */
+static void clusterRaftClearOptionalNodeInfo(clusterNode *node) {
+    node->announce_client_tcp_port = 0;
+    node->announce_client_tls_port = 0;
+    sdsclear(node->hostname);
+    sdsclear(node->human_nodename);
+    sdsclear(node->announce_client_ipv4);
+    sdsclear(node->announce_client_ipv6);
+    sdsclear(node->availability_zone);
+}
+
 /* Find a pending proposal matching type+data, fire its callback, and remove it.
  * Called both when an entry is applied (from raftLogApply) and when the leader
  * sends a REJECT for a forwarded proposal. */
@@ -1637,14 +1649,7 @@ static void raftLogApply(raftLogEntry *e) {
             clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
 
             if (node && node != myself) {
-                /* Reset optional fields so absent aux fields get cleared. */
-                node->announce_client_tcp_port = 0;
-                node->announce_client_tls_port = 0;
-                sdsclear(node->hostname);
-                sdsclear(node->human_nodename);
-                sdsclear(node->announce_client_ipv4);
-                sdsclear(node->announce_client_ipv6);
-                sdsclear(node->availability_zone);
+                clusterRaftClearOptionalNodeInfo(node);
                 clusterNodeParseAddressString(node, argv[1]);
                 /* Apply self-set flags. TODO: split on comma and compare
                  * each part individually when more flags are added. */
@@ -2082,6 +2087,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             int keep = CLUSTER_NODE_MYSELF;
             if (node == myself && rs->role == RAFT_ROLE_JOINER) keep |= CLUSTER_NODE_JOINING;
             node->flags &= keep;
+            if (node != myself) clusterRaftClearOptionalNodeInfo(node);
             node->replicaof = NULL;
             zfree(node->replicas);
             node->replicas = NULL;

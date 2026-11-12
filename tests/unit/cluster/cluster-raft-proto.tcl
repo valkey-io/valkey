@@ -416,7 +416,7 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         assert_equal fail [CI 0 cluster_state]
         assert_equal {} [R 0 CLUSTER SLOTS]
         set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
-        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 1-16383"
+        append snapshot "\n$leader_id $leader_addr,client-ipv4=10.0.0.1 master - 0 0 1 connected 1-16383"
         append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0"
         raft_send $fd $snapshot
         while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
@@ -432,16 +432,20 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         }
         assert_equal 2 [llength [R 0 CLUSTER SLOTS]]
 
+        assert_match "*10.0.0.1*" [R 0 CLUSTER SLOTS]
+
         # Installing a snapshot that doesn't change the owner of a slot keeps
-        # the sharded pubsub subscriptions in it.
+        # the sharded pubsub subscriptions in it. An info field that the
+        # snapshot no longer has is cleared.
         assert_equal 0 [R 0 CLUSTER KEYSLOT 06S]
         set rd [valkey_deferring_client]
         $rd ssubscribe 06S
         $rd read
-        raft_send $fd "[string map {" 10 1" " 15 1"} $snapshot]"
+        raft_send $fd "[string map {" 10 1" " 15 1" ",client-ipv4=10.0.0.1" ""} $snapshot]"
         while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
         assert_match "AE_ACK 1 1 15 *" $reply
         assert_equal {06S 1} [R 0 PUBSUB SHARDNUMSUB 06S]
+        assert_no_match "*10.0.0.1*" [R 0 CLUSTER SLOTS]
         $rd close
 
         # A snapshot without the sender is rejected.

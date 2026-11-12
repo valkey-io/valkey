@@ -511,7 +511,9 @@ start_multiple_servers 3 [list overrides $base_conf] {
         # Result should be 1 due to stderr output
         assert_equal $result 1
         assert_match {*unable to send CLUSTER RESET*} $output
-        assert_match {*Connection refused*} $output
+        # The reason after this message is the client library's errno text,
+        # which on macOS is not always "Connection refused".
+        assert_match "*Could not connect to Valkey at 127.0.0.1:[srv -2 port]:*" $output
 
         # Check for success message
         assert_match {*\[OK\] Node*removed from the cluster*} $output

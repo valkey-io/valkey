@@ -2549,7 +2549,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             }
             after 200
             $replica replicaof $primary_host $primary_port
-            wait_for_condition [expr {$::valgrind ? 10000 : 500}] 100 {
+            wait_for_condition 500 100 {
                 [s 0 master_link_status] eq {up}
             } else {
                 fail "Replica didn't sync"
@@ -2613,13 +2613,7 @@ foreach primary_diskless {yes no} {
                         $primary select $cmd_db
                         assert_not_equal 0 [$primary {*}$cmd]
                         $primary select 0
-                        if {$cmd eq "flushdb" && $primary_diskless eq "no"} {
-                            # A save to disk is a consistent snapshot, which a FLUSHDB of
-                            # any db aborts. The replica then starts the full sync over.
-                            wait_for_log_messages -1 {"*forkless save cancelled*"} 0 50 100
-                        } else {
-                            assert_equal 1 [s -1 rdb_bgsave_in_progress]
-                        }
+                        assert_equal 1 [s -1 rdb_bgsave_in_progress]
                         $primary config set rdb-key-save-delay 0
                         wait_for_condition 500 100 {
                             [s 0 master_link_status] eq {up}
@@ -2840,7 +2834,7 @@ foreach load_mode {disabled on-empty-db} {
                 wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
 
                 # Replica must sync while writes are still flowing.
-                wait_for_condition [expr {$::valgrind ? 5000 : 100}] 100 {
+                wait_for_condition 100 100 {
                     [s 0 master_link_status] eq {up}
                 } else {
                     fail "Replica didn't sync (repl-diskless-load=$load_mode)"

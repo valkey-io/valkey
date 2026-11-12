@@ -221,13 +221,18 @@ proc test_replica_config_epoch_failover {type drop_nack} {
         } else {
             fail "Other primaries does not update config epoch"
         }
-        # Make sure that replica do not update config epoch.
-        assert_not_equal $R0_config_epoch [dict get [cluster_get_node_by_id 3 $R0_nodeid] config_epoch]
 
         # Pause R0 and resume R3's debug.
         # drop_nack=1 keeps NACKs filtered so the legacy timeout path is exercised.
         # drop_nack=0 lets NACKs through for the fast-fail path.
         pause_process [srv 0 pid]
+        # The kernel of R 0 may still hold a packet with the new config epoch
+        # (Nagle's algorithm waits for the ACK of a PING that the replica
+        # dropped) and deliver it while R 0 is paused. Close the replica's
+        # links with R 0 so that it can not arrive once the filter is removed.
+        R 3 DEBUG CLUSTERLINK KILL ALL $R0_nodeid
+        # Make sure that replica do not update config epoch.
+        assert_not_equal $R0_config_epoch [dict get [cluster_get_node_by_id 3 $R0_nodeid] config_epoch]
         if {$drop_nack} {
             R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_FAILOVER_AUTH_NACK
         } else {

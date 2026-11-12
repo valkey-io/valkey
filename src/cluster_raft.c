@@ -2012,6 +2012,13 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     uint64_t snap_term = strtoull(argv[4], NULL, 10);
 
     if (msg_term < rs->current_term) return 1;
+    /* A leader's snapshot ends at an entry from its term or an earlier one,
+     * and terms start at 1. Reject anything else before acting on it. */
+    if (snap_index == 0 || snap_term == 0 || snap_term > msg_term) {
+        serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid index %llu or term %llu.",
+                  argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
+        return 1;
+    }
     clusterRaftMaybeStepDown(msg_term);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();

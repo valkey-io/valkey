@@ -409,6 +409,18 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         assert_equal 3 [CI 0 cluster_raft_last_applied]
         assert_equal 3 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
 
+        # So is a snapshot whose term is 0 or newer than the message's term.
+        foreach header [list "INSTALL_SNAPSHOT $leader_id 1 10 0" "INSTALL_SNAPSHOT $leader_id 1 10 2"] {
+            raft_send $fd "$header\n$leader_id $leader_addr master - 0 0 1 connected 0-16383\n$node_id $node_addr master - 0 0 1 connected"
+        }
+        wait_for_condition 50 100 {
+            [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"] == 5
+        } else {
+            fail "invalid snapshot terms were not rejected"
+        }
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
+        assert_equal 1 [CI 0 cluster_raft_current_term]
+
         # A valid snapshot without C removes C and closes its link. The leak
         # check at shutdown catches links that aren't freed. The snapshot
         # covers all slots, so the cluster becomes ok, and CLUSTER SLOTS

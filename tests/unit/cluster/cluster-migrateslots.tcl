@@ -1504,14 +1504,17 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
     test "Export unpauses when cancelled" {
         assert_does_not_resync {
-            # Lower manual failover timeout for this test
-            test_config_set {R 0} cluster-manual-failover-timeout 100
-
-            # Use debug command to prevent failover
-            set_debug_prevent_failover 1
+            # Freeze the target before the source pauses, so that the source
+            # stays in failover-paused without a failover request
+            set_debug_prevent_pause 1
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
-            wait_for_migration_field 0 $jobname state failover-granted
+            wait_for_migration_field 0 $jobname state waiting-to-pause
+            wait_for_migration_field 2 $jobname state waiting-for-paused
+            set target_pid [srv -2 pid]
+            pause_process $target_pid
+            assert_match "OK" [R 0 DEBUG SLOTMIGRATION PREVENT-PAUSE 0]
+            wait_for_migration_field 0 $jobname state failover-paused
 
             assert_match "slot_migration_in_progress" [s -0 paused_reason]
             assert_match "write" [s -0 paused_actions]
@@ -1519,12 +1522,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Cancel the job
             assert_match "OK" [R 0 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_migration_field 0 $jobname state cancelled
+            resume_process $target_pid
             wait_for_migration_field 2 $jobname state failed
 
             assert_match "none" [s -0 paused_reason]
 
             # Cleanup for the next test
-            set_debug_prevent_failover 0
+            set_debug_prevent_pause 0
             assert_match "OK" [R 0 FLUSHDB SYNC]
         }
     }

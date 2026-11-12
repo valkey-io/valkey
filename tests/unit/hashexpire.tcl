@@ -826,6 +826,11 @@ start_server {tags {"hashexpire"}} {
         r HSETEX myhash2 xx PXAT $exp FIELDS 1 f1 v1
         r HSETEX myhash2 fnx PXAT $exp FIELDS 1 f2 v2
         r HSETEX myhash2 fxx PXAT $exp FIELDS 1 f2 v2
+        # Keys named like the validation arguments are kept.
+        r HSETEX nx NX PXAT $exp FIELDS 1 f1 v1
+        r HSETEX XX NX PXAT $exp FIELDS 1 f1 v1
+        r HSETEX fnx FNX PXAT $exp FIELDS 1 f1 v1
+        r HSETEX Fxx NX PXAT $exp FIELDS 1 f1 v1
 
         assert_replication_stream $repl [subst {
             {select *}
@@ -837,6 +842,10 @@ start_server {tags {"hashexpire"}} {
             {hsetex myhash2 PXAT $exp FIELDS 1 f1 v1}
             {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
             {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+            {hsetex nx PXAT $exp FIELDS 1 f1 v1}
+            {hsetex XX PXAT $exp FIELDS 1 f1 v1}
+            {hsetex fnx PXAT $exp FIELDS 1 f1 v1}
+            {hsetex Fxx PXAT $exp FIELDS 1 f1 v1}
         }]
         close_replication_stream $repl
     }
@@ -5697,5 +5706,13 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
             assert_equal 0 [r hexists myhash live]
             assert_equal 1 [r exists myhash]
         }
+    }
+}
+
+start_server {tags {"hashexpire aof external:skip"} overrides {appendonly yes appendfsync always rename-command {HSETEX MYHSETEX}}} {
+    test {Renamed HSETEX with NX can be replayed from AOF} {
+        assert_equal 1 [r MYHSETEX nx NX EX 3600 FIELDS 1 f v]
+        restart_server 0 true false
+        assert_equal v [r HGET nx f]
     }
 }

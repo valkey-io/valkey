@@ -1875,8 +1875,13 @@ void hsetexCommand(client *c) {
     } else if (need_rewrite_argv) {
         /* We use new_argv for rewrite */
         new_argv = zmalloc(sizeof(robj *) * c->argc);
+        /* Copy the command name and the key as is: the key may be named like a flag. */
+        for (int i = 0; i < 2; i++) {
+            new_argv[new_argc++] = c->argv[i];
+            incrRefCount(c->argv[i]);
+        }
         // Copy optional args (skip NX/XX/FNX/FXX)
-        for (int i = 0; i < fields_index; i++) {
+        for (int i = 2; i < fields_index; i++) {
             if (strcasecmp(objectGetVal(c->argv[i]), "NX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "XX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "FNX") &&
@@ -1884,8 +1889,8 @@ void hsetexCommand(client *c) {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
                  * EX/PX/EXAT flag. EX/PX/EXAT may be repeated and only the last one
                  * applies, so drop the earlier ones, which are a syntax error next to
-                 * PXAT. i > 1 skips the key, which may itself be named EX. */
-                if (expire && !(flags & ARGS_PXAT) && i > 1 &&
+                 * PXAT. The loop starts after the key. */
+                if (expire && !(flags & ARGS_PXAT) &&
                     (!strcasecmp(objectGetVal(c->argv[i]), "EX") ||
                      !strcasecmp(objectGetVal(c->argv[i]), "PX") ||
                      !strcasecmp(objectGetVal(c->argv[i]), "EXAT"))) {

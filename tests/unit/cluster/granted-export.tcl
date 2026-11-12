@@ -17,6 +17,15 @@ start_cluster 3 3 [list tags $tags overrides $overrides] {
 }
 
 start_cluster 3 3 [list tags $tags overrides $overrides] {
+    test "Granted export: CLUSTER CANCELSLOTMIGRATIONS on the source does not unpause it" {
+        # CANCELSLOTMIGRATIONS is not a write command, so the pause doesn't
+        # hold it. Its reply is not checked: it may report the granted export
+        # as not cancellable, but it must not unpause the source.
+        granted_export_check_trigger {catch {R 0 CLUSTER CANCELSLOTMIGRATIONS}}
+    }
+}
+
+start_cluster 3 3 [list tags $tags overrides $overrides] {
     test "Granted export: client FLUSHALL on the source is postponed" {
         # FLUSHALL is a write command, so the pause holds it until the
         # takeover and it never fails the export.

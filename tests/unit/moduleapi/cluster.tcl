@@ -495,3 +495,13 @@ start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
 }
 
 } ;# end tag
+
+source tests/support/granted_export_util.tcl
+
+start_cluster 3 3 {tags {logreqres:skip external:skip needs:debug cluster modules} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000}} {
+    R 0 MODULE LOAD [file normalize tests/modules/resetds.so]
+
+    test "Granted export: module ResetDataset on the source does not unpause it" {
+        granted_export_check_trigger {R 0 resetds.flushall}
+    }
+}

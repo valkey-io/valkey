@@ -2455,6 +2455,21 @@ void finishSlotMigrationJob(slotMigrationJob *job,
                             slotMigrationJobState state,
                             char *message) {
     updateSlotMigrationJobStatusMessage(job, message);
+    if (job->type == SLOT_MIGRATION_EXPORT &&
+        job->state == SLOT_EXPORT_FAILOVER_GRANTED &&
+        state != SLOT_MIGRATION_JOB_SUCCESS &&
+        !isSlotExportPauseTimedOut(job)) {
+        bool migration_done;
+        if (checkSlotExportOwnership(job, &migration_done) == C_OK && !migration_done) {
+            serverLog(LL_WARNING,
+                      "Slot migration %s: %s after failover was granted. "
+                      "Remaining paused until the target takes over or the "
+                      "pause times out.",
+                      job->description, message ? message : "failure");
+            resetSlotMigrationJob(job);
+            return;
+        }
+    }
     if (job->type == SLOT_MIGRATION_EXPORT) {
         /* If we finish the export, we should not remain paused */
         job->mf_end = 0;

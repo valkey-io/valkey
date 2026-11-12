@@ -38,6 +38,30 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
         }
 
+        test {benchmark: Ctrl+C prints partial report and skips remaining tests} {
+            r flushall
+            r config resetstat
+            set out_file [tmpfile benchmark_sigint]
+            set cmd [valkeybenchmark $master_host $master_port "-c 2 -n 1000000000 -t set,get"]
+            set pid [exec {*}$cmd > $out_file 2>@1 &]
+            wait_for_condition 100 100 {
+                [string match {*calls=*} [cmdstat set]]
+            } else {
+                fail "valkey-benchmark did not start sending SET"
+            }
+            exec kill -INT $pid
+            wait_for_condition 100 100 {
+                [string match {*Summary:*} [exec cat $out_file]]
+            } else {
+                fail "valkey-benchmark did not print a report after SIGINT"
+            }
+            set output [exec cat $out_file]
+            assert_match {*====== SET ======*interrupted by user*requests completed in*} $output
+            # The GET test must not run after the interruption.
+            assert_no_match {*====== GET ======*} $output
+            assert_match {} [cmdstat get]
+        }
+
         test {benchmark: single request completes across write retries} {
             # TLS negotiation can make the first write return zero. Retrying
             # must not count the same request again and exhaust the -n limit.

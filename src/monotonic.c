@@ -80,7 +80,7 @@ static void monotonicInit_x86linux(void) {
     char clocksource[64];
 
     if (!kernelClocksourceIsTsc(clocksource, sizeof(clocksource))) {
-        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is %s, not using TSC", clocksource);
+        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is %s, not using TSC\n", clocksource);
         return;
     }
 

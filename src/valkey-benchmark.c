@@ -73,6 +73,7 @@
 #define CONFIG_LATENCY_HISTOGRAM_MAX_VALUE 60000000L         /* <= 60 secs(us precision) */
 #define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 60000000L /* <= 60 secs(us precision) */
 #define SHOW_THROUGHPUT_INTERVAL 250                         /* 250ms */
+#define PROGRESS_LINE_INTERVAL 1000                          /* 1s */
 
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
@@ -116,7 +117,8 @@ static struct config {
     _Atomic int requests_issued;
     _Atomic int requests_finished;
     _Atomic int previous_requests_finished;
-    int last_printed_bytes;
+    long long last_progress_tick; /* When the last progress line was printed */
+    int last_progress_requests;   /* requests_finished at that time */
     long long previous_tick;
     int keysize;
     int datasize;
@@ -300,7 +302,18 @@ static long long nstime(void) {
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
+/* Set by the SIGINT handler: stop the current test as if it had completed so
+ * the report for the samples collected so far is still printed. */
+static volatile sig_atomic_t interrupted = 0;
+
+static void sigintHandler(int sig) {
+    UNUSED(sig);
+    interrupted = 1;
+}
+
 static bool isBenchmarkFinished(int request_count) {
+    if (interrupted) return true;
+
     /* don't end in warmup period */
     int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
     if (warmup_duration > 0) return false;
@@ -1259,8 +1272,8 @@ static void showReport(void) {
     const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
 
     if (!config.quiet && !config.csv) {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
         printf("====== %s ======\n", config.title);
+        if (interrupted) printf("  interrupted by user (Ctrl+C), partial results\n");
         printf("  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
         printf("  %d parallel clients\n", config.numclients);
         printf("  %d bytes payload\n", config.datasize);
@@ -1338,7 +1351,6 @@ static void showReport(void) {
         printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
                p0, p50, p95, p99, p100);
     } else {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
         printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
     }
 }
@@ -1381,7 +1393,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     config.requests_issued = 0;
     config.requests_finished = 0;
     config.previous_requests_finished = 0;
-    config.last_printed_bytes = 0;
+    config.last_progress_requests = 0;
     config.current_warmup_duration = config.warmup_duration;
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
@@ -1413,6 +1425,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     createMissingClients(c);
 
     config.start = mstime();
+    config.last_progress_tick = config.start;
     if (!config.num_threads) {
         aeMain(config.el);
     } else
@@ -1424,6 +1437,8 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
     if (config.rps_histogram) hdr_close(config.rps_histogram);
+    /* Don't run the remaining tests (or the next --loop iteration). */
+    if (interrupted) exit(128 + SIGINT);
 }
 
 /* Benchmark a single RESP-encoded command of length len. */
@@ -2255,6 +2270,8 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
             atomic_store_explicit(&config.current_warmup_duration, 0, memory_order_relaxed);
 
             config.start = current_tick;
+            config.last_progress_tick = current_tick;
+            config.last_progress_requests = 0;
             atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
             atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
             atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
@@ -2286,6 +2303,22 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         fflush(stdout);
         return SHOW_THROUGHPUT_INTERVAL;
     }
+    const float dt = (float)(current_tick - config.start) / 1000.0;
+    const float instantaneous_dt = (float)(current_tick - config.previous_tick) / 1000.0;
+    const float instantaneous_rps = (float)(requests_finished - previous_requests_finished) / instantaneous_dt;
+
+    if (config.rps_histogram) {
+        hdr_record_value(config.rps_histogram, (int64_t)instantaneous_rps);
+    }
+
+    config.previous_tick = current_tick;
+    atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
+
+    /* Print one progress line per PROGRESS_LINE_INTERVAL, each on its own
+     * line so long runs keep a history of the throughput and latency. */
+    if (config.quiet || current_tick - config.last_progress_tick < PROGRESS_LINE_INTERVAL) {
+        return SHOW_THROUGHPUT_INTERVAL;
+    }
     if (config.num_threads) {
         /* Use thread-0's own histograms for the live display line. This is
          * race-free (showThroughput runs on thread-0's event loop, same thread
@@ -2298,32 +2331,30 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         hdr_add(config.current_sec_latency_histogram, t0->current_sec_latency_histogram);
         hdr_reset(t0->current_sec_latency_histogram);
     }
-    const float dt = (float)(current_tick - config.start) / 1000.0;
     const float rps = (float)requests_finished / dt;
-    const float instantaneous_dt = (float)(current_tick - config.previous_tick) / 1000.0;
-    const float instantaneous_rps = (float)(requests_finished - previous_requests_finished) / instantaneous_dt;
+    const float interval_dt = (float)(current_tick - config.last_progress_tick) / 1000.0;
+    const float interval_rps = (float)(requests_finished - config.last_progress_requests) / interval_dt;
 
-    if (config.rps_histogram) {
-        hdr_record_value(config.rps_histogram, (int64_t)instantaneous_rps);
-    }
-
-    config.previous_tick = current_tick;
-    atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
-
-    printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
-    config.last_printed_bytes = 0;
+    /* Progress of the current phase: warmup and -t/--duration runs are
+     * time-based, otherwise it is the share of -n requests completed. */
+    double progress;
     if (warmup_duration > 0) {
-        config.last_printed_bytes += printf("Warming up ");
-    }
-    config.last_printed_bytes +=
-        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
-               hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
-    if (warmup_duration > 0 || config.duration > 0) {
-        config.last_printed_bytes += printf(" %.1f seconds\r", dt);
+        progress = dt * 100.0 / warmup_duration;
+    } else if (config.duration > 0) {
+        progress = dt * 100.0 / config.duration;
     } else {
-        config.last_printed_bytes += printf(" %d requests\r", requests_finished);
+        progress = config.requests > 0 ? (double)requests_finished * 100.0 / config.requests : 0;
     }
+    if (progress > 100) progress = 100;
 
+    printf("%s%s: [%3d%%, %.1f secs] %d threads %d clients: %d requests, rps=%.1f (overall: %.1f) avg_msec=%.3f "
+           "(overall: %.3f)\n",
+           warmup_duration > 0 ? "Warming up " : "", config.title, (int)progress, dt,
+           config.num_threads ? config.num_threads : 1, config.numclients, requests_finished, interval_rps, rps,
+           hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
+
+    config.last_progress_tick = current_tick;
+    config.last_progress_requests = requests_finished;
     hdr_reset(config.current_sec_latency_histogram);
     fflush(stdout);
     return SHOW_THROUGHPUT_INTERVAL;
@@ -2703,6 +2734,15 @@ int main(int argc, char **argv) {
             config.fuzz_log_level,
             config.fuzz_flags);
     }
+
+    /* On Ctrl+C, stop the running test and print its report. SA_RESETHAND
+     * restores the default action, so a second Ctrl+C terminates immediately. */
+    struct sigaction act;
+    memset(&act, 0, sizeof(act));
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = SA_RESETHAND;
+    act.sa_handler = sigintHandler;
+    sigaction(SIGINT, &act, NULL);
 
     /* Run benchmark with the command sequence already parsed above. */
     if (argc && cmd_seq) {

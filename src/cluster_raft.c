@@ -189,7 +189,6 @@ typedef struct {
 
     /* Deferred work for beforeSleep. */
     unsigned int todo_update_slot_coverage : 1;
-    unsigned int todo_invalidate_slots_cache : 1;
     unsigned int todo_connect_nodes : 1;
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
@@ -1481,7 +1480,7 @@ static void raftLogApply(raftLogEntry *e) {
 
                 clusterRaftProcessDeferredMeets();
             }
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
             rs->todo_connect_nodes = 1;
             serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s addr=%s mode=%s (voters=%d).",
                       argv[0], argc >= 2 ? argv[1] : "?", learner ? "learner" : "voter", server.cluster->size);
@@ -1558,7 +1557,7 @@ static void raftLogApply(raftLogEntry *e) {
         entry_result = clusterRaftApplySlotChange(e->data, 0);
         if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "%s SLOT_CHANGE (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -1567,7 +1566,7 @@ static void raftLogApply(raftLogEntry *e) {
     case RAFT_ENTRY_SET_REPLICA_OF: {
         entry_result = clusterRaftApplySetReplica(e->data, 0);
         if (entry_result == RAFT_RESULT_OK) {
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "%s SET_REPLICA_OF (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -1577,7 +1576,7 @@ static void raftLogApply(raftLogEntry *e) {
         entry_result = clusterRaftApplyFailover(e->data, 0);
         if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "%s FAILOVER (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -1607,7 +1606,7 @@ static void raftLogApply(raftLogEntry *e) {
             node->flags |= CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "Applied NODE_FAIL %.40s (index %llu).",
                   e->data, (unsigned long long)e->index);
@@ -1628,7 +1627,7 @@ static void raftLogApply(raftLogEntry *e) {
             node->flags &= ~CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
             /* Cancel deferred failover if the recovered node is my primary. */
             if (nodeIsReplica(myself) && myself->replicaof == node) {
                 rs->todo_schedule_failover = 0;
@@ -2193,7 +2192,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
-    rs->todo_invalidate_slots_cache = 1;
+    clearCachedClusterSlotsResponse();
     /* If our primary is failed, schedule a failover, as applying its
      * NODE_FAIL would have done. */
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
@@ -2969,11 +2968,6 @@ static void clusterRaftBeforeSleep(bool blocked) {
     if (rs->todo_update_slot_coverage) {
         rs->todo_update_slot_coverage = 0;
         clusterRaftCheckSlotCoverage();
-    }
-
-    if (rs->todo_invalidate_slots_cache) {
-        rs->todo_invalidate_slots_cache = 0;
-        clearCachedClusterSlotsResponse();
     }
 
     if (rs->todo_schedule_failover) {
@@ -3786,7 +3780,7 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
             }
         }
         rs->todo_update_slot_coverage = 1;
-        rs->todo_invalidate_slots_cache = 1;
+        clearCachedClusterSlotsResponse();
         if (callback) callback(ctx, NULL);
         zfree(filtered);
         return;
@@ -4202,7 +4196,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     clusterDelNode(node);
     if (was_voter && server.cluster->size > 0) server.cluster->size--;
     rs->todo_update_slot_coverage = 1;
-    rs->todo_invalidate_slots_cache = 1;
+    clearCachedClusterSlotsResponse();
     rs->todo_save_config = 1;
 
     /* Bump shard epoch after successful delete. */

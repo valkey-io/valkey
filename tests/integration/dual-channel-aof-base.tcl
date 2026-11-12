@@ -48,8 +48,7 @@ start_server {tags {"dual-channel-replication repl external:skip"}} {
             }
             assert_equal 1200 [$replica dbsize]
             assert_equal [$primary debug digest] [$replica debug digest]
-            set reused [llength [lsearch -all [split [exec tail -n +$loglines < [srv 0 stdout]] "\n"] "*Reused RDB file from primary sync as AOF base file*"]]
-            puts "aof-use-rdb-preamble $preamble: RDB reused as AOF base: $reused"
+            assert_equal 0 [count_message_lines [srv 0 stdout] "Reused RDB file from primary sync as AOF base file"]
 
             # Reload the dataset from the AOF alone.
             set digest [$replica debug digest]

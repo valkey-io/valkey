@@ -1027,7 +1027,7 @@ static void fillBucketHole(hashtable *ht, bucket *b, int pos_in_bucket, int tabl
 }
 
 /* When entries are deleted while rehashing is paused, they leave empty holes in
- * the buckets. This functions attempts to fill the holes by moving entries from
+ * the buckets. This function attempts to fill the holes by moving entries from
  * the end of the bucket chain to fill the holes and free any empty buckets in
  * the end of the chain. */
 static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_index) {
@@ -2351,15 +2351,17 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
+            if (iter->hashtable->tables[0] == NULL) {
+                /* Empty hashtable. We're done. Check this before pausing,
+                 * since cleanup never resumes an iterator that is still in
+                 * its initial position. */
+                break;
+            }
             if (isSafe(iter)) {
                 hashtablePauseRehashing(iter->hashtable);
                 iter->last_seen_size = iter->hashtable->used[iter->table];
             } else {
                 iter->fingerprint = hashtableFingerprint(iter->hashtable);
-            }
-            if (iter->hashtable->tables[0] == NULL) {
-                /* Empty hashtable. We're done. */
-                break;
             }
             iter->index = 0;
             /* Skip already rehashed buckets. */
@@ -2435,6 +2437,20 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
 
 /* --- Random entries --- */
 
+/* Rehashes after sampling that called hashtableScan 'scans' times. While
+ * shrinking, each scan call visits 2^(exp0 - exp1) buckets of the old table, so
+ * one rehash step per sample makes repeated sampling quadratic in the old table
+ * size. Each step rehashes at least one old bucket, so take one step per old
+ * bucket the scans visited. */
+static void rehashStepOnSampleIfNeeded(hashtable *ht, size_t scans) {
+    size_t steps = 1;
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < ht->bucket_exp[0]) {
+        steps = scans * numBuckets(ht->bucket_exp[0] - ht->bucket_exp[1]);
+    }
+    if (ht->pause_rehash || resize_policy != HASHTABLE_RESIZE_ALLOW) return;
+    while (steps-- && hashtableIsRehashing(ht)) rehashStepOnReadIfNeeded(ht);
+}
+
 /* Scan independent random buckets and collect entries using reservoir sampling.
  * Unlike hashtableSampleEntries which scans contiguous buckets for unique
  * results, this picks a new random bucket each time for fair sampling at the
@@ -2445,10 +2461,12 @@ static unsigned sampleRandomBuckets(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
+    size_t scans = 0;
     while (samples.seen < count) {
         hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        scans++;
     }
-    rehashStepOnReadIfNeeded(ht);
+    rehashStepOnSampleIfNeeded(ht, scans);
     return samples.seen <= count ? samples.seen : count;
 }
 
@@ -2492,10 +2510,12 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.seen = 0;
     samples.entries = dst;
     size_t cursor = randomSizeT();
+    size_t scans = 0;
     while (samples.seen < count) {
         cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
+        scans++;
     }
-    rehashStepOnReadIfNeeded(ht);
+    rehashStepOnSampleIfNeeded(ht, scans);
     /* samples.seen is the number of entries scanned. It may be greater than
      * the requested count and the size of the dst array. */
     return samples.seen <= count ? samples.seen : count;

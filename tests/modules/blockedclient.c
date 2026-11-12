@@ -13,10 +13,10 @@
 #define UNUSED(V) ((void) V)
 
 /* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
+extern int moduleCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 extern int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle);
 extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
+#define ValkeyModule_CallArgv moduleCallArgv
 #define ValkeyModule_CallArgvAbort VM_CallArgvAbort
 #define ValkeyModule_ReplyRaw VM_ReplyRaw
 
@@ -101,6 +101,41 @@ int acquire_gil(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     assert(res == 0);
 
     return VALKEYMODULE_OK;
+}
+
+/* Misuses the API: the postponed length is never set. The thread safe context
+ * is kept until postponed_unmatched_free, after the client was unblocked. */
+static ValkeyModuleCtx *postponed_unmatched_ctx = NULL;
+
+void *postponed_unmatched_worker(void *arg) {
+    ValkeyModuleBlockedClient *bc = arg;
+    postponed_unmatched_ctx = ValkeyModule_GetThreadSafeContext(bc);
+    ValkeyModule_ReplyWithArray(postponed_unmatched_ctx, VALKEYMODULE_POSTPONED_LEN);
+    ValkeyModule_UnblockClient(bc, NULL);
+    return NULL;
+}
+
+int postponed_unmatched_thread(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
+
+    pthread_t tid;
+    int res = pthread_create(&tid, NULL, postponed_unmatched_worker, bc);
+    assert(res == 0);
+    pthread_detach(tid);
+
+    return VALKEYMODULE_OK;
+}
+
+int postponed_unmatched_free(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    ValkeyModule_FreeThreadSafeContext(postponed_unmatched_ctx);
+    postponed_unmatched_ctx = NULL;
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 typedef struct {
@@ -903,6 +938,7 @@ int do_fake_bg_true(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argc);
 
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
+    if (!bc) return ValkeyModule_ReplyWithError(ctx, "block failed");
     ValkeyModuleCtx *bctx = ValkeyModule_GetThreadSafeContext(bc);
 
     ValkeyModule_ReplyWithBool(bctx, 1);
@@ -1127,6 +1163,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "unblock_by_timer", unblock_by_timer, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "postponed_unmatched_thread", postponed_unmatched_thread, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "postponed_unmatched_free", postponed_unmatched_free, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

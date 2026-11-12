@@ -173,7 +173,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
 
     test "Kill a cluster node and wait for fail state (with ASM $use_atomic_slot_migration)" {
         # kill node3 in cluster
-        pause_process $node3_pid
+        pause_process_persistent $node3_pid
 
         wait_for_condition 1000 50 {
             [CI 0 cluster_state] eq {fail} &&

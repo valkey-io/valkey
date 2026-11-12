@@ -1138,6 +1138,10 @@ start_server {tags {"repl"} overrides {save ""}} {
 
         start_server {overrides {save "" repl-compression lz4 dual-channel-replication-enabled yes}} {
             set replica [srv 0 client]
+            # Hold the RDB load open until the in-load assertions below.
+            # Process events often enough to answer INFO and CONFIG SET.
+            $replica config set key-load-delay 10000
+            $replica config set loading-process-events-interval-bytes 1024
             $replica replicaof $primary_host $primary_port
 
             # rdb-key-save-delay stretches the RDB stage; catch the sync window.
@@ -1160,8 +1164,9 @@ start_server {tags {"repl"} overrides {save ""}} {
             $primary set during_load:large $during_load_payload
             assert_equal 1 [s 0 master_sync_in_progress]
             assert_match {*state=bg_transfer*repl_compression=lz4*} [$primary info replication]
+            $replica config set key-load-delay 0
 
-            wait_for_condition 100 100 {
+            wait_for_condition 200 100 {
                 [s 0 master_link_status] eq {up}
             } else {
                 fail "Replication not up after dual-channel sync"
@@ -1222,7 +1227,7 @@ start_server {tags {"repl"} overrides {save ""}} {
                 set payload [string repeat x [expr {2 * 1024 * 1024}]]
                 $primary set zstd-during-load $payload
 
-                wait_for_condition 100 100 {
+                wait_for_condition 200 100 {
                     [s 0 master_link_status] eq {up} &&
                     [$replica get zstd-during-load] eq $payload
                 } else {
@@ -1266,6 +1271,10 @@ start_server {tags {"repl"} overrides {save ""}} {
 
             start_server [list overrides [list save "" repl-compression $replica_mode dual-channel-replication-enabled yes]] {
                 set replica [srv 0 client]
+                # Hold the RDB load open until the in-load assertions below.
+                # Process events often enough to answer INFO and CONFIG SET.
+                $replica config set key-load-delay 10000
+                $replica config set loading-process-events-interval-bytes 1024
                 $replica replicaof $primary_host $primary_port
 
                 wait_for_condition 500 10 {
@@ -1288,8 +1297,9 @@ start_server {tags {"repl"} overrides {save ""}} {
                 assert_match {*state=bg_transfer*} [$primary info replication]
                 assert_equal $initial_compressed \
                     [regexp -all {repl_compression=(lz4|zstd)} [$primary info replication]]
+                $replica config set key-load-delay 0
 
-                wait_for_condition 100 100 {
+                wait_for_condition 200 100 {
                     [status $primary sync_partial_ok] == $partial_before + 1 &&
                     [s 0 master_link_status] eq {up} &&
                     [regexp -all {repl_compression=(lz4|zstd)} [$primary info replication]] == $final_compressed

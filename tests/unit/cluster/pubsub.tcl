@@ -60,11 +60,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
     }
 }
 
-# A packet is lost if its link is reset before it is fully sent, and the sender
-# resets a link whose PING, queued behind the packet, is not answered within the
-# node timeout. Use a timeout that a slow machine does not reach while the 20MB
-# packet is in flight.
-start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 30000}} {
+start_cluster 2 0 {tags {external:skip cluster}} {
     test "PUBLISH larger than the cluster bus packet cap reaches other nodes" {
         set rd [valkey_deferring_client -1]
         subscribe $rd {bigchannel}

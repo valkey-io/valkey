@@ -4188,9 +4188,6 @@ start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
         return $leaves
     }
 
-# libc malloc can return a different usable size for the same request, and
-# the sampled MEMORY USAGE estimate multiplies that by the member count.
-if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {ZSET btree leaf compaction pauses while a child process exists} {
         # 10 s per key: the child must outlive the removals below even on a
         # slow runner, and it is killed as soon as the check is done.
@@ -4241,5 +4238,4 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_lessthan [expr {abs($leaves1 - $leaves2)}] 8
         assert_lessthan $leaves1 [expr {$leaves - 32}]
     } {} {needs:debug needs:local-process}
-} ;# if jemalloc
 }

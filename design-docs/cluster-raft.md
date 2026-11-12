@@ -974,9 +974,6 @@ transfer targets.
 
 ## Future Work
 
-- Minority partition detection and leader step-down (prevents append
-  entries, especially don't trigger primary/replica failovers in a
-  minority partition).
 - Automatic learner promotion (promote the first 5 or 7 nodes to voters).
 - Chained learner replication.
 - Balancing voters over availability zones: the leader can use the
@@ -988,8 +985,10 @@ transfer targets.
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either
   atomically or not.
-- `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
-  some cases, which doesn't work with blocking admin commands).
+- Atomic slot migration (CLUSTER MIGRATESLOTS) with Raft. Most of its
+  tests are skipped with Raft. A likely cause of the failures is that the
+  source node learns about the new slot owner only when it applies the
+  slot change, which can be later than the migration expects.
 - Derive local side effects from state changes instead of from log
   entries. Applying an entry, installing a snapshot and loading
   nodes.conf at startup must all lead to the same local state, such as

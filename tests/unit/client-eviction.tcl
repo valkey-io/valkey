@@ -675,7 +675,9 @@ start_server {} {
         $rdB client setname blpop_b
         $rdB flush
         assert_equal OK [$rdB read]
-        while {[client_field blpop_b tot-mem] < 2000000} {
+        # Fill well past the size asserted below: the kernel can still take in
+        # more of the unread replies after the last sample, which shrinks tot-mem.
+        while {[client_field blpop_b tot-mem] < [mb 10]} {
             $rdB get fat
             $rdB flush
         }

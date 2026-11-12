@@ -102,8 +102,10 @@ start_cluster 3 1 {tags {external:skip cluster}} {
     test "Primary lost a slot during the manual failover pausing" {
         R 0 set FOO 0
 
-        # Set primaries to drop the FAILOVER_AUTH_REQUEST packets, so that
-        # primary 0 will pause until the failover times out.
+        # Set all primaries to drop the FAILOVER_AUTH_REQUEST packets, so that
+        # the replica gets no votes and primary 0 will pause until the failover
+        # times out.
+        R 0 debug drop-cluster-packet-filter 5
         R 1 debug drop-cluster-packet-filter 5
         R 2 debug drop-cluster-packet-filter 5
 
@@ -120,6 +122,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         # Make sure primary doesn't crash when deleting the keys.
         R 0 ping
 
+        R 0 debug drop-cluster-packet-filter -1
         R 1 debug drop-cluster-packet-filter -1
         R 2 debug drop-cluster-packet-filter -1
     }

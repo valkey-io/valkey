@@ -415,6 +415,10 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         # isn't served from a cache populated before the install.
         assert_equal fail [CI 0 cluster_state]
         assert_equal {} [R 0 CLUSTER SLOTS]
+        # The node's own address and nofailover come from its config, not
+        # from the snapshot.
+        R 0 CONFIG SET cluster-announce-hostname mynode.example.com
+        R 0 CONFIG SET cluster-replica-no-failover yes
         set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
         append snapshot "\n$leader_id $leader_addr,client-ipv4=10.0.0.1 master - 0 0 1 connected 1-16383"
         append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0"
@@ -431,6 +435,9 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
             fail "cluster state not updated after the install"
         }
         assert_equal 2 [llength [R 0 CLUSTER SLOTS]]
+        set myself_line [raft_cluster_nodes_line [srv 0 client] $node_id]
+        assert_match "*,mynode.example.com *" $myself_line
+        assert_match "*nofailover*" [lindex $myself_line 2]
 
         assert_match "*10.0.0.1*" [R 0 CLUSTER SLOTS]
 

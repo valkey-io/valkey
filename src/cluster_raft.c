@@ -2096,6 +2096,12 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         dictReleaseIterator(di);
     }
 
+    /* Our own address and nofailover come from our local config, and
+     * applying NODE_INFO skips myself for the same reason. Remember the
+     * address, without the shard id, which the snapshot decides, so it can
+     * be restored after loading our node line. */
+    sds my_addr = clusterNodeAppendAddressStringNoShardId(sdsempty(), myself, server.tls_cluster);
+
     /* Load the validated node lines — updates existing nodes, creates new
      * ones. Only an invalid address can still fail here, and the state is
      * already partly replaced. */
@@ -2109,6 +2115,13 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         }
         sdsfreesplitres(largv, largc);
     }
+    clusterRaftClearOptionalNodeInfo(myself);
+    if (clusterNodeParseAddressString(myself, my_addr) == C_ERR) {
+        serverPanic("INSTALL_SNAPSHOT: failed to restore our address: %s", my_addr);
+    }
+    sdsfree(my_addr);
+    myself->flags &= ~(CLUSTER_NODE_NOFAILOVER | CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL);
+    if (server.cluster_replica_no_failover) myself->flags |= CLUSTER_NODE_NOFAILOVER;
 
     /* Do what applying the skipped slot changes would have done locally. The
      * old owners are still valid, since nodes are only deleted below. */

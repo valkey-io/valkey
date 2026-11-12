@@ -34,7 +34,8 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
         test {benchmark: set,get} {
             set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get"]
-            common_bench_setup $cmd
+            set output [common_bench_setup $cmd]
+            assert_match {*avg*min*p50*p95*p99*p99.9*max*} $output
             default_set_get_checks
         }
 

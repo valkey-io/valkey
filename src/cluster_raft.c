@@ -2964,7 +2964,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
             int rank = 0;
             for (int r = 0; r < clusterNodeNumReplicas(myself->replicaof); r++) {
                 clusterNode *sibling = clusterNodeGetReplica(myself->replicaof, r);
-                if (sibling == myself) continue;
+                if (sibling == myself || nodeCantFailover(sibling)) continue;
                 if (sibling->repl_offset > my_offset) rank++;
             }
             rs->failover_time = monotonicMs() + rank * 1000;

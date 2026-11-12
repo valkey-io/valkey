@@ -30,6 +30,15 @@ start_server {tags {"introspection"}} {
         assert {[r object idletime foo] >= 2}
     }
 
+    test {OBJECT introspection commands return null for missing keys} {
+        set rd [valkey_client]
+        test_defer [list $rd close]
+        $rd readraw 1
+        set null_reply [expr {$::force_resp3 ? {_} : {$-1}}]
+        assert_equal $null_reply [$rd object idletime missing]
+        assert_equal $null_reply [$rd object refcount missing]
+    }
+
     proc test_touch_alters_access_time {} {
         r set foo bar
         r set script_foo bar

@@ -1383,7 +1383,7 @@ unsigned long fbtreeHeight(const fbtreeIndex *fbt) {
     return height;
 }
 
-unsigned long fbtreeNumLeaves(fbtreeIndex *fbt) {
+unsigned long fbtreeNumLeaves(const fbtreeIndex *fbt) {
     return fbt->num_leaves;
 }
 

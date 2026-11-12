@@ -756,6 +756,11 @@ void debugCommand(client *c) {
                 nextra += used;
                 remaining -= used;
             }
+        } else if (val->encoding == OBJ_ENCODING_BTREE) {
+            /* Leaf count of the B+tree index, read by tests that check leaf
+             * compaction. */
+            zset *zs = objectGetVal(val);
+            snprintf(extra, sizeof(extra), " btree_leaves:%lu", orderedIndexGetNumLeaves(zs->oi));
         }
 
         sds s = sdsempty();

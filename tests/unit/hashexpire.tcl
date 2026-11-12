@@ -5715,4 +5715,25 @@ start_server {tags {"hashexpire aof external:skip"} overrides {appendonly yes ap
         restart_server 0 true false
         assert_equal v [r HGET nx f]
     }
+
+    test {HINCRBY and HINCRBYFLOAT rewrites retain renamed HSETEX in AOF} {
+        assert_equal 1 [r MYHSETEX h EX 3600 FIELDS 1 integer 1]
+        assert_equal 2 [r HINCRBY h integer 1]
+        assert_equal 1 [r MYHSETEX h EX 3600 FIELDS 1 float 1]
+        assert_equal 2 [r HINCRBYFLOAT h float 1]
+        restart_server 0 true false
+        assert_equal 2 [r HGET h integer]
+        assert_equal 2 [r HGET h float]
+    }
+}
+
+start_server {tags {"hashexpire aof external:skip"} overrides {appendonly yes appendfsync always rename-command {HSET MYHSET}}} {
+    test {HINCRBY and HINCRBYFLOAT rewrites retain renamed HSET in AOF} {
+        assert_equal 1 [r HSETEX h EX 3600 FIELDS 1 volatile 1]
+        assert_equal 1 [r HINCRBY h integer 1]
+        assert_equal 1 [r HINCRBYFLOAT h float 1]
+        restart_server 0 true false
+        assert_equal 1 [r HGET h integer]
+        assert_equal 1 [r HGET h float]
+    }
 }

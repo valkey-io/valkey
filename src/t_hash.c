@@ -1229,6 +1229,14 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
  * Hash type commands
  *----------------------------------------------------------------------------*/
 
+/* Use the configured name of a different command when rewriting HINCRBY or
+ * HINCRBYFLOAT, so the AOF can replay it after that command is renamed. */
+static robj *hashTypeRewrittenCommandName(robj *original_name) {
+    struct serverCommand *cmd = lookupCommandBySdsLogic(server.orig_commands, objectGetVal(original_name));
+    serverAssert(cmd != NULL);
+    return createStringObject(cmd->current_name, sdslen(cmd->current_name));
+}
+
 void hincrbyCommand(client *c) {
     long long value, incr, oldvalue;
     robj *o;
@@ -1282,14 +1290,16 @@ void hincrbyCommand(client *c) {
         int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
         robj *newobj = createRawStringObject(buf, len);
         if (expiry == EXPIRY_NONE) {
-            rewriteClientCommandArgument(c, 0, shared.hset);
+            robj *command_name = hashTypeRewrittenCommandName(shared.hset);
+            rewriteClientCommandArgument(c, 0, command_name);
+            decrRefCount(command_name);
             rewriteClientCommandArgument(c, 3, newobj);
             decrRefCount(newobj);
         } else {
             int new_argc = 8; /* HSETEX(1) + key(2) + PXAT(3) + unix-time-milliseconds(4) + FIELDS(5) + numfields(6) + field(7) + value(8) */
             robj **new_argv = zmalloc(sizeof(robj *) * (8));
             robj *milliseconds_obj = createStringObjectFromLongLong(expiry);
-            new_argv[0] = shared.hsetex;
+            new_argv[0] = hashTypeRewrittenCommandName(shared.hsetex);
             new_argv[1] = c->argv[1];
             incrRefCount(c->argv[1]);
             new_argv[2] = shared.pxat;
@@ -1365,14 +1375,16 @@ void hincrbyfloatCommand(client *c) {
     robj *newobj;
     newobj = createRawStringObject(buf, len);
     if (expiry == EXPIRY_NONE) {
-        rewriteClientCommandArgument(c, 0, shared.hset);
+        robj *command_name = hashTypeRewrittenCommandName(shared.hset);
+        rewriteClientCommandArgument(c, 0, command_name);
+        decrRefCount(command_name);
         rewriteClientCommandArgument(c, 3, newobj);
         decrRefCount(newobj);
     } else {
         int new_argc = 8; /* HSETEX(1) + key(2) + PXAT(3) + unix-time-milliseconds(4) + FIELDS(5) + numfields(6) + field(7) + value(8) */
         robj **new_argv = zmalloc(sizeof(robj *) * (8));
         robj *milliseconds_obj = createStringObjectFromLongLong(expiry);
-        new_argv[0] = shared.hsetex;
+        new_argv[0] = hashTypeRewrittenCommandName(shared.hsetex);
         new_argv[1] = c->argv[1];
         incrRefCount(c->argv[1]);
         new_argv[2] = shared.pxat;

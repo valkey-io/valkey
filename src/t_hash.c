@@ -1866,7 +1866,7 @@ void hsetexCommand(client *c) {
 
     /* Prepare a new argv when rewriting the command. If set_expired is true,
      * all expired fields will be deleted. Otherwise, if rewriting is needed due to NX/XX/FNX/FXX flags,
-     * copy the command, key, and optional arguments, skipping the NX/XX/FNX/FXX flags. */
+     * copy the key and optional arguments, skipping the NX/XX/FNX/FXX flags. */
     if (set_expired) {
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
         new_argv[new_argc++] = shared.hdel;
@@ -1875,8 +1875,12 @@ void hsetexCommand(client *c) {
     } else if (need_rewrite_argv) {
         /* We use new_argv for rewrite */
         new_argv = zmalloc(sizeof(robj *) * c->argc);
+        /* Keep the key even when it is named like a flag. */
+        new_argv[new_argc++] = shared.hsetex;
+        new_argv[new_argc++] = c->argv[1];
+        incrRefCount(c->argv[1]);
         // Copy optional args (skip NX/XX/FNX/FXX)
-        for (int i = 0; i < fields_index; i++) {
+        for (int i = 2; i < fields_index; i++) {
             if (strcasecmp(objectGetVal(c->argv[i]), "NX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "XX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "FNX") &&
@@ -1884,8 +1888,8 @@ void hsetexCommand(client *c) {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
                  * EX/PX/EXAT flag. EX/PX/EXAT may be repeated and only the last one
                  * applies, so drop the earlier ones, which are a syntax error next to
-                 * PXAT. i > 1 skips the key, which may itself be named EX. */
-                if (expire && !(flags & ARGS_PXAT) && i > 1 &&
+                 * PXAT. The loop starts after the key. */
+                if (expire && !(flags & ARGS_PXAT) &&
                     (!strcasecmp(objectGetVal(c->argv[i]), "EX") ||
                      !strcasecmp(objectGetVal(c->argv[i]), "PX") ||
                      !strcasecmp(objectGetVal(c->argv[i]), "EXAT"))) {

@@ -27,11 +27,17 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "entry.h"
+#include "expire.h"
+#include "listpack.h"
+#include "sds.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
+#include "util.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -601,7 +607,7 @@ int persistAofManifest(aofManifest *am) {
     return ret;
 }
 
-/* Called in `loadAppendOnlyFiles` when we upgrade from a old version of the server.
+/* Called in `loadAppendOnlyFiles` when we upgrade from an old version of the server.
  *
  * 1) Create AOF directory use 'server.aof_dirname' as the name.
  * 2) Use 'server.aof_filename' to construct a BASE type aofInfo and add it to
@@ -964,7 +970,7 @@ int startAppendOnly(void) {
     serverAssert(server.aof_state == AOF_OFF);
 
     server.aof_state = AOF_WAIT_REWRITE;
-    if (hasActiveChildProcess() && server.child_type != CHILD_TYPE_AOF) {
+    if (hasActiveSaveOrChild() && server.child_type != CHILD_TYPE_AOF) {
         server.aof_rewrite_scheduled = 1;
         serverLog(LL_NOTICE, "AOF was enabled but there is already another background operation. An AOF background was "
                              "scheduled to start when possible.");
@@ -1227,7 +1233,7 @@ void flushAppendOnlyFile(int force) {
                  * than two seconds this is still ok. Postpone again. */
                 return;
             }
-            /* Otherwise fall through, and go write since we can't wait
+            /* Otherwise, fall through, and go write since we can't wait
              * over two seconds. */
             server.aof_delayed_fsync++;
             serverLog(LL_NOTICE, "Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer "
@@ -1393,8 +1399,8 @@ try_fsync:
 
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     char buf[32];
+    char llstr[LONG_STR_SIZE];
     int len, j;
-    robj *o;
 
     buf[0] = '*';
     len = 1 + ll2string(buf + 1, sizeof(buf) - 1, argc);
@@ -1403,15 +1409,23 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     dst = sdscatlen(dst, buf, len);
 
     for (j = 0; j < argc; j++) {
-        o = getDecodedObject(argv[j]);
+        robj *o = argv[j];
+        char *p;
+        size_t plen;
+        if (sdsEncodedObject(o)) {
+            p = objectGetVal(o);
+            plen = sdslen(objectGetVal(o));
+        } else {
+            p = llstr;
+            plen = ll2string(llstr, sizeof(llstr), (long)objectGetVal(o));
+        }
         buf[0] = '$';
-        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(objectGetVal(o)));
+        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, plen);
         buf[len++] = '\r';
         buf[len++] = '\n';
         dst = sdscatlen(dst, buf, len);
-        dst = sdscatlen(dst, objectGetVal(o), sdslen(objectGetVal(o)));
+        dst = sdscatlen(dst, p, plen);
         dst = sdscatlen(dst, "\r\n", 2);
-        decrRefCount(o);
     }
     return dst;
 }
@@ -1442,17 +1456,26 @@ sds genAofTimestampAnnotationIfNeeded(int force) {
  *          to avoid writing `select` command in any case.
  * argv   - The command to write to the aof.
  * argc   - Number of values in argv
+ *
+ * If AOF is not actively writing (i.e. not AOF_ON, and not in an active
+ * rewrite), this function returns immediately without side effects.
  */
 void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
-    sds buf = sdsempty();
-
     serverAssert(dictid == -1 || (dictid >= 0 && dictid < server.dbnum));
+
+    /* The caller (propagateNow) only checks AOF_OFF. We additionally skip
+     * AOF_WAIT_REWRITE without an active rewrite child, since aof_buf
+     * data has nowhere to be merged from in that transient state. */
+    if (!(server.aof_state == AOF_ON ||
+          (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF))) {
+        return;
+    }
 
     /* Feed timestamp if needed */
     if (server.aof_timestamp_enabled) {
         sds ts = genAofTimestampAnnotationIfNeeded(0);
         if (ts != NULL) {
-            buf = sdscatsds(buf, ts);
+            server.aof_buf = sdscatsds(server.aof_buf, ts);
             sdsfree(ts);
         }
     }
@@ -1463,22 +1486,14 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
         char seldb[64];
 
         snprintf(seldb, sizeof(seldb), "%d", dictid);
-        buf = sdscatprintf(buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
+        server.aof_buf =
+            sdscatprintf(server.aof_buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
         server.aof_selected_db = dictid;
     }
 
     /* All commands should be propagated the same way in AOF as in replication.
      * No need for AOF-specific translation. */
-    buf = catAppendOnlyGenericCommand(buf, argc, argv);
-
-    /* Append to the AOF buffer. This will be flushed on disk just before
-     * of re-entering the event loop, so before the client will get a
-     * positive reply about the operation performed. */
-    if (server.aof_state == AOF_ON || (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF)) {
-        server.aof_buf = sdscatlen(server.aof_buf, buf, sdslen(buf));
-    }
-
-    sdsfree(buf);
+    server.aof_buf = catAppendOnlyGenericCommand(server.aof_buf, argc, argv);
 }
 
 /* ----------------------------------------------------------------------------
@@ -1491,6 +1506,10 @@ struct client *createAOFClient(void) {
     struct client *c = createClient(NULL);
 
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
+
+    /* The AOF client is not subject to ACL checks because all commands present
+     * in the AOF file must be replayed. */
+    c->user = NULL;
 
     /*
      * The AOF client should never be blocked (unlike primary
@@ -1511,6 +1530,180 @@ struct client *createAOFClient(void) {
     initClientReplicationData(c);
     c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     return c;
+}
+
+/* Adapts fread to the read_fn signature used by parseRespCommandFromReader. */
+static size_t aofFileReader(void *ctx, void *buf, size_t len) {
+    return fread(buf, len, 1, (FILE *)ctx) == 1 ? len : 0;
+}
+
+/* Adapts fgets to the readline_fn signature used by parseRespCommandFromReader. */
+static char *aofFileReadLine(void *ctx, char *buf, int size) {
+    return fgets(buf, size, (FILE *)ctx);
+}
+
+/* Read a "<prefix><number>\r\n" line through readline_fn and parse the number
+ * into *out. Returns RESP_PARSE_OK, RESP_PARSE_EOF, or RESP_PARSE_FMTERR. */
+static respParseResult readRespNumberLine(char *(*readline_fn)(void *ctx, char *buf, int size),
+                                          void *ctx,
+                                          char prefix,
+                                          long *out) {
+    char buf[LONG_STR_SIZE + 3];
+
+    if (readline_fn(ctx, buf, sizeof(buf)) == NULL) return RESP_PARSE_EOF;
+    if (buf[0] != prefix) return RESP_PARSE_FMTERR;
+    char *newline = strchr(buf, '\n');
+    /* An over-long line is malformed and would desync the stream. */
+    if (!newline) return strlen(buf) == sizeof(buf) - 1 ? RESP_PARSE_FMTERR : RESP_PARSE_EOF;
+    if (newline[-1] != '\r') return RESP_PARSE_FMTERR;
+    if (!string2l(buf + 1, newline - buf - 2, out)) return RESP_PARSE_FMTERR;
+    return RESP_PARSE_OK;
+}
+
+/* Read one RESP command (*<argc>\r\n followed by argc $<len>\r\n<data>\r\n
+ * arguments) through read_fn into a freshly allocated argv. On RESP_PARSE_OK
+ * the caller owns argv and its objects.
+ *
+ * read_fn must read exactly len bytes into buf and return len on success or 0
+ * on failure. readline_fn reads the *<argc> and $<len> lines like fgets. ctx is
+ * passed back untouched so the source (rio, FILE, ...) is opaque to this parser.
+ *
+ * Returns RESP_PARSE_OK, RESP_PARSE_EOF if the bytes could not be read,
+ * RESP_PARSE_FMTERR if the input is malformed, or RESP_PARSE_OOM if it is too
+ * large to allocate. On error any partial allocation is freed and the outputs
+ * are left untouched. */
+respParseResult parseRespCommandFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len),
+                                           char *(*readline_fn)(void *ctx, char *buf, int size),
+                                           void *ctx,
+                                           int *argc_out,
+                                           robj ***argv_out) {
+    long argc;
+    int j;
+    respParseResult result = readRespNumberLine(readline_fn, ctx, '*', &argc);
+    if (result != RESP_PARSE_OK) return result;
+    if (argc < 1 || argc > INT_MAX || (size_t)argc > SIZE_MAX / sizeof(robj *)) return RESP_PARSE_FMTERR;
+
+    robj **argv = ztrymalloc(sizeof(robj *) * argc);
+    if (argv == NULL) return RESP_PARSE_OOM;
+    for (j = 0; j < argc; j++) {
+        long len;
+        result = readRespNumberLine(readline_fn, ctx, '$', &len);
+        if (result != RESP_PARSE_OK) goto err;
+        /* A negative len would become a huge size_t. */
+        if (len < 0) {
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+
+        sds argsds = sdstrynewlen(SDS_NOINIT, len);
+        if (argsds == NULL) {
+            result = RESP_PARSE_OOM;
+            goto err;
+        }
+        if (len && read_fn(ctx, argsds, len) == 0) {
+            sdsfree(argsds);
+            result = RESP_PARSE_EOF;
+            goto err;
+        }
+        argv[j] = createObject(OBJ_STRING, argsds);
+
+        /* Discard the trailing \r\n, validating it is exactly \r\n. */
+        char crlf[2];
+        if (read_fn(ctx, crlf, 2) == 0) {
+            j++; /* argv[j] was assigned above; free it too. */
+            result = RESP_PARSE_EOF;
+            goto err;
+        }
+        if (crlf[0] != '\r' || crlf[1] != '\n') {
+            j++; /* argv[j] was assigned above; free it too. */
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+    }
+
+    *argc_out = (int)argc;
+    *argv_out = argv;
+    return RESP_PARSE_OK;
+
+err:
+    for (int k = 0; k < j; k++) decrRefCount(argv[k]);
+    zfree(argv);
+    return result;
+}
+
+/* Run one command that has already been parsed into argv/argc, using a fake
+ * client. This is used when we replay commands while loading data. The fake
+ * client sends no reply and is never allowed to block.
+ *
+ * The fake client takes over argv. When this function returns, argv has
+ * already been freed (running the command can change argv, so we free the
+ * client's own argv, not the pointer that was passed in).
+ *
+ * Returns LOAD_CMD_OK if the command ran, or LOAD_CMD_MULTI_START if it ran and
+ * was a MULTI. Returns LOAD_CMD_ERR_UNKNOWN if the command name is not known, or
+ * LOAD_CMD_ERR if the number of arguments is wrong. In the error cases *err is
+ * set to a short message that the caller must free.
+ *
+ * With LOAD_CMD_SOURCE_INLINE_REPL the caller is replaying individual
+ * replicated commands, so MULTI/EXEC are skipped rather than queued into a
+ * transaction, and only commands a primary replicates are allowed. */
+loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, loadCommandSource source, sds *err) {
+    struct serverCommand *cmd;
+
+    fakeClient->argc = argc;
+    fakeClient->argv = argv;
+    fakeClient->argv_len = argc;
+
+    fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
+    if ((!cmd && !commandCheckExistence(fakeClient, err)) || (cmd && !commandCheckArity(cmd, argc, err))) {
+        /* An unknown command's error text can echo user data; an arity error
+         * cannot. Report them distinctly so the caller can redact. */
+        loadCommandResult res = (cmd == NULL) ? LOAD_CMD_ERR_UNKNOWN : LOAD_CMD_ERR;
+        freeClientArgv(fakeClient);
+        return res;
+    }
+
+    /* A caller replaying individual commands skips MULTI/EXEC framing so each
+     * command applies immediately instead of being queued into a transaction. */
+    if (source == LOAD_CMD_SOURCE_INLINE_REPL && (cmd->proc == multiCommand || cmd->proc == execCommand)) {
+        serverLog(LL_DEBUG, "Skipping %s command while replaying individual commands", cmd->fullname);
+        freeClientArgv(fakeClient);
+        return LOAD_CMD_OK;
+    }
+
+    /* Inline replication only runs commands a primary replicates. Otherwise a
+     * crafted RDB could run any command through the fake client, which bypasses
+     * ACL checks. */
+    if (source == LOAD_CMD_SOURCE_INLINE_REPL && !(cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
+        *err = sdscatfmt(sdsempty(), "command '%s' is not a replicable write", cmd->fullname);
+        freeClientArgv(fakeClient);
+        return LOAD_CMD_ERR;
+    }
+
+    /* Note whether this command is a MULTI before running it, so the caller
+     * replaying an AOF can track transaction boundaries. */
+    loadCommandResult res = (cmd->proc == multiCommand) ? LOAD_CMD_MULTI_START : LOAD_CMD_OK;
+
+    /* Run the command in the context of a fake client */
+    if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
+        /* Note: we don't have to attempt calling evalGetCommandFlags,
+         * since this is a replay, the checks in processCommand are not made
+         * anyway.*/
+        queueMultiCommand(fakeClient, cmd->flags);
+    } else {
+        cmd->proc(fakeClient);
+    }
+
+    /* The fake client should not have a reply */
+    serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
+
+    /* The fake client should never get blocked */
+    serverAssert(fakeClient->flag.blocked == 0);
+
+    /* Clean up. Command code may have changed argv/argc so we use the
+     * argv/argc of the client instead of the local variables. */
+    freeClientArgv(fakeClient);
+    return res;
 }
 
 /* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
@@ -1560,11 +1753,12 @@ int loadSingleAppendOnlyFile(char *filename) {
     fakeClient = createAOFClient();
     server.current_client = server.executing_client = fakeClient;
 
-    /* Check if the AOF file is in RDB format (it may be RDB encoded base AOF
-     * or old style RDB-preamble AOF). In that case we need to load the RDB file
-     * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
-    char sig[6]; /* "REDIS" or "VALKEY" */
-    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS0", 6) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
+    /* Check if the AOF starts with a plain or streaming-compressed RDB (it may
+     * be an RDB-encoded base AOF or old-style RDB-preamble AOF). In that case,
+     * load the RDB and then continue with any old-style AOF tail. */
+    char sig[6]; /* "REDIS0", "VALKEY", or the three-byte "VCS" prefix. */
+    size_t siglen = fread(sig, 1, sizeof(sig), fp);
+    if (!rdbHasFileSignature(sig, siglen)) {
         /* Not in RDB format, seek back at 0 offset. */
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {
@@ -1578,7 +1772,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != RDB_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL, aof_filepath) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1588,20 +1782,20 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
-            loadingAbsProgress(ftello(fp));
-            last_progress_report_size = ftello(fp);
+            /* rdbLoadRio() leaves fp at the first byte after the RDB, where an
+             * old-style AOF tail starts. */
+            valid_up_to = ftello(fp);
+            loadingAbsProgress(valid_up_to);
+            last_progress_report_size = valid_up_to;
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */
     while (1) {
-        int argc, j;
-        unsigned long len;
-        robj **argv;
+        int argc = 0;
+        robj **argv = NULL;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
-        sds argsds;
-        struct serverCommand *cmd;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1024)) {
@@ -1611,90 +1805,42 @@ int loadSingleAppendOnlyFile(char *filename) {
             processEventsWhileBlocked();
             processModuleLoadingProgressEvent(1);
         }
-        if (fgets(buf, sizeof(buf), fp) == NULL) {
+        int ch = getc(fp);
+        if (ch == EOF) {
             if (feof(fp)) {
                 break;
             } else {
                 goto readerr;
             }
         }
-        if (buf[0] == '#') continue; /* Skip annotations */
-        if (buf[0] != '*') goto fmterr;
-        if (buf[1] == '\0') goto readerr;
-        argc = atoi(buf + 1);
-        if (argc < 1) goto fmterr;
-        if ((size_t)argc > SIZE_MAX / sizeof(robj *)) goto fmterr;
-
-        /* Load the next command in the AOF as our fake client
-         * argv. */
-        argv = zmalloc(sizeof(robj *) * argc);
-        fakeClient->argc = argc;
-        fakeClient->argv = argv;
-        fakeClient->argv_len = argc;
-
-        for (j = 0; j < argc; j++) {
-            /* Parse the argument len. */
-            char *readres = fgets(buf, sizeof(buf), fp);
-            if (readres == NULL || buf[0] != '$') {
-                fakeClient->argc = j; /* Free up to j-1. */
-                freeClientArgv(fakeClient);
-                if (readres == NULL)
-                    goto readerr;
-                else
-                    goto fmterr;
-            }
-            len = strtol(buf + 1, NULL, 10);
-
-            /* Read it into a string object. */
-            argsds = sdsnewlen(SDS_NOINIT, len);
-            if (len && fread(argsds, len, 1, fp) == 0) {
-                sdsfree(argsds);
-                fakeClient->argc = j; /* Free up to j-1. */
-                freeClientArgv(fakeClient);
-                goto readerr;
-            }
-            argv[j] = createObject(OBJ_STRING, argsds);
-
-            /* Discard CRLF. */
-            if (fread(buf, 2, 1, fp) == 0) {
-                fakeClient->argc = j + 1; /* Free up to j. */
-                freeClientArgv(fakeClient);
-                goto readerr;
-            }
+        if (ch == '#') { /* Skip annotations */
+            /* A line without a newline at the end of the file is a torn annotation.
+             * Treat it as a short read. Otherwise the next write would be appended
+             * to the torn line, and the next load would fail. */
+            if (fgets(buf, sizeof(buf), fp) == NULL || feof(fp)) goto readerr;
+            continue;
         }
+        ungetc(ch, fp);
 
-        /* Command lookup */
+        /* Read the next command into the fake client's argv. */
+        respParseResult pr = parseRespCommandFromReader(aofFileReader, aofFileReadLine, fp, &argc, &argv);
+        if (pr == RESP_PARSE_EOF) goto readerr;
+        if (pr == RESP_PARSE_FMTERR) goto fmterr;
+        if (pr == RESP_PARSE_OOM) goto oomerr;
+
+        /* Command lookup, validation and execution. Keep MULTI framing (0) so
+         * AOF transactions replay as transactions. */
         sds err = NULL;
-        fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
-        if ((!cmd && !commandCheckExistence(fakeClient, &err)) || (cmd && !commandCheckArity(cmd, argc, &err))) {
-            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename, err);
+        loadCommandResult lr = loadCommandFromArgv(fakeClient, argv, argc, LOAD_CMD_SOURCE_AOF, &err);
+        if (lr == LOAD_CMD_ERR_UNKNOWN || lr == LOAD_CMD_ERR) {
+            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename,
+                      (server.hide_user_data_from_log && lr == LOAD_CMD_ERR_UNKNOWN) ? "*redacted*" : err);
             sdsfree(err);
-            freeClientArgv(fakeClient);
             ret = AOF_FAILED;
             goto cleanup;
         }
+        if (lr == LOAD_CMD_MULTI_START) valid_before_multi = valid_up_to;
 
-        if (cmd->proc == multiCommand) valid_before_multi = valid_up_to;
-
-        /* Run the command in the context of a fake client */
-        if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
-            /* Note: we don't have to attempt calling evalGetCommandFlags,
-             * since this is AOF, the checks in processCommand are not made
-             * anyway.*/
-            queueMultiCommand(fakeClient, cmd->flags);
-        } else {
-            cmd->proc(fakeClient);
-        }
-
-        /* The fake client should not have a reply */
-        serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
-
-        /* The fake client should never get blocked */
-        serverAssert(fakeClient->flag.blocked == 0);
-
-        /* Clean up. Command code may have changed argv/argc so we use the
-         * argv/argc of the client instead of the local variables. */
-        freeClientArgv(fakeClient);
         if (server.aof_load_truncated) valid_up_to = ftello(fp);
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }
@@ -1703,11 +1849,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
-    if (fakeClient->flag.multi) {
-        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
-        valid_up_to = valid_before_multi;
-        goto uxeof;
-    }
+    if (fakeClient->flag.multi) goto uxeof;
 
 loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). */
     loadingIncrProgress(ftello(fp) - last_progress_report_size);
@@ -1722,6 +1864,10 @@ readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
     }
 
 uxeof: /* Unexpected AOF end of file. */
+    if (fakeClient->flag.multi) {
+        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
+        valid_up_to = valid_before_multi;
+    }
     if (server.aof_load_truncated) {
         serverLog(LL_WARNING, "!!! Warning: short read while loading the AOF file %s!!!", filename);
         serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %llu !!!", filename,
@@ -1758,6 +1904,11 @@ fmterr: /* Format error. */
               "Bad file format reading the append only file %s: "
               "make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>",
               filename);
+    ret = AOF_FAILED;
+    goto cleanup;
+
+oomerr: /* An argument too large to allocate. */
+    serverLog(LL_WARNING, "Out of memory reading the append only file %s", filename);
     ret = AOF_FAILED;
     /* fall through to cleanup. */
 
@@ -2020,13 +2171,13 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-    } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
+            OrderedIndexItem *node = next;
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
@@ -2036,8 +2187,10 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            sds ele = zslGetNodeElement(node);
-            if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement(node, &ele, &ele_len);
+            if (!rioWriteBulkDouble(r, orderedIndexItemGetScore(node)) || !rioWriteBulkString(r, ele, ele_len)) {
                 hashtableCleanupIterator(&iter);
                 return 0;
             }
@@ -2082,37 +2235,44 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
-    long long count = 0, volatile_items = 0, non_volatile_items;
+    long long count = 0, non_volatile_items;
+    sds field, value;
+
     /* First serialize volatile items if exist */
     if (hashTypeHasVolatileFields(o)) {
         hashTypeInitVolatileIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
-            long long expiry = entryGetExpiry(hi.next);
-            sds field = entryGetField(hi.next);
-            size_t value_len;
-            char *value = entryGetValue(hi.next, &value_len);
-            if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
-            if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
-            if (rioWriteBulkObject(r, key) == 0) return 0;
-            if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
-            if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
-            if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
-            if (rioWriteBulkLongLong(r, 1) == 0) return 0;
-            if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-            if (rioWriteBulkString(r, value, value_len) == 0) return 0;
-            volatile_items++;
+            long long expiry = hashTypeCurrentExpiry(o, &hi);
+            field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+            value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+            if (expiry > commandTimeSnapshot()) {
+                if (rioWriteBulkCount(r, '*', 8) == 0) goto werr;
+                if (rioWriteBulkString(r, "HSETEX", 6) == 0) goto werr;
+                if (rioWriteBulkObject(r, key) == 0) goto werr;
+                if (rioWriteBulkString(r, "PXAT", 4) == 0) goto werr;
+                if (rioWriteBulkLongLong(r, expiry) == 0) goto werr;
+                if (rioWriteBulkString(r, "FIELDS", 6) == 0) goto werr;
+                if (rioWriteBulkLongLong(r, 1) == 0) goto werr;
+                if (rioWriteBulkString(r, field, sdslen(field)) == 0) goto werr;
+                if (rioWriteBulkString(r, value, sdslen(value)) == 0) goto werr;
+            }
+            sdsfree(field);
+            sdsfree(value);
         }
         hashTypeResetIterator(&hi);
     }
-    non_volatile_items = hashTypeLength(o) - volatile_items;
-    hashTypeInitIterator(o, &hi);
-    while (hashTypeNext(&hi) != C_ERR) {
-        if (volatile_items > 0 && entryHasExpiry(hi.next))
-            continue;
 
+    /* Write the persistent (no-TTL) fields as HMSET batches. The batch
+     * header needs the count of fields the persistent iterator will emit:
+     * total fields minus ALL volatile ones (expired-unreaped included,
+     * since the iterator skips those too). */
+    non_volatile_items = hashTypeLength(o) - hashTypeVolatileCount(o);
+
+    hashTypeInitPersistentIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
+        /* If new vector write the HMSET command first */
         if (count == 0) {
             int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
-
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
                 !rioWriteBulkObject(r, key)) {
                 hashTypeResetIterator(&hi);
@@ -2120,6 +2280,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             }
         }
 
+        /* Iterate till we reach the batch size */
         if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
             hashTypeResetIterator(&hi);
             return 0;
@@ -2127,9 +2288,14 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
         non_volatile_items--;
     }
-
     hashTypeResetIterator(&hi);
     return 1;
+
+werr:
+    sdsfree(field);
+    sdsfree(value);
+    hashTypeResetIterator(&hi);
+    return 0;
 }
 
 /* Helper for rewriteStreamObject() that generates a bulk string into the
@@ -2382,6 +2548,8 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
         if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_STREAM) {
         if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        if (rewritePathHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_MODULE) {
         if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {
@@ -2529,7 +2697,9 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
+        if (rdbSaveRio(compression_algo, REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
+                       RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }
@@ -2590,7 +2760,7 @@ werr:
 int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveSaveOrChild()) return C_ERR;
 
     if (dirCreateIfMissing(server.aof_dirname) == -1) {
         serverLog(LL_WARNING, "Can't open or create append-only dir %s: %s", server.aof_dirname, strerror(errno));
@@ -2660,7 +2830,7 @@ int rewriteAppendOnlyFileBackground(void) {
 void bgrewriteaofCommand(client *c) {
     if (server.child_type == CHILD_TYPE_AOF) {
         addReplyError(c, "Background append only file rewriting already in progress");
-    } else if (hasActiveChildProcess() || server.in_exec) {
+    } else if (hasActiveSaveOrChild() || server.in_exec) {
         server.aof_rewrite_scheduled = 1;
         /* When manually triggering AOFRW we reset the count
          * so that it can be executed immediately. */

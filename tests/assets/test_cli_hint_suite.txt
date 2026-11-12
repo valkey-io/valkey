@@ -10,6 +10,9 @@
 "DECRBY xyz " "decrement"
 "DECRBY " "key decrement"
 
+# Command with optional arg: INCREX
+"INCREX xyz " "[NX|XX] [EX ex|PX px|EXAT unix-time-seconds|PXAT unix-time-milliseconds|PERSIST] [ENX] [BYINT integer|BYFLOAT float] [LBOUND lowerbound] [UBOUND upperbound] [SATURATE]"
+
 # Command with optional arg: LPOP key [count]
 "LPOP key " "[count]"
 "LPOP key 3 " ""
@@ -25,13 +28,12 @@
 "BITFIELD_RO k " "[GET encoding offset [GET encoding offset ...]]"
 "BITFIELD_RO k GE" "[GET encoding offset [GET encoding offset ...]]"
 "BITFIELD_RO k GET" "[GET encoding offset [GET encoding offset ...]]"
-# TODO: The following hints end with an unbalanced "]" which shouldn't be there.
-"BITFIELD_RO k GET " "encoding offset [GET encoding offset ...]]"
-"BITFIELD_RO k GET xyz " "offset [GET encoding offset ...]]"
-"BITFIELD_RO k GET xyz 12 " "[GET encoding offset ...]]"
-"BITFIELD_RO k GET xyz 12 GET " "encoding offset [GET encoding offset ...]]"
-"BITFIELD_RO k GET enc1 12 GET enc2 " "offset [GET encoding offset ...]]"
-"BITFIELD_RO k GET enc1 12 GET enc2 34 " "[GET encoding offset ...]]"
+"BITFIELD_RO k GET " "encoding offset [GET encoding offset ...]"
+"BITFIELD_RO k GET xyz " "offset [GET encoding offset ...]"
+"BITFIELD_RO k GET xyz 12 " "[GET encoding offset ...]"
+"BITFIELD_RO k GET xyz 12 GET " "encoding offset [GET encoding offset ...]"
+"BITFIELD_RO k GET enc1 12 GET enc2 " "offset [GET encoding offset ...]"
+"BITFIELD_RO k GET enc1 12 GET enc2 34 " "[GET encoding offset ...]"
 
 # Two-word command with multiple non-token block args:  CONFIG SET parameter value [parameter value ...]
 "CONFIG SET param " "value [parameter value ...]"
@@ -58,6 +60,13 @@
 # One-of choices: BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout
 "BLMOVE src dst LEFT " "LEFT|RIGHT timeout"
 
+# Mutually exclusive arguments: RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds|FREQ frequency]
+"RESTORE key 0 serialized-value " "[REPLACE] [ABSTTL] [IDLETIME seconds|FREQ frequency]"
+
+# Mutually exclusive arguments: LCS key1 key2 [LEN|IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]
+"LCS key1 key2 " "[LEN|IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]"
+"LCS key1 key2 LEN " "[MINMATCHLEN min-match-len] [WITHMATCHLEN]"
+
 # Optional args can be in any order: ZRANGE key min max [BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES] [XX]
 "ZRANGE k 1 2 " "[BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES] [XX]"
 "ZRANGE k 1 2 bylex " "[REV] [LIMIT offset count] [WITHSCORES] [XX]"
@@ -68,17 +77,17 @@
 "ZRANGE k 1 2 WITHSCORES " "[BYSCORE|BYLEX] [REV] [LIMIT offset count] [XX]"
 
 # Optional one-of args with parameters: SET key value [NX|XX] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]
-"SET key value " "[NX|XX|IFEQ comparison-value] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
-"SET key value EX" "[NX|XX|IFEQ comparison-value] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
-"SET key value EX " "seconds [NX|XX|IFEQ comparison-value] [GET]"
-"SET key value EX 23 " "[NX|XX|IFEQ comparison-value] [GET]"
-"SET key value EXAT" "[NX|XX|IFEQ comparison-value] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
-"SET key value EXAT " "unix-time-seconds [NX|XX|IFEQ comparison-value] [GET]"
-"SET key value PX" "[NX|XX|IFEQ comparison-value] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
-"SET key value PX " "milliseconds [NX|XX|IFEQ comparison-value] [GET]"
-"SET key value PXAT" "[NX|XX|IFEQ comparison-value] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
-"SET key value PXAT " "unix-time-milliseconds [NX|XX|IFEQ comparison-value] [GET]"
-"SET key value KEEPTTL " "[NX|XX|IFEQ comparison-value] [GET]"
+"SET key value " "[NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
+"SET key value EX" "[NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
+"SET key value EX " "seconds [NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET]"
+"SET key value EX 23 " "[NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET]"
+"SET key value EXAT" "[NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
+"SET key value EXAT " "unix-time-seconds [NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET]"
+"SET key value PX" "[NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
+"SET key value PX " "milliseconds [NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET]"
+"SET key value PXAT" "[NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
+"SET key value PXAT " "unix-time-milliseconds [NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET]"
+"SET key value KEEPTTL " "[NX|XX|IFEQ comparison-value|IFNE comparison-not-equal] [GET]"
 "SET key value XX " "[GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"
 
 # If an input word can't be matched, stop hinting.
@@ -102,9 +111,10 @@
 "GEOSEARCH k FROMLONLAT " "longitude latitude BYRADIUS radius M|KM|FT|MI|BYBOX width height M|KM|FT|MI|BYPOLYGON num-vertices longitude latitude [longitude latitude ...] [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]"
 "GEOSEARCH k FROMLONLAT 2.34 4.45 BYRADIUS badvalue " ""
 
-# Optional parameters followed by mandatory params: ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]
-"ZADD key " "[NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]"
-"ZADD key CH LT " "[NX|XX] [INCR] score member [score member ...]"
+# Optional parameters followed by mandatory params: ZADD key [NX|[XX] [GT|LT]] [CH] [INCR] score member [score member ...]
+"ZADD key " "[NX|[XX] [GT|LT]] [CH] [INCR] score member [score member ...]"
+"ZADD key CH XX " "[GT|LT] [INCR] score member [score member ...]"
+"ZADD key NX " "[CH] [INCR] score member [score member ...]"
 "ZADD key 0 " "member [score member ...]"
 
 # Empty-valued token argument represented as a pair of double-quotes.

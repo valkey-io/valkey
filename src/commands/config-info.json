@@ -3,7 +3,7 @@
         "summary": "Returns information about configuration parameters matching the given patterns.",
         "complexity": "O(N) when N is the number of configuration parameters provided",
         "group": "server",
-        "since": "10.0.0",
+        "since": "9.2.0",
         "arity": -3,
         "container": "CONFIG",
         "function": "configInfoCommand",

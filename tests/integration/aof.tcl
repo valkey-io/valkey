@@ -29,6 +29,34 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+        append_to_aof [string range [formatCommand exec] 0 end-1]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Short read in MULTI: Discard incomplete transaction and preserve subsequent writes across restart" {
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "OK" [$client set baz survived]
+            assert_equal "survived" [$client get baz]
+
+            restart_server 0 true false
+
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "survived" [$client get baz]
+        }
+    }
+
     ## Should also start with truncated AOF without incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand incr foo]
@@ -142,6 +170,55 @@ tags {"aof external:skip logreqres:skip"} {
             wait_done_loading $client
             assert_equal "hello" [$client get foo]
             assert_equal "" [$client get bar]
+        }
+    }
+
+    ## Test a torn annotation (a line without a newline) at the end of the AOF
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "#TS:1700000000"
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated no] [list wait_ready false] {
+        test "Torn annotation: Server should have logged an error" {
+            wait_for_log_messages 0 {"*Unexpected end of file reading the append only file*"} 0 10 1000
+        }
+    }
+
+    test "Torn annotation: Utility should confirm the AOF is not valid" {
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
+        } result
+        assert_match "*Torn annotation at the end of the file*not valid*" $result
+    }
+
+    test "Torn annotation: Utility should be able to fix the AOF" {
+        set result [exec $::VALKEY_CHECK_AOF_BIN --fix $aof_manifest_file << "y\n"]
+        assert_match "*Successfully truncated AOF*" $result
+        assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "#TS:1700000000"
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Torn annotation: Server should start and truncate it if load-truncated is yes" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            $client set bar world
+        }
+    }
+
+    # The torn annotation was truncated, so the write after it starts on a new line.
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "Torn annotation: The write after the truncation is loaded" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "world" [$client get bar]
         }
     }
 
@@ -376,6 +453,31 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    # A MULTI/EXEC block in the AOF must be replayed even when the default user
+    # is disabled. EXEC re-checks ACLs of the queued commands, but that check
+    # must not apply to the client used for loading the AOF, otherwise the
+    # transaction's writes are silently lost.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set outside-tx 1]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set inside-tx-a 2]
+        append_to_aof [formatCommand set inside-tx-b 3]
+        append_to_aof [formatCommand exec]
+    }
+
+    set acl_config_lines {user {default off} user {someuser on nopass ~* &* +@all}}
+    start_server_aof_ex [list dir $server_path] [list wait_ready false config_lines $acl_config_lines] {
+        test {AOF with MULTI/EXEC is fully loaded when the default user is disabled} {
+            set c [valkey [srv host] [srv port] 0 $::tls]
+            $c auth someuser somepass
+            wait_done_loading $c
+            assert_equal 1 [$c get outside-tx]
+            assert_equal 2 [$c get inside-tx-a]
+            assert_equal 3 [$c get inside-tx-b]
+            $c close
+        }
+    }
+
     # The server could load AOF which has timestamp annotations inside
     create_aof $aof_dirpath $aof_file {
         append_to_aof "#TS:1628217470\r\n"
@@ -500,6 +602,24 @@ tags {"aof external:skip logreqres:skip"} {
             exec $::VALKEY_CHECK_AOF_BIN tests/assets/rdb-preamble.aof
         } result
         assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
+    }
+
+    start_server {overrides {appendonly yes aof-use-rdb-preamble yes}} {
+        test {Test valkey-check-aof for Multi Part AOF with Valkey RDB base} {
+            r set foo bar
+            r bgrewriteaof
+            waitForBgrewriteaof r
+
+            set base_aof [get_base_aof_path r]
+            set manifest [file join [file dirname $base_aof] "[lindex [r config get appendfilename] 1]$::manifest_suffix"]
+            assert_equal "VALKEY" [read_binary_file_prefix $base_aof 6]
+
+            set failed [catch {
+                exec $::VALKEY_CHECK_AOF_BIN $manifest
+            } result]
+            assert_equal 0 $failed
+            assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*BASE AOF*is valid*All AOF files and manifest are valid*" $result
+        }
     }
 
     test {Test valkey-check-aof for Multi Part AOF with resp AOF base} {

@@ -1,0 +1,93 @@
+# A single-shot fake primary for replication negative tests. Answers the
+# replication handshake (PING -> +PONG, REPLCONF -> +OK each, PSYNC ->
+# +FULLRESYNC), announces a bulk transfer of ANNOUNCE_SIZE bytes, sends the
+# contents of PAYLOAD_FILE, then closes the connection and exits. When
+# STREAM_FILE is provided, its contents are sent after the RDB and the
+# connection stays open until the replica disconnects. When PSYNC_REPLY is
+# provided, it is sent as the whole PSYNC reply instead of the full sync, and
+# the connection stays open until the replica disconnects. A PSYNC_REPLY that
+# starts with -ERR makes the replica fall back to SYNC, which is then answered
+# with the same bulk transfer.
+#
+# Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE ?STREAM_FILE? ?PSYNC_REPLY? ?OFFSET?
+
+set port [lindex $argv 0]
+set payload_file [lindex $argv 1]
+set announce_size [lindex $argv 2]
+set stream_file [lindex $argv 3]
+set psync_reply [lindex $argv 4]
+set fullresync_offset [expr {$argc > 5 ? [lindex $argv 5] : 0}]
+
+set fd [open $payload_file r]
+fconfigure $fd -translation binary
+set payload [read $fd]
+close $fd
+
+set stream_payload ""
+if {$stream_file ne ""} {
+    set fd [open $stream_file r]
+    fconfigure $fd -translation binary
+    set stream_payload [read $fd]
+    close $fd
+}
+
+# The replica sends RESP-encoded commands. Reading line by line and replying
+# once per command-name line keeps replies in step with pipelined commands;
+# RESP framing lines (*N, $N) and argument lines fall through unmatched.
+proc accept {sock host port} {
+    global payload announce_size stream_payload psync_reply fullresync_offset done
+    fconfigure $sock -translation binary -blocking 1
+    set served 0
+    catch {
+        while {[gets $sock line] >= 0} {
+            set cmd [string toupper [string trim $line]]
+            if {$cmd eq "PING"} {
+                puts -nonewline $sock "+PONG\r\n"
+                flush $sock
+            } elseif {$cmd eq "REPLCONF"} {
+                puts -nonewline $sock "+OK\r\n"
+                flush $sock
+            } elseif {$cmd eq "PSYNC" && [string match "-ERR*" $psync_reply]} {
+                # Reject PSYNC so the replica falls back to SYNC.
+                puts -nonewline $sock "$psync_reply\r\n"
+                flush $sock
+            } elseif {$cmd eq "SYNC"} {
+                puts -nonewline $sock "\$$announce_size\r\n"
+                puts -nonewline $sock $payload
+                flush $sock
+                set served 1
+                break
+            } elseif {$cmd eq "PSYNC" && $psync_reply ne ""} {
+                puts -nonewline $sock "$psync_reply\r\n"
+                flush $sock
+                while {![eof $sock]} {
+                    read $sock 4096
+                }
+                set served 1
+                break
+            } elseif {$cmd eq "PSYNC"} {
+                puts -nonewline $sock "+FULLRESYNC [string repeat 0 40] $fullresync_offset\r\n"
+                puts -nonewline $sock "\$$announce_size\r\n"
+                puts -nonewline $sock $payload
+                flush $sock
+                if {$stream_payload ne ""} {
+                    puts -nonewline $sock $stream_payload
+                    flush $sock
+                    while {![eof $sock]} {
+                        read $sock 4096
+                    }
+                }
+                set served 1
+                break
+            }
+        }
+    }
+    catch {close $sock}
+    # Port-probe connections come and go without a PSYNC; only a served
+    # transfer completes the single shot.
+    if {$served} {set done served}
+}
+
+socket -server accept $port
+after 60000 set done timeout
+vwait done

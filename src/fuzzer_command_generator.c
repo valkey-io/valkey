@@ -48,7 +48,8 @@ typedef enum {
     CMD_GROUP_GEO = 8,
     CMD_GROUP_BITMAP = 9,
     CMD_GROUP_PUBSUB = 10,
-    CMD_GROUP_GENERIC = 11
+    CMD_GROUP_GENERIC = 11,
+    CMD_GROUP_PATH_HASH = 12
 } CommandGroupType;
 
 typedef enum {
@@ -217,6 +218,7 @@ static CommandGroupType mapGroupType(const sds groupStr) {
         {"hyperloglog", CMD_GROUP_HYPERLOGLOG},
         {"geo", CMD_GROUP_GEO},
         {"bitmap", CMD_GROUP_BITMAP},
+        {"pathhash", CMD_GROUP_PATH_HASH},
         {"pubsub", CMD_GROUP_PUBSUB},
         {"generic", CMD_GROUP_GENERIC},
         {NULL, CMD_GROUP_UNKNOWN}};
@@ -1177,6 +1179,9 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
         case CMD_GROUP_BITMAP:
             keyPrefix = "bitmap";
             break;
+        case CMD_GROUP_PATH_HASH:
+            keyPrefix = "pathhash";
+            break;
         case CMD_GROUP_PUBSUB:
             keyPrefix = "channel";
             break;
@@ -1548,8 +1553,6 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         appendArg(cmd, sdscatprintf(sdsempty(), "module-%d", rand() % 100));
     } else if (strcmp(argName, "arg") == 0 || strcmp(argName, "args") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "arg%d", rand() % 10));
-    } else if (strcmp(argName, "command") == 0) {
-        appendArg(cmd, sdsnew(commands[rand() % (sizeof(commands) / sizeof(commands[0]))]));
     } else if (strcmp(argName, "threshold") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 30));
     } else if (strcmp(argName, "metric") == 0) {

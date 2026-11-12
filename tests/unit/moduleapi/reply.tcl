@@ -146,6 +146,11 @@ start_server {tags {"modules"}} {
         r hello 2
     }
 
+    test "Unmatched RM_ReplyWithArray(POSTPONED_LEN) does not crash the server" {
+        assert_equal {} [r rw.postponed_unmatched]
+        assert_equal PONG [r ping]
+    }
+
     test "Unload the module - replywith" {
         assert_equal {OK} [r module unload replywith]
     }

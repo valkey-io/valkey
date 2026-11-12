@@ -1,6 +1,9 @@
 #include "valkeymodule.h"
 
+#include <stdint.h>
 #include <string.h>
+
+static size_t external_memory_used = 0;
 
 void InfoFunc(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
     ValkeyModule_InfoAddSection(ctx, "");
@@ -96,6 +99,51 @@ int info_getd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return info_get(ctx, argv, argc, 'd');
 }
 
+int info_setexternal(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    long long amount_ll;
+    size_t amount;
+
+    if (argc != 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+
+    if (ValkeyModule_StringToLongLong(argv[1], &amount_ll) != VALKEYMODULE_OK || amount_ll < 0 ||
+        (unsigned long long)amount_ll > SIZE_MAX) {
+        ValkeyModule_ReplyWithError(ctx, "ERR invalid external memory value");
+        return VALKEYMODULE_OK;
+    }
+
+    amount = amount_ll;
+    if (amount > external_memory_used) {
+        if (ValkeyModule_IncrExternalMemory(amount - external_memory_used) != VALKEYMODULE_OK) {
+            ValkeyModule_ReplyWithError(ctx, "ERR external memory increment failed");
+            return VALKEYMODULE_OK;
+        }
+    } else if (amount < external_memory_used) {
+        if (ValkeyModule_DecrExternalMemory(external_memory_used - amount) != VALKEYMODULE_OK) {
+            ValkeyModule_ReplyWithError(ctx, "ERR external memory decrement failed");
+            return VALKEYMODULE_OK;
+        }
+    }
+
+    external_memory_used = amount;
+    ValkeyModule_ReplyWithLongLong(ctx, amount_ll);
+    return VALKEYMODULE_OK;
+}
+
+int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+    VALKEYMODULE_NOT_USED(ctx);
+
+    if (external_memory_used != 0 &&
+        ValkeyModule_DecrExternalMemory(external_memory_used) != VALKEYMODULE_OK) {
+        return VALKEYMODULE_ERR;
+    }
+
+    external_memory_used = 0;
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -113,6 +161,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"info.getu", info_getu,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"info.getd", info_getd,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"info.setexternal", info_setexternal,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

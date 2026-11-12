@@ -240,17 +240,6 @@ start_server {tags {"other"}} {
         }
     }
 
-    test {BGSAVE} {
-        # Use FLUSHALL instead of FLUSHDB, FLUSHALL do a foreground save
-        # and reset the dirty counter to 0, so we won't trigger an unexpected bgsave.
-        r flushall
-        r save
-        r set x 10
-        r bgsave
-        waitForBgsave r
-        r debug reload
-        r get x
-    } {10} {needs:debug needs:save}
 
     test {SELECT an out of range DB} {
         catch {r select 1000000} err
@@ -311,21 +300,6 @@ start_server {tags {"other"}} {
         } {1} {needs:debug}
     }
 
-    test {EXPIRES after a reload (snapshot + append only file rewrite)} {
-        r flushdb
-        r set x 10
-        r expire x 1000
-        r save
-        r debug reload
-        set ttl [r ttl x]
-        set e1 [expr {$ttl > 900 && $ttl <= 1000}]
-        r bgrewriteaof
-        waitForBgrewriteaof r
-        r debug loadaof
-        set ttl [r ttl x]
-        set e2 [expr {$ttl > 900 && $ttl <= 1000}]
-        list $e1 $e2
-    } {1 1} {needs:debug needs:save}
 
     test {EXPIRES after AOF reload (without rewrite)} {
         r flushdb
@@ -346,7 +320,7 @@ start_server {tags {"other"}} {
 
         # Reload and check
         waitForBgrewriteaof r
-        # We need to wait two seconds to avoid false positives here, otherwise
+        # We need to wait two seconds to avoid false positives here; otherwise,
         # the DEBUG LOADAOF command may read a partial file.
         # Another solution would be to set the fsync policy to no, since this
         # prevents write() to be delayed by the completion of fsync().
@@ -516,6 +490,12 @@ start_server {tags {"other"}} {
         assert_error {*unknown command*} {r CONFIG|GET GET_XX}
         assert_error {*unknown subcommand*} {r CONFIG GET_XX}
     }
+
+    test "DEBUG SLOTMIGRATION with missing arguments does not crash" {
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION}
+        assert_error {ERR *} {r DEBUG SLOTMIGRATION PREVENT-PAUSE}
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
 
     test "Extended Redis Compatibility config" {
         # This config is added in Valkey 8.0, shall be deprecated and have no
@@ -778,3 +758,40 @@ if {$::verbose} {
 }
 close $tempFileId
 file delete $tempFileName
+
+start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "external:skip"}} {
+    foreach bgsave_type {"fork" "forkless"} {
+        test "BGSAVE $bgsave_type" {
+            r flushall
+            r save
+            r set x 10
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r bgsave
+            waitForBgsave r
+
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
+            assert_equal [s rdb_last_bgsave_type] $expected_type
+
+            r debug reload
+            r get x
+        } {10} {needs:debug needs:save}
+
+        test "EXPIRES after a reload ($bgsave_type snapshot + append only file rewrite)" {
+            r flushdb
+            r set x 10
+            r expire x 1000
+            r config set forkless-policy [expr {$bgsave_type eq "forkless" ? "prefer-forkless" : "require-fork"}]
+            r bgsave
+            waitForBgsave r
+            r debug reload
+            set ttl [r ttl x]
+            set e1 [expr {$ttl > 900 && $ttl <= 1000}]
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+            set ttl [r ttl x]
+            set e2 [expr {$ttl > 900 && $ttl <= 1000}]
+            list $e1 $e2
+        } {1 1} {needs:debug needs:save}
+    }
+}

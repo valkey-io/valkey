@@ -196,6 +196,59 @@ policy: ignite when main-thread active time crosses
 non-empty, scale down after `IO_COOLDOWN_MS` of idle. `io-threads-always-active`
 disables the policy and keeps all configured workers awake.
 
+## Cluster Bus I/O
+
+Cluster bus reads, writes, and the inbound TLS handshake run on the same worker
+pool as client I/O. The main thread alone applies cluster packets and mutates
+cluster state; workers do transport work only.
+
+Scope: the **outbound** handshake is not offloaded. `connTLSAccept` has an
+offload hook, `connTLSConnect` does not, so `SSL_connect` still runs on the main
+thread from `tlsHandleEvent`. Links are bidirectional and the bus uses mutual
+TLS, so roughly half the handshake cost stays on the main thread; offloading
+connect is planned follow-up work.
+
+Key design decisions:
+
+- **Read framing boundary.** Workers read into `clusterLink->rcvbuf`, scan
+  the prefix of complete packets, and publish `io_complete_bytes` /
+  `io_complete_packets`. The main thread drains exactly that prefix on
+  completion, then shrinks `rcvbuf` around any leftover partial packet.
+- **Write snapshot boundary.** A single canonical `send_msg_queue` is shared
+  with the worker via `io_last_send_block` + `io_head_offset`. New messages
+  enqueued while a write is in flight are picked up by the next dispatch.
+- **Bounded jobs.** A read job stops at `RCVBUF_MAX_PREALLOC`, a write job at
+  `NET_MAX_WRITES_PER_EVENT`, so one link cannot hold a worker or balloon its
+  buffer. The remainder goes out on the next event.
+- **Read and write are mutually exclusive per link**, because both directions
+  share the connection: TLS forbids concurrent use of one `SSL` object, and both
+  workers classify errors from `conn->state`. A one-shot yield
+  (`io_read_deferred`) keeps a permanently backlogged send queue from starving
+  reads, since `CONN_FLAG_WRITE_BARRIER` fires writable first.
+- **Deferred teardown.** `freeClusterLink()` defers final free via
+  `io_refs > 0` + `async_close = 1`; the last completion drops the ref and
+  frees the link. For links, `io_refs` alone guards connection lifetime.
+- **Accept serialization.** `CONN_FLAG_ACCEPT_OFFLOAD_PENDING` ensures only
+  one accept job is in flight per connection across TLS retries, and
+  `clusterConnAcceptHandler` is installed as `conn_handler` before dispatch so
+  every completion path finishes the accept. The generic accept path uses
+  `ConnectionOwnerKind` to route cluster-owned connections back to the cluster
+  dispatcher. Only TLS accepts are offloaded; a plain TCP accept does no real
+  work.
+- **Read/write dispatch is skipped until the connection is established.** A link
+  mid-connect or mid-handshake is left to the connection layer, which drives the
+  read/write handler once connected. This guards the data path; it says nothing
+  about offloading the handshake itself.
+- **Fallback.** If dispatch returns `C_ERR`, the caller runs the I/O on
+  the main thread and increments `cluster_io_main_thread_fallbacks`. Dispatch
+  needs an already-active pool, so on a lightly loaded node most cluster bus I/O
+  takes this path.
+
+`CLUSTER INFO` reports `cluster_io_threaded_reads_processed`,
+`cluster_io_threaded_writes_processed`,
+`cluster_io_threaded_accepts_processed` (all counted when a worker job
+completes) and `cluster_io_main_thread_fallbacks`.
+
 ## Relevant Code
 
 - `src/io_threads.{c,h}` — main thread dispatch helpers, worker loop,
@@ -203,3 +256,7 @@ disables the policy and keeps all configured workers awake.
 - `src/queues.{c,h}` — SPMC, MPSC, and SPSC queue primitives.
 - `src/networking.c` — client read/write handlers invoked from worker job
   dispatch (`ioThreadReadQueryFromClient`, `ioThreadWriteToClient`).
+- `src/cluster_legacy.c` — cluster bus worker jobs (`clusterReadJob`,
+  `clusterWriteJob`, `clusterAcceptJob`) and their main-thread completions
+  (`clusterHandleReadCompletion`, `clusterHandleWriteCompletion`,
+  `clusterHandleAcceptCompletion`).

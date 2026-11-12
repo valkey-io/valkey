@@ -73,11 +73,6 @@ dictType engineDictType = {
     .entryDestructor = zfree,
 };
 
-static int isCalledFromAsyncThread(void) {
-    pthread_t curr_thread = pthread_self();
-    return !pthread_equal(server.main_thread_id, curr_thread);
-}
-
 /* Initializes the scripting engine manager.
  * The engine manager is responsible for managing the several scripting engines
  * that are loaded in the server and implemented by Valkey Modules.
@@ -209,7 +204,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
 
 /*
  * Lookups the engine with `engine_name` in the engine manager and returns it if
- * it exists. Otherwise returns `NULL`.
+ * it exists. Otherwise, returns `NULL`.
  */
 scriptingEngine *scriptingEngineManagerFind(const char *engine_name) {
     dictEntry *entry = dictFind(engineMgr.engines, engine_name);
@@ -313,7 +308,7 @@ void scriptingEngineCallFreeFunction(scriptingEngine *engine,
                                      subsystemType type,
                                      compiledFunction *compiled_func) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
-    int is_async = isCalledFromAsyncThread();
+    int is_async = !onServerMainThread();
 
     /* We need to acquire the module GIL when running from an async thread while
      * flushing the script functions. */
@@ -803,6 +798,10 @@ static robj **readReadCommandInternal(size_t *argc, robj **err) {
 protoerr:
     *err = createStringObject(protocol_error, strlen(protocol_error));
 keep_reading:
+    /* Reset *argc so the caller can retry: if we parsed the bulk count
+     * header before hitting a keep_reading exit, *argc is non-zero and
+     * the precondition assert on the next call would fire. */
+    *argc = 0;
     for (size_t i = 0; i < largc; i++) {
         decrRefCount(argv[i]);
     }
@@ -1045,7 +1044,8 @@ static int findAndExecuteCommand(robj **argv, size_t argc) {
         return CONTINUE_READ_NEXT_COMMAND;
     }
 
-    return cmd->handler(argv, argc, cmd->context);
+    /* Fall back to the engine's own context, which handlers can cast back to their engine context type. */
+    return cmd->handler(argv, argc, cmd->context ? cmd->context : ds.engine->impl.ctx);
 }
 
 void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err) {
@@ -1076,7 +1076,7 @@ void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err
              */
             if (sdslen(ds.cbuf) > 1 << 20) {
                 *err = createStringObject(max_buffer_error, strlen(max_buffer_error));
-                return;
+                break;
             }
         }
 

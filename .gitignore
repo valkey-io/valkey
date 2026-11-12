@@ -48,6 +48,7 @@ redis.code-workspace
 .cscope*
 .swp
 nodes*.conf
+nodes*.conf.lock
 tests/cluster/tmp/*
 tests/rdma/rdma-test
 tags
@@ -58,3 +59,5 @@ cmake-build-debug/
 cmake-build-release/
 __pycache__
 src/unit/.flags
+valkey-unit-tests
+src/.idea/*

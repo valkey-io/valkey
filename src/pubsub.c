@@ -302,7 +302,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         retval = 1;
         /* Add the client to the channel -> list of clients hash table */
         if (server.cluster_enabled && type.shard) {
-            slot = getKeySlot(objectGetVal(channel));
+            slot = getCachedKeySlot(objectGetVal(channel));
         }
 
         hashtablePosition pos;
@@ -344,7 +344,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
         retval = 1;
         /* Remove the client from the channel -> clients list hash table */
         if (server.cluster_enabled && type.shard) {
-            /* Using keyHashSlot directly because we can't rely on the current_client's slot via getKeySlot() here,
+            /* Using keyHashSlot directly because we can't rely on the current_client's slot via getCachedKeySlot() here,
              * as it might differ from the channel's slot. */
             slot = keyHashSlot(objectGetVal(channel), (int)sdslen(objectGetVal(channel)));
         }
@@ -592,7 +592,7 @@ void subscribeCommand(client *c) {
     if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
-         * expect a reply per command and so can not execute subscribe.
+         * expect a reply per command and so cannot execute subscribe.
          *
          * Notice that we have a special treatment for multi because of
          * backward compatibility
@@ -626,7 +626,7 @@ void psubscribeCommand(client *c) {
     if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
-         * expect a reply per command and so can not execute subscribe.
+         * expect a reply per command and so cannot execute subscribe.
          *
          * Notice that we have a special treatment for multi because of
          * backward compatibility
@@ -654,8 +654,12 @@ void punsubscribeCommand(client *c) {
 }
 
 /* This function wraps pubsubPublishMessage and also propagates the message to cluster.
- * Used by the commands PUBLISH/SPUBLISH and their respective module APIs.*/
+ * Used by the commands PUBLISH/SPUBLISH and their respective module APIs.
+ * Returns zero without publishing if the message exceeds the supported cluster
+ * bus publish size. */
 int pubsubPublishMessageAndPropagateToCluster(robj *channel, robj *message, int sharded) {
+    if (server.cluster_enabled && !clusterPublishMessageLengthValid(channel, message)) return 0;
+
     int receivers = pubsubPublishMessage(channel, message, sharded);
     if (server.cluster_enabled) clusterPropagatePublish(channel, message, sharded);
     return receivers;
@@ -668,6 +672,10 @@ void publishCommand(client *c) {
         return;
     }
 
+    if (server.cluster_enabled && !clusterPublishMessageLengthValid(c->argv[1], c->argv[2])) {
+        addReplyError(c, "Publish message is too large for the cluster bus");
+        return;
+    }
     int receivers = pubsubPublishMessageAndPropagateToCluster(c->argv[1], c->argv[2], 0);
     if (!server.cluster_enabled) forceCommandPropagation(c, PROPAGATE_REPL);
     addReplyLongLong(c, receivers);
@@ -758,6 +766,10 @@ void channelList(client *c, sds pat, kvstore *pubsub_channels) {
 
 /* SPUBLISH <shardchannel> <message> */
 void spublishCommand(client *c) {
+    if (server.cluster_enabled && !clusterPublishMessageLengthValid(c->argv[1], c->argv[2])) {
+        addReplyError(c, "Publish message is too large for the cluster bus");
+        return;
+    }
     int receivers = pubsubPublishMessageAndPropagateToCluster(c->argv[1], c->argv[2], 1);
     if (!server.cluster_enabled) forceCommandPropagation(c, PROPAGATE_REPL);
     addReplyLongLong(c, receivers);
@@ -767,7 +779,7 @@ void spublishCommand(client *c) {
 void ssubscribeCommand(client *c) {
     if (c->flag.deny_blocking) {
         /* A client that has CLIENT_DENY_BLOCKING flag on
-         * expect a reply per command and so can not execute subscribe. */
+         * expect a reply per command and so cannot execute subscribe. */
         addReplyError(c, "SSUBSCRIBE isn't allowed for a DENY BLOCKING client");
         return;
     }

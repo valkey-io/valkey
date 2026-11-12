@@ -162,7 +162,7 @@ proc execute_test_code {__testname filename code} {
     send_data_packet $::test_server_fd done "$__testname"
 }
 
-# Setup a list to hold a stack of server configs. When calls to start_server
+# Set up a list to hold a stack of server configs. When calls to start_server
 # are nested, use "srv 0 pid" to get the pid of the inner server. To access
 # outer servers, use "srv -1 pid" etcetera.
 set ::servers {}
@@ -345,6 +345,7 @@ proc cleanup {} {
     catch {exec rm -rf {*}[glob tests/tmp/nodes.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/rdb-slot-import-*]}
     if {!$::quiet} {puts "OK"}
 }
 
@@ -1131,7 +1132,7 @@ proc is_mptcp_available {} {
 }
 
 # With the parallel test running multiple server instances at the same time
-# we need a fast enough computer, otherwise a lot of tests may generate
+# we need a fast enough computer; otherwise, a lot of tests may generate
 # false positives.
 # If the computer is too slow we revert the sequential test without any
 # parallelism, that is, clients == 1.

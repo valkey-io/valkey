@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include "serverassert.h"
 
@@ -46,6 +47,28 @@ static monotime getMonotonicUs_x86(void) {
     return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
 }
 
+/* Read current_clocksource into name. Returns 1 if it is tsc. */
+static int kernelClocksourceIsTsc(char *name, size_t namelen) {
+    char buf[64];
+    size_t len;
+    FILE *f;
+
+    snprintf(name, namelen, "unknown");
+    f = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
+    if (f == NULL) return 0;
+    if (fgets(buf, sizeof(buf), f) == NULL) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+
+    len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' ')) buf[--len] = '\0';
+    if (len == 0) return 0;
+    snprintf(name, namelen, "%s", buf);
+    return strcmp(buf, "tsc") == 0;
+}
+
 static void monotonicInit_x86linux(void) {
     const int bufflen = 256;
     char buf[bufflen];
@@ -54,6 +77,12 @@ static void monotonicInit_x86linux(void) {
     regmatch_t pmatch[nmatch];
     int constantTsc = 0;
     int rc;
+    char clocksource[64];
+
+    if (!kernelClocksourceIsTsc(clocksource, sizeof(clocksource))) {
+        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is %s, not using TSC", clocksource);
+        return;
+    }
 
     /* Calibrate TSC ticks per microsecond against CLOCK_MONOTONIC.
      * This determines the actual TSC frequency regardless of what

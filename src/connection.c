@@ -168,3 +168,51 @@ sds getListensInfoString(sds info) {
 
     return info;
 }
+/* Set connection priority. If the connection already has active events
+ * registered in the event loop, migrate them to the new priority level.
+ * Handles postponed state safely if the socket is offloaded to IO threads,
+ * and preserves AE_BARRIER ordering flags.
+ * Returns C_OK on success, or C_ERR if event migration fails. */
+int connSetPriority(connection *conn, bool is_priority) {
+    serverAssert(conn != NULL);
+    if (conn->is_priority == is_priority) return C_OK;
+
+    /* Fast path: if no socket exists yet, update priority field directly */
+    if (conn->fd == -1) {
+        conn->is_priority = is_priority;
+        return C_OK;
+    }
+
+    int mask = aeGetFileEvents(server.el, conn->fd);
+    if (mask == AE_NONE) {
+        conn->is_priority = is_priority;
+        return C_OK;
+    }
+
+    /* If socket state update is postponed by IO threads, update priority field only;
+     * connUpdateState() will register with the new priority upon IO completion. */
+    if (conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE) {
+        conn->is_priority = is_priority;
+        return C_OK;
+    }
+
+    /* Dynamic migration: active events exist on this socket */
+    bool old_priority = conn->is_priority;
+    conn->is_priority = is_priority;
+
+    /* If transport has custom state updater (e.g. TLS), delegate to it */
+    if (conn->type && conn->type->update_state) {
+        conn->type->update_state(conn);
+    } else {
+        mask = (mask & ~AE_HIGH_PRIORITY);               /* Strip off old priority flag */
+        if (conn->is_priority) mask |= AE_HIGH_PRIORITY; /* Add new priority flag */
+
+        if (aeCreateFileEvent(server.el, conn->fd, mask, conn->type->ae_handler, conn) == AE_ERR) {
+            return C_ERR;
+        }
+    }
+
+    serverLog(LL_DEBUG, "Connection fd %d priority updated from %s to %s",
+              conn->fd, old_priority ? "prioritized" : "normal", is_priority ? "prioritized" : "normal");
+    return C_OK;
+}

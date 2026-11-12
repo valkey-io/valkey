@@ -331,6 +331,30 @@ foreach call_type {nested normal} {
         assert_equal PONG [$rd read]
     }
 
+    test {real module timer and blocked timeout may expire together} {
+        # Exercise the collision scenario from redis/redis#13015 using a real
+        # module timer. This bounded test allows both completion orders.
+        set rd [valkey_deferring_client]
+        test_defer {$rd close}
+        test_defer {catch {r module load $testmodule}}
+        for {set i 0} {$i < 12} {incr i} {
+            $rd unblock_by_timer 100 100 1
+            set reply [$rd read]
+            assert {$reply eq "OK" || $reply eq "TIMEOUT"}
+        }
+        # If timeout won, a real timer may still hold the blocked-client
+        # handle. Poll until all callbacks have completed and the module can
+        # be unloaded; this also prevents stale replies reaching a new command.
+        wait_for_condition 50 50 {
+            [catch {r module unload blockedclient} unload_err] == 0
+        } else {
+            fail "real timer did not release blocked clients: $unload_err"
+        }
+        assert_equal OK [r module load $testmodule]
+        $rd ping
+        assert_equal PONG [$rd read]
+    }
+
     test {CLIENT UNBLOCK invokes the module timeout callback} {
         set rd [valkey_deferring_client]
         test_defer {$rd close}

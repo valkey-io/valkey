@@ -400,7 +400,7 @@ static raftLogEntry *raftLogGet(uint64_t index);
 static uint64_t raftLogLastIndex(void);
 static uint64_t raftLogTermAt(uint64_t index);
 static void raftLogTruncateFrom(uint64_t index);
-static void clusterRaftPersistNewLogEntries(uint64_t from);
+static int clusterRaftPersistNewLogEntries(uint64_t from);
 static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
 static void clusterRaftStartElection(void);
@@ -2584,8 +2584,13 @@ static void clusterRaftBeforeSleep(bool blocked) {
         clusterSaveConfigOrDie(1);
         rs->last_rewrite_applied = rs->last_applied;
     } else if (rs->todo_persist_log) {
+        /* A failed append may have left a torn tail. Replace the file
+         * before sending AE_ACK. */
+        if (clusterRaftPersistNewLogEntries(rs->persist_log_from) == C_ERR) {
+            clusterSaveConfigOrDie(1);
+            rs->last_rewrite_applied = rs->last_applied;
+        }
         rs->todo_persist_log = 0;
-        clusterRaftPersistNewLogEntries(rs->persist_log_from);
     }
 
     /* Singleton leader: commit after persistence (quorum = 1). */
@@ -3096,31 +3101,51 @@ static sds clusterRaftAppendLogLines(sds config) {
 }
 
 /* Append all log entries from index 'from' onwards to nodes.conf. Called
- * from beforeSleep to batch multiple entries into a single write+fsync. */
-static void clusterRaftPersistNewLogEntries(uint64_t from) {
+ * from beforeSleep to batch multiple entries into a single write+fsync.
+ * Returns C_OK when every byte has been written and fsynced. Returns C_ERR
+ * if the append did not complete; a short write may already be on the file,
+ * and the caller replaces it with a full rewrite before sending AE_ACK. */
+static int clusterRaftPersistNewLogEntries(uint64_t from) {
     clusterRaftState *rs = RAFT_STATE();
     sds buf = sdsempty();
+    size_t offset = 0, len;
+    int fd;
     for (uint64_t i = 0; i < rs->log_count; i++) {
         raftLogEntry *e = rs->log[i];
         if (e->index < from) continue;
         buf = raftLogFormatLine(buf, e);
     }
-    if (sdslen(buf) == 0) {
+    len = sdslen(buf);
+    if (len == 0) {
         sdsfree(buf);
-        return;
+        return C_OK;
     }
-    int fd = open(server.cluster_configfile, O_WRONLY | O_APPEND);
+    fd = open(server.cluster_configfile, O_WRONLY | O_APPEND);
     if (fd == -1) {
         serverLog(LL_WARNING, "Could not open cluster config for log append: %s", strerror(errno));
         sdsfree(buf);
-        return;
+        return C_ERR;
     }
-    if (write(fd, buf, sdslen(buf)) == -1) {
-        serverLog(LL_WARNING, "Could not append log entries to cluster config: %s", strerror(errno));
+    while (offset < len) {
+        ssize_t written = write(fd, buf + offset, len - offset);
+        if (written <= 0) {
+            if (written < 0 && errno == EINTR) continue;
+            serverLog(LL_WARNING, "Could not append log entries to cluster config: %s", strerror(errno));
+            close(fd);
+            sdsfree(buf);
+            return C_ERR;
+        }
+        offset += written;
     }
-    valkey_fsync(fd);
+    if (valkey_fsync(fd) == -1) {
+        serverLog(LL_WARNING, "Could not sync cluster config log append: %s", strerror(errno));
+        close(fd);
+        sdsfree(buf);
+        return C_ERR;
+    }
     close(fd);
     sdsfree(buf);
+    return C_OK;
 }
 
 

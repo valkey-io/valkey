@@ -258,6 +258,119 @@ start_server {tags {"throttle repl external:skip valgrind:skip"}} {
             teardown_throttle_replication $replica $primary
         }
 
+        test {Timed-out script ending with a throttled primary client} {
+            setup_throttle_replication $primary $replica $primary_host $primary_port
+
+            pause_process $replica_pid
+
+            # Activate throttling.
+            grow_replica_cob $primary 5000 1000
+            wait_for_condition 50 100 {
+                [throttle_rate $primary] >= 0
+            } else {
+                resume_process $replica_pid
+                fail "throttle did not activate before failover"
+            }
+
+            # Queue several writers in the throttler so that a write from the new
+            # primary is queued behind them after the demotion.
+            set writers {}
+            set wids {}
+            for {set i 0} {$i < 8} {incr i} {
+                set writer [valkey_deferring_client]
+                $writer CLIENT ID
+                set wid [$writer read]
+                if {![wait_throttled_client $primary $writer $wid]} {
+                    resume_process $replica_pid
+                    fail "Client is not throttled."
+                }
+                lappend writers $writer
+                lappend wids $wid
+            }
+
+            # Keep the writers in the throttler queue. Each released command is
+            # followed by another one, which is queued again at the tail. DEL of a
+            # missing key is not propagated, so the replication offset stays put.
+            foreach writer $writers {
+                for {set i 0} {$i < 100} {incr i} {
+                    $writer del {throttled-primary-missing}
+                }
+            }
+
+            # Keep the throttler alive after the demotion: it is only torn down by
+            # serverCron. This also stops the replication PINGs.
+            $primary debug pause-cron 1
+
+            # Let the replica catch up, so the demoted node can partially resync
+            # with it. A full sync would need cron on the demoted node to complete.
+            resume_process $replica_pid
+            wait_for_condition 100 100 {
+                [string match {*cmd=del*} [$primary CLIENT LIST ID {*}$wids]] &&
+                ![string match {*cmd=eval*} [$primary CLIENT LIST ID {*}$wids]]
+            } else {
+                $primary debug pause-cron 0
+                fail "throttled writes were not released"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            # Fail over. The partial resync runs on file events, so it completes with cron paused.
+            $replica replicaof no one
+            $primary replicaof $replica_host $replica_port
+            wait_for_condition 50 100 {
+                [string match {*master_link_status:up*} [$primary info replication]]
+            } else {
+                $primary debug pause-cron 0
+                fail "demoted node did not connect to the new primary"
+            }
+
+            # The write from the new primary is read by the demoted node and its
+            # primary client is queued in the throttler behind the writers.
+            $replica set {throttled-primary} 1
+            wait_for_condition 50 100 {
+                [status $primary slave_read_repl_offset] == [status $replica master_repl_offset]
+            } else {
+                $primary debug pause-cron 0
+                fail "demoted node did not read the write"
+            }
+            set pid ""
+            regexp {id=(\d+)} [$primary CLIENT LIST TYPE primary] -> pid
+            assert {[client_throttled $primary $pid]}
+            assert_equal 0 [$primary exists {throttled-primary}]
+
+            # End a timed-out read-only script while the primary client is throttled.
+            set old_threshold [lindex [$primary config get busy-reply-threshold] 1]
+            $primary config set busy-reply-threshold 10
+            set rd [valkey_deferring_client]
+            $rd eval_ro {while true do end} 0
+            wait_for_condition 50 100 {
+                [catch {$primary ping} e] == 1 && [string match {BUSY*} $e]
+            } else {
+                fail "Script did not become busy."
+            }
+            $primary script kill
+            catch {$rd read}
+            $rd close
+
+            # The primary client stays throttled and its write is not applied yet.
+            assert_equal PONG [$primary ping]
+            assert {[client_throttled $primary $pid]}
+            assert_equal 0 [$primary exists {throttled-primary}]
+
+            # Once cron tears the throttler down, the primary client is released and applies the write.
+            $primary debug pause-cron 0
+            wait_for_condition 50 100 {
+                [$primary exists {throttled-primary}] == 1
+            } else {
+                fail "primary client was not released after the throttler was torn down"
+            }
+
+            $primary config set busy-reply-threshold $old_threshold
+            foreach writer $writers {
+                $writer close
+            }
+            teardown_throttle_replication $replica $primary
+        }
+
         test {Throttling tears down when disabling config} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
 

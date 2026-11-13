@@ -1739,7 +1739,10 @@ start_server {tags {"repl external:skip cluster:skip"}} {
 }
 
 # fake_redis_node doesn't support TLS and expects the exact non-cluster handshake.
-start_server {tags {"repl external:skip cluster:skip tls:skip"}} {
+# The server starts as a replica of an unreachable primary: a primary turned
+# into a replica synthesizes a cached primary from its own replication ID and
+# would send PSYNC <replid> <offset> instead of PSYNC ? -1.
+start_server {tags {"repl external:skip cluster:skip tls:skip"} overrides {replicaof "127.0.0.1 0"}} {
     test "Replica rejects a +CONTINUE reply to PSYNC when there is no cached primary" {
         # Keep the REPLCONF capa line sent by the replica predictable.
         r config set dual-channel-replication-enabled no

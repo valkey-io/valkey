@@ -18,11 +18,12 @@
  * - The first log entry referencing any node is its NODE_JOIN. Other
  *   entry types (SLOT_CHANGE, SET_REPLICA_OF, etc.) are only proposed
  *   after the node's NODE_JOIN is in the log.
- * - CLUSTER_NODE_MEET means "not yet in the raft log" — set on all
- *   nodes (including myself) at creation, cleared on NODE_JOIN apply.
+ * - CLUSTER_NODE_JOINING means "not yet in the raft log" — set on all
+ *   nodes (including myself) at creation, cleared on NODE_JOIN apply. It's
+ *   never persisted in nodes.conf or sent in snapshots.
  *
  * Constraints:
- * - AE, PRE_VOTE_REQ, and VOTE_REQ are never sent to nodes with CLUSTER_NODE_MEET.
+ * - AE, PRE_VOTE_REQ, and VOTE_REQ are never sent to nodes with CLUSTER_NODE_JOINING.
  *   This prevents AE from arriving before MEET on the same link. Learners receive
  *   AE but are excluded from PRE_VOTE_REQ, VOTE_REQ, and quorum accounting.
  * - Configuration (quorum) takes effect on apply, not on append.
@@ -162,28 +163,32 @@ typedef struct {
 typedef struct {
     /* Persistent Raft state */
     uint64_t current_term;
+    uint64_t last_applied;
+    uint64_t snapshot_term;          /* Term of the entry at last_applied */
     char voted_for[CLUSTER_NAMELEN]; /* All zeros = none */
 
     /* Volatile Raft state */
     enum raftRole role;
     uint64_t commit_index;
-    uint64_t last_applied;
 
     /* Log */
     raftLogEntry **log;
     uint64_t log_count;
     uint64_t log_alloc;
+    uint64_t log_trim_index; /* Index of the last entry trimmed from the log, 0 = none */
+    uint64_t log_trim_term;  /* Term of that entry */
 
     /* Pending proposals waiting for commit. */
     list *pending_proposals; /* list of raftPendingProposal */
 
     /* Pending MEET callbacks waiting for NODE_JOIN commit. */
     list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
-    list *deferred_meets; /* Inbound MEET messages drained once we're in a multi-member cluster */
+    list *deferred_meets; /* Names (sds) of nodes whose MEET we answer once we're in a multi-member cluster */
+
+    clusterLink *processing_link; /* Link whose message is being processed, or NULL */
 
     /* Deferred work for beforeSleep. */
     unsigned int todo_update_slot_coverage : 1;
-    unsigned int todo_invalidate_slots_cache : 1;
     unsigned int todo_connect_nodes : 1;
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
@@ -249,6 +254,7 @@ typedef struct {
     uint64_t next_index;
     uint64_t match_index;
     mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
+    mstime_t last_snapshot_time;          /* Last time we sent INSTALL_SNAPSHOT to this peer */
     unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
 } clusterNodeRaftData;
 
@@ -258,7 +264,7 @@ static bool nodeIsLearner(clusterNode *n) {
     return n->flags & CLUSTER_NODE_LEARNER;
 }
 static bool nodeIsVoter(clusterNode *n) {
-    return !(n->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_LEARNER));
+    return !(n->flags & (CLUSTER_NODE_JOINING | CLUSTER_NODE_LEARNER));
 }
 
 /* --------------------------------------------------------------------------
@@ -349,7 +355,7 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *n = dictGetVal(de);
-        if (n->flags & CLUSTER_NODE_MEET) continue;
+        if (n->flags & CLUSTER_NODE_JOINING) continue;
         long long off = (n == myself) ? getNodeReplicationOffset(myself)
                                       : n->repl_offset;
         msg = sdscatlen(msg, " ", 1);
@@ -388,6 +394,8 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
 static void clusterRaftSendPreVoteRequest(clusterLink *link, uint64_t term);
 static void clusterRaftUnblockMeet(clusterNode *node);
 static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only);
+static void clusterRaftProcessDeferredMeets(void);
+static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, clusterNode *new_owner);
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only);
@@ -415,13 +423,13 @@ static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
 }
 
-/* True if there are any nodes other than myself without the MEET flag. */
+/* True if there are any nodes other than myself without the JOINING flag. */
 static bool clusterRaftHasPeerMembers(void) {
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (node != myself && !(node->flags & CLUSTER_NODE_MEET)) {
+        if (node != myself && !(node->flags & CLUSTER_NODE_JOINING)) {
             dictReleaseIterator(di);
             return true;
         }
@@ -622,7 +630,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
 
     clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
     if (!sender) {
-        sender = createClusterNode(sender_name, CLUSTER_NODE_MEET | CLUSTER_NODE_PRIMARY);
+        sender = createClusterNode(sender_name, CLUSTER_NODE_JOINING | CLUSTER_NODE_PRIMARY);
         clusterAddNode(sender);
     }
 
@@ -692,7 +700,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
     /* If we're the leader, send AE immediately to minimize commit latency
      * after a reconnection (especially in 2-node clusters). */
     if (rs->role == RAFT_ROLE_LEADER && link->node &&
-        !(link->node->flags & CLUSTER_NODE_MEET)) {
+        !(link->node->flags & CLUSTER_NODE_JOINING)) {
         clusterRaftSendAppendEntries(link, link->node);
     }
 
@@ -734,11 +742,30 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
     } else {
         /* Already a joiner (stepped down for another node). Defer until
          * we join a cluster and can invite the sender. */
-        listAddNodeTail(rs->deferred_meets, link);
+        listAddNodeTail(rs->deferred_meets, sdsnewlen(sender->name, CLUSTER_NAMELEN));
         serverLog(LL_NOTICE, "Deferring MEET from %.40s (waiting to join cluster).", sender->name);
     }
 
     return 1;
+}
+
+/* Answer the MEETs we deferred while we were a joiner, now that we're in a
+ * cluster. A node that has disconnected or been removed since is skipped. */
+static void clusterRaftProcessDeferredMeets(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (listLength(rs->deferred_meets) == 0 || !clusterRaftHasPeerMembers()) return;
+    listIter li;
+    listNode *ln;
+    listRewind(rs->deferred_meets, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        sds name = listNodeValue(ln);
+        clusterNode *node = clusterLookupNode(name, CLUSTER_NAMELEN);
+        if (node && node->inbound_link) {
+            clusterRaftSendBare(node->inbound_link, "WELCOME");
+            clusterRaftInvitePeer(node);
+        }
+    }
+    listEmpty(rs->deferred_meets);
 }
 
 /* ADDME handler: the peer stepped down and wants us to add them. */
@@ -1229,6 +1256,7 @@ static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
 /* Forward declarations for pre-vote handlers. */
 static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *argv);
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv);
+static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count);
 static void clusterRaftStartPreVote(void);
 
 /* Defer pending proposals for retry after a leader change. The proposals
@@ -1296,12 +1324,11 @@ static void raftLogAppend(raftLogEntry *e) {
 /* O(1) lookup by index. Returns NULL if out of range. Indices start at 1. */
 static raftLogEntry *raftLogGet(uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
-    if (index == 0 || index > raftLogLastIndex()) return NULL;
-    /* Entries are stored sequentially; first entry's index may not be 1
-     * after future log compaction. For now, base is always 1. */
-    uint64_t base = rs->log_count > 0 ? rs->log[0]->index : 1;
-    if (index < base) return NULL;
-    return rs->log[index - base];
+    if (rs->log_count == 0 || index == 0 || index > raftLogLastIndex()) return NULL;
+    uint64_t base = rs->log[0]->index;
+    if (index < base || index - base >= rs->log_count) return NULL;
+    raftLogEntry *e = rs->log[index - base];
+    return e->index == index ? e : NULL;
 }
 
 /* Truncate the log from the given index onwards (inclusive). */
@@ -1315,19 +1342,57 @@ static void raftLogTruncateFrom(uint64_t index) {
     rs->todo_save_config = 1;
 }
 
+/* Trim applied entries from the front of the log. Called after applying
+ * entries; trims only when the number of applied entries in the log exceeds
+ * twice the keep threshold, so trimming happens in infrequent batches. */
+#define RAFT_LOG_TRIM_KEEP 64
+static void raftLogTrimApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->log_count == 0) return;
+    uint64_t base = rs->log[0]->index;
+    if (rs->last_applied < base) return;
+    uint64_t applied_in_log = rs->last_applied - base + 1;
+    if (applied_in_log <= RAFT_LOG_TRIM_KEEP * 2) return;
+    uint64_t trim_count = applied_in_log - RAFT_LOG_TRIM_KEEP;
+    rs->log_trim_index = rs->log[trim_count - 1]->index;
+    rs->log_trim_term = rs->log[trim_count - 1]->term;
+    for (uint64_t i = 0; i < trim_count; i++) {
+        raftLogFree(rs->log[i]);
+    }
+    rs->log_count -= trim_count;
+    memmove(rs->log, rs->log + trim_count, rs->log_count * sizeof(raftLogEntry *));
+}
+
 static uint64_t raftLogLastIndex(void) {
     clusterRaftState *rs = RAFT_STATE();
-    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->index : 0;
+    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->index : rs->last_applied;
 }
 
 static uint64_t raftLogLastTerm(void) {
     clusterRaftState *rs = RAFT_STATE();
-    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->term : 0;
+    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->term : rs->snapshot_term;
 }
 
 static uint64_t raftLogTermAt(uint64_t index) {
     raftLogEntry *e = raftLogGet(index);
-    return e ? e->term : 0;
+    if (e) return e->term;
+    /* Entry not in log — if it's at the snapshot boundary, use snapshot_term. */
+    clusterRaftState *rs = RAFT_STATE();
+    if (index == rs->last_applied) return rs->snapshot_term;
+    if (index == rs->log_trim_index) return rs->log_trim_term;
+    return 0;
+}
+
+/* Reset the optional fields of a node's address string, so that the ones
+ * missing from the next address string we load end up cleared. */
+static void clusterRaftClearOptionalNodeInfo(clusterNode *node) {
+    node->announce_client_tcp_port = 0;
+    node->announce_client_tls_port = 0;
+    sdsclear(node->hostname);
+    sdsclear(node->human_nodename);
+    sdsclear(node->announce_client_ipv4);
+    sdsclear(node->announce_client_ipv6);
+    sdsclear(node->availability_zone);
 }
 
 /* Find a pending proposal matching type+data, fire its callback, and remove it.
@@ -1398,12 +1463,12 @@ static void raftLogApply(raftLogEntry *e) {
                 /* Update address for existing node. */
                 clusterNodeParseAddressString(existing, argv[1]);
             }
-            /* On first official join, clear MEET and mark voter/learner. */
+            /* On first official join, clear JOINING and mark voter/learner. */
             clusterNode *joined = existing ? existing : clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             bool first_join = false;
-            if (joined && (!existing || (joined->flags & CLUSTER_NODE_MEET))) {
+            if (joined && (!existing || (joined->flags & CLUSTER_NODE_JOINING))) {
                 first_join = true;
-                joined->flags &= ~CLUSTER_NODE_MEET;
+                joined->flags &= ~CLUSTER_NODE_JOINING;
                 if (learner) {
                     joined->flags |= CLUSTER_NODE_LEARNER;
                 } else {
@@ -1413,22 +1478,9 @@ static void raftLogApply(raftLogEntry *e) {
                 clusterAddNodeToShard(joined->shard_id, joined);
                 rs->todo_save_config = 1;
 
-                /* Process deferred MEET messages now that we're in a cluster. */
-                if (clusterRaftHasPeerMembers() && listLength(rs->deferred_meets) > 0) {
-                    listIter dli;
-                    listNode *dln;
-                    listRewind(rs->deferred_meets, &dli);
-                    while ((dln = listNext(&dli)) != NULL) {
-                        clusterLink *mlink = listNodeValue(dln);
-                        if (mlink->node) {
-                            clusterRaftSendBare(mlink, "WELCOME");
-                            clusterRaftInvitePeer(mlink->node);
-                        }
-                    }
-                    listEmpty(rs->deferred_meets);
-                }
+                clusterRaftProcessDeferredMeets();
             }
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
             rs->todo_connect_nodes = 1;
             serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s addr=%s mode=%s (voters=%d).",
                       argv[0], argc >= 2 ? argv[1] : "?", learner ? "learner" : "voter", server.cluster->size);
@@ -1505,7 +1557,7 @@ static void raftLogApply(raftLogEntry *e) {
         entry_result = clusterRaftApplySlotChange(e->data, 0);
         if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "%s SLOT_CHANGE (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -1514,7 +1566,7 @@ static void raftLogApply(raftLogEntry *e) {
     case RAFT_ENTRY_SET_REPLICA_OF: {
         entry_result = clusterRaftApplySetReplica(e->data, 0);
         if (entry_result == RAFT_RESULT_OK) {
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "%s SET_REPLICA_OF (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -1524,7 +1576,7 @@ static void raftLogApply(raftLogEntry *e) {
         entry_result = clusterRaftApplyFailover(e->data, 0);
         if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "%s FAILOVER (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -1554,7 +1606,7 @@ static void raftLogApply(raftLogEntry *e) {
             node->flags |= CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
         }
         serverLog(LL_NOTICE, "Applied NODE_FAIL %.40s (index %llu).",
                   e->data, (unsigned long long)e->index);
@@ -1575,7 +1627,7 @@ static void raftLogApply(raftLogEntry *e) {
             node->flags &= ~CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
-            rs->todo_invalidate_slots_cache = 1;
+            clearCachedClusterSlotsResponse();
             /* Cancel deferred failover if the recovered node is my primary. */
             if (nodeIsReplica(myself) && myself->replicaof == node) {
                 rs->todo_schedule_failover = 0;
@@ -1596,14 +1648,7 @@ static void raftLogApply(raftLogEntry *e) {
             clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
 
             if (node && node != myself) {
-                /* Reset optional fields so absent aux fields get cleared. */
-                node->announce_client_tcp_port = 0;
-                node->announce_client_tls_port = 0;
-                sdsclear(node->hostname);
-                sdsclear(node->human_nodename);
-                sdsclear(node->announce_client_ipv4);
-                sdsclear(node->announce_client_ipv6);
-                sdsclear(node->availability_zone);
+                clusterRaftClearOptionalNodeInfo(node);
                 clusterNodeParseAddressString(node, argv[1]);
                 /* Apply self-set flags. TODO: split on comma and compare
                  * each part individually when more flags are added. */
@@ -1645,6 +1690,22 @@ static void raftLogApply(raftLogEntry *e) {
     clusterRaftCompletePendingProposal(e->type, e->data, entry_result);
 }
 
+/* Apply all committed but unapplied log entries. */
+static void raftApplyCommitted(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    while (rs->last_applied < rs->commit_index) {
+        raftLogEntry *e = raftLogGet(rs->last_applied + 1);
+        if (!e) {
+            serverLog(LL_WARNING, "Committed entry %llu is missing from the log.",
+                      (unsigned long long)(rs->last_applied + 1));
+            break;
+        }
+        rs->last_applied++;
+        rs->snapshot_term = e->term;
+        raftLogApply(e);
+    }
+}
+
 /* --------------------------------------------------------------------------
  * AE (AppendEntries) message
  *
@@ -1652,11 +1713,49 @@ static void raftLogApply(raftLogEntry *e) {
  * Entry lines: <term> <type> <data>
  * -------------------------------------------------------------------------- */
 
+/* Send a snapshot to a follower whose next_index is behind the trimmed log.
+ * Format: INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<config> */
+static void clusterRaftSendInstallSnapshot(clusterLink *link, clusterNode *node) {
+    clusterRaftState *rs = RAFT_STATE();
+    /* Strip MYSELF flag so the receiver doesn't adopt our identity.
+     * Filter JOINING nodes (NODE_JOIN not yet committed). */
+    myself->flags &= ~CLUSTER_NODE_MYSELF;
+    sds config = clusterGenNodesDescription(NULL, CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE, 0);
+    myself->flags |= CLUSTER_NODE_MYSELF;
+    sds msg = wireNewMsg("INSTALL_SNAPSHOT");
+    msg = sdscatlen(msg, " ", 1);
+    msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
+    msg = sdscatfmt(msg, " %U %U %U\n",
+                    (unsigned long long)rs->current_term,
+                    (unsigned long long)rs->last_applied,
+                    (unsigned long long)rs->snapshot_term);
+    msg = sdscatsds(msg, config);
+    sdsfree(config);
+    msg = wireFinishMsg(msg);
+    clusterRaftSendMsg(link, msg);
+    serverLog(LL_NOTICE, "Sent INSTALL_SNAPSHOT to %.40s (last_applied=%llu, term=%llu).",
+              node->name, (unsigned long long)rs->last_applied,
+              (unsigned long long)rs->snapshot_term);
+    /* next_index is updated by the AE_ACK sent after installing it. */
+    RAFT_NODE(node)->last_snapshot_time = monotonicMs();
+}
+
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
     clusterNodeRaftData *rd = RAFT_NODE(node);
 
     uint64_t next = rd->next_index;
+
+    /* If the follower needs entries we've already trimmed, send a snapshot. */
+    uint64_t first_available = rs->log_count > 0 ? rs->log[0]->index : rs->last_applied + 1;
+    if (next < first_available) {
+        /* Don't resend it on every heartbeat while the follower installs it,
+         * but resend it if it's lost. */
+        if (monotonicMs() - rd->last_snapshot_time > server.cluster_node_timeout / 2)
+            clusterRaftSendInstallSnapshot(link, node);
+        return;
+    }
+
     uint64_t prev_index = next > 0 ? next - 1 : 0;
     uint64_t prev_term = raftLogTermAt(prev_index);
 
@@ -1694,7 +1793,7 @@ static void clusterRaftBroadcastAppendEntries(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
-        if (node->flags & CLUSTER_NODE_MEET) continue;
+        if (node->flags & CLUSTER_NODE_JOINING) continue;
         if (!node->link) continue;
         clusterRaftSendAppendEntries(node->link, node);
     }
@@ -1709,6 +1808,15 @@ static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t ter
                     (unsigned long long)raftLogLastIndex(), (long long)offset);
     msg = wireFinishMsg(msg);
     clusterRaftSendMsg(link, msg);
+}
+
+/* Record the leader we heard from. On a leader change, resend the pending
+ * proposals, since a node that isn't the leader drops them. */
+static void clusterRaftSetLeader(const char *leader_id) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (memcmp(rs->leader, leader_id, CLUSTER_NAMELEN) == 0) return;
+    memcpy(rs->leader, leader_id, CLUSTER_NAMELEN);
+    if (listLength(rs->pending_proposals) > 0) rs->todo_retry_proposals = 1;
 }
 
 static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *argv, sds *entry_lines, int entry_line_count) {
@@ -1735,15 +1843,12 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
-    /* Detect leader change — retry pending proposals to the new leader. */
-    if (memcmp(rs->leader, argv[1], CLUSTER_NAMELEN) != 0) {
-        memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
-        if (listLength(rs->pending_proposals) > 0)
-            rs->todo_retry_proposals = 1;
-    }
+    clusterRaftSetLeader(argv[1]);
 
-    /* Log consistency check: verify prev_log_index/term match. */
-    if (prev_log_index > 0 && raftLogTermAt(prev_log_index) != prev_log_term) {
+    /* Log consistency check: verify prev_log_index/term match. Entries have
+     * term >= 1, so 0 means we don't know the entry and never matches. */
+    uint64_t local_prev_term = raftLogTermAt(prev_log_index);
+    if (prev_log_index > 0 && (local_prev_term == 0 || local_prev_term != prev_log_term)) {
         clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
         return 1;
     }
@@ -1755,13 +1860,13 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         sds *eargv = sdssplitlen(entry_lines[i], sdslen(entry_lines[i]), " ", 1, &eargc);
         if (!eargv || eargc < 3) {
             if (eargv) sdsfreesplitres(eargv, eargc);
-            continue;
+            break;
         }
         uint64_t e_term = strtoull(eargv[0], NULL, 10);
         int e_type_int = raftEntryTypeByName(eargv[1]);
-        if (e_type_int < 0) {
+        if (e_term == 0 || e_type_int < 0) {
             sdsfreesplitres(eargv, eargc);
-            continue;
+            break;
         }
         uint8_t e_type = e_type_int;
         sds e_data = sdsjoinsds(eargv + 2, eargc - 2, " ", 1);
@@ -1773,11 +1878,18 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
             raftLogTruncateFrom(new_index);
             existing = NULL;
         }
-        if (!existing) {
-            raftLogAppend(raftLogCreate(e_term, new_index, e_type, e_data));
-        } else {
-            sdsfree(e_data); /* Already have this entry. */
+        if (existing || new_index <= rs->last_applied) {
+            sdsfree(e_data); /* Already have this entry, or applied and trimmed. */
+            continue;
         }
+        if (new_index != raftLogLastIndex() + 1) {
+            /* Not contiguous with our log; don't leave a hole. */
+            serverLog(LL_WARNING, "AE entry %llu doesn't follow our last log index %llu.",
+                      (unsigned long long)new_index, (unsigned long long)raftLogLastIndex());
+            sdsfree(e_data);
+            break;
+        }
+        raftLogAppend(raftLogCreate(e_term, new_index, e_type, e_data));
     }
 
     /* Update commit index and apply. */
@@ -1785,11 +1897,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         rs->commit_index = leader_commit;
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
-    while (rs->last_applied < rs->commit_index) {
-        rs->last_applied++;
-        raftLogEntry *e = raftLogGet(rs->last_applied);
-        if (e) raftLogApply(e);
-    }
+    raftApplyCommitted();
 
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
      * entries are on stable storage before the leader counts our ACK. */
@@ -1824,7 +1932,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
      * between 0 and non-zero (replica finishes sync or starts resync). */
     if (prev_offset != follower_repl_offset &&
         (prev_offset == 0 || follower_repl_offset == 0) &&
-        !(node->flags & CLUSTER_NODE_MEET)) {
+        !(node->flags & CLUSTER_NODE_JOINING)) {
         clusterRaftBroadcastNodeOffset(node, follower_repl_offset);
     }
 
@@ -1869,11 +1977,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
         /* Apply newly committed entries. */
         uint64_t prev_commit = rs->last_applied;
-        while (rs->last_applied < rs->commit_index) {
-            rs->last_applied++;
-            raftLogEntry *e = raftLogGet(rs->last_applied);
-            if (e) raftLogApply(e);
-        }
+        raftApplyCommitted();
         /* If the node we were talking to was forgotten, bail out. */
         if (!link->node) {
             freeClusterLink(link);
@@ -1888,6 +1992,236 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         if (rd->next_index > 1) rd->next_index--;
         clusterRaftSendAppendEntries(node->link, node);
     }
+    return 1;
+}
+
+/* True for a node that we know of but isn't in the log yet, and so isn't in
+ * the snapshot with these node IDs. */
+static bool clusterRaftIsLocalOnlyNode(clusterNode *node, dict *snapshot_ids) {
+    if (!(node->flags & (CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE))) return false;
+    sds name = sdsnewlen(node->name, CLUSTER_NAMELEN);
+    bool in_snapshot = dictFind(snapshot_ids, name) != NULL;
+    sdsfree(name);
+    return !in_snapshot;
+}
+
+/* INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<node lines> */
+static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count) {
+    if (argc < 5) return 1;
+    if (sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
+
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t msg_term = strtoull(argv[2], NULL, 10);
+    uint64_t snap_index = strtoull(argv[3], NULL, 10);
+    uint64_t snap_term = strtoull(argv[4], NULL, 10);
+
+    if (msg_term < rs->current_term) return 1;
+    /* A leader's snapshot ends at an entry from its term or an earlier one,
+     * and terms start at 1. Reject anything else before acting on it. */
+    if (snap_index == 0 || snap_term == 0 || snap_term > msg_term) {
+        serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid index %llu or term %llu.",
+                  argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
+        return 1;
+    }
+    clusterRaftMaybeStepDown(msg_term);
+    if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
+    rs->last_heartbeat = monotonicMs();
+    clusterRaftSetLeader(argv[1]);
+
+    /* If we're already past the snapshot, ignore. */
+    if (snap_index <= rs->last_applied) {
+        rs->todo_send_ae_ack = 1;
+        return 1;
+    }
+
+    /* If our log has the snapshot's last entry, keep the entries after it,
+     * which we may have acknowledged, and just commit up to the snapshot
+     * (Raft paper, section 7). */
+    if (raftLogTermAt(snap_index) == snap_term) {
+        if (snap_index > rs->commit_index) rs->commit_index = snap_index;
+        raftApplyCommitted();
+        rs->todo_send_ae_ack = 1;
+        return 1;
+    }
+
+    /* Check all node lines before changing any state. If one is invalid, a
+     * node appears twice, or the sender isn't included, reject the snapshot.
+     * The leader sends it again later. The leader strips its myself flag, so
+     * a line with it is invalid too. */
+    bool sender_included = false;
+    dict *seen = dictCreate(&clusterNodesDictType);
+    for (int i = 0; i < config_line_count; i++) {
+        if (sdslen(config_lines[i]) == 0) continue;
+        int largc;
+        sds *largv = sdssplitargs(config_lines[i], &largc);
+        bool valid = largv && clusterValidateNodeLine(largv, largc) == C_OK &&
+                     !strcasestr(largv[2], "myself") && dictFind(seen, largv[0]) == NULL;
+        if (valid) {
+            dictAdd(seen, sdsdup(largv[0]), NULL);
+            if (!memcmp(largv[0], argv[1], CLUSTER_NAMELEN)) sender_included = true;
+        }
+        if (largv) sdsfreesplitres(largv, largc);
+        if (!valid) {
+            serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid node line: %s",
+                      argv[1], config_lines[i]);
+            dictRelease(seen);
+            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+            return 1;
+        }
+    }
+    if (!sender_included) {
+        serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
+        dictRelease(seen);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        return 1;
+    }
+
+    /* Clear slots — the snapshot will re-assign them. Remember the old owners
+     * to update the local slot state afterwards, and keep the sharded pubsub
+     * subscriptions until we know which slots changed owner. Shard membership
+     * is kept: loading a node line moves a node whose shard id changed, and
+     * removed nodes leave their shard. */
+    clusterNode **old_owners = zmalloc(sizeof(server.cluster->slots));
+    memcpy(old_owners, server.cluster->slots, sizeof(server.cluster->slots));
+    for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlotKeepChannels(j);
+
+    /* Clear raft log. */
+    for (uint64_t i = 0; i < rs->log_count; i++) raftLogFree(rs->log[i]);
+    rs->log_count = 0;
+    rs->log_trim_index = 0;
+    rs->log_trim_term = 0;
+
+    /* clusterLoadNodeLine() only adds flags and replica links to a node that
+     * already exists. Reset them first so that the snapshot fully defines the
+     * new state. MIGRATE_TO isn't part of the node lines, but loading them
+     * sets it again, as when loading nodes.conf. A joiner keeps JOINING until it
+     * finds itself in the snapshot. Nodes that we know of but that aren't in
+     * the log yet (JOINING or HANDSHAKE) are left out of snapshots, so if the
+     * snapshot doesn't include them, they are kept as they are. */
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node != myself && clusterRaftIsLocalOnlyNode(node, seen)) continue;
+            int keep = CLUSTER_NODE_MYSELF;
+            if (node == myself && rs->role == RAFT_ROLE_JOINER) keep |= CLUSTER_NODE_JOINING;
+            node->flags &= keep;
+            if (node != myself) clusterRaftClearOptionalNodeInfo(node);
+            node->replicaof = NULL;
+            zfree(node->replicas);
+            node->replicas = NULL;
+            node->num_replicas = 0;
+        }
+        dictReleaseIterator(di);
+    }
+
+    /* Our own address and nofailover come from our local config, and
+     * applying NODE_INFO skips myself for the same reason. Remember the
+     * address, without the shard id, which the snapshot decides, so it can
+     * be restored after loading our node line. */
+    sds my_addr = clusterNodeAppendAddressStringNoShardId(sdsempty(), myself, server.tls_cluster);
+
+    /* Load the validated node lines — updates existing nodes, creates new
+     * ones. Only an invalid address can still fail here, and the state is
+     * already partly replaced. */
+    dict *snapshot_nodes = dictCreate(&clusterNodesDictType);
+    for (int i = 0; i < config_line_count; i++) {
+        if (sdslen(config_lines[i]) == 0) continue;
+        int largc;
+        sds *largv = sdssplitargs(config_lines[i], &largc);
+        if (clusterLoadNodeLine(largv, largc, snapshot_nodes) == C_ERR) {
+            serverPanic("Corrupt INSTALL_SNAPSHOT: failed to load node line: %s", config_lines[i]);
+        }
+        sdsfreesplitres(largv, largc);
+    }
+    clusterRaftClearOptionalNodeInfo(myself);
+    if (clusterNodeParseAddressString(myself, my_addr) == C_ERR) {
+        serverPanic("INSTALL_SNAPSHOT: failed to restore our address: %s", my_addr);
+    }
+    sdsfree(my_addr);
+    myself->flags &= ~(CLUSTER_NODE_NOFAILOVER | CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL);
+    if (server.cluster_replica_no_failover) myself->flags |= CLUSTER_NODE_NOFAILOVER;
+
+    /* Do what applying the skipped slot changes would have done locally. The
+     * old owners are still valid, since nodes are only deleted below. */
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (old_owners[j] != server.cluster->slots[j]) {
+            removeChannelsInSlot(j);
+            clusterRaftUpdateLocalSlotState(j, old_owners[j], server.cluster->slots[j]);
+        }
+    }
+    zfree(old_owners);
+
+    /* Remove nodes not present in the snapshot. */
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself) continue;
+            sds name = sdsnewlen(node->name, CLUSTER_NAMELEN);
+            int in_snapshot = dictFind(snapshot_nodes, name) != NULL;
+            sdsfree(name);
+            if (in_snapshot || clusterRaftIsLocalOnlyNode(node, seen)) continue;
+            clusterDelNode(node);
+        }
+        dictReleaseIterator(di);
+    }
+    dictRelease(seen);
+    /* If we were a joiner and the snapshot includes us (our NODE_JOIN was
+     * committed), promote to learner or follower, same as
+     * raftLogApply(NODE_JOIN). Otherwise sync the role with our voter or
+     * learner status in the snapshot, as ADD_VOTER and DEL_VOTER do. */
+    if (rs->role == RAFT_ROLE_JOINER) {
+        sds mykey = sdsnewlen(myself->name, CLUSTER_NAMELEN);
+        int found = dictFind(snapshot_nodes, mykey) != NULL;
+        sdsfree(mykey);
+        if (found) {
+            myself->flags &= ~CLUSTER_NODE_JOINING;
+            rs->role = nodeIsLearner(myself) ? RAFT_ROLE_LEARNER : RAFT_ROLE_FOLLOWER;
+            serverLog(LL_NOTICE, "Promoted from joiner to %s (via snapshot).",
+                      nodeIsLearner(myself) ? "learner" : "follower");
+        }
+    } else {
+        rs->role = nodeIsLearner(myself) ? RAFT_ROLE_LEARNER : RAFT_ROLE_FOLLOWER;
+    }
+    dictRelease(snapshot_nodes);
+
+    /* Update raft state to the snapshot point. */
+    rs->last_applied = snap_index;
+    rs->commit_index = snap_index;
+    rs->snapshot_term = snap_term;
+
+    serverLog(LL_NOTICE, "Installed snapshot from %.40s (index=%llu, term=%llu).",
+              argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
+
+    /* Recompute cluster size (number of voters) from the loaded snapshot. */
+    server.cluster->size = 0;
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (nodeIsVoter(node)) server.cluster->size++;
+        }
+        dictReleaseIterator(di);
+    }
+
+    rs->todo_save_config = 1;
+    rs->todo_connect_nodes = 1;
+    rs->todo_send_ae_ack = 1;
+    rs->todo_update_replication = 1;
+    rs->todo_update_slot_coverage = 1;
+    clearCachedClusterSlotsResponse();
+    /* If our primary is failed, schedule a failover, as applying its
+     * NODE_FAIL would have done. */
+    if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
+        rs->todo_schedule_failover = 1;
+    }
+    /* Answer MEETs deferred while we were a joiner, as when our own
+     * NODE_JOIN is applied. */
+    clusterRaftProcessDeferredMeets();
     return 1;
 }
 
@@ -2171,6 +2505,7 @@ static void clusterRaftInit(void) {
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
     rs->deferred_meets = listCreate();
+    listSetFreeMethod(rs->deferred_meets, sdsfreeVoid);
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
@@ -2182,19 +2517,25 @@ static void clusterRaftInit(void) {
 static void clusterRaftInitLast(void) {
     clusterListenerInit();
 
-    /* On fresh start (size == 0), mark myself as not yet in the raft log.
-     * Cleared when our own NODE_JOIN is applied. On restart, size is
-     * restored by postLoad so we skip this. */
-    if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
-        myself->flags |= CLUSTER_NODE_MEET;
+    /* A singleton (no peers) that has never been in a raft log is marked
+     * JOINING, to prevent it from committing entries before joining a
+     * cluster. Cleared when our own NODE_JOIN is applied (in a multi-node
+     * cluster). A singleton that has been in a log, e.g. after the other
+     * nodes were forgotten, keeps its state and elects itself, since the
+     * election timeout only runs when there are other nodes. */
+    clusterRaftState *rs = RAFT_STATE();
+    if (dictSize(server.cluster->nodes) <= 1 && rs->last_applied == 0) {
+        myself->flags |= CLUSTER_NODE_JOINING;
+        server.cluster->size = 0;
+    } else if (dictSize(server.cluster->nodes) == 1 && nodeIsVoter(myself)) {
+        clusterRaftStartElection();
     }
 
     /* Fresh single-node cluster: become leader immediately. */
-    clusterRaftState *rs = RAFT_STATE();
     if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
         myself->flags &= ~CLUSTER_NODE_LEARNER;
         rs->role = RAFT_ROLE_LEADER;
-        rs->current_term = 1;
+        if (rs->current_term == 0) rs->current_term = 1;
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
         serverLog(LL_NOTICE, "Single-node cluster: becoming Raft leader (term %llu).",
                   (unsigned long long)rs->current_term);
@@ -2379,7 +2720,7 @@ static void clusterRaftCron(void) {
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
             if (node == myself || !node->link) continue;
-            if (node->flags & CLUSTER_NODE_MEET) continue;
+            if (node->flags & CLUSTER_NODE_JOINING) continue;
             /* link->ctime and data_received are wall-clock (mstime) times. */
             mstime_t link_age = mstime() - node->link->ctime;
             if ((node->data_received < node->link->ctime && link_age > stale) ||
@@ -2592,16 +2933,15 @@ static void clusterRaftBeforeSleep(bool blocked) {
         }
         rs->todo_persist_log = 0;
     }
+    /* Only trim once new entries are persisted. An incremental append only
+     * writes the entries still in the log. */
+    raftLogTrimApplied();
 
     /* Singleton leader: commit after persistence (quorum = 1). */
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 &&
         raftLogLastIndex() > rs->commit_index) {
         rs->commit_index = raftLogLastIndex();
-        while (rs->last_applied < rs->commit_index) {
-            rs->last_applied++;
-            raftLogEntry *e = raftLogGet(rs->last_applied);
-            if (e) raftLogApply(e);
-        }
+        raftApplyCommitted();
         /* If we have any peer member (voter or learner), replicate the new commit index. */
         if (clusterRaftHasPeerMembers()) rs->todo_broadcast_ae = 1;
     }
@@ -2656,11 +2996,6 @@ static void clusterRaftBeforeSleep(bool blocked) {
         clusterRaftCheckSlotCoverage();
     }
 
-    if (rs->todo_invalidate_slots_cache) {
-        rs->todo_invalidate_slots_cache = 0;
-        clearCachedClusterSlotsResponse();
-    }
-
     if (rs->todo_schedule_failover) {
         rs->todo_schedule_failover = 0;
         /* Schedule automatic failover if my primary is still failed. */
@@ -2670,7 +3005,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
             int rank = 0;
             for (int r = 0; r < clusterNodeNumReplicas(myself->replicaof); r++) {
                 clusterNode *sibling = clusterNodeGetReplica(myself->replicaof, r);
-                if (sibling == myself) continue;
+                if (sibling == myself || nodeCantFailover(sibling)) continue;
                 if (sibling->repl_offset > my_offset) rank++;
             }
             rs->failover_time = monotonicMs() + rank * 1000;
@@ -2717,7 +3052,7 @@ static void clusterRaftPrepareShutdown(void) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
         if (nodeFailed(node)) continue;
-        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_LEARNER)) continue;
+        if (node->flags & (CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_LEARNER)) continue;
         uint64_t mi = RAFT_NODE(node)->match_index;
         if (!best || mi > best_match) {
             best = node;
@@ -2813,6 +3148,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         goto done;
     }
 
+    RAFT_STATE()->processing_link = link;
     if (!strcasecmp(argv[0], "HELLO")) {
         ret = clusterRaftProcessHello(link, argc, argv);
     } else if (!strcasecmp(argv[0], "HI")) {
@@ -2831,6 +3167,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessReject(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
+    } else if (!strcasecmp(argv[0], "INSTALL_SNAPSHOT")) {
+        ret = clusterRaftProcessInstallSnapshot(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "AE_ACK")) {
         ret = clusterRaftProcessAppendEntriesResponse(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PRE_VOTE_REQ")) {
@@ -2931,6 +3269,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
 
     sdsfreesplitres(argv, argc);
 done:
+    RAFT_STATE()->processing_link = NULL;
     if (lines) sdsfreesplitres(lines, line_count);
     return ret;
 }
@@ -2990,7 +3329,7 @@ static void clusterRaftUpdateMyself(int old_flags) {
     clearCachedClusterSlotsResponse();
     /* Don't propose NODE_INFO before our own NODE_JOIN is in the log,
      * or if our IP is not yet known. */
-    if ((myself->flags & CLUSTER_NODE_MEET) || myself->ip[0] == '\0') return;
+    if ((myself->flags & CLUSTER_NODE_JOINING) || myself->ip[0] == '\0') return;
     /* Propose NODE_INFO to propagate the change to other nodes. */
     sds data = clusterRaftBuildMyNodeInfo();
     sds entry = sdsnew("NODE_INFO ");
@@ -3037,9 +3376,10 @@ static void clusterRaftSetNodePingPongEpoch(clusterNode *node, int ping_active, 
 
 static sds clusterRaftAppendVarsLine(sds config) {
     clusterRaftState *rs = RAFT_STATE();
-    config = sdscatprintf(config, "vars currentTerm %llu lastApplied %llu",
+    config = sdscatprintf(config, "vars currentTerm %llu lastApplied %llu snapshotTerm %llu",
                           (unsigned long long)rs->current_term,
-                          (unsigned long long)rs->last_applied);
+                          (unsigned long long)rs->last_applied,
+                          (unsigned long long)rs->snapshot_term);
     if (rs->voted_for[0]) {
         config = sdscat(config, " votedFor ");
         config = sdscatlen(config, rs->voted_for, CLUSTER_NAMELEN);
@@ -3060,6 +3400,9 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
     } else if (!strcasecmp(name, "lastApplied")) {
         rs->last_applied = strtoull(value, NULL, 10);
         rs->commit_index = rs->last_applied;
+        return 1;
+    } else if (!strcasecmp(name, "snapshotTerm")) {
+        rs->snapshot_term = strtoull(value, NULL, 10);
         return 1;
     } else if (!strcasecmp(name, "votedFor")) {
         memcpy(rs->voted_for, value, CLUSTER_NAMELEN);
@@ -3176,6 +3519,10 @@ static int clusterRaftParseLogLine(sds *argv, int argc) {
         return C_ERR;
     }
     uint64_t term = strtoull(argv[3], NULL, 10);
+    if (term == 0) {
+        serverLog(LL_WARNING, "Corrupt raft log line at index %llu: term 0.", (unsigned long long)index);
+        return C_ERR;
+    }
     int type = raftEntryTypeByName(argv[4]);
     if (type < 0) {
         serverLog(LL_WARNING, "Corrupt raft log line at index %llu: unknown type '%s'.",
@@ -3201,6 +3548,16 @@ static void clusterRaftPostLoad(void) {
      * the leader will update it via AE. For now, ensure it's consistent. */
     if (rs->commit_index < rs->last_applied)
         rs->commit_index = rs->last_applied;
+    /* The log consistency check relies on knowing the term at last_applied. */
+    if (rs->last_applied > 0 && rs->snapshot_term == 0) {
+        serverPanic("Corrupt cluster config: lastApplied %llu without snapshotTerm.",
+                    (unsigned long long)rs->last_applied);
+    }
+    /* We can't have applied an entry from a later term than our current one. */
+    if (rs->current_term < rs->snapshot_term) {
+        serverPanic("Corrupt cluster config: currentTerm %llu is lower than snapshotTerm %llu.",
+                    (unsigned long long)rs->current_term, (unsigned long long)rs->snapshot_term);
+    }
     /* Schedule a full rewrite to produce a clean file (removes any
      * incomplete trailing line from a short write). */
     rs->todo_save_config = 1;
@@ -3469,7 +3826,7 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
             }
         }
         rs->todo_update_slot_coverage = 1;
-        rs->todo_invalidate_slots_cache = 1;
+        clearCachedClusterSlotsResponse();
         if (callback) callback(ctx, NULL);
         zfree(filtered);
         return;
@@ -3504,6 +3861,39 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     clusterRaftPropose(entry, sc, &clusterRaftSlotChangeApplyCallback);
     sdsfree(entry);
     zfree(filtered);
+}
+
+/* Update the local state of a slot that moves from old_owner to new_owner
+ * (either may be NULL): delete the keys in a slot that has left our shard,
+ * and clear the migrating and importing markers that the move completes. The
+ * markers are local to the shard and not part of the snapshot, so this is
+ * done both when applying a slot change and when installing a snapshot. */
+static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, clusterNode *new_owner) {
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    if (old_owner == myself || new_owner == myself) RAFT_STATE()->todo_save_config = 1;
+    /* DELSLOTS keeps the keys and markers, like gossip. */
+    if (!new_owner) return;
+
+    /* Only while still bound, like gossip. A slot that moves to another node
+     * in our shard, e.g. our replica that took over, keeps its keys. */
+    if (old_owner == myself && memcmp(new_owner->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
+        serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
+        delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+    }
+
+    /* Target is this shard, not necessarily myself. */
+    if (new_owner == my_primary && getImportingSlotSource(slot)) {
+        setImportingSlotSource(slot, NULL);
+        RAFT_STATE()->todo_save_config = 1;
+    }
+
+    /* Clear migrating only if the slot left our shard. */
+    if (getMigratingSlotDest(slot) && old_owner &&
+        !memcmp(old_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) &&
+        memcmp(new_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
+        setMigratingSlotDest(slot, NULL);
+        RAFT_STATE()->todo_save_config = 1;
+    }
 }
 
 /* Apply (or validate) a SLOT_CHANGE entry.
@@ -3544,41 +3934,10 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
         }
         for (int j = start; j <= end; j++) {
             clusterNode *old_owner = server.cluster->slots[j];
-            clusterNode *my_primary = clusterNodeGetPrimary(myself);
-
-            if (info.target_node) {
-                /* Same owner: do not touch migrating/importing. */
-                if (old_owner == info.target_node) continue;
-
-                /* Only while still bound, like gossip. DELSLOTS orphans stay. */
-                if (old_owner == myself && info.target_node != myself) {
-                    serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
-                              j, myself->name);
-                    delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
-                }
-
-                /* Target is this shard, not necessarily myself. */
-                if (info.target_node == my_primary && getImportingSlotSource(j)) {
-                    setImportingSlotSource(j, NULL);
-                    RAFT_STATE()->todo_save_config = 1;
-                }
-
-                /* Clear migrating only if the slot left our shard. */
-                if (getMigratingSlotDest(j) && old_owner &&
-                    !memcmp(old_owner->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) &&
-                    memcmp(info.target_node->shard_id, my_primary->shard_id, CLUSTER_NAMELEN) != 0) {
-                    setMigratingSlotDest(j, NULL);
-                    RAFT_STATE()->todo_save_config = 1;
-                }
-
-                if (info.target_node == myself || old_owner == myself)
-                    RAFT_STATE()->todo_save_config = 1;
-                if (old_owner) clusterDelSlot(j);
-                clusterAddSlot(info.target_node, j);
-            } else {
-                if (old_owner == myself) RAFT_STATE()->todo_save_config = 1;
-                clusterDelSlot(j);
-            }
+            if (old_owner == info.target_node) continue;
+            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
+            if (old_owner) clusterDelSlot(j);
+            if (info.target_node) clusterAddSlot(info.target_node, j);
         }
     }
     goto done;
@@ -3783,7 +4142,7 @@ static RaftProposalResult clusterRaftApplyAddVoter(sds data, int validate_only) 
     }
 
     clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
-    if (!node || (node->flags & CLUSTER_NODE_MEET) || !nodeIsLearner(node)) {
+    if (!node || (node->flags & CLUSTER_NODE_JOINING) || !nodeIsLearner(node)) {
         sdsfreesplitres(argv, argc);
         return RAFT_RESULT_REJECTED;
     }
@@ -3817,7 +4176,7 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     }
 
     clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
-    if (!node || (node->flags & CLUSTER_NODE_MEET) || nodeIsLearner(node) ||
+    if (!node || (node->flags & CLUSTER_NODE_JOINING) || nodeIsLearner(node) ||
         server.cluster->size <= 1 ||
         memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
         sdsfreesplitres(argv, argc);
@@ -3871,16 +4230,19 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
     bool was_voter = nodeIsVoter(node);
 
-    /* Detach link before deleting so clusterReadHandler can detect
-     * that the node it was talking to is gone. */
-    if (node->link) {
-        node->link->node = NULL;
-        node->link = NULL;
+    /* clusterDelNode() frees the node's links. If we're processing a message
+     * from one of them, detach it instead, so the message handler can detect
+     * that the node it was talking to is gone and free the link. */
+    clusterLink *link = rs->processing_link;
+    if (link && link->node == node) {
+        if (node->link == link) node->link = NULL;
+        if (node->inbound_link == link) node->inbound_link = NULL;
+        link->node = NULL;
     }
     clusterDelNode(node);
     if (was_voter && server.cluster->size > 0) server.cluster->size--;
     rs->todo_update_slot_coverage = 1;
-    rs->todo_invalidate_slots_cache = 1;
+    clearCachedClusterSlotsResponse();
     rs->todo_save_config = 1;
 
     /* Bump shard epoch after successful delete. */
@@ -4067,7 +4429,7 @@ static void clusterRaftMeet(const char *ip, int port, int cport, void *ctx, void
     dictReleaseIterator(di);
 
     if (!already) {
-        clusterNode *n = createClusterNode(NULL, CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE);
+        clusterNode *n = createClusterNode(NULL, CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE);
         memcpy(n->ip, norm_ip, sizeof(n->ip));
         if (server.tls_cluster) {
             n->tls_port = port;
@@ -4140,17 +4502,21 @@ static void clusterRaftResetCluster(int hard) {
         zfree(pm);
         listDelNode(rs->pending_meets, ln);
     }
+    listEmpty(rs->deferred_meets);
     rs->current_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     rs->commit_index = 0;
     rs->last_applied = 0;
+    rs->snapshot_term = 0;
     rs->log_count = 0;
+    rs->log_trim_index = 0;
+    rs->log_trim_term = 0;
     rs->role = RAFT_ROLE_LEADER;
     rs->failover_time = 0;
     clusterRaftCancelManualFailover();
     server.cluster->size = 0;
-    myself->flags |= CLUSTER_NODE_MEET;
+    myself->flags |= CLUSTER_NODE_JOINING;
     myself->flags &= ~CLUSTER_NODE_LEARNER;
 
     /* Hard reset: change node ID. */
@@ -4177,6 +4543,7 @@ static void clusterRaftResetCluster(int hard) {
     }
 
     clearCachedClusterSlotsResponse();
+    rs->todo_save_config = 1;
     serverLog(LL_NOTICE, "Cluster %s reset, now I'm %.40s",
               hard ? "hard" : "soft", myself->name);
 }

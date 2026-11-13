@@ -24,6 +24,7 @@ extern dictType clusterSlotDictType;
 #define CLUSTER_NODE_MIGRATE_TO (1 << 8) /* Primary eligible for replica migration. */
 #define CLUSTER_NODE_NOFAILOVER (1 << 9) /* Replica will not try to failover. */
 #define CLUSTER_NODE_LEARNER (1 << 14)   /* Raft non-voting member. */
+#define CLUSTER_NODE_JOINING (1 << 15)   /* Raft: not yet committed to the log. */
 
 #define nodeIsPrimary(n) ((n)->flags & CLUSTER_NODE_PRIMARY)
 #define nodeIsReplica(n) ((n)->flags & CLUSTER_NODE_REPLICA)
@@ -163,6 +164,7 @@ void clusterNodeIterReset(ClusterNodeIterator *iter);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
+int clusterDelSlotKeepChannels(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 
 bool isAnySlotInManualImportingState(void);

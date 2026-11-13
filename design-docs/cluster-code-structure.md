@@ -54,51 +54,48 @@ The common layer dispatches to the active implementation through
 `clusterCurrentBus`; the implementations call back into the common layer
 (node and slot state, nodes.conf, links), shown by the arrows on the sides.
 
+## Design rules
+
+- Common code calls protocol code only through `clusterCurrentBus`, and
+  never reads protocol-specific data.
+- Functions declared in `cluster.h` are implemented in the common layer. If
+  the behavior is protocol-specific, the function dispatches through the bus.
+- Each protocol owns its wire format. The link layer only frames incoming
+  messages, using `validateMessageHeader`, and passes them to
+  `processMessage`.
+- The cluster topology (nodes, slots, shards) is kept in common state, but
+  the active protocol decides when it changes. The gossip protocol applies a
+  change directly; a consensus-based protocol such as Raft applies it when
+  it is committed.
+- Bus operations that change the topology report completion through a
+  callback. A client running such a command is blocked with `BLOCKED_ASYNC`
+  until the callback replies, so a change can wait for consensus without
+  blocking the server.
+
 ## Protocol-specific state
 
-Both `clusterState` and `clusterNode` contain a `void *protocol_data`
-field that protocol implementations use to attach their own state.
+`clusterState` and `clusterNode` each have a `void *protocol_data` pointer
+where the active protocol keeps its own state:
 
 ```
-clusterState (cluster_state.h)              clusterNode (cluster_state.h)
-┌──────────────────────────┐                ┌──────────────────────────┐
-│ myself                   │                │ name, shard_id, flags    │
-│ state, fail_reason, size │                │ slots[], numslots        │
-│ nodes (dict)             │                │ ip, ports, hostname      │
-│ shards (dict)            │                │ replicaof, replicas      │
-│ migrating_slots_to       │                │ link, inbound_link       │
-│ importing_slots_from     │                │ repl_offset              │
-│ slots[CLUSTER_SLOTS]     │                │ ...                      │
-│ slot_stats[]             │                │                          │
-│ stat_cluster_links_...   │                │ void *protocol_data ─────┼──┐
-│ before_sleep_handle_...  │                └──────────────────────────┘  │
-│ ...                      │                                              │
-│ void *protocol_data ─────┼──┐             ┌──────────────────────────┐  │
-└──────────────────────────┘  │             │ clusterNodeLegacyData    │◄─┘
-                              │             │ (cluster_legacy.c)       │
-┌──────────────────────────┐  │             │                          │
-│ clusterLegacyState       │◄─┘             │ configEpoch              │
-│ (cluster_legacy.c)       │                │ ping_sent, pong_received │
-│                          │                │ fail_time, meet_sent     │
-│ currentEpoch             │                │ fail_reports (rax)       │
-│ safe_to_join             │                │ orphaned_time            │
-│ todo_before_sleep        │                └──────────────────────────┘
-│ nodes_black_list         │
-│ failover_auth_*          │
-│ mf_end, mf_replica       │
-│ stats_bus_messages_*     │
-│ owner_not_claiming_slot  │
-└──────────────────────────┘
+┌───────────────────────────┐        ┌───────────────────────────┐
+│ clusterState              │        │ clusterNode               │
+├───────────────────────────┤        ├───────────────────────────┤
+│ nodes, shards, slots[],   │        │ name, flags, slots[],     │
+│ ...                       │        │ link, ...                 │
+│ protocol_data ──┐         │        │ protocol_data ──┐         │
+└─────────────────┼─────────┘        └─────────────────┼─────────┘
+                  │                                    │
+┌─────────────────▼─────────┐        ┌─────────────────▼─────────┐
+│ clusterLegacyState        │        │ clusterNodeLegacyData     │
+├───────────────────────────┤        ├───────────────────────────┤
+│ currentEpoch, failover    │        │ configEpoch, ping_sent,   │
+│ election, ...             │        │ fail_reports, ...         │
+└───────────────────────────┘        └───────────────────────────┘
 ```
 
-The legacy protocol accesses its data through macros defined in
-cluster_legacy.c:
-
-- `LEGACY_STATE()` — casts `server.cluster->protocol_data` to
-  `clusterLegacyState *`.
-- `LEGACY_DATA(node)` — casts `node->protocol_data` to
-  `clusterNodeLegacyData *`.
-
-The `initNodeData` vtable callback is responsible for allocating and
-initializing the per-node protocol data when `createClusterNode` is
-called.
+The legacy protocol reaches its data through the `LEGACY_STATE()` and
+`LEGACY_DATA(node)` macros in cluster_legacy.c. Per-node data is allocated
+and freed by the `initNodeData` and `freeNodeData` bus operations. The Raft
+implementation keeps its own state in the same way and is described in its
+own design document.

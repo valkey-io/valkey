@@ -41,6 +41,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <libgen.h>
 
 extern char **environ;
 
@@ -524,15 +525,49 @@ void initSentinel(void) {
     server.sentinel_config = NULL;
 }
 
-/* This function is for checking whether sentinel config file has been set,
- * also checking whether we have write permissions. */
+/* Check that the config file is set and that we can save state to it.
+ * A read-only config file is refused on purpose: we won't overwrite it.
+ * The directory must also allow what rewriteConfigOverwriteFile() does:
+ * create a temp file, and open the directory to fsync it. */
 void sentinelCheckConfigFile(void) {
     if (server.configfile == NULL) {
         serverLog(LL_WARNING, "Sentinel needs config file on disk to save state. Exiting...");
         exit(1);
-    } else if (access(server.configfile, W_OK) == -1) {
+    }
+
+    if (access(server.configfile, W_OK) == -1) {
         serverLog(LL_WARNING, "Sentinel config file %s is not writable: %s. Exiting...", server.configfile,
                   strerror(errno));
+        exit(1);
+    }
+
+    /* Same temp name and length check as rewriteConfigOverwriteFile(). */
+    char tmp_conffile[PATH_MAX];
+    int tmp_path_len = snprintf(tmp_conffile, sizeof(tmp_conffile), "%s%s", server.configfile, ".XXXXXX");
+    if (tmp_path_len <= 0 || (unsigned int)tmp_path_len >= sizeof(tmp_conffile)) {
+        serverLog(LL_WARNING, "Sentinel config file path %s is too long. Exiting...", server.configfile);
+        exit(1);
+    }
+
+    /* For logging only. Fits per the check above; dirname() may modify it. */
+    char dir_buf[PATH_MAX];
+    memcpy(dir_buf, server.configfile, strlen(server.configfile) + 1);
+    const char *dir = dirname(dir_buf);
+
+#if defined(_GNU_SOURCE) && !defined(__HAIKU__)
+    int fd = mkostemp(tmp_conffile, O_CLOEXEC);
+#else
+    int fd = mkstemp(tmp_conffile);
+#endif
+    if (fd == -1) {
+        serverLog(LL_WARNING, "Sentinel config dir %s is not writable: %s. Exiting...", dir, strerror(errno));
+        exit(1);
+    }
+    close(fd);
+    unlink(tmp_conffile);
+
+    if (fsyncFileDir(server.configfile) == -1) {
+        serverLog(LL_WARNING, "Sentinel config dir %s cannot be synced: %s. Exiting...", dir, strerror(errno));
         exit(1);
     }
 }
@@ -4512,21 +4547,24 @@ void sentinelCheckSubjectivelyDown(sentinelValkeyInstance *ri) {
 void sentinelCheckObjectivelyDown(sentinelValkeyInstance *primary) {
     dictIterator *di;
     dictEntry *de;
-    unsigned int quorum = 0, odown = 0;
+    unsigned int quorum = 1, odown = 0; /* Count the current sentinel. */
+    mstime_t now = mstime();
 
-    if (primary->flags & SRI_S_DOWN) {
-        /* Is down for enough sentinels? */
-        quorum = 1; /* the current sentinel. */
-        /* Count all the other sentinels. */
-        di = dictGetIterator(primary->sentinels);
-        while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *ri = dictGetVal(de);
+    /* Expire stale replies even when the primary is healthy, before counting
+     * the other sentinels towards the quorum. */
+    di = dictGetIterator(primary->sentinels);
+    while ((de = dictNext(di)) != NULL) {
+        sentinelValkeyInstance *ri = dictGetVal(de);
 
-            if (ri->flags & SRI_PRIMARY_DOWN) quorum++;
+        if (now - ri->last_primary_down_reply_time > sentinel_ask_period * 5) {
+            ri->flags &= ~SRI_PRIMARY_DOWN;
+            sdsfree(ri->leader);
+            ri->leader = NULL;
         }
-        dictReleaseIterator(di);
-        if (quorum >= primary->quorum) odown = 1;
+        if (ri->flags & SRI_PRIMARY_DOWN) quorum++;
     }
+    dictReleaseIterator(di);
+    if ((primary->flags & SRI_S_DOWN) && quorum >= primary->quorum) odown = 1;
 
     /* Set the flag accordingly to the outcome. */
     if (odown) {
@@ -4595,15 +4633,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
     di = dictGetIterator(primary->sentinels);
     while ((de = dictNext(di)) != NULL) {
         sentinelValkeyInstance *ri = dictGetVal(de);
-        mstime_t elapsed = mstime() - ri->last_primary_down_reply_time;
         int retval;
-
-        /* If the primary state from other sentinel is too old, we clear it. */
-        if (elapsed > sentinel_ask_period * 5) {
-            ri->flags &= ~SRI_PRIMARY_DOWN;
-            sdsfree(ri->leader);
-            ri->leader = NULL;
-        }
 
         /* Only ask if primary is down to other sentinels if:
          *

@@ -4159,3 +4159,83 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 }
+
+start_server {tags {"zset" "needs:debug" "external:skip"} overrides {save ""}} {
+    proc zset_fill_fixed {key n} {
+        r eval {
+            for i = 1, tonumber(ARGV[1]) do
+                server.call('ZADD', KEYS[1], i, string.format('m%06d', i))
+            end
+        } 1 $key $n
+    }
+    # Remove every member whose index i has i % mod == rem.
+    proc zset_remove_every {key n mod rem} {
+        r eval {
+            local n, mod, rem = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
+            for i = 1, n do
+                if i % mod == rem then
+                    server.call('ZREM', KEYS[1], string.format('m%06d', i))
+                end
+            end
+        } 1 $key $n $mod $rem
+    }
+    # Leaf count of a btree-encoded sorted set. Exact, unlike MEMORY USAGE,
+    # whose sampled member sizes depend on the allocator.
+    proc zset_leaves {key} {
+        set info [r debug object $key]
+        assert_match {*btree_leaves:*} $info
+        regexp {btree_leaves:(\d+)} $info -> leaves
+        return $leaves
+    }
+
+    test {ZSET btree leaf compaction pauses while a child process exists} {
+        # 10 s per key: the child must outlive the removals below even on a
+        # slow runner, and it is killed as soon as the check is done.
+        test_config_set r rdb-key-save-delay 10000000
+        r del z1{t} z2{t}
+        set n 12000
+
+        # Two keys with the same members, scores and insertion order build
+        # the same tree.
+        zset_fill_fixed z1{t} $n
+        zset_fill_fixed z2{t} $n
+        assert_encoding btree z1{t}
+        assert_encoding btree z2{t}
+        set leaves [zset_leaves z1{t}]
+        assert_equal $leaves [zset_leaves z2{t}]
+
+        r bgsave
+        wait_for_condition 10 100 {
+            [s rdb_bgsave_in_progress] eq 1
+        } else {
+            fail "bgsave did not start in time"
+        }
+
+        # With a child alive, remove two of every three members from z1.
+        # Scattered in rank, so every leaf thins to about a third and none
+        # empties. The gate must keep every leaf.
+        zset_remove_every z1{t} $n 3 1
+        zset_remove_every z1{t} $n 3 2
+        assert_equal $leaves [zset_leaves z1{t}]
+
+        exec kill -9 [get_child_pid 0]
+        waitForBgsave r
+
+        # The same deletions on z2 with no child re-pack each bottom node as
+        # it crosses the trigger, freeing about a third of the leaves.
+        zset_remove_every z2{t} $n 3 1
+        zset_remove_every z2{t} $n 3 2
+        assert_equal [r zcard z1{t}] [r zcard z2{t}]
+        assert_lessthan [zset_leaves z2{t}] [expr {$leaves - 16}]
+
+        # Compaction has resumed on z1 too: after the same further deletions
+        # both trees have re-packed the same item counts and converge.
+        zset_remove_every z1{t} $n 6 0
+        zset_remove_every z2{t} $n 6 0
+        assert_equal [r zcard z1{t}] [r zcard z2{t}]
+        set leaves1 [zset_leaves z1{t}]
+        set leaves2 [zset_leaves z2{t}]
+        assert_lessthan [expr {abs($leaves1 - $leaves2)}] 8
+        assert_lessthan $leaves1 [expr {$leaves - 32}]
+    } {} {needs:debug needs:local-process}
+}

@@ -191,8 +191,12 @@ proc get_nodes_conf_path {srv_idx} {
 # failure and it will cause cluster config file save to fail at the rename.
 proc create_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
-    if {[file exists $cluster_conf_path]} { exec rm -rf $cluster_conf_path }
-    exec mkdir -p $cluster_conf_path
+    # Retry: a background config save can recreate nodes.conf between the rm and the mkdir.
+    wait_for_condition 50 100 {
+        ![catch {exec rm -rf $cluster_conf_path; exec mkdir -p $cluster_conf_path}]
+    } else {
+        fail "Could not create folder $cluster_conf_path"
+    }
 }
 
 # Remove the folder (or nodes.conf) that we created from create_nodes_conf_folder.
@@ -210,6 +214,19 @@ proc file_inode {path} {
 # over the cluster config file, so none should survive a completed save.
 proc leftover_nodes_conf_tmp_files {srv_idx} {
     return [glob -nocomplain "[get_nodes_conf_path $srv_idx].tmp-*"]
+}
+
+# Wait until node srv_idx has no temp files left. A drain does not stop new
+# saves: cluster bus messages can start one right after it, and that save's
+# temp file exists until its rename fails and it deletes the file. So drain
+# and check again a few times. A temp file that is never deleted still fails.
+proc wait_for_no_nodes_conf_tmp_files {srv_idx} {
+    wait_for_condition 10 100 {
+        [R $srv_idx debug bio-drain BIO_CLUSTER_SAVE] eq {OK} &&
+        [leftover_nodes_conf_tmp_files $srv_idx] eq {}
+    } else {
+        fail "Node $srv_idx left temp files: [leftover_nodes_conf_tmp_files $srv_idx]"
+    }
 }
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
@@ -289,10 +306,9 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
 
         # A node whose renames keep failing must not accumulate temp files. This
         # holds before this commit too; it is here to keep the invariant from
-        # regressing as the save path is reordered. The bio jobs were drained
-        # above, so no save is still in flight.
-        assert_equal {} [leftover_nodes_conf_tmp_files 0]
-        assert_equal {} [leftover_nodes_conf_tmp_files 1]
+        # regressing as the save path is reordered.
+        wait_for_no_nodes_conf_tmp_files 0
+        wait_for_no_nodes_conf_tmp_files 1
 
         # Check the info field is err.
         assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]

@@ -985,24 +985,3 @@ transfer targets.
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either
   atomically or not.
-- Atomic slot migration (CLUSTER MIGRATESLOTS) with Raft. Most of its
-  tests are skipped with Raft. A likely cause of the failures is that the
-  source node learns about the new slot owner only when it applies the
-  slot change, which can be later than the migration expects.
-- Derive local side effects from state changes instead of from log
-  entries. Applying an entry, installing a snapshot and loading
-  nodes.conf at startup must all lead to the same local state, such as
-  deleted keys in slots that left our shard, cleared migration markers,
-  sharded pubsub subscriptions, slot coverage, scheduled failovers and
-  shard membership. Today each entry type performs its side effects when
-  it's applied, and installing a snapshot re-derives them separately. If
-  applying only changed the replicated state, and a common reconcile step
-  reacted to the old and new values of what changed (for example, by
-  comparing the state before and after, or by recording changes as
-  they're made), all three paths would share the same code. Treating the
-  replicated state as a key-value map would make this comparison generic,
-  but it's not required. The reconcile step must give the right result
-  for any jump between two states, since a snapshot skips the
-  intermediate ones. Effects that belong to an operation rather
-  than to the state, such as replying to the client that proposed an
-  entry, stay with the entry.

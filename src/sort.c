@@ -65,19 +65,13 @@ static int isReturnSubstPattern(sds pattern) {
  *
  * The returned object will always have its refcount increased by 1
  * when it is non-NULL. */
-robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
+static robj *sortPatternKeyName(sds spat, robj *subst, robj **fieldobj) {
     char *p, *f, *k;
-    sds spat, ssub;
-    robj *keyobj, *fieldobj = NULL, *o;
+    sds ssub;
+    robj *keyobj;
     size_t prefixlen, sublen, postfixlen, fieldlen;
 
-    /* If the pattern is "#" return the substitution object itself in order
-     * to implement the "SORT ... GET #" feature. */
-    spat = objectGetVal(pattern);
-    if (isReturnSubstPattern(spat)) {
-        incrRefCount(subst);
-        return subst;
-    }
+    *fieldobj = NULL;
 
     /* The substitution object may be specially encoded. If so we create
      * a decoded object on the fly. Otherwise, getDecodedObject will just
@@ -96,7 +90,7 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     /* Find out if we're dealing with a hash dereference. */
     if ((f = strstr(p + 1, "->")) != NULL && *(f + 2) != '\0') {
         fieldlen = sdslen(spat) - (f - spat) - 2;
-        fieldobj = createStringObject(f + 2, fieldlen);
+        *fieldobj = createStringObject(f + 2, fieldlen);
     } else {
         fieldlen = 0;
     }
@@ -111,6 +105,23 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     memcpy(k + prefixlen, ssub, sublen);
     memcpy(k + prefixlen + sublen, p + 1, postfixlen);
     decrRefCount(subst); /* Incremented by decodeObject() */
+    return keyobj;
+}
+
+robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
+    sds spat;
+    robj *keyobj, *fieldobj, *o;
+
+    /* If the pattern is "#" return the substitution object itself in order
+     * to implement the "SORT ... GET #" feature. */
+    spat = objectGetVal(pattern);
+    if (isReturnSubstPattern(spat)) {
+        incrRefCount(subst);
+        return subst;
+    }
+
+    keyobj = sortPatternKeyName(spat, subst, &fieldobj);
+    if (keyobj == NULL) return NULL;
 
     /* Lookup substituted key */
     o = lookupKeyRead(db, keyobj);
@@ -135,8 +146,97 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
 
 noobj:
     decrRefCount(keyobj);
-    if (fieldlen) decrRefCount(fieldobj);
+    if (fieldobj) decrRefCount(fieldobj);
     return NULL;
+}
+
+static void sortAddPatternKeys(robj **patterns, int numpatterns, robj *ele, robj ***keys, int *numkeys, int *cap) {
+    for (int i = 0; i < numpatterns; i++) {
+        robj *fieldobj;
+        robj *keyobj = sortPatternKeyName(objectGetVal(patterns[i]), ele, &fieldobj);
+        if (fieldobj) decrRefCount(fieldobj);
+        if (keyobj == NULL) continue;
+        if (*numkeys == *cap) {
+            *cap = *cap ? *cap * 2 : 16;
+            *keys = zrealloc(*keys, sizeof(robj *) * (*cap));
+        }
+        (*keys)[(*numkeys)++] = keyobj;
+    }
+}
+
+int sortGetPatternKeys(serverDb *db, int argc, robj **argv, robj ***keys) {
+    robj **patterns = zmalloc(sizeof(robj *) * argc);
+    int numpatterns = 0, numkeys = 0, cap = 0;
+    *keys = NULL;
+
+    for (int j = 2; j < argc; j++) {
+        int leftargs = argc - j - 1;
+        char *opt = objectGetVal(argv[j]);
+        if (!strcasecmp(opt, "limit") && leftargs >= 2) {
+            j += 2;
+        } else if ((!strcasecmp(opt, "by") || !strcasecmp(opt, "get")) && leftargs >= 1) {
+            sds spat = objectGetVal(argv[j + 1]);
+            if (!isReturnSubstPattern(spat) && strchr(spat, '*')) patterns[numpatterns++] = argv[j + 1];
+            j++;
+        } else if (!strcasecmp(opt, "store") && leftargs >= 1) {
+            j++;
+        }
+    }
+
+    robj *sortval = numpatterns ? lookupKeyReadWithFlags(db, argv[1], LOOKUP_NOEFFECTS) : NULL;
+    if (sortval == NULL) {
+        zfree(patterns);
+        return 0;
+    }
+
+    if (sortval->type == OBJ_LIST) {
+        listTypeIterator *li = listTypeInitIterator(sortval, 0, LIST_TAIL);
+        listTypeEntry entry;
+        while (listTypeNext(li, &entry)) {
+            robj *ele = listTypeGet(&entry);
+            sortAddPatternKeys(patterns, numpatterns, ele, keys, &numkeys, &cap);
+            decrRefCount(ele);
+        }
+        listTypeReleaseIterator(li);
+    } else if (sortval->type == OBJ_SET) {
+        setTypeIterator *si = setTypeInitIterator(sortval);
+        sds sdsele;
+        while ((sdsele = setTypeNextObject(si)) != NULL) {
+            robj *ele = createObject(OBJ_STRING, sdsele);
+            sortAddPatternKeys(patterns, numpatterns, ele, keys, &numkeys, &cap);
+            decrRefCount(ele);
+        }
+        setTypeReleaseIterator(si);
+    } else if (sortval->type == OBJ_ZSET && objectGetEncoding(sortval) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(sortval);
+        unsigned char *p = lpFirst(zl);
+        while (p) {
+            unsigned int vlen;
+            long long vll;
+            unsigned char *vstr = lpGetValue(p, &vlen, &vll);
+            robj *ele = vstr ? createStringObject((char *)vstr, vlen) : createStringObjectFromLongLong(vll);
+            sortAddPatternKeys(patterns, numpatterns, ele, keys, &numkeys, &cap);
+            decrRefCount(ele);
+            p = lpNext(zl, lpNext(zl, p));
+        }
+    } else if (sortval->type == OBJ_ZSET) {
+        hashtable *ht = ((zset *)objectGetVal(sortval))->ht;
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            const char *ele_str;
+            size_t ele_len;
+            orderedIndexItemGetElement((const OrderedIndexItem *)next, &ele_str, &ele_len);
+            robj *ele = createStringObject(ele_str, ele_len);
+            sortAddPatternKeys(patterns, numpatterns, ele, keys, &numkeys, &cap);
+            decrRefCount(ele);
+        }
+        hashtableCleanupIterator(&iter);
+    }
+
+    zfree(patterns);
+    return numkeys;
 }
 
 /* sortCompare() is used by qsort in sortCommand(). Given that qsort_r with

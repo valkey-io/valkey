@@ -71,6 +71,15 @@ start_server {tags {"modules"}} {
         r config set rdb-key-save-delay 10000000
         r bgrewriteaof
 
+        # The child creates its temp file after it installed the SIGUSR1
+        # handler, so wait for the file before the child gets killed.
+        set temp_aof [file join [lindex [r config get dir] 1] temp-rewriteaof-[get_child_pid 0].aof]
+        wait_for_condition 50 100 {
+            [file exists $temp_aof]
+        } else {
+            fail "aof rewrite child did not create $temp_aof"
+        }
+
         # RM_RdbLoad() should kill aof fork
         assert_equal OK [r test.rdbload aoftest.rdb]
 
@@ -99,8 +108,17 @@ start_server {tags {"modules"}} {
         assert_equal OK [r test.rdbsave bgsave.rdb]
 
         r set k v2
-        r config set rdb-key-save-delay 500000
+        r config set rdb-key-save-delay 10000000
         r bgsave
+
+        # The child creates its temp file after it installed the SIGUSR1
+        # handler, so wait for the file before the child gets killed.
+        set temp_rdb [file join [lindex [r config get dir] 1] temp-[get_child_pid 0].rdb]
+        wait_for_condition 50 100 {
+            [file exists $temp_rdb]
+        } else {
+            fail "bgsave child did not create $temp_rdb"
+        }
 
         # RM_RdbLoad() should kill RDB fork
         assert_equal OK [r test.rdbload bgsave.rdb]

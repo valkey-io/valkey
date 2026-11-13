@@ -13547,7 +13547,18 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
     }
 
     if (post_load_err) {
-        moduleUnload(ctx.module->name, NULL);
+        /* The unload can be refused (the module may export a data type, hold a
+         * timer, have blocked clients, ...), and moduleUnloadInternal() writes
+         * the reason through errmsg, so a valid pointer is required. The
+         * refusal is also worth a log line: the module then stays loaded with
+         * its queued configurations never applied, which is otherwise silent.
+         * errmsg can stay NULL when OnUnload cancels the unload. */
+        const char *unload_err = NULL;
+        if (moduleUnload(ctx.module->name, &unload_err) != C_OK) {
+            serverLog(LL_WARNING,
+                      "Module %s could not be unloaded after a failed load and remains loaded: %s",
+                      ctx.module->name, unload_err ? unload_err : "unknown error");
+        }
         moduleFreeContext(&ctx);
         return C_ERR;
     }

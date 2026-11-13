@@ -13547,7 +13547,8 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
     }
 
     if (post_load_err) {
-        moduleUnload(ctx.module->name, NULL);
+        const char *errmsg = NULL;
+        moduleUnload(ctx.module->name, &errmsg);
         moduleFreeContext(&ctx);
         return C_ERR;
     }
@@ -15650,3 +15651,4 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ScriptingEngineDebuggerProcessCommands);
     REGISTER_API(ACLCheckKeyPrefixPermissions);
 }
+

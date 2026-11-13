@@ -2306,7 +2306,7 @@ int memtest_test_linux_anonymous_maps(void) {
                  (unsigned long)start_vect[regions], (unsigned long)size_vect[regions]);
         if (write(fd, logbuf, strlen(logbuf)) == -1) { /* Nothing to do. */
         }
-        regions++;
+        if (++regions == MEMTEST_MAX_REGIONS) break;
     }
 
     int errors = 0;

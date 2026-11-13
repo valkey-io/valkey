@@ -55,6 +55,11 @@ tags {"benchmark network external:skip logreqres:skip"} {
             } else {
                 fail "valkey-benchmark did not print a report after SIGINT"
             }
+            wait_for_condition 50 100 {
+                ![process_is_alive $pid]
+            } else {
+                fail "valkey-benchmark did not exit after SIGINT"
+            }
             set output [exec cat $out_file]
             assert_match {*====== SET ======*interrupted by user*requests completed in*} $output
             # The GET test must not run after the interruption.

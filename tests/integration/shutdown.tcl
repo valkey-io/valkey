@@ -280,6 +280,14 @@ test "Shutting down primary wait for replica after previous block" {
             resume_process $replica_pid
             $primary_deferring close
 
+            # Wait for the primary to exit on its own, so that it is not
+            # signaled while it runs its exit-time leak check.
+            wait_for_condition 300 100 {
+                ![is_alive $primary_pid]
+            } else {
+                fail "Primary (pid $primary_pid) did not exit after SHUTDOWN"
+            }
+
             # Check for crash.
             assert_equal [count_log_message -1 "*BUG REPORT START*"] 0
         }

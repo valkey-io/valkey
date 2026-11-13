@@ -2034,6 +2034,16 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         return 1;
     }
 
+    /* If our log has the snapshot's last entry, keep the entries after it,
+     * which we may have acknowledged, and just commit up to the snapshot
+     * (Raft paper, section 7). */
+    if (raftLogTermAt(snap_index) == snap_term) {
+        if (snap_index > rs->commit_index) rs->commit_index = snap_index;
+        raftApplyCommitted();
+        rs->todo_send_ae_ack = 1;
+        return 1;
+    }
+
     /* Check all node lines before changing any state. If one is invalid, a
      * node appears twice, or the sender isn't included, reject the snapshot.
      * The leader sends it again later. The leader strips its myself flag, so

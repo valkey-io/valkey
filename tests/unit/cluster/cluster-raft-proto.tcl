@@ -477,6 +477,22 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         assert_match "*$leader_id*" [R 0 CLUSTER NODES]
         assert_equal 1 [count_log_message 0 "the sender isn't included"]
 
+        # A snapshot that ends at an entry we already have doesn't discard
+        # the entries after it, which we may have acknowledged.
+        set ae "AE $leader_id 1 15 1 15 3"
+        for {set j 0} {$j < 3} {incr j} {
+            append ae "\n1 NODE_INFO $leader_id $leader_addr noflags"
+        }
+        raft_send $fd $ae
+        while {![string match "AE_ACK 1 1 18 *" [set reply [raft_recv $fd]]]} {}
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 17 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 1-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 18 *" $reply
+        assert_equal 17 [CI 0 cluster_raft_last_applied]
+
         close $fd_c
         close $fd
     }

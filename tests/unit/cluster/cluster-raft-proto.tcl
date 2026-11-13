@@ -362,6 +362,226 @@ test "Raft proto: PRE_VOTE granted after node-timeout even with randomized elect
     }
 }
 
+test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set c_id [string repeat "c" 40]
+        set c_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
+
+        # Join the fake leader's cluster as a follower, together with a fake
+        # node C. Say HELLO again once the node knows the leader and C, so
+        # that their links are associated with them.
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        raft_send $fd "AE $leader_id 1 0 0 3 3\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter\n1 NODE_JOIN $c_id $c_addr voter"
+        assert_match "AE_ACK 1 1 *" [raft_recv $fd]
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
+        raft_send $fd "HELLO $leader_id $leader_addr"
+        assert_match "HI *" [raft_recv $fd]
+        set fd_c [raft_connect_fake_node 127.0.0.1 $cport $c_id $c_addr]
+
+        # A snapshot with an unknown node flag is rejected with a failed
+        # AE_ACK, and the node keeps its state.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
+        append snapshot "\n$node_id $node_addr master,bogus - 0 0 1 connected"
+        raft_send $fd $snapshot
+        assert_match "AE_ACK 1 0 *" [raft_recv $fd]
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
+        assert_equal 0 [CI 0 cluster_slots_assigned]
+        assert_equal 1 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
+
+        # So are snapshots with a duplicate node or a myself flag.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected"
+        foreach bad [list "\n$node_id $node_addr master - 0 0 1 connected" \
+                          "\n$c_id $c_addr myself,master - 0 0 1 connected"] {
+            raft_send $fd "$snapshot$bad"
+            while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+            assert_match "AE_ACK 1 0 *" $reply
+        }
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
+        assert_equal 3 [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"]
+
+        # So is a snapshot whose term is 0 or newer than the message's term.
+        foreach header [list "INSTALL_SNAPSHOT $leader_id 1 10 0" "INSTALL_SNAPSHOT $leader_id 1 10 2"] {
+            raft_send $fd "$header\n$leader_id $leader_addr master - 0 0 1 connected 0-16383\n$node_id $node_addr master - 0 0 1 connected"
+        }
+        wait_for_condition 50 100 {
+            [count_log_message 0 "Rejecting INSTALL_SNAPSHOT"] == 5
+        } else {
+            fail "invalid snapshot terms were not rejected"
+        }
+        assert_equal 3 [CI 0 cluster_raft_last_applied]
+        assert_equal 1 [CI 0 cluster_raft_current_term]
+
+        # A valid snapshot without C removes C and closes its link. The leak
+        # check at shutdown catches links that aren't freed. The snapshot
+        # covers all slots, so the cluster becomes ok, and CLUSTER SLOTS
+        # isn't served from a cache populated before the install.
+        assert_equal fail [CI 0 cluster_state]
+        assert_equal {} [R 0 CLUSTER SLOTS]
+        # The node's own address and nofailover come from its config, not
+        # from the snapshot.
+        R 0 CONFIG SET cluster-announce-hostname mynode.example.com
+        R 0 CONFIG SET cluster-replica-no-failover yes
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr,client-ipv4=10.0.0.1 master - 0 0 1 connected 1-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 10 *" $reply
+        assert_equal 10 [CI 0 cluster_raft_last_applied]
+        assert_equal 16384 [CI 0 cluster_slots_assigned]
+        assert_no_match "*$c_id*" [R 0 CLUSTER NODES]
+        wait_for_condition 50 100 {[catch {read $fd_c}] || [eof $fd_c]} else {
+            fail "C's link was not closed"
+        }
+        wait_for_condition 50 100 {[CI 0 cluster_state] eq "ok"} else {
+            fail "cluster state not updated after the install"
+        }
+        assert_equal 2 [llength [R 0 CLUSTER SLOTS]]
+        set myself_line [raft_cluster_nodes_line [srv 0 client] $node_id]
+        assert_match "*,mynode.example.com *" $myself_line
+        assert_match "*nofailover*" [lindex $myself_line 2]
+
+        assert_match "*10.0.0.1*" [R 0 CLUSTER SLOTS]
+
+        # Installing a snapshot that doesn't change the owner of a slot keeps
+        # the sharded pubsub subscriptions in it. An info field that the
+        # snapshot no longer has is cleared.
+        assert_equal 0 [R 0 CLUSTER KEYSLOT 06S]
+        set rd [valkey_deferring_client]
+        $rd ssubscribe 06S
+        $rd read
+        raft_send $fd "[string map {" 10 1" " 15 1" ",client-ipv4=10.0.0.1" ""} $snapshot]"
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 15 *" $reply
+        assert_equal {06S 1} [R 0 PUBSUB SHARDNUMSUB 06S]
+        assert_no_match "*10.0.0.1*" [R 0 CLUSTER SLOTS]
+        $rd close
+
+        # A snapshot without the sender is rejected.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 20 1"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0-16383"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 0 *" $reply
+        assert_equal 15 [CI 0 cluster_raft_last_applied]
+        assert_match "*$leader_id*" [R 0 CLUSTER NODES]
+        assert_equal 1 [count_log_message 0 "the sender isn't included"]
+
+        # A snapshot that ends at an entry we already have doesn't discard
+        # the entries after it, which we may have acknowledged.
+        set ae "AE $leader_id 1 15 1 15 3"
+        for {set j 0} {$j < 3} {incr j} {
+            append ae "\n1 NODE_INFO $leader_id $leader_addr noflags"
+        }
+        raft_send $fd $ae
+        while {![string match "AE_ACK 1 1 18 *" [set reply [raft_recv $fd]]]} {}
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 17 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 1-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected 0"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 18 *" $reply
+        assert_equal 17 [CI 0 cluster_raft_last_applied]
+
+        close $fd_c
+        close $fd
+    }
+}
+
+test "Raft proto: entries are persisted before they are trimmed" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set last 2
+        raft_send $fd "AE $leader_id 1 0 0 $last 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+
+        # Commit batches of entries. After the second batch, nodes.conf is
+        # rewritten. The third batch is only appended to it, and applying it
+        # trims the log past the start of that batch.
+        foreach count {98 2 90} {
+            set ae "AE $leader_id 1 $last 1 [expr {$last + $count}] $count"
+            for {set j 0} {$j < $count} {incr j} {
+                append ae "\n1 NODE_INFO $leader_id $leader_addr noflags"
+            }
+            raft_send $fd $ae
+            incr last $count
+            while {![string match "AE_ACK 1 1 $last *" [set reply [raft_recv $fd]]]} {}
+        }
+        assert_equal $last [CI 0 cluster_raft_last_applied]
+        close $fd
+
+        # All committed entries must be in nodes.conf, so the node starts
+        # after a crash.
+        exec kill -9 [srv 0 pid]
+        restart_server 0 true false
+        assert_equal $last [expr {[CI 0 cluster_raft_last_applied] + [CI 0 cluster_raft_log_entries]}]
+    }
+}
+
+test "Raft proto: MEET deferred by a joiner is answered after a snapshot" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+        set d_id [string repeat "c" 40]
+        set d_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
+        set e_id [string repeat "b" 40]
+        set e_addr "127.0.0.1:9993@19993,,tls-port=0,shard-id=[string repeat 9 40]"
+
+        # The node steps down to joiner for the fake leader. A fake singleton
+        # D then MEETs it, which it defers until it's in the cluster.
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set fd_d [raft_connect_fake_node 127.0.0.1 $cport $d_id $d_addr]
+        raft_send $fd_d "MEET singleton"
+        wait_for_condition 50 100 {
+            [count_log_message 0 "Deferring MEET from $d_id"] == 1
+        } else {
+            fail "MEET from D was not deferred"
+        }
+
+        # The node joins through a snapshot. D isn't in it, since it isn't in
+        # the log, but the node answers its MEET.
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 10 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 0-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 10 *" $reply
+        assert_equal "WELCOME" [raft_recv $fd_d]
+
+        # Applying the next NODE_JOIN doesn't touch the deferred MEET again.
+        raft_send $fd "AE $leader_id 1 10 1 11 1\n1 NODE_JOIN $e_id $e_addr learner"
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 11 *" $reply
+        assert_equal PONG [R 0 PING]
+
+        close $fd_d
+        close $fd
+    }
+}
+
 test "Raft proto: PRE_VOTE granted when no leader lease is active" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]

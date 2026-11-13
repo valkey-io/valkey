@@ -17,6 +17,8 @@ void clusterFreeNodesSlotsInfo(clusterNode *n);
 
 /* Cluster config file (nodes.conf) persistence. */
 int clusterLoadConfig(char *filename);
+int clusterValidateNodeLine(sds *argv, int argc);
+int clusterLoadNodeLine(sds *argv, int argc, dict *nodes_seen);
 int clusterSaveConfig(bool use_bio, bool do_fsync);
 void clusterSaveConfigOrDie(bool do_fsync);
 void clusterSaveConfigBackground(bool do_fsync);

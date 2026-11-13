@@ -756,6 +756,8 @@ typedef struct blockedAsyncHandle {
 blockedAsyncHandle *blockClientAsync(client *c) {
     blockedAsyncHandle *h = zmalloc(sizeof(*h));
     h->client_id = c->id;
+    initClientBlockingState(c);
+    c->bstate->timeout = 0;
     /* The caller replies before unblockClientAsync(), so clear pending_command
      * to prevent the command from being re-executed on unblock. */
     c->flag.pending_command = 0;

@@ -671,17 +671,26 @@ int clusterAddSlot(clusterNode *n, int slot) {
  * Returns C_OK if the slot was assigned; otherwise, if the slot was
  * already unassigned C_ERR is returned. */
 int clusterDelSlot(int slot) {
+    if (!server.cluster->slots[slot]) return C_ERR;
+
+    /* Cleanup the channels in primary/replica as part of slot deletion. */
+    removeChannelsInSlot(slot);
+    hotkeysPurgeSlot(slot);
+    return clusterDelSlotKeepChannels(slot);
+}
+
+/* Like clusterDelSlot(), but keeps the sharded pubsub subscriptions and the
+ * hot key state in the slot, for when the slot may be assigned to the same
+ * node again. */
+int clusterDelSlotKeepChannels(int slot) {
     clusterNode *n = server.cluster->slots[slot];
 
     if (!n) return C_ERR;
 
-    /* Cleanup the channels in primary/replica as part of slot deletion. */
-    removeChannelsInSlot(slot);
     /* Clear the slot bit. */
     serverAssert(clusterNodeClearSlotBit(n, slot) == 1);
     server.cluster->slots[slot] = NULL;
     clusterSlotStatReset(slot);
-    hotkeysPurgeSlot(slot);
     return C_OK;
 }
 

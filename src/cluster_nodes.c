@@ -45,16 +45,13 @@
 #include "bio.h"
 #include "cluster.h"
 #include "cluster_bus.h"
+#include "cluster_nodes.h"
 #include "cluster_state.h"
 #include "cluster_slot_stats.h"
 
 #include <arpa/inet.h>
 #include <sys/file.h>
 #include <sys/stat.h>
-
-/* Forward declarations. */
-void clusterGenNodesSlotsInfo(int filter);
-void clusterFreeNodesSlotsInfo(clusterNode *n);
 
 /* -----------------------------------------------------------------------------
  * Nodes to string representation functions.
@@ -587,7 +584,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
 
-        if (node->flags & filter) continue;
+        if (node != myself && (node->flags & filter)) continue;
         ni = clusterGenNodeDescription(c, node, tls_primary);
         ci = sdscatsds(ci, ni);
         sdsfree(ni);
@@ -686,8 +683,6 @@ int clusterLoadConfig(char *filename) {
     while (fgets(line, maxline, fp) != NULL) {
         int argc;
         sds *argv;
-        clusterNode *n, *primary;
-        char *p, *s;
 
         /* Skip blank lines, they can be created either by users manually
          * editing nodes.conf or by the config writing process if stopped
@@ -765,72 +760,165 @@ int clusterLoadConfig(char *filename) {
             continue;
         }
 
+        if (clusterLoadNodeLine(argv, argc, tmp_cluster_nodes) == C_ERR) {
+            sdsfreesplitres(argv, argc);
+            goto fmterr;
+        }
+        sdsfreesplitres(argv, argc);
+    }
+    /* Config sanity check */
+    if (server.cluster->myself == NULL) goto fmterr;
+
+    zfree(line);
+    fclose(fp);
+    serverAssert(tmp_cluster_nodes != NULL);
+    dictRelease(tmp_cluster_nodes);
+
+    serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", server.cluster->myself->name);
+
+    /* Post-load fixups (e.g. ensuring currentEpoch >= max configEpoch). */
+    if (clusterCurrentBus->postLoad) clusterCurrentBus->postLoad();
+    return C_OK;
+
+fmterr:
+    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
+}
+
+/* Map a flag name in a node line to its flag bits. Returns C_ERR for an
+ * unknown name. */
+static int clusterParseNodeFlag(const char *name, int *flag) {
+    if (!strcasecmp(name, "myself")) {
+        *flag = CLUSTER_NODE_MYSELF;
+    } else if (!strcasecmp(name, "master") || !strcasecmp(name, "primary")) {
+        *flag = CLUSTER_NODE_PRIMARY;
+    } else if (!strcasecmp(name, "slave") || !strcasecmp(name, "replica")) {
+        *flag = CLUSTER_NODE_REPLICA;
+    } else if (!strcasecmp(name, "fail?")) {
+        *flag = CLUSTER_NODE_PFAIL;
+    } else if (!strcasecmp(name, "fail")) {
+        *flag = CLUSTER_NODE_FAIL;
+    } else if (!strcasecmp(name, "handshake")) {
+        *flag = CLUSTER_NODE_HANDSHAKE;
+    } else if (!strcasecmp(name, "noaddr")) {
+        *flag = CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL;
+    } else if (!strcasecmp(name, "nofailover")) {
+        *flag = CLUSTER_NODE_NOFAILOVER;
+    } else if (!strcasecmp(name, "learner")) {
+        *flag = CLUSTER_NODE_LEARNER;
+    } else if (!strcasecmp(name, "noflags")) {
+        *flag = 0;
+    } else {
+        return C_ERR;
+    }
+    return C_OK;
+}
+
+/* Parse a slot field of a node line: a slot, a range "start-stop", or a
+ * migration "[slot->-<node-id>]" / "[slot-<-<node-id>]". For a migration,
+ * *direction is '>' or '<' and *node_id points into field; otherwise
+ * *direction is 0. Doesn't modify field. Returns C_OK/C_ERR. */
+static int clusterParseSlotField(const char *field, int *start, int *stop, char *direction, const char **node_id) {
+    const char *p;
+    if (field[0] == '[') {
+        p = strchr(field, '-');
+        if (p == NULL || (p[1] != '>' && p[1] != '<') || p[2] != '-') return C_ERR;
+        *start = *stop = atoi(field + 1);
+        *direction = p[1];
+        *node_id = p + 3;
+        const char *end = strchr(*node_id, ']');
+        if (end == NULL || verifyClusterNodeId(*node_id, end - *node_id) == C_ERR) return C_ERR;
+    } else {
+        *direction = 0;
+        *start = atoi(field);
+        *stop = (p = strchr(field, '-')) != NULL ? atoi(p + 1) : *start;
+    }
+    if (*start < 0 || *start >= CLUSTER_SLOTS || *stop < 0 || *stop >= CLUSTER_SLOTS) return C_ERR;
+    return C_OK;
+}
+
+/* Check a node line without changing any state, so a set of lines can be
+ * validated before any of them is loaded. The address isn't checked. Returns
+ * C_OK/C_ERR. */
+int clusterValidateNodeLine(sds *argv, int argc) {
+    if (argc < 8) return C_ERR;
+    if (verifyClusterNodeId(argv[0], sdslen(argv[0])) == C_ERR) return C_ERR;
+    if (argv[3][0] != '-' && verifyClusterNodeId(argv[3], sdslen(argv[3])) == C_ERR) return C_ERR;
+    int count;
+    sds *flags = sdssplitlen(argv[2], sdslen(argv[2]), ",", 1, &count);
+    if (flags == NULL) return C_ERR;
+    for (int i = 0; i < count; i++) {
+        int flag;
+        if (clusterParseNodeFlag(flags[i], &flag) == C_ERR) {
+            sdsfreesplitres(flags, count);
+            return C_ERR;
+        }
+    }
+    sdsfreesplitres(flags, count);
+    for (int j = 8; j < argc; j++) {
+        int start, stop;
+        char direction;
+        const char *node_id;
+        if (clusterParseSlotField(argv[j], &start, &stop, &direction, &node_id) == C_ERR) return C_ERR;
+    }
+    return C_OK;
+}
+
+/* Parse a single node description line (same format as CLUSTER NODES output).
+ * Creates or updates the node in the cluster state. argv/argc are the
+ * space-split fields of the line. If nodes_seen is non-NULL, checks for
+ * duplicate node IDs and records each parsed ID. Returns C_OK/C_ERR. */
+int clusterLoadNodeLine(sds *argv, int argc, dict *nodes_seen) {
+    clusterNode *n, *primary;
+    char *p, *s;
+    int j;
+    {
         /* Regular config lines have at least eight fields */
         if (argc < 8) {
-            sdsfreesplitres(argv, argc);
             goto fmterr;
         }
 
         /* Create this node if it does not exist */
         if (verifyClusterNodeId(argv[0], sdslen(argv[0])) == C_ERR) {
-            sdsfreesplitres(argv, argc);
             goto fmterr;
         }
         n = clusterLookupNode(argv[0], sdslen(argv[0]));
         if (!n) {
             n = createClusterNode(argv[0], 0);
             clusterAddNode(n);
-            dictAdd(tmp_cluster_nodes, sdsnewlen(argv[0], sdslen(argv[0])), NULL);
-        } else {
+        }
+        if (nodes_seen) {
             /* Check if the node (nodeid) has already been loaded. The nodeid is used to
              * identify every node across the entire cluster, we do not expect to find
              * duplicate nodeids in nodes.conf. */
-            dictEntry *de = dictFind(tmp_cluster_nodes, argv[0]);
+            dictEntry *de = dictFind(nodes_seen, argv[0]);
             if (de != NULL) {
                 serverLog(LL_WARNING, "Duplicate nodeid detected: %s", argv[0]);
-                sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
+            dictAdd(nodes_seen, sdsnewlen(argv[0], sdslen(argv[0])), NULL);
         }
         /* Format for the node address and auxiliary argument information:
          * ip:port[@cport][,hostname][,aux=val]*] */
         if (clusterNodeParseAddressString(n, argv[1]) == C_ERR) {
-            sdsfreesplitres(argv, argc);
             goto fmterr;
         }
 
         /* Parse flags */
         p = s = argv[2];
         while (p) {
+            int flag;
             p = strchr(s, ',');
             if (p) *p = '\0';
-            if (!strcasecmp(s, "myself")) {
+            if (clusterParseNodeFlag(s, &flag) == C_ERR) {
+                serverLog(LL_WARNING, "Unknown node flag \"%s\"", s);
+                goto fmterr;
+            }
+            if (flag & CLUSTER_NODE_MYSELF) {
                 serverAssert(server.cluster->myself == NULL);
                 server.cluster->myself = n;
-                n->flags |= CLUSTER_NODE_MYSELF;
-            } else if (!strcasecmp(s, "master") || !strcasecmp(s, "primary")) {
-                n->flags |= CLUSTER_NODE_PRIMARY;
-            } else if (!strcasecmp(s, "slave") || !strcasecmp(s, "replica")) {
-                n->flags |= CLUSTER_NODE_REPLICA;
-            } else if (!strcasecmp(s, "fail?")) {
-                n->flags |= CLUSTER_NODE_PFAIL;
-            } else if (!strcasecmp(s, "fail")) {
-                n->flags |= CLUSTER_NODE_FAIL;
-                if (clusterCurrentBus->setNodeFailed) clusterCurrentBus->setNodeFailed(n);
-            } else if (!strcasecmp(s, "handshake")) {
-                n->flags |= CLUSTER_NODE_HANDSHAKE;
-            } else if (!strcasecmp(s, "noaddr")) {
-                n->flags |= (CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL);
-                if (clusterCurrentBus->setNodeFailed) clusterCurrentBus->setNodeFailed(n);
-            } else if (!strcasecmp(s, "nofailover")) {
-                n->flags |= CLUSTER_NODE_NOFAILOVER;
-            } else if (!strcasecmp(s, "learner")) {
-                n->flags |= CLUSTER_NODE_LEARNER;
-            } else if (!strcasecmp(s, "noflags")) {
-                /* nothing to do */
-            } else {
-                serverPanic("Unknown flag in %s cluster config file", SERVER_TITLE);
             }
+            n->flags |= flag;
+            if ((flag & CLUSTER_NODE_FAIL) && clusterCurrentBus->setNodeFailed) clusterCurrentBus->setNodeFailed(n);
             if (p) s = p + 1;
         }
 
@@ -838,7 +926,6 @@ int clusterLoadConfig(char *filename) {
          * replica list. */
         if (argv[3][0] != '-') {
             if (verifyClusterNodeId(argv[3], sdslen(argv[3])) == C_ERR) {
-                sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
             primary = clusterLookupNode(argv[3], sdslen(argv[3]));
@@ -886,91 +973,32 @@ int clusterLoadConfig(char *filename) {
         /* Populate hash slots served by this instance. */
         for (j = 8; j < argc; j++) {
             int start, stop;
-
-            if (argv[j][0] == '[') {
+            char direction;
+            const char *node_id;
+            if (clusterParseSlotField(argv[j], &start, &stop, &direction, &node_id) == C_ERR) goto fmterr;
+            if (direction) {
                 /* Here we handle migrating / importing slots */
-                int slot;
-                char direction;
-                clusterNode *cn;
-
-                p = strchr(argv[j], '-');
-                if (p == NULL) {
-                    sdsfreesplitres(argv, argc);
-                    goto fmterr;
-                }
-                *p = '\0';
-                direction = p[1]; /* Either '>' or '<' */
-                if (direction != '>' && direction != '<') {
-                    sdsfreesplitres(argv, argc);
-                    goto fmterr;
-                }
-                if (p[2] != '-') {
-                    sdsfreesplitres(argv, argc);
-                    goto fmterr;
-                }
-                slot = atoi(argv[j] + 1);
-                if (slot < 0 || slot >= CLUSTER_SLOTS) {
-                    sdsfreesplitres(argv, argc);
-                    goto fmterr;
-                }
-                p += 3;
-
-                char *pr = strchr(p, ']');
-                if (pr == NULL) {
-                    sdsfreesplitres(argv, argc);
-                    goto fmterr;
-                }
-                size_t node_len = pr - p;
-                if (verifyClusterNodeId(p, node_len) == C_ERR) {
-                    sdsfreesplitres(argv, argc);
-                    goto fmterr;
-                }
-                cn = clusterLookupNode(p, CLUSTER_NAMELEN);
+                clusterNode *cn = clusterLookupNode(node_id, CLUSTER_NAMELEN);
                 if (!cn) {
-                    cn = createClusterNode(p, 0);
+                    cn = createClusterNode((char *)node_id, 0);
                     clusterAddNode(cn);
                 }
                 if (direction == '>') {
-                    setMigratingSlotDest(slot, cn);
+                    setMigratingSlotDest(start, cn);
                 } else {
-                    setImportingSlotSource(slot, cn);
+                    setImportingSlotSource(start, cn);
                 }
                 continue;
-            } else if ((p = strchr(argv[j], '-')) != NULL) {
-                *p = '\0';
-                start = atoi(argv[j]);
-                stop = atoi(p + 1);
-            } else {
-                start = stop = atoi(argv[j]);
-            }
-            if (start < 0 || start >= CLUSTER_SLOTS || stop < 0 || stop >= CLUSTER_SLOTS) {
-                sdsfreesplitres(argv, argc);
-                goto fmterr;
             }
             /* The return value of clusterAddSlot is ignored here, which is fine
              * because a well-formed nodes.conf has no slot conflicts; any stray
              * ownership from a bad config is eventually corrected by gossip. */
             while (start <= stop) clusterAddSlot(n, start++);
         }
-
-        sdsfreesplitres(argv, argc);
     }
-    /* Config sanity check */
-    if (server.cluster->myself == NULL) goto fmterr;
-
-    zfree(line);
-    fclose(fp);
-    serverAssert(tmp_cluster_nodes != NULL);
-    dictRelease(tmp_cluster_nodes);
-
-    serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", server.cluster->myself->name);
-
-    /* Post-load fixups (e.g. ensuring currentEpoch >= max configEpoch). */
-    if (clusterCurrentBus->postLoad) clusterCurrentBus->postLoad();
     return C_OK;
-
 fmterr:
-    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
+    return C_ERR;
 }
 
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.
@@ -1093,9 +1121,12 @@ cleanup:
     return retval;
 }
 
-/* Get the nodes description and concatenate protocol-specific vars. */
+/* Get the nodes description and concatenate protocol-specific vars.
+ * Filter HANDSHAKE (unidentified) and JOINING (raft: not yet committed)
+ * nodes — both represent incomplete join attempts that should not
+ * persist across restarts. */
 static sds clusterGenNodesConfContent(void) {
-    sds content = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    sds content = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_JOINING, 0);
     if (clusterCurrentBus->appendVarsLine) content = clusterCurrentBus->appendVarsLine(content);
     /* CRC over snapshot (node lines + vars), before log lines. */
     if (clusterCurrentBus->appendLogLines) {

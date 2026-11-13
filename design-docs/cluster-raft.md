@@ -382,8 +382,8 @@ WELCOME and inviting the sender.
 
 ### AE suppression during joining
 
-AE and VOTE_REQ are not sent to nodes with the CLUSTER_NODE_MEET
-flag (not yet in the raft log). This prevents a race where AE
+AE and VOTE_REQ are not sent to nodes that aren't in the raft log
+yet. This prevents a race where AE
 arrives before MEET on the same link, causing the receiver to step
 down prematurely and defer the MEET.
 
@@ -715,7 +715,8 @@ Raft state is persisted in `nodes.conf`. The file has three sections:
 
 1. **Node lines** — the cluster state snapshot (nodes, slots, replication
    topology) as of `lastApplied`.
-2. **Vars line** — `currentTerm`, `lastApplied`, `votedFor`, `raftLeader`.
+2. **Vars line** — `currentTerm`, `lastApplied`, `snapshotTerm`,
+   `votedFor`, `raftLeader`.
 3. **Log lines** — entries with index > `lastApplied` appended at the end.
 
 Only `currentTerm`, `votedFor`, and the log require persistence for
@@ -794,6 +795,97 @@ The node lines share the same format as the gossip protocol (code
 reuse), but the vars and log lines are raft-specific. The file is not
 compatible between protocols — switching from gossip to raft (or vice
 versa) requires removing nodes.conf.
+
+## Log compaction and snapshots
+
+### Conceptual model
+
+The `nodes.conf` file IS the snapshot. The node lines represent the
+fully applied cluster state at `lastApplied`. Entries at or before
+`lastApplied` are not stored — only their cumulative effect (the cluster
+state) is retained. Entries after `lastApplied` are stored as log lines.
+
+This corresponds to the Raft paper's snapshot mechanism (§7), where:
+
+- **`lastApplied`** = `lastIncludedIndex` (last entry in the snapshot)
+- **`snapshotTerm`** = `lastIncludedTerm` (term of that entry)
+
+`snapshotTerm` is needed because the entry at `lastApplied` is no longer
+in the log. When the leader sends AE whose previous entry is the one at
+`lastApplied`, the follower verifies its term against `snapshotTerm`.
+
+Note: the standard Raft paper persists the full log (or log from the
+snapshot point). We don't — we only persist entries after `lastApplied`.
+This is why `snapshotTerm` must be explicitly stored in the vars line,
+whereas in a textbook implementation it could be read from the log.
+
+Terms start at 1, so a term of 0 always means an unknown entry. A node
+refuses to start if `nodes.conf` contains a log entry with term 0, has
+`lastApplied` without `snapshotTerm`, or has a `currentTerm` lower than
+`snapshotTerm`.
+
+### In-memory log trimming
+
+Each node trims applied entries from its in-memory log to bound memory
+usage. It keeps the 64 most recent applied entries, so that slow
+followers can catch up through normal AE, and trims in batches when
+there are more than 128. The term of the last trimmed entry is
+remembered, so a follower can still be checked against the entry just
+before the first one in memory.
+
+A follower rejects an AE whose previous entry it doesn't know, and only
+appends entries that directly follow its last log entry, so its log
+never has gaps. On rejection, the leader steps back, and once it needs
+an entry it has trimmed, it sends a snapshot instead.
+
+### InstallSnapshot
+
+When a follower needs entries that the leader has trimmed, the leader
+sends `INSTALL_SNAPSHOT` instead of AE. The message contains:
+
+    INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>
+    <node line 1>
+    <node line 2>
+    ...
+
+The follower processes the snapshot by:
+
+1. Checking all node lines before changing anything. If a line is
+   invalid, for example because it has an unknown flag, or the sender
+   isn't included, the snapshot is rejected with a failed AE_ACK and the
+   follower keeps its state.
+2. Replacing its cluster state with the node lines: nodes are created or
+   updated, and nodes not present in the snapshot are removed.
+3. Updating local state for slots whose owner changed, as when applying
+   a slot change: completed importing and migrating markers are cleared,
+   and keys in slots it no longer owns are deleted.
+4. Promoting from joiner to follower if its own NODE_JOIN is included.
+5. Setting `lastApplied` and `snapshotTerm` to the snapshot's values,
+   clearing the in-memory log (all entries are superseded), and
+   recomputing the number of voters (quorum).
+6. Scheduling an automatic failover if it is a replica and its primary
+   is failed in the snapshot.
+
+Slot migration markers (`[slot->…]` and `[slot-<-…]`) aren't part of the
+snapshot, since they are local to a shard and propagated through
+replication.
+
+The leader keeps resending the snapshot until the follower acknowledges
+that it has installed it, at most every half node timeout. A lost
+snapshot is therefore resent, but a slow follower doesn't get one on
+every heartbeat.
+
+### No-op entry on election
+
+When a new leader is elected, it appends a no-op entry in its own term.
+This serves two purposes (Raft paper §5.4.2, §8):
+
+1. **Commit previous-term entries**: A leader cannot commit entries from
+   prior terms by replica counting alone. The no-op in the current term
+   carries older entries to commitment.
+2. **Establish the new term in the log**: After the no-op is committed,
+   `snapshotTerm` equals `currentTerm` in steady state, simplifying
+   reasoning about the compaction boundary.
 
 ## Shard Epoch
 
@@ -877,15 +969,11 @@ immediately starts a real election (skipping pre-vote) without waiting
 for the election timeout.
 (See Ongaro dissertation §3.10.)
 
-Nodes in handshake or with the MEET flag are excluded as transfer
-targets.
+Nodes in handshake or not yet in the raft log are excluded as
+transfer targets.
 
 ## Future Work
 
-- Minority partition detection and leader step-down (prevents append
-  entries, especially don't trigger primary/replica failovers in a
-  minority partition).
-- Log compaction / snapshotting for lagging followers.
 - Automatic learner promotion (promote the first 5 or 7 nodes to voters).
 - Chained learner replication.
 - Balancing voters over availability zones: the leader can use the
@@ -897,5 +985,3 @@ targets.
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either
   atomically or not.
-- `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
-  some cases, which doesn't work with blocking admin commands).

@@ -12,6 +12,7 @@
 
 extern "C" {
 #include "throttle.h"
+#include "script.h"
 static monotime fakeGetMonotonicUs(void);
 static monotime (*origGetMonotonicUs)(void);
 
@@ -657,6 +658,39 @@ TEST_F(ThrottleTest, throttledClientIsNotReprocessed) {
     throttle_removeClient(c);
     throttle_deregister(t);
     freeFakeClient(c);
+}
+
+/* A timed-out script ending on a replica must not queue a throttled primary client, since
+ * processUnblockedClients() asserts that queued clients are not throttled. The throttler
+ * queues the client when it releases it. */
+TEST_F(ThrottleTest, scriptTimeoutDoesNotQueueThrottledPrimary) {
+    client *caller = createFakeClient(1, false);
+    client *primary = createFakeClient(2, true);
+    server.primary_host = (char *)"localhost";
+    server.repl_state = REPL_STATE_CONNECTED;
+    server.primary = primary;
+
+    auto endTimedOutScript = [&]() {
+        scriptRunCtx run_ctx;
+        ASSERT_EQ(scriptPrepareForRun(&run_ctx, NULL, caller, "f", SCRIPT_FLAG_EVAL_COMPAT_MODE, 1), C_OK);
+        run_ctx.flags |= SCRIPT_TIMEDOUT;
+        server.blocking_op_nesting = 1;
+        scriptResetRun(&run_ctx);
+    };
+
+    primary->flag.throttled = 1;
+    EXPECT_CALL(mock, queueClientForReprocessing(primary)).Times(0);
+    endTimedOutScript();
+
+    primary->flag.throttled = 0;
+    EXPECT_CALL(mock, queueClientForReprocessing(primary)).WillOnce(Return());
+    endTimedOutScript();
+
+    server.primary = NULL;
+    server.primary_host = NULL;
+    server.repl_state = REPL_STATE_NONE;
+    freeFakeClient(caller);
+    freeFakeClient(primary);
 }
 
 /* handleReadJobs() leaves READ postponed on an RDMA connection while a skipped throttled client

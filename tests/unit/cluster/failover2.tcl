@@ -73,16 +73,56 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000 cluster-replica-no-failover yes}} {
     test "Primaries will not time out then they are elected in the same epoch" {
-        # Since we have the delay time, so these node may not initiate the
-        # election at the same time (same epoch). But if they do, we make
-        # sure there is no failover timeout.
+        # A replica that starts its election in an epoch that another replica
+        # wins must start a new election as soon as it sees the winner, without
+        # waiting for the failover timeout. The election delays make that rare,
+        # so the replicas are released one by one, and R 8 is kept from seeing
+        # the election of R 7 so that it starts its own in the same epoch.
+        set CLUSTER_PACKET_TYPE_NONE -1
+        set CLUSTER_PACKET_TYPE_ALL -2
 
         # Killing there primary nodes.
+        set paused_ids [list [R 0 cluster myid] [R 1 cluster myid] [R 2 cluster myid]]
         pause_process [srv 0 pid]
         pause_process [srv -1 pid]
         pause_process [srv -2 pid]
+
+        # Wait until every remaining node sees all the paused primaries as fail,
+        # so that every voter can grant its vote to each of the replicas.
+        foreach id $paused_ids {
+            for {set j 3} {$j < 10} {incr j} {
+                wait_node_marked_fail $j $id
+            }
+        }
+
+        # R 7 wins its election while R 8 drops every cluster bus packet.
+        R 8 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+        R 8 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 1
+        R 7 CONFIG SET cluster-replica-no-failover no
+        wait_for_condition 1000 50 {
+            [s -7 role] == "master"
+        } else {
+            fail "No failover detected on R 7"
+        }
+
+        # R 8 still has the old epoch, so it starts its election in the epoch
+        # that R 7 has won, in which the primaries have already voted.
+        R 8 CONFIG SET cluster-replica-no-failover no
+        wait_for_log_messages -8 {"*Starting a failover election for epoch*"} 0 1000 50
+
+        # R 8 now sees that R 7 has claimed the epoch, and must win a new
+        # election before its failover timeout.
+        R 8 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+        R 8 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 0
+        wait_for_condition 1000 50 {
+            [s -8 role] == "master"
+        } else {
+            fail "No failover detected on R 8"
+        }
+
+        R 9 CONFIG SET cluster-replica-no-failover no
 
         # Wait for the failover
         wait_for_condition 1000 50 {

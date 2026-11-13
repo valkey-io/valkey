@@ -3,7 +3,11 @@
 
 # Create a cluster with 5 master and 10 slaves, so that we have 2
 # slaves for each master.
-start_cluster 5 10 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+#
+# The election delay added per replica rank scales with cluster-node-timeout.
+# Use the default node timeout so that the replica with the best offset has
+# time to win its election before the other replica starts its own.
+start_cluster 5 10 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok

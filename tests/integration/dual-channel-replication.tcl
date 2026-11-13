@@ -1377,81 +1377,138 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     }
 }
 
-start_server {tags {"dual-channel-replication external:skip"}} {
-    set primary [srv 0 client]
-    set primary_host [srv 0 host]
-    set primary_port [srv 0 port]
+# Pause at the first replay event to control when the connection or role changes.
+foreach repl_compression {no lz4} {
+    foreach trigger {kill rehost noone primary-close} {
+        start_server {tags {"dual-channel-replication external:skip"}} {
+            set primary [srv 0 client]
+            set primary_host [srv 0 host]
+            set primary_port [srv 0 port]
 
-    $primary config set repl-diskless-sync yes
-    $primary config set dual-channel-replication-enabled yes
-    $primary config set repl-diskless-sync-delay 0
+            start_server {overrides {appendonly yes}} {
+                set replica [srv 0 client]
 
-    $primary config set rdbcompression no
+                test "Dual-channel buffer replay handles $trigger ($repl_compression)" {
+                    $primary config set repl-diskless-sync yes
+                    $primary config set dual-channel-replication-enabled yes
+                    $primary config set repl-diskless-sync-delay 0
+                    $primary config set repl-compression $repl_compression
+                    $primary config set rdbcompression no
+                    $primary debug populate 1000 key 1024
+                    $primary set baseline before-sync
+                    set ofs_before [s -1 master_repl_offset]
 
-    # A large set that is slow to copy, and enough keys for the replica to stay
-    # in the RDB load for as long as we need when it uses key-load-delay.
-    for {set j 0} {$j < 300} {incr j} {
-        set members {}
-        for {set i 0} {$i < 1000} {incr i} {
-            lappend members "$j:$i"
-        }
-        $primary sadd bigset {*}$members
-    }
-    $primary debug populate 3000 key 1024
+                    $replica config set dual-channel-replication-enabled yes
+                    $replica config set repl-compression $repl_compression
+                    $replica config set loading-process-events-interval-bytes 1024
+                    # Hold the RDB load until the incremental commands are buffered.
+                    $replica config set key-load-delay 100000
+                    $replica debug pause-before-repl-stream-event 1
+                    test_defer_fail [list $replica debug pause-before-repl-stream-event 0]
+                    test_defer [list resume_process [srv 0 pid]]
 
-    start_server {} {
-        set replica [srv 0 client]
+                    set loglines [count_log_lines 0]
+                    $replica replicaof $primary_host $primary_port
+                    wait_for_condition 500 100 {
+                        [s 0 loading] eq 1
+                    } else {
+                        fail "replica didn't start loading the RDB in time"
+                    }
 
-        $replica config set dual-channel-replication-enabled yes
-        $replica config set loading-process-events-interval-bytes 1024
-        # Keep the replica in the RDB load until all the commands are buffered.
-        $replica config set key-load-delay 100000
+                    # Multiple blocks ensure replay stops after applying some writes.
+                    set padding [string repeat x 32768]
+                    for {set i 0} {$i < 100} {incr i} {
+                        $primary incr counter
+                        $primary set buffer:$i $padding
+                    }
+                    wait_for_condition 500 100 {
+                        [s 0 replicas_repl_buffer_size] >= [expr {$repl_compression eq "no" ? 100 * 1024 : 1024}]
+                    } else {
+                        fail "replica didn't buffer the commands in time"
+                    }
+                    assert_equal 1 [s 0 loading]
 
-        test "Replica primary link killed while streaming the local replication buffer" {
-            set loglines [count_log_lines 0]
-            $replica replicaof $primary_host $primary_port
-            wait_for_condition 500 100 {
-                [s 0 loading] eq 1
-            } else {
-                fail "replica didn't start loading the RDB in time"
+                    set control [valkey_deferring_client]
+                    test_defer [list $control close]
+                    $control config set key-load-delay 0
+                    wait_process_paused [srv 0 pid]
+                    # Register this self-stopped process for cleanup if an assertion fails.
+                    pause_process [srv 0 pid]
+                    set killline [count_log_lines 0]
+                    if {$repl_compression eq "lz4"} {
+                        assert_match {*repl_compression=lz4*} [$primary info replication]
+                    }
+                    switch $trigger {
+                        kill { $control client kill type primary }
+                        rehost {
+                            # Change the host without depending on whether
+                            # localhost resolves to the IPv6 loopback.
+                            $control replicaof 127.1 $primary_port
+                        }
+                        noone { $control replicaof no one }
+                        primary-close {
+                            # Hold the primary after closing its side of the link, so
+                            # reconnecting cannot race the replica's disconnect event.
+                            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+                            assert_not_equal "" $replica_main_conn_id
+                            assert_equal 1 [$primary client kill id $replica_main_conn_id]
+                            pause_process [srv -1 pid]
+                        }
+                    }
+                    resume_process [srv 0 pid]
+                    assert_equal OK [$control read]
+                    if {$trigger ne "primary-close"} {
+                        assert_equal [expr {$trigger eq "kill" ? 1 : "OK"}] [$control read]
+                    }
+
+                    if {$trigger eq "primary-close"} {
+                        # The primary reader is installed only after replay, so a
+                        # remote close is detected after the buffer has been drained.
+                        wait_for_log_messages 0 {"*Successfully streamed replication data into memory*"} $loglines 100 100
+                        resume_process [srv -1 pid]
+                    } else {
+                        wait_for_log_messages 0 {"*Failed to stream local replication buffer into memory*"} $loglines 100 100
+                    }
+                    if {$trigger eq "noone"} {
+                        assert_equal master [s 0 role]
+                        assert_morethan [s 0 master_repl_offset] $ofs_before
+                        assert_lessthan_equal [s 0 master_repl_offset] [s -1 master_repl_offset]
+                        assert_equal [s -1 master_replid] [s 0 master_replid2]
+                        assert_morethan [$replica get counter] 0
+                        assert_lessthan [$replica get counter] 100
+                    } else {
+                        wait_for_condition 500 100 {
+                            [s 0 master_link_status] eq "up"
+                        } else {
+                            fail "replica didn't sync with the primary again"
+                        }
+                        wait_for_ofs_sync $primary $replica
+                        assert_equal [$primary debug digest] [$replica debug digest]
+                        assert_equal 100 [$replica get counter]
+                        # The replica resumes from the part of the buffer it applied.
+                        assert_equal 1 [s -1 sync_full]
+                    }
+                    if {$trigger ne "primary-close"} {
+                        # Check after recovery, so the aborted completion handler
+                        # has returned and cannot log success after this assertion.
+                        verify_no_log_message 0 "*Finished with success*" $killline
+                    }
+
+                    # AOF replay must retain buffered writes, including partial replay
+                    # when the replica was promoted at the checkpoint.
+                    wait_for_condition 500 100 {
+                        [s 0 aof_enabled] eq 1 && [s 0 aof_rewrite_in_progress] eq 0 &&
+                        [s 0 aof_rewrite_scheduled] eq 0
+                    } else {
+                        fail "AOF was not rebuilt after buffer replay"
+                    }
+                    set digest [$replica debug digest]
+                    set counter [$replica get counter]
+                    $replica debug loadaof
+                    assert_equal $counter [$replica get counter]
+                    assert_equal $digest [$replica debug digest]
+                }
             }
-
-            # The replica buffers these commands while it loads the RDB. They
-            # are slow and large enough for the replica to serve clients several
-            # times when it streams the buffer into memory.
-            $primary set streaming-started 1
-            set padding [string repeat x 1024]
-            for {set i 0} {$i < 100} {incr i} {
-                $primary sunionstore $padding bigset
-            }
-            wait_for_condition 500 100 {
-                [s 0 replicas_repl_buffer_size] >= 100 * 1024
-            } else {
-                fail "replica didn't buffer the commands in time"
-            }
-            assert_equal 1 [s 0 loading]
-
-            # Let the replica finish the load, and kill the primary link once it
-            # started streaming the buffer.
-            $replica config set key-load-delay 0
-            wait_for_condition 1000 10 {
-                ![catch {$replica exists streaming-started} e] && $e == 1
-            } else {
-                fail "replica didn't start streaming the local buffer in time"
-            }
-            assert_equal 1 [$replica client kill type primary]
-
-            # The replica aborts the sync and connects to the primary again.
-            wait_for_log_messages 0 {"*Failed to stream local replication buffer into memory*"} $loglines 100 100
-            wait_for_condition 500 100 {
-                [s 0 master_link_status] eq "up"
-            } else {
-                fail "replica didn't sync with the primary again"
-            }
-            wait_for_ofs_sync $primary $replica
-            assert_equal [$primary debug digest] [$replica debug digest]
-            # The replica continued with a partial resynchronization.
-            assert_equal 1 [s -1 sync_full]
         }
     }
 }

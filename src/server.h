@@ -2302,6 +2302,8 @@ struct valkeyServer {
                                                  * after a replication fork() (for bgsave). */
     int debug_pause_before_psync;               /* Replica pauses (SIGSTOP) right before
                                                  * sending PSYNC to its primary. */
+    int debug_pause_before_repl_stream_event;   /* Pause once before serving events
+                                                 * during local replication buffer replay. */
     size_t repl_buffer_mem;                     /* The memory of replication buffer. */
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */

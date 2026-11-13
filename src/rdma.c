@@ -229,29 +229,25 @@ static void *rdmaMemoryAlloc(size_t size) {
     return ptr + page_size;
 }
 
-static void rdmaMemoryFree(void **ptr, uint32_t *size) {
+static void rdmaMemoryFree(void *ptr, size_t size) {
     uint8_t *real_ptr;
     size_t real_size, aligned_size;
 
-    if (!*ptr) {
-        *size = 0;
+    if (!ptr) {
         return;
     }
 
-    if ((unsigned long)*ptr & (page_size - 1)) {
+    if ((unsigned long)ptr & (page_size - 1)) {
         serverPanic("unaligned memory in use for RDMA region");
     }
 
-    aligned_size = (*size + page_size - 1) & (~(page_size - 1));
+    aligned_size = (size + page_size - 1) & (~(page_size - 1));
     real_size = aligned_size + 2 * page_size;
-    real_ptr = (uint8_t *)*ptr - page_size;
+    real_ptr = (uint8_t *)ptr - page_size;
 
     if (munmap(real_ptr, real_size)) {
         serverPanic("failed to free memory for RDMA region");
     }
-
-    *ptr = NULL;
-    *size = 0;
 }
 
 #define CMD_BUF_LEN (sizeof(ValkeyRdmaCmd) * VALKEY_RDMA_MAX_WQE * 2)
@@ -262,14 +258,18 @@ static void rdmaDestroyIoBuf(RdmaContext *ctx) {
         ctx->rx.mr = NULL;
     }
 
-    rdmaMemoryFree((void **)&ctx->rx.addr, &ctx->rx.length);
+    rdmaMemoryFree(ctx->rx.addr, ctx->rx.length);
+    ctx->rx.addr = NULL;
+    ctx->rx.length = 0;
 
     if (ctx->tx.mr) {
         ibv_dereg_mr(ctx->tx.mr);
         ctx->tx.mr = NULL;
     }
 
-    rdmaMemoryFree((void **)&ctx->tx.addr, &ctx->tx_length);
+    rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
+    ctx->tx.addr = NULL;
+    ctx->tx_length = 0;
     ctx->tx.length = 0;
 
     if (ctx->cmd_mr) {
@@ -277,13 +277,13 @@ static void rdmaDestroyIoBuf(RdmaContext *ctx) {
         ctx->cmd_mr = NULL;
     }
 
-    uint32_t length = CMD_BUF_LEN;
-    rdmaMemoryFree((void **)&ctx->cmd_buf, &length);
+    rdmaMemoryFree(ctx->cmd_buf, CMD_BUF_LEN);
+    ctx->cmd_buf = NULL;
 }
 
 static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     int access = IBV_ACCESS_LOCAL_WRITE;
-    uint32_t length = CMD_BUF_LEN;
+    size_t length = CMD_BUF_LEN;
     ValkeyRdmaCmd *cmd;
     int i;
 
@@ -419,7 +419,9 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     /* try to free old MR & buffer */
     if (ctx->tx_length) {
         ibv_dereg_mr(ctx->tx.mr);
-        rdmaMemoryFree((void **)&ctx->tx.addr, &ctx->tx_length);
+        rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
+        ctx->tx.addr = NULL;
+        ctx->tx_length = 0;
     }
 
     /* create a new buffer & MR */
@@ -429,7 +431,9 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     if (!ctx->tx.mr) {
         serverRdmaError(server.neterr, "RDMA: reg send mr failed: %s", strerror(errno));
         serverLog(LL_WARNING, "RDMA: FATAL error, recv corrupted cmd");
-        rdmaMemoryFree((void **)&ctx->tx.addr, &ctx->tx_length);
+        rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
+        ctx->tx.addr = NULL;
+        ctx->tx_length = 0;
         return C_ERR;
     }
 
@@ -555,13 +559,17 @@ static int connRdmaHandleRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, Valkey
 
     case Keepalive: break;
 
-    case RegisterXferMemory:
+    case RegisterXferMemory: {
+        uint32_t length = ntohl(cmd->memory.length);
         ctx->tx_addr = (char *)(uintptr_t)ntohu64(cmd->memory.addr);
-        ctx->tx.length = ntohl(cmd->memory.length);
         ctx->tx_key = ntohl(cmd->memory.key);
         ctx->tx.offset = 0;
-        rdmaAdjustSendbuf(ctx, ctx->tx.length);
+        if (rdmaAdjustSendbuf(ctx, length) == C_ERR) {
+            return C_ERR;
+        }
+        ctx->tx.length = length;
         break;
+    }
 
     default: serverLog(LL_WARNING, "RDMA: FATAL error, unknown cmd"); return C_ERR;
     }

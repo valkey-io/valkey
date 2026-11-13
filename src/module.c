@@ -4706,9 +4706,15 @@ int VM_StringSet(ValkeyModuleKey *key, ValkeyModuleString *str) {
  * moved into the keyspace, in similar spirit to `std::move`. The caller MUST treat the
  * `str` pointer as having been moved. It must not be referenced or freed again.
  *
+ * Only strings the module owns may be moved. Lent strings, like a command's `argv` or
+ * callback arguments, must never be moved. They belong to the server. Moving one of those
+ * strings is like calling ValkeyModule_FreeString on it.
+ * Use ValkeyModule_StringSet for strings you don't own (or might not own).
+ *
  * The caller retains its reference in case of error.
  * Returns VALKEYMODULE_ERR, with errno set to:
- * * EINVAL when str's refcount is not exactly 1 (required for move)
+ * * EINVAL when str's refcount is not exactly 1, meaning it is shared. A refcount
+ *   of 1 does not by itself prove module ownership of `str`.
  * * EACCES when key is not opened for write.
  * * EBUSY when key has an open iterator.
  * * EIO when delete of previous value fails (unlikely, as access is pre-checked).

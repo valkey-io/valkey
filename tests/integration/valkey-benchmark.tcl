@@ -57,6 +57,12 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match {*calls=10,*} [cmdstat incr]
         }
 
+        test {benchmark: rps summary includes p99.9} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 1 -n 10 --rps 10 INCR counter"]
+            set output [common_bench_setup $cmd]
+            assert_match {*RPS Summary:*avg*min*p50*p95*p99*p99.9*max*Latency by percentile*} $output
+        }
+
         test {benchmark: connecting using URI set,get} {
             set cmd [valkeybenchmarkuri $master_host $master_port "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
@@ -617,6 +623,9 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set output [common_bench_setup $cmd]
             # CSV output should contain comma-separated values
             assert_match "*,*,*,*" $output
+            # Header and each row carry p999_latency_ms between p99 and max
+            assert_match {*"p99_latency_ms","p999_latency_ms","max_latency_ms"*} $output
+            assert {[regexp {(?n)^"SET"(,"[^"]*"){8}$} $output]}
             # Should not contain the usual formatted output
             assert_no_match "*requests per second*" $output
             # Should not contain carriage returns or progress indicators

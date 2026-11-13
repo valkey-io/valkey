@@ -1238,14 +1238,15 @@ static void showRPSReport(void) {
         const float p50 = (float)hdr_value_at_percentile(config.rps_histogram, 50.0);
         const float p95 = (float)hdr_value_at_percentile(config.rps_histogram, 95.0);
         const float p99 = (float)hdr_value_at_percentile(config.rps_histogram, 99.0);
+        const float p999 = (float)hdr_value_at_percentile(config.rps_histogram, 99.9);
         const float p100 = (float)hdr_max(config.rps_histogram);
 
         printf("\n");
         printf("RPS Summary:\n");
         printf("  target RPS: %.2f\n", target_rps);
         printf("  RPS distribution (reqs/sec):\n");
-        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
-        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
+        printf("    %9s %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "p99.9", "max");
+        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p999, p100);
     }
 }
 
@@ -1336,8 +1337,8 @@ static void showReport(void) {
         printf("    %9s %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "p99.9", "max");
         printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p999, p100);
     } else if (config.csv) {
-        printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
-               p0, p50, p95, p99, p100);
+        printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec,
+               avg, p0, p50, p95, p99, p999, p100);
     } else {
         printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
         printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
@@ -2689,7 +2690,7 @@ int main(int argc, char **argv) {
     }
     if (config.csv) {
         printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
-               "latency_ms\",\"max_latency_ms\"\n");
+               "latency_ms\",\"p999_latency_ms\",\"max_latency_ms\"\n");
     }
 
     if (config.fuzz_mode) {

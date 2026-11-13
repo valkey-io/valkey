@@ -47,3 +47,26 @@ test "Sentinel removes a stale identity announced at its own address" {
     }
     assert_equal -1 [lsearch [sentinel_runids 0] $myid]
 }
+
+test "Sentinel ignores its own runid in a known-sentinel config line" {
+    # An older version could save its own runid as a known-sentinel. Load it
+    # at an address nothing answers on, so no hello can remove it.
+    set myid [S 0 SENTINEL MYID]
+    set port [expr {[get_instance_attrib sentinel 0 port] + 1000}]
+    set cfgfile [file join "sentinel_0" "sentinel.conf"]
+    kill_instance sentinel 0
+    set fd [open $cfgfile a]
+    puts $fd "sentinel known-sentinel mymaster 127.0.0.1 $port $myid"
+    close $fd
+    restart_instance sentinel 0
+    verify_sentinel_auto_discovery
+
+    assert_equal -1 [lsearch [sentinel_runids 0] $myid]
+    assert_equal [expr {$num_sentinels-1}] [dict get [S 0 SENTINEL PRIMARY mymaster] num-other-sentinels]
+
+    S 0 SENTINEL FLUSHCONFIG
+    set fd [open $cfgfile r]
+    set content [read $fd]
+    close $fd
+    assert_equal -1 [string first "known-sentinel mymaster 127.0.0.1 $port $myid" $content]
+}

@@ -1942,7 +1942,9 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
     } else if (!strcasecmp(argv[0], "known-sentinel") && (argc == 4 || argc == 5)) {
         sentinelValkeyInstance *si;
 
-        if (argc == 5) { /* Ignore the old form without runid. */
+        /* Ignore the old form without runid, and our own runid, which an
+         * older version could save as a peer. */
+        if (argc == 5 && strcmp(argv[4], sentinel.myid)) {
             /* known-sentinel <name> <ip> <port> [runid] */
             ri = sentinelGetPrimaryByName(argv[1]);
             if (!ri) return "No such master with specified name.";

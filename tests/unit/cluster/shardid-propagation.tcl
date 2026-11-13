@@ -58,3 +58,24 @@ tags {tls:skip external:skip cluster} {
 }
 
 set ::singledb $old_singledb
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test "The replica will have a new shard_id after cluster reset soft" {
+        assert_equal [R 0 cluster myshardid] [R 3 cluster myshardid]
+
+        R 3 cluster reset
+        assert_not_equal [R 0 cluster myshardid] [R 3 cluster myshardid]
+
+        # The reset node forgot its peers and only announces its shard_id
+        # to nodes it knows, so it has to meet the cluster again.
+        assert_equal {OK} [R 3 cluster meet [srv 0 host] [srv 0 port]]
+
+        wait_for_condition 1000 50 {
+            [llength [R 0 cluster shards]] == 4 &&
+            [llength [R 1 cluster shards]] == 4 &&
+            [llength [R 2 cluster shards]] == 4
+        } else {
+            fail "R 3 does not become a new shard"
+        }
+    }
+}

@@ -1294,10 +1294,11 @@ void clusterHandleServerShutdown(void) {
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
-    int j;
+    int j, was_replica = 0;
 
     /* Turn into primary. */
     if (nodeIsReplica(myself)) {
+        was_replica = 1;
         clusterSetNodeAsPrimary(myself);
         replicationUnsetPrimary();
         emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
@@ -1344,6 +1345,11 @@ void clusterReset(int hard) {
         getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNode(myself);
         serverLog(LL_NOTICE, "Node hard reset, now I'm %.40s", myself->name);
+    } else {
+        /* If we were a replica, this means our shard_id is the shard_id of
+         * the primary node, and since now we become a new empty primary, we
+         * need to have our own shard_id. */
+        if (was_replica) getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
     }
 
     /* Re-populate shards */

@@ -304,15 +304,25 @@ static long long nstime(void) {
 
 /* Set by the SIGINT handler: stop the current test as if it had completed so
  * the report for the samples collected so far is still printed. */
-static volatile sig_atomic_t interrupted = 0;
+static atomic_int interrupted = 0;
 
 static void sigintHandler(int sig) {
     UNUSED(sig);
-    interrupted = 1;
+    atomic_store_explicit(&interrupted, 1, memory_order_relaxed);
+}
+
+/* After Ctrl+C, don't start another test (or --loop iteration). Re-raise
+ * SIGINT with the default action so the parent sees we were killed by it. */
+static void exitIfInterrupted(void) {
+    if (!interrupted) return;
+    fflush(stdout);
+    signal(SIGINT, SIG_DFL);
+    raise(SIGINT);
+    exit(128 + SIGINT);
 }
 
 static bool isBenchmarkFinished(int request_count) {
-    if (interrupted) return true;
+    if (atomic_load_explicit(&interrupted, memory_order_relaxed)) return true;
 
     /* don't end in warmup period */
     int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
@@ -1242,6 +1252,11 @@ static void createMissingClients(client c) {
     }
 }
 
+/* hdr_mean divides by total_count, so an empty histogram would yield nan. */
+static double hdrMeanOrZero(const struct hdr_histogram *h) {
+    return h->total_count > 0 ? hdr_mean(h) : 0;
+}
+
 static void showRPSReport(void) {
     if (config.rps_histogram && config.rps_histogram->total_count > 0) {
         const float target_rps = (float)config.rps;
@@ -1264,12 +1279,18 @@ static void showRPSReport(void) {
 
 static void showReport(void) {
     const float reqpersec = (float)config.requests_finished / ((float)config.totlatency / 1000.0f);
-    const float p0 = ((float)hdr_min(config.latency_histogram)) / 1000.0f;
-    const float p50 = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0f;
-    const float p95 = hdr_value_at_percentile(config.latency_histogram, 95.0) / 1000.0f;
-    const float p99 = hdr_value_at_percentile(config.latency_histogram, 99.0) / 1000.0f;
-    const float p100 = ((float)hdr_max(config.latency_histogram)) / 1000.0f;
-    const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
+    float p0 = 0, p50 = 0, p95 = 0, p99 = 0, p100 = 0, avg = 0;
+    /* The histogram is empty when Ctrl+C arrives before any reply. hdr_mean
+     * would divide by zero and hdr_min would return INT64_MAX, so report all
+     * latency figures as 0 instead. */
+    if (config.latency_histogram->total_count > 0) {
+        p0 = ((float)hdr_min(config.latency_histogram)) / 1000.0f;
+        p50 = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0f;
+        p95 = hdr_value_at_percentile(config.latency_histogram, 95.0) / 1000.0f;
+        p99 = hdr_value_at_percentile(config.latency_histogram, 99.0) / 1000.0f;
+        p100 = ((float)hdr_max(config.latency_histogram)) / 1000.0f;
+        avg = hdrMeanOrZero(config.latency_histogram) / 1000.0f;
+    }
 
     if (!config.quiet && !config.csv) {
         printf("====== %s ======\n", config.title);
@@ -1312,9 +1333,12 @@ static void showReport(void) {
         struct hdr_iter iter;
         long long previous_cumulative_count = -1;
         const long long total_count = config.latency_histogram->total_count;
+        /* Empty when Ctrl+C arrives before any reply: the percentile iterator
+         * would still emit a misleading "100% <= 0" line, so skip it. */
+        if (total_count == 0) printf("  (no samples)\n");
         hdr_iter_percentile_init(&iter, config.latency_histogram, 1);
         struct hdr_iter_percentiles *percentiles = &iter.specifics.percentiles;
-        while (hdr_iter_next(&iter)) {
+        while (total_count > 0 && hdr_iter_next(&iter)) {
             const double value = iter.highest_equivalent_value / 1000.0f;
             const double percentile = percentiles->percentile;
             const long long cumulative_count = iter.cumulative_count;
@@ -1325,9 +1349,10 @@ static void showReport(void) {
         }
         printf("\n");
         printf("Cumulative distribution of latencies:\n");
+        if (total_count == 0) printf("  (no samples)\n");
         previous_cumulative_count = -1;
         hdr_iter_linear_init(&iter, config.latency_histogram, 100);
-        while (hdr_iter_next(&iter)) {
+        while (total_count > 0 && hdr_iter_next(&iter)) {
             const double value = iter.highest_equivalent_value / 1000.0f;
             const long long cumulative_count = iter.cumulative_count;
             const double percentile = ((double)cumulative_count / (double)total_count) * 100.0;
@@ -1389,6 +1414,9 @@ static void startBenchmarkThreads(void) {
 static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
     client c;
 
+    /* Ctrl+C may land between two tests: don't set up the next one. */
+    exitIfInterrupted();
+
     config.title = title;
     config.requests_issued = 0;
     config.requests_finished = 0;
@@ -1437,8 +1465,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
     if (config.rps_histogram) hdr_close(config.rps_histogram);
-    /* Don't run the remaining tests (or the next --loop iteration). */
-    if (interrupted) exit(128 + SIGINT);
+    exitIfInterrupted();
 }
 
 /* Benchmark a single RESP-encoded command of length len. */
@@ -2264,6 +2291,13 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         exit(1);
     }
     int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
+    /* Ctrl+C must also stop a warmup in which no reply arrives: the warmup
+     * branch below never checks the flag, and once warmup expires it would
+     * clear the stats of what was interrupted. */
+    if (interrupted) {
+        aeStop(eventLoop);
+        return config.num_threads ? AE_NOMORE : SHOW_THROUGHPUT_INTERVAL;
+    }
     if (warmup_duration > 0) {
         if ((current_tick - config.start) >= (warmup_duration * 1000LL)) {
             /* exit the warmup period, clear all stats */
@@ -2351,7 +2385,8 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
            "(overall: %.3f)\n",
            warmup_duration > 0 ? "Warming up " : "", config.title, (int)progress, dt,
            config.num_threads ? config.num_threads : 1, config.numclients, requests_finished, interval_rps, rps,
-           hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
+           hdrMeanOrZero(config.current_sec_latency_histogram) / 1000.0f,
+           hdrMeanOrZero(config.latency_histogram) / 1000.0f);
 
     config.last_progress_tick = current_tick;
     config.last_progress_requests = requests_finished;

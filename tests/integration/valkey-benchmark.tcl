@@ -26,6 +26,29 @@ proc default_set_get_checks {} {
     assert_match  {} [cmdstat lrange]
 }
 
+# Start valkey-benchmark in the background, wait until its output matches
+# ready_pattern, send SIGINT and return the output once it has exited.
+proc bench_interrupt {cmd ready_pattern} {
+    set out_file [tmpfile benchmark_sigint]
+    set pid [exec {*}$cmd > $out_file 2>@1 &]
+    try {
+        wait_for_condition 100 100 {
+            [string match $ready_pattern [exec cat $out_file]]
+        } else {
+            fail "valkey-benchmark output never matched $ready_pattern"
+        }
+        exec kill -INT $pid
+        wait_for_condition 50 100 {
+            ![process_is_alive $pid]
+        } else {
+            fail "valkey-benchmark did not exit after SIGINT"
+        }
+        return [exec cat $out_file]
+    } finally {
+        catch {exec kill -9 $pid}
+    }
+}
+
 tags {"benchmark network external:skip logreqres:skip"} {
     start_server {} {
         set master_host [srv 0 host]
@@ -34,8 +57,9 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
         test {benchmark: set,get} {
             set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get"]
-            common_bench_setup $cmd
+            set output [common_bench_setup $cmd]
             default_set_get_checks
+            assert_no_match {*interrupted by user*} $output
         }
 
         test {benchmark: Ctrl+C prints partial report and skips remaining tests} {
@@ -44,27 +68,90 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set out_file [tmpfile benchmark_sigint]
             set cmd [valkeybenchmark $master_host $master_port "-c 2 -n 1000000000 -t set,get"]
             set pid [exec {*}$cmd > $out_file 2>@1 &]
-            wait_for_condition 100 100 {
-                [string match {*calls=*} [cmdstat set]]
-            } else {
-                fail "valkey-benchmark did not start sending SET"
+            try {
+                wait_for_condition 100 100 {
+                    [string match {*calls=*} [cmdstat set]]
+                } else {
+                    fail "valkey-benchmark did not start sending SET"
+                }
+                exec kill -INT $pid
+                wait_for_condition 100 100 {
+                    [string match {*Summary:*} [exec cat $out_file]]
+                } else {
+                    fail "valkey-benchmark did not print a report after SIGINT"
+                }
+                wait_for_condition 50 100 {
+                    ![process_is_alive $pid]
+                } else {
+                    fail "valkey-benchmark did not exit after SIGINT"
+                }
+                set output [exec cat $out_file]
+                assert_match {*====== SET ======*interrupted by user*requests completed in*} $output
+                # The GET test must not run after the interruption.
+                assert_no_match {*====== GET ======*} $output
+                assert_match {} [cmdstat get]
+            } finally {
+                catch {exec kill -9 $pid}
             }
-            exec kill -INT $pid
-            wait_for_condition 100 100 {
-                [string match {*Summary:*} [exec cat $out_file]]
-            } else {
-                fail "valkey-benchmark did not print a report after SIGINT"
+        }
+
+        test {benchmark: Ctrl+C stops a warmup in which no reply arrives} {
+            r flushall
+            set out_file [tmpfile benchmark_sigint_warmup]
+            set cmd [valkeybenchmark $master_host $master_port "-c 1 --warmup 600 -n 1000000 -- BLPOP missing 0"]
+            set pid [exec {*}$cmd > $out_file 2>@1 &]
+            try {
+                wait_for_condition 100 100 {
+                    [string match {*cmd=blpop*} [r client list]]
+                } else {
+                    fail "valkey-benchmark did not send BLPOP"
+                }
+                exec kill -INT $pid
+                # Without the fix, the warmup keeps going for 600 seconds.
+                wait_for_condition 50 100 {
+                    [string match {*Summary:*} [exec cat $out_file]]
+                } else {
+                    fail "valkey-benchmark did not print a report after SIGINT during warmup"
+                }
+                assert_match {*interrupted by user*0 requests completed in*} [exec cat $out_file]
+            } finally {
+                catch {exec kill -9 $pid}
             }
-            wait_for_condition 50 100 {
-                ![process_is_alive $pid]
-            } else {
-                fail "valkey-benchmark did not exit after SIGINT"
-            }
-            set output [exec cat $out_file]
-            assert_match {*====== SET ======*interrupted by user*requests completed in*} $output
-            # The GET test must not run after the interruption.
+        }
+
+        test {benchmark: Ctrl+C with --threads prints the same report} {
+            r flushall
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "--threads 2 -c 4 -n 1000000000 -t set,get"]
+            # Wait for a progress line so both threads have recorded samples.
+            set output [bench_interrupt $cmd {*rps=*}]
+            assert_match {*====== SET ======*interrupted by user*requests completed in*multi-thread: yes*threads: 2*Latency by percentile distribution:*cumulative count*Summary:*latency summary*} $output
             assert_no_match {*====== GET ======*} $output
             assert_match {} [cmdstat get]
+        }
+
+        test {benchmark: Ctrl+C with -l does not start another iteration} {
+            r flushall
+            # Each iteration takes about a second, so the first report shows
+            # that the loop is running and SIGINT then hits the second one.
+            set cmd [valkeybenchmark $master_host $master_port "-l -c 2 -n 20000 -t set"]
+            set output [bench_interrupt $cmd {*Summary:*}]
+            assert_match {*Summary:*interrupted by user*} $output
+            # Nothing may follow the report of the interrupted iteration.
+            set tail [string range $output [string first "interrupted by user" $output] end]
+            assert_no_match {*======*} $tail
+            assert_equal 1 [regexp -all {interrupted by user} $output]
+        }
+
+        foreach mode {-q --csv} {
+            test "benchmark: no progress lines with $mode" {
+                # Progress lines are printed once per second, so run longer.
+                set cmd [valkeybenchmark $master_host $master_port "-c 2 --duration 2 -t set $mode"]
+                set output [common_bench_setup $cmd]
+                assert_no_match {*rps=*} $output
+                assert_no_match {*secs\]*} $output
+                assert_no_match "*\r*" $output
+            }
         }
 
         test {benchmark: single request completes across write retries} {

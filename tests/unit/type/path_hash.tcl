@@ -1102,6 +1102,69 @@ start_server {tags {pathhash}} {
         assert_equal $expected [r phgetall per-path-dst p2]
     }
 
+    test {RESTORE converts a large path payload on a long value and rejects a duplicate on that pair} {
+        test_defer {r debug set-skip-checksum-validation 0}
+        r debug set-skip-checksum-validation 1
+        test_config_set r hash-max-listpack-entries 512
+        test_config_set r hash-max-listpack-value 64
+        r del long-src
+        r del long-dst
+        set pairs {}
+        for {set i 1} {$i <= 18} {incr i} {
+            if {$i == 17} {
+                lappend pairs f:$i [string repeat x 80]
+            } else {
+                lappend pairs f:$i v:$i
+            }
+        }
+        r phset long-src p fields 18 {*}$pairs
+        set dumped [r dump long-src]
+
+        # The long value must convert the payload while loading. OBJECT
+        # ENCODING only reports pathhash, so compare memory usage against the
+        # same payload kept as a Listpack under a larger value limit.
+        assert_equal OK [r restore long-dst 0 $dumped]
+        assert_equal [string repeat x 80] [r phget long-dst p f:17]
+        set converted [r memory usage long-dst samples 0]
+        r del long-dst
+        test_config_set r hash-max-listpack-value 128
+        assert_equal OK [r restore long-dst 0 $dumped]
+        set listpack [r memory usage long-dst samples 0]
+        assert_morethan $converted $listpack
+        r del long-dst
+        test_config_set r hash-max-listpack-value 64
+
+        # A duplicate on the converting pair is still rejected.
+        set idx [string first f:17 [string range $dumped 0 end-10]]
+        set duplicate [string replace $dumped $idx [expr {$idx + 3}] f:10]
+        assert_error {*Bad data format*} {r restore long-dst 0 $duplicate}
+        assert_equal 0 [r exists long-dst]
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
+
+    test {RESTORE converts a large path payload once it exceeds hash-max-listpack-entries} {
+        test_config_set r hash-max-listpack-entries 512
+        r del count-src
+        r del count-dst
+        set pairs {}
+        for {set i 1} {$i <= 32} {incr i} {lappend pairs d:$i v:$i}
+        r phset count-src p fields 32 {*}$pairs
+        set dumped [r dump count-src]
+
+        # Under the limit the payload stays a Listpack: PHGETALL replies in
+        # insertion order.
+        assert_equal OK [r restore count-dst 0 $dumped]
+        assert_equal $pairs [r phgetall count-dst p]
+        r del count-dst
+
+        # Over the limit it converts to a hash table while loading: the same
+        # payload no longer replies in insertion order.
+        test_config_set r hash-max-listpack-entries 16
+        assert_equal OK [r restore count-dst 0 $dumped]
+        assert_equal [list v:1 v:32] [r phget count-dst p d:1 d:32]
+        assert {[r phgetall count-dst p] ne $pairs}
+    }
+
     test {Large per-path payload promotes and survives RDB round trip} {
         r del tree
         for {set i 0} {$i < 600} {incr i} {

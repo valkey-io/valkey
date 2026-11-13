@@ -470,6 +470,7 @@ tags "modules" {
             set primary_aborts [R 0 hooks.event_count atomic-slot-migration-import-abort-jobname]
             set replica_aborts [R 3 hooks.event_count atomic-slot-migration-import-abort-jobname]
             assert_match "OK" [R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1]
+            test_defer_fail {R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0}
             set node0_id [R 0 CLUSTER MYID]
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
             set job_name [dict get [lindex [R 2 CLUSTER GETSLOTMIGRATIONS] 0] name]
@@ -493,6 +494,7 @@ tags "modules" {
             assert_equal [expr {$primary_aborts + 1}] [R 0 hooks.event_count atomic-slot-migration-import-abort-jobname]
             assert_equal [expr {$replica_aborts + 1}] [R 3 hooks.event_count atomic-slot-migration-import-abort-jobname]
             assert_equal $job_name [R 3 hooks.event_last atomic-slot-migration-import-abort-jobname]
+            assert_equal failed [dict get [lsearch -inline [R 3 CLUSTER GETSLOTMIGRATIONS] "name $job_name *"] state]
 
             assert_match "OK" [R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0]
         }

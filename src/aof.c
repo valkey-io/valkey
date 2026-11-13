@@ -1828,7 +1828,11 @@ int loadSingleAppendOnlyFile(char *filename) {
      * off, just like a command at the end of a short file. Zeros inside an RDB
      * part are left to the RDB loader. */
     zero_padding_offset = aofGetZeroPaddingOffset(fp);
-    if (zero_padding_offset != -1 && zero_padding_offset < ftello(fp)) zero_padding_offset = -1;
+    /* Zeros inside the RDB preamble are not padding. If the trailing zero run
+     * starts inside the RDB (e.g. an all-zero checksum), it can only be padding
+     * from the position rdbLoadRio() stopped at, so clamp the offset there
+     * instead of discarding the padding detection. */
+    if (zero_padding_offset != -1 && zero_padding_offset < ftello(fp)) zero_padding_offset = ftello(fp);
 
     /* Read the actual AOF file, in REPL format, command by command. */
     while (1) {

@@ -269,8 +269,12 @@ test "Shutting down primary wait for replica after previous block" {
             # Call shutdown.
             $primary_deferring shutdown
 
+            # BLPOP can still be blocked while SHUTDOWN waits in its input
+            # buffer. Wait for SHUTDOWN itself before closing this client.
             wait_for_condition 100 100 {
-                [string match "*connected_clients:2*" [$primary info clients]] && [string match "*blocked_clients:1*" [$primary info clients]]
+                [string match "*connected_clients:2*" [$primary info clients]] &&
+                [string match "*blocked_clients:1*" [$primary info clients]] &&
+                [string match "*cmd=shutdown*" [$primary client list]]
             } else {
                 set client_info [$primary info clients]
                 fail "Shutdown did not trigger block. Current INFO CLIENTS output: $client_info"
@@ -279,6 +283,14 @@ test "Shutting down primary wait for replica after previous block" {
             # Wake up replica, causing primary to continue shutting down.
             resume_process $replica_pid
             $primary_deferring close
+
+            # Wait for the primary to exit, so that the whole shutdown is
+            # checked and the process is gone before the server is killed.
+            wait_for_condition 500 100 {
+                ![is_alive $primary_pid]
+            } else {
+                fail "Primary did not exit after the replica was resumed"
+            }
 
             # Check for crash.
             assert_equal [count_log_message -1 "*BUG REPORT START*"] 0

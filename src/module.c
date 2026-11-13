@@ -547,6 +547,7 @@ int moduleVerifyResourceName(const char *name);
 
 int moduleCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error, int *would_block);
+static void moduleDefragGlobalsUnlink(listNode *ln);
 
 /* --------------------------------------------------------------------------
  * ## Heap allocation raw functions
@@ -577,17 +578,23 @@ void *VM_TryAlloc(size_t bytes) {
     return ztrymalloc_usable(bytes, NULL);
 }
 
+static bool moduleCallocOverflows(size_t nmemb, size_t size) {
+    return size && nmemb > SIZE_MAX / size;
+}
+
 /* Use like calloc(). Memory allocated with this function is reported in
  * INFO memory, used for keys eviction according to maxmemory settings
  * and in general is taken into account as memory allocated by the server.
  * You should avoid using calloc() directly. */
 void *VM_Calloc(size_t nmemb, size_t size) {
+    if (moduleCallocOverflows(nmemb, size)) serverPanic("ValkeyModule_Calloc(%zu, %zu) overflows", nmemb, size);
     return zcalloc_usable(nmemb * size, NULL);
 }
 
 /* Similar to VM_Calloc, but returns NULL in case of allocation failure, instead
  * of panicking. */
 void *VM_TryCalloc(size_t nmemb, size_t size) {
+    if (moduleCallocOverflows(nmemb, size)) return NULL;
     return ztrycalloc_usable(nmemb * size, NULL);
 }
 
@@ -931,6 +938,14 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
     autoMemoryCollect(ctx);
     poolAllocRelease(ctx);
     if (ctx->postponed_arrays) {
+        /* Fill the placeholders, since a NULL node left in the reply list
+         * crashes the server when the reply is written. A thread safe context
+         * may be freed after its client was unblocked, so its placeholders are
+         * filled in moduleHandleBlockedClients() instead. */
+        if (!(ctx->flags & VALKEYMODULE_CTX_THREAD_SAFE)) {
+            for (int i = 0; i < ctx->postponed_arrays_count; i++)
+                setDeferredArrayLen(ctx->client, ctx->postponed_arrays[i], 0);
+        }
         zfree(ctx->postponed_arrays);
         ctx->postponed_arrays_count = 0;
         serverLog(LL_WARNING,
@@ -4448,8 +4463,19 @@ void VM_CloseKey(ValkeyModuleKey *key) {
     zfree(key);
 }
 
-/* Return the type of the key. If the key pointer is NULL then
- * VALKEYMODULE_KEYTYPE_EMPTY is returned. */
+/* Return the type of the key as one of the following:
+ *
+ * - VALKEYMODULE_KEYTYPE_EMPTY
+ * - VALKEYMODULE_KEYTYPE_STRING
+ * - VALKEYMODULE_KEYTYPE_LIST
+ * - VALKEYMODULE_KEYTYPE_HASH
+ * - VALKEYMODULE_KEYTYPE_SET
+ * - VALKEYMODULE_KEYTYPE_ZSET
+ * - VALKEYMODULE_KEYTYPE_MODULE
+ * - VALKEYMODULE_KEYTYPE_STREAM
+ * - VALKEYMODULE_KEYTYPE_PATH_HASH
+ *
+ * If the key pointer is NULL then VALKEYMODULE_KEYTYPE_EMPTY is returned. */
 int VM_KeyType(ValkeyModuleKey *key) {
     if (key == NULL || key->value == NULL) return VALKEYMODULE_KEYTYPE_EMPTY;
     /* We map between defines so that we are free to change the internal
@@ -9281,6 +9307,14 @@ void moduleHandleBlockedClients(void) {
              * replies to send to the client in a thread safe context.
              * We need to glue such replies to the client output buffer and
              * free the temporary client we just used for the replies. */
+            listIter li;
+            listNode *reply_ln;
+            listRewind(bc->reply_client->reply, &li);
+            while ((reply_ln = listNext(&li))) {
+                /* The module can no longer set the length of a postponed
+                 * reply once it unblocked the client. */
+                if (!listNodeValue(reply_ln)) setDeferredArrayLen(bc->reply_client, reply_ln, 0);
+            }
             AddReplyFromClient(c, bc->reply_client);
         }
         moduleReleaseTempClient(bc->reply_client);
@@ -9597,14 +9631,16 @@ void moduleReleaseGIL(void) {
  *  - VALKEYMODULE_NOTIFY_EVICTED: Eviction events
  *  - VALKEYMODULE_NOTIFY_STREAM: Stream events
  *  - VALKEYMODULE_NOTIFY_MODULE: Module types events
- *  - VALKEYMODULE_NOTIFY_KEYMISS: Key-miss events
+ *  - VALKEYMODULE_NOTIFY_PATH_HASH: Path hash events
+ *  - VALKEYMODULE_NOTIFY_NEW: New key events
+ *  - VALKEYMODULE_NOTIFY_KEY_MISS: Key-miss events
  *                                Notice, key-miss event is the only type
  *                                of event that is fired from within a read command.
  *                                Performing VM_Call with a write command from within
  *                                this notification is wrong and discourage. It will
  *                                cause the read command that trigger the event to be
  *                                replicated to the AOF/Replica.
- *  - VALKEYMODULE_NOTIFY_ALL: All events (Excluding VALKEYMODULE_NOTIFY_KEYMISS)
+ *  - VALKEYMODULE_NOTIFY_ALL: All events (Excluding VALKEYMODULE_NOTIFY_KEY_MISS and VALKEYMODULE_NOTIFY_NEW)
  *  - VALKEYMODULE_NOTIFY_LOADED: A special notification available only for modules,
  *                               indicates that the key was loaded from persistence.
  *                               Notice, when this event fires, the given key
@@ -13889,6 +13925,14 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
         handle = NULL;
     }
 
+    /* 'prefer-forkless' allows a non-forkless module but will always fall back to fork */
+    if (server.forkless_policy == FORKLESS_POLICY_PREFER_FORKLESS &&
+        !(ctx.module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS)) {
+        serverLog(LL_WARNING, "%sModule %s does not declare VALKEYMODULE_OPTIONS_HANDLE_FORKLESS; "
+                              "with forkless-policy 'prefer-forkless', forkless operations will fall back to fork.",
+                  is_static ? "Static " : "", display_name);
+    }
+
     /* Module loaded! Register it. */
     listAddNodeTail(modules, ctx.module);
     ctx.module->blocked_clients = 0;
@@ -14163,6 +14207,7 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     serverLog(LL_NOTICE, "Module %s unloaded", module->name);
     listNode *ln = listSearchKey(modules, module->name);
     serverAssert(ln != NULL);
+    moduleDefragGlobalsUnlink(ln);
     listDelNode(modules, ln);
     moduleFreeModuleStructure(module);
 
@@ -15604,15 +15649,25 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
 }
 
 /* Global defrag walks the modules one at a time.  These two values are the whole resume state: the
- * module currently being defragged (by position, since a module can be unloaded between invocations)
- * and the cursor that module last stored.  Both are reset at the start of every cycle. */
-static long defrag_module_position = 0;
+ * list node of the module currently being defragged (NULL once the pass is complete) and the cursor
+ * that module last stored.  Both are reset at the start of every cycle, and MODULE UNLOAD moves the
+ * node off a module before deleting it (see moduleDefragGlobalsUnlink). */
+static listNode *defrag_module_node = NULL;
 static unsigned long defrag_module_cursor = 0;
 
 /* Begin a fresh pass from the first module.  Called internally when the stage starts (endtime==0);
  * a cycle that was aborted mid-pass leaves stale values here, which this discards. */
 static void moduleDefragGlobalsStart(void) {
-    defrag_module_position = 0;
+    defrag_module_node = listFirst(modules);
+    defrag_module_cursor = 0;
+}
+
+/* Called before 'ln' is removed from the modules list.  If global defrag stopped on that module, the
+ * pass resumes at the next module with a fresh cursor, since the stored one belonged to the module
+ * being removed. */
+static void moduleDefragGlobalsUnlink(listNode *ln) {
+    if (ln != defrag_module_node) return;
+    defrag_module_node = ln->next;
     defrag_module_cursor = 0;
 }
 
@@ -15627,10 +15682,7 @@ bool moduleDefragGlobals(monotime endtime) {
         return true;
     }
 
-    /* Resolve the resume position to a node once; walking with listIndex per step would be quadratic
-     * in the number of loaded modules.  The list can't change during a single call (defrag is
-     * single-threaded), so the node stays valid until we return. */
-    listNode *ln = listIndex(modules, defrag_module_position);
+    listNode *ln = defrag_module_node;
     while (ln != NULL) {
         if (getMonotonicUs() >= endtime) return true;
 
@@ -15641,9 +15693,8 @@ bool moduleDefragGlobals(monotime endtime) {
             if (defrag_module_cursor != 0) continue; /* more work on this module */
         }
         /* This module is done (or has no callback): advance and start the next one at cursor 0. */
-        defrag_module_position++;
+        ln = defrag_module_node = ln->next;
         defrag_module_cursor = 0;
-        ln = ln->next;
     }
     return false;
 }

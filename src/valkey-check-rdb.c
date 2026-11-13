@@ -780,8 +780,14 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             uint64_t num_slot_ranges;
             if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             for (uint64_t i = 0; i < num_slot_ranges; i++) {
-                if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
-                if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
+                uint64_t start_slot, end_slot;
+                if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+                if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+                if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+                    rdbCheckError("Invalid slot import range in RDB: start=%llu end=%llu",
+                                  (unsigned long long)start_slot, (unsigned long long)end_slot);
+                    goto err;
+                }
             }
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {
@@ -860,14 +866,17 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.keys++;
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
-        if ((val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, NULL, RDBFLAGS_NONE, 0)) == NULL) goto eoferr;
-        if (rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);
+        int error = 0;
+        val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, &error, RDBFLAGS_NONE, 0);
+        /* Match the server when loading legacy empty containers. */
+        if (val == NULL && error != RDB_LOAD_ERR_EMPTY_KEY) goto eoferr;
+        if (val && rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now) rdbstate.already_expired++;
         if (expiretime != -1) rdbstate.expires++;
         rdbstate.key = NULL;
         decrRefCount(key);
-        decrRefCount(val);
+        if (val) decrRefCount(val);
         rdbstate.key_type = -1;
         expiretime = -1;
     }

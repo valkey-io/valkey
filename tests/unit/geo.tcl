@@ -223,6 +223,22 @@ start_server {tags {"geo"}} {
         set err
     } {*valid*}
 
+    test {GEOADD out of range coordinates} {
+        r del range_check
+        # Valid longitudes are limited to [-180,+180]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -190 40.747533 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check 190 40.747533 "out of range"}
+        # Valid latitudes are limited to [-85.05112878,+85.05112878]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 -86 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 86 "out of range"}
+        # The failing pair is reported even when it is not the first one.
+        assert_error "*invalid longitude,latitude pair 181.000000,38.000000*" {
+            r geoadd range_check -73.9454966 40.747533 "in range" 181 38 "out of range"
+        }
+        # GEOADD is all-or-nothing
+        assert_equal 0 [r exists range_check]
+    }
+
     test {GEOADD multi add} {
         r geoadd nyc -73.9733487 40.7648057 "central park n/q/r" -73.9903085 40.7362513 "union square" -74.0131604 40.7126674 "wtc one" -73.7858139 40.6428986 "jfk" -73.9375699 40.7498929 "q4" -73.9564142 40.7480973 4545
     } {6}
@@ -404,6 +420,23 @@ start_server {tags {"geo"}} {
         lindex [r geohash points test] 0
     } {ezs42e44yx0}
 
+    test {GEOHASH returns null for a missing member} {
+        r del points
+        r geoadd points -5.6 42.6 test
+        set protocols {2 3}
+        if {$::force_resp3} {
+            set protocols {3}
+        }
+        foreach resp $protocols {
+            set rd [valkey_client]
+            test_defer [list $rd close]
+            $rd hello $resp
+            $rd readraw 1
+            assert_equal {*1} [$rd geohash points missing]
+            assert_equal [expr {$resp == 2 ? {$-1} : {_}}] [$rd read]
+        }
+    }
+
     test {GEOHASH with only key as argument} {
         r del points
         r geoadd points 10 20 a 30 40 b
@@ -457,6 +490,20 @@ start_server {tags {"geo"}} {
         assert {$m eq {}}
         set m [r geodist empty_key Palermo Catania]
         assert {$m eq {}}
+    }
+
+    test {GEODIST invalid unit} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*unsupported unit*" {r geodist points Palermo Catania yards}
+    }
+
+    test {GEODIST too many arguments} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*syntax error*" {r geodist points Palermo Catania km extra}
     }
 
     test {GEORADIUS STORE option: syntax error} {
@@ -622,7 +669,31 @@ start_server {tags {"geo"}} {
         assert_lessthan [expr {[s used_memory] - $before}] 262144
     } {} {external:skip}
 
+    test {GEORADIUS/GEOSEARCH out of range coordinates} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo"
+
+        assert_error "*invalid longitude,latitude pair*" {r georadius points 181 38 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r georadius_ro points 13 86 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 181 38 byradius 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 13 86 bybox 100 100 km}
+        # A bad vertex is reported wherever it appears in the polygon.
+        assert_error "*invalid longitude,latitude pair 181.000000,40.000000*" {
+            r geosearch points bypolygon 3 13 38 14 39 181 40
+        }
+    }
+
+    test {GEOSEARCHSTORE out of range coordinates} {
+        r del points{t} dest{t}
+        r geoadd points{t} 13.361389 38.115556 "Palermo"
+        assert_error "*invalid longitude,latitude pair*" {
+            r geosearchstore dest{t} points{t} fromlonlat 181 38 byradius 100 km
+        }
+        assert_equal 0 [r exists dest{t}]
+    }
+
     test {GEOSEARCH BYPOLYGON standard operations} {
+        r del points
         r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87156123068408 "St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"

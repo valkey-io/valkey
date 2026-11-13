@@ -216,9 +216,15 @@ char *lm_asprintf(char const *fmt, ...) {
     va_list args;
 
     va_start(args, fmt);
-    size_t str_len = vsnprintf(NULL, 0, fmt, args) + 1;
+    int len = vsnprintf(NULL, 0, fmt, args);
     va_end(args);
 
+    /* vsnprintf() fails if the output would be longer than INT_MAX, which a
+     * script can cause with a long enough string. Return an empty string
+     * instead of a buffer that nothing writes to. */
+    if (len < 0) return lm_strcpy("");
+
+    size_t str_len = (size_t)len + 1;
     char *str = ValkeyModule_Alloc(str_len);
 
     va_start(args, fmt);
@@ -1435,27 +1441,24 @@ static int luaLogCommand(lua_State *lua) {
     }
 
     /* Glue together all the arguments */
-    char *log = NULL;
+    ValkeyModuleString *log = ValkeyModule_CreateString(NULL, "", 0);
     for (j = 1; j < argc; j++) {
-        size_t len;
         char *s;
 
-        s = (char *)lua_tolstring(lua, (-argc) + j, &len);
+        s = (char *)lua_tostring(lua, (-argc) + j);
         if (s) {
-            if (j != 1) {
-                char *next_log = lm_asprintf("%s %s", log, s);
-                ValkeyModule_Free(log);
-                log = next_log;
-            } else {
-                log = lm_asprintf("%s", s);
-            }
+            if (j != 1) ValkeyModule_StringAppendBuffer(NULL, log, " ", 1);
+            /* Stop each argument at a NUL, like the "%s" that logs it. */
+            ValkeyModule_StringAppendBuffer(NULL, log, s, strlen(s));
         }
     }
 
     /* The legacy log format writes the message verbatim, so a line break
      * would let the script start a record without the module tag. */
-    for (char *p = log; p && *p; p++) {
-        if (*p == '\r' || *p == '\n') *p = ' ';
+    size_t len;
+    char *msg = (char *)ValkeyModule_StringPtrLen(log, &len);
+    for (size_t i = 0; i < len; i++) {
+        if (msg[i] == '\r' || msg[i] == '\n') msg[i] = ' ';
     }
 
     const char *level_str = NULL;
@@ -1467,8 +1470,8 @@ static int luaLogCommand(lua_State *lua) {
     default: ValkeyModule_Assert(0);
     }
 
-    ValkeyModule_Log(rctx ? rctx->module_ctx : NULL, level_str, "%s", log);
-    ValkeyModule_Free(log);
+    ValkeyModule_Log(rctx ? rctx->module_ctx : NULL, level_str, "%s", msg);
+    ValkeyModule_FreeString(NULL, log);
     return 0;
 }
 
@@ -1960,25 +1963,29 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
         return;
     }
 
-    lua_getfield(lua, -1, "err");
+    lua_pushstring(lua, "err");
+    lua_rawget(lua, -2);
     if (lua_isstring(lua, -1)) {
         err_info->msg = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_getfield(lua, -1, "source");
+    lua_pushstring(lua, "source");
+    lua_rawget(lua, -2);
     if (lua_isstring(lua, -1)) {
         err_info->source = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_getfield(lua, -1, "line");
+    lua_pushstring(lua, "line");
+    lua_rawget(lua, -2);
     if (lua_isstring(lua, -1)) {
         err_info->line = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
-    lua_getfield(lua, -1, "ignore_error_stats_update");
+    lua_pushstring(lua, "ignore_error_stats_update");
+    lua_rawget(lua, -2);
     if (lua_isboolean(lua, -1)) {
         err_info->ignore_err_stats_update = lua_toboolean(lua, -1);
     }

@@ -418,6 +418,25 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     }
 }
 
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "Oversized PING length is rejected before the body is buffered" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+
+        # Only the 14-byte header: signature, totlen of 256MB, ver, port, type PING.
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 0
+        puts -nonewline $sock "RCmb[binary format ISSS [expr {256 * 1024 * 1024}] 1 0 0]"
+
+        # The node must drop the link rather than wait for 256MB of body.
+        wait_for_condition 100 50 {
+            [read $sock] eq "" && [eof $sock]
+        } else {
+            fail "Node kept the link open waiting for an oversized packet"
+        }
+        close $sock
+    }
+}
+
 start_cluster 10 0 {tags {external:skip cluster tls:skip}} {
     test "Gossip count scales with higher percentage of `cluster-message-gossip-perc`" {
         R 0 config set cluster-message-gossip-perc 80
@@ -481,5 +500,36 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
         close $sock
 
         assert_no_match "*$gossip_id*" [R 0 cluster nodes]
+    }
+}
+
+start_cluster 2 0 {tags {external:skip cluster tls:skip}} {
+    test "Gossip entry with the MYSELF flag does not create a second myself node" {
+        set cluster_port [expr {[srv 0 port] + 10000}]
+        set gossip_id "0000000000000000000000000000000000c0ffee"
+
+        # A PING from a known node with one gossip entry: nodename, ping_sent,
+        # pong_received, ip, port, cport, flags (PRIMARY | MYSELF), pport, notused1.
+        set packet [create_cluster_meet_packet [R 1 cluster myid] [srv -1 port] [expr {[srv -1 port] + 10000}] 1]
+        set packet [string replace $packet 12 13 [binary format S 0]]
+        append packet $gossip_id [binary format II 0 0]
+        append packet "127.0.0.1" [string repeat "\x00" 37]
+        append packet [binary format SSSSS 1 2 0x11 0 0]
+        set packet [string replace $packet 4 7 [binary format I [string length $packet]]]
+
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 1
+        puts -nonewline $sock $packet
+        flush $sock
+        close $sock
+
+        wait_for_condition 1000 10 {
+            [string match "*$gossip_id*" [R 0 cluster nodes]]
+        } else {
+            fail "Gossiped node was never added"
+        }
+
+        # A second myself node is saved to nodes.conf and fails the next load.
+        assert_equal 1 [regexp -all {myself} [R 0 cluster nodes]]
     }
 }

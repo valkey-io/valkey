@@ -647,7 +647,7 @@ static int hllSparseToDense(robj *o) {
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
-            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+            if (p + 1 >= end || (runlen + idx) > HLL_REGISTERS) { /* Truncated or overflow. */
                 valid = 0;
                 break;
             }
@@ -759,7 +759,8 @@ static int hllSparseSet(robj *o, long index, uint8_t count) {
     if (span == 0 || p >= end) return -1; /* Invalid format. */
 
     next = HLL_SPARSE_IS_XZERO(p) ? p + 2 : p + 1;
-    if (next >= end) next = NULL;
+    if (next > end) return -1; /* Truncated XZERO. */
+    if (next == end) next = NULL;
 
     /* Cache current opcode type to avoid using the macro again and
      * again for something that will not change.
@@ -887,7 +888,7 @@ static int hllSparseSet(robj *o, long index, uint8_t count) {
     if (deltalen > 0 && sdslen(objectGetVal(o)) + deltalen > server.hll_sparse_max_bytes) goto promote;
     serverAssert(sdslen(objectGetVal(o)) + deltalen <= sdsalloc(objectGetVal(o)));
     if (deltalen && next) memmove(next + deltalen, next, end - next);
-    sdsIncrLen(objectGetVal(o), deltalen);
+    if (deltalen) sdsIncrLen(objectGetVal(o), deltalen);
     memcpy(p, seq, seqlen);
     end += deltalen;
 
@@ -981,7 +982,7 @@ static void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int 
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
-            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+            if (p + 1 >= end || (runlen + idx) > HLL_REGISTERS) { /* Truncated or overflow. */
                 valid = 0;
                 break;
             }
@@ -1382,7 +1383,7 @@ static int hllMerge(uint8_t *max, robj *hll) {
                 p++;
             } else if (HLL_SPARSE_IS_XZERO(p)) {
                 runlen = HLL_SPARSE_XZERO_LEN(p);
-                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                if (p + 1 >= end || (runlen + i) > HLL_REGISTERS) { /* Truncated or overflow. */
                     valid = 0;
                     break;
                 }
@@ -1665,6 +1666,7 @@ void pfaddCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     struct hllhdr *hdr;
     int updated = 0, j;
+    bool invalid = false;
 
     if (o == NULL) {
         /* Create the key with a string value of the exact length to
@@ -1682,8 +1684,20 @@ void pfaddCommand(client *c) {
         int retval = hllAdd(o, (unsigned char *)objectGetVal(c->argv[j]), sdslen(objectGetVal(c->argv[j])));
         switch (retval) {
         case 1: updated++; break;
-        case -1: addReplyError(c, invalid_hll_err); return;
+        case -1: invalid = true; break;
         }
+        if (invalid) break;
+    }
+    if (invalid && updated) {
+        /* The elements before argv[j] were already applied in place. Propagate
+         * only those, so replicas and the AOF reach the same value without
+         * replaying the error. */
+        robj **argv = zmalloc(sizeof(robj *) * j);
+        for (int k = 0; k < j; k++) {
+            argv[k] = c->argv[k];
+            incrRefCount(argv[k]);
+        }
+        replaceClientCommandVector(c, j, argv);
     }
     hdr = objectGetVal(o);
     if (updated) {
@@ -1692,7 +1706,10 @@ void pfaddCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_STRING, "pfadd", c->argv[1], c->db->id);
         server.dirty += updated;
     }
-    addReply(c, updated ? shared.cone : shared.czero);
+    if (invalid)
+        addReplyError(c, invalid_hll_err);
+    else
+        addReply(c, updated ? shared.cone : shared.czero);
 }
 
 /* PFCOUNT var -> approximated cardinality of set. */
@@ -2061,6 +2078,11 @@ void pfdebugCommand(client *c) {
                 p++;
                 decoded = sdscatprintf(decoded, "z:%d ", runlen);
             } else if (HLL_SPARSE_IS_XZERO(p)) {
+                if (p + 1 >= end) { /* Truncated. */
+                    sdsfree(decoded);
+                    addReplyError(c, invalid_hll_err);
+                    return;
+                }
                 runlen = HLL_SPARSE_XZERO_LEN(p);
                 p += 2;
                 decoded = sdscatprintf(decoded, "Z:%d ", runlen);

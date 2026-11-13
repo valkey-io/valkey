@@ -3,7 +3,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
-      # any PR to a release branch.
+      # PRs to release, unstable, or agent branches, including future agent branches.
       - "[0-9].[0-9]"
       - "unstable"
       - "agent/**"

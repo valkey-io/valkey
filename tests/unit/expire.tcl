@@ -679,6 +679,23 @@ start_server {tags {"expire"}} {
         r ttl foo
     } {-1}
 
+    test {SET keeps the expires table consistent when adding and overwriting keys} {
+        r flushall
+        r set volatile bar EX 100
+        r set added bar
+        r set overwritten bar
+        r set overwritten bar2
+        assert_equal -1 [r ttl added]
+        assert_equal -1 [r ttl overwritten]
+        assert_range [r ttl volatile] 90 100
+        assert_match {*keys=3,expires=1,*} [r info keyspace]
+
+        # Overwriting the only volatile key must also drop it from the expires table.
+        r set volatile bar2
+        assert_equal -1 [r ttl volatile]
+        assert_match {*keys=3,expires=0*} [r info keyspace]
+    }
+
     test {SET - use KEEPTTL option, TTL should not be removed} {
         r set foo bar EX 100
         r set foo bar KEEPTTL

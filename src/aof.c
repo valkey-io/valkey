@@ -1858,6 +1858,9 @@ int loadSingleAppendOnlyFile(char *filename) {
              * Treat it as a short read. Otherwise the next write would be appended
              * to the torn line, and the next load would fail. */
             if (fgets(buf, sizeof(buf), fp) == NULL || feof(fp)) goto readerr;
+            /* The annotation may have been read together with the trailing zero
+             * padding. Stop before the padding so it is truncated on load. */
+            if (zero_padding_offset != -1 && ftello(fp) > zero_padding_offset) goto zeropad;
             continue;
         }
         ungetc(ch, fp);

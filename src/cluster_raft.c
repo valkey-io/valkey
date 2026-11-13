@@ -1810,6 +1810,15 @@ static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t ter
     clusterRaftSendMsg(link, msg);
 }
 
+/* Record the leader we heard from. On a leader change, resend the pending
+ * proposals, since a node that isn't the leader drops them. */
+static void clusterRaftSetLeader(const char *leader_id) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (memcmp(rs->leader, leader_id, CLUSTER_NAMELEN) == 0) return;
+    memcpy(rs->leader, leader_id, CLUSTER_NAMELEN);
+    if (listLength(rs->pending_proposals) > 0) rs->todo_retry_proposals = 1;
+}
+
 static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *argv, sds *entry_lines, int entry_line_count) {
     /* argv: AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count> */
     if (argc < 7) return 1;
@@ -1834,12 +1843,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
-    /* Detect leader change — retry pending proposals to the new leader. */
-    if (memcmp(rs->leader, argv[1], CLUSTER_NAMELEN) != 0) {
-        memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
-        if (listLength(rs->pending_proposals) > 0)
-            rs->todo_retry_proposals = 1;
-    }
+    clusterRaftSetLeader(argv[1]);
 
     /* Log consistency check: verify prev_log_index/term match. Entries have
      * term >= 1, so 0 means we don't know the entry and never matches. */
@@ -2022,7 +2026,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     clusterRaftMaybeStepDown(msg_term);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
-    memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+    clusterRaftSetLeader(argv[1]);
 
     /* If we're already past the snapshot, ignore. */
     if (snap_index <= rs->last_applied) {

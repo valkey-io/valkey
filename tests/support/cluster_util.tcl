@@ -136,8 +136,9 @@ proc cluster_get_myself id {
     return {}
 }
 
-# Returns a parsed CLUSTER NODES output as a list of dictionaries.
-proc get_cluster_nodes id {
+# Returns a parsed CLUSTER NODES output as a list of dictionaries. Optional status field
+# can be specified to only returns entries that match the provided status.
+proc get_cluster_nodes {id {status "*"}} {
     set lines [split [R $id cluster nodes] "\r\n"]
     set nodes {}
     foreach l $lines {
@@ -155,7 +156,9 @@ proc get_cluster_nodes id {
             linkstate [lindex $args 7] \
             slots [lrange $args 8 end] \
         ]
-        lappend nodes $node
+        if {[string match $status [lindex $args 7]]} {
+            lappend nodes $node
+        }
     }
     return $nodes
 }

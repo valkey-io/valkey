@@ -2636,6 +2636,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
              * replaces, so keep using hashTypeSet() below. */
             hashtable *dupSearchHashtable = NULL;
             if (field_count > 16) dupSearchHashtable = hashtableCreate(&setHashtableType);
+            uint64_t payload_fields = 0;
             while (field_count--) {
                 sds field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
                 if (field == NULL) {
@@ -2679,11 +2680,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     sdsfree(field);
                     sdsfree(value);
 
-                    /* num_fields has not counted this pair yet, so +1 is the
-                     * loaded length. Counting locally avoids rescanning the
-                     * listpack on every append when extreme entry limits
-                     * exhaust the listpack header's element count. */
-                    if (path_hash->num_fields + 1 > server.hash_max_listpack_entries) {
+                    payload_fields++;
+                    /* Count only this payload; path_hash->num_fields spans all
+                     * paths, so a later payload would cross the limit early.
+                     * Counting locally also avoids rescanning the listpack on
+                     * every append when extreme entry limits exhaust the
+                     * listpack header's element count. */
+                    if (payload_fields > server.hash_max_listpack_entries) {
                         hashTypeConvert(payload, OBJ_ENCODING_HASHTABLE);
                         hashtableRelease(dupSearchHashtable);
                         dupSearchHashtable = NULL;

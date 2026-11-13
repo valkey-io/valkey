@@ -1080,6 +1080,28 @@ start_server {tags {pathhash}} {
         assert_equal PONG [r ping]
     } {} {needs:debug}
 
+    test {RESTORE converts each path payload against its own field count} {
+        test_config_set r hash-max-listpack-entries 64
+        r del per-path-src
+        r del per-path-dst
+        set pairs {}
+        for {set i 1} {$i <= 64} {incr i} {lappend pairs f:$i w:$i}
+        r phset per-path-src p1 fields 64 {*}$pairs
+        set pairs {}
+        for {set i 1} {$i <= 32} {incr i} {lappend pairs g:$i u:$i}
+        r phset per-path-src p2 fields 32 {*}$pairs
+        set dumped [r dump per-path-src]
+        assert_equal OK [r restore per-path-dst 0 $dumped]
+        assert_equal [list w:1 w:64] [r phget per-path-dst p1 f:1 f:64]
+        assert_equal [list u:1 u:32] [r phget per-path-dst p2 g:1 g:32]
+        # p2 must still be a Listpack payload: its fields reply in insertion
+        # order. Converting it against a cumulative field count during loading
+        # would turn it into a hash table and reorder the reply.
+        set expected {}
+        for {set i 1} {$i <= 32} {incr i} {lappend expected g:$i u:$i}
+        assert_equal $expected [r phgetall per-path-dst p2]
+    }
+
     test {Large per-path payload promotes and survives RDB round trip} {
         r del tree
         for {set i 0} {$i < 600} {incr i} {

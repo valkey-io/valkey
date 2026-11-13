@@ -2679,7 +2679,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     sdsfree(field);
                     sdsfree(value);
 
-                    if (hashTypeLength(payload) > server.hash_max_listpack_entries) {
+                    /* num_fields has not counted this pair yet, so +1 is the
+                     * loaded length. Counting locally avoids rescanning the
+                     * listpack on every append when extreme entry limits
+                     * exhaust the listpack header's element count. */
+                    if (path_hash->num_fields + 1 > server.hash_max_listpack_entries) {
                         hashTypeConvert(payload, OBJ_ENCODING_HASHTABLE);
                         hashtableRelease(dupSearchHashtable);
                         dupSearchHashtable = NULL;

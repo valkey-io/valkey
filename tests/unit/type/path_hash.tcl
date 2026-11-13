@@ -970,7 +970,8 @@ start_server {tags {pathhash}} {
 
         # A long value after a unique short pair converts the payload from
         # Listpack while loading; the converting pair is still duplicate-checked.
-        r del dup-value-src dup-value-dst
+        r del dup-value-src
+        r del dup-value-dst
         set long_value [string repeat Zc 40]
         r phset dup-value-src p fields 2 aa ww bb $long_value
         set dumped [r dump dup-value-src]
@@ -985,7 +986,8 @@ start_server {tags {pathhash}} {
         # A larger Listpack payload rejects duplicates before and after its
         # count-based conversion to a hash table.
         test_config_set r hash-max-listpack-entries 512
-        r del dup-direct-src dup-direct-dst
+        r del dup-direct-src
+        r del dup-direct-dst
         set pairs {}
         for {set i 1} {$i <= 32} {incr i} {lappend pairs d:$i v:$i}
         r phset dup-direct-src p fields 32 {*}$pairs
@@ -1001,10 +1003,21 @@ start_server {tags {pathhash}} {
             assert_equal 0 [r exists dup-direct-dst]
         }
 
+        # A duplicate is also rejected on the pair that itself crosses
+        # hash-max-listpack-entries, before the crossing converts the payload.
+        test_config_set r hash-max-listpack-entries 17
+        assert_equal OK [r restore dup-direct-dst 0 $dumped]
+        r del dup-direct-dst
+        set idx [string first d:18 [string range $dumped 0 end-10]]
+        set duplicate [string replace $dumped $idx [expr {$idx + 3}] d:10]
+        assert_error {*Bad data format*} {r restore dup-direct-dst 0 $duplicate}
+        assert_equal 0 [r exists dup-direct-dst]
+
         # A duplicate is rejected on the pair that would cross
         # hash-max-listpack-entries and on the first pair after the crossing.
         test_config_set r hash-max-listpack-entries 4
-        r del dup-count-src dup-count-dst
+        r del dup-count-src
+        r del dup-count-dst
         set pairs {}
         for {set i 1} {$i <= 6} {incr i} {lappend pairs g:$i v:$i}
         r phset dup-count-src p fields 6 {*}$pairs
@@ -1021,7 +1034,8 @@ start_server {tags {pathhash}} {
 
         # Forced HashTable loading rejects a duplicate after the first pair converts.
         test_config_set r hash-max-listpack-entries 0
-        r del dup-ht-src dup-ht-dst
+        r del dup-ht-src
+        r del dup-ht-dst
         r phset dup-ht-src p fields 2 q1 w1 q2 w2
         set dumped [r dump dup-ht-src]
         set idx [string first q2 [string range $dumped 0 end-10]]
@@ -1036,7 +1050,8 @@ start_server {tags {pathhash}} {
         test_defer {r debug set-skip-checksum-validation 0}
         r debug set-skip-checksum-validation 1
 
-        r del trunc-src trunc-dst
+        r del trunc-src
+        r del trunc-dst
         r phset trunc-src p fields 3 f1 v1 f2 v2 f3 v3
         set dumped [r dump trunc-src]
         set payload [string range $dumped 0 end-10]

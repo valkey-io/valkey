@@ -68,7 +68,7 @@ static void replicaStartCommandStream(client *replica);
 int cancelReplicationHandshake(int reconnect);
 void replicationSteadyStateInit(void);
 void dualChannelSetupMainConnForPsync(connection *conn);
-int dualChannelSyncHandleRdbLoadCompletion(void);
+void dualChannelSyncHandleRdbLoadCompletion(void);
 static void dualChannelFullSyncWithPrimary(connection *conn);
 void syncWithPrimary(connection *conn);
 
@@ -2848,17 +2848,9 @@ static int replicaCheckFullSyncOffsetFromRdb(rdbSaveInfo *rsi) {
 }
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
-    /* The loaded snapshot starts a new history, even if buffer replay aborts. */
-    clearReplicationId2();
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
-        if (dualChannelSyncHandleRdbLoadCompletion() == C_ERR) {
-            /* Replay may already have applied writes absent from the received
-             * RDB. Rebuild the AOF from memory rather than reusing that file. */
-            if (server.aof_enabled && server.aof_state == AOF_OFF) restartAOFAfterSYNC();
-            if (server.repl_backlog == NULL) createReplicationBacklog();
-            return;
-        }
+        dualChannelSyncHandleRdbLoadCompletion();
     } else {
         /* A forkless (socket) full sync signalled its offset as -1 in
          * +FULLRESYNC; adopt the real offset from the RDB repl-offset aux field
@@ -2886,6 +2878,8 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         memcpy(server.replid, server.primary->repl_data->replid, sizeof(server.replid));
         server.primary_repl_offset = server.primary->repl_data->reploff;
     }
+    clearReplicationId2();
+
     /* Let's create the replication backlog if needed. Replicas need to
      * accumulate the backlog regardless of the fact they have sub-replicas
      * or not, in order to behave correctly if they are promoted to
@@ -2900,13 +2894,12 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
 
     /* Restart the AOF subsystem now that we finished the sync.
      *
-     * For single-channel disk-based sync with aof-use-rdb-preamble enabled,
-     * reuse the received RDB as the AOF base, avoiding a redundant rewrite.
-     * Otherwise rebuild the AOF from memory. Dual-channel replay may already
-     * have applied writes absent from the received RDB. */
+     * When disk-based sync was used and aof-use-rdb-preamble is enabled,
+     * reuse the RDB file received from the primary as the AOF base file
+     * directly, avoiding a redundant bgrewriteaof. Otherwise (diskless
+     * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
     if (server.aof_enabled) {
-        bool aof_rdb_base_candidate = disk_based_sync && server.aof_use_rdb_preamble &&
-                                      conn != server.repl_rdb_transfer_s;
+        bool aof_rdb_base_candidate = disk_based_sync && server.aof_use_rdb_preamble;
         if (!aof_rdb_base_candidate || restartAOFWithSyncRdb() == C_ERR) {
             restartAOFAfterSYNC();
         }
@@ -3840,15 +3833,10 @@ void replDataBufInit(void) {
  * Track the local repl-data buffer streaming progress and serve clients from time to time */
 void replStreamProgressCallback(size_t offset, size_t length, time_t *last_progress_callback) {
     time_t now = mstime();
-    if (server.debug_pause_before_repl_stream_event ||
-        (server.loading_process_events_interval_bytes &&
-         ((offset + length) / server.loading_process_events_interval_bytes >
-          offset / server.loading_process_events_interval_bytes) &&
-         (now - *last_progress_callback > server.loading_process_events_interval_ms))) {
-        if (server.debug_pause_before_repl_stream_event) {
-            server.debug_pause_before_repl_stream_event = 0;
-            debugPauseProcess();
-        }
+    if (server.loading_process_events_interval_bytes &&
+        ((offset + length) / server.loading_process_events_interval_bytes >
+         offset / server.loading_process_events_interval_bytes) &&
+        (now - *last_progress_callback > server.loading_process_events_interval_ms)) {
         replicationSendNewlineToPrimary();
         processEventsWhileBlocked();
         *last_progress_callback = now;
@@ -4003,10 +3991,9 @@ int streamReplDataBufToDb(client *c) {
 }
 
 /* Replication: Replica side.
- * Create the primary client and replay buffered replication data before
- * enabling its read handler.
- * Return C_ERR if replay aborts, or C_OK after establishing steady state. */
-int dualChannelSyncSuccess(void) {
+ * After done loading the snapshot using the rdb-channel prepare this replica for steady state by
+ * initializing the primary client, amd stream local incremental buffer into memory. */
+void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
     /* Finalize full sync duration here to exclude backlog draining/streaming time to be consistent with single channel. */
@@ -4020,7 +4007,7 @@ int dualChannelSyncSuccess(void) {
             replicationAbortDualChannelSyncTransfer();
             freeClientAsync(server.primary);
         }
-        return C_ERR;
+        return;
     }
     freePendingReplDataBuf();
     dualChannelServerLog(LL_NOTICE, "Successfully streamed replication data into memory");
@@ -4029,7 +4016,6 @@ int dualChannelSyncSuccess(void) {
     replicationSendAck(); /* Send ACK to notify primary that replica is synced */
     server.rdb_client_id = -1;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
-    return C_OK;
 }
 
 /* Replication: Replica side.
@@ -4050,23 +4036,24 @@ int dualChannelSyncHandlePsync(void) {
     serverAssert(server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RDB_LOADED);
     /* RDB is loaded */
     dualChannelServerLog(LL_DEBUG, "Psync established after rdb load");
-    return dualChannelSyncSuccess();
+    dualChannelSyncSuccess();
+    return C_OK;
 }
 
 /* Replication: Replica side.
- * Complete the RDB channel and replay its buffer if PSYNC is established.
- * Otherwise defer replay until the main channel establishes PSYNC.
- * Return C_ERR if replay aborts, or C_OK after replay or while PSYNC is pending. */
-int dualChannelSyncHandleRdbLoadCompletion(void) {
+ * RDB channel done loading the RDB. Check whether the main channel has completed its part
+ * and act accordingly. */
+void dualChannelSyncHandleRdbLoadCompletion(void) {
     serverAssert(server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RDB_LOAD);
     if (server.repl_state < REPL_STATE_TRANSFER) {
         /* Main psync channel hasn't been established yet */
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RDB_LOADED;
-        return C_OK;
+        return;
     }
     serverAssert(server.repl_state == REPL_STATE_TRANSFER);
     connSetReadHandler(server.repl_transfer_s, NULL);
-    return dualChannelSyncSuccess();
+    dualChannelSyncSuccess();
+    return;
 }
 
 /* Handles the initial step of the partial resynchronization process by

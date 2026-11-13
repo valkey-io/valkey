@@ -515,8 +515,6 @@ void debugCommand(client *c) {
             "    Enables or disables checksum checks for RDB files and RESTORE's payload.",
             "SLEEP <seconds>",
             "    Stop the server for <seconds>. Decimals allowed.",
-            "PAUSE-BEFORE-REPL-STREAM-EVENT <0|1>",
-            "    Pause once before serving events while replaying a dual-channel buffer.",
             "STRINGMATCH-TEST",
             "    Run a fuzz tester against the stringmatchlen() function.",
             "STRUCTSIZE",
@@ -1129,9 +1127,6 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-before-psync") && c->argc == 3) {
         server.debug_pause_before_psync = atoi(objectGetVal(c->argv[2]));
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-before-repl-stream-event") && c->argc == 3) {
-        server.debug_pause_before_repl_stream_event = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(objectGetVal(c->argv[2]));

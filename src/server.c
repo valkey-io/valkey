@@ -3304,8 +3304,12 @@ void initServer(void) {
     initSharedQueryBuf();
     bgIteration_init();
 
-    /* Initialize ACL default password if it exists */
-    ACLUpdateDefaultUserPassword(server.requirepass);
+    /* Initialize ACL default password if it exists. Refuse to start if it
+     * cannot be hashed rather than run with a password nobody can use. */
+    if (ACLUpdateDefaultUserPassword(server.requirepass) != C_OK) {
+        serverLog(LL_WARNING, "Failed to set requirepass: the crypto provider could not compute SHA-256. Exiting.");
+        exit(1);
+    }
 
     /* Initialize the functions engine based off of LUA initialization. */
     if (functionsInit() == C_ERR) {

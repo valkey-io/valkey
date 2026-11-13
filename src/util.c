@@ -56,7 +56,9 @@
 #include "monotonic.h"
 
 #ifdef HAVE_OPENSSL_PROVIDERS
+#include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <pthread.h>
 #endif
 
 #if HAVE_X86_SIMD
@@ -1259,6 +1261,50 @@ int getSecureRandomHexChars(char *p, size_t len) {
     if (!getSecureRandomBytes((unsigned char *)p, len)) return 0;
     for (j = 0; j < len; j++) p[j] = charset[p[j] & 0x0F];
     return 1;
+}
+
+#ifdef HAVE_OPENSSL_PROVIDERS
+/* The provider's SHA-256, fetched once and kept for the life of the process
+ * because digestSHA256() runs on every AUTH. It stays NULL if the fetch fails
+ * or the provider's digest is not 32 bytes, and then every digest fails. */
+static EVP_MD *sha256_md = NULL;
+static pthread_once_t sha256_md_once = PTHREAD_ONCE_INIT;
+
+static void fetchSHA256MD(void) {
+    EVP_MD *md = EVP_MD_fetch(NULL, "SHA256", NULL);
+    if (md == NULL) return;
+
+    /* EVP_Digest() writes EVP_MD_get_size() bytes into a buffer the caller
+     * sized for SHA-256, so reject a provider that reports any other size. */
+    if (EVP_MD_get_size(md) != SHA256_BLOCK_SIZE) {
+        EVP_MD_free(md);
+        return;
+    }
+    sha256_md = md;
+}
+#endif
+
+/* SHA-256 of `data` into `digest`, which must hold SHA256_BLOCK_SIZE (32)
+ * bytes. Returns 1 on success, 0 on failure.
+ *
+ * This hashes passwords for AUTH, ACL SETUSER and requirepass. With
+ * HAVE_OPENSSL_PROVIDERS the digest comes from the provider selected in
+ * openssl.cnf and fails if that provider cannot supply SHA-256; callers must
+ * then deny rather than fall back to the bundled code. Other builds use the
+ * bundled SHA-256 and always return 1, as before provider support existed. */
+int digestSHA256(unsigned char *digest, const void *data, size_t len) {
+#ifdef HAVE_OPENSSL_PROVIDERS
+    pthread_once(&sha256_md_once, fetchSHA256MD);
+    if (sha256_md == NULL) return 0;
+    return EVP_Digest(data, len, digest, NULL, sha256_md, NULL) == 1;
+#else
+    SHA256_CTX ctx;
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const BYTE *)data, len);
+    sha256_final(&ctx, digest);
+    return 1;
+#endif
 }
 
 /* Given the filename, return the absolute path as an SDS string, or NULL

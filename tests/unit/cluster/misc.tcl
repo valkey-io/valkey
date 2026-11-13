@@ -57,6 +57,18 @@ proc leftover_nodes_conf_tmp_files {srv_idx} {
     return [glob -nocomplain "${cluster_conf_path}.tmp-*"]
 }
 
+# Wait until node srv_idx has no temp files left. Cluster bus messages can
+# start a save at any time, and that save's temp file exists until its rename
+# fails and it deletes the file. So check again a few times. A temp file that
+# is never deleted still fails.
+proc wait_for_no_nodes_conf_tmp_files {srv_idx} {
+    wait_for_condition 10 100 {
+        [leftover_nodes_conf_tmp_files $srv_idx] eq {}
+    } else {
+        fail "Node $srv_idx left temp files: [leftover_nodes_conf_tmp_files $srv_idx]"
+    }
+}
+
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
     test {cluster-config-save-behavior sync mode - node exits when config save fails} {
         # Create folder that can cause the rename fail.
@@ -122,8 +134,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         # A node whose renames keep failing must not accumulate temp files. This
         # holds before this commit too; it is here to keep the invariant from
         # regressing as the save path is reordered.
-        assert_equal {} [leftover_nodes_conf_tmp_files 0]
-        assert_equal {} [leftover_nodes_conf_tmp_files 1]
+        wait_for_no_nodes_conf_tmp_files 0
+        wait_for_no_nodes_conf_tmp_files 1
     }
 }
 

@@ -3114,6 +3114,41 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    test "Replica takes the primary's FINISH after a swapdb full sync during an import" {
+        set key "{6ZJ}:full-sync-import"
+        assert_equal 16383 [R 2 CLUSTER KEYSLOT $key]
+        R 3 config set repl-diskless-load swapdb
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set job_name [get_job_name 2 16383]
+        wait_for_migration_field 3 $job_name state occurring-on-primary
+        wait_for_migration_field 0 $job_name state waiting-for-paused
+
+        # The full sync fails the replica's tracking job, while the primary's
+        # import is still waiting for the source to pause.
+        set syncs [status [Rn 0] sync_full]
+        R 0 debug change-repl-id
+        R 0 client kill type replica
+        wait_for_condition 100 100 {
+            [status [Rn 0] sync_full] > $syncs && [status [Rn 3] master_link_status] eq "up"
+        } else {
+            fail "Replica did not full sync"
+        }
+        wait_for_migration_field 3 $job_name state failed
+
+        # Verify writes made after the full sync survive FINISH reconciliation.
+        assert_equal OK [R 2 SET $key value]
+        set_debug_prevent_pause 0
+        wait_for_migration_field 0 $job_name state success
+        wait_for_ofs_sync [Rn 0] [Rn 3]
+        assert_equal success [dict get [get_migration_by_name 3 $job_name] state]
+        assert_equal value [R 0 GET $key]
+        assert_equal [R 0 DEBUG DIGEST] [R 3 DEBUG DIGEST]
+        wait_for_countkeysinslot 2 16383 0
+    }
+}
+
 start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no forkless-infrastructure-enabled yes forkless-policy prefer-forkless save "" repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     set node0_id [R 0 CLUSTER MYID]
 

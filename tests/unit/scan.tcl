@@ -117,6 +117,13 @@ proc test_scan {type} {
         r debug set-active-expire 1
     } {OK} {needs:debug}
 
+    test "{$type} SCAN rejects negative cursors" {
+        assert_error "*invalid cursor*" {r scan -1}
+        assert_error "*invalid cursor*" {r scan " -1"}
+        assert_error "*invalid cursor*" {r scan -9223372036854775809}
+        assert_error "*invalid cursor*" {r scan -18446744073709551615}
+    }
+
     test "{$type} SCAN with expired keys" {
         r flushdb
         # make sure that passive expiration is triggered by the scan

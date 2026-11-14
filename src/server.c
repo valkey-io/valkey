@@ -2092,6 +2092,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
+        /* The AOF flush above can block for seconds. */
+        if (server.cluster_enabled) clusterCheckStall();
         int io_responses_after = processIOThreadsResponses();
         if (io_responses_after > 0) {
             server.el_iteration_active = true;
@@ -4303,6 +4305,9 @@ void call(client *c, int flags) {
 
     valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
     c->duration += duration;
+
+    /* Commands queued behind a slow one in the same event batch must see the stall. */
+    if (server.cluster_enabled && !server.execution_nesting) clusterCheckSlowCommand(duration);
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
 

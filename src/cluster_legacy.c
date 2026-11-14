@@ -1577,6 +1577,7 @@ void clusterInit(void) {
     server.cluster->size = 0;
     server.cluster->todo_before_sleep = 0;
     server.cluster->stall_time = 0;
+    server.cluster->stall_links_pending = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
     server.cluster->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
@@ -7191,29 +7192,41 @@ void clusterDoBeforeSleep(int flags) {
     server.cluster->todo_before_sleep |= flags;
 }
 
-/* Runs on both sides of every event loop sleep, before any event or command
- * queued by I/O threads is handled. After a stall longer than the node timeout
- * we may already have been failed over, and queued client commands run before
- * clusterCron() can notice. Refuse queries until a majority of primaries
- * answers a PING sent after the stall. */
-void clusterCheckStall(void) {
+static long long clusterStallThresholdMs(void) {
+    /* A replica can be promoted soon after the node timeout, so slack on top
+     * of it would miss real failovers. The floor keeps the once per
+     * serverCron() idle wakeup, plus jitter, from tripping tiny timeouts. */
+    return max(server.cluster_node_timeout, 2 * (1000 / server.hz));
+}
+
+static int clusterStallDetected(void) {
     static monotime last_check = 0;
     monotime now_us = getMonotonicUs();
     monotime gap_us = last_check ? now_us - last_check : 0;
     last_check = now_us;
 
-    /* An idle event loop wakes once per serverCron() period. Allow one more
-     * period for timer and scheduler jitter so tiny node timeouts don't trip. */
-    long long max_gap_ms = server.cluster_node_timeout + 2 * (1000 / server.hz);
-    if ((long long)(gap_us / 1000) <= max_gap_ms) return;
-
+    if ((long long)(gap_us / 1000) <= clusterStallThresholdMs()) return 0;
     serverLog(LL_WARNING,
               "Main thread was blocked for %lld ms, longer than cluster-node-timeout. "
               "Refusing queries until a majority of primaries is reachable again.",
               (long long)(gap_us / 1000));
+    return 1;
+}
+
+/* After a stall longer than the node timeout we may already have been failed
+ * over, and queued client commands run before clusterCron() can notice. Refuse
+ * queries until a majority of primaries answers a PING sent after the stall.
+ *
+ * Called on both sides of every event loop sleep and before the I/O thread
+ * responses handled after the AOF flush. clusterCheckSlowCommand() covers a
+ * slow command. A stall elsewhere inside an event handler is only seen at the
+ * next check, so the rest of that event batch runs with the old cluster state. */
+void clusterCheckStall(void) {
+    if (!clusterStallDetected() && !server.cluster->stall_links_pending) return;
 
     mstime_t now = mstime();
     server.cluster->stall_time = now;
+    server.cluster->stall_links_pending = 0;
 
     /* PONGs queued on our links during the stall answer old PINGs. Drop the
      * links so they reconnect and PING again, and give every node a full node
@@ -7228,6 +7241,17 @@ void clusterCheckStall(void) {
     }
     dictReleaseIterator(di);
 
+    clusterUpdateState();
+}
+
+/* Lets the commands queued behind a slow command in the same event batch see
+ * the stall. We may be inside a cluster bus handler here, so the next
+ * clusterCheckStall() drops the links. A check below the threshold would
+ * restart the gap without detecting anything. */
+void clusterCheckSlowCommand(long long duration_us) {
+    if (duration_us / 1000 <= clusterStallThresholdMs() || !clusterStallDetected()) return;
+    server.cluster->stall_time = mstime();
+    server.cluster->stall_links_pending = 1;
     clusterUpdateState();
 }
 
@@ -7500,11 +7524,12 @@ void clusterUpdateState(void) {
                 server.cluster->size++;
                 if (node->voter_election_state == VOTER_NACKED) nacked++;
                 if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) failed_without_response++;
-                /* After a stall only a PONG received since then proves the
-                 * node is reachable. */
+                /* After a stall only a PONG received since our links were
+                 * dropped proves the node is reachable. */
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0 &&
                     (!server.cluster->stall_time || node == myself ||
-                     node->pong_received >= server.cluster->stall_time)) {
+                     (!server.cluster->stall_links_pending &&
+                      node->pong_received >= server.cluster->stall_time))) {
                     reachable_primaries++;
                 }
             }

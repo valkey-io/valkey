@@ -567,6 +567,8 @@ struct clusterState {
     int todo_before_sleep;  /* Things to do in clusterBeforeSleep(). */
     mstime_t stall_time;    /* When the main thread last stalled for longer than
                                the node timeout, 0 once a majority answered. */
+    int stall_links_pending; /* A stall was found where the links could not be
+                                dropped, the next clusterCheckStall() does it. */
     /* Stats */
     /* Messages received and sent by type. */
     long long stats_bus_messages_sent[CLUSTERMSG_TYPE_COUNT];

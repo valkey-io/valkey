@@ -76,9 +76,9 @@ function (valkey_parse_build_option OPTION_VALUE OUT_ARG_ENUM)
     list(APPEND VALID_OPTIONS "module")
 
     string(TOLOWER "${OPTION_VALUE}" OPTION_VALUE)
-    list(FIND VALID_OPTIONS "${ARG}" OPT_INDEX)
-    if (VERSION_STR_POS GREATER -1)
-        message(FATAL_ERROR "Invalid value passed ''${OPTION_VALUE}'")
+    list(FIND VALID_OPTIONS "${OPTION_VALUE}" OPT_INDEX)
+    if (OPT_INDEX LESS 0)
+        message(FATAL_ERROR "Invalid value passed '${OPTION_VALUE}'")
     endif ()
 
     if ("${OPTION_VALUE}" STREQUAL "yes"

@@ -2393,6 +2393,90 @@ start_server {tags {"repl external:skip tls:skip"} overrides {forkless-infrastru
     }
 }
 
+start_server {tags {"repl external:skip valgrind:skip needs:debug needs:save"} overrides {
+    forkless-infrastructure-enabled yes
+    forkless-policy prefer-forkless
+    repl-diskless-sync no
+    rdbcompression no
+    rdb-save-incremental-fsync yes
+    save ""
+}} {
+    set primary [srv 0 client]
+
+    # Shell out to python3 for mincore(2) because Tcl has no mincore binding and fincore is not installed in ci.yml.
+    proc rdb_cached_bytes {path} {
+        exec python3 -c {
+import ctypes, mmap, os, sys
+path = sys.argv[1]
+size = os.path.getsize(path)
+if size == 0:
+    print("0 0")
+    sys.exit(0)
+ps = os.sysconf("SC_PAGE_SIZE")
+npages = (size + ps - 1) // ps
+vec = (ctypes.c_ubyte * npages)()
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mincore.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_ubyte)]
+libc.mincore.restype = ctypes.c_int
+with open(path, "r+b") as f, mmap.mmap(f.fileno(), 0, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE) as mm:
+    addr = ctypes.addressof(ctypes.c_char.from_buffer(mm))
+    if libc.mincore(addr, size, vec) != 0:
+        raise OSError(ctypes.get_errno(), "mincore failed")
+print(f"{min(sum(b & 1 for b in vec) * ps, size)} {size}")
+} $path
+    }
+
+    test "Forkless disk-based full sync keeps the RDB in the OS page cache" {
+        if {$::tcl_platform(os) ne "Linux" || [auto_execok python3] eq ""} {
+            skip "Linux with python3 is required to inspect RDB page cache residency"
+        }
+
+        # POSIX_FADV_DONTNEED has no effect on memory-backed filesystems.
+        # runtest puts server dirs under ./tests/tmp, which is disk-backed on CI
+        # runners (unlike /tmp on Ubuntu 26.04+).
+        set rdb_dir [file dirname [server_rdb_path $primary]]
+        if {![catch {exec stat -f -c %T $rdb_dir} fstype] && $fstype in {tmpfs ramfs}} {
+            skip "Skipping test because RDB directory ($rdb_dir) is on $fstype"
+        }
+
+        # Populate ~33 MB (~8 x 4 MB REDIS_AUTOSYNC_BYTES chunks) so incremental
+        # fsync cache reclamation evicts most of the file when enabled, even after
+        # sendBulkToReplica pre-fills the socket buffer.
+        $primary debug populate 1000 key 32768
+
+        # Calibrate with a regular forkless BGSAVE (without RDBFLAGS_KEEP_CACHE)
+        # to confirm the environment reclaims synced chunks on POSIX_FADV_DONTNEED.
+        $primary bgsave
+        waitForBgsave $primary
+        assert_equal forkless [s rdb_last_bgsave_type]
+        lassign [rdb_cached_bytes [server_rdb_path $primary]] bgsave_res bgsave_size
+        if {$bgsave_res > $bgsave_size / 2} {
+            skip "Filesystem does not reclaim page cache on POSIX_FADV_DONTNEED"
+        }
+
+        # Trigger a forkless disk-based replication save and keep the deferring
+        # replica client paused before reading the RDB bulk stream so closeRepldbfd
+        # has not reclaimed the cache yet.
+        set loglines [count_log_lines 0]
+        set forks_before [s total_forks]
+        set rd [valkey_deferring_client]
+        $rd replconf capa eof capa psync2
+        assert_equal {OK} [$rd read]
+        $rd replconf version [s valkey_version]
+        assert_equal {OK} [$rd read]
+        $rd psync ? -1
+
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*method: forkless*"} $loglines 100 100
+        waitForBgsave $primary
+        assert_equal forkless [s rdb_last_bgsave_type]
+        assert_equal $forks_before [s total_forks]
+
+        lassign [rdb_cached_bytes [server_rdb_path $primary]] sync_res sync_size
+        catch {$rd close}
+        assert_morethan $sync_res [expr {$sync_size * 3 / 4}]
+    }
+}
+
 start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
     set src [srv 0 client]
     $src set k v

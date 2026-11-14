@@ -7525,11 +7525,12 @@ void clusterUpdateState(void) {
                 if (node->voter_election_state == VOTER_NACKED) nacked++;
                 if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) failed_without_response++;
                 /* After a stall only a PONG received since our links were
-                 * dropped proves the node is reachable. */
+                 * dropped proves the node is reachable. A stale PONG handled
+                 * just before the drop can share its millisecond. */
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0 &&
                     (!server.cluster->stall_time || node == myself ||
                      (!server.cluster->stall_links_pending &&
-                      node->pong_received >= server.cluster->stall_time))) {
+                      node->pong_received > server.cluster->stall_time))) {
                     reachable_primaries++;
                 }
             }

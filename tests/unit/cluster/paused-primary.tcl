@@ -66,31 +66,28 @@ start_cluster 3 3 {tags {external:skip cluster}} {
 start_cluster 3 3 {tags {external:skip cluster}} {
     set key "{06S}key"
 
-    test "Paused primary does not acknowledge a write pipelined behind the stalled command" {
+    test "Primary does not acknowledge a write pipelined behind a slow command" {
         assert_equal {OK} [R 0 set $key before-failover]
         assert_equal {1} [R 0 wait 1 5000]
 
-        # Both commands arrive in one read, so the SET runs in the same event
-        # batch as the stalled DEBUG SLEEP, with no event loop sleep between.
+        # The DEBUG SLEEP outlasts the node timeout and the failover, and the
+        # SET behind it runs in the same event batch, with no event loop sleep
+        # between them.
         set rd [valkey_deferring_client 0]
-        $rd write [format_command debug sleep 2]
+        $rd write [format_command debug sleep 10]
         $rd write [format_command set $key after-failover]
         $rd flush
 
-        after 500
-        set primary_pid [srv 0 pid]
-        pause_process $primary_pid
         wait_for_condition 1000 50 {
             [s -3 role] eq {master}
         } else {
             fail "Replica 3 was not promoted"
         }
-        resume_process $primary_pid
 
         assert_equal {OK} [$rd read]
         catch {$rd read} reply
         if {![regexp {^(CLUSTERDOWN|MOVED) } $reply]} {
-            fail "Paused primary replied '$reply' to a pipelined write after failover"
+            fail "Primary replied '$reply' to a pipelined write after failover"
         }
         $rd close
 

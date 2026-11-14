@@ -486,3 +486,69 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
         wait_for_cluster_state ok
     }
 }
+
+# Returns the id of the first node in handshake that instance `id` knows, or
+# an empty string when there is none.
+proc cluster_find_handshake_node {id} {
+    foreach n [get_cluster_nodes $id] {
+        if {[cluster_has_flag $n handshake]} { return [dict get $n id] }
+    }
+    return ""
+}
+
+start_server {tags {external:skip cluster singledb} overrides {cluster-enabled yes}} {
+    test {CLUSTER REPLICATE rejects a node that is still in handshake} {
+        # An empty primary: no slots, no keys, and it knows only itself.
+        assert_equal 1 [llength [get_cluster_nodes 0]]
+
+        # MEET a port where nothing listens. The handshake node is created at
+        # once under a placeholder id and stays in handshake until the
+        # handshake times out, which is far longer than this test.
+        set dead_port [find_available_port $::baseport $::portcount]
+        R 0 cluster meet 127.0.0.1 $dead_port $dead_port
+        wait_for_condition 50 100 {
+            [cluster_find_handshake_node 0] ne ""
+        } else {
+            fail "handshake node was never created"
+        }
+        set hs [cluster_find_handshake_node 0]
+        assert {![cluster_has_flag [cluster_get_node_by_id 0 $hs] slave]}
+
+        assert_error {ERR Can't replicate a node that is still in handshake or has no known address*} {R 0 cluster replicate $hs}
+
+        # We are still a primary with no primary of our own.
+        set me [cluster_get_myself 0]
+        assert {[cluster_has_flag $me master]}
+        assert_equal "-" [dict get $me slaveof]
+    }
+}
+
+# Slot allocator: all slots to R 0, so that R 1 is an empty primary that is
+# allowed to replicate another node.
+proc cluster_allocate_all_slots_to_r0 {masters replicas} {
+    R 0 cluster addslotsrange 0 16383
+}
+
+start_cluster 2 0 {tags {external:skip cluster}} {
+    test {CLUSTER REPLICATE rejects a node that has no known address} {
+        set r0_id [R 0 cluster myid]
+
+        # CLUSTER RESET HARD gives R 0 a new id. The next PONG that R 1 gets
+        # on the old link carries the new id, so R 1 marks the old id as
+        # noaddr and fail and keeps it in its list of known nodes.
+        R 0 cluster reset hard
+        wait_for_condition 1000 10 {
+            [cluster_has_flag [cluster_get_node_by_id 1 $r0_id] noaddr]
+        } else {
+            fail "R 1 did not mark the old id of R 0 as noaddr"
+        }
+        assert {![cluster_has_flag [cluster_get_node_by_id 1 $r0_id] slave]}
+
+        assert_error {ERR Can't replicate a node that is still in handshake or has no known address*} {R 1 cluster replicate $r0_id}
+
+        # R 1 is still a primary with no primary of its own.
+        set me [cluster_get_myself 1]
+        assert {[cluster_has_flag $me master]}
+        assert_equal "-" [dict get $me slaveof]
+    }
+} cluster_allocate_all_slots_to_r0

@@ -1,7 +1,6 @@
 # Test automatic learner promotion for the Raft cluster protocol: the leader
 # promotes caught-up learners to voters up to RAFT_TARGET_VOTERS (5), reusing
-# the ADD_VOTER path, with replacement-first DELVOTER pre-validation and an
-# "at most one membership transition in flight" guard.
+# the ADD_VOTER path, with at most one membership transition in flight.
 
 source tests/support/cluster_raft.tcl
 
@@ -133,7 +132,7 @@ start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft c
 }
 
 start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
-    test "Raft autopromote: DELVOTER below target is rejected (replacement-first)" {
+    test "Raft autopromote: DELVOTER below target is applied, then the learner is promoted" {
         set r0 [srv 0 client]
         set peer_ids [raft_meet_peers 5]
         wait_for_condition 200 100 {
@@ -141,12 +140,15 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft c
         } else {
             fail "size=[CI 0 cluster_size]"
         }
-        # Demoting a voter would leave 4 < target.
         set target [raft_find_voter 0 $peer_ids]
         assert {$target ne ""}
-        catch {$r0 CLUSTER DELVOTER $target} err
-        assert_match "*rejected*" $err
-        assert_equal 5 [CI 0 cluster_size]
+        assert_equal OK [$r0 CLUSTER DELVOTER $target]
+        wait_for_condition 200 100 {
+            [CI 0 cluster_size] == 5 &&
+            ![cluster_has_flag [cluster_get_node_by_id 0 $target] learner]
+        } else {
+            fail "size=[CI 0 cluster_size]"
+        }
     }
 }
 
@@ -341,45 +343,65 @@ start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft c
 }
 
 start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
-    test "Raft autopromote: concurrent DELVOTER does not drop below target" {
+    test "Raft autopromote: forgetting a voter promotes another learner" {
+        set r0 [srv 0 client]
         set peer_ids [raft_meet_peers 6]
         wait_for_condition 200 100 {
             [CI 0 cluster_size] == 5
         } else {
             fail "size=[CI 0 cluster_size]"
         }
-        set remaining [raft_find_learner 0 $peer_ids]
-        raft_add_voter 0 $remaining
+        set learner [raft_find_learner 0 $peer_ids]
+        set target [raft_find_voter 0 $peer_ids]
+        assert {$learner ne "" && $target ne ""}
+        # Pause the forgotten process so it cannot reconnect before the
+        # assertion.
+        set target_idx [expr {[lsearch -exact $peer_ids $target] + 1}]
+        assert_equal OK [$r0 CLUSTER FORGET $target]
+        pause_process [srv -$target_idx pid]
+        wait_for_condition 200 100 {
+            [CI 0 cluster_size] == 5 &&
+            [cluster_get_node_by_id 0 $target] eq {} &&
+            ![cluster_has_flag [cluster_get_node_by_id 0 $learner] learner]
+        } else {
+            resume_process [srv -$target_idx pid]
+            fail "size=[CI 0 cluster_size]"
+        }
+        resume_process [srv -$target_idx pid]
+    }
+}
+
+start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+    test "Raft autopromote: FORGET can shrink the voter set to one node" {
+        set r0 [srv 0 client]
+        raft_meet_peers 3
         wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 6
+            [CI 0 cluster_size] == 3
         } else {
             fail "size=[CI 0 cluster_size]"
         }
-
-        set a [raft_find_voter 0 $peer_ids]
-        set b [raft_find_voter 0 $peer_ids $a]
-        assert {$a ne "" && $b ne ""}
-
-        # Fire two DELVOTERs concurrently. Exactly one may win (6 -> 5); the
-        # other is rejected (either by the in-flight gate or because it would
-        # go 5 -> 4, below target).
-        set c1 [valkey_deferring_client]
-        set c2 [valkey_deferring_client]
-        $c1 CLUSTER DELVOTER $a
-        $c2 CLUSTER DELVOTER $b
-        set s1 [catch {$c1 read} r1]
-        set s2 [catch {$c2 read} r2]
-        $c1 close
-        $c2 close
-
-        assert {($s1 == 0) != ($s2 == 0)}
+        # Pause each forgotten process so it cannot reconnect.
+        assert_equal OK [$r0 CLUSTER FORGET [R 2 CLUSTER MYID]]
+        pause_process [srv -2 pid]
         wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 5
+            [CI 0 cluster_size] == 2
         } else {
+            resume_process [srv -2 pid]
+            fail "size=[CI 0 cluster_size]"
+        }
+        assert_equal OK [$r0 CLUSTER FORGET [R 1 CLUSTER MYID]]
+        pause_process [srv -1 pid]
+        wait_for_condition 100 100 {
+            [CI 0 cluster_size] == 1
+        } else {
+            resume_process [srv -1 pid]
+            resume_process [srv -2 pid]
             fail "size=[CI 0 cluster_size]"
         }
         after 1000
-        assert_equal 5 [CI 0 cluster_size]
+        assert_equal 1 [CI 0 cluster_size]
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
     }
 }
 

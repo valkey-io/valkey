@@ -515,14 +515,19 @@ caught-up learners to voters until the voting set reaches
 `RAFT_TARGET_VOTERS` (5). It is intentionally minimal:
 
 - **Leader-only and one-way.** Only the leader promotes; it never
-  demotes. When `size >= RAFT_TARGET_VOTERS` it is a no-op.
+  demotes. When `size >= RAFT_TARGET_VOTERS` it is a no-op. Below the
+  target, including a single node, nothing happens until an eligible
+  learner exists.
 - **Reuses ADD_VOTER.** There is no new node flag or entry type. Apply
   goes through `clusterRaftApplyAddVoter`, the single membership-change
   point.
-- **Replacement-first demotion.** `CLUSTER DELVOTER` pre-validation
-  rejects a demote that would bring `size` below the target, forcing the
-  admin to add a replacement voter first. A manual `ADD_VOTER` may still
-  push `size` above the target (the controller does not demote).
+- **Shrinking.** `CLUSTER FORGET` of a voter decrements `size`, down to
+  one node. `CLUSTER DELVOTER` demotes a voter to a learner, down to one
+  voter, and rejects demoting the leader or the last voter. The demoted
+  node stays in the cluster, so the next cron promotes it again when it
+  is still eligible. After a forget, the controller promotes another
+  caught-up learner when one exists. A manual `ADD_VOTER` may push
+  `size` above the target; the controller does not demote it back.
 
 A candidate is eligible only when it is a learner, has finished joining
 (no MEET flag), is not failed, has an active link, and its `match_index`
@@ -531,14 +536,17 @@ has caught up with the leader's last log index.
 To avoid overlapping membership transitions, the leader enforces **at
 most one quorum-changing entry in flight**, where a transition's identity
 is its entry type plus the target node id (the first `CLUSTER_NAMELEN`
-bytes of the entry data). The check scans the committed-but-unapplied
-entries `(last_applied, lastIndex]` and classifies the candidate as:
+bytes of the entry data). The check scans `(last_applied, lastIndex]`,
+which is every appended entry that has not been applied yet, including
+entries that are not committed yet, and classifies the candidate as:
 
 - `NONE` — no quorum-changing entry in flight; proceed with full
   pre-validation.
-- `SAME` — the identical transition is already in flight; resend the
-  duplicate without re-running readiness checks (which would be fooled by
-  a `match_index` reset after a leader change).
+- `SAME` — the identical transition is already in the log. A retry after
+  a leader change leaves the pending proposal attached to that entry and
+  does not append a second copy. Re-checking `match_index` would reject
+  a caught-up peer, because election resets `match_index` to 0 until the
+  next `AE_ACK`.
 - `CONFLICT` — a different transition is in flight; reject.
 
 The same gate fronts `clusterRaftPreValidate` (for manual and automatic

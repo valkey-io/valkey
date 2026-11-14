@@ -30,6 +30,7 @@
 #include "server.h"
 #include "listpack.h"
 #include "hotkeys.h"
+#include "traffic.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -131,6 +132,11 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
     /* Charge this lookup to hot-key detection. All the policy (whether detection
      * is on, which lookups count, and sampling) lives in hotkeys.c. */
     hotkeysRecordLookup(key, db->id, flags);
+
+    /* Charge the bytes this read moves to traffic tracking; policy lives in
+     * traffic.c. Write lookups are skipped here and charged by the setKey hook
+     * from the value actually written. */
+    trafficRecordLookup(key, db->id, flags, val);
 
     return val;
 }
@@ -450,6 +456,9 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
+    /* Charge the bytes this write moves to traffic tracking (the stored value,
+     * post-reallocation); policy lives in traffic.c. */
+    trafficRecordSetKey(key, db->id, *valref);
     bgIteration_dbEntryModified(*valref);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
@@ -715,6 +724,13 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
             hotkeysPurgeAll();
         else
             hotkeysPurgeDb(dbnum);
+    }
+
+    if (trafficEnabled()) {
+        if (dbnum == -1)
+            trafficPurgeAll();
+        else
+            trafficPurgeDb(dbnum);
     }
 
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);

@@ -4188,6 +4188,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
 void blockClientShutdown(client *c);
 void blockPostponeClient(client *c);
 void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]);
+bool isClientBlockedInUse(client *c);
 void unblockClientsInUseOnKey(robj *key);
 void unblockClientsInUseOnAllKeys(void);
 void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, int numreplicas, int numlocal);

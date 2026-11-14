@@ -4474,6 +4474,7 @@ void VM_CloseKey(ValkeyModuleKey *key) {
  * - VALKEYMODULE_KEYTYPE_MODULE
  * - VALKEYMODULE_KEYTYPE_STREAM
  * - VALKEYMODULE_KEYTYPE_PATH_HASH
+ * - VALKEYMODULE_KEYTYPE_BITMAP
  *
  * If the key pointer is NULL then VALKEYMODULE_KEYTYPE_EMPTY is returned. */
 int VM_KeyType(ValkeyModuleKey *key) {
@@ -4489,13 +4490,15 @@ int VM_KeyType(ValkeyModuleKey *key) {
     case OBJ_MODULE: return VALKEYMODULE_KEYTYPE_MODULE;
     case OBJ_STREAM: return VALKEYMODULE_KEYTYPE_STREAM;
     case OBJ_PATH_HASH: return VALKEYMODULE_KEYTYPE_PATH_HASH;
+    case OBJ_BITMAP: return VALKEYMODULE_KEYTYPE_BITMAP;
     default: return VALKEYMODULE_KEYTYPE_EMPTY;
     }
 }
 
 /* Return the length of the value associated with the key.
- * For strings this is the length of the string. For all the other types
- * is the number of elements (just counting keys for hashes).
+ * For strings this is the length of the string, and for bitmaps their length
+ * in bytes. For all the other types is the number of elements (just counting
+ * keys for hashes).
  *
  * If the key pointer is NULL or the key is empty, zero is returned. */
 size_t VM_ValueLength(ValkeyModuleKey *key) {
@@ -4508,6 +4511,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
     case OBJ_HASH: return hashTypeLength(key->value);
     case OBJ_STREAM: return streamLength(key->value);
     case OBJ_PATH_HASH: return raxSize(((pathHashObject *)objectGetVal(key->value))->index);
+    case OBJ_BITMAP: return bitmapRoaringLen(key->value);
     default: return 0;
     }
 }

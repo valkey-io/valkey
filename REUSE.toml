@@ -91,6 +91,12 @@ SPDX-FileCopyrightText = ["2010-2016, Redis Ltd.", "2010-2013, Pieter Noordhuis 
 SPDX-License-Identifier = "BSD-2-Clause"
 
 [[annotations]]
+path = "deps/croaring/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2016-present, The CRoaring authors"
+SPDX-License-Identifier = "Apache-2.0 OR MIT"
+
+[[annotations]]
 path = "deps/lz4/**"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2011-2023, Yann Collet"

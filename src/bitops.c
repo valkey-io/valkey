@@ -630,18 +630,47 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
     return C_OK;
 }
 
+/* Bit commands work on strings and on bitmaps (see bitmap_roaring.c). Replies
+ * with a WRONGTYPE error and returns 1 if 'o' is another type. */
+static int checkBitType(client *c, robj *o) {
+    if (o && objectGetType(o) != OBJ_STRING && objectGetType(o) != OBJ_BITMAP) {
+        addReplyErrorObject(c, shared.wrongtypeerr);
+        return 1;
+    }
+    return 0;
+}
+
 /* This is a helper function for commands implementations that need to write
- * bits to a string object. The command creates or pad with zeroes the string
- * so that the 'maxbit' bit can be addressed. The object is finally
- * returned. Otherwise, if the key holds a wrong type NULL is returned and
- * an error is sent to the client. */
+ * bits to a string or a bitmap. The command creates or pad with zeroes the
+ * value so that the 'maxbit' bit can be addressed. The object is finally
+ * returned. Otherwise, if the key holds a wrong type, or a bitmap that cannot
+ * hold the bit, NULL is returned and an error is sent to the client.
+ *
+ * The key keeps its type: a bitmap stays a bitmap, and a string stays a
+ * string. A missing key is created as a string. */
 robj *lookupStringForBitCommand(client *c, uint64_t maxbit, int *dirty) {
     size_t byte = maxbit >> 3;
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_STRING)) return NULL;
+    if (checkBitType(c, o)) return NULL;
     if (dirty) *dirty = 0;
 
-    if (o == NULL) {
+    if (o && objectGetType(o) == OBJ_BITMAP) {
+        if (byte >= BITMAP_ROARING_MAX_BYTES) {
+            addReplyError(c, "bit offset is out of range for a bitmap");
+            return NULL;
+        }
+        if (objectGetRefcount(o) != 1) {
+            robj *r = bitmapRoaringDupObject(o);
+            dbReplaceValue(c->db, c->argv[1], &r);
+            o = r;
+        }
+    }
+
+    if (o && objectGetType(o) == OBJ_BITMAP) {
+        size_t oldlen = bitmapRoaringLen(o);
+        bitmapRoaringGrow(o, byte + 1);
+        if (dirty && oldlen != bitmapRoaringLen(o)) *dirty = 1;
+    } else if (o == NULL) {
         o = createObject(OBJ_STRING, sdsnewlen(NULL, byte + 1));
         dbAdd(c->db, c->argv[1], &o);
         if (dirty) *dirty = 1;
@@ -685,6 +714,16 @@ unsigned char *getObjectReadOnlyString(robj *o, long *len, char *llbuf) {
     return p;
 }
 
+/* Like getObjectReadOnlyString(), but for a bitmap it returns NULL and stores
+ * its length in 'len': callers then use the Roaring bitmap. */
+static unsigned char *getBitmapReadOnlyString(robj *o, long *len, char *llbuf) {
+    if (o && o->type == OBJ_BITMAP) {
+        *len = (long)bitmapRoaringLen(o);
+        return NULL;
+    }
+    return getObjectReadOnlyString(o, len, llbuf);
+}
+
 /* SETBIT key offset bitvalue */
 void setbitCommand(client *c) {
     robj *o;
@@ -706,6 +745,18 @@ void setbitCommand(client *c) {
 
     int dirty;
     if ((o = lookupStringForBitCommand(c, bitoffset, &dirty)) == NULL) return;
+
+    if (o->type == OBJ_BITMAP) {
+        bitval = bitmapRoaringGetBit(o, bitoffset);
+        if (dirty || bitval != on) {
+            bitmapRoaringSetBit(o, bitoffset, on);
+            signalModifiedKey(c, c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);
+            server.dirty++;
+        }
+        addReply(c, bitval ? shared.cone : shared.czero);
+        return;
+    }
 
     /* Get current values */
     byte = bitoffset >> 3;
@@ -740,11 +791,13 @@ void getbitCommand(client *c) {
 
     if (getBitOffsetFromArgument(c, c->argv[2], &bitoffset, 0, 0) != C_OK) return;
 
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkBitType(c, o)) return;
 
     byte = bitoffset >> 3;
     bit = 7 - (bitoffset & 0x7);
-    if (sdsEncodedObject(o)) {
+    if (o->type == OBJ_BITMAP) {
+        bitval = bitmapRoaringGetBit(o, bitoffset);
+    } else if (sdsEncodedObject(o)) {
         if (byte < sdslen(objectGetVal(o))) bitval = ((uint8_t *)objectGetVal(o))[byte] & (1 << bit);
     } else {
         if (byte < (size_t)ll2string(llbuf, sizeof(llbuf), (long)objectGetVal(o))) bitval = llbuf[byte] & (1 << bit);
@@ -786,8 +839,10 @@ void bitopCommand(client *c) {
         return;
     }
 
-    /* Lookup keys, and store pointers to the string objects into an array. */
+    /* Lookup keys, and store pointers to the string or bitmap objects into an
+     * array. */
     numkeys = c->argc - 3;
+    int any_bitmap = 0;
     src = zmalloc(sizeof(unsigned char *) * numkeys);
     len = zmalloc(sizeof(long) * numkeys);
     objects = zmalloc(sizeof(robj *) * numkeys);
@@ -801,8 +856,8 @@ void bitopCommand(client *c) {
             minlen = 0;
             continue;
         }
-        /* Return an error if one of the keys is not a string. */
-        if (checkType(c, o, OBJ_STRING)) {
+        /* Return an error if one of the keys is not a string or a bitmap. */
+        if (checkBitType(c, o)) {
             unsigned long i;
             for (i = 0; i < j; i++) {
                 if (objects[i]) decrRefCount(objects[i]);
@@ -812,15 +867,37 @@ void bitopCommand(client *c) {
             zfree(objects);
             return;
         }
-        objects[j] = getDecodedObject(o);
-        src[j] = objectGetVal(objects[j]);
-        len[j] = sdslen(objectGetVal(objects[j]));
+        incrRefCount(o);
+        objects[j] = o;
+        if (o->type == OBJ_BITMAP) {
+            any_bitmap = 1;
+            len[j] = bitmapRoaringLen(o);
+        } else {
+            len[j] = stringObjectLen(o);
+        }
         if (len[j] > maxlen) maxlen = len[j];
         if (j == 0 || len[j] < minlen) minlen = len[j];
     }
 
+    /* The result is a bitmap if a source is a bitmap and the result fits a
+     * bitmap. The type depends only on the sources, so every node that runs
+     * the command stores the same type. */
+    int use_roaring = any_bitmap && maxlen <= BITMAP_ROARING_MAX_BYTES;
+    robj *roaring_res = NULL;
+    if (use_roaring && maxlen) roaring_res = bitmapRoaringBitop(op, objects, numkeys, maxlen);
+
+    /* Otherwise, work on the bytes of the strings. */
+    for (j = 0; j < numkeys && !use_roaring; j++) {
+        if (objects[j] == NULL) continue;
+        robj *decoded = objects[j]->type == OBJ_BITMAP ? bitmapRoaringToStringObject(objects[j])
+                                                       : getDecodedObject(objects[j]);
+        decrRefCount(objects[j]);
+        objects[j] = decoded;
+        src[j] = objectGetVal(decoded);
+    }
+
     /* Compute the bit operation, if at least one string is not empty. */
-    if (maxlen) {
+    if (maxlen && !use_roaring) {
         res = (unsigned char *)sdsnewlen(NULL, maxlen);
         unsigned char output, byte;
         unsigned long i;
@@ -928,7 +1005,7 @@ void bitopCommand(client *c) {
 
     /* Store the computed value into the target key */
     if (maxlen) {
-        o = createObject(OBJ_STRING, res);
+        o = roaring_res ? roaring_res : createObject(OBJ_STRING, res);
         setKey(c, c->db, targetkey, &o, 0);
         notifyKeyspaceEvent(NOTIFY_STRING, "set", targetkey, c->db->id);
         server.dirty++;
@@ -949,6 +1026,7 @@ void bitcountCommand(client *c) {
     char llbuf[LONG_STR_SIZE];
     int isbit = 0;
     unsigned char first_byte_neg_mask = 0, last_byte_neg_mask = 0;
+    uint64_t first_bit = 0, last_bit = 0; /* Same range, in bits. */
 
     /* Parse start/end range if any. */
     if (c->argc == 3 || c->argc == 4 || c->argc == 5) {
@@ -969,8 +1047,8 @@ void bitcountCommand(client *c) {
 
         /* Lookup, check for type. */
         o = lookupKeyRead(c->db, c->argv[1]);
-        if (checkType(c, o, OBJ_STRING)) return;
-        p = getObjectReadOnlyString(o, &strlen, llbuf);
+        if (checkBitType(c, o)) return;
+        p = getBitmapReadOnlyString(o, &strlen, llbuf);
         long long totlen = strlen;
 
         /* Make sure we will not overflow */
@@ -989,6 +1067,10 @@ void bitcountCommand(client *c) {
         if (start < 0) start = 0;
         if (end < 0) end = 0;
         if (end >= totlen) end = totlen - 1;
+        if (start <= end) {
+            first_bit = isbit ? start : start * 8;
+            last_bit = isbit ? end : end * 8 + 7;
+        }
         if (isbit && start <= end) {
             /* Before converting bit offset to byte offset, create negative masks
              * for the edges. */
@@ -1000,11 +1082,13 @@ void bitcountCommand(client *c) {
     } else if (c->argc == 2) {
         /* Lookup, check for type. */
         o = lookupKeyRead(c->db, c->argv[1]);
-        if (checkType(c, o, OBJ_STRING)) return;
-        p = getObjectReadOnlyString(o, &strlen, llbuf);
+        if (checkBitType(c, o)) return;
+        p = getBitmapReadOnlyString(o, &strlen, llbuf);
         /* The whole string. */
         start = 0;
         end = strlen - 1;
+        first_bit = 0;
+        last_bit = strlen ? (uint64_t)strlen * 8 - 1 : 0;
     } else {
         /* Syntax error. */
         addReplyErrorObject(c, shared.syntaxerr);
@@ -1021,6 +1105,8 @@ void bitcountCommand(client *c) {
      * zero can be returned is: start > end. */
     if (start > end) {
         addReply(c, shared.czero);
+    } else if (p == NULL) {
+        addReplyLongLong(c, (long long)bitmapRoaringCount(o, first_bit, last_bit));
     } else {
         long bytes = (long)(end - start + 1);
         long long count = serverPopcount(p + start, bytes);
@@ -1046,6 +1132,7 @@ void bitposCommand(client *c) {
     char llbuf[LONG_STR_SIZE];
     int isbit = 0, end_given = 0;
     unsigned char first_byte_neg_mask = 0, last_byte_neg_mask = 0;
+    uint64_t first_bit = 0, last_bit = 0; /* Same range, in bits. */
 
     /* Parse the bit argument to understand what we are looking for, set
      * or clear bits. */
@@ -1075,8 +1162,8 @@ void bitposCommand(client *c) {
 
         /* Lookup, check for type. */
         o = lookupKeyRead(c->db, c->argv[1]);
-        if (checkType(c, o, OBJ_STRING)) return;
-        p = getObjectReadOnlyString(o, &strlen, llbuf);
+        if (checkBitType(c, o)) return;
+        p = getBitmapReadOnlyString(o, &strlen, llbuf);
 
         /* Make sure we will not overflow */
         long long totlen = strlen;
@@ -1091,6 +1178,10 @@ void bitposCommand(client *c) {
         if (start < 0) start = 0;
         if (end < 0) end = 0;
         if (end >= totlen) end = totlen - 1;
+        if (start <= end) {
+            first_bit = isbit ? start : start * 8;
+            last_bit = isbit ? end : end * 8 + 7;
+        }
         if (isbit && start <= end) {
             /* Before converting bit offset to byte offset, create negative masks
              * for the edges. */
@@ -1102,12 +1193,14 @@ void bitposCommand(client *c) {
     } else if (c->argc == 3) {
         /* Lookup, check for type. */
         o = lookupKeyRead(c->db, c->argv[1]);
-        if (checkType(c, o, OBJ_STRING)) return;
-        p = getObjectReadOnlyString(o, &strlen, llbuf);
+        if (checkBitType(c, o)) return;
+        p = getBitmapReadOnlyString(o, &strlen, llbuf);
 
         /* The whole string. */
         start = 0;
         end = strlen - 1;
+        first_bit = 0;
+        last_bit = strlen ? (uint64_t)strlen * 8 - 1 : 0;
     } else {
         /* Syntax error. */
         addReplyErrorObject(c, shared.syntaxerr);
@@ -1126,6 +1219,11 @@ void bitposCommand(client *c) {
      * neither 0 nor 1. */
     if (start > end) {
         addReplyLongLong(c, -1);
+    } else if (p == NULL) {
+        long long pos = bitmapRoaringFirst(o, bit, first_bit, last_bit);
+        /* Without an explicit end, the string is padded with clear bits. */
+        if (pos == -1 && bit == 0 && !end_given) pos = (long long)last_bit + 1;
+        addReplyLongLong(c, pos);
     } else {
         long bytes = end - start + 1;
         long long pos;
@@ -1285,9 +1383,9 @@ void bitfieldGeneric(client *c, int flags) {
 
     if (readonly) {
         /* Lookup for read is ok if key doesn't exit, but errors
-         * if it's not a string. */
+         * if it's not a string or a bitmap. */
         o = lookupKeyRead(c->db, c->argv[1]);
-        if (o != NULL && checkType(c, o, OBJ_STRING)) {
+        if (o != NULL && checkBitType(c, o)) {
             zfree(ops);
             return;
         }
@@ -1319,6 +1417,20 @@ void bitfieldGeneric(client *c, int flags) {
              * for simplicity. SET return value is the previous value so
              * we need fetch & store as well. */
 
+            /* A bitmap is read and written through a window of the up to 9
+             * bytes holding the field. */
+            unsigned char window[9], before[9];
+            unsigned char *p = objectGetVal(o);
+            uint64_t offset = thisop->offset, wbyte = 0;
+            int written = 0;
+            if (o->type == OBJ_BITMAP) {
+                wbyte = offset >> 3;
+                bitmapRoaringReadBytes(o, wbyte, sizeof(window), window);
+                memcpy(before, window, sizeof(window));
+                p = window;
+                offset -= wbyte * 8;
+            }
+
             /* We need two different but very similar code paths for signed
              * and unsigned operations, since the set of functions to get/set
              * the integers and the used variables types are different. */
@@ -1326,7 +1438,7 @@ void bitfieldGeneric(client *c, int flags) {
                 int64_t oldval, newval, wrapped, retval;
                 int overflow;
 
-                oldval = getSignedBitfield(objectGetVal(o), thisop->offset, thisop->bits);
+                oldval = getSignedBitfield(p, offset, thisop->bits);
 
                 if (thisop->opcode == BITFIELDOP_INCRBY) {
                     overflow = checkSignedBitfieldOverflow(oldval, thisop->i64, thisop->bits, thisop->owtype, &wrapped);
@@ -1343,7 +1455,8 @@ void bitfieldGeneric(client *c, int flags) {
                  * NULL to signal the condition. */
                 if (!(overflow && thisop->owtype == BFOVERFLOW_FAIL)) {
                     addReplyLongLong(c, retval);
-                    setSignedBitfield(objectGetVal(o), thisop->offset, thisop->bits, newval);
+                    setSignedBitfield(p, offset, thisop->bits, newval);
+                    written = 1;
 
                     if (dirty || (oldval != newval)) changes++;
                 } else {
@@ -1355,7 +1468,7 @@ void bitfieldGeneric(client *c, int flags) {
                 uint64_t oldval, newval, retval, wrapped = 0;
                 int overflow;
 
-                oldval = getUnsignedBitfield(objectGetVal(o), thisop->offset, thisop->bits);
+                oldval = getUnsignedBitfield(p, offset, thisop->bits);
 
                 if (thisop->opcode == BITFIELDOP_INCRBY) {
                     newval = oldval + thisop->i64;
@@ -1373,12 +1486,17 @@ void bitfieldGeneric(client *c, int flags) {
                  * NULL to signal the condition. */
                 if (!(overflow && thisop->owtype == BFOVERFLOW_FAIL)) {
                     addReplyLongLong(c, retval);
-                    setUnsignedBitfield(objectGetVal(o), thisop->offset, thisop->bits, newval);
+                    setUnsignedBitfield(p, offset, thisop->bits, newval);
+                    written = 1;
 
                     if (dirty || (oldval != newval)) changes++;
                 } else {
                     addReplyNull(c);
                 }
+            }
+            if (written && p == window) {
+                uint64_t count = ((thisop->offset + thisop->bits - 1) >> 3) - wbyte + 1;
+                if (memcmp(before, window, count) != 0) bitmapRoaringWriteBytes(o, wbyte, count, window);
             }
         } else {
             /* GET */
@@ -1387,7 +1505,7 @@ void bitfieldGeneric(client *c, int flags) {
             unsigned char *src = NULL;
             char llbuf[LONG_STR_SIZE];
 
-            if (o != NULL) src = getObjectReadOnlyString(o, &strlen, llbuf);
+            if (o != NULL && o->type == OBJ_STRING) src = getObjectReadOnlyString(o, &strlen, llbuf);
 
             /* For GET we use a trick: before executing the operation
              * copy up to 9 bytes to a local buffer, so that we can easily
@@ -1400,6 +1518,7 @@ void bitfieldGeneric(client *c, int flags) {
                 if (src == NULL || i + byte >= (uint64_t)strlen) break;
                 buf[i] = src[i + byte];
             }
+            if (o != NULL && o->type == OBJ_BITMAP) bitmapRoaringReadBytes(o, byte, 9, buf);
 
             /* Now operate on the copied buffer which is guaranteed
              * to be zero-padded. */
@@ -1413,6 +1532,10 @@ void bitfieldGeneric(client *c, int flags) {
         }
     }
 
+    /* Creating or extending the key is a change even when every operation
+     * failed (OVERFLOW FAIL): the length is part of the value, so the command
+     * must still reach replicas and the AOF. */
+    if (dirty && !changes) changes = 1;
     if (changes) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);
@@ -1428,4 +1551,110 @@ void bitfieldCommand(client *c) {
 
 void bitfieldroCommand(client *c) {
     bitfieldGeneric(c, BITFIELD_FLAG_READONLY);
+}
+
+/* BITCONVERT key BITMAP|STRING
+ *
+ * Converts the string at 'key' to a bitmap, or the bitmap at 'key' to a
+ * string, keeping its bits, its length and its time to live. With BITMAP, a
+ * missing key is created as an empty bitmap. Replies 1 if the key was created
+ * or converted, and 0 if nothing changed. This is the only command that turns
+ * a string into a bitmap in place: bit writes keep the type of their key. */
+void bitconvertCommand(client *c) {
+    char *target = objectGetVal(c->argv[2]);
+    int to_bitmap;
+    if (!strcasecmp(target, "bitmap")) {
+        to_bitmap = 1;
+    } else if (!strcasecmp(target, "string")) {
+        to_bitmap = 0;
+    } else {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkBitType(c, o)) return;
+    if (o == NULL && to_bitmap) {
+        /* dbAdd() emits the "new" event. */
+        o = createBitmapRoaringObject(0);
+        dbAdd(c->db, c->argv[1], &o);
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STRING, "bitconvert", c->argv[1], c->db->id);
+        server.dirty++;
+        addReply(c, shared.cone);
+        return;
+    }
+    if (o == NULL || objectGetType(o) == (to_bitmap ? OBJ_BITMAP : OBJ_STRING)) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    robj *r;
+    if (to_bitmap) {
+        if ((r = bitmapRoaringObjectFromString(o)) == NULL) {
+            addReplyError(c, "string is too long for a bitmap: it has bits past 2^32 - 1");
+            return;
+        }
+    } else {
+        /* SETBIT cannot make a string longer than proto-max-bulk-len. */
+        if (!mustObeyClient(c) && bitmapRoaringLen(o) > (size_t)server.proto_max_bulk_len) {
+            addReplyError(c, "string exceeds maximum allowed size (proto-max-bulk-len)");
+            return;
+        }
+        r = bitmapRoaringToStringObject(o);
+    }
+    dbReplaceValue(c->db, c->argv[1], &r);
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "bitconvert", c->argv[1], c->db->id);
+    server.dirty++;
+    addReply(c, shared.cone);
+}
+
+/* R.EXPORT key
+ *
+ * Returns the bits of the bitmap or the string at 'key' in the portable
+ * serialization format of Roaring bitmaps
+ * (https://roaringbitmap.github.io/RoaringFormatSpec/), read by the Roaring
+ * libraries of most languages: CRoaring (C and C++), RoaringBitmap (Java),
+ * roaring (Go), roaring-rs (Rust), pyroaring (Python); see
+ * https://roaringbitmap.org. The length in bytes is not exported. */
+void rexportCommand(client *c) {
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (o == NULL) {
+        addReplyNull(c);
+        return;
+    }
+    if (checkBitType(c, o)) return;
+    sds payload = bitmapRoaringExport(o);
+    if (payload == NULL) {
+        addReplyError(c, "string is too long for a Roaring bitmap: it has bits past 2^32 - 1");
+        return;
+    }
+    addReplyBulkSds(c, payload);
+}
+
+/* R.IMPORT key payload
+ *
+ * Stores at 'key' the bitmap whose set bits are those of 'payload', a Roaring
+ * bitmap in the portable serialization format. Like SET, it replaces any
+ * value and its time to live. The bitmap is just long enough to hold the
+ * largest value. */
+void rimportCommand(client *c) {
+    robj *payload = getDecodedObject(c->argv[2]);
+    robj *o = bitmapRoaringImport(objectGetVal(payload), sdslen(objectGetVal(payload)));
+    decrRefCount(payload);
+    if (o == NULL) {
+        addReplyError(c, "invalid Roaring bitmap payload");
+        return;
+    }
+    /* SETBIT cannot make a bitmap longer than proto-max-bulk-len either. */
+    if (!mustObeyClient(c) && bitmapRoaringLen(o) > (size_t)server.proto_max_bulk_len) {
+        decrRefCount(o);
+        addReplyError(c, "bitmap exceeds maximum allowed size (proto-max-bulk-len)");
+        return;
+    }
+    setKey(c, c->db, c->argv[1], &o, 0);
+    notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
+    server.dirty++;
+    addReply(c, shared.ok);
 }

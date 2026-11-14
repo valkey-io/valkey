@@ -43,6 +43,7 @@ distclean:
 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
 	-(cd lz4 && $(MAKE) clean) > /dev/null || true
+	-(cd croaring && $(MAKE) clean) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean
@@ -139,3 +140,9 @@ lz4: .make-prerequisites
 	cd lz4 && $(MAKE) CFLAGS="$(CFLAGS)"
 
 .PHONY: lz4
+
+croaring: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd croaring && $(MAKE) CFLAGS="$(CFLAGS)"
+
+.PHONY: croaring

@@ -283,6 +283,7 @@ include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
 include_directories("${CMAKE_SOURCE_DIR}/deps/lz4")
+include_directories("${CMAKE_SOURCE_DIR}/deps/croaring")
 
 string(TOLOWER "${BUILD_ZSTD}" BUILD_ZSTD_LOWER)
 if (NOT "${BUILD_ZSTD_LOWER}" MATCHES "^(yes|no|on|off|1|0)$")

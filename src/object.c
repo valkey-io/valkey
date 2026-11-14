@@ -781,6 +781,7 @@ void decrRefCount(robj *o) {
             case OBJ_MODULE: freeModuleObject(o); break;
             case OBJ_STREAM: freeStreamObject(o); break;
             case OBJ_PATH_HASH: freePathHashObject(o); break;
+            case OBJ_BITMAP: bitmapRoaringFreeObject(o); break;
             default: serverPanic("Unknown object type"); break;
             }
         }
@@ -1321,6 +1322,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
     case OBJ_ENCODING_PATH_HASH: return "pathhash";
+    case OBJ_ENCODING_ROARING: return "roaring";
     default: return "unknown";
     }
 }
@@ -1501,6 +1503,8 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         }
     } else if (objectGetType(o) == OBJ_PATH_HASH) {
         asize += pathHashTypeMemUsage(o, sample_size);
+    } else if (objectGetType(o) == OBJ_BITMAP) {
+        asize += bitmapRoaringAllocSize(o);
     } else if (objectGetType(o) == OBJ_MODULE) {
         asize += moduleGetMemUsage(key, o, sample_size, dbid);
     } else {

@@ -1,0 +1,53 @@
+{
+    "R.IMPORT": {
+        "summary": "Creates a bitmap from a Roaring bitmap in the portable serialization format.",
+        "complexity": "O(N) where N is the size of the serialized bitmap.",
+        "group": "bitmap",
+        "since": "9.3.0",
+        "arity": 3,
+        "function": "rimportCommand",
+        "command_flags": [
+            "WRITE",
+            "DENYOOM"
+        ],
+        "acl_categories": [
+            "BITMAP",
+            "WRITE",
+            "SLOW"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "OW",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "payload",
+                "type": "string"
+            }
+        ]
+    }
+}

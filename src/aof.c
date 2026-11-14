@@ -2358,6 +2358,25 @@ int rioWriteStreamEmptyConsumer(rio *r,
     return 1;
 }
 
+/* Emit the commands needed to rebuild a bitmap: R.IMPORT with its bits, which
+ * makes the bitmap just long enough for its last set bit, then, if the last
+ * bit of the bitmap is clear, a SETBIT clearing it to restore the length.
+ * The function returns 0 on error, 1 on success. */
+static int rewriteBitmapObject(rio *r, robj *key, robj *o) {
+    sds payload = bitmapRoaringExport(o);
+    int ok = rioWriteBulkCount(r, '*', 3) && rioWriteBulkString(r, "R.IMPORT", 8) && rioWriteBulkObject(r, key) &&
+             rioWriteBulkString(r, payload, sdslen(payload));
+    sdsfree(payload);
+    if (!ok) return 0;
+
+    size_t len = bitmapRoaringLen(o);
+    if (len == 0) return 1;
+    uint64_t last = (uint64_t)len * 8 - 1;
+    if (bitmapRoaringGetBit(o, last)) return 1;
+    return rioWriteBulkCount(r, '*', 4) && rioWriteBulkString(r, "SETBIT", 6) && rioWriteBulkObject(r, key) &&
+           rioWriteBulkLongLong(r, (long long)last) && rioWriteBulkString(r, "0", 1);
+}
+
 /* Emit the commands needed to rebuild a stream object.
  * The function returns 0 on error, 1 on success. */
 int rewriteStreamObject(rio *r, robj *key, robj *o) {
@@ -2550,6 +2569,8 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
         if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_PATH_HASH) {
         if (rewritePathHashObject(aof, &key, o) == 0) return C_ERR;
+    } else if (objectGetType(o) == OBJ_BITMAP) {
+        if (rewriteBitmapObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_MODULE) {
         if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {

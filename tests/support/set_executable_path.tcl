@@ -25,6 +25,7 @@ set ::VALKEY_CLI_BIN       [valkey_bin_absolute_path "valkey-cli"]
 set ::VALKEY_BENCHMARK_BIN [valkey_bin_absolute_path "valkey-benchmark"]
 set ::VALKEY_CHECK_AOF_BIN [valkey_bin_absolute_path "valkey-check-aof"]
 set ::VALKEY_CHECK_RDB_BIN [valkey_bin_absolute_path "valkey-check-rdb"]
+set ::VALKEY_CHECK_ACL_BIN [valkey_bin_absolute_path "valkey-check-acl"]
 set ::VALKEY_SENTINEL_BIN  [valkey_bin_absolute_path "valkey-sentinel"]
 
 # TLS module path: in CMake builds it's in lib/, in Make builds it's in src/

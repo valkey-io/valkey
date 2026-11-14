@@ -105,7 +105,7 @@ static void listTypeTryConvertQuicklist(robj *o, int shrinking, beforeConvertCB 
     objectSetVal(o, ql->head->entry);
     ql->head->entry = NULL;
     quicklistRelease(ql);
-    o->encoding = OBJ_ENCODING_LISTPACK;
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
 }
 
 /* Check if the list needs to be converted to appropriate encoding due to
@@ -154,18 +154,18 @@ void listTypeTryConversionAppend(robj *o, robj **argv, int start, int end, befor
  * There is no need for the caller to increment the refcount of 'value' as
  * the function takes care of it if needed. */
 void listTypePush(robj *subject, robj *value, int where) {
-    if (subject->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetEncoding(subject) == OBJ_ENCODING_QUICKLIST) {
         int pos = (where == LIST_HEAD) ? QUICKLIST_HEAD : QUICKLIST_TAIL;
-        if (value->encoding == OBJ_ENCODING_INT) {
+        if (objectGetEncoding(value) == OBJ_ENCODING_INT) {
             char buf[32];
             ll2string(buf, 32, (long)objectGetVal(value));
             quicklistPush(objectGetVal(subject), buf, strlen(buf), pos);
         } else {
             quicklistPush(objectGetVal(subject), objectGetVal(value), sdslen(objectGetVal(value)), pos);
         }
-    } else if (subject->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(subject) == OBJ_ENCODING_LISTPACK) {
         unsigned char *new_val = NULL;
-        if (value->encoding == OBJ_ENCODING_INT) {
+        if (objectGetEncoding(value) == OBJ_ENCODING_INT) {
             new_val = (where == LIST_HEAD) ? lpPrependInteger(objectGetVal(subject), (long)objectGetVal(value))
                                            : lpAppendInteger(objectGetVal(subject), (long)objectGetVal(value));
         } else {
@@ -185,13 +185,13 @@ void *listPopSaver(unsigned char *data, size_t sz) {
 robj *listTypePop(robj *subject, int where) {
     robj *value = NULL;
 
-    if (subject->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetEncoding(subject) == OBJ_ENCODING_QUICKLIST) {
         long long vlong;
         int ql_where = where == LIST_HEAD ? QUICKLIST_HEAD : QUICKLIST_TAIL;
         if (quicklistPopCustom(objectGetVal(subject), ql_where, (unsigned char **)&value, NULL, &vlong, listPopSaver)) {
             if (!value) value = createStringObjectFromLongLong(vlong);
         }
-    } else if (subject->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(subject) == OBJ_ENCODING_LISTPACK) {
         unsigned char *p;
         unsigned char *vstr;
         int64_t vlen;
@@ -210,9 +210,9 @@ robj *listTypePop(robj *subject, int where) {
 }
 
 unsigned long listTypeLength(const robj *subject) {
-    if (subject->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetEncoding(subject) == OBJ_ENCODING_QUICKLIST) {
         return quicklistCount(objectGetVal(subject));
-    } else if (subject->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(subject) == OBJ_ENCODING_LISTPACK) {
         return lpLength(objectGetVal(subject));
     } else {
         serverPanic("Unknown list encoding");
@@ -223,7 +223,7 @@ unsigned long listTypeLength(const robj *subject) {
 listTypeIterator *listTypeInitIterator(robj *subject, long index, unsigned char direction) {
     listTypeIterator *li = zmalloc(sizeof(listTypeIterator));
     li->subject = subject;
-    li->encoding = subject->encoding;
+    li->encoding = objectGetEncoding(subject);
     li->direction = direction;
     li->iter = NULL;
     /* LIST_HEAD means start at TAIL and move *towards* head.
@@ -268,7 +268,7 @@ void listTypeReleaseIterator(listTypeIterator *li) {
  * entry is in fact an entry, 0 otherwise. */
 int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
     /* Protect from converting when iterating */
-    serverAssert(li->subject->encoding == li->encoding);
+    serverAssert(objectGetEncoding(li->subject) == li->encoding);
 
     entry->li = li;
     if (li->encoding == OBJ_ENCODING_QUICKLIST) {
@@ -433,22 +433,22 @@ void listTypeDelete(listTypeIterator *iter, listTypeEntry *entry) {
 robj *listTypeDup(robj *o) {
     robj *lobj;
 
-    serverAssert(o->type == OBJ_LIST);
+    serverAssert(objectGetType(o) == OBJ_LIST);
 
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_LISTPACK: lobj = createObject(OBJ_LIST, lpDup(objectGetVal(o))); break;
     case OBJ_ENCODING_QUICKLIST: lobj = createObject(OBJ_LIST, quicklistDup(objectGetVal(o))); break;
     default: serverPanic("Unknown list encoding"); break;
     }
-    lobj->encoding = o->encoding;
+    objectSetEncoding(lobj, objectGetEncoding(o));
     return lobj;
 }
 
 /* Delete a range of elements from the list. */
 void listTypeDelRange(robj *subject, long start, long count) {
-    if (subject->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetEncoding(subject) == OBJ_ENCODING_QUICKLIST) {
         quicklistDelRange(objectGetVal(subject), start, count);
-    } else if (subject->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(subject) == OBJ_ENCODING_LISTPACK) {
         objectSetVal(subject, lpDeleteRange(objectGetVal(subject), start, count));
     } else {
         serverPanic("Unknown list encoding");

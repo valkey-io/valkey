@@ -197,7 +197,7 @@ size_t reqresAppendRequest(client *c) {
     for (int i = 0; i < argc; i++) {
         if (sdsEncodedObject(argv[i])) {
             ret += reqresAppendArg(c, objectGetVal(argv[i]), sdslen(objectGetVal(argv[i])));
-        } else if (argv[i]->encoding == OBJ_ENCODING_INT) {
+        } else if (objectGetEncoding(argv[i]) == OBJ_ENCODING_INT) {
             char buf[LONG_STR_SIZE];
             size_t len = ll2string(buf, sizeof(buf), (long)objectGetVal(argv[i]));
             ret += reqresAppendArg(c, buf, len);

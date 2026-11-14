@@ -357,8 +357,8 @@ TEST_F(NetworkingTest, TestBackupAndUpdateClientArgv) {
     ASSERT_EQ(c->original_argc, 2);
     ASSERT_EQ(c->argc, 3);
     ASSERT_EQ(c->argv_len, 3);
-    ASSERT_EQ(c->argv[0]->refcount, 2u);
-    ASSERT_EQ(c->argv[1]->refcount, 2u);
+    ASSERT_EQ(objectGetRefcount(c->argv[0]), 2u);
+    ASSERT_EQ(objectGetRefcount(c->argv[1]), 2u);
     ASSERT_EQ(c->argv[2], nullptr);
 
     /* Test 2: Direct argv replacement */
@@ -374,8 +374,8 @@ TEST_F(NetworkingTest, TestBackupAndUpdateClientArgv) {
     ASSERT_NE(c->original_argv, c->argv);
     ASSERT_EQ(c->original_argv, initial_argv);
     ASSERT_EQ(c->original_argc, 2);
-    ASSERT_EQ(c->original_argv[0]->refcount, 1u);
-    ASSERT_EQ(c->original_argv[1]->refcount, 1u);
+    ASSERT_EQ(objectGetRefcount(c->original_argv[0]), 1u);
+    ASSERT_EQ(objectGetRefcount(c->original_argv[1]), 1u);
 
     /* Test 3: Expanding argc */
     testOnlyBackupAndUpdateClientArgv(c, 4, nullptr);
@@ -421,11 +421,11 @@ TEST_F(NetworkingTest, TestRewriteClientCommandArgument) {
     rewriteClientCommandArgument(c, 1, newval);
 
     ASSERT_EQ(c->argv[1], newval);
-    ASSERT_EQ(c->argv[1]->refcount, 2u);
+    ASSERT_EQ(objectGetRefcount(c->argv[1]), 2u);
     ASSERT_EQ(c->argv_len_sum, 14u); // 3 + 6 + 5
     ASSERT_EQ(c->original_argv, initial_argv);
     ASSERT_EQ(c->original_argv[1], original_key);
-    ASSERT_EQ(c->original_argv[1]->refcount, 1u);
+    ASSERT_EQ(objectGetRefcount(c->original_argv[1]), 1u);
 
     /* Test 2: Extend argument vector */
     robj *extraval = createStringObject("extra", 5);
@@ -483,7 +483,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToBuffer) {
     robj *obj = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test"));
     testOnlyAddBulkStrRefToBufferOrList(c, obj);
 
-    ASSERT_EQ(obj->refcount, 2u);
+    ASSERT_EQ(objectGetRefcount(obj), 2u);
     ASSERT_EQ(c->bufpos, sizeof(payloadHeader) + PTRS_LEN);
 
     payloadHeader *header1 = c->last_header;
@@ -526,7 +526,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToBuffer) {
 
     /* Test 3: Add one more bulk offload to the buffer */
     testOnlyAddBulkStrRefToBufferOrList(c, obj);
-    ASSERT_EQ(obj->refcount, 3u);
+    ASSERT_EQ(objectGetRefcount(obj), 3u);
     ASSERT_EQ(c->bufpos, 3 * sizeof(payloadHeader) + 3 * PTRS_LEN + 10 * plain_len);
     payloadHeader *header3 = c->last_header;
     ASSERT_EQ(header3->payload_type, BULK_STR_REF);
@@ -571,7 +571,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToList) {
      * then one block is expected in c->reply */
     robj *obj = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test"));
     testOnlyAddBulkStrRefToBufferOrList(c, obj);
-    ASSERT_EQ(obj->refcount, 2u);
+    ASSERT_EQ(objectGetRefcount(obj), 2u);
     ASSERT_EQ(c->bufpos, sizeof(payloadHeader) + reply_len);
     ASSERT_EQ(listLength(c->reply), 1u);
 
@@ -592,7 +592,7 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToList) {
 
     /* Test 2: Add one more bulk offload to the reply list */
     testOnlyAddBulkStrRefToBufferOrList(c, obj);
-    ASSERT_EQ(obj->refcount, 3u);
+    ASSERT_EQ(objectGetRefcount(obj), 3u);
     ASSERT_EQ(listLength(c->reply), 1u);
     ASSERT_EQ(blk->used, sizeof(payloadHeader) + 2 * PTRS_LEN);
     ASSERT_EQ(header1->payload_type, BULK_STR_REF);

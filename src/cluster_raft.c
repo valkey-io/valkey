@@ -49,9 +49,10 @@
 /* Result codes for proposal pre-validation and apply-time validation.
  * Used for control flow instead of comparing human-readable error strings. */
 typedef enum {
-    RAFT_RESULT_OK = 0,      /* Proposal is valid / applied successfully. */
-    RAFT_RESULT_STALE_EPOCH, /* Rejected due to stale shard epoch (retryable). */
-    RAFT_RESULT_REJECTED,    /* Rejected for other reasons (terminal). */
+    RAFT_RESULT_OK = 0,          /* Proposal is valid / applied successfully. */
+    RAFT_RESULT_STALE_EPOCH,     /* Rejected due to stale shard epoch (retryable). */
+    RAFT_RESULT_REJECTED,        /* Rejected for other reasons (terminal). */
+    RAFT_RESULT_LEADER_TRANSFER, /* Retry after the leader has changed. */
 } RaftProposalResult;
 
 /* Human-readable error messages returned to clients via callbacks. */
@@ -61,6 +62,7 @@ typedef enum {
 /* Wire-protocol tokens used in REJECT proposal between leader -> follower. */
 #define REJECT_WIRE_CONFLICT "conflict" /* for stale shard epoch validation fail. */
 #define REJECT_WIRE_REJECTED "rejected" /* for any other validation fail. */
+#define REJECT_WIRE_TRANSFER "transfer" /* the leader is handing off leadership first. */
 
 /* Map a RaftProposalResult to a human-readable error string for client replies.
  * Returns NULL for RAFT_RESULT_OK (no error). */
@@ -69,18 +71,23 @@ static inline const char *raftProposalResultMsg(RaftProposalResult result) {
     case RAFT_RESULT_OK: return NULL;
     case RAFT_RESULT_STALE_EPOCH: return STALE_SHARD_EPOCH_REJECTION_MSG;
     case RAFT_RESULT_REJECTED: return GENERIC_PROPOSAL_REJECTION_MSG;
+    case RAFT_RESULT_LEADER_TRANSFER: return GENERIC_PROPOSAL_REJECTION_MSG;
     }
     return GENERIC_PROPOSAL_REJECTION_MSG;
 }
 
 /* Map a RaftProposalResult to a wire-protocol token for REJECT messages. */
 static inline const char *raftProposalResultWireReason(RaftProposalResult result) {
-    return (result == RAFT_RESULT_STALE_EPOCH) ? REJECT_WIRE_CONFLICT : REJECT_WIRE_REJECTED;
+    if (result == RAFT_RESULT_STALE_EPOCH) return REJECT_WIRE_CONFLICT;
+    if (result == RAFT_RESULT_LEADER_TRANSFER) return REJECT_WIRE_TRANSFER;
+    return REJECT_WIRE_REJECTED;
 }
 
 /* Parse a wire-protocol REJECT reason token back to a RaftProposalResult. */
 static inline RaftProposalResult raftProposalResultFromWire(const char *reason) {
-    return (!strcasecmp(reason, REJECT_WIRE_CONFLICT)) ? RAFT_RESULT_STALE_EPOCH : RAFT_RESULT_REJECTED;
+    if (!strcasecmp(reason, REJECT_WIRE_CONFLICT)) return RAFT_RESULT_STALE_EPOCH;
+    if (!strcasecmp(reason, REJECT_WIRE_TRANSFER)) return RAFT_RESULT_LEADER_TRANSFER;
+    return RAFT_RESULT_REJECTED;
 }
 
 /* From module.c */
@@ -414,6 +421,7 @@ static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
 static void clusterRaftStartElection(void);
 static clusterNode *clusterRaftSelectTransferTarget(void);
+static int clusterRaftRequestLeaderTransfer(void);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -1169,7 +1177,7 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     default:
         break;
     }
-    if (result != RAFT_RESULT_OK) {
+    if (result != RAFT_RESULT_OK && result != RAFT_RESULT_LEADER_TRANSFER) {
         serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (%s). data: %s",
                   raftEntryTypeName(type), raftProposalResultMsg(result), data);
     }
@@ -1196,6 +1204,10 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     /* Pre-validate on the leader to reject stale/invalid proposals. */
     RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+    if (pre_result == RAFT_RESULT_LEADER_TRANSFER && !clusterRaftRequestLeaderTransfer()) {
+        serverLog(LL_NOTICE, "Rejecting NODE_FORGET for myself: no eligible voter for leadership transfer.");
+        pre_result = RAFT_RESULT_REJECTED;
+    }
     if (pre_result != RAFT_RESULT_OK) {
         /* Send REJECT back to the proposing follower so it can unblock the client. */
         if (link) {
@@ -1310,6 +1322,20 @@ static clusterNode *clusterRaftSelectTransferTarget(void) {
     }
     dictReleaseIterator(di);
     return best;
+}
+
+/* Hand off leadership to the best voter. Returns 0 if there is none. */
+static int clusterRaftRequestLeaderTransfer(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    clusterNode *best = clusterRaftSelectTransferTarget();
+    if (!best) return 0;
+
+    sds msg = wireNewMsg("TIMEOUT_NOW");
+    msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);
+    msg = wireFinishMsg(msg);
+    clusterRaftSendMsg(best->link, msg);
+    serverLog(LL_NOTICE, "Leadership transfer: sent TIMEOUT_NOW to %.40s.", best->name);
+    return 1;
 }
 
 /* --------------------------------------------------------------------------
@@ -1432,6 +1458,8 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
         if (pp->type == type && !sdscmp(pp->data, data)) {
+            /* Resent to the new leader by the retry on leader change. */
+            if (result == RAFT_RESULT_LEADER_TRANSFER) return;
             /* On stale epoch with retries remaining: mark deferred.
              * The epoch update happens at retry time when the epoch has
              * actually advanced (checked by raftRefreshEpochInData). */
@@ -4252,7 +4280,8 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
     /* Already forgotten: success (idempotent; may be a no-op log entry). */
     if (!node) goto done;
-    if (node == myself) goto reject;
+    /* Forgetting myself is only validated, as a leader transfer below. */
+    if (node == myself && !validate_only) goto reject;
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
@@ -4265,7 +4294,10 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
         goto reject;
     }
 
-    if (validate_only) goto done;
+    if (validate_only) {
+        if (node == myself) result = RAFT_RESULT_LEADER_TRANSFER;
+        goto done;
+    }
 
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];
@@ -4341,12 +4373,13 @@ static void clusterRaftProposeVoterChange(const char *entry_name, const char *no
 }
 
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    /* TODO: Leadership transfer will be taken care as part of issue#4069 */
     clusterRaftState *rs = RAFT_STATE();
     if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
         clusterNode *leader_node = clusterLookupNode(node_id, id_len);
-        if (leader_node && !nodeFailed(leader_node)) {
-            serverLog(LL_WARNING, "Attempting to forget raft leader.");
+        /* The leader would need another voter to hand off to. */
+        if (leader_node && !nodeFailed(leader_node) && server.cluster->size <= 1) {
+            if (callback) callback(ctx, "no eligible voting member available for leadership transfer");
+            return;
         }
     }
 

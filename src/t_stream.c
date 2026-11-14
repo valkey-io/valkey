@@ -723,7 +723,32 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
-    if (trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0 && !approx && limit == 0) {
+    /* An empty radix tree needs no work. Retained nodes must still be
+     * examined by the normal MINID trim path. */
+    if (s->length == 0 && raxSize(s->rax) == 0) return 0;
+
+    /* Check each node's last ID, just as the normal trimming loop does.
+     * Restored streams can have a last_id below IDs in their nodes. */
+    int within_limit = limit == 0 || s->length <= (uint64_t)limit;
+    int trim_all = trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0;
+    if (within_limit && trim_strategy == TRIM_STRATEGY_MINID && streamCompareID(&s->last_id, id) < 0) {
+        raxIterator check;
+        raxStart(&check, s->rax);
+        raxSeek(&check, "^", NULL, 0);
+        trim_all = 1;
+        while (raxNext(&check)) {
+            streamID primary_id, node_last_id = {0, 0};
+            streamDecodeID(check.key, &primary_id);
+            lpGetEdgeStreamID(check.data, 0, &primary_id, &node_last_id);
+            if (streamCompareID(&node_last_id, id) >= 0) {
+                trim_all = 0;
+                break;
+            }
+        }
+        raxStop(&check);
+    }
+    if (trim_all && within_limit) {
+        /* No nodes need to survive, so avoid removing them one by one. */
         int64_t deleted = s->length;
         raxFreeWithCallback(s->rax, lpFreeVoid);
         s->rax = raxNew();

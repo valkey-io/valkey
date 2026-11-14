@@ -661,6 +661,68 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Slot Migration cleanup propagates CLUSTER FLUSHSLOT" {
+        # Populate data before migration
+        populate 1000 "$16383_slot_tag:" 1000 -2
+
+        # Attach stream listener to Node 2 (the exporting node)
+        set repl [attach_to_replication_stream_on_connection -2]
+
+        # Perform slot migration
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration 0 16383
+
+        # Keys successfully migrated
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Also eventually reflected in replicas
+        wait_for_countkeysinslot 3 16383 1000
+        wait_for_countkeysinslot 5 16383 0
+
+        # Migration log shows success on both ends
+        assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+
+        # Node 2 has already cleaned up slot 16383 synchronously at this point,
+        # so anything it propagated for the cleanup is ahead of this FLUSHDB in
+        # its replication stream. Use it as an end marker so we can verify the
+        # whole cleanup without relying on timing.
+        assert_match "OK" [R 2 FLUSHDB SYNC]
+
+        set found_flushslot 0
+        set found_individual_dels 0
+        while 1 {
+            set cmd [read_from_replication_stream $repl]
+            if {$cmd eq ""} {
+                fail "Timed out waiting for the FLUSHDB marker in the replication stream of node 2"
+            }
+            set cmdname [lindex $cmd 0]
+            if {$cmdname eq "ping"} continue
+            if {$cmdname eq "flushdb"} break
+            if {$cmdname eq "cluster" && [string equal -nocase [lindex $cmd 1] "flushslot"]} {
+                assert_equal 16383 [lindex $cmd 2]
+                incr found_flushslot
+            } elseif {$cmdname eq "del" || $cmdname eq "unlink"} {
+                incr found_individual_dels
+            }
+        }
+
+        # Exactly one CLUSTER FLUSHSLOT and no per-key DEL/UNLINK.
+        assert_equal 1 $found_flushslot
+        assert_equal 0 $found_individual_dels
+
+        close_replication_stream $repl
+
+        # Cleanup for next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 0 SAVE]
+        assert_match "OK" [R 2 SAVE]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
     proc verify_client_flag {idx flag expected_count} {
         set clients [split [string trim [R $idx client list]] "\r\n"]
         set found 0

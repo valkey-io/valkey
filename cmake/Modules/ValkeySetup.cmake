@@ -125,6 +125,18 @@ endif ()
 # Build options (allocator, tls, rdma et al)
 # ----------------------------------------------------
 
+# The Makefile spells these two options `MALLOC=<libname>` and `SANITIZER=<type>`. Accept those names as aliases for the
+# CMake ones, so that the same flag works with both build systems.
+if (MALLOC)
+    set(BUILD_MALLOC "${MALLOC}" CACHE STRING "Allocator to build with" FORCE)
+    unset(MALLOC CACHE)
+endif ()
+
+if (SANITIZER)
+    set(BUILD_SANITIZER "${SANITIZER}" CACHE STRING "Sanitizer to build with" FORCE)
+    unset(SANITIZER CACHE)
+endif ()
+
 if (NOT BUILD_MALLOC)
     if (APPLE)
         set(BUILD_MALLOC "libc")
@@ -260,6 +272,7 @@ endif ()
 
 # Sanitizer
 if (BUILD_SANITIZER)
+    message(STATUS "Sanitizer to build with is ${BUILD_SANITIZER}")
     # Common CFLAGS
     list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-sanitize-recover=all")
     list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-omit-frame-pointer")

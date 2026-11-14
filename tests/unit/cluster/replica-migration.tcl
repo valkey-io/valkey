@@ -469,7 +469,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
     test_cluster_setslot "gossip"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
     test_cluster_setslot "setslot"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 

@@ -375,6 +375,38 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
         }
     }
+
+    foreach bgsave_type {"fork" "forkless"} {
+        test "DEBUG RELOAD is refused while a $bgsave_type bgsave is in progress" {
+            # A slow save (100 keys, 0.1 s each) keeps rdb_bgsave_in_progress
+            # set for about 10 s, far longer than the test needs.
+            r config set rdb-key-save-delay 100000
+            populate 100 "" 16
+
+            r config set bgsave-default-method $bgsave_type
+            r bgsave
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "bgsave did not start in time"
+            }
+            assert_equal [s rdb_current_bgsave_type] $bgsave_type
+
+            # DEBUG RELOAD saves the RDB before loading it. The running
+            # bgsave would rename its older snapshot over that file, so it
+            # must refuse while a save is in progress, like SAVE does.
+            assert_error "ERR Background save already in progress" {r debug reload}
+            assert_equal [s rdb_bgsave_in_progress] 1
+
+            assert {[r bgsave cancel] eq {Background saving cancelled}}
+            r config set rdb-key-save-delay 0
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 0
+            } else {
+                fail "bgsave was not cancelled"
+            }
+        } {} {needs:debug}
+    }
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {

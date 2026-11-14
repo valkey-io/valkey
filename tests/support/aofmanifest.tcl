@@ -44,11 +44,19 @@ proc get_cur_base_aof_name {manifest_filepath} {
         return ""
     }
 
-    set first_line [lindex $lines 0]
-    set aofname [lindex [split $first_line " "] 1]
-    set aoftype [lindex [split $first_line " "] 5]
-    if { $aoftype eq "b" } {
-        return $aofname
+    foreach line $lines {
+        if {[string match "#*" $line]} {
+            continue
+        }
+        set parts [split $line " "]
+        if {[llength $parts] < 6} {
+            continue
+        }
+        set aofname [lindex $parts 1]
+        set aoftype [lindex $parts 5]
+        if { $aoftype eq "b" } {
+            return $aofname
+        }
     }
 
     return ""
@@ -71,12 +79,21 @@ proc get_last_incr_aof_name {manifest_filepath} {
         return ""
     }
 
-    set len [llength $lines]
-    set last_line [lindex $lines [expr $len - 1]]
-    set aofname [lindex [split $last_line " "] 1]
-    set aoftype [lindex [split $last_line " "] 5]
-    if { $aoftype eq "i" } {
-        return $aofname
+    # Iterate backwards to find the last incr file, ignoring comments
+    for {set i [expr [llength $lines] - 1]} {$i >= 0} {incr i -1} {
+        set line [lindex $lines $i]
+        if {[string match "#*" $line]} {
+            continue
+        }
+        set parts [split $line " "]
+        if {[llength $parts] < 6} {
+            continue
+        }
+        set aofname [lindex $parts 1]
+        set aoftype [lindex $parts 5]
+        if { $aoftype eq "i" } {
+            return $aofname
+        }
     }
 
     return ""
@@ -170,4 +187,53 @@ proc start_server_aof_ex {overrides options code} {
     upvar defaults defaults srv srv server_path server_path
     set config [concat $defaults $overrides]
     start_server [concat [list overrides $config keep_persistence true] $options] $code
+}
+
+# CRC-64/Jones as computed by crc64() in src/crc64.c (reflected, no final xor).
+proc crc64 {crc data} {
+    if {![info exists ::crc64_table]} {
+        set ::crc64_table {}
+        for {set i 0} {$i < 256} {incr i} {
+            set c $i
+            for {set j 0} {$j < 8} {incr j} {
+                if {$c & 1} {
+                    set c [expr {($c >> 1) ^ 0x95ac9329ac4bc9b5}]
+                } else {
+                    set c [expr {$c >> 1}]
+                }
+            }
+            lappend ::crc64_table $c
+        }
+    }
+    binary scan $data cu* bytes
+    foreach b $bytes {
+        set crc [expr {[lindex $::crc64_table [expr {($crc ^ $b) & 0xff}]] ^ ($crc >> 8)}]
+    }
+    return $crc
+}
+
+proc append_binary_file {path data} {
+    set fp [open $path a]
+    fconfigure $fp -translation binary
+    puts -nonewline $fp $data
+    close $fp
+}
+
+# Returns the running checksum after the last integrity block in an AOF file.
+proc aof_last_block_checksum {path} {
+    set checksums [regexp -all -inline {#HDR:v1;[^\r\n]*checksum:([0-9]+);[^\r\n]*\r\n} [read_binary_file $path]]
+    return [lindex $checksums end]
+}
+
+# Builds an integrity block (header and payload) chained from the running checksum
+# `seed`, as flushAppendOnlyFile() writes it. The header's len defaults to the payload
+# length; a smaller len leaves the rest of the payload outside the block. `before` and
+# `after` hold additional header fields to put before len and after checksum, e.g.
+# "foo:bar;".
+proc aof_integrity_block {seed payload {len {}} {before {}} {after {}}} {
+    if {$len eq {}} {set len [string length $payload]}
+    set prefix "#HDR:v1;${before}len:$len;checksum:"
+    set suffix ";$after\r\n"
+    set checksum [crc64 [crc64 [crc64 $seed $prefix] $suffix] [string range $payload 0 [expr {$len - 1}]]]
+    return "$prefix$checksum$suffix$payload"
 }

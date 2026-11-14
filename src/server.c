@@ -2465,6 +2465,8 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
+    server.aof_running_checksum = 0;
+    server.aof_integrity_active = 0;
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
@@ -3214,6 +3216,7 @@ void initServer(void) {
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
     server.aof_buf = sdsempty();
+    server.aof_retry_buf = sdsempty();
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;
@@ -6825,7 +6828,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "aof_current_size:%lld\r\n", (long long)server.aof_current_size,
                     "aof_base_size:%lld\r\n", (long long)server.aof_rewrite_base_size,
                     "aof_pending_rewrite:%d\r\n", server.aof_rewrite_scheduled,
-                    "aof_buffer_length:%zu\r\n", sdslen(server.aof_buf),
+                    "aof_buffer_length:%zu\r\n", sdslen(server.aof_buf) + sdslen(server.aof_retry_buf),
                     "aof_pending_bio_fsync:%lu\r\n", bioPendingJobsOfType(BIO_AOF_FSYNC),
                     "aof_delayed_fsync:%lu\r\n", server.aof_delayed_fsync));
         }

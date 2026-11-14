@@ -1579,7 +1579,7 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
 
     mem = 0;
     if (server.aof_state != AOF_OFF) {
-        mem += sdsAllocSize(server.aof_buf);
+        mem += sdsAllocSize(server.aof_buf) + sdsAllocSize(server.aof_retry_buf);
     }
     mh->aof_buffer = mem;
     mem_total += mem;

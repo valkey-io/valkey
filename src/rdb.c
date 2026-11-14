@@ -1697,14 +1697,16 @@ int rdbSaveRio(compressionAlgo compression_algo, int req, int rdbver, rio *rdb, 
     streamWriter compression_writer;
     bool use_streaming_compression = compression_algo != ALGO_NONE && compression_algo != ALGO_LZF;
 
+    /* AOF integrity check relies on the RDB preamble checksum even if rdbchecksum is disabled. */
+    int checksum_enabled = server.rdb_checksum || (server.aof_integrity_check && (rdbflags & RDBFLAGS_AOF_PREAMBLE));
     if (use_streaming_compression) {
-        if (rdbCompressionInit(rdb, &compression_writer, compression_algo, server.rdb_checksum) == C_ERR) {
+        if (rdbCompressionInit(rdb, &compression_writer, compression_algo, checksum_enabled) == C_ERR) {
             if (error) *error = EIO;
             return C_ERR;
         }
     }
 
-    if (use_streaming_compression || !server.rdb_checksum) {
+    if (use_streaming_compression || !checksum_enabled) {
         rdb->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
         rdb->update_cksum = NULL;
         rdb->cksum = 0;
@@ -3479,7 +3481,7 @@ void stopSaving(int success) {
 /* Track loading progress in order to serve client's from time to time
    and if needed calculate rdb checksum  */
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
-    if (server.rdb_checksum && !(r->flags & RIO_FLAG_SKIP_RDB_CHECKSUM))
+    if ((server.rdb_checksum || (r->flags & RIO_FLAG_AOF_INTEGRITY)) && !(r->flags & RIO_FLAG_SKIP_RDB_CHECKSUM))
         rioGenericUpdateChecksum(r, buf, len);
 
     /* Event scheduling uses decoded (logical) bytes so that
@@ -3604,9 +3606,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb,
     compressionAlgo compression_algo = ALGO_NONE;
     int retval;
 
+    /* AOF integrity relies on the checksum of the preamble, even if rdbchecksum is disabled. */
+    if (server.aof_integrity_check && (rdbflags & RDBFLAGS_AOF_PREAMBLE)) rdb->flags |= RIO_FLAG_AOF_INTEGRITY;
     bool skip_codec_checksum_validation =
         (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) ||
-        !server.rdb_checksum ||
+        !(server.rdb_checksum || (rdb->flags & RIO_FLAG_AOF_INTEGRITY)) ||
         server.skip_checksum_validation;
     rdbStreamReaderInitResult init_rc =
         rdbInitStreamReader(rdb, &stream_reader, skip_codec_checksum_validation, &compression_algo);
@@ -4221,7 +4225,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if (rioRead(rdb, &cksum, 8) == 0) goto eoferr;
         if (rdb->flags & RIO_FLAG_STREAMING_COMPRESSION) {
             serverLog(LL_NOTICE, "Logical RDB CRC64 skipped for streaming-compressed input.");
-        } else if (server.rdb_checksum && !server.skip_checksum_validation) {
+        } else if ((server.rdb_checksum || (rdb->flags & RIO_FLAG_AOF_INTEGRITY)) && !server.skip_checksum_validation) {
             memrev64ifbe(&cksum);
             if (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) {
                 serverLog(LL_NOTICE, "RDB file was saved with checksum disabled: skipped checksum for this transfer");
@@ -4799,7 +4803,8 @@ ssize_t rdbSaveDbSizeHints(rio *rdb, serverDb *db, int include_importing) {
  * Returns C_OK on success, C_ERR on error. */
 int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi) {
     char magic[10];
-    if (server.rdb_checksum && !(rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM)) {
+    if ((server.rdb_checksum || (server.aof_integrity_check && (rdbflags & RDBFLAGS_AOF_PREAMBLE))) &&
+        !(rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM)) {
         rdb->update_cksum = rioGenericUpdateChecksum;
     }
 

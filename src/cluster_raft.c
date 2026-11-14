@@ -940,13 +940,20 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     sds data = sp ? sdsnew(sp + 1) : sdsempty();
 
+    /* SAME: this quorum change is already appended and not yet applied.
+     * Keep the caller's callback for that entry instead of writing a copy. */
+    int already_appended = 0;
     if (rs->role == RAFT_ROLE_LEADER) {
-        /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
-        RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
-        if (pre_result != RAFT_RESULT_OK) {
-            if (callback) callback(ctx, raftProposalResultMsg(pre_result));
-            sdsfree(data);
-            return;
+        if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_SAME) {
+            already_appended = 1;
+        } else {
+            /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
+            RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+            if (pre_result != RAFT_RESULT_OK) {
+                if (callback) callback(ctx, raftProposalResultMsg(pre_result));
+                sdsfree(data);
+                return;
+            }
         }
     }
 
@@ -979,23 +986,27 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         /* Kept pending, and retried after the transfer. */
         sdsfree(data);
     } else if (rs->role == RAFT_ROLE_LEADER) {
-        /* If we're a singleton leader with an empty log that hasn't committed
-         * its own NODE_JOIN yet, do it now before appending any other entry. */
-        if (raftLogLastIndex() == 0 &&
-            !(type == RAFT_ENTRY_NODE_JOIN &&
-              sdslen(data) >= CLUSTER_NAMELEN &&
-              memcmp(data, myself->name, CLUSTER_NAMELEN) == 0)) {
-            clusterRaftSelfJoin();
-        }
-        uint64_t idx = raftLogLastIndex() + 1;
-        raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
-        serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
-                  raftEntryTypeName(type), (unsigned long long)idx);
+        if (already_appended) {
+            sdsfree(data);
+        } else {
+            /* If we're a singleton leader with an empty log that hasn't committed
+             * its own NODE_JOIN yet, do it now before appending any other entry. */
+            if (raftLogLastIndex() == 0 &&
+                !(type == RAFT_ENTRY_NODE_JOIN &&
+                  sdslen(data) >= CLUSTER_NAMELEN &&
+                  memcmp(data, myself->name, CLUSTER_NAMELEN) == 0)) {
+                clusterRaftSelfJoin();
+            }
+            uint64_t idx = raftLogLastIndex() + 1;
+            raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
+            serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
+                      raftEntryTypeName(type), (unsigned long long)idx);
 
-        /* Multi-node: replicate to followers. Single-node: commit is
-         * deferred to beforeSleep after persistence. */
-        if (clusterRaftHasPeerMembers()) {
-            rs->todo_broadcast_ae = 1;
+            /* Multi-node: replicate to followers. Single-node: commit is
+             * deferred to beforeSleep after persistence. */
+            if (clusterRaftHasPeerMembers()) {
+                rs->todo_broadcast_ae = 1;
+            }
         }
     } else {
         sdsfree(data);
@@ -1241,6 +1252,15 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     /* Data is everything after the type name. */
     sds data = (argc >= 3) ? sdsjoinsds(argv + 2, argc - 2, " ", 1) : sdsempty();
+
+    /* The follower already has a pending proposal for this entry. Applying
+     * the copy that is in the log completes it; REJECT would fail the client
+     * before that apply. */
+    if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_SAME) {
+        sdsfree(data);
+        sdsfree(entry);
+        return 1;
+    }
 
     /* Pre-validate on the leader to reject stale/invalid proposals. */
     RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
@@ -1571,9 +1591,10 @@ static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data) 
     return RAFT_QC_NONE;
 }
 
-/* Find a pending proposal matching type+data, fire its callback, and remove it.
- * Called both when an entry is applied (from raftLogApply) and when the leader
- * sends a REJECT for a forwarded proposal. */
+/* Find every pending proposal matching type+data, fire its callback, and
+ * remove it. Several callers can wait on one in-flight entry. Called both
+ * when an entry is applied (from raftLogApply) and when the leader sends a
+ * REJECT for a forwarded proposal. */
 static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
@@ -1583,27 +1604,25 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
-        if (pp->type == type && !sdscmp(pp->data, data)) {
-            /* Resent to the new leader by the retry on leader change. */
-            if (result == RAFT_RESULT_LEADER_TRANSFER) return;
-            /* On stale epoch with retries remaining: mark deferred.
-             * The epoch update happens at retry time when the epoch has
-             * actually advanced (checked by raftRefreshEpochInData). */
-            if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
-                pp->retries--;
-                pp->deferred = 1;
-                /* The epoch may already have advanced before this rejection
-                 * arrived. Retry in case it did; raftRefreshEpochInData()
-                 * skips it otherwise. */
-                rs->todo_retry_deferred = 1;
-                return;
-            }
-            if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
-            sdsfree(pp->data);
-            zfree(pp);
-            listDelNode(rs->pending_proposals, ln);
-            break;
+        if (pp->type != type || sdscmp(pp->data, data)) continue;
+        /* Resent to the new leader by the retry on leader change. */
+        if (result == RAFT_RESULT_LEADER_TRANSFER) continue;
+        /* On stale epoch with retries remaining: mark deferred.
+         * The epoch update happens at retry time when the epoch has
+         * actually advanced (checked by raftRefreshEpochInData). */
+        if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
+            pp->retries--;
+            pp->deferred = 1;
+            /* The epoch may already have advanced before this rejection
+             * arrived. Retry in case it did; raftRefreshEpochInData()
+             * skips it otherwise. */
+            rs->todo_retry_deferred = 1;
+            continue;
         }
+        if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
+        sdsfree(pp->data);
+        zfree(pp);
+        listDelNode(rs->pending_proposals, ln);
     }
 }
 

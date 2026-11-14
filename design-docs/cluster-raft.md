@@ -542,15 +542,18 @@ entries that are not committed yet, and classifies the candidate as:
 
 - `NONE` — no quorum-changing entry in flight; proceed with full
   pre-validation.
-- `SAME` — the identical transition is already in the log. A retry after
-  a leader change leaves the pending proposal attached to that entry and
-  does not append a second copy. Re-checking `match_index` would reject
-  a caught-up peer, because election resets `match_index` to 0 until the
-  next `AE_ACK`.
+- `SAME` — the identical transition is already in the log. The leader
+  does not append another copy. A local caller, a follower retrying
+  `PROPOSE`, and a pending proposal replayed after a leader change all
+  wait for that entry to be applied. The re-sent `PROPOSE` is not
+  rejected: `match_index` is 0 until the next `AE_ACK` after an election,
+  so the catch-up check does not describe this entry.
 - `CONFLICT` — a different transition is in flight; reject.
 
-The same gate fronts `clusterRaftPreValidate` (for manual and automatic
-proposals) and the leader branch of `clusterRaftRetryProposals`.
+`CONFLICT` is enforced in `clusterRaftPreValidate`. `SAME` is handled in
+`clusterRaftPropose`, `clusterRaftProcessPropose`, and the leader branch
+of `clusterRaftRetryProposals`. Every pending proposal with that
+type and data is completed when the existing entry is applied.
 
 ## Failure Detection
 

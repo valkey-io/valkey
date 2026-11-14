@@ -2903,3 +2903,54 @@ foreach load_mode {disabled on-empty-db} {
         }
     }
 }
+
+foreach {src_type sort_cmd} {
+    list {sort src GET obj_* STORE dst}
+    list {sort src BY w_* STORE dst}
+    set  {sort src BY w_* GET h_*->f STORE dst}
+    zset {sort src BY nosort GET obj_* STORE dst}
+    list {multi; rpush src 1000; sort src GET obj_* STORE dst; exec}
+    list {eval {return server.call('sort', KEYS[1], 'GET', 'obj_*', 'STORE', KEYS[2])} 2 src dst}
+} {
+    start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+        set primary [srv 0 client]
+        set ph [srv 0 host]
+        set pp [srv 0 port]
+        $primary debug populate 2000 filler 10
+        for {set i 1} {$i <= 1000} {incr i} {
+            $primary set obj_$i val_$i
+            $primary set w_$i [expr {1000 - $i}]
+            $primary hset h_$i f hval_$i
+        }
+        for {set i 1} {$i <= 100} {incr i} {
+            switch $src_type {
+                list {$primary rpush src $i}
+                set  {$primary sadd src $i}
+                zset {$primary zadd src $i $i}
+            }
+        }
+
+        start_server {overrides {save {}}} {
+            set replica [srv 0 client]
+
+            test "SORT with BY/GET patterns during forkless sync replays correctly ($src_type: $sort_cmd)" {
+                $primary config set rdb-key-save-delay 1000
+                $replica replicaof $ph $pp
+                wait_for_condition 50 100 {
+                    [s -1 rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "Forkless save didn't start"
+                }
+                foreach cmd [split $sort_cmd ";"] {
+                    $primary {*}[string trim $cmd]
+                }
+                $primary config set rdb-key-save-delay 0
+                wait_for_sync $replica
+                wait_for_ofs_sync $primary $replica
+                assert_equal [$primary lrange dst 0 -1] [$replica lrange dst 0 -1]
+                assert_equal [$primary debug digest] [$replica debug digest]
+                assert_equal 0 [s -1 total_forks]
+            }
+        }
+    }
+}

@@ -442,6 +442,7 @@ static dict *inUseEntries; // dbEntry -> ref count
 /* Key values in the current command which don't exist in the DB yet.  Needed for determination of
  * replication for NON-consistent iterations. */
 static list *curCmdMissingKeys; // list of robj
+static list *curCmdPatternKeys; // list of robj
 
 /* A counter of the total amount of memory used for buffered replication data.  This amount is
  * excluded when computing the need for evictions. */
@@ -1882,15 +1883,43 @@ static bool expediteKeysForWriteOnAllIterators(int dbid,
                                                hashtable *waitingOnKeys) {
     bool mustBlock = false;
 
+    robj **pattern_argv = NULL;
+    keyReference *pattern_keyrefs = NULL;
+    int num_pattern_keys = 0;
+    if (cmd->proc == sortCommand && server.db[dbid]) {
+        robj **pattern_keys;
+        num_pattern_keys = sortGetPatternKeys(server.db[dbid], argc, argv, &pattern_keys);
+        if (num_pattern_keys) {
+            pattern_argv = zmalloc(sizeof(robj *) * (argc + num_pattern_keys));
+            memcpy(pattern_argv, argv, sizeof(robj *) * argc);
+            pattern_keyrefs = zmalloc(sizeof(keyReference) * (numKeys + num_pattern_keys));
+            memcpy(pattern_keyrefs, keyrefs, sizeof(keyReference) * numKeys);
+            for (int i = 0; i < num_pattern_keys; i++) {
+                pattern_argv[argc + i] = pattern_keys[i];
+                pattern_keyrefs[numKeys + i] = (keyReference){.pos = argc + i, .flags = CMD_KEY_RO};
+                listAddNodeTail(curCmdPatternKeys, pattern_keys[i]);
+            }
+            zfree(pattern_keys);
+        }
+    }
+
     listIter li;
     listNode *node;
     listRewind(allIterators, &li);
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
-        if (expediteKeysForWrite(it, dbid, cmd, argc, argv, keyrefs, numKeys, waitingOnKeys))
+        bool use_pattern_keys = num_pattern_keys && (it->iteration_flags & BGITERATOR_FLAG_REPLICATION);
+        if (expediteKeysForWrite(it, dbid, cmd,
+                                 use_pattern_keys ? argc + num_pattern_keys : argc,
+                                 use_pattern_keys ? pattern_argv : argv,
+                                 use_pattern_keys ? pattern_keyrefs : keyrefs,
+                                 use_pattern_keys ? numKeys + num_pattern_keys : numKeys,
+                                 waitingOnKeys))
             mustBlock = true;
     }
 
+    zfree(pattern_argv);
+    zfree(pattern_keyrefs);
     return mustBlock;
 }
 
@@ -2257,6 +2286,10 @@ void bgIteration_init(void) {
     serverAssert(curCmdMissingKeys != NULL);
     listSetFreeMethod(curCmdMissingKeys, decrRefCountVoid);
 
+    curCmdPatternKeys = listCreate();
+    serverAssert(curCmdPatternKeys != NULL);
+    listSetFreeMethod(curCmdPatternKeys, decrRefCountVoid);
+
     bufferedReplicationBytes = 0;
 
     if (BGITERATION_DEBUG) {
@@ -2364,6 +2397,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
     bool mustBlock = false;
     hashtable *waitOnKeys = hashtableCreate(&tempKeysetHashtableType); // set of robj(sds)
     listEmpty(curCmdMissingKeys);
+    listEmpty(curCmdPatternKeys);
 
     if (c->cmd->proc == execCommand) {
         mustBlock = expediteKeysForMultiExec(c, waitOnKeys);

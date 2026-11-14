@@ -2848,6 +2848,12 @@ static int replicaCheckFullSyncOffsetFromRdb(rdbSaveInfo *rsi) {
 }
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
+    /* A dual channel sync whose main channel buffered part of the stream
+     * applies that buffer below, while the AOF is still off. The RDB file then
+     * no longer matches the dataset and can't be used as the AOF base. */
+    int applied_repl_buf = conn == server.repl_rdb_transfer_s && server.repl_state == REPL_STATE_TRANSFER &&
+                           server.pending_repl_data.blocks && listLength(server.pending_repl_data.blocks) > 0;
+
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
@@ -2899,7 +2905,7 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
      * directly, avoiding a redundant bgrewriteaof. Otherwise (diskless
      * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
     if (server.aof_enabled) {
-        bool aof_rdb_base_candidate = disk_based_sync && server.aof_use_rdb_preamble;
+        bool aof_rdb_base_candidate = disk_based_sync && server.aof_use_rdb_preamble && !applied_repl_buf;
         if (!aof_rdb_base_candidate || restartAOFWithSyncRdb() == C_ERR) {
             restartAOFAfterSYNC();
         }

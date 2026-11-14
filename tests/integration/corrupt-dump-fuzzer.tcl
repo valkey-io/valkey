@@ -2,7 +2,7 @@
 
 # The fuzzer can cause corrupt the state in many places, which could
 # mess up the reply, so we decided to skip logreqres.
-tags {"dump" "corruption" "external:skip" "logreqres:skip"} {
+tags {"dump" "corruption" "slow" "external:skip" "logreqres:skip"} {
 
 # catch sigterm so that in case one of the random command hangs the test,
 # usually due to the server not putting a response in the output buffers,

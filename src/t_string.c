@@ -567,10 +567,52 @@ void getrangeCommand(client *c) {
     }
 }
 
+/* Prefetch the SDS headers needed by per-reference limit checks, including
+ * keys beyond the outer command batch's key budget. Preparation excludes
+ * lookup callbacks. Retain each value until its reply has acquired its own
+ * reference or copied the value. */
+static void mgetReplyPrefetchedValues(client *c, writePreparedClient *wpc, int batch_size) {
+    /* The existing prefetch-batch-max-size configuration is bounded at 128. */
+    robj *values[batch_size];
+    for (int j = 1; j < c->argc;) {
+        int count = min(batch_size, c->argc - j);
+        for (int i = 0; i < count; i++) {
+            robj *o = lookupKeyRead(c->db, c->argv[j + i]);
+            values[i] = NULL;
+            if (o == NULL || o->type != OBJ_STRING) continue;
+            if (unlikely(objectGetRefcount(o) == OBJ_STATIC_REFCOUNT))
+                o = dupStringObject(o);
+            else
+                incrRefCount(o);
+            values[i] = o;
+            if (o->encoding == OBJ_ENCODING_RAW) valkey_prefetch((char *)objectGetVal(o) - 1);
+        }
+        for (int i = 0; i < count; i++) {
+            if (values[i]) {
+                addWritePreparedBulk(wpc, values[i]);
+                decrRefCount(values[i]);
+            } else {
+                addReplyNull(c);
+            }
+        }
+        j += count;
+    }
+}
+
 void mgetCommand(client *c) {
     int j;
 
-    addReplyArrayLen(c, c->argc - 1);
+    int exempt = 0;
+    writePreparedClient *wpc = c->argc > 2 ? prepareClientForBulk(c, &exempt) : NULL;
+    if (wpc)
+        addWritePreparedReplyArrayLen(wpc, c->argc - 1);
+    else
+        addReplyArrayLen(c, c->argc - 1);
+    if (wpc && !exempt && server.prefetch_batch_max_size > 1) {
+        mgetReplyPrefetchedValues(c, wpc, server.prefetch_batch_max_size);
+        finishWritePreparedBulk(wpc);
+        return;
+    }
     for (j = 1; j < c->argc; j++) {
         robj *o = lookupKeyRead(c->db, c->argv[j]);
         if (o == NULL) {
@@ -579,10 +621,18 @@ void mgetCommand(client *c) {
             if (o->type != OBJ_STRING) {
                 addReplyNull(c);
             } else {
-                addReplyBulk(c, o);
+                if (wpc) {
+                    if (exempt)
+                        addWritePreparedBulkExempt(wpc, o);
+                    else
+                        addWritePreparedBulk(wpc, o);
+                } else {
+                    addReplyBulk(c, o);
+                }
             }
         }
     }
+    if (wpc) finishWritePreparedBulk(wpc);
 }
 
 void msetGenericCommand(client *c, int nx) {

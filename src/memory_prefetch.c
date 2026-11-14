@@ -156,7 +156,7 @@ static void prefetchEntry(KeyPrefetchInfo *info) {
 }
 
 /* Prefetch the entry's value object, then hand hash and zset keys to the nested path. */
-static void prefetchValue(KeyPrefetchInfo *info) {
+static void prefetchValue(KeyPrefetchInfo *info, int read_string) {
     void *entry;
     if (hashtableIncrementalFindGetResult(&info->hashtab_state, &entry)) {
         robj *val = entry;
@@ -167,7 +167,7 @@ static void prefetchValue(KeyPrefetchInfo *info) {
             moveToNextKey();
             return;
         }
-        if (server.io_threads_num < server.min_io_threads_copy_avoid && val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
+        if (read_string && val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
             valkey_prefetch(objectGetVal(val));
         }
     }
@@ -263,11 +263,17 @@ static void prefetchValueNested(KeyPrefetchInfo *info) {
  */
 static void hashtablePrefetch(hashtable **tables) {
     initBatchInfo(tables);
+    /* No commands run during this pass. Decide once whether the main thread
+     * needs SDS lengths, rather than reloading these settings for every key. */
+    clientBufferLimitsConfig *limits = &server.client_obuf_limits[CLIENT_TYPE_NORMAL];
+    int read_string = server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1 ||
+                      !server.min_io_threads_copy_avoid || server.io_threads_num < server.min_io_threads_copy_avoid ||
+                      limits->hard_limit_bytes || limits->soft_limit_bytes;
     KeyPrefetchInfo *info;
     while ((info = getNextPrefetchInfo())) {
         switch (info->state) {
         case PREFETCH_ENTRY: prefetchEntry(info); break;
-        case PREFETCH_VALUE: prefetchValue(info); break;
+        case PREFETCH_VALUE: prefetchValue(info, read_string); break;
         case PREFETCH_VALUE_NESTED: prefetchValueNested(info); break;
         default: serverPanic("Unknown prefetch state %d", info->state);
         }

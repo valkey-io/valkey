@@ -7656,8 +7656,12 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             continue;
         }
 
-        if (!per_key) {
-            unsigned long count = hashtableSize(old_keys[i]);
+        /* signalDetachedSlotKeys() scans the db's watched and blocking key
+         * dicts, which is only cheaper than walking the slot while those are
+         * no larger than the slot. Otherwise walk the slot, so that flushing
+         * many small slots doesn't scan every watched key of the db each time. */
+        unsigned long count = hashtableSize(old_keys[i]);
+        if (!per_key && dictSize(db->watched_keys) + dictSize(db->blocking_keys_unblock_on_nokey) <= count) {
             signalDetachedSlotKeys(db, old_keys[i], hashslot);
             j += count;
             server.dirty += count;

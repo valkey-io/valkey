@@ -93,6 +93,26 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         R 0 del "{06S}-watched"
     }
 
+    test "Flush slot command aborts EXEC when more keys are watched than the slot holds" {
+        R 0 set "{FC}-watched" "value"
+
+        # More keys are watched than the flushed slot holds, so the flush
+        # walks the slot instead of the watched keys.
+        set watch_deleted [valkey_client_by_addr [srv 0 host] [srv 0 port]]
+        set watch_other_slot [valkey_client_by_addr [srv 0 host] [srv 0 port]]
+        $watch_deleted watch "{FC}-watched"
+        $watch_other_slot watch "{06S}-a" "{06S}-b" "{06S}-c"
+
+        R 0 CLUSTER FLUSHSLOT $key_slot SYNC
+
+        foreach {client expected} [list $watch_deleted {} $watch_other_slot PONG] {
+            $client multi
+            $client ping
+            assert_equal $expected [$client exec]
+            $client close
+        }
+    }
+
     test "Flush slot command wakes up clients blocked on a stream in the slot" {
         R 0 xadd "{FC}-stream" * field value
         R 0 xgroup create "{FC}-stream" group $

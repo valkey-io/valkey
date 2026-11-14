@@ -152,6 +152,14 @@ proc sanitizer_errors_from_file {filename} {
             continue
         }
 
+        # Ignore LeakSanitizer's ptrace probe warning. The probe's waitpid is
+        # not restarted when our SIGTERM interrupts it, so LSan misreads the
+        # unset status as a blocked ptrace. It is not a sanitizer finding:
+        # the test already passed and any real leak report still fails below.
+        if {[string match {*WARNING: ptrace appears to be blocked*} $line]} {
+            continue
+        }
+
         # GCC UBSAN output does not contain 'Sanitizer' but 'runtime error'.
         if {[string match {*runtime error*} $line] ||
             [string match {*Sanitizer*} $line]} {
@@ -160,6 +168,14 @@ proc sanitizer_errors_from_file {filename} {
     }
 
     return ""
+}
+
+# Return 1 if the sanitizer stderr holds LeakSanitizer's ptrace probe
+# warning, which sanitizer_errors_from_file ignores. Callers report it as a
+# non-fatal note so each occurrence stays visible in the test output.
+proc sanitizer_ptrace_warning_in_file {filename} {
+    set log [exec cat $filename]
+    return [string match {*WARNING: ptrace appears to be blocked*} $log]
 }
 
 proc getInfoProperty {infostr property} {
@@ -853,6 +869,17 @@ proc resume_process pid {
     if {$idx >= 0} {
         set ::test_paused_pids [lreplace $::test_paused_pids $idx $idx]
     }
+}
+
+# Return 1 if the process is stopped by a stop signal (SIGSTOP/SIGTSTP), as
+# pause_process leaves it. The state letter is "T" on Linux and macOS. A
+# ptrace-stopped thread reports "t" on Linux and is deliberately not matched:
+# that is a tracer's stop, not a job-control stop, and must not be resumed.
+proc process_is_stopped pid {
+    if {[catch {exec ps -o stat= -p $pid} stat]} {
+        return 0
+    }
+    return [string match {T*} [string trim $stat]]
 }
 
 proc cmdrstat {cmd r} {

@@ -92,6 +92,11 @@ REPL_OFFSETS <node-id> <offset> [<node-id> <offset> ...]
     Recipients update node->repl_offset for CLUSTER SLOTS/SHARDS
     health reporting.
 
+TRANSFER_LEADER <term>
+    Sent by a follower or learner to ask the current leader to hand off leadership.
+    Used when an administrative operation, such as forgetting the leader,
+    needs a different node to become leader first.
+
 TIMEOUT_NOW <term>
     Sent by the leader to a follower to trigger immediate election
     (leader transfer). The recipient starts an election without
@@ -969,8 +974,16 @@ immediately starts a real election (skipping pre-vote) without waiting
 for the election timeout.
 (See Ongaro dissertation §3.10.)
 
-Nodes in handshake or not yet in the raft log are excluded as
-transfer targets.
+When `CLUSTER FORGET` targets the leader, the `NODE_FORGET` proposal is
+kept pending and the leader is asked to transfer leadership
+(`TRANSFER_LEADER`). Since the target skips pre-vote, the leader only
+sends `TIMEOUT_NOW` once the target's `match_index` has reached the
+leader's last log index. If that doesn't happen within the node timeout,
+the transfer is abandoned and the leader stays leader. The pending
+`NODE_FORGET` is resent to the new leader, or times out.
+
+Nodes in handshake, learners and nodes not yet in the raft log are
+excluded as transfer targets.
 
 ## Future Work
 
@@ -980,7 +993,6 @@ transfer targets.
   per-node availability-zone info to add/remove voters so that voters
   are spread across at least 3 zones, letting the cluster survive a
   single zone outage.
-- Leader transfer on CLUSTER FORGET where the target is the leader.
 - Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either

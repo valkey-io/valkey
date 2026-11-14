@@ -3781,10 +3781,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
     }
 
-    if (rdb_loading_ctx->dbarray[0] == NULL) {
-        rdb_loading_ctx->dbarray[0] = createDatabase(0);
-    }
-    serverDb *db = rdb_loading_ctx->dbarray[0];
+    serverDb *db = createDatabaseInArrayIfNeeded(rdb_loading_ctx->dbarray, 0);
 
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
@@ -3890,10 +3887,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                           SERVER_TITLE, server.dbnum);
                 exit(1);
             }
-            if (rdb_loading_ctx->dbarray[dbid] == NULL) {
-                rdb_loading_ctx->dbarray[dbid] = createDatabase(dbid);
-            }
-            db = rdb_loading_ctx->dbarray[dbid];
+            db = createDatabaseInArrayIfNeeded(rdb_loading_ctx->dbarray, dbid);
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently

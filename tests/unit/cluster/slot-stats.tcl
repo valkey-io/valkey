@@ -765,6 +765,120 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
 }
 
 # -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS key-count with multiple databases.
+# key-count is the sum over all databases.
+# -----------------------------------------------------------------------------
+
+proc slot_key_count {slot} {
+    set slot_stats [convert_array_into_dict [R 0 CLUSTER SLOT-STATS SLOTSRANGE $slot $slot]]
+    return [dict get [dict get $slot_stats $slot] key-count]
+}
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-databases 16 cluster-slot-stats-enabled yes}} {
+
+    set key "FOO"
+    set key_slot [R 0 cluster keyslot $key]
+
+    test "CLUSTER SLOT-STATS key-count sums keys over databases" {
+        R 0 SELECT 0
+        R 0 SET $key v0
+        assert_equal 1 [slot_key_count $key_slot]
+
+        R 0 SELECT 5
+        R 0 SET $key v5
+        R 0 SET "{$key}2" v5
+        assert_equal 2 [R 0 CLUSTER COUNTKEYSINSLOT $key_slot]
+        assert_equal 3 [slot_key_count $key_slot]
+    }
+
+    test "CLUSTER SLOT-STATS ORDERBY key-count sums keys over databases" {
+        set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT 1 DESC]
+        assert_equal $key_slot [lindex [lindex $slot_stats 0] 0]
+        assert_equal 3 [dict get [lindex [lindex $slot_stats 0] 1] key-count]
+    }
+
+    test "CLUSTER SLOT-STATS key-count with a database created out of id order" {
+        # Database 3 is created after database 5.
+        R 0 SELECT 3
+        R 0 SET $key v3
+        assert_equal 1 [R 0 CLUSTER COUNTKEYSINSLOT $key_slot]
+        assert_equal 4 [slot_key_count $key_slot]
+    }
+
+    test "CLUSTER SLOT-STATS ORDERBY non key-count metric sums keys over databases" {
+        set slot_stats [convert_array_into_dict [R 0 CLUSTER SLOT-STATS ORDERBY cpu-usec LIMIT 16384]]
+        assert_equal 4 [dict get [dict get $slot_stats $key_slot] key-count]
+    }
+
+    test "CLUSTER SLOT-STATS key-count after DEBUG RELOAD" {
+        R 0 DEBUG RELOAD
+        assert_equal 4 [slot_key_count $key_slot]
+    }
+
+    test "CLUSTER SLOT-STATS key-count after FLUSHALL" {
+        R 0 FLUSHALL
+        assert_equal 0 [slot_key_count $key_slot]
+    }
+}
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-databases 16}} {
+
+    set key "FOO"
+    set key_slot [R 0 cluster keyslot $key]
+
+    test "CLUSTER SLOT-STATS key-count after loading a database from RDB on startup" {
+        R 0 SELECT 7
+        R 0 SET $key v7
+        R 0 SET "{$key}2" v7
+        R 0 SAVE
+        restart_server 0 true false
+
+        # Database 7 is created by the RDB load. Query it before any SELECT.
+        assert_equal 2 [slot_key_count $key_slot]
+        assert_equal 2 [dict get [lindex [lindex [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT 1 DESC] 0] 1] key-count]
+        R 0 SELECT 7
+        assert_equal 2 [R 0 CLUSTER COUNTKEYSINSLOT $key_slot]
+    }
+}
+
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-databases 16}} {
+
+    set key "FOO"
+    set key_slot [R 0 cluster keyslot $key]
+
+    test "CLUSTER SLOT-STATS key-count on replica after diskless load with swapdb" {
+        set primary [srv 0 client]
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        R 1 config set repl-diskless-load swapdb
+
+        # Drop the replication link while the replica is paused, so database 9
+        # reaches the replica only through the full sync RDB, which is loaded
+        # into a temp database and swapped into the main one.
+        set replica_pid [srv -1 pid]
+        pause_process $replica_pid
+        $primary client kill type replica
+        $primary SELECT 9
+        $primary SET $key v9
+        $primary SET "{$key}2" v9
+        $primary SET "{$key}3" v9
+        $primary debug change-repl-id
+        set loglines [count_log_lines -1]
+        resume_process $replica_pid
+
+        wait_for_log_messages -1 {"*Swapping active DB with loaded DB*"} $loglines 1000 50
+        wait_for_condition 1000 50 {
+            [s -1 master_link_status] eq "up"
+        } else {
+            fail "Replica did not complete the full sync"
+        }
+
+        set slot_stats [convert_array_into_dict [R 1 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]]
+        assert_equal 3 [dict get [dict get $slot_stats $key_slot] key-count]
+    }
+}
+
+# -----------------------------------------------------------------------------
 # Test cases for CLUSTER SLOT-STATS SLOTSRANGE sub-argument.
 # -----------------------------------------------------------------------------
 

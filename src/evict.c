@@ -498,9 +498,7 @@ int performEvictions(void) {
                 /* We don't want to make local-db choices when expiring keys,
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
-                for (i = 0; i < server.dbnum; i++) {
-                    db = server.db[i];
-                    if (db == NULL) continue;
+                forEachCreatedDb(db) {
                     kvstore *kvs;
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
                         kvs = db->keys;
@@ -564,12 +562,11 @@ int performEvictions(void) {
         else if (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
                  server.maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM) {
             /* When evicting a random key, we try to evict a key for
-             * each DB, so we use the static 'next_db' variable to
-             * incrementally visit all DBs. */
-            for (i = 0; i < server.dbnum; i++) {
-                j = (++next_db) % server.dbnum;
+             * each DB, so we use the static 'next_db' variable, an index
+             * into server.created_db_ids, to incrementally visit all DBs. */
+            for (i = 0; i < server.created_db_count; i++) {
+                j = server.created_db_ids[(++next_db) % server.created_db_count];
                 db = server.db[j];
-                if (db == NULL) continue;
                 kvstore *kvs;
                 if (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) {
                     kvs = db->keys;

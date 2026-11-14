@@ -1662,16 +1662,15 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Show some info about non-empty databases */
     if (server.verbosity <= LL_VERBOSE) {
         run_with_period(5000) {
-            for (j = 0; j < server.dbnum; j++) {
-                serverDb *db = server.db[j];
-                if (db == NULL) continue;
+            serverDb *db;
+            forEachCreatedDb(db) {
                 long long size, used, vkeys;
 
-                size = kvstoreBuckets(server.db[j]->keys) * hashtableEntriesPerBucket();
-                used = kvstoreSize(server.db[j]->keys);
-                vkeys = kvstoreSize(server.db[j]->expires);
+                size = kvstoreBuckets(db->keys) * hashtableEntriesPerBucket();
+                used = kvstoreSize(db->keys);
+                vkeys = kvstoreSize(db->expires);
                 if (used || vkeys) {
-                    serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", j, used, vkeys, size);
+                    serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", db->id, used, vkeys, size);
                 }
             }
         }
@@ -3070,11 +3069,38 @@ serverDb *createDatabase(int id) {
     return db;
 }
 
+/* Adds id to server.created_db_ids. Databases are never freed while the
+ * server runs, so the list only grows. The list is sorted by id so that the
+ * order of loops over it (for example eviction sampling and defrag stages) is
+ * deterministic and does not depend on the order databases were created.
+ * Only createDatabaseIfNeeded() calls this; it is exported for unit tests. */
+void trackCreatedDatabase(int id) {
+    serverAssert(server.created_db_count < server.dbnum);
+    int pos = server.created_db_count;
+    while (pos > 0 && server.created_db_ids[pos - 1] > id) {
+        server.created_db_ids[pos] = server.created_db_ids[pos - 1];
+        pos--;
+    }
+    serverAssert(pos == 0 || server.created_db_ids[pos - 1] != id);
+    server.created_db_ids[pos] = id;
+    server.created_db_count++;
+}
+
 serverDb *createDatabaseIfNeeded(int id) {
     if (server.db[id] == NULL) {
         server.db[id] = createDatabase(id);
+        trackCreatedDatabase(id);
     }
     return server.db[id];
+}
+
+/* Like createDatabaseIfNeeded(), for code that fills either server.db or a
+ * temporary database array (for example RDB loading into a temp db). Only
+ * databases created in server.db are tracked. */
+serverDb *createDatabaseInArrayIfNeeded(serverDb **dbarray, int id) {
+    if (dbarray == server.db) return createDatabaseIfNeeded(id);
+    if (dbarray[id] == NULL) dbarray[id] = createDatabase(id);
+    return dbarray[id];
 }
 
 void initServer(void) {
@@ -3173,6 +3199,8 @@ void initServer(void) {
     }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
+    server.created_db_ids = zcalloc(sizeof(int) * server.dbnum);
+    server.created_db_count = 0;
 
     /* Set object metadata size before creating any database key objects */
     if (server.forkless_infrastructure_enabled) {

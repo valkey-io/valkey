@@ -398,7 +398,17 @@ void resizeReplicationBacklog(void) {
 }
 
 void freeReplicationBacklog(void) {
-    serverAssert(listLength(server.replicas) == 0);
+    /* Callers that may have replicas call disconnectReplicas() right before
+     * this, so only replicas whose free it deferred may be left. They stay
+     * attached until freed, and on a primary an attached replica needs a
+     * backlog, see VM_RdbLoad(). */
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        serverAssert(replica->flag.close_asap && replica->repl_data->ref_repl_buf_node == NULL);
+    }
     if (server.repl_backlog == NULL) return;
 
     /* Decrease the start buffer node reference count. */
@@ -3998,6 +4008,9 @@ void dualChannelSyncSuccess(void) {
     replicationResurrectProvisionalPrimary();
     /* Finalize full sync duration here to exclude backlog draining/streaming time to be consistent with single channel. */
     captureReplFullSyncCompleteDuration();
+    /* A sub-replica whose free was deferred may still be attached, and
+     * proxying the buffer below to attached replicas needs a backlog. */
+    if (listLength(server.replicas) && server.repl_backlog == NULL) createReplicationBacklog();
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
     if (server.pending_repl_data.blocks && streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */

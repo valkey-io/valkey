@@ -1763,6 +1763,9 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
             close(slot_migration_pipe_write);
             close(server.slot_migration_pipe_read);
             close(server.slot_migration_child_exit_pipe);
+            close(safe_to_exit_pipe);
+            server.slot_migration_pipe_read = -1;
+            server.slot_migration_child_exit_pipe = -1;
             server.slot_migration_pipe_conn = NULL;
             return C_ERR;
         }

@@ -93,7 +93,7 @@ typedef void (*bgIteratorCleanupFunc)(bool terminated, void *privdata);
  *
  * This method creates and initializes the bgIterator.  It does not perform any thread management.
  * It is expected that the main Valkey thread will call this method, and then start a new thread to
- * to implement the iteration client which will read from the returned bgIterator.
+ * implement the iteration client which will read from the returned bgIterator.
  *
  * There is no need to delete/destroy a bgIterator.  It will automatically be cleaned up after the
  * last item is read. */
@@ -118,7 +118,7 @@ bgIterator *bgIteratorCreateFullScanIter(
  *
  * This method creates and initializes the bgIterator.  It does not perform any thread management.
  * It is expected that the main Valkey thread will call this method, and then start a new thread to
- * to implement the iteration client which will read from the returned bgIterator.
+ * implement the iteration client which will read from the returned bgIterator.
  *
  * The caller of this function has the ownership of the `slots` array's memory. This function will
  * just copy its data and leave the array untouched.

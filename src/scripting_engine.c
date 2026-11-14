@@ -638,7 +638,7 @@ void scriptingEngineDebuggerFlushLogs(void) {
  * to continue, or when fork returned an error).
  *
  * The caller should call scriptingEngineDebuggerEndSession() only if
- * scriptDebugStartSession() returned 1. */
+ * scriptingEngineDebuggerStartSession() returned 1. */
 int scriptingEngineDebuggerStartSession(client *c) {
     ds.forked = !c->flag.lua_debug_sync;
     if (ds.forked) {

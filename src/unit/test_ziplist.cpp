@@ -730,7 +730,7 @@ TEST_F(ZiplistTest, DISABLED_ziplistStressWithRandomPayloadsOfDifferentEncoding)
 
 TEST_F(ZiplistTest, ziplistCascadeUpdateEdgeCases) {
     unsigned char *zl;
-    /* Inserting a entry with data length greater than ZIP_BIG_PREVLEN-4
+    /* Inserting an entry with data length greater than ZIP_BIG_PREVLEN-4
      * will leads to cascade update. */
     size_t s1 = ZIP_BIG_PREVLEN - 4, s2 = ZIP_BIG_PREVLEN - 3;
     zl = ziplistNew();

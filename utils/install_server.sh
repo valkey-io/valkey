@@ -274,7 +274,7 @@ echo "Copied $TMP_FILE => $INIT_SCRIPT_DEST"
 #Install the service
 echo "Installing service..."
 if command -v chkconfig >/dev/null 2>&1; then
-	# we're chkconfig, so lets add to chkconfig and put in runlevel 345
+	# we're chkconfig, so let's add to chkconfig and put in runlevel 345
 	chkconfig --add valkey_${SERVER_PORT} && echo "Successfully added to chkconfig!"
 	chkconfig --level 345 valkey_${SERVER_PORT} on && echo "Successfully added to runlevels 345!"
 elif command -v update-rc.d >/dev/null 2>&1; then

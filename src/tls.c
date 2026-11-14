@@ -1644,7 +1644,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
                           ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ)));
 
         /* Normally we execute the readable event first, and the writable
-         * event laster. This is useful as sometimes we may be able
+         * event later. This is useful as sometimes we may be able
          * to serve the reply of a query immediately after processing the
          * query.
          *
@@ -1652,7 +1652,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
          * asking us to do the reverse: never fire the writable event
          * after the readable. In such a case, we invert the calls.
          * This is useful when, for instance, we want to do things
-         * in the beforeSleep() hook, like fsynching a file to disk,
+         * in the beforeSleep() hook, like fsyncing a file to disk,
          * before replying to a client. */
         int invert = conn->c.flags & CONN_FLAG_WRITE_BARRIER;
 

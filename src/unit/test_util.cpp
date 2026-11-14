@@ -288,7 +288,7 @@ TEST_F(UtilTest, TestVersion2num) {
 }
 
 #if defined(__linux__)
-/* Since fadvise and mincore is only supported in specific platforms like
+/* Since fadvise and mincore are only supported in specific platforms like
  * Linux, we only verify the fadvise mechanism works in Linux */
 static int cache_exist(int fd) {
     unsigned char flag;

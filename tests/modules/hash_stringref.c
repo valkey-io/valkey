@@ -43,7 +43,7 @@ void freeBufferList(void) {
  *
  * Parameters:
  * 1. The hash entry key.
- * 2. The hahs entry field.
+ * 2. The hash entry field.
  */
 int hashHasStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
@@ -60,7 +60,7 @@ int hashHasStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
  * Sets hash entry value of a given key and field to an external owned buffer.
  * Parameters:
  * 1. The hash entry key.
- * 2. The hahs entry field.
+ * 2. The hash entry field.
  * 3. The buffer to share with the core.
  */
 int hashSetStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {

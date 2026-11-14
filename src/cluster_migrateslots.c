@@ -1374,10 +1374,17 @@ void clusterCommandCancelSlotMigrations(client *c) {
     }
     sds client_info = catClientInfoShortString(sdsempty(), c,
                                                server.hide_user_data_from_log);
-    serverLog(LL_NOTICE,
-              "Canceled in progress slot migrations, except %d that already "
-              "granted failover (user request from '%s')",
-              kept, client_info);
+    if (kept) {
+        serverLog(LL_NOTICE,
+                  "Canceled in progress slot migrations, except %d that "
+                  "already granted failover (user request from '%s')",
+                  kept, client_info);
+    } else {
+        serverLog(LL_NOTICE,
+                  "Canceled all in progress slot migrations (user request from "
+                  "'%s')",
+                  client_info);
+    }
     sdsfree(client_info);
     addReply(c, shared.ok);
     return;

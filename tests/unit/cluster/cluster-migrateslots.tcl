@@ -1560,7 +1560,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         wait_for_migration_field 0 $jobname state failover-granted
 
         # Only the granted export survives the cancel, and writes stay paused
-        catch {R 0 CLUSTER CANCELSLOTMIGRATIONS}
+        assert_equal "OK" [R 0 CLUSTER CANCELSLOTMIGRATIONS]
         assert_equal "cancelled" [dict get [get_migration_by_name 0 $other_jobname] state]
         assert_equal "failover-granted" [dict get [get_migration_by_name 0 $jobname] state]
         assert_equal "slot_migration_in_progress" [s -0 paused_reason]

@@ -25,14 +25,13 @@ start_cluster 3 3 [list tags $tags overrides [concat $overrides {appendonly yes}
 start_cluster 3 3 [list tags $tags overrides $overrides] {
     test "Granted export: CLUSTER CANCELSLOTMIGRATIONS on the source does not unpause it" {
         # CANCELSLOTMIGRATIONS is not a write command, so the pause doesn't
-        # hold it. Its reply is not checked: it may report the granted export
-        # as not cancellable, but it must not unpause the source. The logs
+        # hold it. It replies OK and must not unpause the source. The logs
         # must say the export was not cancelled, and its status message must
         # be kept.
         granted_export_check_trigger {
             set cancel_loglines [count_log_lines 0]
             set msg_before [dict get [granted_export_get_job 0] message]
-            catch {R 0 CLUSTER CANCELSLOTMIGRATIONS}
+            assert_equal "OK" [R 0 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_log_messages 0 {"*not cancelling (user request) because failover*"} \
                 $cancel_loglines 100 100
             wait_for_log_messages 0 {"*Canceled in progress slot migrations, except 1 that*"} \

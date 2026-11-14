@@ -490,6 +490,55 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+    # EXEC expedites the keys it expects the queued commands to write, but it cannot foresee a
+    # database remapped by a queued SWAPDB or by a script.  Lists are used because they are never
+    # cloned, so the writer has to wait.
+    test "forkless save survives MULTI writes to keys EXEC could not foresee" {
+        r config set forkless-policy prefer-forkless
+        r select 0
+        r debug populate 1000
+        r rpush L0 x
+        r select 2
+        r rpush L1 a
+        r select 3
+        r rpush L2 a
+        r select 0
+
+        r config set rdb-key-save-delay 10000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        r multi
+        r swapdb 1 2
+        r copy L0 L1 db 1 replace
+        assert_equal {OK 1} [r exec]
+
+        r multi
+        r eval {server.call('swapdb', 0, 3)} 0
+        r rpush L2 b
+        assert_equal {{} 2} [r exec]
+
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+
+        # The snapshot holds every key as it was when the save started.
+        assert_equal OK [r debug reload nosave]
+        r select 0
+        assert_equal {x} [r lrange L0 0 -1]
+        r select 1
+        assert_equal 0 [r dbsize]
+        r select 2
+        assert_equal {a} [r lrange L1 0 -1]
+        r select 3
+        assert_equal {a} [r lrange L2 0 -1]
+    } {} {needs:debug}
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         
         # Populate database with complex dataset

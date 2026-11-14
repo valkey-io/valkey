@@ -7,6 +7,23 @@ tags {tls:skip external:skip cluster singledb} {
 
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
 start_multiple_servers 3 [list overrides $base_conf] {
+    test {Reject an invalid --cluster-replicas value} {
+        # A negative count used to reach a division by (replicas + 1), so -1
+        # killed valkey-cli with SIGFPE. The nodes stay empty for the tests below.
+        foreach replicas {-1 -2 abc 1x} {
+            catch {exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                            127.0.0.1:[srv 0 port] \
+                            --cluster-replicas $replicas} err
+            assert_match "*Invalid --cluster-replicas value*" $err
+        }
+        # With more replicas per primary than nodes there would be no primary
+        # at all; --cluster-yes must not go ahead and configure the node.
+        catch {exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        --cluster-replicas 1} err
+        assert_match "*Requested more replicas than nodes available*" $err
+    }
+
     test {Create 1 node cluster} {
         exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
                             127.0.0.1:[srv 0 port]

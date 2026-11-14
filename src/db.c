@@ -2130,6 +2130,30 @@ int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields
     return n_fields;
 }
 
+/* Propagate a HSET for hash fields that were expired but not yet reclaimed, and were
+ * overwritten while keeping their TTL (e.g. HSETEX KEEPTTL). Replicas and AOF loading
+ * never treat a field as expired, so they would keep the stale TTL. HSET clears it.
+ * HDEL is not used because it deletes the key, and with it the key TTL, when it
+ * removes the last field.
+ *
+ * 'fields_values' holds 'n_fields' field/value pairs. The caller keeps ownership. */
+void propagateExpiredFieldsOverwrite(serverDb *db, robj *key, size_t n_fields, robj *fields_values[], int slot) {
+    int prev_replication_allowed = server.replication_allowed;
+    server.replication_allowed = 1;
+
+    int argc = 0;
+    robj **argv = zmalloc(sizeof(robj *) * (n_fields * 2 + 2)); /* HSET + key + field/value pairs */
+    argv[argc++] = shared.hset;
+    argv[argc++] = key;
+    for (size_t i = 0; i < n_fields * 2; i++) {
+        argv[argc++] = fields_values[i];
+    }
+
+    alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL, slot);
+    server.replication_allowed = prev_replication_allowed;
+    zfree(argv);
+}
+
 /* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
  *
  * This routine:

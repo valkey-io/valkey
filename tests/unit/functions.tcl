@@ -695,6 +695,15 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*attempted to access nonexistent global variable 'acl_check_cmd'*}
 
+    test {LIBRARIES - redis.log from function load} {
+        r function load replace {#!lua name=lib2
+            redis.log(redis.LOG_WARNING, 'log from function load')
+            redis.register_function('log_at_load', function() return 1 end)
+        }
+        assert_equal 1 [r fcall log_at_load 0]
+        r function delete lib2
+    }
+
     test {LIBRARIES - malicious access test} {
         # the 'library' API is not exposed inside a
         # function context and the 'redis' API is not
@@ -802,6 +811,20 @@ start_server {tags {"scripting"}} {
         }
         r function list
     } {{library_name lib engine LUA functions {{name f1 description {some desc} flags {}}}}}
+
+    test {LIBRARIES - deleting a function frees its long description} {
+        r function flush
+        set before [s used_memory]
+        r function load {#!lua name=lib
+            server.register_function{
+                function_name='f1',
+                callback=function() return 1 end,
+                description=('x'):rep(10000000)
+            }
+        }
+        r function delete lib
+        assert_lessthan [expr {[s used_memory] - $before}] 1000000
+    }
 
     test {LIBRARIES - named arguments, bad function name} {
         catch {

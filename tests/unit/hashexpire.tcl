@@ -1617,7 +1617,7 @@ start_server {tags {"hashexpire"}} {
             r HEXPIRE myhash{t} 200 FIELDS 1 f1
 
             # Verify initial TTL state
-            set mem_before [r MEMORY USAGE myhash{t}]
+            set mem_before [memory_usage myhash{t}]
             assert_equal "v1 v2" [r HMGET myhash{t} f1 f2]
             assert_morethan [r HTTL myhash{t} FIELDS 1 f1] 100
             assert_equal -1 [r HTTL myhash{t} FIELDS 1 f2]
@@ -1636,7 +1636,7 @@ start_server {tags {"hashexpire"}} {
             }
 
             # Verify field values and TTLs are preserved
-            set memory_after [r MEMORY USAGE $newhash]
+            set memory_after [memory_usage $newhash]
             assert_equal "v1 v2" [r HMGET $newhash f1 f2]
             assert_morethan [r HTTL $newhash FIELDS 1 f1] 100
             assert_equal -1 [r HTTL $newhash FIELDS 1 f2]
@@ -1644,6 +1644,7 @@ start_server {tags {"hashexpire"}} {
             if {$cmd eq "RESTORE"} {
                 assert_equal 2 [get_keys r]
                 assert_equal 2 [get_keys_with_volatile_items r]
+                assert_equal [r OBJECT ENCODING myhash{t}] [r OBJECT ENCODING $newhash]
             } else {
                 assert_equal 1 [get_keys r]
                 assert_equal 1 [get_keys_with_volatile_items r]
@@ -1665,7 +1666,10 @@ start_server {tags {"hashexpire"}} {
         r copy myhash{t} nwhash{t}
 
         # Verify initial TTL state
-        assert_equal [r MEMORY USAGE myhash{t}] [r MEMORY USAGE nwhash{t}]
+        # memory_usage skips the strict check under libc malloc, where MEMORY
+        # USAGE of the copy can differ by an allocator chunk.
+        assert_equal [r OBJECT ENCODING myhash{t}] [r OBJECT ENCODING nwhash{t}]
+        assert_equal [memory_usage myhash{t}] [memory_usage nwhash{t}]
         assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
         assert_equal "v1 v3 v4" [r HMGET nwhash{t} f1 f3 f4]
         assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f1] [r HEXPIRETIME nwhash{t} FIELDS 1 f1] 
@@ -1731,6 +1735,35 @@ start_server {tags {"hashexpire"}} {
             }
         }
         # Re-enable active expiry
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test {MEMORY USAGE counts expired but unreaped hash fields} {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        # One small live field and 99 large fields that expire right away.
+        # With active expiry off nothing is reclaimed, so the large fields
+        # still occupy memory. If the size estimate sampled only live fields
+        # it would extrapolate the small one across the whole table and
+        # report a few hundred bytes for a ~100KB hash.
+        r del memusagehfe
+        r hset memusagehfe live v
+        set value [string repeat x 1000]
+        for {set i 1} {$i <= 99} {incr i} {
+            r hset memusagehfe f$i $value
+        }
+        assert_encoding hashtable memusagehfe
+        set fields {}
+        for {set i 1} {$i <= 99} {incr i} {
+            lappend fields f$i
+        }
+        assert_equal 99 [llength [r hpexpire memusagehfe 1 fields 99 {*}$fields]]
+        after 5
+        assert_equal 100 [r hlen memusagehfe]
+        assert_equal {} [r hget memusagehfe f1]
+
+        assert_morethan [r memory usage memusagehfe samples 0] 99000
+
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
 

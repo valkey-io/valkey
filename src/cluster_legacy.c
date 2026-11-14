@@ -1016,6 +1016,9 @@ int clusterLoadConfig(char *filename) {
                 sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
+            /* The return value of clusterAddSlot is ignored here, which is fine
+             * because a well-formed nodes.conf has no slot conflicts; any stray
+             * ownership from a bad config is eventually corrected by gossip. */
             while (start <= stop) clusterAddSlot(n, start++);
         }
 
@@ -4231,8 +4234,14 @@ int clusterProcessPacket(clusterLink *link) {
             if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
                 if (sender_last_reported_as_replica) {
-                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                              humanNodename(sender), sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                    serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a primary in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
+                    clusterSetNodeAsPrimary(sender);
+                } else if (!sender_last_reported_as_primary) {
+                    /* `sender` has no role locally yet (e.g. created with noflags
+                     * from nodes.conf). Adopt the advertised primary role. */
+                    serverLog(LL_NOTICE, "Node %.40s (%s) had no role and now announces as a primary in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
                     clusterSetNodeAsPrimary(sender);
                 }
             } else {
@@ -4240,8 +4249,8 @@ int clusterProcessPacket(clusterLink *link) {
                 clusterNode *sender_claimed_primary = clusterLookupNode(msg->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_last_reported_as_primary) {
-                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                              humanNodename(sender), sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                    serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a replica in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
 
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
@@ -4311,6 +4320,24 @@ int clusterProcessPacket(clusterLink *link) {
 
                     /* Update config and state. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+                } else if (!sender_last_reported_as_replica) {
+                    /* `sender` has no role locally yet (e.g. created with noflags
+                     * from nodes.conf). Adopt the advertised replica role. */
+                    serverLog(LL_NOTICE, "Node %.40s (%s) had no role and now announces as a replica in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
+                    /* A replica must never own slots, so any residual ownership is
+                     * an abnormal leftover and should be cleared so the replica does
+                     * not keep slots it never serves. */
+                    int slots = clusterDelNodeSlots(sender);
+                    if (slots) {
+                        serverLog(LL_NOTICE,
+                                  "Node %.40s (%s) became a replica in shard %.40s, removed %d slot(s) it owned",
+                                  sender->name, humanNodename(sender), sender->shard_id, slots);
+                    }
+                    serverAssert(sender->numslots == 0);
+                    sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
+                    sender->flags |= CLUSTER_NODE_REPLICA;
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 }
 
                 /* Primary node changed for this replica? */
@@ -6320,6 +6347,18 @@ void clusterCron(void) {
             ping_delay > server.cluster_node_timeout / 2 &&
             /* and in such interval we are not seeing any traffic at all. */
             data_delay > server.cluster_node_timeout / 2) {
+            /* Disconnect the link, it will be reconnected automatically. */
+            freeClusterLink(node->link);
+        }
+
+        /* In some situations the check above cannot disconnect the link,
+         * because data_received keeps being refreshed by the peer's own PINGs
+         * even though our PING was lost. If our PING stays outstanding for a
+         * full node timeout without a PONG, force a reconnect so a fresh PING
+         * is sent and the stale state clears. */
+        if (node->link &&
+            now - node->link->ctime > server.cluster_node_timeout &&
+            node->ping_sent && ping_delay > server.cluster_node_timeout) {
             /* Disconnect the link, it will be reconnected automatically. */
             freeClusterLink(node->link);
         }

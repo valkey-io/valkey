@@ -1242,6 +1242,21 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Import cancelled while target writes are paused" {
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        R 0 CLIENT PAUSE 100000 WRITE
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
+        wait_for_migration_field 0 $jobname state failed
+        assert_equal "PONG" [R 0 PING]
+
+        R 0 CLIENT UNPAUSE
+        set_debug_prevent_pause 0
+    }
+
     test "OOM on target aborts migration" {
         assert_does_not_resync {
             # Load some data before the snapshot
@@ -1530,6 +1545,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_error "*ERR CLUSTER SYNCSLOTS PAUSED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS PAUSED}
             assert_error "*ERR CLUSTER SYNCSLOTS FAILOVER-GRANTED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED}
             assert_error "*ERR CLUSTER SYNCSLOTS ACK should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS ACK}
+            assert_error "*ERR CLUSTER SYNCSLOTS FINISH should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FINISH STATE failed NAME $fake_jobname}
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS UNKNOWN}
 
             assert_causes_conn_drop 0 {
@@ -1544,6 +1560,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_causes_conn_drop 0 {
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
+            }
+        }
+    }
+
+    test "CLUSTER SYNCSLOTS ESTABLISH rejects a repeated establish on the same connection" {
+        assert_does_not_resync {
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 10923 10923
             }
         }
     }

@@ -145,6 +145,27 @@ proc wait_for_cluster_size {cluster_size} {
     }
 }
 
+# CLUSTER INFO cluster_size is the Raft voter count, not cluster_known_nodes.
+# Target is 5 (RAFT_TARGET_VOTERS in src/cluster_raft.c).
+proc raft_cluster_size_consistent {size} {
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {![process_is_alive [srv -$j pid]]} continue
+        if {[process_is_paused [srv -$j pid]]} continue
+        if {[CI $j cluster_size] != $size} {
+            return 0
+        }
+    }
+    return 1
+}
+
+proc wait_for_raft_cluster_size {size} {
+    wait_for_condition 1000 50 {
+        [raft_cluster_size_consistent $size] eq 1
+    } else {
+        fail "raft cluster_size did not reach $size"
+    }
+}
+
 # Check that cluster nodes agree about "state", or raise an error.
 proc wait_for_cluster_state {state} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -249,8 +270,13 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
         }
     }
 
-    # Learners are promoted to voters automatically by the leader's
-    # auto-promotion controller (RAFT_TARGET_VOTERS).
+    # Raft: wait for auto-promotion to min(n, 5) voters (RAFT_TARGET_VOTERS).
+    if {[lindex [R 0 CONFIG GET cluster-protocol] 1] eq "raft"} {
+        set voters $node_count
+        if {$voters > 5} {set voters 5}
+        wait_for_raft_cluster_size $voters
+    }
+
     $slot_allocator $masters $replicas
 
     wait_for_cluster_propagation

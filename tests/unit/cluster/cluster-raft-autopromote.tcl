@@ -90,26 +90,14 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft c
     test "Raft autopromote: 1 voter + 4 learners converge to 5 voters" {
         raft_meet_peers 5
         # No manual ADDVOTER — the controller must promote all four learners.
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5 &&
-            [CI 1 cluster_size] == 5 &&
-            [CI 4 cluster_size] == 5
-        } else {
-            fail "Sizes: [CI 0 cluster_size] [CI 1 cluster_size] [CI 4 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
     }
 }
 
 start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: fewer than target nodes converge without hanging" {
         raft_meet_peers 3
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 3 &&
-            [CI 1 cluster_size] == 3 &&
-            [CI 2 cluster_size] == 3
-        } else {
-            fail "Sizes: [CI 0 cluster_size] [CI 1 cluster_size] [CI 2 cluster_size]"
-        }
+        wait_for_raft_cluster_size 3
     }
 }
 
@@ -117,11 +105,7 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft c
     test "Raft autopromote: stops at exactly the target number of voters" {
         set r0 [srv 0 client]
         raft_meet_peers 5
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
         # Give the controller a chance to overshoot; it must not.
         after 2000
         assert_equal 5 [CI 0 cluster_size]
@@ -132,20 +116,12 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft c
 start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: manual ADDVOTER above target is not demoted" {
         set peer_ids [raft_meet_peers 6]
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
         # Promote the remaining learner by hand, pushing size to 6.
         set remaining [raft_find_learner 0 $peer_ids]
         assert {$remaining ne ""}
         raft_add_voter 0 $remaining
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 6
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 6
         # The one-way controller must not demote it back to 5.
         after 2000
         assert_equal 6 [CI 0 cluster_size]
@@ -156,11 +132,7 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft c
     test "Raft autopromote: DELVOTER below target is applied, then the learner is promoted" {
         set r0 [srv 0 client]
         set peer_ids [raft_meet_peers 5]
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
         set target [raft_find_voter 0 $peer_ids]
         assert {$target ne ""}
         assert_equal OK [$r0 CLUSTER DELVOTER $target]
@@ -177,39 +149,23 @@ start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft c
     test "Raft autopromote: DELVOTER at/above target is allowed" {
         set r0 [srv 0 client]
         set peer_ids [raft_meet_peers 6]
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
         set remaining [raft_find_learner 0 $peer_ids]
         assert {$remaining ne ""}
         raft_add_voter 0 $remaining
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 6
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 6
         # Now demoting a non-leader voter (6 -> 5) is allowed.
         set target [raft_find_voter 0 $peer_ids $remaining]
         assert {$target ne ""}
         $r0 CLUSTER DELVOTER $target
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
     }
 }
 
 start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: paused voter does not cause promotion beyond target" {
         set peer_ids [raft_meet_peers 6]
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
         set remaining [raft_find_learner 0 $peer_ids]
         assert {$remaining ne ""}
         # Pause a non-leader voter. The controller must not promote the 6th
@@ -280,11 +236,7 @@ start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-
 start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 15000}} {
     test "Raft autopromote: at most one distinct membership transition in flight" {
         raft_meet_peers 3
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 3
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 3
 
         # Pause both follower voters so the leader can append but not commit a
         # membership transition (quorum = 2 of 3). node-timeout is large enough
@@ -330,11 +282,7 @@ start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft c
 start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 15000}} {
     test "Raft autopromote: second DELVOTER waits on the in-flight entry" {
         raft_meet_peers 3
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 3
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 3
 
         set id [R 1 CLUSTER MYID]
         pause_process [srv -1 pid]
@@ -359,11 +307,7 @@ start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft c
 start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 500}} {
     test "Raft autopromote: leader change preserves the voter set and ADDVOTER works" {
         set peer_ids [raft_meet_peers 6]
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
         set remaining [raft_find_learner 0 $peer_ids]
         assert {$remaining ne ""}
 
@@ -393,11 +337,7 @@ start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft c
         # The new leader must still promote the remaining learner.
         raft_add_voter $new_leader_idx $remaining
         resume_process [srv 0 pid]
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 6 && [CI 1 cluster_size] == 6
-        } else {
-            fail "Sizes after leader change: [CI 0 cluster_size] [CI 1 cluster_size]"
-        }
+        wait_for_raft_cluster_size 6
     }
 }
 
@@ -405,11 +345,7 @@ start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft c
     test "Raft autopromote: forgetting a voter promotes another learner" {
         set r0 [srv 0 client]
         set peer_ids [raft_meet_peers 6]
-        wait_for_condition 200 100 {
-            [CI 0 cluster_size] == 5
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
         set learner [raft_find_learner 0 $peer_ids]
         set target [raft_find_voter 0 $peer_ids]
         assert {$learner ne "" && $target ne ""}
@@ -434,11 +370,7 @@ start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft c
     test "Raft autopromote: FORGET can shrink the voter set to one node" {
         set r0 [srv 0 client]
         raft_meet_peers 3
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 3
-        } else {
-            fail "size=[CI 0 cluster_size]"
-        }
+        wait_for_raft_cluster_size 3
         # Pause each forgotten process so it cannot reconnect.
         assert_equal OK [$r0 CLUSTER FORGET [R 2 CLUSTER MYID]]
         pause_process [srv -2 pid]

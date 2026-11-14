@@ -269,6 +269,10 @@ void IOThreadsAfterSleep(int numevents) {
 
         pthread_mutex_lock(&io_threads_mutex[tid]);
         server.active_io_threads_num--;
+        if (server.active_io_threads_num == 1) {
+            memset(&server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME], 0,
+                   sizeof(server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME]));
+        }
         serverLog(LL_DEBUG, "IO threads decreased from %zu to %d", active, server.active_io_threads_num);
     }
 }
@@ -579,6 +583,11 @@ int updateIOThreads(const char **err) {
     /* Set active threads to 1, will be adjusted based on workload later. */
     for (int i = 1; i < server.active_io_threads_num; i++) {
         pthread_mutex_lock(&io_threads_mutex[i]);
+    }
+    if (server.active_io_threads_num > 1) {
+        /* Not sampled while workers run; a stale ring re-ignites on the next loop. */
+        memset(&server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME], 0,
+               sizeof(server.inst_metric[STATS_METRIC_MAIN_THREAD_ACTIVE_TIME]));
     }
     server.active_io_threads_num = 1;
 

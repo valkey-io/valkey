@@ -456,4 +456,20 @@ start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
     }
 }
 
+start_cluster 1 0 {} {
+    test "Flush slot from a module's OnLoad calls the unlink callback of its type" {
+        set testmodule [file normalize tests/modules/test_lazyfree.so]
+
+        # The test config enables keyspace events, which makes CLUSTER
+        # FLUSHSLOT visit every key whether or not a module needs it.
+        R 0 config set notify-keyspace-events ""
+
+        # The module creates a value of its type and flushes its slot from
+        # OnLoad, before it is registered.
+        assert_equal {OK} [R 0 MODULE LOAD $testmodule flushslot lazykey]
+        assert_equal 0 [R 0 exists lazykey]
+        assert_equal 1 [R 0 lazyfreelink.unlinkcount]
+    }
+}
+
 } ;# end tag

@@ -9473,6 +9473,45 @@ unsigned long moduleNotifyKeyspaceSubscribersCnt(void) {
     return listLength(moduleKeyspaceSubscribers);
 }
 
+/* Return 1 if some module needs to hear about every key when keys are dropped
+ * in bulk, e.g. when the keys of a slot are deleted: a listener for key server
+ * events, a keyspace subscriber for generic events, or a module data type with
+ * an unlink callback. */
+int moduleNeedsPerKeyDeleteEvents(void) {
+    listIter li;
+    listNode *ln;
+
+    listRewind(ValkeyModule_EventListeners, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModuleEventListener *el = ln->value;
+        if (el->event.id == VALKEYMODULE_EVENT_KEY) return 1;
+    }
+
+    listRewind(moduleKeyspaceSubscribers, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModuleKeyspaceSubscriber *sub = ln->value;
+        if (sub->event_mask & NOTIFY_GENERIC) return 1;
+    }
+
+    if (dictSize(modules) == 0) return 0;
+    int found = 0;
+    dictIterator *di = dictGetIterator(modules);
+    dictEntry *de;
+    while (!found && (de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+        listRewind(module->types, &li);
+        while ((ln = listNext(&li))) {
+            moduleType *mt = ln->value;
+            if (mt->unlink || mt->unlink2) {
+                found = 1;
+                break;
+            }
+        }
+    }
+    dictReleaseIterator(di);
+    return found;
+}
+
 /* Dispatcher for keyspace notifications to module subscriber functions.
  * This gets called  only if at least one module requested to be notified on
  * keyspace notifications */

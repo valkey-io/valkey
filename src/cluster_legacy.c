@@ -7544,6 +7544,48 @@ static void propagateFlushSlot(unsigned int hashslot, int lazy) {
     if (lazy) decrRefCount(argv[3]);
 }
 
+/* Keys of a slot whose table was detached by delKeysInSlot() can still matter
+ * to clients that WATCH them or are blocked on them. Find those through the
+ * (usually small) watched and blocking key dicts of the db instead of walking
+ * every key of the slot. */
+static void signalDetachedSlotKeys(serverDb *db, hashtable *keys, unsigned int hashslot) {
+    dict *dicts[2] = {db->watched_keys, db->blocking_keys_unblock_on_nokey};
+    for (int d = 0; d < 2; d++) {
+        if (dictSize(dicts[d]) == 0) continue;
+
+        /* Collect first: touchWatchedKey() unwatches the client's keys, which
+         * deletes entries from watched_keys while we would be iterating it. */
+        list *matched = listCreate();
+        dictIterator *di = dictGetIterator(dicts[d]);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            robj *key = dictGetKey(de);
+            sds k = objectGetVal(key);
+            if (keyHashSlot(k, sdslen(k)) != hashslot) continue;
+            incrRefCount(key);
+            listAddNodeTail(matched, key);
+        }
+        dictReleaseIterator(di);
+
+        listIter li;
+        listNode *ln;
+        listRewind(matched, &li);
+        while ((ln = listNext(&li))) {
+            robj *key = ln->value;
+            void *val;
+            if (hashtableFind(keys, objectGetVal(key), &val)) {
+                if (d == 0) {
+                    touchWatchedKey(db, key);
+                } else {
+                    signalDeletedKeyAsReady(db, key, ((robj *)val)->type);
+                }
+            }
+            decrRefCount(key);
+        }
+        listRelease(matched);
+    }
+}
+
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned.
  *
@@ -7595,6 +7637,15 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
         old_volatile[i] = kvstoreDetachHashtable(db->keys_with_volatile_items, hashslot);
     }
 
+    /* Walking every key is only needed when someone wants to hear about each
+     * one: a module, clients subscribed to keyspace events (CLUSTER FLUSHSLOT),
+     * client tracking, or per-key propagation. Otherwise the keys only matter
+     * to WATCH and blocked clients, which signalDetachedSlotKeys() handles
+     * without walking the slot. */
+    bool per_key = moduleNeedsPerKeyDeleteEvents() || server.tracking_clients ||
+                   (send_del_event && (server.notify_keyspace_events & NOTIFY_GENERIC)) ||
+                   (propagate_del && !propagate_as_flushslot);
+
     for (int i = 0; i < server.dbnum; i++) {
         serverDb *db = server.db[i];
         if (db == NULL) continue;
@@ -7603,6 +7654,14 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             if (old_expires[i]) hashtableRelease(old_expires[i]);
             if (old_volatile[i]) hashtableRelease(old_volatile[i]);
             continue;
+        }
+
+        if (!per_key) {
+            unsigned long count = hashtableSize(old_keys[i]);
+            signalDetachedSlotKeys(db, old_keys[i], hashslot);
+            j += count;
+            server.dirty += count;
+            goto release;
         }
 
         /* Fire the per-key notifications. The values remain owned by the
@@ -7640,6 +7699,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
         }
         hashtableCleanupIterator(&di);
 
+    release:
         /* Release the detached tables. The 'old_keys' table owns the values and
          * frees them through its entry destructor; the expires and volatile
          * items tables only hold references to the same objects. */

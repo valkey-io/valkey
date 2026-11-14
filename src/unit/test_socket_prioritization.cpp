@@ -125,12 +125,8 @@ class SocketPrioritizationTest : public ::testing::Test {
         server.logfile = strdup("");
         server.syslog_enabled = 0;
 
-        /* Initialize connection types registry ONCE */
-        static bool conn_types_initialized = false;
-        if (!conn_types_initialized) {
-            connTypeInitialize();
-            conn_types_initialized = true;
-        }
+        /* The registry is process-wide and may already be filled by another suite. */
+        if (!connectionByType(CONN_TYPE_SOCKET)) connTypeInitialize();
 
         server.el = aeCreateEventLoop(1024);
         if (server.el) {

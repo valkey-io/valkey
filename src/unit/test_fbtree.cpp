@@ -305,7 +305,7 @@ TEST_F(FbtreeTest, IteratorSmall) {
 
 TEST_F(FbtreeTest, IteratorFullLeaf) {
     const int count = NODE_SIZE + 1;
-    char buf[8];
+    char buf[32];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
         insert(buf);
@@ -326,7 +326,7 @@ TEST_F(FbtreeTest, IteratorFullLeaf) {
 
 TEST_F(FbtreeTest, IteratorReverseInsert) {
     const int count = NODE_SIZE + 1;
-    char buf[8];
+    char buf[32];
     for (int i = count - 1; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "k%02d", i);
         insert(buf);
@@ -369,7 +369,7 @@ TEST_F(FbtreeTest, IteratorResetInvalidates) {
 /* ========== Ordering Tests ========== */
 
 TEST_F(FbtreeTest, MultilevelReverseInsert) {
-    char buf[8];
+    char buf[32];
     for (int i = 95; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         insert(buf);
@@ -531,7 +531,7 @@ TEST_F(FbtreeTest, PrevSmall) {
 
 TEST_F(FbtreeTest, PrevFullLeaf) {
     const int count = NODE_SIZE + 1;
-    char buf[8];
+    char buf[32];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
         insert(buf);
@@ -729,7 +729,7 @@ TEST_F(FbtreeTest, IteratorExhaustedStaysInvalid) {
 
 TEST_F(FbtreeTest, MultilevelLookup) {
     const int count = NODE_SIZE + 1;
-    char buf[8];
+    char buf[32];
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
@@ -752,7 +752,7 @@ TEST_F(FbtreeTest, MultilevelLookup) {
 
 TEST_F(FbtreeTest, MultilevelForwardIteration) {
     const int count = NODE_SIZE * 7 / 2;
-    char buf[8];
+    char buf[32];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         insert(buf);
@@ -772,7 +772,7 @@ TEST_F(FbtreeTest, MultilevelForwardIteration) {
 
 TEST_F(FbtreeTest, MultilevelBackwardIteration) {
     const int count = NODE_SIZE * 7 / 2;
-    char buf[8];
+    char buf[32];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         insert(buf);
@@ -792,7 +792,7 @@ TEST_F(FbtreeTest, MultilevelBackwardIteration) {
 
 TEST_F(FbtreeTest, MultilevelMixedIteration) {
     const int total = NODE_SIZE * 7 / 2;
-    char buf[8];
+    char buf[32];
     for (int i = 0; i < total; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         insert(buf);
@@ -828,7 +828,7 @@ TEST_F(FbtreeTest, MultilevelMixedIteration) {
 }
 
 TEST_F(FbtreeTest, MultilevelCrossLeafIteration) {
-    char buf[8];
+    char buf[32];
     for (int i = 0; i < 200; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         insert(buf);
@@ -944,7 +944,7 @@ TEST_F(FbtreeTest, InnerSplitShuffled) {
 
 TEST_F(FbtreeTest, DeepTree4Levels) {
     const int count = NODE_SIZE * NODE_SIZE * NODE_SIZE + 10000;
-    char buf[16];
+    char buf[32];
     sds first_item = NULL, middle_item = NULL, last_item = NULL;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "deep_%06d", i);
@@ -1032,7 +1032,7 @@ TEST_F(FbtreeTest, DeepTreeMixedInsertPatterns) {
 /* ========== String Pattern Tests ========== */
 
 TEST_F(FbtreeTest, VariedStringPatterns) {
-    char buf[32];
+    char buf[48];
     sds *inserted = (sds *)zmalloc(4000 * sizeof(sds));
     int idx = 0;
 
@@ -1079,7 +1079,7 @@ TEST_F(FbtreeTest, VariedStringPatterns) {
 /* ========== Split Boundary Tests ========== */
 
 TEST_F(FbtreeTest, SplitAtExactBoundary) {
-    char buf[16];
+    char buf[32];
     const int count = TEST_TWO_LEVEL_ITEMS;
 
     for (int i = 0; i < count; i++) {
@@ -1215,7 +1215,7 @@ TEST_F(FbtreeTest, DeleteFromEmpty) {
 }
 
 TEST_F(FbtreeTest, DeleteAllItems) {
-    char buf[8];
+    char buf[32];
     sds inserted[10];
     for (int i = 0; i < 10; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
@@ -1239,7 +1239,7 @@ TEST_F(FbtreeTest, DeleteAllItems) {
 }
 
 TEST_F(FbtreeTest, DeleteMiddleItem) {
-    char buf[8];
+    char buf[32];
     sds inserted[50];
     for (int i = 0; i < 50; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
@@ -1927,7 +1927,7 @@ TEST_F(FbtreeTest, SeekToScoreSingleElement) {
 
 TEST_F(FbtreeTest, SeekToScoreDeepTree) {
     const int count = TEST_THREE_LEVEL_ITEMS;
-    char buf[24];
+    char buf[32];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "%08d_elem_%05d", i, i);
         fbtreeInsert(fbt, createString(buf));
@@ -2002,7 +2002,7 @@ TEST_F(FbtreeTest, InnerBsearchIdenticalFeatureBytes) {
 
     const int count = NODE_SIZE + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
-    char buf[16];
+    char buf[32];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "XXXX_%05d", i);
         inserted[i] = fbtreeInsert(fbt, createString(buf));
@@ -2036,7 +2036,7 @@ TEST_F(FbtreeTest, LongPrefixBasic) {
     const size_t prefix_len = EMBED_PREFIX_LEN + 6;
     const int count = TEST_TWO_LEVEL_ITEMS;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
-    char suffix[8];
+    char suffix[32];
 
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "s%05d", i);
@@ -2066,7 +2066,7 @@ TEST_F(FbtreeTest, VeryLongPrefix) {
     const size_t prefix_len = EMBED_PREFIX_LEN * 10;
     const int count = NODE_SIZE + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
-    char suffix[8];
+    char suffix[32];
 
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "s%03d", i);
@@ -2095,7 +2095,7 @@ TEST_F(FbtreeTest, VeryLongPrefix) {
 TEST_F(FbtreeTest, LongPrefixMultilevel) {
     const size_t prefix_len = EMBED_PREFIX_LEN + 14;
     const int count = TEST_THREE_LEVEL_ITEMS;
-    char suffix[16];
+    char suffix[32];
 
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "item_%05d", i);
@@ -2118,7 +2118,7 @@ TEST_F(FbtreeTest, LongPrefixDelete) {
     const size_t prefix_len = EMBED_PREFIX_LEN + 4;
     const int count = NODE_SIZE * 2;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
-    char suffix[8];
+    char suffix[32];
 
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "d%03d", i);
@@ -2164,7 +2164,7 @@ TEST_F(FbtreeTest, LongPrefixDeleteAll) {
 
 TEST_F(FbtreeTest, LongPrefixBoundary) {
     const int count = NODE_SIZE + 10;
-    char suffix[8];
+    char suffix[32];
 
     /* Case 1: prefix exactly at EMBED_PREFIX_LEN (embedded storage) */
     {
@@ -2202,7 +2202,7 @@ TEST_F(FbtreeTest, LongPrefixShrinkToShort) {
     const size_t long_prefix = EMBED_PREFIX_LEN + 14;
     const int count = NODE_SIZE + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
-    char suffix[8];
+    char suffix[32];
 
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "s%03d", i);
@@ -2232,7 +2232,7 @@ TEST_F(FbtreeTest, LongPrefixRealloc) {
     const size_t long_prefix = EMBED_PREFIX_LEN * 2;
     const int count = NODE_SIZE + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
-    char suffix[8];
+    char suffix[32];
 
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "s%03d", i);
@@ -2721,7 +2721,7 @@ TEST_F(FbtreeTest, SeekToValueDeepTree) {
 }
 
 TEST_F(FbtreeTest, SeekToValueThenIterate) {
-    char buf[16];
+    char buf[32];
     const int count = 200;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "item_%03d", i);
@@ -3404,7 +3404,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreMultilevel) {
     const int N = NODE_SIZE * 4;
     for (int i = 0; i < N; i++) {
         /* Create 8-byte score prefix from index, then element suffix */
-        char score[9];
+        char score[32];
         snprintf(score, sizeof(score), "%08d", i);
         sds s = sdsnewlen(NULL, 8 + 6 + 1);
         memcpy(s, score, 8);
@@ -4144,7 +4144,7 @@ TEST_F(FbtreeTest, NodeMergeCascading) {
  * pointers are correct. */
 TEST_F(FbtreeTest, NodeMergeLeafCacheUpdate) {
     const int count = NODE_SIZE * 3;
-    char buf[16];
+    char buf[32];
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "cache_%04d", i);
@@ -4243,7 +4243,7 @@ TEST_F(FbtreeTest, NodeMergeRootCollapse) {
      * Then delete until one leaf is empty/merged, leaving root with 1 child.
      * Root should collapse to that single child (a leaf). */
     const int count = NODE_SIZE + 1;
-    char buf[16];
+    char buf[32];
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "root_%03d", i);
@@ -5077,7 +5077,7 @@ TEST_F(FbtreeTest, DefragScanRelocatesInnerNodes) {
 TEST_F(FbtreeTest, DefragScanRelocatesSpilledPrefixBlocks) {
     const size_t prefix_len = EMBED_PREFIX_LEN + 46;
     enum { N = 5000 };
-    char suffix[8];
+    char suffix[32];
     for (int i = 0; i < N; i++) {
         snprintf(suffix, sizeof(suffix), "s%05d", i);
         fbtreeInsert(fbt, createPrefixString("P", prefix_len, suffix));
@@ -5275,7 +5275,7 @@ TEST_F(FbtreeTest, DismissMemoryHintsEveryAllocationOnce) {
 TEST_F(FbtreeTest, DismissMemoryWalksInnerNodesAndSpilledPrefixes) {
     const size_t prefix_len = EMBED_PREFIX_LEN + 46;
     enum { N = 5000 };
-    char suffix[8];
+    char suffix[32];
     for (int i = 0; i < N; i++) {
         snprintf(suffix, sizeof(suffix), "s%05d", i);
         fbtreeInsert(fbt, createPrefixString("P", prefix_len, suffix));

@@ -78,9 +78,10 @@ proc granted_export_hold {} {
 }
 
 # Hold the export in failover-granted, run 'trigger' on the source, then send
-# SET + WAIT 1 and resume the target. The source must stay paused, so the SET
-# is held until the takeover and no acknowledged write is lost.
-proc granted_export_check_trigger {trigger} {
+# a SET and resume the target. The source must stay paused, so the SET is held
+# until the takeover and no acknowledged write is lost. 'held_by_pause' is 1
+# for a write trigger, which the pause holds instead of failing the export.
+proc granted_export_check_trigger {trigger {held_by_pause 0}} {
     set key "{06S}:granted"
     assert_match "OK" [R 0 SET $key old]
     assert_equal 1 [R 0 WAIT 1 2000]
@@ -88,18 +89,22 @@ proc granted_export_check_trigger {trigger} {
     set jobname [granted_export_hold]
     assert_equal "slot_migration_in_progress" [s -0 paused_reason]
 
+    set loglines [count_log_lines 0]
     uplevel 1 $trigger
-    # Give the trigger time to take effect (a DEBUG hook may act on the next
-    # cron tick).
-    after 300
+    if {$held_by_pause} {
+        wait_for_blocked_clients_count 1 100 10 0
+    } else {
+        wait_for_log_messages 0 {"*failover was already granted. Remaining paused*"} $loglines 100 100
+    }
     assert_equal "slot_migration_in_progress" [s -0 paused_reason]
     assert_equal "failover-granted" [dict get [granted_export_get_job 0 $jobname] state]
 
+    set blocked [s 0 blocked_clients]
     set rd [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
     test_defer [list $rd close]
     $rd SET $key new
     $rd flush
-    wait_for_blocked_client
+    wait_for_blocked_clients_count [expr {$blocked + 1}] 100 10 0
 
     resume_process $target_pid
     wait_for_condition 100 100 {
@@ -109,4 +114,10 @@ proc granted_export_check_trigger {trigger} {
     }
     assert_error "MOVED 0 *" {$rd read}
     assert_equal "old" [R 2 GET $key]
+    granted_export_wait_for_state 0 $jobname success
+    wait_for_condition 100 100 {
+        [s 0 paused_reason] eq "none"
+    } else {
+        fail "The source is still paused after the takeover"
+    }
 }

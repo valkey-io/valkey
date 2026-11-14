@@ -1353,6 +1353,7 @@ slotMigrationJob *clusterLookupMigrationJob(sds name) {
 void clusterCommandCancelSlotMigrations(client *c) {
     listNode *ln;
     listIter li;
+    int kept = 0;
 
     if (!clusterIsAnySlotExporting()) {
         addReplyError(c, "No migrations ongoing");
@@ -1367,13 +1368,16 @@ void clusterCommandCancelSlotMigrations(client *c) {
             continue;
         }
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
+        /* An export that granted failover is kept (see
+         * finishSlotMigrationJob). */
+        if (isSlotMigrationJobInProgress(job)) kept++;
     }
     sds client_info = catClientInfoShortString(sdsempty(), c,
                                                server.hide_user_data_from_log);
     serverLog(LL_NOTICE,
-              "Canceled all in progress slot migrations (user request from "
-              "'%s')",
-              client_info);
+              "Canceled in progress slot migrations, except %d that already "
+              "granted failover (user request from '%s')",
+              kept, client_info);
     sdsfree(client_info);
     addReply(c, shared.ok);
     return;
@@ -2450,26 +2454,34 @@ void clusterHandleSlotMigrationClientOOM(slotMigrationJob *job) {
 
 /* Move the given job to the provided terminal state. Any associated connections
  * or clients will be closed, and this function will trigger cleanup if this is
- * an import operation. */
+ * an import operation.
+ *
+ * The exception is an export that has granted failover, failed or cancelled
+ * before the pause timed out while we still own its slots. The target may take
+ * the slots at any time, so the job stays in failover-granted, paused and with
+ * its link open, until the takeover finishes it as a success or the pause
+ * timeout fails it. */
 void finishSlotMigrationJob(slotMigrationJob *job,
                             slotMigrationJobState state,
                             char *message) {
-    updateSlotMigrationJobStatusMessage(job, message);
     if (job->type == SLOT_MIGRATION_EXPORT &&
         job->state == SLOT_EXPORT_FAILOVER_GRANTED &&
         state != SLOT_MIGRATION_JOB_SUCCESS &&
-        !isSlotExportPauseTimedOut(job)) {
-        bool migration_done;
-        if (checkSlotExportOwnership(job, &migration_done) == C_OK && !migration_done) {
-            serverLog(LL_WARNING,
-                      "Slot migration %s: %s after failover was granted. "
-                      "Remaining paused until the target takes over or the "
-                      "pause times out.",
-                      job->description, message ? message : "failure");
-            resetSlotMigrationJob(job);
-            return;
-        }
+        !isSlotExportPauseTimedOut(job) &&
+        getClusterNodeBySlotRanges(job->slot_ranges, NULL) == server.cluster->myself) {
+        /* Keep the link open: FAILOVER-GRANTED may still be queued on it, and
+         * a client freed with freeClientAsync() never writes its pending
+         * output. */
+        serverLog(LL_WARNING,
+                  "Slot migration %s: not %s (%s) because failover was "
+                  "already granted. Remaining paused until the target takes "
+                  "over or the pause times out.",
+                  job->description,
+                  state == SLOT_MIGRATION_JOB_CANCELLED ? "cancelling" : "failing",
+                  message ? message : "user request");
+        return;
     }
+    updateSlotMigrationJobStatusMessage(job, message);
     if (job->type == SLOT_MIGRATION_EXPORT) {
         /* If we finish the export, we should not remain paused */
         job->mf_end = 0;

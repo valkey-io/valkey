@@ -13,11 +13,21 @@
 # It prints "SENT" on stdout once the extra command is written, and runs
 # until it is killed.
 #
-# Usage: tclsh fake_slot_migration_target.tcl PORT ARG ?ARG ...?
+# With -pipelined, it sends the extra command in the same write as
+# REQUEST-FAILOVER, so the source processes both in one event-loop iteration,
+# and prints "SENT" when FAILOVER-GRANTED arrives.
+#
+# Usage: tclsh fake_slot_migration_target.tcl PORT ?-pipelined? ARG ?ARG ...?
 # (the ARGs are the extra command, for example CLUSTER SYNCSLOTS BOGUS)
 
 set port [lindex $argv 0]
-set extra_cmd [lrange $argv 1 end]
+set pipelined 0
+if {[lindex $argv 1] eq "-pipelined"} {
+    set pipelined 1
+    set extra_cmd [lrange $argv 2 end]
+} else {
+    set extra_cmd [lrange $argv 1 end]
+}
 
 proc resp_command {args} {
     set out "*[llength $args]\r\n"
@@ -37,7 +47,7 @@ proc accept {sock host port} {
 }
 
 proc on_read {sock} {
-    global extra_cmd
+    global extra_cmd pipelined
     while {[gets $sock line] >= 0} {
         set line [string trimright $line "\r"]
         switch -exact -- $line {
@@ -51,11 +61,15 @@ proc on_read {sock} {
                 puts -nonewline $sock [resp_command CLUSTER SYNCSLOTS REQUEST-PAUSE]
             }
             PAUSED {
-                puts -nonewline $sock [resp_command CLUSTER SYNCSLOTS REQUEST-FAILOVER]
+                set out [resp_command CLUSTER SYNCSLOTS REQUEST-FAILOVER]
+                if {$pipelined} {append out [resp_command {*}$extra_cmd]}
+                puts -nonewline $sock $out
             }
             FAILOVER-GRANTED {
-                puts -nonewline $sock [resp_command {*}$extra_cmd]
-                flush $sock
+                if {!$pipelined} {
+                    puts -nonewline $sock [resp_command {*}$extra_cmd]
+                    flush $sock
+                }
                 puts SENT
                 flush stdout
             }

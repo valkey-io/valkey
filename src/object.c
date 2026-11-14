@@ -749,7 +749,11 @@ void freeHashObject(robj *o) {
 
 void freeModuleObject(robj *o) {
     moduleValue *mv = objectGetVal(o);
-    mv->type->free(mv->value);
+    /* Modules may omit free. The core can't release a module-owned value,
+     * so only the wrapper is freed here. */
+    if (mv->type->free != NULL) {
+        mv->type->free(mv->value);
+    }
     zfree(mv);
 }
 

@@ -7843,9 +7843,11 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                              void *privdata,
                                              int flags) {
     client *c = ctx->client;
-    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL || c->flag.deny_blocking) {
-        /* Early return if duplicate block attempt or client is not normal or
-         * client is set to deny blocking. */
+    int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
+    int type = getClientType(c);
+    bool can_block = type == CLIENT_TYPE_NORMAL ||
+                     (type == CLIENT_TYPE_PUBSUB && c->resp != 2 && !is_keyspace_notification);
+    if (c->flag.blocked || !can_block || c->flag.deny_blocking) {
         errno = ENOTSUP;
         return NULL;
     }
@@ -7855,7 +7857,6 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
         errno = EINVAL;
         return NULL;
     }
-    int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
     int islua = scriptIsRunning();
     int ismulti = server.in_exec;
     if ((islua || ismulti) && is_keyspace_notification) {
@@ -13716,6 +13717,7 @@ int *VM_GetCommandKeysWithFlags(ValkeyModuleCtx *ctx,
         if (out_flags) (*out_flags)[i] = moduleConvertKeySpecsFlags(result.keys[i].flags, 0);
     }
 
+    getKeysFreeResult(&result);
     return res;
 }
 

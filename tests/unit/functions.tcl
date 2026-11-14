@@ -803,6 +803,24 @@ start_server {tags {"scripting"}} {
         r function list
     } {{library_name lib engine LUA functions {{name f1 description {some desc} flags {}}}}}
 
+    test {LIBRARIES - named arguments repeated in another case do not leak} {
+        r function flush sync
+        set before [s used_memory]
+        catch {
+            r function load replace {#!lua name=lib
+                server.register_function{
+                    function_name=('x'):rep(1000000),
+                    Function_name=('x'):rep(1000000),
+                    description=('x'):rep(1000000),
+                    Description=('x'):rep(1000000),
+                }
+            }
+        } e
+        assert_match {*must get a callback argument*} $e
+        r function flush sync
+        assert_lessthan [expr {[s used_memory] - $before}] 500000
+    }
+
     test {LIBRARIES - named arguments, bad function name} {
         catch {
             r function load replace {#!lua name=lib

@@ -225,6 +225,15 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         reconnect
     }
 
+    test "Obuf limit, HMGET with repeated fields stopped mid-run" {
+        r config set client-output-buffer-limit {normal 1000000 0 0}
+        r hset bighash f [string repeat x 100000]
+        catch {r hmget bighash {*}[lrepeat 2000 f]} e
+        assert_match "*I/O error*" $e
+        reconnect
+        assert_lessthan [s used_memory_peak] 50000000
+    }
+
     test "Obuf limit, KEYS stopped mid-run" {
         r config set client-output-buffer-limit {normal 100000 0 0}
         populate 1000 "long-key-name-prefix-of-100-chars-------------------------------------------------------------------"

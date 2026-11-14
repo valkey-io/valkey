@@ -4532,6 +4532,7 @@ void xgroupCommand(client *c);
 void xsetidCommand(client *c);
 void xackCommand(client *c);
 void xpendingCommand(client *c);
+void xnackCommand(client *c);
 void xclaimCommand(client *c);
 void xautoclaimCommand(client *c);
 void xinfoCommand(client *c);

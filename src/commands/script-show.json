@@ -9,7 +9,8 @@
         "function": "scriptCommand",
         "command_flags": [
             "NOSCRIPT",
-            "STALE"
+            "STALE",
+            "CURRENT_DB"
         ],
         "acl_categories": [
             "SCRIPTING",

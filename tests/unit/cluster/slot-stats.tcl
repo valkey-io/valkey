@@ -708,6 +708,128 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 }
 
 # -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS keyspace-hits and keyspace-misses.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+
+    # Define shared variables.
+    set key "FOO"
+    set key_slot [R 0 cluster keyslot $key]
+    set key_secondary "FOO2"
+    set key_secondary_slot [R 0 cluster keyslot $key_secondary]
+    # Keys that share the hash tag of $key and $key_secondary, but never exist.
+    set missing_key "missing{$key}"
+    set missing_key_secondary "missing{$key_secondary}"
+    set metrics_to_assert [list keyspace-hits keyspace-misses]
+
+    test "CLUSTER SLOT-STATS keyspace-hits and keyspace-misses are empty upon startup" {
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+
+    test "CLUSTER SLOT-STATS keyspace-hits for read commands on existing keys" {
+        R 0 SET $key VALUE
+        R 0 GET $key
+        R 0 GET $key
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create keyspace-hits 2 keyspace-misses 0
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS keyspace-misses for read commands on missing keys" {
+        R 0 DEL $key
+        R 0 GET $key
+        R 0 GET $key
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create keyspace-hits 0 keyspace-misses 2
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS keyspace-hits and keyspace-misses are slot specific" {
+        R 0 SET $key VALUE
+        R 0 SET $key_secondary VALUE
+        R 0 GET $key
+        R 0 GET $key
+        R 0 GET $missing_key
+        R 0 GET $key_secondary
+        R 0 GET $missing_key_secondary
+        R 0 GET $missing_key_secondary
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create \
+                $key_slot [ \
+                    dict create keyspace-hits 2 keyspace-misses 1 \
+                ] \
+                $key_secondary_slot [ \
+                    dict create keyspace-hits 1 keyspace-misses 2 \
+                ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS keyspace-hits and keyspace-misses reset upon CONFIG RESETSTAT" {
+        R 0 SET $key VALUE
+        R 0 GET $key
+        R 0 GET $missing_key
+
+        R 0 CONFIG RESETSTAT
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS keyspace-hits and keyspace-misses reset upon slot migration" {
+        R 0 SET $key VALUE
+        R 0 GET $key
+        R 0 GET $missing_key
+
+        R 0 CLUSTER DELSLOTS $key_slot
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+
+        R 0 CLUSTER ADDSLOTS $key_slot
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS keyspace-hits and keyspace-misses are not reported when cluster-slot-stats-enabled is no" {
+        R 0 SET $key VALUE
+        R 0 GET $key
+
+        R 0 CONFIG SET cluster-slot-stats-enabled no
+        set slot_stats [convert_array_into_dict [R 0 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]]
+        set stats [dict get $slot_stats $key_slot]
+        assert {[dict exists $stats key-count]}
+        assert {![dict exists $stats keyspace-hits]}
+        assert {![dict exists $stats keyspace-misses]}
+        R 0 CONFIG SET cluster-slot-stats-enabled yes
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+}
+
+# -----------------------------------------------------------------------------
 # Test cases for CLUSTER SLOT-STATS key-count metric correctness.
 # -----------------------------------------------------------------------------
 
@@ -798,7 +920,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 
 start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
-    set metrics [list "key-count" "cpu-usec" "network-bytes-in" "network-bytes-out"]
+    set metrics [list "key-count" "cpu-usec" "network-bytes-in" "network-bytes-out" "keyspace-hits" "keyspace-misses"]
 
     # SET keys for target hashslots, to encourage ordering.
     set hash_tags [list 0 1 2 3 4]
@@ -806,6 +928,10 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     foreach hash_tag $hash_tags {
         for {set i 0} {$i < $num_keys} {incr i 1} {
             R 0 SET "$i{$hash_tag}" VALUE
+            # Read the key back, to accumulate keyspace-hits.
+            R 0 GET "$i{$hash_tag}"
+            # Read a key that was never set, to accumulate keyspace-misses.
+            R 0 GET "missing$i{$hash_tag}"
         }
         incr num_keys 1
     }
@@ -887,6 +1013,10 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         set orderby "network-bytes-in"
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
         set orderby "network-bytes-out"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+        set orderby "keyspace-hits"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+        set orderby "keyspace-misses"
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
     }
 

@@ -369,7 +369,7 @@ void dictHashtableDestructor(void *val) {
 
 /* Returns 1 when keys match */
 int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
+    size_t l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
@@ -1379,7 +1379,7 @@ void checkChildrenDone(void) {
 
         if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
-        /* sigKillChildHandler catches the signal and calls exit(), but we
+        /* sigKillChildHandler catches the signal and calls _exit(), but we
          * must make sure not to flag lastbgsave_status, etc incorrectly.
          * We could directly terminate the child process via SIGUSR1
          * without handling it */
@@ -6746,7 +6746,12 @@ static void sigKillChildHandler(int sig) {
     UNUSED(sig);
     int level = server.in_fork_child == CHILD_TYPE_MODULE ? LL_VERBOSE : LL_WARNING;
     serverLogRawFromHandler(level, "Received SIGUSR1 in child, exiting now.");
-    exitFromChild(SERVER_CHILD_NOERROR_RETVAL);
+    /* Only async-signal-safe functions may be called from a signal handler,
+     * so use _exit() directly rather than exitFromChild(), whose exit() path
+     * in coverage builds runs the gcov atexit dump. A child killed by its
+     * parent intentionally skips the coverage dump: the dump serializes on
+     * profile data files shared with every concurrently exiting process. */
+    _exit(SERVER_CHILD_NOERROR_RETVAL);
 }
 
 void setupChildSignalHandlers(void) {

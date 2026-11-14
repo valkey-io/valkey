@@ -16,8 +16,17 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 
     test "Wait for failover" {
+        # Both replicas can win an election one right after the other. The
+        # first winner is then demoted and has to resync from the second, and
+        # until that sync is done it is not allowed to fail over. So wait for
+        # one of them to be the primary and the other to be in sync with it.
         wait_for_condition 1000 50 {
-            [s -3 role] == "master" || [s -6 role] == "master"
+            ([s -3 role] == "master" &&
+             [s -6 master_port] == [srv -3 port] &&
+             [s -6 master_link_status] == "up") ||
+            ([s -6 role] == "master" &&
+             [s -3 master_port] == [srv -6 port] &&
+             [s -3 master_link_status] == "up")
         } else {
             fail "No failover detected"
         }
@@ -164,11 +173,14 @@ proc test_replica_config_epoch_failover {type} {
         } else {
             fail "Other primaries does not update config epoch"
         }
-        # Make sure that replica do not update config epoch.
-        assert_not_equal $R0_config_epoch [dict get [cluster_get_node_by_id 3 $R0_nodeid] config_epoch]
 
         # Pause the R 0 and wait for the cluster to be down.
         pause_process [srv 0 pid]
+        # Make sure that replica do not update config epoch. R 0 sends nothing
+        # more, and the reply from the replica means it has read and dropped
+        # all that R 0 had sent, so the new config epoch can not reach the
+        # replica once the filter is removed.
+        assert_not_equal $R0_config_epoch [dict get [cluster_get_node_by_id 3 $R0_nodeid] config_epoch]
         R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
         R 3 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 0
         wait_for_condition 1000 50 {

@@ -135,8 +135,63 @@ start_server {tags {"introspection"}} {
         assert_morethan [r command count] 0
     }
 
+    test {COMMAND DOCS marks sorted-set numeric arguments as doubles} {
+        foreach {command argument_index} {
+            zincrby 1
+            zinter 2
+            zinterstore 3
+            zunion 2
+            zunionstore 3
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set argument [lindex [dict get $docs arguments] $argument_index]
+            assert_equal double [dict get $argument type]
+        }
+    }
+
+    test {COMMAND DOCS allows XX with GT or LT for expiry commands} {
+        foreach command {
+            expire expireat pexpire pexpireat
+            hexpire hexpireat hpexpire hpexpireat
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set condition [lindex [dict get $docs arguments] 2]
+            set alternatives [dict get $condition arguments]
+            assert_equal NX [dict get [lindex $alternatives 0] token]
+
+            set xx_comparison [lindex $alternatives 1]
+            assert_equal block [dict get $xx_comparison type]
+            set options [dict get $xx_comparison arguments]
+            assert_equal XX [dict get [lindex $options 0] token]
+            assert_equal {optional} [dict get [lindex $options 0] flags]
+
+            set comparison [lindex $options 1]
+            assert_equal {optional} [dict get $comparison flags]
+            set comparisons [dict get $comparison arguments]
+            assert_equal GT [dict get [lindex $comparisons 0] token]
+            assert_equal LT [dict get [lindex $comparisons 1] token]
+        }
+    }
+
     test {COMMAND GETKEYS GET} {
         assert_equal {key} [r command getkeys get key]
+    }
+
+    test {COMMAND DOCS marks RESTORE eviction metadata as mutually exclusive} {
+        foreach command {restore restore-asking} {
+            set docs [dict get [r command docs $command] $command]
+            set eviction [lindex [dict get $docs arguments] 5]
+            assert_equal oneof [dict get $eviction type]
+            assert_equal {optional} [dict get $eviction flags]
+
+            set options [dict get $eviction arguments]
+            foreach {index token} {0 IDLETIME 1 FREQ} {
+                set option [lindex $options $index]
+                assert_equal integer [dict get $option type]
+                assert_equal $token [dict get $option token]
+                assert {![dict exists $option flags]}
+            }
+        }
     }
 
     test {COMMAND GETKEYSANDFLAGS} {

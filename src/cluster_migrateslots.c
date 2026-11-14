@@ -544,6 +544,12 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     char *source_node_name = NULL;
     list *slot_ranges = NULL;
 
+    if (c->slot_migration_job) {
+        addReplyError(c, "CLUSTER SYNCSLOTS ESTABLISH is not allowed on a "
+                         "client that is already a slot migration client");
+        return;
+    }
+
     if (!mustObeyClient(c) && validateSlotMigrationCanStartOrReply(c) == C_ERR) {
         return;
     }
@@ -728,6 +734,15 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
 /* Sent by a target primary to a replica in its shard to inform that an ongoing
  * slot import is now finished. */
 void clusterCommandSyncSlotsFinish(client *c) {
+    /* FINISH is sent within the slot migration replication stream, so it must
+     * originate from a slot migration client (primary/AOF). Reject any other
+     * client to prevent driving the import state machine to a terminal state. */
+    if (!mustObeyClient(c)) {
+        addReplyError(c, "CLUSTER SYNCSLOTS FINISH should only be used "
+                         "by slot migration clients");
+        return;
+    }
+
     char *name = NULL;
     char *state = NULL;
     char *message = NULL;
@@ -999,11 +1014,18 @@ void propagateSyncSlotsFinish(slotMigrationJob *job) {
     }
 
     /* Perform the propagation. Notably, we may not already be in an execution
-     * unit (cron, beforeSleep). */
+     * unit (cron, beforeSleep).
+     *
+     * The import can finish from cron or beforeSleep while writes are paused,
+     * e.g. a failed import right after delKeysInSlot() propagated its DELs.
+     * The FINISH only settles slot ownership for replicas, like those DELs, so
+     * it gets the same exemption in propagateNow(). */
+    server.server_del_keys_in_slot = 1;
     enterExecutionUnit(1, 0);
     alsoPropagate(-1, argv, argc, PROPAGATE_REPL | PROPAGATE_AOF, -1);
     exitExecutionUnit();
     postExecutionUnitOperations();
+    server.server_del_keys_in_slot = 0;
 
     if (name_obj) decrRefCount(name_obj);
     if (message_obj) decrRefCount(message_obj);

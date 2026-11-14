@@ -973,9 +973,30 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         # Let one replica hit repl-timeout while the slow reader
                         # is paused, then restore a generous timeout so the
                         # remaining replica can finish the streamed RDB.
+                        #
+                        # The disconnect can land in either of two branches in
+                        # replication.c serverCron (see src/replication.c around
+                        # the "Disconnecting timedout replica" emitters):
+                        #   - "(full sync)"      WAIT_BGSAVE_END + rdb_child_type == SOCKET
+                        #   - "(streaming sync)" REPLICA_STATE_ONLINE
+                        # On some platforms (notably macOS CI) the RDB child can
+                        # exit and clear rdb_child_type in the same serverCron
+                        # tick as the disconnect check, closing the (full sync)
+                        # window; the timed-out replica is by then already
+                        # promoted via replicaPutOnline() and the disconnect
+                        # surfaces on the (streaming sync) path instead. Both
+                        # are legitimate timeout-driven disconnects.
                         $master config set repl-timeout 2
-                        wait_for_log_messages -2 {"*Disconnecting timedout replica (full sync)*"} $loglines 100 100
+                        wait_for_log_messages -2 {
+                            "*Disconnecting timedout replica (full sync)*"
+                            "*Disconnecting timedout replica (streaming sync)*"
+                        } $loglines 100 100
                         $master config set repl-timeout 60
+                        # Guard against silently broadening the assertion: the
+                        # slow replica must time out exactly once across both
+                        # branches in this subcase.
+                        assert_equal 1 [count_log_message -2 "Disconnecting timedout replica"] \
+                            "expected exactly one 'Disconnecting timedout replica' log entry (full sync or streaming sync) for the slow replica"
                     }
 
                     # Use a single generous budget for all subcases; successful
@@ -1714,5 +1735,44 @@ start_server {tags {"repl external:skip cluster:skip"}} {
                 fail "mem_clients_normal leaked: expected < 1000000 but got [status $replica mem_clients_normal]"
             }
         }
+    }
+}
+
+# fake_redis_node doesn't support TLS and expects the exact non-cluster handshake.
+# The server starts as a replica of an unreachable primary: a primary turned
+# into a replica synthesizes a cached primary from its own replication ID and
+# would send PSYNC <replid> <offset> instead of PSYNC ? -1.
+start_server {tags {"repl external:skip cluster:skip tls:skip"} overrides {replicaof "127.0.0.1 0"}} {
+    test "Replica rejects a +CONTINUE reply to PSYNC when there is no cached primary" {
+        # Keep the REPLCONF capa line sent by the replica predictable.
+        r config set dual-channel-replication-enabled no
+
+        # A fake primary that completes the handshake and then answers the
+        # full resynchronization request (PSYNC ? -1) with +CONTINUE.
+        set tclsh [info nameofexecutable]
+        set script "tests/helpers/fake_redis_node.tcl"
+        set fake_port [find_available_port $::baseport $::portcount]
+        set fake_pid [exec $tclsh $script $fake_port \
+                "PING" "+PONG" \
+                "REPLCONF listening-port [srv 0 port]" "+OK" \
+                "REPLCONF capa eof capa psync2" "+OK" \
+                "REPLCONF version [s valkey_version]" "+OK" \
+                "PSYNC ? -1" "+CONTINUE" &]
+        wait_for_condition 50 50 {
+            [catch {close [socket "127.0.0.1" $fake_port]}] == 0
+        } else {
+            fail "Failed to start fake primary"
+        }
+
+        set loglines [count_log_lines 0]
+        r replicaof 127.0.0.1 $fake_port
+        wait_for_log_messages 0 {"*Primary replied +CONTINUE to a full resynchronization request*"} $loglines 50 100
+
+        # The replica must survive and stay disconnected from the primary.
+        assert_equal "PONG" [r ping]
+        assert_equal "down" [s master_link_status]
+
+        r replicaof no one
+        catch {exec kill -9 $fake_pid}
     }
 }

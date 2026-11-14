@@ -157,6 +157,13 @@ proc test_nonempty_replica {type} {
         R 7 config set cluster-allow-replica-migration yes
         R 7 cluster replicate [R 0 cluster myid]
 
+        # Make server 4 (the freshest replica) win deterministically: server 7
+        # drops the failover auth acks, so it can still start elections and
+        # report its zero offset, but it can never collect enough votes to win.
+        set CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK 6
+        set CLUSTER_PACKET_TYPE_NONE -1
+        R 7 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK
+
         if {$type == "shutdown"} {
             # Shutdown primary 0.
             catch {R 0 shutdown nosave}
@@ -175,6 +182,8 @@ proc test_nonempty_replica {type} {
             puts "s -7 role: [s -7 role]"
             fail "Failover does not happened"
         }
+
+        R 7 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_NONE
 
         verify_log_message -4 "*Start of election*rank #0*" 0
 

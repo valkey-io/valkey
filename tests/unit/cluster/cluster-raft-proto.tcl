@@ -321,9 +321,9 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
             fail "cluster state not updated after the install"
         }
         assert_equal 2 [llength [R 0 CLUSTER SLOTS]]
-        set myself_line [raft_cluster_nodes_line [srv 0 client] $node_id]
-        assert_match "*,mynode.example.com *" $myself_line
-        assert_match "*nofailover*" [lindex $myself_line 2]
+        set myself [cluster_get_node_by_id 0 $node_id]
+        assert_match "*,mynode.example.com*" [dict get $myself addr]
+        assert {[cluster_has_flag $myself nofailover]}
 
         assert_match "*10.0.0.1*" [R 0 CLUSTER SLOTS]
 

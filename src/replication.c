@@ -5236,6 +5236,18 @@ void replicationHandlePrimaryDisconnection(void) {
 
     server.primary = NULL;
 
+    /* The primary client only exists during a dual channel sync while we are
+     * streaming the local replication buffer into memory, which serves events
+     * from time to time. Abort the sync, so the streaming stops and we don't
+     * go on to finalize the sync without a primary client. The part of the
+     * buffer that was streamed is applied, so if the primary client was cached
+     * we take its offset, like we do when the sync is finalized, in order to
+     * continue from there with a partial resynchronization. */
+    if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
+        if (server.cached_primary) server.primary_repl_offset = server.cached_primary->repl_data->reploff;
+        replicationAbortDualChannelSyncTransfer();
+    }
+
     /* freeClient(primary) can be deferred via freeClientAsync when the client
      * has pending IO. By the time we run in that deferred context,
      * replicationUnsetPrimary()/replicationSetPrimary() may have already

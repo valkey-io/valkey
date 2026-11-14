@@ -961,10 +961,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 0.5
             assert_match "1" [R $source_idx HSETEX "$slot_to_migrate_tag:hfe" PX 500 FIELDS 1 field value]
             assert_match "1" [R $target_idx HSETEX "$slot_to_test_tag:hfe" PX 500 FIELDS 1 field value]
+            assert_match "1" [R $source_idx SADDEX "$slot_to_migrate_tag:sfe" PX 500 MEMBERS 1 member]
+            assert_match "1" [R $target_idx SADDEX "$slot_to_test_tag:sfe" PX 500 MEMBERS 1 member]
             assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
-            assert_match "1001" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+            assert_match "1002" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 
             # Unpause target expirations
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 1]
@@ -973,7 +975,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_countkeysinslot $target_idx $slot_to_test 0
 
             # Validate keys are still there
-            assert_match "1001" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+            assert_match "1002" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 
             # Resume source expirations
             assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 1]

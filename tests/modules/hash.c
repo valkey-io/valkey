@@ -15,7 +15,8 @@ static ValkeyModuleString *value_or_delete(ValkeyModuleString *s) {
 /* HASH.SET key flags field1 value1 [field2 value2 ..]
  *
  * Sets 1-4 fields. Returns the same as ValkeyModule_HashSet().
- * Flags is a string of "nxa" where n = NX, x = XX, a = COUNT_ALL.
+ * Flags is a string of "nxak" where n = NX, x = XX, a = COUNT_ALL,
+ * k = KEEPTTL.
  * To delete a field, use the value ":delete:".
  */
 int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -33,6 +34,7 @@ int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         case 'n': flags |= VALKEYMODULE_HASH_NX; break;
         case 'x': flags |= VALKEYMODULE_HASH_XX; break;
         case 'a': flags |= VALKEYMODULE_HASH_COUNT_ALL; break;
+        case 'k': flags |= VALKEYMODULE_HASH_KEEPTTL; break;
         }
     }
 
@@ -73,6 +75,7 @@ int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
             ValkeyModule_Assert(errno == ENOENT);
     }
 
+    ValkeyModule_ReplicateVerbatim(ctx);
     return ValkeyModule_ReplyWithLongLong(ctx, result);
 }
 

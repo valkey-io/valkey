@@ -1845,9 +1845,10 @@ static void handleFlushdb(int dbid) {
 
         // Let the low-level iterator know the DB is being flushed
         it->keyset_iter->flushDb(it->keyset_iter, dbid);
+        if (it->completed || it->terminated) continue;
 
         if (should_abort_iterators || it->iteration_flags & BGITERATOR_FLAG_CONSISTENT) {
-            if (!it->terminated) bgIteratorTerminate(it);
+            bgIteratorTerminate(it);
         } else {
             /* In this (limited) case, we're only flushing a single DB that contains < half the
              * keys.  We don't want to kill a full-sync replication.  We will just continue with

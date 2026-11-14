@@ -1413,6 +1413,13 @@ void bitfieldGeneric(client *c, int flags) {
         }
     }
 
+    /* If the key was created or grown (dirty) but no operation counted a change
+     * -- e.g. every op hit OVERFLOW FAIL and the per-op check above was skipped
+     * -- the create/resize is still a modification that must be propagated to
+     * replicas and the AOF. Count it once here so the block below runs;
+     * otherwise the primary would diverge from its replicas. */
+    if (dirty && !changes) changes++;
+
     if (changes) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);

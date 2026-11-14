@@ -1500,152 +1500,110 @@ char *fgets_async_signal_safe(char *dest, int buff_size, int fd) {
     return dest;
 }
 
-static const char HEX[] = "0123456789abcdef";
+/* Appends val in the given base, after prefix ("-" or "0x"), padded to width
+ * with zeros (between the prefix and the digits) or spaces (before the prefix). */
+static void appendNumberAsyncSignalSafe(char **to,
+                                        const char *end,
+                                        uint64_t val,
+                                        int base,
+                                        const char *prefix,
+                                        int width,
+                                        int zero_pad) {
+    static const char HEX[] = "0123456789abcdef";
 
-static char *u2string_async_signal_safe(int _base, uint64_t val, char *buf) {
-    uint32_t base = (uint32_t)_base;
-    *buf-- = 0;
+    char digits[24];
+    char *d = digits + sizeof(digits);
     do {
-        *buf-- = HEX[val % base];
-    } while ((val /= base) != 0);
-    return buf + 1;
-}
-
-static char *i2string_async_signal_safe(int base, int64_t val, char *buf) {
-    char *orig_buf = buf;
-    const int32_t is_neg = (val < 0);
-    *buf-- = 0;
-
-    if (is_neg) {
-        val = -val;
-    }
-    if (is_neg && base == 16) {
-        int ix;
-        val -= 1;
-        for (ix = 0; ix < 16; ++ix) buf[-ix] = '0';
-    }
-
-    do {
-        *buf-- = HEX[val % base];
+        *--d = HEX[val % base];
     } while ((val /= base) != 0);
 
-    if (is_neg && base == 10) {
-        *buf-- = '-';
-    }
-
-    if (is_neg && base == 16) {
-        int ix;
-        buf = orig_buf - 1;
-        for (ix = 0; ix < 16; ++ix, --buf) {
-            switch (*buf) {
-            case '0': *buf = 'f'; break;
-            case '1': *buf = 'e'; break;
-            case '2': *buf = 'd'; break;
-            case '3': *buf = 'c'; break;
-            case '4': *buf = 'b'; break;
-            case '5': *buf = 'a'; break;
-            case '6': *buf = '9'; break;
-            case '7': *buf = '8'; break;
-            case '8': *buf = '7'; break;
-            case '9': *buf = '6'; break;
-            case 'a': *buf = '5'; break;
-            case 'b': *buf = '4'; break;
-            case 'c': *buf = '3'; break;
-            case 'd': *buf = '2'; break;
-            case 'e': *buf = '1'; break;
-            case 'f': *buf = '0'; break;
-            }
-        }
-    }
-    return buf + 1;
+    int len = (int)(digits + sizeof(digits) - d) + (int)strlen(prefix);
+    for (int pad = width - len; !zero_pad && pad > 0 && *to < end; pad--) *(*to)++ = ' ';
+    while (*prefix && *to < end) *(*to)++ = *prefix++;
+    for (int pad = width - len; zero_pad && pad > 0 && *to < end; pad--) *(*to)++ = '0';
+    while (d < digits + sizeof(digits) && *to < end) *(*to)++ = *d++;
 }
 
-static const char *check_longlong_async_signal_safe(const char *fmt, int32_t *have_longlong) {
-    *have_longlong = 0;
-    if (*fmt == 'l') {
-        fmt++;
-        if (*fmt != 'l') {
-            *have_longlong = (sizeof(long) == sizeof(int64_t));
-        } else {
-            fmt++;
-            *have_longlong = 1;
-        }
-    }
-    return fmt;
-}
-
+/* An async-signal-safe subset of vsnprintf(), covering what the crash handler uses:
+ *   %d %u %x  with optional l, ll or z, and an optional zero-padded width (e.g. %016lx)
+ *   %p        as "0x" followed by hex digits
+ *   %s        NULL prints "(null)"
+ * Since the argument type of any other conversion is unknown, the rest of the
+ * format is then copied verbatim and no more arguments are read.
+ *
+ * Returns the number of characters written (not counting the terminating NUL),
+ * which, unlike vsnprintf(), is never more than size - 1. */
 int vsnprintf_async_signal_safe(char *to, size_t size, const char *format, va_list ap) {
+    if (size == 0) return 0;
     char *start = to;
-    char *end = start + size - 1;
-    for (; *format; ++format) {
-        int32_t have_longlong = 0;
+    const char *end = start + size - 1;
+
+    for (; *format; format++) {
         if (*format != '%') {
-            if (to == end) { /* end of buffer */
-                break;
-            }
-            *to++ = *format; /* copy ordinary char */
+            if (to < end) *to++ = *format;
             continue;
         }
-        ++format; /* skip '%' */
+        const char *spec = format++; /* skip '%' */
 
-        format = check_longlong_async_signal_safe(format, &have_longlong);
+        int zero_pad = 0, width = 0, longs = 0, is_size = 0;
+        if (*format == '0') {
+            zero_pad = 1;
+            format++;
+        }
+        while (*format >= '0' && *format <= '9') {
+            if (width < 10000) width = width * 10 + (*format - '0');
+            format++;
+        }
+        if (*format == 'z') {
+            is_size = 1;
+            format++;
+        } else {
+            while (*format == 'l' && longs < 2) {
+                longs++;
+                format++;
+            }
+        }
+        int has_modifiers = zero_pad || width || longs || is_size;
 
         switch (*format) {
-        case 'd':
-        case 'i':
+        case 'd': {
+            int64_t val = is_size      ? va_arg(ap, ssize_t)
+                          : longs == 2 ? va_arg(ap, long long)
+                          : longs == 1 ? va_arg(ap, long)
+                                       : va_arg(ap, int);
+            /* Negate in unsigned arithmetic so INT64_MIN doesn't overflow. */
+            uint64_t mag = val < 0 ? (uint64_t)0 - (uint64_t)val : (uint64_t)val;
+            appendNumberAsyncSignalSafe(&to, end, mag, 10, val < 0 ? "-" : "", width, zero_pad);
+            break;
+        }
         case 'u':
-        case 'x':
-        case 'p': {
-            int64_t ival = 0;
-            uint64_t uval = 0;
-            if (*format == 'p') have_longlong = (sizeof(void *) == sizeof(uint64_t));
-            if (have_longlong) {
-                if (*format == 'u') {
-                    uval = va_arg(ap, uint64_t);
-                } else {
-                    ival = va_arg(ap, int64_t);
-                }
-            } else {
-                if (*format == 'u') {
-                    uval = va_arg(ap, uint32_t);
-                } else {
-                    ival = va_arg(ap, int32_t);
-                }
-            }
-
-            {
-                char buff[22];
-                const int base = (*format == 'x' || *format == 'p') ? 16 : 10;
-
-                /* *INDENT-OFF* */
-                char *val_as_str = (*format == 'u') ? u2string_async_signal_safe(base, uval, &buff[sizeof(buff) - 1])
-                                                    : i2string_async_signal_safe(base, ival, &buff[sizeof(buff) - 1]);
-                /* *INDENT-ON* */
-
-                /* Strip off "ffffffff" if we have 'x' format without 'll' */
-                if (*format == 'x' && !have_longlong && ival < 0) {
-                    val_as_str += 8;
-                }
-
-                while (*val_as_str && to < end) {
-                    *to++ = *val_as_str++;
-                }
-                continue;
-            }
+        case 'x': {
+            uint64_t val = is_size      ? va_arg(ap, size_t)
+                           : longs == 2 ? va_arg(ap, unsigned long long)
+                           : longs == 1 ? va_arg(ap, unsigned long)
+                                        : va_arg(ap, unsigned int);
+            appendNumberAsyncSignalSafe(&to, end, val, *format == 'x' ? 16 : 10, "", width, zero_pad);
+            break;
         }
+        case 'p':
+            if (has_modifiers) goto unsupported;
+            appendNumberAsyncSignalSafe(&to, end, (uint64_t)(uintptr_t)va_arg(ap, void *), 16, "0x", 0, 0);
+            break;
         case 's': {
-            const char *val = va_arg(ap, char *);
-            if (!val) {
-                val = "(null)";
-            }
-            while (*val && to < end) {
-                *to++ = *val++;
-            }
-            continue;
+            if (has_modifiers) goto unsupported;
+            const char *s = va_arg(ap, const char *);
+            if (s == NULL) s = "(null)";
+            while (*s && to < end) *to++ = *s++;
+            break;
         }
+        default:
+        unsupported:
+            while (*spec && to < end) *to++ = *spec++;
+            goto done;
         }
     }
-    *to = 0;
+done:
+    *to = '\0';
     return (int)(to - start);
 }
 

@@ -814,13 +814,21 @@ int rewritePathHashObject(rio *r, robj *key, robj *o) {
     while (raxNext(&paths)) {
         hashTypeIterator fields;
         hashTypeInitIterator(paths.data, &fields);
+        long long count = 0, items = hashTypeLength(paths.data);
         while (hashTypeNext(&fields) != C_ERR) {
+            if (count == 0) {
+                int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
+                if (!rioWriteBulkCount(r, '*', 5 + cmd_items * 2) || !rioWriteBulkString(r, "PHSET", 5) ||
+                    !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, (char *)paths.key, paths.key_len) ||
+                    !rioWriteBulkString(r, "FIELDS", 6) || !rioWriteBulkLongLong(r, cmd_items)) {
+                    hashTypeResetIterator(&fields);
+                    raxStop(&paths);
+                    return 0;
+                }
+            }
             sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
             sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
-            int ok = rioWriteBulkCount(r, '*', 7) && rioWriteBulkString(r, "PHSET", 5) &&
-                     rioWriteBulkObject(r, key) && rioWriteBulkString(r, (char *)paths.key, paths.key_len) &&
-                     rioWriteBulkString(r, "FIELDS", 6) && rioWriteBulkLongLong(r, 1) &&
-                     rioWriteBulkString(r, field, sdslen(field)) && rioWriteBulkString(r, value, sdslen(value));
+            int ok = rioWriteBulkString(r, field, sdslen(field)) && rioWriteBulkString(r, value, sdslen(value));
             sdsfree(field);
             sdsfree(value);
             if (!ok) {
@@ -828,6 +836,8 @@ int rewritePathHashObject(rio *r, robj *key, robj *o) {
                 raxStop(&paths);
                 return 0;
             }
+            if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
+            items--;
         }
         hashTypeResetIterator(&fields);
     }

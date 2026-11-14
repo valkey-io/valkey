@@ -270,8 +270,9 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
         }
     }
 
-    # Raft: wait for auto-promotion to min(n, 5) voters (RAFT_TARGET_VOTERS).
-    if {[lindex [R 0 CONFIG GET cluster-protocol] 1] eq "raft"} {
+    # Raft: wait for auto-promotion to min(n, 5) voters. Skip a singleton:
+    # cluster_size stays 0 until NODE_JOIN/ADD_VOTER apply, and there is no MEET.
+    if {$node_count > 1 && [lindex [R 0 CONFIG GET cluster-protocol] 1] eq "raft"} {
         set voters $node_count
         if {$voters > 5} {set voters 5}
         wait_for_raft_cluster_size $voters

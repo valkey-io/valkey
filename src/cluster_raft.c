@@ -412,6 +412,7 @@ static int clusterRaftPersistNewLogEntries(uint64_t from);
 static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
 static void clusterRaftStartElection(void);
+static clusterNode *clusterRaftSelectTransferTarget(void);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -1287,6 +1288,27 @@ static int clusterRaftMaybeStepDown(uint64_t term) {
 static int clusterRaftIsVotedForNone(void) {
     char zero[CLUSTER_NAMELEN] = {0};
     return memcmp(RAFT_STATE()->voted_for, zero, CLUSTER_NAMELEN) == 0;
+}
+
+/* Return the reachable voter with the highest match_index, or NULL. */
+static clusterNode *clusterRaftSelectTransferTarget(void) {
+    clusterNode *best = NULL;
+    uint64_t best_match = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself || !node->link) continue;
+        if (nodeFailed(node)) continue;
+        if (!nodeIsVoter(node) || (node->flags & CLUSTER_NODE_HANDSHAKE)) continue;
+        uint64_t mi = RAFT_NODE(node)->match_index;
+        if (!best || mi > best_match) {
+            best = node;
+            best_match = mi;
+        }
+    }
+    dictReleaseIterator(di);
+    return best;
 }
 
 /* --------------------------------------------------------------------------
@@ -3043,23 +3065,7 @@ static void clusterRaftPrepareShutdown(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (rs->role != RAFT_ROLE_LEADER || server.cluster->size <= 1) return;
 
-    /* Find the follower with the highest match_index. */
-    clusterNode *best = NULL;
-    uint64_t best_match = 0;
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        if (node == myself || !node->link) continue;
-        if (nodeFailed(node)) continue;
-        if (node->flags & (CLUSTER_NODE_JOINING | CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_LEARNER)) continue;
-        uint64_t mi = RAFT_NODE(node)->match_index;
-        if (!best || mi > best_match) {
-            best = node;
-            best_match = mi;
-        }
-    }
-    dictReleaseIterator(di);
+    clusterNode *best = clusterRaftSelectTransferTarget();
     if (best) {
         sds msg = wireNewMsg("TIMEOUT_NOW");
         msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);

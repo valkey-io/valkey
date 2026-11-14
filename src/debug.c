@@ -65,7 +65,10 @@ typedef ucontext_t sigcontext_t;
 
 #ifdef USE_LIBBACKTRACE
 #include <backtrace.h>
+#endif
 #include <sys/wait.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
 #endif
 
 #ifdef __CYGWIN__
@@ -2543,21 +2546,92 @@ void removeSigSegvHandlers(void) {
     sigaction(SIGABRT, &act, NULL);
 }
 
+/* __GLIBC_PREREQ() can only be evaluated once we know it's defined. */
+#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+#if __GLIBC_PREREQ(2, 34)
+#define HAVE__FORK 1
+#endif
+#endif
+
+/* Fork a child for the crash report. Unlike fork(), this does not run the
+ * pthread_atfork() handlers. */
+static pid_t forkFromHandler(void) {
+    pid_t pid;
+#if defined(HAVE__FORK)
+    pid = _Fork();
+#elif defined(__linux__) && defined(SYS_clone) && !defined(__s390__)
+    pid = (pid_t)syscall(SYS_clone, SIGCHLD, 0, 0, 0, 0);
+#else
+    pid = fork();
+#endif
+    return pid;
+}
+
+/* Wait for child process to exit gracefully within a specified timeout, if the timeout
+ * is exhausted & child is yet to return, we kill it.
+ * timeout is only 10ms granular, timeout will be clamped to the previous 10ms boundary.
+ */
+static int waitChild(pid_t pid, long long timeout) {
+    int status;
+    long long attempts = timeout / 10000;
+    pid_t ret = 0;
+    const struct timespec poll_interval = {.tv_sec = 0, .tv_nsec = 10 * 1000 * 1000};
+
+    while (attempts--) {
+        nanosleep(&poll_interval, NULL);
+        ret = waitpid(pid, &status, WNOHANG);
+        if (ret > 0) break;                     /* Child exited */
+        if (ret == -1 && errno != EINTR) break; /* Real error */
+    }
+
+    if (ret == 0 || (ret == -1 && errno == EINTR)) {
+        /* kill the child, but don't block on reaping it.
+         * Give it up to 100ms, then leave it unreaped. */
+        kill(pid, SIGKILL);
+        for (int j = 0; j < 10; j++) {
+            nanosleep(&poll_interval, NULL);
+            ret = waitpid(pid, NULL, WNOHANG);
+            if (ret == pid || (ret == -1 && errno != EINTR)) return 1;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+/* Set in the child forked by printCrashReport(). */
+static volatile sig_atomic_t in_crash_report_child = 0;
+
 void printCrashReport(void) {
     server.crashed = 1;
-    /* Log INFO and CLIENT LIST */
-    logServerInfo();
+    /* The parts below allocate, take locks and call module code, so they may
+     * hang (e.g. on a lock held by another thread) or crash. Run them in a
+     * child so the rest of the report still comes out. If fork fails, skip
+     * them. */
+    pid_t pid = forkFromHandler();
+    if (pid == 0) {
+        in_crash_report_child = 1;
+        /* Log INFO and CLIENT LIST */
+        logServerInfo();
 
-    /* Log the current client */
-    logCurrentClient(server.current_client, "CURRENT");
-    logCurrentClient(server.executing_client, "EXECUTING");
+        /* Log the current client */
+        logCurrentClient(server.current_client, "CURRENT");
+        logCurrentClient(server.executing_client, "EXECUTING");
 
-    /* Log modules info. Something we wanna do last since we fear it may crash. */
-    logModulesInfo();
+        /* Log modules info. Something we wanna do last since we fear it may crash. */
+        logModulesInfo();
 
-    /* Log debug config information, which are some values
-     * which may be useful for debugging crashes. */
-    logConfigDebugInfo();
+        /* Log debug config information, which are some values
+         * which may be useful for debugging crashes. */
+        logConfigDebugInfo();
+
+        _exit(0);
+    } else if (pid > 0) {
+        if (waitChild(pid, 10 * 1000000))
+            serverLogRawFromHandler(LL_WARNING, "Crash report child timed out and was killed. INFO, client, modules and config debug output may be incomplete.");
+    } else {
+        serverLogRawFromHandler(LL_WARNING, "Skipped INFO, client, modules and config debug output: fork failed.");
+    }
 
     /* Run memory test in case the crash was triggered by memory corruption. */
     doFastMemoryTest();
@@ -2565,6 +2639,10 @@ void printCrashReport(void) {
 
 void bugReportEnd(int killViaSignal, int sig) {
     struct sigaction act;
+
+    /* A crash or assert in the crash report child ends only the child. The
+     * parent goes on with the report and logs its end. */
+    if (in_crash_report_child) _exit(1);
 
     serverLogFromHandler(LL_WARNING | LL_RAW,
                          "\n=== %s BUG REPORT END. Make sure to include from START to END. ===\n\n"

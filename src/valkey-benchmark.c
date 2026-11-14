@@ -768,6 +768,75 @@ static void clientDone(client c) {
     }
 }
 
+/* The benchmark only inspects top-level error replies, so only those are built
+ * as reply objects. Everything else is still parsed, but is represented by a
+ * shared placeholder instead of a tree of allocations that is freed right away. */
+static valkeyReply skippedReply;
+/* RESP3 push messages (e.g. tracking invalidations) keep their type, which
+ * libvalkey uses to route them to the push callback instead of returning them
+ * as command replies. */
+static valkeyReply skippedPushReply = {.type = VALKEY_REPLY_PUSH};
+
+static void *createSkippedString(const valkeyReadTask *task, char *str, size_t len) {
+    if (task->parent != NULL || task->type != VALKEY_REPLY_ERROR) return &skippedReply;
+    valkeyReply *r = zcalloc(sizeof(*r));
+    r->type = task->type;
+    r->str = zmalloc(len + 1);
+    memcpy(r->str, str, len);
+    r->str[len] = '\0';
+    r->len = len;
+    return r;
+}
+
+static void *createSkippedArray(const valkeyReadTask *task, size_t elements) {
+    UNUSED(elements);
+    if (task->parent == NULL && task->type == VALKEY_REPLY_PUSH) return &skippedPushReply;
+    return &skippedReply;
+}
+
+static void *createSkippedInteger(const valkeyReadTask *task, long long value) {
+    UNUSED(task);
+    UNUSED(value);
+    return &skippedReply;
+}
+
+static void *createSkippedDouble(const valkeyReadTask *task, double value, char *str, size_t len) {
+    UNUSED(task);
+    UNUSED(value);
+    UNUSED(str);
+    UNUSED(len);
+    return &skippedReply;
+}
+
+static void *createSkippedNil(const valkeyReadTask *task) {
+    UNUSED(task);
+    return &skippedReply;
+}
+
+static void *createSkippedBool(const valkeyReadTask *task, int bval) {
+    UNUSED(task);
+    UNUSED(bval);
+    return &skippedReply;
+}
+
+static void freeBenchmarkReply(void *reply) {
+    if (reply == &skippedReply || reply == &skippedPushReply) return;
+    valkeyReply *r = reply;
+    zfree(r->str);
+    zfree(r);
+}
+
+/* Replaces libvalkey's default push callback, which would free the reply with
+ * freeReplyObject(). */
+static void discardPushReply(void *privdata, void *reply) {
+    UNUSED(privdata);
+    freeBenchmarkReply(reply);
+}
+
+static valkeyReplyObjectFunctions benchmarkReplyFunctions = {
+    createSkippedString, createSkippedArray, createSkippedInteger, createSkippedDouble,
+    createSkippedNil, createSkippedBool, freeBenchmarkReply};
+
 static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     client c = privdata;
     void *reply = NULL;
@@ -826,7 +895,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                 }
 
-                freeReplyObject(reply);
+                freeBenchmarkReply(reply);
                 /* This is an OK for prefix commands such as auth and select.*/
                 if (c->prefix_pending > 0) {
                     c->prefix_pending--;
@@ -1105,6 +1174,10 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     c->thread_id = thread_id;
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
+    /* Replies read on this context may be the shared placeholders above, so they
+     * must be released with freeBenchmarkReply(), never freeReplyObject(). */
+    c->context->reader->fn = &benchmarkReplyFunctions;
+    valkeySetPushCallback(c->context, discardPushReply);
 
     /* Build the request buffer:
      * Queue N requests accordingly to the pipeline size, or simply clone

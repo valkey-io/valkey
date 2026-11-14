@@ -1513,6 +1513,14 @@ LUALIB_API int(luaopen_struct)(lua_State *L);
 LUALIB_API int(luaopen_cmsgpack)(lua_State *L);
 LUALIB_API int(luaopen_bit)(lua_State *L);
 
+/* Interrupt hooks for the cjson/cmsgpack C encoders. They run entirely in C
+ * without returning to the Lua VM, so the instruction-count hook cannot stop
+ * them. luaEncoderInterrupt (defined below) is installed into these pointers
+ * so a long encode honors the busy time limit and SCRIPT KILL. */
+extern int (*lua_cjson_encode_interrupt)(lua_State *L);
+extern int (*lua_cmsgpack_encode_interrupt)(lua_State *L);
+static int luaEncoderInterrupt(lua_State *lua);
+
 static void luaLoadLibraries(lua_State *lua) {
     luaLoadLib(lua, "", luaopen_base);
     luaLoadLib(lua, LUA_TABLIBNAME, luaopen_table);
@@ -1768,6 +1776,12 @@ void luaRegisterServerAPI(luaEngineCtx *ctx, lua_State *lua) {
     /* Add default C functions provided in deps/lua codebase to handle basic data types such as table, string etc. */
     luaLoadLibraries(lua);
 
+    /* Let the cjson/cmsgpack C encoders check the script time limit while they
+     * run, so a pathological script-built table can no longer block the server
+     * past the busy threshold without SCRIPT KILL being able to stop it. */
+    lua_cjson_encode_interrupt = luaEncoderInterrupt;
+    lua_cmsgpack_encode_interrupt = luaEncoderInterrupt;
+
     luaSaveOnRegistry(lua, REGISTRY_RUN_CTX_NAME, NULL);
 
     /* Before Redis OSS 7, Lua used to return error messages as strings from pcall function. With Valkey (or Redis OSS 7), Lua now returns
@@ -1919,21 +1933,41 @@ static int server_math_randomseed(lua_State *L) {
     return 0;
 }
 
+static const char *luaScriptKilledError(luaFuncCallCtx *rctx) {
+    if (rctx->type == VMSE_EVAL) {
+        return "Script killed by user with SCRIPT KILL.";
+    } else {
+        return "Script killed by user with FUNCTION KILL.";
+    }
+}
+
+/* Returns 1 when the function running at the hook event 'ar' is the error
+ * handler stored in the registry (the Lua function that annotates an error
+ * with the user's source line). */
+static int luaHookIsInErrorHandler(lua_State *lua, lua_Debug *ar) {
+    if (!lua_getinfo(lua, "f", ar)) return 0;
+    lua_pushstring(lua, REGISTRY_ERROR_HANDLER_NAME);
+    lua_gettable(lua, LUA_REGISTRYINDEX);
+    int in_handler = lua_rawequal(lua, -1, -2);
+    lua_pop(lua, 2);
+    return in_handler;
+}
+
 /* This is the Lua script "count" hook that we use to detect scripts timeout. */
 static void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
-    VALKEYMODULE_NOT_USED(ar);
-
     luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
 
     ValkeyModuleScriptingEngineExecutionState state = ValkeyModule_GetFunctionExecutionState(rctx->run_ctx);
     if (state == VMSE_STATE_KILLED) {
-        char *err = NULL;
-        if (rctx->type == VMSE_EVAL) {
-            err = "Script killed by user with SCRIPT KILL.";
-        } else {
-            err = "Script killed by user with FUNCTION KILL.";
-        }
+        /* A killed cjson/cmsgpack encoder raises its error from plain C code
+         * (see luaEncoderInterrupt), so this hook, re-armed as a line hook, can
+         * fire inside the registry error handler while it annotates that error
+         * with the user's source line. Do not raise a second error from there:
+         * let the handler finish, and kill the script on its next line. */
+        if (luaHookIsInErrorHandler(lua, ar)) return;
+
+        const char *err = luaScriptKilledError(rctx);
         ValkeyModule_Log(NULL, "notice", "%s", err);
 
         /*
@@ -1946,6 +1980,42 @@ static void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
         luaPushError(lua, err);
         luaError(lua);
     }
+}
+
+/* Called by the cjson/cmsgpack C encoders every ~100k units of work. It runs
+ * the same check as luaMaskCountHook: ValkeyModule_GetFunctionExecutionState
+ * enters the busy state when the time limit is passed, processes events so
+ * other clients get BUSY replies, and reports a pending SCRIPT KILL / FUNCTION
+ * KILL. On a kill it pushes the same error value luaMaskCountHook raises and
+ * returns non-zero; the encoder frees its buffer and raises that value with
+ * lua_error, so the client sees "Script killed by user with SCRIPT KILL." with
+ * the user's source line (the encoder is a C function, so the registry error
+ * handler reports its caller). It also re-arms the count hook to fire on every
+ * line, so a pcall around the encoder cannot swallow the kill, matching the
+ * behavior of a killed pure-Lua loop; luaMaskCountHook skips the error
+ * handler's own lines so that annotation completes first.
+ *
+ * When the Lua debugger is active the script runs under luaLdbLineHook, which
+ * never checks the time limit, so a debugged script never enters busy mode.
+ * Keep the encoders on the same rule and do nothing in that case. */
+static int luaEncoderInterrupt(lua_State *lua) {
+    if (ldbIsActive()) return 0;
+
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    if (!rctx || !rctx->run_ctx) return 0; /* not inside a script invocation */
+
+    ValkeyModuleScriptingEngineExecutionState state = ValkeyModule_GetFunctionExecutionState(rctx->run_ctx);
+    if (state != VMSE_STATE_KILLED) return 0;
+
+    /* luaPushError needs a few free slots. If the stack is full, let this
+     * encode continue; the count hook kills the script once it returns. */
+    if (!lua_checkstack(lua, 4)) return 0;
+
+    const char *err = luaScriptKilledError(rctx);
+    ValkeyModule_Log(NULL, "notice", "%s", err);
+    lua_sethook(lua, luaMaskCountHook, LUA_MASKLINE, 0);
+    luaPushError(lua, err);
+    return 1;
 }
 
 void luaErrorInformationDiscard(errorInfo *err_info) {

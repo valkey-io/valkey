@@ -105,6 +105,7 @@ and our version:
 6. Protection of tables reachable from globals, with a globals whitelist.
 7. Multiple CVE security patches (CVE-2022-24834, CVE-2024-31449, CVE-2024-31227, CVE-2024-31228) in cjson, cmsgpack, and the parser.
 8. In `lbaselib.c`, `coroutine.resume` and `coroutine.wrap` hand the debug hook and its remaining instruction count between the resumer and the coroutine, so script timeouts and SCRIPT KILL apply across coroutines.
+9. `lua_cjson.c` and `lua_cmsgpack.c` expose the interrupt hook pointers `lua_cjson_encode_interrupt` and `lua_cmsgpack_encode_interrupt`. They are `NULL` by default; the server sets them so a long encode honors the script time limit.
 
 Hdr_Histogram
 ---

@@ -1032,11 +1032,11 @@ int hex_digit_to_int(char c) {
     }
 }
 
-static inline bool isPtrExceedingEnd(const char *ptr, size_t len, const char *end) {
+static inline bool isPtrExceedingEnd(const void *ptr, size_t len, const void *end) {
     if (end == NULL) {
         return false;
     }
-    return (ptr + len) >= end;
+    return ((const char *)ptr + len) >= (const char *)end;
 }
 
 /* Helper function for sdssplitargs that parses a single argument. It
@@ -1046,7 +1046,7 @@ static inline bool isPtrExceedingEnd(const char *ptr, size_t len, const char *en
  * characters that were parsed. If the argument can't be parsed, it
  * returns 0. */
 static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char *dst) {
-    const char *p = arg;
+    const unsigned char *p = (const unsigned char *)arg;
     int inq = 0;  /* set to 1 if we are in "quotes" */
     int insq = 0; /* set to 1 if we are in 'single quotes' */
     int done = 0;
@@ -1056,6 +1056,8 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
     }
 
     while (!done) {
+        /* -1 means no output byte this step. Source bytes are read as
+         * unsigned char so that 0xFF does not collide with it. */
         int new_char = -1;
         if (inq) {
             if (!*p) {
@@ -1126,7 +1128,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             }
         }
     }
-    return p - arg;
+    return p - (const unsigned char *)arg;
 }
 
 /* Split a line into arguments, where every argument can be in the

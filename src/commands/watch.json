@@ -7,6 +7,7 @@
         "arity": -2,
         "function": "watchCommand",
         "command_flags": [
+            "DENYOOM",
             "NOSCRIPT",
             "LOADING",
             "STALE",

@@ -974,6 +974,14 @@ immediately starts a real election (skipping pre-vote) without waiting
 for the election timeout.
 (See Ongaro dissertation §3.10.)
 
+When `CLUSTER FORGET` targets the leader, the `NODE_FORGET` proposal is
+kept pending and the leader is asked to transfer leadership
+(`TRANSFER_LEADER`). Since the target skips pre-vote, the leader only
+sends `TIMEOUT_NOW` once the target's `match_index` has reached the
+leader's last log index. If that doesn't happen within the node timeout,
+the transfer is abandoned and the leader stays leader. The pending
+`NODE_FORGET` is resent to the new leader, or times out.
+
 Nodes in handshake, learners and nodes not yet in the raft log are
 excluded as transfer targets.
 

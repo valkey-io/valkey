@@ -220,6 +220,11 @@ typedef struct {
     /* Leader identity */
     char leader[CLUSTER_NAMELEN]; /* All zeros = unknown */
 
+    /* Leadership transfer in progress, valid while leader in transfer_term */
+    char transfer_target[CLUSTER_NAMELEN];
+    uint64_t transfer_term;
+    mstime_t transfer_deadline; /* 0 = no transfer in progress */
+
     /* Manual failover state (on the replica side) */
     mstime_t mf_end;             /* Timeout for manual failover, 0 = not in progress */
     long long mf_primary_offset; /* Primary's offset after pausing, -1 = not received yet */
@@ -416,6 +421,7 @@ static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last
 static void clusterRaftStartElection(void);
 static clusterNode *clusterRaftSelectTransferTarget(void);
 static void clusterRaftRequestLeaderTransfer(void);
+static void clusterRaftMaybeSendTimeoutNow(void);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -1325,14 +1331,21 @@ static void clusterRaftRequestLeaderTransfer(void) {
     if (server.cluster->size <= 1) return;
 
     if (rs->role == RAFT_ROLE_LEADER) {
+        if (rs->transfer_deadline && rs->transfer_term == rs->current_term) return;
+
         clusterNode *best = clusterRaftSelectTransferTarget();
         if (!best) return;
 
-        sds msg = wireNewMsg("TIMEOUT_NOW");
-        msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);
-        msg = wireFinishMsg(msg);
-        clusterRaftSendMsg(best->link, msg);
-        serverLog(LL_NOTICE, "Leadership transfer: sent TIMEOUT_NOW to %.40s.", best->name);
+        memcpy(rs->transfer_target, best->name, CLUSTER_NAMELEN);
+        rs->transfer_term = rs->current_term;
+        rs->transfer_deadline = monotonicMs() + server.cluster_node_timeout;
+        clusterRaftMaybeSendTimeoutNow();
+        if (rs->transfer_deadline) {
+            serverLog(LL_NOTICE, "Leadership transfer: waiting for %.40s to catch up (match index %llu, last index %llu).",
+                      best->name, (unsigned long long)RAFT_NODE(best)->match_index,
+                      (unsigned long long)raftLogLastIndex());
+            rs->todo_broadcast_ae = 1;
+        }
         return;
     }
 
@@ -1349,6 +1362,32 @@ static void clusterRaftRequestLeaderTransfer(void) {
         clusterRaftSendMsg(leader->link, msg);
         serverLog(LL_NOTICE, "Requested leadership transfer from %.40s.", leader->name);
     }
+}
+
+/* The target skips pre-vote on TIMEOUT_NOW, so it must have our whole log. */
+static void clusterRaftMaybeSendTimeoutNow(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->transfer_deadline) return;
+    if (rs->role != RAFT_ROLE_LEADER || rs->transfer_term != rs->current_term) {
+        rs->transfer_deadline = 0;
+        return;
+    }
+
+    clusterNode *target = clusterLookupNode(rs->transfer_target, CLUSTER_NAMELEN);
+    if (!target || !target->link || nodeFailed(target) || !nodeIsVoter(target)) {
+        serverLog(LL_NOTICE, "Leadership transfer aborted: target %.40s is no longer available.",
+                  rs->transfer_target);
+        rs->transfer_deadline = 0;
+        return;
+    }
+    if (RAFT_NODE(target)->match_index < raftLogLastIndex()) return;
+
+    sds msg = wireNewMsg("TIMEOUT_NOW");
+    msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);
+    msg = wireFinishMsg(msg);
+    clusterRaftSendMsg(target->link, msg);
+    serverLog(LL_NOTICE, "Leadership transfer: sent TIMEOUT_NOW to %.40s.", target->name);
+    rs->transfer_deadline = 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -2012,6 +2051,10 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         /* Follower accepted — update matchIndex/nextIndex. */
         rd->match_index = follower_last_index;
         rd->next_index = follower_last_index + 1;
+        if (rs->transfer_deadline &&
+            memcmp(node->name, rs->transfer_target, CLUSTER_NAMELEN) == 0) {
+            clusterRaftMaybeSendTimeoutNow();
+        }
 
         /* Check if we can advance commitIndex (Raft paper §5.3/§5.4). */
         for (uint64_t i = rs->log_count; i > 0; i--) {
@@ -2836,6 +2879,15 @@ static void clusterRaftCron(void) {
         if (rs->role == RAFT_ROLE_LEADER &&
             !clusterRaftLeaderHasFreshQuorum(now)) {
             clusterRaftStepDown(now, "lost quorum freshness");
+        }
+
+        /* The pending proposal times out by itself, we stay leader. */
+        if (rs->transfer_deadline && now > rs->transfer_deadline) {
+            if (rs->role == RAFT_ROLE_LEADER && rs->transfer_term == rs->current_term) {
+                serverLog(LL_NOTICE, "Leadership transfer aborted: %.40s did not catch up in time.",
+                          rs->transfer_target);
+            }
+            rs->transfer_deadline = 0;
         }
 
         /* Expire stale pending proposals to prevent unbounded buildup

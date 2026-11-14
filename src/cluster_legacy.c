@@ -3464,13 +3464,14 @@ int clusterProcessPacket(clusterLink *link) {
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
+                        if (nodeEpoch(sender) > sender_claimed_config_epoch ||
+                            nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
                                       sender->name, sender->human_nodename, sender->shard_id,
                                       (unsigned long long)sender_claimed_config_epoch,
-                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
+                                      (unsigned long long)max(nodeEpoch(sender), nodeEpoch(sender_claimed_primary)));
                             /* This packet is stale so we avoid processing it anymore. Otherwise
                              * this may cause a primary-replica chain issue. */
                             return 1;
@@ -5221,6 +5222,18 @@ void clusterCron(void) {
             ping_delay > server.cluster_node_timeout / 2 &&
             /* and in such interval we are not seeing any traffic at all. */
             data_delay > server.cluster_node_timeout / 2) {
+            /* Disconnect the link, it will be reconnected automatically. */
+            freeClusterLink(node->link);
+        }
+
+        /* In some situations the check above cannot disconnect the link,
+         * because data_received keeps being refreshed by the peer's own PINGs
+         * even though our PING was lost. If our PING stays outstanding for a
+         * full node timeout without a PONG, force a reconnect so a fresh PING
+         * is sent and the stale state clears. */
+        if (node->link &&
+            now - node->link->ctime > server.cluster_node_timeout &&
+            node->ping_sent && ping_delay > server.cluster_node_timeout) {
             /* Disconnect the link, it will be reconnected automatically. */
             freeClusterLink(node->link);
         }

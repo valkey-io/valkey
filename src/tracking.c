@@ -279,7 +279,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
     int using_redirection = 0;
     if (c->client_tracking_redirection) {
         client *redir = lookupClientByID(c->client_tracking_redirection);
-        if (!redir) {
+        if (!redir || redir->flag.close_after_reply || redir->flag.close_asap) {
             c->flag.tracking_broken_redir = 1;
             /* We need to signal to the original connection that we
              * are unable to send invalidation messages to the redirected
@@ -496,6 +496,10 @@ void trackingInvalidateKeysOnFlush(int async) {
     }
 }
 
+/* Maximum time in microseconds a single call to trackingLimitUsedSlots()
+ * spends invalidating keys. */
+#define TRACKING_EVICTION_TIME_LIMIT_US 500
+
 /* Tracking forces the server to remember information about which client may have
  * certain keys. In workloads where there are a lot of reads, but keys are
  * hardly modified, the amount of information we have to remember server side
@@ -520,6 +524,8 @@ void trackingLimitUsedSlots(void) {
      * we do here is proportional to the number of times we entered this
      * function and found that we are still over the limit. */
     int effort = 100 * (timeout_counter + 1);
+    monotime timer;
+    elapsedStart(&timer);
 
     /* We just remove one key after another by using a random walk. */
     raxIterator ri;
@@ -537,6 +543,10 @@ void trackingLimitUsedSlots(void) {
             raxStop(&ri);
             return; /* Return ASAP: we are again under the limit. */
         }
+        /* A key can be tracked by any number of clients, so the number of
+         * keys does not bound the work. Stop on time as well, the next calls
+         * continue the eviction. */
+        if (elapsedUs(timer) > TRACKING_EVICTION_TIME_LIMIT_US) break;
     }
 
     /* If we reach this point, we were not able to go under the configured

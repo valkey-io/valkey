@@ -65,7 +65,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
 
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
     test "Primaries will not time out then they are elected in the same epoch" {
         # Since we have the delay time, so these node may not initiate the
         # election at the same time (same epoch). But if they do, we make
@@ -152,9 +152,21 @@ proc test_replica_config_epoch_failover {type} {
 
         set R0_nodeid [R 0 cluster myid]
 
-        # R 0 is the first node, so we expect its epoch to be the smallest,
-        # so bumpepoch must succeed and it's config epoch will be changed.
+        # Bumpepoch changes the config epoch of R 0 only if it is not already
+        # the greatest epoch R 0 knows. The config epoch collisions resolved
+        # when the cluster is created can leave R 0 with the greatest one, in
+        # that case bump the config epoch of R 1 and wait for R 0 to see it.
         set res [R 0 cluster bumpepoch]
+        if {[string match {STILL *} $res]} {
+            set R1_nodeid [R 1 cluster myid]
+            set R1_config_epoch [lindex [R 1 cluster bumpepoch] 1]
+            wait_for_condition 1000 10 {
+                $R1_config_epoch == [dict get [cluster_get_node_by_id 0 $R1_nodeid] config_epoch]
+            } else {
+                fail "R 0 does not see the config epoch $R1_config_epoch of R 1"
+            }
+            set res [R 0 cluster bumpepoch]
+        }
         assert_match {BUMPED *} $res
         set R0_config_epoch [lindex $res 1]
 

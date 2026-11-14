@@ -662,6 +662,27 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         wait_for_migration 2 16383
     }
 
+    test "Slot Migration cleanup aborts EXEC of clients watching keys in the slot" {
+        R 2 set "$16383_slot_tag:watched" "value"
+        set watcher [valkey_client_by_addr [srv -2 host] [srv -2 port]]
+        $watcher watch "$16383_slot_tag:watched"
+
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        wait_for_migration 0 16383
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # The key was dropped from node 2, so the transaction must be aborted.
+        $watcher multi
+        $watcher ping
+        assert_equal {} [$watcher exec]
+        $watcher close
+
+        # Cleanup for next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
     proc verify_client_flag {idx flag expected_count} {
         set clients [split [string trim [R $idx client list]] "\r\n"]
         set found 0

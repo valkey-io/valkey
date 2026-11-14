@@ -5036,12 +5036,6 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     if (validate_only) {
         /* Not checked on apply, where nodes may know different leaders. */
         bool is_leader = memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0;
-        /* Replacement-first: refuse to demote below the auto-promotion
-         * target. The caller must add a replacement voter first. */
-        if (server.cluster->size - 1 < RAFT_TARGET_VOTERS) {
-            sdsfreesplitres(argv, argc);
-            return RAFT_RESULT_REJECTED;
-        }
         sdsfreesplitres(argv, argc);
         return is_leader ? RAFT_RESULT_REJECTED : RAFT_RESULT_OK;
     }
@@ -5131,15 +5125,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     }
 
     if (validate_only) {
-        /* Forgetting the current leader is a transfer, not a shrink. */
-        if (node == myself) {
-            result = RAFT_RESULT_LEADER_TRANSFER;
-            goto done;
-        }
-        /* Replacement-first: refuse to forget a voter below the target. */
-        if (nodeIsVoter(node) && server.cluster->size - 1 < RAFT_TARGET_VOTERS) {
-            goto reject;
-        }
+        if (node == myself) result = RAFT_RESULT_LEADER_TRANSFER;
         goto done;
     }
 

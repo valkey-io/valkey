@@ -75,6 +75,16 @@ int stringmatchlen(const char *p, int plen, const char *s, int slen, int nocase)
 int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase);
 int stringmatch(const char *p, const char *s, int nocase);
 int stringmatchlen_fuzz_test(void);
+
+/* Prepared-pattern API: for callers that match one fixed pattern against
+ * many candidate strings (e.g. KEYS scanning the whole keyspace), this
+ * amortizes stringmatchlen()'s "[...]" class parsing across all of them
+ * instead of repeating it for every candidate. 'pattern' must stay valid
+ * for the lifetime of the returned handle. */
+typedef struct stringmatchPrepared stringmatchPrepared;
+stringmatchPrepared *stringmatchlen_prepare(const char *pattern, int patternLen, int nocase);
+int stringmatchlen_prepared(const stringmatchPrepared *prepared, const char *s, int slen);
+void stringmatchlen_prepared_free(stringmatchPrepared *prepared);
 unsigned long long memtoull(const char *p, int *err);
 const char *mempbrk(const char *s, size_t len, const char *chars, size_t charslen);
 char *memmapchars(char *s, size_t len, const char *from, const char *to, size_t setlen);

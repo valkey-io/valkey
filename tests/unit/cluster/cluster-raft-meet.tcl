@@ -7,13 +7,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}}
         set r0 [srv 0 client]
 
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 2 &&
-            [CI 1 cluster_size] == 2
-        } else {
-            fail "Cluster size: [CI 0 cluster_size] [CI 1 cluster_size]"
-        }
+        wait_for_raft_cluster_size 2
     }
 }
 
@@ -24,14 +18,7 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}}
         for {set i 1} {$i < 5} {incr i} {
             $r0 CLUSTER MEET [srv -$i host] [srv -$i port]
         }
-
-        wait_for_condition 100 200 {
-            [CI 0 cluster_size] == 5 &&
-            [CI 1 cluster_size] == 5 &&
-            [CI 4 cluster_size] == 5
-        } else {
-            fail "Sizes: [CI 0 cluster_size] [CI 1 cluster_size] [CI 4 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
     }
 }
 
@@ -40,14 +27,7 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}}
         for {set i 1} {$i < 5} {incr i} {
             [srv -$i client] CLUSTER MEET [srv 0 host] [srv 0 port]
         }
-
-        wait_for_condition 100 200 {
-            [CI 0 cluster_size] == 5 &&
-            [CI 1 cluster_size] == 5 &&
-            [CI 4 cluster_size] == 5
-        } else {
-            fail "Sizes: [CI 0 cluster_size] [CI 1 cluster_size] [CI 4 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
     }
 }
 
@@ -58,14 +38,7 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}}
         for {set i 0} {$i < 4} {incr i} {
             [srv -$i client] CLUSTER MEET [srv -[expr {$i+1}] host] [srv -[expr {$i+1}] port]
         }
-
-        wait_for_condition 100 200 {
-            [CI 0 cluster_size] == 5 &&
-            [CI 1 cluster_size] == 5 &&
-            [CI 4 cluster_size] == 5
-        } else {
-            fail "Sizes: [CI 0 cluster_size] [CI 1 cluster_size] [CI 4 cluster_size]"
-        }
+        wait_for_raft_cluster_size 5
     }
 }
 
@@ -74,11 +47,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}}
         set r0 [srv 0 client]
 
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 2
-        } else {
-            fail "Cluster did not form"
-        }
+        wait_for_raft_cluster_size 2
 
         $r0 CLUSTER ADDSLOTSRANGE 0 16383
 
@@ -100,12 +69,7 @@ start_multiple_servers 4 {overrides {cluster-enabled yes cluster-protocol raft}}
         [srv 0 client] CLUSTER MEET [srv -1 host] [srv -1 port]
         [srv -2 client] CLUSTER MEET [srv -3 host] [srv -3 port]
 
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 2 &&
-            [CI 2 cluster_size] == 2
-        } else {
-            fail "Two clusters did not form"
-        }
+        wait_for_raft_cluster_size 2
 
         # Attempting to merge them should fail.
         catch {[srv 0 client] CLUSTER MEET [srv -2 host] [srv -2 port]} err

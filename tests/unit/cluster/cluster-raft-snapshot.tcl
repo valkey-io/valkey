@@ -20,8 +20,6 @@ proc shard_members {id} {
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters.
-    raft_promote_start_cluster_voters 3
     test "Raft snapshot: follower catches up via snapshot after leader trims log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
 
@@ -146,10 +144,6 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make the primaries voters. The test takes R0
-    # and its replica R4 down, which leaves a majority whether or not R4 is
-    # a voter.
-    raft_promote_start_cluster_voters 4
     test "Raft snapshot: replica fails over after learning from a snapshot that its primary failed" {
         # R4 is down while its primary R0 fails, so it skips the NODE_FAIL
         # entry and learns about the failure from a snapshot.
@@ -206,8 +200,6 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters.
-    raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins leader with compacted log (via restart)" {
         assert_equal "leader" [CI 0 cluster_raft_role]
         set leader_port [srv 0 port]
@@ -255,8 +247,6 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters.
-    raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins when leader has trimmed log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
         set leader_port [srv 0 port]
@@ -306,11 +296,6 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
         # Forget each replica while another voter can still ack, then pause
         # it so it cannot open a new link.
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 3
-        } else {
-            fail "replicas were not promoted (size=[CI 0 cluster_size])"
-        }
         assert_equal OK [R 0 cluster forget $r2_id]
         pause_process [srv -2 pid]
         wait_for_condition 50 100 {
@@ -356,11 +341,7 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         set r1_id [R 1 cluster myid]
         R 0 cluster meet 127.0.0.1 [srv -1 port]
         raft_add_voter 0 $r1_id
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 2
-        } else {
-            fail "joined voter not counted (size=[CI 0 cluster_size])"
-        }
+        wait_for_raft_cluster_size 2
     }
 }
 

@@ -15,7 +15,7 @@ start_server {
         r XADD mystream 1-2 b 2
         r XADD mystream 1-3 c 3
         r XADD mystream 1-4 d 4
-        assert_error "*value for ENTRIESREAD must be positive or -1*" {r XGROUP CREATE mystream mygroup $ ENTRIESREAD -3}
+        assert_error "*value for ENTRIESREAD must be non-negative, or -1 for unknown*" {r XGROUP CREATE mystream mygroup $ ENTRIESREAD -3}
 
         r XGROUP CREATE mystream mygroup1 $ ENTRIESREAD 0
         r XGROUP CREATE mystream mygroup2 $ ENTRIESREAD 3

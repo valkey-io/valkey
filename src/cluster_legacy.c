@@ -3627,6 +3627,26 @@ static clusterMsgPingExt *getNextPingExt(clusterMsgPingExt *ext) {
     return next;
 }
 
+/* Returns the shard id announced in the ping extensions of 'hdr', or NULL if it
+ * has none or it is not a valid node id. The pointer refers into the receive
+ * buffer. clusterProcessPingExtensions() applies the shard id only after the
+ * role switch, so a caller that must decide before that reads it here. */
+static char *getClaimedShardIdFromPingExt(clusterMsg *hdr) {
+    if (!(hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) return NULL;
+    char *shard_id = NULL;
+    uint16_t extensions = ntohs(hdr->extensions);
+    clusterMsgPingExt *ext = getInitialPingExt(hdr, ntohs(hdr->count));
+    while (extensions--) {
+        if (ntohs(ext->type) == CLUSTERMSG_EXT_TYPE_SHARDID) {
+            clusterMsgPingExtShardId *shardid_ext = (clusterMsgPingExtShardId *)&(ext->ext[0].shard_id);
+            shard_id = shardid_ext->shard_id;
+        }
+        ext = getNextPingExt(ext);
+    }
+    if (shard_id && verifyClusterNodeId(shard_id, CLUSTER_NAMELEN) != C_OK) return NULL;
+    return shard_id;
+}
+
 /* All PING extensions must be 8-byte aligned */
 static uint32_t getAlignedPingExtSize(uint32_t dataSize) {
     return sizeof(clusterMsgPingExt) + EIGHT_BYTE_ALIGN(dataSize);
@@ -4543,6 +4563,23 @@ int clusterProcessPacket(clusterLink *link) {
             if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
                 if (sender_last_reported_as_replica) {
+                    /* A stale primary claim from a node we record as a replica must not
+                     * flip it back to primary. Epoch 0 has nothing to order against (soft
+                     * reset can keep it). A claim with another shard id comes from a node
+                     * that moved shards on soft reset, so it is not stale. */
+                    if (sender_claimed_config_epoch != 0 && nodeEpoch(sender) > sender_claimed_config_epoch) {
+                        char *claimed_shard_id = getClaimedShardIdFromPingExt(msg);
+                        if (claimed_shard_id == NULL ||
+                            memcmp(claimed_shard_id, clusterNodeGetPrimary(sender)->shard_id, CLUSTER_NAMELEN) == 0) {
+                            serverLog(LL_NOTICE,
+                                      "Ignore stale primary claim from %.40s (%s) in shard %.40s;"
+                                      " gossip config epoch: %llu, current config epoch: %llu",
+                                      sender->name, humanNodename(sender), sender->shard_id,
+                                      (unsigned long long)sender_claimed_config_epoch,
+                                      (unsigned long long)nodeEpoch(sender));
+                            return 1;
+                        }
+                    }
                     serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a primary in shard %.40s",
                               sender->name, humanNodename(sender), sender->shard_id);
                     clusterSetNodeAsPrimary(sender);

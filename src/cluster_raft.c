@@ -4362,12 +4362,6 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     }
 
     if (validate_only) {
-        /* Replacement-first: refuse to demote below the auto-promotion
-         * target. The caller must add a replacement voter first. */
-        if (server.cluster->size - 1 < RAFT_TARGET_VOTERS) {
-            sdsfreesplitres(argv, argc);
-            return RAFT_RESULT_REJECTED;
-        }
         sdsfreesplitres(argv, argc);
         return RAFT_RESULT_OK;
     }
@@ -4407,13 +4401,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
         goto reject;
     }
 
-    if (validate_only) {
-        /* Replacement-first: refuse to forget a voter below the target. */
-        if (nodeIsVoter(node) && server.cluster->size - 1 < RAFT_TARGET_VOTERS) {
-            goto reject;
-        }
-        goto done;
-    }
+    if (validate_only) goto done;
 
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];

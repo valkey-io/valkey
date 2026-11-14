@@ -303,23 +303,27 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         set r1_id [R 1 cluster myid]
         set r2_id [R 2 cluster myid]
 
-        # Leave R0 alone. Demote the replicas first if they are voters, so
-        # that R0 can commit the forgets on its own.
-        foreach id [list $r1_id $r2_id] {
-            catch {R 0 cluster delvoter $id}
-        }
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 1
+        # Forget each replica while another voter can still ack, then pause
+        # it so it cannot open a new link.
+        wait_for_condition 100 100 {
+            [CI 0 cluster_size] == 3
         } else {
-            fail "replicas were not demoted (size=[CI 0 cluster_size])"
+            fail "replicas were not promoted (size=[CI 0 cluster_size])"
         }
-        # Pause the replicas while they are forgotten, so that R0 still has
-        # links to them, and check that the links are freed.
-        pause_process [srv -1 pid]
-        pause_process [srv -2 pid]
-        assert_equal OK [R 0 cluster forget $r1_id]
         assert_equal OK [R 0 cluster forget $r2_id]
-        assert_equal 1 [CI 0 cluster_known_nodes]
+        pause_process [srv -2 pid]
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 2
+        } else {
+            fail "first replica was not forgotten (size=[CI 0 cluster_size])"
+        }
+        assert_equal OK [R 0 cluster forget $r1_id]
+        pause_process [srv -1 pid]
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 1 && [CI 0 cluster_known_nodes] == 1
+        } else {
+            fail "size=[CI 0 cluster_size] known=[CI 0 cluster_known_nodes]"
+        }
         assert_morethan [CI 0 cluster_raft_last_applied] 0
         assert_equal 0 [s 0 mem_cluster_links]
         resume_process [srv -1 pid]

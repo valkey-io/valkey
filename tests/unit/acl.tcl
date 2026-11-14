@@ -195,6 +195,62 @@ start_server {tags {"acl external:skip"}} {
         set e
     } {*NOPERM*channel*}
 
+    test {ACL LIST supports filtering by type} {
+        r ACL DELUSER test_acl_list_user
+        r ACL DELUSER test_acl_list_user2
+        r ACL DELUSER test_acl_list_user3
+
+        r ACL SETUSER test_acl_list_user
+        r ACL SETUSER test_acl_list_user2
+        r ACL SETUSER test_acl_list_user3
+
+        set all [r ACL LIST]
+        set users [r ACL LIST user]
+        set roles [r ACL LIST role]
+        set all_filter [r ACL LIST all]
+
+        # ACL LIST user contains only user entries.
+        foreach entry $users {
+            assert_match "user *" $entry
+        }
+
+        # ACL LIST role contains only role entries.
+        foreach entry $roles {
+            assert_match "role *" $entry
+        }
+
+        # ACL LIST and ACL LIST all return the same number of entries.
+        assert_equal [llength $all] [llength $all_filter]
+
+        # The users we created are present in the user-filtered result.
+        foreach username {test_acl_list_user test_acl_list_user2 test_acl_list_user3} {
+            set found 0
+            foreach entry $users {
+                if {[string match "user $username *" $entry]} {
+                    set found 1
+                    break
+                }
+            }
+            assert_equal $found 1
+        }
+
+        # The role filter should contain no entries because this test
+        # does not create any roles.
+        assert_equal [llength $roles] 0
+
+        # Invalid filters are rejected.
+        assert_error "*Unknown ACL LIST filter*" {
+            r ACL LIST invalid
+        }
+
+        # ACL USERS remains unchanged and returns usernames only.
+        set usernames [r ACL USERS]
+        foreach username $usernames {
+            assert_no_match "user *" $username
+            assert_no_match "role *" $username
+        }
+    }
+
     test {In transaction queue publish/subscribe/psubscribe to unauthorized channel will fail} {
         r ACL setuser psuser +multi +discard
         r MULTI

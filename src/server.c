@@ -7217,13 +7217,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
     }
 
-    /* Hotkeys */
-    if (all_sections || (dictFind(section_dict, "hotkeys") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Hotkeys\r\n");
-        info = genHotkeysInfoString(info);
-    }
-
     /* Throttling */
     if (all_sections || (dictFind(section_dict, "throttling") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");

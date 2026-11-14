@@ -193,6 +193,9 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/fuzzer_client.c
     ${CMAKE_SOURCE_DIR}/src/fuzzer_command_generator.c)
 
+# valkey-benchmark, only with BUILD_EFA
+set(VALKEY_BENCHMARK_EFA_SRCS ${CMAKE_SOURCE_DIR}/src/valkey-benchmark-efa.c)
+
 # valkey-rdma module
 set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)
 

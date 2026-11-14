@@ -487,6 +487,29 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         waitForBgsave r
         assert_equal [r ping] "PONG"
     } {} {needs:debug}
+
+    test "forkless save survives PHGET on a path hash payload that is rehashing" {
+        r flushall
+        r config set forkless-policy prefer-forkless
+        r config set rdb-key-save-delay 0
+        # Just past a growth threshold (buckets * entries per bucket: 7 * 2^15 on 64-bit,
+        # 12 * 2^14 on 32-bit), the payload hashtable is partway through a resize, and
+        # each PHGET on it does an incremental rehash step unless rehashing is paused.
+        # The small path keeps a listpack payload in the same key.
+        set fields [expr {[s arch_bits] == 64 ? 230000 : 200000}]
+        r eval {for i = 1, tonumber(ARGV[1]) do
+            redis.call('phset', KEYS[1], 'p', 'FIELDS', 1, 'f' .. i, 'v')
+        end} 1 ph $fields
+        r phset ph small FIELDS 1 f v
+
+        r bgsave
+        set deadline [expr {[clock seconds] + 120}]
+        while {[s rdb_bgsave_in_progress]} {
+            r phget ph p f1
+            if {[clock seconds] > $deadline} { fail "forkless bgsave did not finish" }
+        }
+        assert_equal [s rdb_last_bgsave_status] ok
+    }
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {

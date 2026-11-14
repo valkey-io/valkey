@@ -161,7 +161,8 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         # snapshot when it comes back.
         catch {R 0 shutdown}
         wait_for_condition 100 100 {
-            [string match "*fail*" [lindex [raft_cluster_nodes_line [srv -1 client] $r0_id] 2]]
+            [llength [set n [cluster_get_node_by_id 1 $r0_id]]] > 0 &&
+            [cluster_has_flag $n fail]
         } else {
             fail "R0 was not marked as failed"
         }

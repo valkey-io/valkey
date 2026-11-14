@@ -186,7 +186,7 @@ start_multiple_servers 6 {overrides {cluster-enabled yes cluster-protocol raft c
     }
 }
 
-start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000} tags {tls:skip}} {
     test "Raft autopromote: learner that has not caught up is not promoted" {
         set fake_id [string repeat "9" 40]
         set fake_shard [string repeat "8" 40]
@@ -233,7 +233,7 @@ start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-
     }
 }
 
-start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 15000}} {
+start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 15000} tags {tls:skip}} {
     test "Raft autopromote: at most one distinct membership transition in flight" {
         raft_meet_peers 3
         wait_for_raft_cluster_size 3

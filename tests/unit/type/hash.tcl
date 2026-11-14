@@ -272,7 +272,7 @@ start_server {tags {"hash"}} {
         list [r hlen bighash]
     } {1024}
 
-    test {Is the big hash encoded with an hash table?} {
+    test {Is the big hash encoded with a hash table?} {
         assert_encoding hashtable bighash
     }
 

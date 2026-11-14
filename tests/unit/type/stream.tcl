@@ -372,7 +372,7 @@ start_server {
     test "Blocking XREAD for stream that ran dry (issue #5299)" {
         set rd [valkey_deferring_client]
 
-        # Add a entry then delete it, now stream's last_id is 666.
+        # Add an entry then delete it, now stream's last_id is 666.
         r DEL mystream
         r XADD mystream 666 key value
         r XDEL mystream 666

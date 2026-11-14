@@ -727,7 +727,7 @@ void clusterFindCompletePackets(char *rcvbuf,
  * full length of the packet. When a whole packet is in memory this function
  * will call the function to process the packet. And so forth. */
 void clusterReadHandler(connection *conn) {
-    char buf[sizeof(clusterMsgSendBlock)];
+    char buf[PROTO_IOBUF_LEN];
     ssize_t nread;
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;

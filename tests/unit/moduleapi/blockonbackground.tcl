@@ -9,6 +9,23 @@ proc latency_percentiles_usec {cmd} {
 start_server {tags {"modules"}} {
     r module load $testmodule
 
+    test { blocked client timeout overflow does not crash server } {
+        set before [r block.debug_unblocked_count]
+        assert_error {*timeout is out of range*} {
+            r block.debug 0 9223372036854775807
+        }
+
+        # Wait for the background worker to return from UnblockClient so the
+        # rejected handle is enqueued and processed by the main event loop,
+        # then confirm the server is still responsive.
+        wait_for_condition 50 100 {
+            [r block.debug_unblocked_count] > $before
+        } else {
+            fail "Background worker did not reach UnblockClient"
+        }
+        assert_equal {PONG} [r ping]
+    }
+
     test { blocked clients time tracking - check blocked command that uses RedisModule_BlockedClientMeasureTimeStart() is tracking background time} {
         r slowlog reset
         r config set slowlog-log-slower-than 200000

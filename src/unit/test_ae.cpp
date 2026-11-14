@@ -120,3 +120,55 @@ TEST_F(AeTest, CacheNotStaleAfterEarliestFires) {
     ASSERT_EQ(loop->earliestTimer->id, id2);
     (void)id1;
 }
+
+static monotime fakeNow;
+static monotime fakeMonotonicUs(void) {
+    return fakeNow;
+}
+
+static int fired;
+static long long aeTestPeriodicTimerProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    (void)eventLoop;
+    (void)id;
+    (void)clientData;
+    fired++;
+    return 1000;
+}
+
+class AeFakeClockTest : public AeTest {
+  protected:
+    monotime (*realMonotonicUs)(void) = nullptr;
+
+    void SetUp() override {
+        monotonicInit();
+        realMonotonicUs = getMonotonicUs;
+        getMonotonicUs = fakeMonotonicUs;
+        fakeNow = 1000000000000ULL;
+        fired = 0;
+        AeTest::SetUp();
+    }
+    void TearDown() override {
+        AeTest::TearDown();
+        getMonotonicUs = realMonotonicUs;
+    }
+};
+
+TEST_F(AeFakeClockTest, TimersFireAfterClockJumpsBackwards) {
+    aeCreateTimeEvent(loop, 1000, aeTestPeriodicTimerProc, NULL, NULL);
+    aeProcessEvents(loop, AE_ALL_EVENTS); /* not due yet */
+    ASSERT_EQ(fired, 0);
+
+    /* The processor clock goes backwards, e.g. after a checkpoint/restore
+     * onto a host with a shorter uptime. The timer must not wait for the
+     * old clock to be reached again. */
+    fakeNow -= 42ULL * 3600 * 1000000;
+    aeProcessEvents(loop, AE_ALL_EVENTS);
+    ASSERT_EQ(fired, 1);
+
+    /* Rescheduled relative to the new clock. */
+    aeProcessEvents(loop, AE_ALL_EVENTS);
+    ASSERT_EQ(fired, 1);
+    fakeNow += 1000 * 1000;
+    aeProcessEvents(loop, AE_ALL_EVENTS);
+    ASSERT_EQ(fired, 2);
+}

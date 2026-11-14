@@ -92,6 +92,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->setsize = setsize;
     eventLoop->timeEventHead = NULL;
     eventLoop->earliestTimer = NULL;
+    eventLoop->lastTime = getMonotonicUs();
     eventLoop->timeEventNextId = 1;
     eventLoop->stop = 0;
     eventLoop->maxfd = -1;
@@ -402,6 +403,16 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     te = eventLoop->timeEventHead;
     maxId = eventLoop->timeEventNextId - 1;
     monotime now = getMonotonicUs();
+
+    /* The processor clock can jump backwards, e.g. after a checkpoint/restore
+     * onto a host with a shorter uptime. Timers would then be scheduled far in
+     * the future, so process them all now. */
+    if (now < eventLoop->lastTime) {
+        for (aeTimeEvent *t = eventLoop->timeEventHead; t; t = t->next) t->when = 0;
+        eventLoop->earliestTimer = NULL;
+    }
+    eventLoop->lastTime = now;
+
     while (te) {
         long long id;
 

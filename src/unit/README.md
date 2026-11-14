@@ -49,6 +49,23 @@ make
 sudo make install
 ```
 
+## Unit tests run one per process
+
+The unit tests are designed to run one test per process. `make test-unit` runs
+each test in its own process with gtest-parallel. Running the binary with no
+`--gtest_filter`, with `--gtest_filter=*`, or with a filter that only excludes
+tests (such as `--gtest_filter=-Suite.Test`) exits with code 2 instead of
+running every test in one process. To run or debug one test directly, choose it
+with a filter, for example in gdb:
+
+```bash
+gdb --args ./src/unit/valkey-unit-gtests --gtest_filter=Suite.Test
+```
+
+A filter that selects several tests runs them in one process. Tests are not
+required to clean up all the global state they change, so such a run can
+fail even when each test passes alone.
+
 ## Tricks in running unit tests
 
 Sometimes the developer might want to run only one gtest unit test, or only a

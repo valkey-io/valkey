@@ -94,3 +94,48 @@ start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {c
         R 0 MIGRATE 127.0.0.1 [lindex [R 1 CONFIG GET port] 1] $stream_name 0 5000
     }
 }
+
+start_cluster 2 1 {tags {external:skip cluster needs:debug}} {
+    test "Replica survives CLUSTER REPLICATE sent by its primary" {
+        wait_for_cluster_state ok
+        # DEBUG REPLICATE only reaches replicas that are already attached.
+        wait_for_sync [srv -2 client]
+        set new_primary_id [R 1 CLUSTER MYID]
+        R 0 DEBUG REPLICATE CLUSTER REPLICATE $new_primary_id
+        wait_for_condition 100 100 {
+            [dict get [cluster_get_myself 2] slaveof] eq $new_primary_id
+        } else {
+            fail "Replica did not switch to the new primary"
+        }
+        assert_equal {PONG} [R 2 PING]
+    }
+
+    # CLUSTER RESET is the command that turns a replica into an empty primary
+    # here, and it also makes the node forget the rest of the cluster.
+    test "Replica full syncs after CLUSTER RESET sent by its primary" {
+        wait_for_sync [srv -2 client]
+        # "foo" hashes to a slot owned by node 1, the replica's primary now.
+        R 1 SET foo bar
+        wait_for_ofs_sync [srv -1 client] [srv -2 client]
+        set primary_id [R 1 CLUSTER MYID]
+        R 1 DEBUG REPLICATE CLUSTER RESET
+        wait_for_condition 100 100 {
+            [lindex [R 2 ROLE] 0] eq {master}
+        } else {
+            fail "Replica did not become a primary"
+        }
+        R 2 CLUSTER MEET [srv -1 host] [srv -1 port]
+        wait_for_condition 100 100 {
+            [string match "*$primary_id*" [R 2 CLUSTER NODES]]
+        } else {
+            fail "Node did not learn about its former primary again"
+        }
+        R 2 CLUSTER REPLICATE $primary_id
+        wait_for_condition 100 100 {
+            [status [srv -2 client] master_link_status] eq {up}
+        } else {
+            fail "Replica did not resync"
+        }
+        assert_equal 1 [R 2 DBSIZE]
+    }
+}

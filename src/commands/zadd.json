@@ -86,27 +86,34 @@
                         "token": "NX"
                     },
                     {
-                        "name": "xx",
-                        "type": "pure-token",
-                        "token": "XX"
-                    }
-                ]
-            },
-            {
-                "name": "comparison",
-                "type": "oneof",
-                "optional": true,
-                "since": "6.2.0",
-                "arguments": [
-                    {
-                        "name": "gt",
-                        "type": "pure-token",
-                        "token": "GT"
-                    },
-                    {
-                        "name": "lt",
-                        "type": "pure-token",
-                        "token": "LT"
+                        "name": "xx-comparison",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "name": "xx",
+                                "type": "pure-token",
+                                "token": "XX",
+                                "optional": true
+                            },
+                            {
+                                "name": "comparison",
+                                "type": "oneof",
+                                "optional": true,
+                                "since": "6.2.0",
+                                "arguments": [
+                                    {
+                                        "name": "gt",
+                                        "type": "pure-token",
+                                        "token": "GT"
+                                    },
+                                    {
+                                        "name": "lt",
+                                        "type": "pure-token",
+                                        "token": "LT"
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             },

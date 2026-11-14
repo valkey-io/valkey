@@ -2726,7 +2726,8 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     if ((ri->flags & SRI_SLAVE) &&
         role == SRI_SLAVE &&
         (ri->slave_master_port != ri->master->addr->port ||
-         !sentinelAddrEqualsHostname(ri->master->addr, ri->slave_master_host)))
+         (ri->slave_master_host &&
+          !sentinelAddrEqualsHostname(ri->master->addr, ri->slave_master_host))))
     {
         mstime_t wait_time = ri->master->failover_timeout;
 
@@ -3937,7 +3938,8 @@ void sentinelCommand(client *c) {
 "    Show a list of Sentinel instances for this master and their state.",
 "SET <master-name> <option> <value> [<option> <value> ...]",
 "    Set configuration parameters for certain masters.",
-"SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
+"SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) "
+"[(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...]",
 "    Simulate a Sentinel crash.",
 NULL
         };
@@ -4229,7 +4231,8 @@ NULL
         dictReleaseIterator(di);
         if (masters_local != sentinel.masters) dictRelease(masters_local);
     } else if (!strcasecmp(c->argv[1]->ptr,"simulate-failure")) {
-        /* SENTINEL SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP] */
+        /* SENTINEL SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP)
+         * [(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...] */
         int j;
 
         sentinel.simfailure_flags = SENTINEL_SIMFAILURE_NONE;

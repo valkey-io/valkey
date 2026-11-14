@@ -386,6 +386,11 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [r ACL DRYRUN command-test EVAL "" 3 rw rw]
         assert_equal "OK" [r ACL DRYRUN command-test EVAL "" 3 rw read]
 
+        # Test PFMERGE without source keys, the source key spec starts past the last argument
+        assert_equal "OK" [r ACL DRYRUN command-test PFMERGE rw]
+        assert_match {*has no permissions to access the 'read' key*} [r ACL DRYRUN command-test PFMERGE read]
+        assert_match {*has no permissions to access the 'nothing' key*} [r ACL DRYRUN command-test PFMERGE nothing]
+
         # Test GEORADIUS which uses the last type of keyspec, keyword
         assert_equal "OK" [r ACL DRYRUN command-test GEORADIUS read longitude latitude radius M STOREDIST write]
         assert_equal "OK" [r ACL DRYRUN command-test GEORADIUS read longitude latitude radius M]
@@ -573,6 +578,37 @@ start_server {tags {"acl external:skip"}} {
         r del v1 mylist
     }
     
+    test {Test SORT STORE destination that is named like an option} {
+        # Every decoy destination below is permitted, so the only reason to
+        # reject a command is the real destination the server writes to.
+        r ACL setuser test-sort-store on nopass ~allowed:* ~by ~get ~limit ~alpha +@all
+        r rpush allowed:src c b a
+
+        # A dedicated client, because deleting the user below kills it.
+        set r3 [redis_client]
+        $r3 auth test-sort-store nopass
+
+        # A destination spelling an option that takes arguments hides the later
+        # STORE clause that SORT actually uses.
+        foreach keyword {by get limit} {
+            assert_equal "User test-sort-store has no permissions to access the 'forbidden:dst' key" \
+                [r ACL DRYRUN test-sort-store SORT allowed:src ALPHA STORE $keyword STORE forbidden:dst]
+            assert_error "*NOPERM*key*" {$r3 sort allowed:src ALPHA STORE $keyword STORE forbidden:dst}
+            assert_equal 0 [r exists forbidden:dst]
+        }
+
+        # A destination spelling STORE reports whatever follows it instead.
+        assert_equal "User test-sort-store has no permissions to access the 'store' key" \
+            [r ACL DRYRUN test-sort-store SORT allowed:src STORE store alpha]
+        assert_error "*NOPERM*key*" {$r3 sort allowed:src STORE store alpha}
+        assert_equal 0 [r exists store]
+
+        # cleanup
+        $r3 close
+        r ACL deluser test-sort-store
+        r del allowed:src
+    }
+
     test {Test DRYRUN with wrong number of arguments} {
         r ACL setuser test-dry-run +@all ~v*
         

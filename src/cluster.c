@@ -7045,6 +7045,19 @@ void migrateCommand(client *c) {
     int first_key = 3; /* Argument index of the first key. */
     int num_keys = 1;  /* By default only migrate the 'key' argument. */
 
+    /* Redact credentials before parsing the options, since a rejected command
+     * is still shown in MONITOR and the slowlog. */
+    for (j = 6; j < c->argc; j++) {
+        const char *opt = c->argv[j]->ptr;
+        if (!strcasecmp(opt, "keys")) break;
+        if (!strcasecmp(opt, "auth")) {
+            if (j + 1 < c->argc) redactClientCommandArgument(c, ++j);
+        } else if (!strcasecmp(opt, "auth2")) {
+            if (j + 1 < c->argc) redactClientCommandArgument(c, ++j);
+            if (j + 1 < c->argc) redactClientCommandArgument(c, ++j);
+        }
+    }
+
     /* Parse additional options */
     for (j = 6; j < c->argc; j++) {
         int moreargs = (c->argc-1) - j;
@@ -7059,16 +7072,13 @@ void migrateCommand(client *c) {
             }
             j++;
             password = c->argv[j]->ptr;
-            redactClientCommandArgument(c,j);
         } else if (!strcasecmp(c->argv[j]->ptr,"auth2")) {
             if (moreargs < 2) {
                 addReplyErrorObject(c,shared.syntaxerr);
                 return;
             }
             username = c->argv[++j]->ptr;
-            redactClientCommandArgument(c,j);
             password = c->argv[++j]->ptr;
-            redactClientCommandArgument(c,j);
         } else if (!strcasecmp(c->argv[j]->ptr,"keys")) {
             if (sdslen(c->argv[3]->ptr) != 0) {
                 addReplyError(c,

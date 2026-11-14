@@ -1431,7 +1431,12 @@ void disconnectSlaves(void) {
     listNode *ln;
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
-        freeClient((client*)ln->value);
+        client *slave = (client*)ln->value;
+        /* The slave may be the client running this command. */
+        if (slave == server.current_client)
+            freeClientAsync(slave);
+        else
+            freeClient(slave);
     }
 }
 
@@ -3588,6 +3593,15 @@ void helloCommand(client *c) {
     long long ver = 0;
     int next_arg = 1;
 
+    /* Redact credentials before any validation, since a rejected command is
+     * still shown in MONITOR and the slowlog. */
+    for (int j = 1; j < c->argc; j++) {
+        if (strcasecmp(c->argv[j]->ptr, "AUTH")) continue;
+        if (j + 1 < c->argc) redactClientCommandArgument(c, j + 1);
+        if (j + 2 < c->argc) redactClientCommandArgument(c, j + 2);
+        j += 2;
+    }
+
     if (c->argc >= 2) {
         if (getLongLongFromObjectOrReply(c, c->argv[next_arg++], &ver,
             "Protocol version is not an integer or out of range") != C_OK) {
@@ -3607,8 +3621,6 @@ void helloCommand(client *c) {
         int moreargs = (c->argc-1) - j;
         const char *opt = c->argv[j]->ptr;
         if (!strcasecmp(opt,"AUTH") && moreargs >= 2) {
-            redactClientCommandArgument(c, j+1);
-            redactClientCommandArgument(c, j+2);
             username = c->argv[j+1];
             password = c->argv[j+2];
             j += 2;

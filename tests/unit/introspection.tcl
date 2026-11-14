@@ -199,6 +199,22 @@ start_server {tags {"introspection"}} {
         $rd close
     } {0} {needs:repl}
 
+    test {MONITOR redacts credentials of rejected commands} {
+        set rd [redis_deferring_client]
+        $rd monitor
+        $rd read ; # Discard the OK
+
+        catch {r hello 4 AUTH not-real not-a-password} _
+        catch {r hello 3 AUTH not-a-password} _
+        catch {r auth not-real not-a-password extra} _
+        catch {r migrate [srv 0 host] [srv 0 port] key 9 5000 bogus AUTH not-a-password} _
+
+        for {set i 0} {$i < 4} {incr i} {
+            assert_no_match {*not-a-password*} [$rd read]
+        }
+        $rd close
+    } {0} {needs:repl}
+
     test {MONITOR correctly handles multi-exec cases} {
         set rd [redis_deferring_client]
         $rd monitor
@@ -827,3 +843,20 @@ test {CONFIG REWRITE handles alias config properly} {
         assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
     }
 } {} {external:skip}
+
+# A sysfs attribute reports a size of 4096 but reads back far fewer bytes,
+# which gives a deterministic short read of the old config file.
+set sysfs_file /sys/kernel/mm/transparent_hugepage/enabled
+if {[file readable $sysfs_file] && [file size $sysfs_file] > [string length [exec cat $sysfs_file]]} {
+    test {CONFIG REWRITE fails when the old config file reads short} {
+        start_server {tags {"introspection"}} {
+            set config_file [srv 0 config_file]
+            file rename $config_file $config_file.bak
+            file link -symbolic $config_file $sysfs_file
+            catch {r config rewrite} err
+            file delete $config_file
+            file rename $config_file.bak $config_file
+            assert_match {ERR Rewriting config file: *} $err
+        }
+    } {} {external:skip}
+}

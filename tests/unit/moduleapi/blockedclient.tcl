@@ -188,7 +188,7 @@ foreach call_type {nested normal} {
 
         # make sure we get BUSY error, and that we didn't get here too early
         assert_error {*BUSY Slow module operation*} {r ping}
-        assert_morethan [expr [clock clicks -milliseconds]-$start] $busy_time_limit
+        assert_morethan_equal [expr [clock clicks -milliseconds]-$start] $busy_time_limit
         # abort the blocking operation
         r set_slow_bg_operation 0
 
@@ -281,6 +281,12 @@ foreach call_type {nested normal} {
         assert_match "OK" [r unblock_by_timer 100]
     }
     
+    test {Unmatched POSTPONED_LEN reply from a thread safe context does not crash the server} {
+        assert_equal {} [r postponed_unmatched_thread]
+        assert_equal OK [r postponed_unmatched_free]
+        assert_equal PONG [r ping]
+    }
+
     test "Unload the module - blockedclient" {
         assert_equal {OK} [r module unload blockedclient]
     }

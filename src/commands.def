@@ -2419,6 +2419,12 @@ keySpec RESTORE_Keyspecs[1] = {
 };
 #endif
 
+/* RESTORE eviction argument table */
+struct COMMAND_ARG RESTORE_eviction_Subargs[] = {
+{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+};
+
 /* RESTORE argument table */
 struct COMMAND_ARG RESTORE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
@@ -2426,8 +2432,7 @@ struct COMMAND_ARG RESTORE_Args[] = {
 {MAKE_ARG("serialized-value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"3.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("absttl",ARG_TYPE_PURE_TOKEN,-1,"ABSTTL",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("eviction",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RESTORE_eviction_Subargs},
 };
 
 /********** SCAN ********************/
@@ -5786,14 +5791,14 @@ struct COMMAND_ARG SENTINEL_SET_Args[] = {
 
 /* SENTINEL SIMULATE_FAILURE mode argument table */
 struct COMMAND_ARG SENTINEL_SIMULATE_FAILURE_mode_Subargs[] = {
-{MAKE_ARG("crash-after-election",ARG_TYPE_PURE_TOKEN,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("crash-after-promotion",ARG_TYPE_PURE_TOKEN,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("help",ARG_TYPE_PURE_TOKEN,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("crash-after-election",ARG_TYPE_PURE_TOKEN,-1,"CRASH-AFTER-ELECTION",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("crash-after-promotion",ARG_TYPE_PURE_TOKEN,-1,"CRASH-AFTER-PROMOTION",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("help",ARG_TYPE_PURE_TOKEN,-1,"HELP",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /* SENTINEL SIMULATE_FAILURE argument table */
 struct COMMAND_ARG SENTINEL_SIMULATE_FAILURE_Args[] = {
-{MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,3,NULL),.subargs=SENTINEL_SIMULATE_FAILURE_mode_Subargs},
+{MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,3,NULL),.subargs=SENTINEL_SIMULATE_FAILURE_mode_Subargs},
 };
 
 /********** SENTINEL SLAVES ********************/
@@ -7359,6 +7364,12 @@ keySpec RESTORE_ASKING_Keyspecs[1] = {
 };
 #endif
 
+/* RESTORE_ASKING eviction argument table */
+struct COMMAND_ARG RESTORE_ASKING_eviction_Subargs[] = {
+{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_NONE,0,NULL)},
+};
+
 /* RESTORE_ASKING argument table */
 struct COMMAND_ARG RESTORE_ASKING_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
@@ -7366,8 +7377,7 @@ struct COMMAND_ARG RESTORE_ASKING_Args[] = {
 {MAKE_ARG("serialized-value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"3.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("absttl",ARG_TYPE_PURE_TOKEN,-1,"ABSTTL",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,"5.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("eviction",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RESTORE_ASKING_eviction_Subargs},
 };
 
 /********** ROLE ********************/
@@ -8204,16 +8214,22 @@ keySpec ZADD_Keyspecs[1] = {
 };
 #endif
 
+/* ZADD condition xx_comparison comparison argument table */
+struct COMMAND_ARG ZADD_condition_xx_comparison_comparison_Subargs[] = {
+{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* ZADD condition xx_comparison argument table */
+struct COMMAND_ARG ZADD_condition_xx_comparison_Subargs[] = {
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,"6.2.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=ZADD_condition_xx_comparison_comparison_Subargs},
+};
+
 /* ZADD condition argument table */
 struct COMMAND_ARG ZADD_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-};
-
-/* ZADD comparison argument table */
-struct COMMAND_ARG ZADD_comparison_Subargs[] = {
-{MAKE_ARG("gt",ARG_TYPE_PURE_TOKEN,-1,"GT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("lt",ARG_TYPE_PURE_TOKEN,-1,"LT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx-comparison",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=ZADD_condition_xx_comparison_Subargs},
 };
 
 /* ZADD data argument table */
@@ -8226,7 +8242,6 @@ struct COMMAND_ARG ZADD_data_Subargs[] = {
 struct COMMAND_ARG ZADD_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"3.0.2",CMD_ARG_OPTIONAL,2,NULL),.subargs=ZADD_condition_Subargs},
-{MAKE_ARG("comparison",ARG_TYPE_ONEOF,-1,NULL,NULL,"6.2.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=ZADD_comparison_Subargs},
 {MAKE_ARG("change",ARG_TYPE_PURE_TOKEN,-1,"CH",NULL,"3.0.2",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("increment",ARG_TYPE_PURE_TOKEN,-1,"INCR",NULL,"3.0.2",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=ZADD_data_Subargs},
@@ -8356,7 +8371,7 @@ keySpec ZINCRBY_Keyspecs[1] = {
 /* ZINCRBY argument table */
 struct COMMAND_ARG ZINCRBY_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("increment",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("increment",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("member",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
@@ -8390,7 +8405,7 @@ struct COMMAND_ARG ZINTER_aggregate_Subargs[] = {
 struct COMMAND_ARG ZINTER_Args[] = {
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZINTER_aggregate_Subargs},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
@@ -8452,7 +8467,7 @@ struct COMMAND_ARG ZINTERSTORE_Args[] = {
 {MAKE_ARG("destination",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZINTERSTORE_aggregate_Subargs},
 };
 
@@ -9119,7 +9134,7 @@ struct COMMAND_ARG ZUNION_aggregate_Subargs[] = {
 struct COMMAND_ARG ZUNION_Args[] = {
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZUNION_aggregate_Subargs},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
@@ -9155,7 +9170,7 @@ struct COMMAND_ARG ZUNIONSTORE_Args[] = {
 {MAKE_ARG("destination",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("numkeys",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key",ARG_TYPE_KEY,1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
-{MAKE_ARG("weight",ARG_TYPE_INTEGER,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("weight",ARG_TYPE_DOUBLE,-1,"WEIGHTS",NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 {MAKE_ARG("aggregate",ARG_TYPE_ONEOF,-1,"AGGREGATE",NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=ZUNIONSTORE_aggregate_Subargs},
 };
 
@@ -10242,12 +10257,17 @@ keySpec LCS_Keyspecs[1] = {
 };
 #endif
 
+/* LCS output argument table */
+struct COMMAND_ARG LCS_output_Subargs[] = {
+{MAKE_ARG("len",ARG_TYPE_PURE_TOKEN,-1,"LEN",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("idx",ARG_TYPE_PURE_TOKEN,-1,"IDX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /* LCS argument table */
 struct COMMAND_ARG LCS_Args[] = {
 {MAKE_ARG("key1",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("key2",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("len",ARG_TYPE_PURE_TOKEN,-1,"LEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("idx",ARG_TYPE_PURE_TOKEN,-1,"IDX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("output",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=LCS_output_Subargs},
 {MAKE_ARG("min-match-len",ARG_TYPE_INTEGER,-1,"MINMATCHLEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("withmatchlen",ARG_TYPE_PURE_TOKEN,-1,"WITHMATCHLEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
@@ -10678,7 +10698,7 @@ struct COMMAND_STRUCT redisCommandTable[] = {
 {MAKE_CMD("randomkey","Returns a random key name from the database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RANDOMKEY_History,0,RANDOMKEY_Tips,3,randomkeyCommand,1,CMD_READONLY|CMD_TOUCHES_ARBITRARY_KEYS,ACL_CATEGORY_KEYSPACE,RANDOMKEY_Keyspecs,0,NULL,0)},
 {MAKE_CMD("rename","Renames a key and overwrites the destination.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RENAME_History,0,RENAME_Tips,0,renameCommand,3,CMD_WRITE,ACL_CATEGORY_KEYSPACE,RENAME_Keyspecs,2,NULL,2),.args=RENAME_Args},
 {MAKE_CMD("renamenx","Renames a key only when the target key name doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RENAMENX_History,1,RENAMENX_Tips,0,renamenxCommand,3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_KEYSPACE,RENAMENX_Keyspecs,2,NULL,2),.args=RENAMENX_Args},
-{MAKE_CMD("restore","Creates a key from the serialized representation of a value.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RESTORE_History,3,RESTORE_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_DANGEROUS,RESTORE_Keyspecs,1,NULL,7),.args=RESTORE_Args},
+{MAKE_CMD("restore","Creates a key from the serialized representation of a value.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,RESTORE_History,3,RESTORE_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_DANGEROUS,RESTORE_Keyspecs,1,NULL,6),.args=RESTORE_Args},
 {MAKE_CMD("scan","Iterates over the key names in the database.","O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.","2.8.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SCAN_History,1,SCAN_Tips,3,scanCommand,-2,CMD_READONLY|CMD_TOUCHES_ARBITRARY_KEYS,ACL_CATEGORY_KEYSPACE,SCAN_Keyspecs,0,NULL,4),.args=SCAN_Args},
 {MAKE_CMD("sort","Sorts the elements in a list, a set, or a sorted set, optionally storing the result.","O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SORT_History,0,SORT_Tips,0,sortCommand,-2,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SET|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_LIST|ACL_CATEGORY_DANGEROUS,SORT_Keyspecs,3,sortGetKeys,7),.args=SORT_Args},
 {MAKE_CMD("sort_ro","Returns the sorted elements of a list, a set, or a sorted set.","O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).","7.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,SORT_RO_History,0,SORT_RO_Tips,0,sortroCommand,-2,CMD_READONLY,ACL_CATEGORY_SET|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_LIST|ACL_CATEGORY_DANGEROUS,SORT_RO_Keyspecs,2,sortROGetKeys,6),.args=SORT_RO_Args},
@@ -10787,7 +10807,7 @@ struct COMMAND_STRUCT redisCommandTable[] = {
 {MAKE_CMD("psync","An internal command used in replication.",NULL,"2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,PSYNC_History,0,PSYNC_Tips,0,syncCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NO_MULTI|CMD_NOSCRIPT,0,PSYNC_Keyspecs,0,NULL,2),.args=PSYNC_Args},
 {MAKE_CMD("replconf","An internal command for configuring the replication stream.","O(1)","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLCONF_History,0,REPLCONF_Tips,0,replconfCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_ALLOW_BUSY,0,REPLCONF_Keyspecs,0,NULL,0)},
 {MAKE_CMD("replicaof","Configures a server as replica of another, or promotes it to a master.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLICAOF_History,0,REPLICAOF_Tips,0,replicaofCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,0,REPLICAOF_Keyspecs,0,NULL,1),.args=REPLICAOF_Args},
-{MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_DANGEROUS,RESTORE_ASKING_Keyspecs,1,NULL,7),.args=RESTORE_ASKING_Args},
+{MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_DANGEROUS,RESTORE_ASKING_Keyspecs,1,NULL,6),.args=RESTORE_ASKING_Args},
 {MAKE_CMD("role","Returns the replication role.","O(1)","2.8.12",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ROLE_History,0,ROLE_Tips,0,roleCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS,ROLE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("save","Synchronously saves the database(s) to disk.","O(N) where N is the total number of keys in all databases","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SAVE_History,0,SAVE_Tips,0,saveCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_NO_MULTI,0,SAVE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("shutdown","Synchronously saves the database(s) to disk and shuts down the Redis server.","O(N) when saving, where N is the total number of keys in all databases when saving data, otherwise O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SHUTDOWN_History,1,SHUTDOWN_Tips,0,shutdownCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_NO_MULTI|CMD_SENTINEL|CMD_ALLOW_BUSY,0,SHUTDOWN_Keyspecs,0,NULL,4),.args=SHUTDOWN_Args},
@@ -10818,7 +10838,7 @@ struct COMMAND_STRUCT redisCommandTable[] = {
 {MAKE_CMD("bzmpop","Removes and returns a member by score from one or more sorted sets. Blocks until a member is available otherwise. Deletes the sorted set if the last element was popped.","O(K) + O(M*log(N)) where K is the number of provided keys, N being the number of elements in the sorted set, and M being the number of elements popped.","7.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,BZMPOP_History,0,BZMPOP_Tips,0,bzmpopCommand,-5,CMD_WRITE|CMD_BLOCKING,ACL_CATEGORY_SORTEDSET,BZMPOP_Keyspecs,1,blmpopGetKeys,5),.args=BZMPOP_Args},
 {MAKE_CMD("bzpopmax","Removes and returns the member with the highest score from one or more sorted sets. Blocks until a member available otherwise.  Deletes the sorted set if the last element was popped.","O(log(N)) with N being the number of elements in the sorted set.","5.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,BZPOPMAX_History,1,BZPOPMAX_Tips,0,bzpopmaxCommand,-3,CMD_WRITE|CMD_FAST|CMD_BLOCKING,ACL_CATEGORY_SORTEDSET,BZPOPMAX_Keyspecs,1,NULL,2),.args=BZPOPMAX_Args},
 {MAKE_CMD("bzpopmin","Removes and returns the member with the lowest score from one or more sorted sets. Blocks until a member is available otherwise. Deletes the sorted set if the last element was popped.","O(log(N)) with N being the number of elements in the sorted set.","5.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,BZPOPMIN_History,1,BZPOPMIN_Tips,0,bzpopminCommand,-3,CMD_WRITE|CMD_FAST|CMD_BLOCKING,ACL_CATEGORY_SORTEDSET,BZPOPMIN_Keyspecs,1,NULL,2),.args=BZPOPMIN_Args},
-{MAKE_CMD("zadd","Adds one or more members to a sorted set, or updates their scores. Creates the key if it doesn't exist.","O(log(N)) for each item added, where N is the number of elements in the sorted set.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZADD_History,3,ZADD_Tips,0,zaddCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZADD_Keyspecs,1,NULL,6),.args=ZADD_Args},
+{MAKE_CMD("zadd","Adds one or more members to a sorted set, or updates their scores. Creates the key if it doesn't exist.","O(log(N)) for each item added, where N is the number of elements in the sorted set.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZADD_History,3,ZADD_Tips,0,zaddCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZADD_Keyspecs,1,NULL,5),.args=ZADD_Args},
 {MAKE_CMD("zcard","Returns the number of members in a sorted set.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZCARD_History,0,ZCARD_Tips,0,zcardCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZCARD_Keyspecs,1,NULL,1),.args=ZCARD_Args},
 {MAKE_CMD("zcount","Returns the count of members in a sorted set that have scores within a range.","O(log(N)) with N being the number of elements in the sorted set.","2.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZCOUNT_History,0,ZCOUNT_Tips,0,zcountCommand,4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_SORTEDSET,ZCOUNT_Keyspecs,1,NULL,3),.args=ZCOUNT_Args},
 {MAKE_CMD("zdiff","Returns the difference between multiple sorted sets.","O(L + (N-K)log(N)) worst case where L is the total number of elements in all the sets, N is the size of the first set, and K is the size of the result set.","6.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZDIFF_History,0,ZDIFF_Tips,0,zdiffCommand,-3,CMD_READONLY,ACL_CATEGORY_SORTEDSET,ZDIFF_Keyspecs,1,zunionInterDiffGetKeys,3),.args=ZDIFF_Args},
@@ -10878,7 +10898,7 @@ struct COMMAND_STRUCT redisCommandTable[] = {
 {MAKE_CMD("incr","Increments the integer value of a key by one. Uses 0 as initial value if the key doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,INCR_History,0,INCR_Tips,0,incrCommand,2,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_STRING,INCR_Keyspecs,1,NULL,1),.args=INCR_Args},
 {MAKE_CMD("incrby","Increments the integer value of a key by a number. Uses 0 as initial value if the key doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,INCRBY_History,0,INCRBY_Tips,0,incrbyCommand,3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_STRING,INCRBY_Keyspecs,1,NULL,2),.args=INCRBY_Args},
 {MAKE_CMD("incrbyfloat","Increment the floating point value of a key by a number. Uses 0 as initial value if the key doesn't exist.","O(1)","2.6.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,INCRBYFLOAT_History,0,INCRBYFLOAT_Tips,0,incrbyfloatCommand,3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_STRING,INCRBYFLOAT_Keyspecs,1,NULL,2),.args=INCRBYFLOAT_Args},
-{MAKE_CMD("lcs","Finds the longest common substring.","O(N*M) where N and M are the lengths of s1 and s2, respectively","7.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,LCS_History,0,LCS_Tips,0,lcsCommand,-3,CMD_READONLY,ACL_CATEGORY_STRING,LCS_Keyspecs,1,NULL,6),.args=LCS_Args},
+{MAKE_CMD("lcs","Finds the longest common substring.","O(N*M) where N and M are the lengths of s1 and s2, respectively","7.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,LCS_History,0,LCS_Tips,0,lcsCommand,-3,CMD_READONLY,ACL_CATEGORY_STRING,LCS_Keyspecs,1,NULL,5),.args=LCS_Args},
 {MAKE_CMD("mget","Atomically returns the string values of one or more keys.","O(N) where N is the number of keys to retrieve.","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MGET_History,0,MGET_Tips,1,mgetCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_STRING,MGET_Keyspecs,1,NULL,1),.args=MGET_Args},
 {MAKE_CMD("mset","Atomically creates or modifies the string values of one or more keys.","O(N) where N is the number of keys to set.","1.0.1",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MSET_History,0,MSET_Tips,2,msetCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_STRING,MSET_Keyspecs,1,NULL,1),.args=MSET_Args},
 {MAKE_CMD("msetnx","Atomically modifies the string values of one or more keys only when all keys don't exist.","O(N) where N is the number of keys to set.","1.0.1",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MSETNX_History,0,MSETNX_Tips,0,msetnxCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_STRING,MSETNX_Keyspecs,1,NULL,1),.args=MSETNX_Args},

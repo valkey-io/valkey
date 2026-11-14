@@ -11,23 +11,12 @@ proc raft_add_voter {leader node_id} {
         fail "Node $node_id did not finish joining on leader $leader"
     }
     set err ""
-    # The auto-promoter may have already promoted this learner, making a
-    # subsequent ADDVOTER fail with "already a voter". Treat either
-    # "promoted" or "ADDVOTER succeeded" as success (avoids a TOCTOU race).
+    # Auto-promote may have already done this; "already a voter" is success.
     wait_for_condition 200 100 {
         [expr {![cluster_has_flag [cluster_get_node_by_id $leader $node_id] learner] ||
                ![catch {$leader_client CLUSTER ADDVOTER $node_id} err]}]
     } else {
         fail "Could not promote $node_id to voter: $err"
-    }
-}
-
-# Wait until every peer started by start_cluster is a voter. The leader's
-# auto-promoter may win the race; raft_add_voter treats that as success.
-# leader is a server index, matching raft_add_voter.
-proc raft_promote_start_cluster_voters {node_count} {
-    for {set i 1} {$i < $node_count} {incr i} {
-        raft_add_voter 0 [R $i CLUSTER MYID]
     }
 }
 

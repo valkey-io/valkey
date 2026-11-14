@@ -508,6 +508,53 @@ consensus (§4.3). Both require the new node to receive AE as a
 non-voting member before its NODE_JOIN is committed, adding
 complexity to the leader's replication logic.
 
+#### Automatic learner promotion
+
+The leader runs a one-way reconciliation controller that promotes
+caught-up learners to voters until the voting set reaches
+`RAFT_TARGET_VOTERS` (5). It is intentionally minimal:
+
+- **Leader-only and one-way.** Only the leader promotes; it never
+  demotes. When `size >= RAFT_TARGET_VOTERS` it is a no-op. Below the
+  target, including a single node, nothing happens until an eligible
+  learner exists.
+- **Reuses ADD_VOTER.** There is no new node flag or entry type. Apply
+  goes through `clusterRaftApplyAddVoter`, the single membership-change
+  point.
+- **Shrinking.** `CLUSTER FORGET` of a voter decrements `size`, down to
+  one node. `CLUSTER DELVOTER` demotes a voter to a learner, down to one
+  voter, and rejects demoting the leader or the last voter. The demoted
+  node stays in the cluster, so the next cron promotes it again when it
+  is still eligible. After a forget, the controller promotes another
+  caught-up learner when one exists. A manual `ADD_VOTER` may push
+  `size` above the target; the controller does not demote it back.
+
+A candidate is eligible only when it is a learner, has finished joining
+(no MEET flag), is not failed, has an active link, and its `match_index`
+has caught up with the leader's last log index.
+
+To avoid overlapping membership transitions, the leader enforces **at
+most one quorum-changing entry in flight**, where a transition's identity
+is its entry type plus the target node id (the first `CLUSTER_NAMELEN`
+bytes of the entry data). The check scans `(last_applied, lastIndex]`,
+which is every appended entry that has not been applied yet, including
+entries that are not committed yet, and classifies the candidate as:
+
+- `NONE` — no quorum-changing entry in flight; proceed with full
+  pre-validation.
+- `SAME` — the identical transition is already in the log. The leader
+  does not append another copy. A local caller, a follower retrying
+  `PROPOSE`, and a pending proposal replayed after a leader change all
+  wait for that entry to be applied. The re-sent `PROPOSE` is not
+  rejected: `match_index` is 0 until the next `AE_ACK` after an election,
+  so the catch-up check does not describe this entry.
+- `CONFLICT` — a different transition is in flight; reject.
+
+`CONFLICT` is enforced in `clusterRaftPreValidate`. `SAME` is handled in
+`clusterRaftPropose`, `clusterRaftProcessPropose`, and the leader branch
+of `clusterRaftRetryProposals`. Every pending proposal with that
+type and data is completed when the existing entry is applied.
+
 ## Failure Detection
 
 The leader tracks `last_ack_time` per peer, updated on every AE_ACK
@@ -974,7 +1021,9 @@ transfer targets.
 
 ## Future Work
 
-- Automatic learner promotion (promote the first 5 or 7 nodes to voters).
+- Configurable voter target and automatic failed-voter replacement (the
+  current controller hardcodes `RAFT_TARGET_VOTERS` and never replaces a
+  failed voter).
 - Chained learner replication.
 - Balancing voters over availability zones: the leader can use the
   per-node availability-zone info to add/remove voters so that voters

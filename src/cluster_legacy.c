@@ -7191,15 +7191,16 @@ void clusterDoBeforeSleep(int flags) {
     server.cluster->todo_before_sleep |= flags;
 }
 
-/* Runs on every event loop wakeup, before any event is handled. After a stall
- * longer than the node timeout we may already have been failed over, and queued
- * client commands run before clusterCron() can notice. Refuse queries until a
- * majority of primaries answers a PING sent after the stall. */
-void clusterAfterSleep(void) {
-    static monotime last_wakeup = 0;
+/* Runs on both sides of every event loop sleep, before any event or command
+ * queued by I/O threads is handled. After a stall longer than the node timeout
+ * we may already have been failed over, and queued client commands run before
+ * clusterCron() can notice. Refuse queries until a majority of primaries
+ * answers a PING sent after the stall. */
+void clusterCheckStall(void) {
+    static monotime last_check = 0;
     monotime now_us = getMonotonicUs();
-    monotime gap_us = last_wakeup ? now_us - last_wakeup : 0;
-    last_wakeup = now_us;
+    monotime gap_us = last_check ? now_us - last_check : 0;
+    last_check = now_us;
 
     /* An idle event loop wakes once per serverCron() period. Allow one more
      * period for timer and scheduler jitter so tiny node timeouts don't trip. */

@@ -39,27 +39,26 @@ start_cluster 3 3 {tags {external:skip cluster}} {
         }
         assert_equal {before-failover} [R 3 get $key]
     }
+}
+
+start_cluster 3 3 {tags {external:skip cluster}} {
+    set key "{06S}key"
 
     test "Primary serves writes again after a long pause without failover" {
-        wait_for_condition 1000 50 {
-            [s 0 master_link_status] eq {up}
-        } else {
-            fail "Old primary did not sync with the new primary"
-        }
-        R 0 config set cluster-replica-no-failover yes
+        R 3 config set cluster-replica-no-failover yes
 
-        set primary_pid [srv -3 pid]
+        set primary_pid [srv 0 pid]
         pause_process $primary_pid
         after 4000
         resume_process $primary_pid
 
         wait_for_condition 1000 50 {
-            [CI 3 cluster_state] eq {ok}
+            [CI 0 cluster_state] eq {ok}
         } else {
-            fail "Primary 3 did not recover cluster_state ok"
+            fail "Primary 0 did not recover cluster_state ok"
         }
-        verify_log_message -3 "*longer than cluster-node-timeout*" 0
-        assert_equal {OK} [R 3 set $key after-pause]
-        assert_equal {master} [s -3 role]
+        verify_log_message 0 "*longer than cluster-node-timeout*" 0
+        assert_equal {OK} [R 0 set $key after-pause]
+        assert_equal {master} [s 0 role]
     }
 }

@@ -1949,6 +1949,10 @@ static bool processPendingReplStreamDecode(void) {
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
+    /* Must run before processIOThreadsResponses() executes commands that I/O
+     * threads read before or during a stall. */
+    if (server.cluster_enabled) clusterCheckStall();
+
     /* When I/O threads are enabled and there are pending I/O jobs, the poll is offloaded to one of the I/O threads. */
     trySendPollJobToIOThreads();
 
@@ -2191,7 +2195,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
      * refresh here since afterSleep() runs on every event-loop wakeup. */
     updateCachedTime(0);
 
-    if (server.cluster_enabled) clusterAfterSleep();
+    if (server.cluster_enabled) clusterCheckStall();
 
     /* Update command time snapshot in case it'll be required without a command
      * e.g. somehow used by module timers. Don't update it while yielding to a

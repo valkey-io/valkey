@@ -1576,6 +1576,7 @@ void clusterInit(void) {
     server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
     server.cluster->todo_before_sleep = 0;
+    server.cluster->stall_time = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
     server.cluster->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
@@ -7190,6 +7191,45 @@ void clusterDoBeforeSleep(int flags) {
     server.cluster->todo_before_sleep |= flags;
 }
 
+/* Runs on every event loop wakeup, before any event is handled. After a stall
+ * longer than the node timeout we may already have been failed over, and queued
+ * client commands run before clusterCron() can notice. Refuse queries until a
+ * majority of primaries answers a PING sent after the stall. */
+void clusterAfterSleep(void) {
+    static monotime last_wakeup = 0;
+    monotime now_us = getMonotonicUs();
+    monotime gap_us = last_wakeup ? now_us - last_wakeup : 0;
+    last_wakeup = now_us;
+
+    /* An idle event loop wakes once per serverCron() period. Allow one more
+     * period for timer and scheduler jitter so tiny node timeouts don't trip. */
+    long long max_gap_ms = server.cluster_node_timeout + 2 * (1000 / server.hz);
+    if ((long long)(gap_us / 1000) <= max_gap_ms) return;
+
+    serverLog(LL_WARNING,
+              "Main thread was blocked for %lld ms, longer than cluster-node-timeout. "
+              "Refusing queries until a majority of primaries is reachable again.",
+              (long long)(gap_us / 1000));
+
+    mstime_t now = mstime();
+    server.cluster->stall_time = now;
+
+    /* PONGs queued on our links during the stall answer old PINGs. Drop the
+     * links so they reconnect and PING again, and give every node a full node
+     * timeout from now to answer. */
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself) continue;
+        if (node->link) freeClusterLink(node->link);
+        node->ping_sent = now;
+    }
+    dictReleaseIterator(di);
+
+    clusterUpdateState();
+}
+
 /* -----------------------------------------------------------------------------
  * Slots management
  * -------------------------------------------------------------------------- */
@@ -7459,7 +7499,13 @@ void clusterUpdateState(void) {
                 server.cluster->size++;
                 if (node->voter_election_state == VOTER_NACKED) nacked++;
                 if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) failed_without_response++;
-                if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
+                /* After a stall only a PONG received since then proves the
+                 * node is reachable. */
+                if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0 &&
+                    (!server.cluster->stall_time || node == myself ||
+                     node->pong_received >= server.cluster->stall_time)) {
+                    reachable_primaries++;
+                }
             }
         }
         dictReleaseIterator(di);
@@ -7477,6 +7523,8 @@ void clusterUpdateState(void) {
             new_state = CLUSTER_FAIL;
             new_reason = CLUSTER_FAIL_MINORITY_PARTITION;
             among_minority_time = mstime();
+        } else {
+            server.cluster->stall_time = 0;
         }
     }
 

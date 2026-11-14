@@ -2191,6 +2191,8 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
      * refresh here since afterSleep() runs on every event-loop wakeup. */
     updateCachedTime(0);
 
+    if (server.cluster_enabled) clusterAfterSleep();
+
     /* Update command time snapshot in case it'll be required without a command
      * e.g. somehow used by module timers. Don't update it while yielding to a
      * blocked command, call() will handle that and restore the original time. */

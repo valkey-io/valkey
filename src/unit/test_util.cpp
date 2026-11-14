@@ -409,3 +409,31 @@ TEST_F(UtilTest, TestSecureRandomBytesFillsEveryPosition) {
         ASSERT_TRUE(differed[i]) << "byte " << i << " was never written in " << kDraws << " draws";
     }
 }
+
+static void assertEscapedJson(const char *in, size_t len, const char *expected) {
+    sds s = escapeJsonString(sdsnew("prefix:"), in, len);
+    ASSERT_EQ(sdslen(s), strlen(expected));
+    ASSERT_EQ(memcmp(s, expected, sdslen(s)), 0) << s;
+    sdsfree(s);
+}
+
+TEST_F(UtilTest, TestEscapeJsonString) {
+    assertEscapedJson("", 0, "prefix:\"\"");
+    assertEscapedJson("plain text", 10, "prefix:\"plain text\"");
+    assertEscapedJson("a\"b\\c", 5, "prefix:\"a\\\"b\\\\c\"");
+    assertEscapedJson("\n\f\r\t\b", 5, "prefix:\"\\n\\f\\r\\t\\b\"");
+    /* Other control characters, including NUL, use \u escapes. */
+    assertEscapedJson("x\0\x01\x1fy", 5, "prefix:\"x\\u0000\\u0001\\u001fy\"");
+    /* Every non-named control byte uses a four-digit Unicode escape. */
+    for (int i = 0; i < 0x20; i++) {
+        if (i == '\n' || i == '\f' || i == '\r' || i == '\t' || i == '\b') continue;
+        char c = i;
+        char expected[32];
+        snprintf(expected, sizeof(expected), "prefix:\"\\u%04x\"", i);
+        assertEscapedJson(&c, 1, expected);
+    }
+    /* DEL and bytes outside ASCII are copied as they are. */
+    assertEscapedJson("\x7f\xc3\xa9\xff", 4, "prefix:\"\x7f\xc3\xa9\xff\"");
+    /* Escapes at both ends of the input. */
+    assertEscapedJson("\"middle\n", 8, "prefix:\"\\\"middle\\n\"");
+}

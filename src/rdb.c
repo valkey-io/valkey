@@ -2631,36 +2631,87 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
             sdsfree(path);
 
+            /* Direct appends need a temporary duplicate-search table. For small
+             * payloads the table costs more than the short lpFind() scans it
+             * replaces, so keep using hashTypeSet() below. */
+            hashtable *dupSearchHashtable = NULL;
+            if (field_count > 16) dupSearchHashtable = hashtableCreate(&setHashtableType);
+            uint64_t payload_fields = 0;
             while (field_count--) {
                 sds field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
                 if (field == NULL) {
+                    if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
                     decrRefCount(o);
                     return NULL;
                 }
                 sds value = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
                 if (value == NULL) {
                     sdsfree(field);
+                    if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
                     decrRefCount(o);
                     return NULL;
                 }
-                /* hashTypeSet() reports whether it updated an existing field, which
-                 * detects duplicates without a second lookup. It takes ownership of
-                 * both strings, so there is nothing left to free here. */
-                bool expired_overwritten = false;
-                int updated = hashTypeSet(payload,
-                                          field,
-                                          value,
-                                          EXPIRY_NONE,
-                                          HASH_SET_TAKE_FIELD | HASH_SET_TAKE_VALUE,
-                                          &expired_overwritten);
-                serverAssert(!expired_overwritten);
-                if (updated) {
-                    rdbReportCorruptRDB("Duplicate pathhash payload field");
-                    decrRefCount(o);
-                    return NULL;
+
+                if (dupSearchHashtable) {
+                    sds field_dup = sdsdup(field);
+                    if (!hashtableAdd(dupSearchHashtable, field_dup)) {
+                        rdbReportCorruptRDB("Duplicate pathhash payload field");
+                        hashtableRelease(dupSearchHashtable);
+                        sdsfree(field_dup);
+                        sdsfree(field);
+                        sdsfree(value);
+                        decrRefCount(o);
+                        return NULL;
+                    }
+                }
+
+                if (objectGetEncoding(payload) == OBJ_ENCODING_LISTPACK &&
+                    (sdslen(field) > server.hash_max_listpack_value ||
+                     sdslen(value) > server.hash_max_listpack_value ||
+                     !lpSafeToAdd(objectGetVal(payload), sdslen(field) + sdslen(value)))) {
+                    hashTypeConvert(payload, OBJ_ENCODING_HASHTABLE);
+                    if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
+                    dupSearchHashtable = NULL;
+                }
+
+                if (objectGetEncoding(payload) == OBJ_ENCODING_LISTPACK && dupSearchHashtable) {
+                    objectSetVal(payload, lpAppend(objectGetVal(payload), (unsigned char *)field, sdslen(field)));
+                    objectSetVal(payload, lpAppend(objectGetVal(payload), (unsigned char *)value, sdslen(value)));
+                    sdsfree(field);
+                    sdsfree(value);
+
+                    payload_fields++;
+                    /* Count only this payload; path_hash->num_fields spans all
+                     * paths, so a later payload would cross the limit early.
+                     * Counting locally also avoids rescanning the listpack on
+                     * every append when extreme entry limits exhaust the
+                     * listpack header's element count. */
+                    if (payload_fields > server.hash_max_listpack_entries) {
+                        hashTypeConvert(payload, OBJ_ENCODING_HASHTABLE);
+                        hashtableRelease(dupSearchHashtable);
+                        dupSearchHashtable = NULL;
+                    }
+                } else {
+                    /* hashTypeSet() reports whether it updated an existing field, which
+                     * detects duplicates without a second lookup. It takes ownership of
+                     * both strings, so there is nothing left to free here. */
+                    bool expired_overwritten = false;
+                    int updated = hashTypeSet(payload,
+                                              field,
+                                              value,
+                                              EXPIRY_NONE,
+                                              HASH_SET_TAKE_FIELD | HASH_SET_TAKE_VALUE,
+                                              &expired_overwritten);
+                    serverAssert(!expired_overwritten);
+                    if (updated) {
+                        rdbReportCorruptRDB("Duplicate pathhash payload field");
+                        decrRefCount(o);
+                        return NULL;
+                    }
                 }
                 path_hash->num_fields++;
             }
+            if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
         }
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST || rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
         if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;

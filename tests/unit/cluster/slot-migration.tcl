@@ -390,7 +390,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 # Build a clusterbus PING with primary flag, explicit currentEpoch and
 # configEpoch, and a shard id extension. Layout follows
 # create_cluster_meet_packet in packet.tcl.
-proc create_stale_primary_ping {sender_name sender_port sender_cport current_epoch config_epoch shard_id} {
+proc create_primary_ping {sender_name sender_port sender_cport current_epoch config_epoch shard_id} {
     set CLUSTER_NAMELEN 40
     set CLUSTER_SLOTS 16384
     set NET_IP_STR_LEN 46
@@ -432,11 +432,20 @@ proc create_stale_primary_ping {sender_name sender_port sender_cport current_epo
     return $packet
 }
 
-# Regression test for a stale primary claim from a demoted replica. The observer
-# R3 records R6 as a replica of R7. R6 is then paused, so its own replica claims
-# cannot reach R3, and a forged primary claim from R6 is delivered with R6's
-# pre-failover configEpoch and shard id. R3 must keep R6 as a replica of R7, and
-# the failback must succeed on the first CLUSTER FAILOVER.
+proc send_cluster_packet {port packet} {
+    set sock [socket 127.0.0.1 [expr {$port + 10000}]]
+    fconfigure $sock -translation binary -buffering none -blocking 1
+    puts -nonewline $sock $packet
+    flush $sock
+    close $sock
+}
+
+# Regression test for a stale primary claim in an empty target shard. The
+# observer R3 records R6 as a replica of R7. With R6 paused, R3 gets a stale
+# primary claim from R6 (its pre-failover epoch), so R3 sees R6 as a primary
+# again. R3 then gets R6's primary claim at a newer epoch, as after a failback.
+# R6 owns no slots, so only the epoch change shows the failover, and R3 must
+# move slot 609's migration target from R7 to R6.
 if {!$::tls} {
     start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
@@ -447,7 +456,7 @@ if {!$::tls} {
         set R6_id [R 6 CLUSTER MYID]
         set R7_id [R 7 CLUSTER MYID]
 
-        test "Stale primary claim from a demoted replica is ignored" {
+        test "Migration target follows a newer epoch after a stale primary claim" {
             # Start the migration of slot 609 from R0 to the empty shard R6.
             assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
             assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
@@ -477,32 +486,38 @@ if {!$::tls} {
                 fail "R3 never saw R7 at config epoch $E7"
             }
 
-            # Pause R6 so that its own claims cannot race the forged PING.
-            set pings [CI 3 cluster_stats_messages_ping_received]
+            # Pause R6 so that its own replica claims cannot correct R3 between
+            # the two forged PINGs.
             pause_process [srv -6 pid]
             try {
-                # Forged primary claim from R6 with its pre-failover configEpoch.
-                set packet [create_stale_primary_ping $R6_id [srv -6 port] \
+                # Stale primary claim from R6 with its pre-failover configEpoch.
+                # R3 accepts it and sees R6 as a primary again.
+                send_cluster_packet [srv -3 port] [create_primary_ping $R6_id [srv -6 port] \
                     [expr {[srv -6 port] + 10000}] $E6 $E6 $shard_id]
-                set sock [socket 127.0.0.1 [expr {[srv -3 port] + 10000}]]
-                fconfigure $sock -translation binary -buffering none -blocking 1
-                puts -nonewline $sock $packet
-                flush $sock
-                close $sock
                 wait_for_condition 1000 10 {
-                    [CI 3 cluster_stats_messages_ping_received] > $pings
+                    [cluster_has_flag [cluster_get_node_by_id 3 $R6_id] master]
                 } else {
-                    fail "Forged PING was never received"
+                    fail "R3 did not process the stale primary claim"
                 }
+                assert_equal "\[609->-$R7_id\]" [get_open_slots 3]
 
-                # R3 must still see R6 as a replica of R7.
-                assert {[cluster_node_is_replica_of 3 $R6_id $R7_id]}
+                # R6's primary claim at a newer epoch, as after a failback. Its
+                # slots are unchanged, so only the epoch shows the failover.
+                set E_new [expr {$E7 + 1}]
+                set loglines [count_log_lines -3]
+                send_cluster_packet [srv -3 port] [create_primary_ping $R6_id [srv -6 port] \
+                    [expr {[srv -6 port] + 10000}] $E_new $E_new $shard_id]
+                wait_for_log_messages -3 [list "*Slot 609 is now being migrated to node $R6_id*"] $loglines 1000 10
+                assert_equal "\[609->-$R6_id\]" [get_open_slots 3]
             } finally {
                 resume_process [srv -6 pid]
             }
 
-            # R6 wins the failback at an epoch above R7's.
+            # Real failback, so the cluster agrees on R6's role and epoch again.
+            # R6's election epoch is at least the forged one, so R3's record of
+            # R6 is not ahead of the real one.
             failback 6
+            assert {[dict get [cluster_get_myself 6] config_epoch] >= $E_new}
 
             # Outcome only: R3 and the source R0 end with slot 609 migrating to R6.
             wait_for_slot_state 3 "\[609->-$R6_id\]"

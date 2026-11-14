@@ -318,6 +318,87 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         }
     }
 
+    test {Output buffer limits of 4 GiB and above are not truncated} {
+        # Plain replies: copy avoidance off.
+        set old_min_size [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        set old_min_threads [lindex [r config get min-io-threads-avoid-copy-reply] 1]
+        r config set min-string-size-avoid-copy-reply 0
+        r config set min-io-threads-avoid-copy-reply 0
+        # 8 GiB is 0 in 32 bits. A truncated limit is exceeded by any client
+        # that reaches the check.
+        r config set client-output-buffer-limit {normal 8589934592 0 0}
+        set value [string repeat t [expr 1024*1024]]
+        r set big_limit_key $value
+        set rd [valkey_deferring_client]
+        $rd get big_limit_key
+        set disconnected [catch {$rd read} reply]
+        assert_equal 0 $disconnected
+        assert_equal $value $reply
+        $rd close
+        r config set client-output-buffer-limit {normal 0 0 0}
+        r config set min-string-size-avoid-copy-reply $old_min_size
+        r config set min-io-threads-avoid-copy-reply $old_min_threads
+    }
+
+    test {Copy avoidance counts logical replies beyond 4 GiB} {
+        r config set min-io-threads-avoid-copy-reply 1
+        r config set io-threads 1
+        # The limit is above 4 GiB, so a 32-bit count of the logical reply
+        # size wraps before it reaches the limit.
+        r config set client-output-buffer-limit {normal 4831838208 0 0}
+        r set wide_reply_key [string repeat l [expr 16*1024*1024]]
+        set rd [valkey_deferring_client]
+        $rd client id
+        set client_id [$rd read]
+        set closures [getInfoProperty [r info stats] client_output_buffer_limit_disconnections]
+        # 300 references to one 16 MiB value: about 4.7 GiB logical, while
+        # the encoded references take a few KiB.
+        $rd mget {*}[lrepeat 300 wide_reply_key]
+        $rd flush
+        wait_for_condition 50 100 {
+            [get_field_in_client_list $client_id [r client list] id] eq ""
+        } else {
+            fail "Logical reply above 4 GiB escaped the output-buffer hard limit"
+        }
+        assert_equal [expr {$closures + 1}] [getInfoProperty [r info stats] client_output_buffer_limit_disconnections]
+        $rd close
+        r config set client-output-buffer-limit {normal 0 0 0}
+        r config set min-io-threads-avoid-copy-reply 0
+        r del wide_reply_key
+    }
+
+    test {Unlogged output accounting saturates logical replies beyond 4 GiB} {
+        set old_logging [lindex [r config get commandlog-reply-larger-than] 1]
+        set old_threads [lindex [r config get io-threads] 1]
+        set old_copy_threads [lindex [r config get min-io-threads-avoid-copy-reply] 1]
+        r config set commandlog-reply-larger-than -1
+        r config set client-output-buffer-limit {normal 0 0 0}
+        r config set min-io-threads-avoid-copy-reply 1
+        r config set io-threads 1
+        set value_length [expr {16*1024*1024}]
+        r set demand_wide_key [string repeat w $value_length]
+        set rd [valkey_deferring_client]
+        $rd client id
+        set client_id [$rd read]
+        $rd mget {*}[lrepeat 300 demand_wide_key]
+        $rd flush
+        set logical [expr {300*($value_length + [string length $value_length] + 5)}]
+        set minimum $logical
+        if {[s arch_bits] == 32} {set minimum 4294967295}
+        wait_for_condition 50 100 {
+            [get_field_in_client_list $client_id [r client list] omem] >= $minimum
+        } else {
+            fail "Logical output size wrapped before its size_t view"
+        }
+        if {[s arch_bits] == 32} {
+            assert_equal 4294967295 [get_field_in_client_list $client_id [r client list] omem]
+        }
+        $rd close
+        r del demand_wide_key
+        r config set commandlog-reply-larger-than $old_logging
+        r config set io-threads $old_threads
+        r config set min-io-threads-avoid-copy-reply $old_copy_threads
+    }
     test {Copy avoidance obuf tracking with IO threads} {
         # Enable copy avoidance and IO threads
         r config set min-io-threads-avoid-copy-reply 1
@@ -463,4 +544,5 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
 
         assert_equal 0 $omem
     }
+
 }

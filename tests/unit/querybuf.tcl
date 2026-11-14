@@ -69,37 +69,24 @@ start_server {tags {"querybuf slow"}} {
         $rd close
     }
 
-    test "query buffer resized correctly when not idle" {
-        # Pause cron to prevent premature shrinking (timing issue).
-        r debug pause-cron 1
-
-        # Memory will increase by more than 32k due to client query buffer.
+    test "large bulk arguments release the query buffer after parsing" {
         set rd [valkey_client]
-        $rd client setname test_client
+        $rd client setname big_arg_client
 
-        # Create a large query buffer (more than PROTO_RESIZE_THRESHOLD - 32k)
-        $rd set x [string repeat A 400000]
-
-        # Make sure query buff is larger than the peak resize threshold (PROTO_RESIZE_THRESHOLD) 32k
-        set orig_test_client_qbuf [client_query_buffer test_client]
-        assert {$orig_test_client_qbuf > 32768}
-
-        r debug pause-cron 0
-
-        # Wait for qbuf to shrink due to lower peak
-        set t [clock milliseconds]
-        while true {
-            # Write something smaller, so query buf peak can shrink
-            $rd set x [string repeat A 100]
-            set new_test_client_qbuf [client_query_buffer test_client]
-            if {$new_test_client_qbuf < $orig_test_client_qbuf && $new_test_client_qbuf > 0} { break } 
-            if {[expr [clock milliseconds] - $t] > 1000} { break }
-            after 10
+        set value [string repeat A 400000]
+        for {set i 0} {$i < 3} {incr i} {
+            assert_equal OK [$rd set "large:$i" $value]
+            assert_equal $value [r get "large:$i"]
+            assert {[client_query_buffer big_arg_client] < 32768}
         }
-        # Validate qbuf shrunk but isn't 0 since we maintain room based on latest peak
-        assert {[client_query_buffer test_client] > 0 && [client_query_buffer test_client] < $orig_test_client_qbuf}
+
+        $rd write "*2\r\n\$4\r\nPING\r\n\$4\r\nPONG\r\n"
+        $rd write "*2\r\n\$4\r\nPING\r\n\$4\r\nDONE\r\n"
+        $rd flush
+        assert_equal PONG [$rd read]
+        assert_equal DONE [$rd read]
         $rd close
-    } {0} {needs:debug}
+    }
 
     test "query buffer resized correctly with fat argv" {
         set rd [valkey_client]

@@ -42,6 +42,27 @@ proc raft_find_voter {leader ids {exclude ""}} {
 # Return the unique ADD_VOTER targets among the unapplied (in-flight) log
 # entries persisted in nodes.conf. A full rewrite (SAVECONFIG) writes only
 # entries with index > last_applied as "log" lines.
+proc raft_inflight_count {client type} {
+    $client CLUSTER SAVECONFIG
+    set dir [lindex [$client CONFIG GET dir] 1]
+    set path "$dir/nodes.conf"
+    if {![file exists $path]} {
+        return 0
+    }
+    set fp [open $path r]
+    set text [read $fp]
+    close $fp
+    set n 0
+    foreach line [split $text "\n"] {
+        set fields [split [string trim $line "\r"] " "]
+        # Format: log <crc64hex> <index> <term> <type> <data...>
+        if {[lindex $fields 0] eq "log" && [lindex $fields 4] eq $type} {
+            incr n
+        }
+    }
+    return $n
+}
+
 proc raft_inflight_add_voter_targets {client} {
     $client CLUSTER SAVECONFIG
     set dir [lindex [$client CONFIG GET dir] 1]
@@ -290,10 +311,48 @@ start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft c
         set reply [raft_recv $fd2 2000]
         assert_match "REJECT *" $reply
 
+        # The same transition again is not a second log entry and is not
+        # rejected. The in-flight NODE_JOIN completes it.
+        raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a1 voter"
+        set got [catch {raft_recv $fd1 400} reply]
+        if {!$got} {
+            assert_no_match "REJECT *" $reply
+        }
+        assert_equal 1 [raft_inflight_count [srv 0 client] NODE_JOIN]
+
         close $fd1
         close $fd2
         resume_process [srv -1 pid]
         resume_process [srv -2 pid]
+    }
+}
+
+start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 15000}} {
+    test "Raft autopromote: second DELVOTER waits on the in-flight entry" {
+        raft_meet_peers 3
+        wait_for_condition 100 100 {
+            [CI 0 cluster_size] == 3
+        } else {
+            fail "size=[CI 0 cluster_size]"
+        }
+
+        set id [R 1 CLUSTER MYID]
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
+        set c1 [valkey_deferring_client]
+        set c2 [valkey_deferring_client]
+        $c1 CLUSTER DELVOTER $id
+        after 300
+        $c2 CLUSTER DELVOTER $id
+        after 300
+        assert_equal 1 [raft_inflight_count [srv 0 client] DEL_VOTER]
+
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
+        assert_equal OK [$c1 read]
+        assert_equal OK [$c2 read]
+        $c1 close
+        $c2 close
     }
 }
 

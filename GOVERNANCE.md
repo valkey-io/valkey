@@ -25,6 +25,16 @@ If the TSC Chair is removed from the TSC (or the Chair steps down from that role
 The TSC may, at its discretion, add or remove members who are not maintainers of the main Valkey repository.
 The TSC may, at its discretion, add or remove maintainers from other repositories within the Valkey project.
 
+## Adding Committers and Maintainers
+
+Committers to any repository within the Valkey project, and maintainers of repositories other than the main Valkey repository, are added by a simple majority vote of the TSC.
+Any TSC member may sponsor a candidate by nominating them to the TSC, which starts the vote.
+Once the vote passes, the candidate shall be added to the MAINTAINERS.md file of the relevant repository and granted the corresponding access.
+
+Adding a maintainer of the main Valkey repository makes that individual a member of the TSC, and is therefore a [Governance Major Decision](#governance-major-decisions).
+Any TSC member may nominate a candidate, and the candidate is added upon approval by a super-majority vote of at least two thirds (2/3) of the entire TSC.
+Once the vote passes, the candidate shall be added as a maintainer in the MAINTAINERS.md file of the main Valkey repository and granted the corresponding access.
+
 ## Voting
 
 The TSC shall strive for all decisions to be made by consensus.

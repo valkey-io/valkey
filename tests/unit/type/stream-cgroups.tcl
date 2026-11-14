@@ -1449,6 +1449,102 @@ start_server {
         assert_equal [dict get $group lag] 0
     }
 
+    test {Consumer group lag on empty streams with trimmed entries, XDEL, and future IDs} {
+        # 1. Stream emptied via XTRIM where group has a valid read counter below entries_added
+        r DEL k
+        r XGROUP CREATE k g $ MKSTREAM
+        r XADD k 1-1 f a
+        r XADD k 2-2 f b
+        r XREADGROUP GROUP g c STREAMS k > ;# group reads 2 entries
+        r XADD k 3-3 f c
+        r XADD k 4-4 f d ;# group lag is 2
+
+        # Trim stream to empty: unread entries trimmed from memory continue counting towards lag
+        r XTRIM k MAXLEN 0
+        set reply [r XINFO GROUPS k]
+        set group [lindex $reply 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 2
+
+        # Group created at arbitrary future ID on emptied stream has undetermined lag (null)
+        r XGROUP CREATE k gf 9-9
+        set reply [r XINFO GROUPS k]
+        foreach grp $reply {
+            if {[dict get $grp name] eq "gf"} {
+                assert_equal [dict get $grp entries-read] {}
+                assert_equal [dict get $grp lag] {}
+            }
+        }
+
+        # Group created at ID 0 on emptied stream has lag 0
+        r XGROUP CREATE k g0 0
+        set reply [r XINFO GROUPS k]
+        foreach grp $reply {
+            if {[dict get $grp name] eq "g0"} {
+                assert_equal [dict get $grp entries-read] {}
+                assert_equal [dict get $grp lag] 0
+            }
+        }
+
+        # Next XADD smoothly advances lag: 2 -> 3 for g, 0 -> 1 for g0, and remains null for gf
+        r XADD k 5-5 f e
+        set reply [r XINFO GROUPS k]
+        foreach grp $reply {
+            if {[dict get $grp name] eq "g"} {
+                assert_equal [dict get $grp entries-read] 2
+                assert_equal [dict get $grp lag] 3
+            }
+            if {[dict get $grp name] eq "g0"} {
+                assert_equal [dict get $grp entries-read] {}
+                assert_equal [dict get $grp lag] 1
+            }
+            if {[dict get $grp name] eq "gf"} {
+                assert_equal [dict get $grp entries-read] {}
+                assert_equal [dict get $grp lag] {}
+            }
+        }
+
+        # 2. Stream emptied via XDEL
+        r DEL k2
+        r XGROUP CREATE k2 g $ MKSTREAM
+        r XADD k2 1-1 f a
+        r XADD k2 2-2 f b
+        r XREADGROUP GROUP g c STREAMS k2 > ;# group reads 2 entries
+        r XADD k2 3-3 f c
+        r XADD k2 4-4 f d ;# lag is 2
+
+        # Deleting already-read entries does not fragment unread range
+        r XDEL k2 1-1 2-2
+        set reply [r XINFO GROUPS k2]
+        set group [lindex $reply 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 2
+
+        # Deleting unread entries ahead of the group empties the stream with tombstones ahead,
+        # making lag undetermined (null)
+        r XDEL k2 3-3 4-4
+        set reply [r XINFO GROUPS k2]
+        set group [lindex $reply 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] {}
+
+        # Group created at future ID on XDEL-emptied stream has undetermined lag (null)
+        r XGROUP CREATE k2 gf 9-9
+        # Group created at ID 0 on XDEL-emptied stream reports lag 0
+        r XGROUP CREATE k2 g0 0
+        set reply [r XINFO GROUPS k2]
+        foreach grp $reply {
+            if {[dict get $grp name] eq "gf"} {
+                assert_equal [dict get $grp entries-read] {}
+                assert_equal [dict get $grp lag] {}
+            }
+            if {[dict get $grp name] eq "g0"} {
+                assert_equal [dict get $grp entries-read] {}
+                assert_equal [dict get $grp lag] 0
+            }
+        }
+    }
+
     test {Loading from legacy (Redis <= v6.2.x, rdb_ver < 10) persistence} {
         # The payload was DUMPed from a v5 instance after:
         # XADD x 1-0 data a

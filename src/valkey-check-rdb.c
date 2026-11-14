@@ -361,15 +361,13 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         hashTypeIterator hi;
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
-            sds sdsele;
             size_t eleLen = 0;
+            char fbuf[LONG_STR_SIZE], vbuf[LONG_STR_SIZE];
+            size_t flen, vlen;
 
-            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
-            eleLen += sdslen(sdsele);
-            sdsfree(sdsele);
-            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            eleLen += sdslen(sdsele);
-            sdsfree(sdsele);
+            hashTypeCurrentObjectRawString(&hi, OBJ_HASH_FIELD, fbuf, &flen);
+            hashTypeCurrentObjectRawString(&hi, OBJ_HASH_VALUE, vbuf, &vlen);
+            eleLen += flen + vlen;
 
             statsRecordElementSize(eleLen, 1, stats);
         }
@@ -401,11 +399,11 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
             hashTypeIterator fields;
             hashTypeInitIterator(paths.data, &fields);
             while (hashTypeNext(&fields) != C_ERR) {
-                sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
-                sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
-                element_size += sdslen(field) + sdslen(value);
-                sdsfree(field);
-                sdsfree(value);
+                char fbuf[LONG_STR_SIZE], vbuf[LONG_STR_SIZE];
+                size_t flen, vlen;
+                hashTypeCurrentObjectRawString(&fields, OBJ_HASH_FIELD, fbuf, &flen);
+                hashTypeCurrentObjectRawString(&fields, OBJ_HASH_VALUE, vbuf, &vlen);
+                element_size += flen + vlen;
             }
             hashTypeResetIterator(&fields);
             statsRecordElementSize(element_size, 1, stats);

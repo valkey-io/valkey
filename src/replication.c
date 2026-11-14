@@ -77,6 +77,12 @@ void syncWithPrimary(connection *conn);
  * the instance is configured to have no persistence. */
 int RDBGeneratedByReplication = 0;
 
+/* Bumped by every cancelReplicationHandshake() that cancels a sync. Loading
+ * a primary RDB from disk processes events, and one of them (e.g. a cluster
+ * bus message that moves us to a new primary) can cancel the sync being
+ * loaded. */
+static unsigned long long repl_handshake_cancellations = 0;
+
 /* --------------------------- Utility functions ---------------------------- */
 ConnectionType *connTypeOfReplication(void) {
     if (server.tls_replication) {
@@ -3079,7 +3085,14 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
      * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
+    unsigned long long cancellations = repl_handshake_cancellations;
     int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
+    if (retval == RDB_OK && cancellations != repl_handshake_cancellations) {
+        /* The sync was cancelled during the load. Its transfer state is gone
+         * or belongs to a newer sync, so don't finalize it. */
+        serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Sync was cancelled while loading the DB");
+        retval = RDB_FAILED;
+    }
 
     if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
@@ -3096,7 +3109,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Skipping flush, no new data was loaded.");
         } else {
             /* If disk-based RDB loading fails, remove the half-loaded dataset. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the loaded data");
             emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
         }
 
@@ -5082,6 +5095,7 @@ int cancelReplicationHandshake(int reconnect) {
     } else {
         return 0;
     }
+    repl_handshake_cancellations++;
 
     if (!reconnect) return 1;
 

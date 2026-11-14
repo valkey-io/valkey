@@ -261,8 +261,9 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
         set target [raft_find_voter 0 $peer_ids]
         assert {$learner ne "" && $target ne ""}
         set target_idx [expr {[lsearch -exact $peer_ids $target] + 1}]
-        assert_equal OK [R 0 CLUSTER FORGET $target]
+        # Pause first so the forgotten node cannot MEET back in before the wait.
         pause_process [srv -$target_idx pid]
+        assert_equal OK [R 0 CLUSTER FORGET $target]
         wait_for_condition 200 100 {
             [CI 0 cluster_size] == 5 &&
             [cluster_get_node_by_id 0 $target] eq {} &&

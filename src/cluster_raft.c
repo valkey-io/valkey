@@ -2005,8 +2005,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     }
     raftApplyCommitted();
 
-    /* NODE_FORGET of ourselves detaches this link. Do not ACK a peer we
-     * just removed from the cluster. */
+    /* Forgotten: this link is unbound. Do not ACK. */
     if (!link->node) {
         freeClusterLink(link);
         return 0;
@@ -2096,9 +2095,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         /* Apply newly committed entries. */
         uint64_t prev_commit = rs->last_applied;
         raftApplyCommitted();
-        /* If the node we were talking to was forgotten, bail out.
-         * Keep the link if a commit AE is still queued so the write
-         * handler can send it; I/O error will free an unbound link. */
+        /* Forgotten: keep the link while a commit AE is still queued. */
         if (!link->node) {
             if (listLength(link->send_msg_queue) > 0) return 1;
             freeClusterLink(link);
@@ -2825,9 +2822,7 @@ static void clusterRaftAssertLearnerRole(void) {
     serverAssert((rs->role == RAFT_ROLE_LEARNER) == nodeIsLearner(myself));
 }
 
-/* HELLO from a forgotten node (or MEET that never committed) leaves a JOINING
- * stub. Drop it once it has no link; keep stubs that still have a connection
- * so a slow NODE_JOIN does not lose deferred MEETs. */
+/* Drop JOINING nodes that never got NODE_JOIN and have no live link. */
 static void clusterRaftReapJoiningStubs(void) {
     mstime_t now = mstime();
     mstime_t timeout = max(server.cluster_node_timeout, 1000);
@@ -4369,8 +4364,7 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     return RAFT_RESULT_OK;
 }
 
-/* This process was removed from the cluster. Stay a learner so we do not
- * campaign, and drop peers so we do not reconnect with HELLO. */
+/* Become a learner and drop all peers so we do not campaign or HELLO back. */
 static void clusterRaftForgetMyself(void) {
     clusterRaftState *rs = RAFT_STATE();
 
@@ -4446,10 +4440,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
     bool was_voter = nodeIsVoter(node);
 
-    /* Queue a commit AE so the forgotten node can apply NODE_FORGET.
-     * Do not flush from this packet handler: clusterWriteHandler() can
-     * free the processing link. The write handler already armed by
-     * SendAppendEntries drains it after we return. */
+    /* Queue a commit AE. Do not flush: WriteHandler may free processing_link. */
     if (rs->role == RAFT_ROLE_LEADER) {
         clusterLink *out = node->link ? node->link : node->inbound_link;
         if (out && out->conn) clusterRaftSendAppendEntries(out, node);

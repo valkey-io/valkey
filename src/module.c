@@ -4330,6 +4330,10 @@ int VM_AvoidReplicaTraffic(void) {
  * before in order to restore the old DB number before returning. */
 int VM_SelectDb(ValkeyModuleCtx *ctx, int newid) {
     int retval = selectDb(ctx->client, newid);
+    if (retval == C_OK && ctx->client->flag.multi) {
+        serverAssert(ctx->client->mstate != NULL);
+        ctx->client->mstate->transaction_db_id = newid;
+    }
     return (retval == C_OK) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
 }
 

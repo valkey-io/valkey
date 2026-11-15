@@ -167,6 +167,29 @@ start_server {tags {"modules acl"}} {
         r acl setuser default on nopass ~* &* +@all alldbs
     }
 
+    test {module SelectDb inside MULTI updates the transaction DB} {
+        r multi
+        r aclcheck.selectdb 1
+        r set dbkey val
+        assert_equal {1 OK} [r exec]
+        assert_equal val [r get dbkey]
+        r del dbkey
+        r select 9
+
+        # Commands queued after the module switched DB are checked against the new DB
+        r acl setuser testuser on nopass +@all ~* resetdbs db=9
+        r auth testuser pass
+        r multi
+        r aclcheck.selectdb 1
+        r set dbkey val
+        catch {r exec} e
+        assert_match {*NOPERM*} $e
+        r auth default ""
+        assert_equal 0 [r exists dbkey]
+        r acl deluser testuser
+        r select 9
+    } {OK} {needs:select}
+
     test {test blocking of Commands outside of OnLoad} {
         assert_equal [r block.commands.outside.onload] OK
     }

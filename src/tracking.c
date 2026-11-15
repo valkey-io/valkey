@@ -30,6 +30,8 @@
 
 #include "server.h"
 
+#include <stdbool.h>
+
 /* The tracking table is constituted by a radix tree of keys, each pointing
  * to a radix tree of client IDs, used to track the clients that may have
  * certain keys in their local, client side, cache.

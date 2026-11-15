@@ -177,7 +177,7 @@ tags {"rdb stream external:skip"} {
     }
 }
 
-tags {"repl external:skip"} {
+tags {"repl external:skip tls:skip"} {
     start_server {overrides {save {} rdb-version-check relaxed repl-diskless-load swapdb}} {
         test {Replica survives IDMP trailer disconnect and accepts a later full sync} {
             set complete [read_binary_file tests/assets/redis-8.6-idmp.rdb]

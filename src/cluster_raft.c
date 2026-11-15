@@ -4340,6 +4340,34 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     return RAFT_RESULT_OK;
 }
 
+/* This process was removed from the cluster. Stay a learner so we do not
+ * campaign, and drop peers so we do not reconnect with HELLO. */
+static void clusterRaftForgetMyself(void) {
+    clusterRaftState *rs = RAFT_STATE();
+
+    myself->flags |= CLUSTER_NODE_LEARNER;
+    rs->role = RAFT_ROLE_LEARNER;
+    memset(rs->leader, 0, CLUSTER_NAMELEN);
+    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
+    server.cluster->size = 0;
+
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself) continue;
+        clusterLink *link = rs->processing_link;
+        if (link && link->node == node) {
+            if (node->link == link) node->link = NULL;
+            if (node->inbound_link == link) node->inbound_link = NULL;
+            link->node = NULL;
+        }
+        clusterDelNode(node);
+    }
+    dictReleaseIterator(di);
+    rs->todo_save_config = 1;
+}
+
 /* Apply (or validate) a NODE_FORGET entry. Format: "<node-id> <shard-epoch>"
  * When validate_only is set, only validation is performed (no state mutation).
  * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
@@ -4354,8 +4382,6 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
     /* Already forgotten: success (idempotent; may be a no-op log entry). */
     if (!node) goto done;
-    /* Forgetting myself is only validated, as a leader transfer below. */
-    if (node == myself && !validate_only) goto reject;
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
@@ -4373,10 +4399,25 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
         goto done;
     }
 
+    if (node == myself) {
+        clusterRaftForgetMyself();
+        goto done;
+    }
+
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
     bool was_voter = nodeIsVoter(node);
+
+    /* Push the new commit index before dropping the link, so the forgotten
+     * node can apply NODE_FORGET for itself and stop reconnecting. */
+    if (rs->role == RAFT_ROLE_LEADER) {
+        clusterLink *out = node->link ? node->link : node->inbound_link;
+        if (out && out->conn) {
+            clusterRaftSendAppendEntries(out, node);
+            clusterWriteHandler(out->conn);
+        }
+    }
 
     /* clusterDelNode() frees the node's links. If we're processing a message
      * from one of them, detach it instead, so the message handler can detect

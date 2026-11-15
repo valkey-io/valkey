@@ -2951,6 +2951,37 @@ static void clusterRaftBeforeSleep(bool blocked) {
         if (clusterRaftHasPeerMembers()) rs->todo_broadcast_ae = 1;
     }
 
+    /* Reconfigure replication before acking, so that the ack and the
+     * failover ranking below see our offset after a SET_REPLICA_OF, e.g. 0
+     * after moving to another shard, not the offset from before it. */
+    if (rs->todo_update_replication) {
+        rs->todo_update_replication = 0;
+        /* Set when applying SET_REPLICA_OF, since myself is already in the
+         * new shard by the time we get here. */
+        int full_sync = rs->todo_full_sync;
+        rs->todo_full_sync = 0;
+        if (nodeIsReplica(myself) && myself->replicaof) {
+            clusterNode *primary = myself->replicaof;
+            /* Only call clusterSetPrimary if replication target changed. */
+            if (!server.primary_host ||
+                strcmp(server.primary_host, primary->ip) != 0 ||
+                server.primary_port != getNodeDefaultReplicationPort(primary)) {
+                if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) full_sync = 1;
+                clusterSetPrimary(primary, full_sync, full_sync);
+            }
+        } else if (nodeIsPrimary(myself) && server.primary_host) {
+            replicationUnsetPrimary();
+        }
+    }
+
+    /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
+    if (nodeIsReplica(myself)) {
+        long long new_offset = replicationGetReplicaOffset();
+        if (myself->repl_offset == 0 && new_offset > 0) {
+        }
+        myself->repl_offset = new_offset;
+    }
+
     if (rs->todo_send_ae_ack) {
         rs->todo_send_ae_ack = 0;
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
@@ -3028,34 +3059,6 @@ static void clusterRaftBeforeSleep(bool blocked) {
                       "(rank #%d, offset %lld, replica priority %u).",
                       myself->replicaof->name, (long long)delay, rank, my_offset, myself->replica_priority);
         }
-    }
-
-    if (rs->todo_update_replication) {
-        rs->todo_update_replication = 0;
-        /* Set when applying SET_REPLICA_OF, since myself is already in the
-         * new shard by the time we get here. */
-        int full_sync = rs->todo_full_sync;
-        rs->todo_full_sync = 0;
-        if (nodeIsReplica(myself) && myself->replicaof) {
-            clusterNode *primary = myself->replicaof;
-            /* Only call clusterSetPrimary if replication target changed. */
-            if (!server.primary_host ||
-                strcmp(server.primary_host, primary->ip) != 0 ||
-                server.primary_port != getNodeDefaultReplicationPort(primary)) {
-                if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) full_sync = 1;
-                clusterSetPrimary(primary, full_sync, full_sync);
-            }
-        } else if (nodeIsPrimary(myself) && server.primary_host) {
-            replicationUnsetPrimary();
-        }
-    }
-
-    /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
-    if (nodeIsReplica(myself)) {
-        long long new_offset = replicationGetReplicaOffset();
-        if (myself->repl_offset == 0 && new_offset > 0) {
-        }
-        myself->repl_offset = new_offset;
     }
 }
 

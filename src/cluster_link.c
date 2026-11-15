@@ -496,10 +496,8 @@ void clusterConnectNodes(void) {
         freeClusterLinkOnBufferLimitReached(node->link);
         freeClusterLinkOnBufferLimitReached(node->inbound_link);
 
-        /* Handshake nodes, and Raft JOINING stubs that never got NODE_JOIN
-         * (HELLO from a forgotten node, or MEET that never committed). */
-        if ((node->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_JOINING)) &&
-            now - node->ctime > handshake_timeout) {
+        /* Remove handshake nodes that have timed out. */
+        if (nodeInHandshake(node) && now - node->ctime > handshake_timeout) {
             clusterDelNode(node);
             continue;
         }

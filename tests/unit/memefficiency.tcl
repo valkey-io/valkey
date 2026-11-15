@@ -638,7 +638,18 @@ run_solo {defrag} {
             set n_keys 40000
             set n_clients 24
 
-            perform_defrag_test $title populate {
+            # The bulk of the memory here is the tracking table itself, so this
+            # test relocates far more (tiny) allocations than the other defrag
+            # tests (~800k rax nodes) and runs far more defrag cycles. When the
+            # defrag timer is starved for a while, computeDefragCycleUs()
+            # intentionally stretches the duty cycle to preserve the target CPU
+            # percentage, so a few-ms event loop hiccup on a loaded runner is
+            # amplified into a wall-clock cycle latency well above the 5ms
+            # default (8ms observed in CI, see #5348; over 30ms on contended
+            # runners). Allow headroom for that compensation; a walker that
+            # lost its incrementality would run a whole-table pass in one
+            # cycle (hundreds of ms of relocations) and still blow past this.
+            perform_defrag_test $title latency 100 populate {
                 # Seed the keys that will be tracked. The values are sized so
                 # the main dictionary contributes some data, but the bulk of
                 # the retained memory is the tracking table itself.

@@ -39,7 +39,7 @@ tags {"rdb stream external:skip"} {
             dict for {key info} $expected {
                 assert_redis_stream_metadata $key $info
             }
-            assert_equal 5 [r dbsize]
+            assert_equal 6 [r dbsize]
             binary scan [r dump idmp] c type
             assert_equal 21 $type
             assert_equal after-streams [r get sentinel]
@@ -70,6 +70,12 @@ tags {"rdb stream external:skip"} {
             set warnings [count_log_message 0 "Discarding Redis stream IDMP state"]
             r restore plain 0 [binary format H* [dict get $dumps plain]] replace
             assert_equal $warnings [count_log_message 0 "Discarding Redis stream IDMP state"]
+        }
+
+        test {RESTORE warns when non-default IDMP configuration is discarded without producer entries} {
+            set warnings [count_log_message 0 "Discarding Redis stream IDMP state"]
+            assert_equal OK [r restore idmp-custom 0 [binary format H* [dict get $dumps idmp-custom]] replace]
+            assert_equal [expr {$warnings + 1}] [count_log_message 0 "Discarding Redis stream IDMP state"]
         }
 
         test {Strict mode still rejects Redis RDB 13 DUMP payloads} {
@@ -140,6 +146,16 @@ tags {"rdb stream external:skip"} {
             }
             r debug set-skip-checksum-validation 0
         } {OK} {needs:debug}
+
+        test {RESTORE rejects Redis type 26 in RDB version 12} {
+            r debug set-skip-checksum-validation 1
+            set dump [binary format H* [dict get $dumps idmp]]
+            set body [string range $dump 0 end-10]
+            set footer "[binary format cc 12 0][string repeat \x00 8]"
+            assert_error "*Bad data format*" {r restore version12 0 "$body$footer"}
+            assert_equal 0 [r exists version12]
+            r debug set-skip-checksum-validation 0
+        } {OK} {needs:debug}
     }
 
     test {valkey-check-rdb understands Redis RDB 13 streams} {
@@ -154,6 +170,66 @@ tags {"rdb stream external:skip"} {
             write_binary_file $filename "$header[string range $data 9 end]"
             assert_equal 1 [catch {exec $::VALKEY_CHECK_RDB_BIN $filename} result]
             assert_match "*Invalid object type: 26*" $result
+        }
+        write_binary_file $filename "REDIS0012[string range $data 9 end]"
+        assert_equal 1 [catch {exec $::VALKEY_CHECK_RDB_BIN $filename} result]
+        assert_match "*Unknown object type 26 in RDB file with foreign version 12*" $result
+    }
+}
+
+tags {"repl external:skip"} {
+    start_server {overrides {save {} rdb-version-check relaxed repl-diskless-load swapdb}} {
+        test {Replica survives IDMP trailer disconnect and accepts a later full sync} {
+            set complete [read_binary_file tests/assets/redis-8.6-idmp.rdb]
+            # The single-stream fixture ends with the IDMP producer counters,
+            # followed by the RDB EOF marker and checksum. Drop the final
+            # counter and footer while still announcing the complete size.
+            set partial [string range $complete 0 end-11]
+            set partial_file [tmpfile truncated-idmp-rdb]
+            write_binary_file $partial_file $partial
+
+            set port [find_available_port $::baseport $::portcount]
+            set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                         $port $partial_file [string length $complete] &]
+            wait_for_condition 50 50 {
+                [ping_server 127.0.0.1 $port]
+            } else {
+                fail "Failed to start fake primary for interrupted full sync"
+            }
+
+            set replica [srv 0 client]
+            $replica select 0
+            $replica replicaof 127.0.0.1 $port
+            wait_for_condition 100 50 {
+                [string match {*rdb format from socket, assuming connection error*} \
+                     [exec cat [srv 0 stdout]]]
+            } else {
+                fail "Interrupted full sync did not report a socket read error: [exec cat [srv 0 stdout]]"
+            }
+            assert_equal PONG [$replica ping]
+            catch {exec kill $pid}
+
+            $replica replicaof no one
+            set port [find_available_port $::baseport $::portcount]
+            set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
+                         $port tests/assets/redis-8.6-idmp.rdb \
+                         [string length $complete] &]
+            wait_for_condition 50 50 {
+                [ping_server 127.0.0.1 $port]
+            } else {
+                fail "Failed to start fake primary for retry full sync"
+            }
+            $replica replicaof 127.0.0.1 $port
+            wait_for_condition 100 50 {
+                [$replica dbsize] == 1
+            } else {
+                fail "Replica did not load the complete Redis stream after retry (dbsize=[$replica dbsize], keys=[$replica keys *]): [exec cat [srv 0 stdout]]"
+            }
+            assert_equal 1 [$replica exists interrupted]
+            assert_equal 1 [$replica xlen interrupted]
+            assert_equal {f v} [lindex [$replica xrange interrupted - +] 0 1]
+            assert_equal PONG [$replica ping]
+            catch {exec kill $pid}
         }
     }
 }

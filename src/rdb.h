@@ -168,7 +168,7 @@ enum RdbType {
 #define RDB_TYPE_REDIS_STREAM_LISTPACKS_4 26
 
 static inline bool rdbIsSupportedForeignType(int rdbver, int type) {
-    return rdbIsForeignVersion(rdbver) && type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4;
+    return rdbver == 13 && type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4;
 }
 
 /* Test if a type is an object type. */

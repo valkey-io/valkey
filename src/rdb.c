@@ -1975,7 +1975,7 @@ static int rdbLoadRedisStreamIdmp(rio *rdb) {
     if (duration < 1 || duration > 86400 || max_entries < 1 || max_entries > 10000)
         return C_ERR;
 
-    bool discarded = producers != 0;
+    bool discarded = producers != 0 || duration != 100 || max_entries != 100;
     while (producers--) {
         sds producer = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
         if (producer == NULL) return C_ERR;
@@ -3363,7 +3363,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             raxStop(&ri_cg_pel);
         }
         if (rdbtype == RDB_TYPE_REDIS_STREAM_LISTPACKS_4 && rdbLoadRedisStreamIdmp(rdb) != C_OK) {
-            rdbReportCorruptRDB("Invalid or truncated Redis stream IDMP metadata");
+            if (rioGetReadError(rdb) || rioGetAsyncCloseError(rdb)) {
+                rdbReportReadError("Redis stream IDMP metadata loading failed");
+            } else {
+                rdbReportCorruptRDB("Invalid Redis stream IDMP metadata");
+            }
             decrRefCount(o);
             return NULL;
         }

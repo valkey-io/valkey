@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 # Regenerate the Redis 8.6 stream fixtures using a disposable, empty Redis 8.6.0
-# server, not a production instance:
+# server on the same host as this script, not a production instance. Redis
+# writes the RDB in its configured directory and this script copies that local
+# file. The server's configured directory must be accessible to the script:
 # tclsh tests/helpers/gen-redis-streams.tcl HOST PORT OUTPUT_DIRECTORY
 # The server must allow CONFIG SET and SAVE. No Redis executable is needed to
 # run the regression tests; only the generated data files are checked in.
@@ -50,10 +52,12 @@ $r xadd idmp idmp 123 43 * f second
 $r xadd idmp idmp 123 42 * f duplicate
 $r xadd idmp idmp [string repeat producer 30] [string repeat iid 60] * f third
 $r set sentinel after-streams
+$r xgroup create idmp-custom group 0 mkstream
+$r xcfgset idmp-custom idmp-duration 200 idmp-maxsize 300
 
 set expected {}
 set dumps {}
-foreach key {plain emptied no-entries idmp} {
+foreach key {plain emptied no-entries idmp idmp-custom} {
     dict set expected $key [$r xinfo stream $key full count 0]
     binary scan [$r dump $key] H* dump
     dict set dumps $key $dump
@@ -61,7 +65,19 @@ foreach key {plain emptied no-entries idmp} {
 $r save
 set dir [lindex [$r config get dir] 1]
 set filename [lindex [$r config get dbfilename] 1]
-file copy -force [file join $dir $filename] [file join $output redis-8.6-streams.rdb]
+set rdb_file [file join $dir $filename]
+if {![file isfile $rdb_file]} {
+    error "Redis SAVE did not create an RDB at '$rdb_file'; ensure the server's local configured directory is accessible"
+}
+file copy -force $rdb_file [file join $output redis-8.6-streams.rdb]
+$r flushall
+$r xadd interrupted idmp producer iid-1 * f v
+$r save
+set rdb_file [file join [lindex [$r config get dir] 1] [lindex [$r config get dbfilename] 1]]
+if {![file isfile $rdb_file]} {
+    error "Redis SAVE did not create an RDB at '$rdb_file'; ensure the server's local configured directory is accessible"
+}
+file copy -force $rdb_file [file join $output redis-8.6-idmp.rdb]
 set fd [open [file join $output redis-8.6-streams.txt] w]
 # Hex keeps binary stream values independent of the file's text encoding.
 binary scan [list $expected $dumps] H* manifest

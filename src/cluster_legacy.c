@@ -4713,14 +4713,17 @@ int clusterProcessPacket(clusterLink *link) {
          * for it or if there was a failover in the sender's shard. Check
          * this ASAP to avoid other computational expensive checks later.
          *
-         * A newer configEpoch from a node we already record as primary also
-         * means a failover in its shard. This covers a primary that owns no
-         * slots (e.g. an empty shard) and that we already saw as primary
-         * because of a stale announcement, so the migrating-slot targets
-         * still get updated. */
+         * A primary that owns no slots (e.g. in an empty shard) shows no slot
+         * change after a failover. If we already recorded it as primary
+         * because of a stale announcement, a newer configEpoch is the only
+         * sign of the failover, so use it to update the migrating-slot
+         * targets. The epoch can also rise without a failover (BUMPEPOCH,
+         * epoch collision), so only slot-less primaries take this path:
+         * for a primary that owns slots, running the slot update on a bare
+         * epoch rise could finalize a stale importing state. */
 
         if (sender && sender_claims_to_be_primary &&
-            (sender_last_reported_as_replica || sender_published_newer_epoch ||
+            (sender_last_reported_as_replica || (sender_published_newer_epoch && sender->numslots == 0) ||
              memcmp(sender->slots, msg->myslots, sizeof(msg->myslots)))) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));

@@ -3739,7 +3739,7 @@ parseResult handleParseResults(client *c) {
     }
 
     if (c->read_flags & READ_FLAGS_INLINE_ZERO_QUERY_LEN && getClientType(c) == CLIENT_TYPE_REPLICA) {
-        c->repl_data->repl_ack_time = server.unixtime;
+        c->repl_data->repl_ack_time = getMonotonicUs();
     }
 
     if (c->read_flags & READ_FLAGS_INLINE_ZERO_QUERY_LEN) {

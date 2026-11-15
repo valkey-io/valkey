@@ -1233,7 +1233,7 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     } else {
         c->repl_data->repl_state = REPLICA_STATE_ONLINE;
     }
-    c->repl_data->repl_ack_time = server.unixtime;
+    c->repl_data->repl_ack_time = getMonotonicUs();
     c->repl_data->repl_start_cmd_stream_on_ack = 0;
     listAddNodeTail(server.replicas, c);
     /* We can't use the connection buffers since they are used to accumulate
@@ -1606,6 +1606,7 @@ void syncCommand(client *c) {
     /* Set up the replica as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the replica differently. */
     c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
+    elapsedStart(&c->repl_data->repl_wait_start);
     if (server.repl_disable_tcp_nodelay) anetDisableTcpNoDelay(NULL, c->conn->fd); /* Non critical if it fails. */
     c->repl_data->repldbfd = -1;
     c->flag.replica = 1;
@@ -1899,7 +1900,7 @@ void replconfCommand(client *c) {
                 if ((getLongLongFromObject(c->argv[j + 3], &offset) != C_OK)) return;
                 if (offset > c->repl_data->repl_aof_off) c->repl_data->repl_aof_off = offset;
             }
-            c->repl_data->repl_ack_time = server.unixtime;
+            c->repl_data->repl_ack_time = getMonotonicUs();
             /* If this was a diskless replication, we need to really put
              * the replica online when the first ACK is received (which
              * confirms replica is online and ready to get more data). This
@@ -2040,7 +2041,7 @@ static int replicaPutOnline(client *replica) {
     if (!command_stream_already_started && replicaEnableCompressionIfNegotiated(replica) != C_OK) return 0;
 
     replica->repl_data->repl_state = REPLICA_STATE_ONLINE;
-    replica->repl_data->repl_ack_time = server.unixtime; /* Prevent false timeout. */
+    replica->repl_data->repl_ack_time = getMonotonicUs(); /* Prevent false timeout. */
 
     refreshGoodReplicasCount();
     /* Fire the replica change modules event. */
@@ -5610,7 +5611,7 @@ void refreshGoodReplicasCount(void) {
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
-        time_t lag = server.unixtime - replica->repl_data->repl_ack_time;
+        time_t lag = elapsedSec(replica->repl_data->repl_ack_time);
 
         if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE && lag <= server.repl_min_replicas_max_lag) good++;
     }
@@ -6051,7 +6052,7 @@ void replicationCron(void) {
 
             if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE) {
                 if (replica->flag.pre_psync) continue;
-                if ((server.unixtime - replica->repl_data->repl_ack_time) > server.repl_timeout) {
+                if (elapsedSec(replica->repl_data->repl_ack_time) > (unsigned)server.repl_timeout) {
                     serverLog(LL_WARNING, "Disconnecting timedout replica (streaming sync): %s",
                               replicationGetReplicaName(replica));
                     freeClient(replica);
@@ -6166,7 +6167,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
                     /* Skip replicas that don't match */
                     continue;
                 }
-                idle = server.unixtime - replica->last_interaction;
+                idle = elapsedSec(replica->repl_data->repl_wait_start);
                 if (idle > max_idle) max_idle = idle;
                 replicas_waiting++;
                 mincapa = first ? replica->repl_data->replica_capa : (mincapa & replica->repl_data->replica_capa);

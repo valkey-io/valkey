@@ -5228,7 +5228,7 @@ int finishShutdown(void) {
         num_replicas++;
         if (replica->repl_data->repl_ack_off != server.primary_repl_offset) {
             num_lagging_replicas++;
-            long lag = replica->repl_data->repl_state == REPLICA_STATE_ONLINE ? time(NULL) - replica->repl_data->repl_ack_time : 0;
+            long lag = replica->repl_data->repl_state == REPLICA_STATE_ONLINE ? elapsedSec(replica->repl_data->repl_ack_time) : 0;
             serverLog(LL_NOTICE, "Lagging replica %s reported offset %lld behind master, lag=%ld, state=%s.",
                       replicationGetReplicaName(replica), server.primary_repl_offset - replica->repl_data->repl_ack_off, lag,
                       replstateToString(replica->repl_data->repl_state));
@@ -7055,7 +7055,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 }
                 const char *state = replstateToString(replica->repl_data->repl_state);
                 if (state[0] == '\0') continue;
-                if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE) lag = time(NULL) - replica->repl_data->repl_ack_time;
+                if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE) lag = elapsedSec(replica->repl_data->repl_ack_time);
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"

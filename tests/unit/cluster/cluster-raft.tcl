@@ -182,35 +182,45 @@ test "Raft: CLUSTER FORGET of a leader with slots fails without a leader transfe
     }
 }
 
-# CLUSTER FORGET without RESET: the forgotten node must leave on both sides.
+# CLUSTER FORGET without RESET. Pause the forgotten node so commit rides
+# the other follower's ACK; the commit AE must still be delivered.
 test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
-    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set r0 [srv 0 client]
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-        raft_add_voter $r0 [R 1 CLUSTER MYID]
-
-        wait_for_condition 100 100 {
-            [CI 0 cluster_size] == 2 &&
-            [CI 1 cluster_size] == 2
-        } else {
-            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size]"
-        }
-
-        set forgotten_id [R 1 CLUSTER MYID]
-        assert_equal "OK" [R 0 CLUSTER FORGET $forgotten_id]
+        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
+        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
+        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
 
         wait_for_condition 50 100 {
-            ![raft_node_visible $r0 $forgotten_id] &&
-            [CI 0 cluster_size] == 1
+            [CI 0 cluster_size] == 3 &&
+            [CI 1 cluster_size] == 3 &&
+            [CI 2 cluster_size] == 3
         } else {
-            fail "NODE_FORGET did not drop the node on the leader: visible=[raft_node_visible $r0 $forgotten_id] size=[CI 0 cluster_size] nodes={[R 0 CLUSTER NODES]}"
+            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
         }
 
-        # Wait for a reconnect/HELLO from the forgotten node.
+        assert_equal [CI 0 cluster_raft_role] "leader"
+        set forgotten_id [R 1 CLUSTER MYID]
+        pause_process [srv -1 pid]
+        if {[catch {
+            assert_equal "OK" [$r0 CLUSTER FORGET $forgotten_id]
+            wait_for_condition 50 100 {
+                ![raft_node_visible $r0 $forgotten_id] &&
+                [CI 0 cluster_size] == 2
+            } else {
+                fail "NODE_FORGET did not drop the paused node on the leader: visible=[raft_node_visible $r0 $forgotten_id] size=[CI 0 cluster_size] nodes={[R 0 CLUSTER NODES]}"
+            }
+        } err]} {
+            resume_process [srv -1 pid]
+            error $err
+        }
+        resume_process [srv -1 pid]
+
         after 2000
 
         set problems {}
-        if {[raft_node_visible $r0 $forgotten_id] || [CI 0 cluster_known_nodes] != 1} {
+        if {[raft_node_visible $r0 $forgotten_id] || [CI 0 cluster_known_nodes] != 2} {
             lappend problems "reappeared via HELLO known_nodes=[CI 0 cluster_known_nodes] nodes={[R 0 CLUSTER NODES]}"
         }
         if {[CI 1 cluster_raft_role] ne "learner" || [CI 1 cluster_size] != 0} {

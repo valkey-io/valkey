@@ -2823,8 +2823,8 @@ static void clusterRaftAssertLearnerRole(void) {
 }
 
 /* Drop JOINING nodes that never got NODE_JOIN and have no live link.
- * HELLO leftovers are JOINING without HANDSHAKE: do not reconnect, or the
- * stub never becomes idle enough to reap. */
+ * HELLO leftovers also get an outbound from clusterConnectNodes(); drop
+ * that so the stub can go idle. MEET after HI only has outbound — keep it. */
 static void clusterRaftReapJoiningStubs(void) {
     mstime_t now = mstime();
     mstime_t timeout = max(server.cluster_node_timeout, 1000);
@@ -2833,9 +2833,8 @@ static void clusterRaftReapJoiningStubs(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !(node->flags & CLUSTER_NODE_JOINING)) continue;
-        if (nodeInHandshake(node)) continue;
-        if (node->link) freeClusterLink(node->link);
-        if (node->inbound_link) continue;
+        if (node->inbound_link && node->link) freeClusterLink(node->link);
+        if (node->link || node->inbound_link) continue;
         if (now - node->ctime > timeout) clusterDelNode(node);
     }
     dictReleaseIterator(di);

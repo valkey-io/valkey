@@ -88,6 +88,33 @@ start_server {tags {"querybuf slow"}} {
         $rd close
     }
 
+    test "query buffer resized correctly when not idle" {
+        # A 20k bulk spans reads without entering the >=32k big-arg path.
+        # The greedy second read grows the private query buffer above 32k.
+        r debug pause-cron 1
+        set rd [valkey_client]
+        $rd client setname nonidle_client
+        assert_equal OK [$rd set x [string repeat A 20000]]
+        set initial [client_query_buffer nonidle_client]
+        assert {$initial > 32768}
+        r debug pause-cron 0
+
+        # Keep the client active so the non-idle peak-based shrink path runs.
+        set resized 0
+        set start [clock milliseconds]
+        while {[clock milliseconds] - $start < 1000} {
+            assert_equal OK [$rd set x [string repeat A 100]]
+            set current [client_query_buffer nonidle_client]
+            if {$current > 0 && $current < $initial} {
+                set resized 1
+                break
+            }
+            after 10
+        }
+        assert {$resized}
+        $rd close
+    } {0} {needs:debug}
+
     test "query buffer resized correctly with fat argv" {
         set rd [valkey_client]
         $rd client setname test_client

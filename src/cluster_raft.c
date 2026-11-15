@@ -4441,19 +4441,25 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     bool was_voter = nodeIsVoter(node);
 
     /* Queue a commit AE. Do not flush: WriteHandler may free processing_link. */
+    clusterLink *out = NULL;
     if (rs->role == RAFT_ROLE_LEADER) {
-        clusterLink *out = node->link ? node->link : node->inbound_link;
+        out = node->link ? node->link : node->inbound_link;
         if (out && out->conn) clusterRaftSendAppendEntries(out, node);
+        if (out && listLength(out->send_msg_queue) == 0) out = NULL;
     }
 
-    /* clusterDelNode() frees the node's links. If we're processing a message
-     * from one of them, detach it instead, so the message handler can detect
-     * that the node it was talking to is gone and free the link. */
+    /* clusterDelNode() frees the node's links. Detach the one we are
+     * processing, and the one holding the queued commit AE. */
     clusterLink *link = rs->processing_link;
     if (link && link->node == node) {
         if (node->link == link) node->link = NULL;
         if (node->inbound_link == link) node->inbound_link = NULL;
         link->node = NULL;
+    }
+    if (out && out->node == node) {
+        if (node->link == out) node->link = NULL;
+        if (node->inbound_link == out) node->inbound_link = NULL;
+        out->node = NULL;
     }
     clusterDelNode(node);
     if (was_voter && server.cluster->size > 0) server.cluster->size--;

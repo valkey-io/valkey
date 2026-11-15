@@ -1118,3 +1118,72 @@ start_server {tags {"tracking network"}} {
         r CLIENT GETREDIR
     } {-1}
 }
+
+# The scheduled sweep (serverCron -> trackingSweepDeadClients) is the only
+# production path reclaiming dead IDs registered on keys that are never
+# modified. Its first step is due as soon as the tracking table exists, and
+# its adaptive period (which is never reset once the table was created) then
+# gates the following steps. This needs a fresh server where tracking was
+# never enabled, with the cron paused while the dead IDs are created, so that
+# the very first scheduled step is the one that finds them.
+start_server {tags {"tracking network needs:debug external:skip logreqres:skip"}} {
+    # Track 'keys' from a new client, then disconnect it, leaving one dead ID
+    # per key in the tracking table.
+    proc leave_dead_tracking_ids {keys} {
+        set tc [valkey_deferring_client]
+        $tc HELLO 3
+        $tc read
+        $tc CLIENT TRACKING on
+        assert_equal OK [$tc read]
+        foreach key $keys {
+            $tc GET $key
+            $tc read
+        }
+        $tc close
+        wait_for_condition 50 100 {
+            [s tracking_clients] == 0
+        } else {
+            fail "tracking client disconnect was not processed"
+        }
+    }
+
+    test {Scheduled sweep reclaims dead tracking IDs and then backs off} {
+        r debug pause-cron 1
+
+        # Fewer IDs than the sweep checks between two clock reads, so a
+        # single step always covers the whole table whatever its time budget.
+        set keys {}
+        for {set i 0} {$i < 10} {incr i} {
+            r SET ckey:$i v
+            lappend keys ckey:$i
+        }
+        leave_dead_tracking_ids $keys
+
+        # Disconnecting does not touch the table, and the cron is paused.
+        assert_equal 10 [s tracking_total_items]
+        assert_equal 10 [s tracking_total_keys]
+
+        # The first scheduled step is due right away: without modifying any
+        # tracked key and without DEBUG SWEEP-TRACKING-TABLE, every dead ID is
+        # reclaimed and the emptied keys are dropped.
+        r debug pause-cron 0
+        wait_for_condition 50 100 {
+            [s tracking_total_items] == 0 && [s tracking_total_keys] == 0
+        } else {
+            fail "scheduled sweep did not reclaim the dead tracking IDs"
+        }
+
+        # That step reclaimed something, so the next one is due only after
+        # the adaptive period (tens of seconds): a new dead ID survives the
+        # following cron ticks.
+        leave_dead_tracking_ids {ckey:0}
+        after 300
+        assert_equal 1 [s tracking_total_items]
+        assert_equal 1 [s tracking_total_keys]
+
+        # It is reclaimable though: only the period was holding the sweep.
+        r debug sweep-tracking-table
+        assert_equal 0 [s tracking_total_items]
+        assert_equal 0 [s tracking_total_keys]
+    }
+}

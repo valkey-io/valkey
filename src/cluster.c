@@ -259,20 +259,28 @@ void restoreCommand(client *c) {
     }
 
     rioInitWithBuffer(&payload, objectGetVal(c->argv[3]));
-    type = rdbLoadObjectType(&payload);
+    type = rdbLoadObjectType(&payload, rdbver);
     if (type == -1) {
         addReplyError(c, "Bad data format");
         return;
     }
 
-    /* If it's a foreign RDB format, only accept old data types that we know
-     * existed in the past and that don't clash with new types added later. */
-    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN) {
+    /* Foreign formats may use old shared types or explicitly supported foreign
+     * types, but must not be interpreted using Valkey's newer type namespace. */
+    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN &&
+        !rdbIsSupportedForeignType(rdbver, type)) {
         addReplyErrorFormat(c, "Unsupported foreign data type: %d", type);
         return;
     }
 
     obj = rdbLoadObject(type, &payload, objectGetVal(key), c->db->id, NULL, RDBFLAGS_NONE, 0);
+    /* A truncated foreign trailer must not consume the DUMP version/checksum
+     * as metadata, nor leave unparsed IDMP state behind. */
+    if (obj && type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4 &&
+        rioTell(&payload) != (off_t)(sdslen(objectGetVal(c->argv[3])) - 10)) {
+        decrRefCount(obj);
+        obj = NULL;
+    }
     if (obj == NULL) {
         addReplyError(c, "Bad data format");
         return;

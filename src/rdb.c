@@ -803,12 +803,12 @@ int rdbGetObjectType(robj *o, int rdbver) {
     return -1; /* avoid warning */
 }
 
-/* Use rdbLoadType() to load a TYPE in RDB format, but returns -1 if the
- * type is not specifically a valid Object Type. */
-int rdbLoadObjectType(rio *rdb) {
+/* Use rdbLoadType() to load an object type, accepting foreign types only in
+ * their own version namespace. Return -1 for an unsupported object type. */
+int rdbLoadObjectType(rio *rdb, int rdbver) {
     int type;
     if ((type = rdbLoadType(rdb)) == -1) return -1;
-    if (!rdbIsObjectType(type)) return -1;
+    if (!rdbIsObjectType(type) && !rdbIsSupportedForeignType(rdbver, type)) return -1;
     return type;
 }
 
@@ -1954,6 +1954,58 @@ void rdbRemoveTempFile(pid_t childpid, int from_signal) {
     }
 }
 
+/* Read an unencoded integer, including the full uint64_t range used by stream IDs. */
+static int rdbLoadRedisStreamIdmpLen(rio *rdb, uint64_t *value) {
+    int encoded;
+    if (rdbLoadLenByRef(rdb, &encoded, value) == -1 || encoded) return C_ERR;
+    return C_OK;
+}
+
+/* Redis stream type 26 appends IDMP configuration, producer/IID mappings and
+ * two counters to the type 21 payload. Valkey has no IDMP implementation.
+ * Consume the entire trailer and warn if producer state or history is lost.
+ * No allocation is based on the untrusted producer or entry counts. */
+static int rdbLoadRedisStreamIdmp(rio *rdb) {
+    uint64_t duration, max_entries, producers, added, duplicates;
+    if (rdbLoadRedisStreamIdmpLen(rdb, &duration) != C_OK ||
+        rdbLoadRedisStreamIdmpLen(rdb, &max_entries) != C_OK ||
+        rdbLoadRedisStreamIdmpLen(rdb, &producers) != C_OK)
+        return C_ERR;
+    /* Redis 8.6's wire-format limits for IDMP duration and maximum entries. */
+    if (duration < 1 || duration > 86400 || max_entries < 1 || max_entries > 10000)
+        return C_ERR;
+
+    bool discarded = producers != 0;
+    while (producers--) {
+        sds producer = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+        if (producer == NULL) return C_ERR;
+        sdsfree(producer);
+
+        uint64_t entries;
+        if (rdbLoadRedisStreamIdmpLen(rdb, &entries) != C_OK) return C_ERR;
+        while (entries--) {
+            sds iid = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+            if (iid == NULL) return C_ERR;
+            sdsfree(iid);
+
+            uint64_t ms, seq;
+            if (rdbLoadRedisStreamIdmpLen(rdb, &ms) != C_OK ||
+                rdbLoadRedisStreamIdmpLen(rdb, &seq) != C_OK)
+                return C_ERR;
+        }
+    }
+
+    if (rdbLoadRedisStreamIdmpLen(rdb, &added) != C_OK ||
+        rdbLoadRedisStreamIdmpLen(rdb, &duplicates) != C_OK)
+        return C_ERR;
+    if (discarded || added || duplicates) {
+        serverLog(LL_WARNING,
+                  "Discarding Redis stream IDMP state: Valkey does not support "
+                  "idempotent message producers");
+    }
+    return C_OK;
+}
+
 /* This function is called by rdbLoadObject() when the code is in RDB-check
  * mode and we find a module value of type 2 that can be parsed without
  * the need of the actual module. The value is parsed for errors, finally
@@ -2990,7 +3042,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
     } else if (rdbtype == RDB_TYPE_STREAM_LISTPACKS || rdbtype == RDB_TYPE_STREAM_LISTPACKS_2 ||
-               rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
+               rdbtype == RDB_TYPE_STREAM_LISTPACKS_3 || rdbtype == RDB_TYPE_REDIS_STREAM_LISTPACKS_4) {
         o = createStreamObject();
         stream *s = objectGetVal(o);
         uint64_t listpacks = rdbLoadLen(rdb, NULL);
@@ -3309,6 +3361,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 }
             }
             raxStop(&ri_cg_pel);
+        }
+        if (rdbtype == RDB_TYPE_REDIS_STREAM_LISTPACKS_4 && rdbLoadRedisStreamIdmp(rdb) != C_OK) {
+            rdbReportCorruptRDB("Invalid or truncated Redis stream IDMP metadata");
+            decrRefCount(o);
+            return NULL;
         }
     } else if (rdbtype == RDB_TYPE_MODULE_PRE_GA) {
         rdbReportCorruptRDB("Pre-release module format not supported");
@@ -3797,9 +3854,15 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
 
         /* Safeguard for unknown foreign opcode interpretations. */
-        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
+        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX &&
+            !rdbIsSupportedForeignType(rdbver, type)) {
             serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
                       type, rdbver);
+            goto loaderr;
+        }
+        if (type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4 &&
+            !(is_redis_magic && rdbIsSupportedForeignType(rdbver, type))) {
+            serverLog(LL_WARNING, "Redis stream type %d requires a foreign RDB version", type);
             goto loaderr;
         }
 

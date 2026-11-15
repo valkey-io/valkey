@@ -566,11 +566,14 @@ void rdbCheckError(const char *fmt, ...) {
     rdbCheckPrintOffset(msg);
     printf("[additional info] While doing: %s\n", rdb_check_doing_string[rdbstate.doing]);
     if (rdbstate.key) printf("[additional info] Reading key '%s'\n", (char *)objectGetVal(rdbstate.key));
-    if (rdbstate.key_type != -1)
-        printf("[additional info] Reading type %d (%s)\n", rdbstate.key_type,
-               ((unsigned)rdbstate.key_type < sizeof(rdb_type_string) / sizeof(char *))
-                   ? rdb_type_string[rdbstate.key_type]
-                   : "unknown");
+    if (rdbstate.key_type != -1) {
+        const char *name = "unknown";
+        if (rdbstate.key_type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4)
+            name = "redis-stream-v4";
+        else if ((unsigned)rdbstate.key_type < sizeof(rdb_type_string) / sizeof(char *))
+            name = rdb_type_string[rdbstate.key_type];
+        printf("[additional info] Reading type %d (%s)\n", rdbstate.key_type, name);
+    }
     rdbShowGenericInfo();
 }
 
@@ -845,10 +848,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             continue;
         } else if (rdbIsForeignVersion(rdbver) &&
                    type >= RDB_FOREIGN_TYPE_MIN &&
-                   type <= RDB_FOREIGN_TYPE_MAX) {
+                   type <= RDB_FOREIGN_TYPE_MAX &&
+                   !rdbIsSupportedForeignType(rdbver, type)) {
             rdbCheckError("Unknown object type %d in RDB file with foreign version %d", type, rdbver);
             goto err;
-        } else if (!rdbIsObjectType(type)) {
+        } else if (!rdbIsObjectType(type) &&
+                   !(is_redis_magic && rdbIsSupportedForeignType(rdbver, type))) {
             if (rdbver > RDB_VERSION) {
                 rdbCheckError("Unknown object type %d in RDB file with future version %d", type, rdbver);
             } else {

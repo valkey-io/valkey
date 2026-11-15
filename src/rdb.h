@@ -163,6 +163,14 @@ enum RdbType {
 #define RDB_FOREIGN_TYPE_MIN 22
 #define RDB_FOREIGN_TYPE_MAX 243
 
+/* Redis RDB 13 streams add an idempotent-producer metadata trailer.
+ * Keep foreign types separate from Valkey's type namespace. */
+#define RDB_TYPE_REDIS_STREAM_LISTPACKS_4 26
+
+static inline bool rdbIsSupportedForeignType(int rdbver, int type) {
+    return rdbIsForeignVersion(rdbver) && type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4;
+}
+
 /* Test if a type is an object type. */
 #define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
 
@@ -229,7 +237,7 @@ long long rdbLoadMillisecondTime(rio *rdb, int rdbver);
 uint64_t rdbLoadLen(rio *rdb, int *isencoded);
 int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
 int rdbGetObjectType(robj *o, int rdbver);
-int rdbLoadObjectType(rio *rdb);
+int rdbLoadObjectType(rio *rdb, int rdbver);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbStartBgsave(int bgsave_type);

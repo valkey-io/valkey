@@ -1659,3 +1659,58 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         }
     }
 }
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set client-output-buffer-limit "replica 1mb 0 0"
+    $primary debug populate 20000 key 100
+
+    start_server {} {
+        set replica [srv 0 client]
+
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set loglevel debug
+        # A small local buffer makes the replica stop reading the main channel early.
+        $replica config set client-output-buffer-limit "replica 256k 0 0"
+        $replica config set loading-process-events-interval-bytes 1024
+        # Slow down the RDB load: 20000 keys * 200us = 4 seconds.
+        $replica config set key-load-delay 200
+
+        test "Replica aborts streaming local buffer when primary drops main channel" {
+            set loglines [count_log_lines 0]
+            set cob_disconnections [s -1 client_output_buffer_limit_disconnections]
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages 0 {"*Loading RDB produced by*"} $loglines 1000 10
+
+            # Fill the replica's local buffer, then overrun the primary's output
+            # buffer limit so it drops the main channel while the RDB is loading.
+            populate 2000 bigkey 10000 -1
+            wait_for_condition 100 100 {
+                [s -1 client_output_buffer_limit_disconnections] > $cob_disconnections
+            } else {
+                fail "Primary should disconnect the replica main channel due to COB overrun"
+            }
+
+            # The replica notices the broken link while streaming its local buffer.
+            wait_for_log_messages 0 {"*Primary connection lost while streaming local replication buffer*"} $loglines 1000 10
+
+            # Relax the limits and let the replica resync.
+            $replica config set key-load-delay 0
+            $replica config set client-output-buffer-limit "replica 0 0 0"
+            $primary config set client-output-buffer-limit "replica 0 0 0"
+            wait_for_condition 500 100 {
+                [s 0 master_link_status] eq "up"
+            } else {
+                fail "Replica didn't resync"
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+        }
+    }
+}

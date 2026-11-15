@@ -3924,6 +3924,18 @@ void bufferReplData(connection *conn) {
 }
 
 /* Replication: Replica side.
+ * While the local buffer is streamed into the DB the primary client has no
+ * read handler, so a dropped connection is only noticed when the progress
+ * callback's write to it fails. Executing further buffered commands on a
+ * broken connection is pointless, so the sync is aborted instead. */
+static int primaryConnBrokenWhileStreaming(client *c) {
+    if (!c->conn || connGetState(c->conn) == CONN_STATE_CONNECTED) return 0;
+    dualChannelServerLog(LL_WARNING, "Primary connection lost while streaming local replication buffer: %s",
+                         connGetLastError(c->conn));
+    return 1;
+}
+
+/* Replication: Replica side.
  * Streams accumulated replication data into the database while freeing read nodes */
 int streamReplDataBufToDb(client *c) {
     serverAssert(c->flag.primary);
@@ -3957,7 +3969,7 @@ int streamReplDataBufToDb(client *c) {
                  * compressible streams still yield at the configured rate. */
                 replStreamProgressCallback(processed_bytes, (size_t)decoded, &last_progress_callback);
                 processed_bytes += (size_t)decoded;
-                if (!server.pending_repl_data.blocks) {
+                if (!server.pending_repl_data.blocks || primaryConnBrokenWhileStreaming(c)) {
                     blockingOperationEnds();
                     return C_ERR;
                 }
@@ -3968,7 +3980,7 @@ int streamReplDataBufToDb(client *c) {
             processInputBuffer(c);
             replStreamProgressCallback(processed_bytes, used, &last_progress_callback);
             processed_bytes += used;
-            if (!server.pending_repl_data.blocks) {
+            if (!server.pending_repl_data.blocks || primaryConnBrokenWhileStreaming(c)) {
                 blockingOperationEnds();
                 return C_ERR;
             }

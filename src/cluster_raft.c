@@ -459,6 +459,14 @@ static bool clusterRaftIsSingleton(void) {
     return server.cluster->size <= 1 && !clusterRaftHasPeerMembers();
 }
 
+/* True between sending TIMEOUT_NOW and stepping down or giving up. The
+ * leader must not append then, or the target may lose the election. */
+static bool clusterRaftTransferSent(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->transfer_deadline && rs->transfer_sent &&
+           rs->role == RAFT_ROLE_LEADER && rs->transfer_term == rs->current_term;
+}
+
 /* Step down on higher term / lost quorum.
  * Voters become followers; learners and joiners keep their role. */
 static void clusterRaftStepDown(mstime_t now, const char *reason) {
@@ -953,7 +961,10 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         listAddNodeTail(rs->pending_proposals, pp);
     }
 
-    if (rs->role == RAFT_ROLE_LEADER) {
+    if (rs->role == RAFT_ROLE_LEADER && clusterRaftTransferSent()) {
+        /* Kept pending, and retried after the transfer. */
+        sdsfree(data);
+    } else if (rs->role == RAFT_ROLE_LEADER) {
         /* If we're a singleton leader with an empty log that hasn't committed
          * its own NODE_JOIN yet, do it now before appending any other entry. */
         if (raftLogLastIndex() == 0 &&
@@ -1197,6 +1208,8 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     /* argv[0]="PROPOSE", argv[1..] is the entry (type + data). */
     if (argc < 2) return 1;
     if (rs->role != RAFT_ROLE_LEADER) return 1;
+    /* The proposer still has it pending, and retries after the leader change. */
+    if (clusterRaftTransferSent()) return 1;
 
     /* Reconstruct the entry and parse the type. */
     sds entry = sdsjoinsds(argv + 1, argc - 1, " ", 1);
@@ -2723,6 +2736,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
 static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader_link) {
     clusterRaftState *rs = RAFT_STATE();
 
+    if (clusterRaftTransferSent()) return;
     pp->propose_time = monotonicMs();
     if (rs->role == RAFT_ROLE_LEADER) {
         uint64_t idx = raftLogLastIndex() + 1;
@@ -2869,6 +2883,8 @@ static void clusterRaftCron(void) {
                 serverLog(LL_NOTICE, "Leadership transfer aborted: %.40s did not catch up in time.",
                           rs->transfer_target);
             }
+            /* Append what was held back while TIMEOUT_NOW was pending. */
+            if (rs->transfer_sent) rs->todo_retry_proposals = 1;
             rs->transfer_deadline = 0;
         }
 

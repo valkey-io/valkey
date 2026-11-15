@@ -122,6 +122,39 @@ test "Raft: leader transfer waits for the target to catch up" {
     }
 }
 
+test "Raft: leader doesn't append after sending TIMEOUT_NOW" {
+    # Long timeout so the leader keeps its link to the paused target
+    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        raft_form_cluster 2 3
+        set leader_id [R 0 CLUSTER MYID]
+        set target_id [R 1 CLUSTER MYID]
+        set loglines [count_log_lines 0]
+
+        # The paused target gets TIMEOUT_NOW but can't start the election yet
+        pause_process [srv -1 pid]
+        set rd [valkey_deferring_client -2]
+        $rd CLUSTER FORGET $leader_id
+        wait_for_log_messages 0 [list "*sent TIMEOUT_NOW to $target_id*"] $loglines 50 100
+
+        set entries [CI 0 cluster_raft_log_entries]
+        R 0 CONFIG SET cluster-announce-hostname held-back.example.com
+        assert_equal $entries [CI 0 cluster_raft_log_entries]
+
+        resume_process [srv -1 pid]
+        assert_equal "OK" [$rd read]
+        $rd close
+
+        wait_for_condition 100 50 {
+            [CI 1 cluster_raft_leader] eq $target_id &&
+            [CI 2 cluster_raft_leader] eq $target_id &&
+            [CI 1 cluster_size] == 1 &&
+            [CI 2 cluster_size] == 1
+        } else {
+            fail "Leadership was not transferred after holding back the append"
+        }
+    }
+}
+
 test "Raft: CLUSTER FORGET rejects leader transfer without another voter" {
     start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         raft_form_cluster 1 2

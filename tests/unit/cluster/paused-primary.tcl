@@ -99,3 +99,29 @@ start_cluster 3 3 {tags {external:skip cluster}} {
         assert_equal {before-failover} [R 3 get $key]
     }
 }
+
+start_cluster 3 3 {tags {external:skip cluster}} {
+    set key "{06S}key"
+
+    test "Replica blocked while its primary fails can still win the election" {
+        assert_equal {OK} [R 0 set $key value]
+        assert_equal {1} [R 0 wait 1 5000]
+
+        # Both outlast the node timeout, so the replica wakes with the FAIL
+        # message about its primary queued and starts its election at once.
+        set primary_pid [srv 0 pid]
+        pause_process $primary_pid
+        set rd [valkey_deferring_client -3]
+        $rd debug sleep 6
+        assert_equal {OK} [$rd read]
+        $rd close
+
+        wait_for_condition 100 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "Replica 3 was not promoted"
+        }
+        verify_no_log_message -3 "*Failover attempt expired*" 0
+        resume_process $primary_pid
+    }
+}

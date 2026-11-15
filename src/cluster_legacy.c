@@ -7205,6 +7205,9 @@ static int clusterStallDetected(void) {
     monotime gap_us = last_check ? now_us - last_check : 0;
     last_check = now_us;
 
+    /* A replica accepts no writes, and dropping its links could leave it
+     * unable to ask for votes when it wakes up just as its primary fails. */
+    if (!clusterNodeIsPrimary(myself)) return 0;
     if ((long long)(gap_us / 1000) <= clusterStallThresholdMs()) return 0;
     serverLog(LL_WARNING,
               "Main thread was blocked for %lld ms, longer than cluster-node-timeout. "
@@ -7213,9 +7216,10 @@ static int clusterStallDetected(void) {
     return 1;
 }
 
-/* After a stall longer than the node timeout we may already have been failed
- * over, and queued client commands run before clusterCron() can notice. Refuse
- * queries until a majority of primaries answers a PING sent after the stall.
+/* After a stall longer than the node timeout a primary may already have been
+ * failed over, and queued client commands run before clusterCron() can notice.
+ * Refuse queries until a majority of primaries answers a PING sent after the
+ * stall.
  *
  * Called on both sides of every event loop sleep and before the I/O thread
  * responses handled after the AOF flush. clusterCheckSlowCommand() covers a

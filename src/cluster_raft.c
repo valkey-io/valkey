@@ -38,6 +38,7 @@
 #include "server.h"
 #include "hotkeys.h"
 #include "cluster.h"
+#include "cluster_migrateslots.h"
 #include "cluster_bus.h"
 #include "cluster_state.h"
 #include "cluster_link.h"
@@ -192,6 +193,9 @@ typedef struct {
     /* Pending MEET callbacks waiting for NODE_JOIN commit. */
     list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
     list *deferred_meets; /* Names (sds) of nodes whose MEET we answer once we're in a multi-member cluster */
+
+    /* Slots whose old keys must remain until their export stream is closed. */
+    list *pending_slot_cleanup;
 
     clusterLink *processing_link; /* Link whose message is being processed, or NULL */
 
@@ -2687,6 +2691,7 @@ static void clusterRaftInit(void) {
     rs->pending_meets = listCreate();
     rs->deferred_meets = listCreate();
     listSetFreeMethod(rs->deferred_meets, sdsfreeVoid);
+    rs->pending_slot_cleanup = listCreate();
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
@@ -3123,6 +3128,25 @@ static void clusterRaftCheckSlotCoverage(void) {
     server.cluster->state = all_slots_covered ? CLUSTER_OK : CLUSTER_FAIL;
 }
 
+/* Cleanup must not feed DELs back into an export that the target is still
+ * consuming. Keep the existing migration handshake responsible for closing it. */
+static void clusterRaftCleanupSlots(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_slot_cleanup, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        int slot = (int)(uintptr_t)listNodeValue(ln);
+        if (clusterIsSlotExporting(slot) || clusterIsSlotImporting(slot)) continue;
+        clusterNode *owner = server.cluster->slots[slot];
+        if (nodeIsPrimary(myself) && owner && memcmp(owner->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
+            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
+            delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+        }
+        listDelNode(rs->pending_slot_cleanup, ln);
+    }
+}
+
 static void clusterRaftBeforeSleep(bool blocked) {
     UNUSED(blocked);
     clusterRaftState *rs = RAFT_STATE();
@@ -3281,6 +3305,8 @@ static void clusterRaftBeforeSleep(bool blocked) {
                       myself->replicaof->name, (long long)delay, rank, my_offset, myself->replica_priority);
         }
     }
+
+    clusterRaftCleanupSlots();
 }
 
 static void clusterRaftPrepareShutdown(void) {
@@ -3324,6 +3350,7 @@ static void clusterRaftHandleServerShutdown(void) {
     }
     listRelease(rs->pending_meets);
     listRelease(rs->deferred_meets);
+    listRelease(rs->pending_slot_cleanup);
     /* Free raft log. */
     for (uint64_t i = 0; i < rs->log_count; i++) {
         sdsfree(rs->log[i]->data);
@@ -4118,8 +4145,12 @@ static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, cl
     /* Only while still bound, like gossip. A slot that moves to another node
      * in our shard, e.g. our replica that took over, keeps its keys. */
     if (old_owner == myself && memcmp(new_owner->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
-        serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
-        delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+        if (clusterIsSlotExporting(slot)) {
+            listAddNodeTail(RAFT_STATE()->pending_slot_cleanup, (void *)(uintptr_t)slot);
+        } else {
+            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
+            delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+        }
     }
 
     /* Target is this shard, not necessarily myself. */
@@ -4845,6 +4876,7 @@ static void clusterRaftResetCluster(int hard) {
         listDelNode(rs->pending_meets, ln);
     }
     listEmpty(rs->deferred_meets);
+    listEmpty(rs->pending_slot_cleanup);
     rs->current_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);

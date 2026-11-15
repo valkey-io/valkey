@@ -196,6 +196,7 @@ typedef struct {
     unsigned int todo_retry_deferred : 1; /* For proposals that need rebasing of new epoch */
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
+    unsigned int todo_full_sync : 1; /* Myself moved to another shard: don't reuse our data. */
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
@@ -3018,22 +3019,31 @@ static void clusterRaftBeforeSleep(bool blocked) {
                 /* Replica priority is the same. Lexicographically compare node id. */
                 if (memcmp(sibling->name, myself->name, CLUSTER_NAMELEN) < 0) rank++;
             }
-            rs->failover_time = monotonicMs() + rank * 1000;
-            serverLog(LL_NOTICE, "Primary %.40s failed, scheduling failover (rank %d).",
-                      myself->replicaof->name, rank);
+            mstime_t delay = rank * 1000;
+            rs->failover_time = monotonicMs() + delay;
+            /* The parenthesized part matches the gossip election log, so tests
+             * can check the rank and offset the same way for both. */
+            serverLog(LL_NOTICE,
+                      "Primary %.40s failed, scheduling failover in %lld milliseconds "
+                      "(rank #%d, offset %lld, replica priority %u).",
+                      myself->replicaof->name, (long long)delay, rank, my_offset, myself->replica_priority);
         }
     }
 
     if (rs->todo_update_replication) {
         rs->todo_update_replication = 0;
+        /* Set when applying SET_REPLICA_OF, since myself is already in the
+         * new shard by the time we get here. */
+        int full_sync = rs->todo_full_sync;
+        rs->todo_full_sync = 0;
         if (nodeIsReplica(myself) && myself->replicaof) {
             clusterNode *primary = myself->replicaof;
             /* Only call clusterSetPrimary if replication target changed. */
             if (!server.primary_host ||
                 strcmp(server.primary_host, primary->ip) != 0 ||
                 server.primary_port != getNodeDefaultReplicationPort(primary)) {
-                int same_shard = memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) == 0;
-                clusterSetPrimary(primary, !same_shard, !same_shard);
+                if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) full_sync = 1;
+                clusterSetPrimary(primary, full_sync, full_sync);
             }
         } else if (nodeIsPrimary(myself) && server.primary_host) {
             replicationUnsetPrimary();
@@ -4040,12 +4050,19 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
         if (!primary) goto reject;
         if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
+        /* A replica that moves to another shard has none of the new shard's
+         * data, so its offset no longer counts. Every node applies this, so
+         * all nodes see the zero offset at once, e.g. for failover ranking. */
+        if (memcmp(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) replica->repl_offset = 0;
         if (replica == myself) {
             if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
             myself->flags &= ~CLUSTER_NODE_PRIMARY;
             myself->flags |= CLUSTER_NODE_REPLICA;
             myself->replicaof = primary;
             clusterNodeAddReplica(primary, myself);
+            /* Our data belongs to the shard we leave, so the new primary
+             * must not treat it as a partial copy of its own. */
+            if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) rs->todo_full_sync = 1;
             clusterRemoveNodeFromShard(myself);
             memcpy(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN);
             clusterAddNodeToShard(primary->shard_id, myself);

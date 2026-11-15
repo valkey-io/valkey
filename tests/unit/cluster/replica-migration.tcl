@@ -82,15 +82,15 @@ proc test_migrated_replica {type} {
         # The node may not be able to initiate an election in time due to
         # problems with cluster communication. If an election is initiated,
         # we make sure the offset of server 3 / 7 is 0.
-        if {[count_log_message -3 "Start of election"] != 0} {
-            verify_log_message -3 "*Start of election*offset 0*" 0
+        if {[count_log_message -3 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -3 {(Start of election|scheduling failover).*offset 0} 0
         }
-        if {[count_log_message -7 "Start of election"] != 0} {
-            verify_log_message -7 "*Start of election*offset 0*" 0
+        if {[count_log_message -7 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -7 {(Start of election|scheduling failover).*offset 0} 0
         }
 
         # Make sure the right replica gets the higher rank.
-        verify_log_message -4 "*Start of election*rank #0*" 0
+        verify_log_message_re -4 {(Start of election|scheduling failover).*rank #0} 0
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
@@ -135,11 +135,11 @@ proc test_migrated_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
@@ -187,13 +187,13 @@ proc test_nonempty_replica {type} {
             fail "Failover does not happened"
         }
 
-        verify_log_message -4 "*Start of election*rank #0*" 0
+        verify_log_message_re -4 {(Start of election|scheduling failover).*rank #0} 0
 
         # The node may not be able to initiate an election in time due to
         # problems with cluster communication. If an election is initiated,
         # we make sure server 7 gets the lower rank and it's offset is 0.
-        if {[count_log_message -7 "Start of election"] != 0} {
-            verify_log_message -7 "*Start of election*offset 0*" 0
+        if {[count_log_message -7 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -7 {(Start of election|scheduling failover).*offset 0} 0
         }
 
         # Wait for the cluster to be ok.
@@ -231,11 +231,11 @@ proc test_nonempty_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 

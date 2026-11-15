@@ -2822,7 +2822,9 @@ static void clusterRaftAssertLearnerRole(void) {
     serverAssert((rs->role == RAFT_ROLE_LEARNER) == nodeIsLearner(myself));
 }
 
-/* Drop JOINING nodes that never got NODE_JOIN and have no live link. */
+/* Drop JOINING nodes that never got NODE_JOIN and have no live link.
+ * HELLO leftovers are JOINING without HANDSHAKE: do not reconnect, or the
+ * stub never becomes idle enough to reap. */
 static void clusterRaftReapJoiningStubs(void) {
     mstime_t now = mstime();
     mstime_t timeout = max(server.cluster_node_timeout, 1000);
@@ -2831,7 +2833,9 @@ static void clusterRaftReapJoiningStubs(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !(node->flags & CLUSTER_NODE_JOINING)) continue;
-        if (node->link || node->inbound_link) continue;
+        if (nodeInHandshake(node)) continue;
+        if (node->link) freeClusterLink(node->link);
+        if (node->inbound_link) continue;
         if (now - node->ctime > timeout) clusterDelNode(node);
     }
     dictReleaseIterator(di);
@@ -4440,26 +4444,25 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
     bool was_voter = nodeIsVoter(node);
 
-    /* Queue a commit AE. Do not flush: WriteHandler may free processing_link. */
+    /* Queue a commit AE. Flush it unless this is processing_link: WriteHandler
+     * may free that link while the packet handler still holds it. */
     clusterLink *out = NULL;
     if (rs->role == RAFT_ROLE_LEADER) {
         out = node->link ? node->link : node->inbound_link;
-        if (out && out->conn) clusterRaftSendAppendEntries(out, node);
-        if (out && listLength(out->send_msg_queue) == 0) out = NULL;
+        if (out && out->conn) {
+            clusterRaftSendAppendEntries(out, node);
+            if (out != rs->processing_link) clusterWriteHandler(out->conn);
+        }
     }
 
-    /* clusterDelNode() frees the node's links. Detach the one we are
-     * processing, and the one holding the queued commit AE. */
+    /* clusterDelNode() frees the node's links. If we're processing a message
+     * from one of them, detach it instead, so the message handler can detect
+     * that the node it was talking to is gone and free the link. */
     clusterLink *link = rs->processing_link;
     if (link && link->node == node) {
         if (node->link == link) node->link = NULL;
         if (node->inbound_link == link) node->inbound_link = NULL;
         link->node = NULL;
-    }
-    if (out && out->node == node) {
-        if (node->link == out) node->link = NULL;
-        if (node->inbound_link == out) node->inbound_link = NULL;
-        out->node = NULL;
     }
     clusterDelNode(node);
     if (was_voter && server.cluster->size > 0) server.cluster->size--;

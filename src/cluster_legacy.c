@@ -3598,6 +3598,65 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     }
 }
 
+/* Called for every PING, PONG or MEET packet from 'sender', a node that claims
+ * to be a primary with the config epoch 'sender_claimed_config_epoch'. It must
+ * be called after the ping extensions of the packet are processed, so that the
+ * shard id of 'sender' is up to date.
+ *
+ * If I am a primary without slots and 'sender' is a primary of my shard with a
+ * greater config epoch, I am a stale primary of the shard of 'sender', so I
+ * become a replica of 'sender'.
+ *
+ * clusterUpdateSlotsConfigWith() already does this when I lose my last slots to
+ * a primary of my shard, which is what happens after a failover. But if the
+ * promoted replica gives some of the slots it inherited to another shard before
+ * I learn about the failover, I lose my last slot to the other shard and stay
+ * a primary without slots. The slots that 'sender' claims then no longer change
+ * from my point of view, so nothing calls clusterUpdateSlotsConfigWith() for
+ * 'sender' again, and the check has to be done for every packet.
+ *
+ * CLUSTER RESET and CLUSTER REPLICATE NO ONE move a node to a new shard, so a
+ * node that is reused as the primary of another shard doesn't qualify.
+ *
+ * Like CLUSTER REPLICATE, this doesn't turn a primary that has keys into a
+ * replica, as its keys may exist nowhere else, for example if they were
+ * imported from another shard. */
+static void clusterHandleNewerPrimaryOfMyShard(clusterNode *sender, uint64_t sender_claimed_config_epoch) {
+    if (!clusterNodeIsPrimary(myself) || myself->numslots != 0) return;
+    if (!nodeIsPrimary(sender) || sender_claimed_config_epoch <= myself->configEpoch) return;
+    if (!areInSameShard(sender, myself)) return;
+    /* clusterUpdateSlotsConfigWith() doesn't reconfigure me in this mode either. */
+    if (server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION) return;
+
+    if (!dbsHaveNoKeys()) {
+        static mstime_t last_log_time = 0;
+        const mstime_t log_interval_ms = 10000;
+        mstime_t now = mstime();
+        if (now - last_log_time >= log_interval_ms) {
+            last_log_time = now;
+            serverLog(LL_WARNING,
+                      "I own no slots and node %.40s (%s) is a primary of my shard %.40s with a greater config "
+                      "epoch (%llu > %llu), but I am not reconfiguring myself as a replica of it because I have "
+                      "%lld key(s) that may exist nowhere else. Move or delete them to let me replicate it.",
+                      sender->name, humanNodename(sender), myself->shard_id,
+                      (unsigned long long)sender_claimed_config_epoch, (unsigned long long)myself->configEpoch,
+                      dbTotalServerKeyCount());
+        }
+        return;
+    }
+
+    serverLog(LL_NOTICE,
+              "I own no slots and node %.40s (%s) is a primary of my shard %.40s with a greater config epoch "
+              "(%llu > %llu). Reconfiguring myself as a replica of it.",
+              sender->name, humanNodename(sender), myself->shard_id, (unsigned long long)sender_claimed_config_epoch,
+              (unsigned long long)myself->configEpoch);
+    /* My open slots are stale. We are in the same shard, so try psync: it fails
+     * if I diverged from 'sender', for example by deleting keys of lost slots. */
+    clusterSetPrimary(sender, 1, 0);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG |
+                         CLUSTER_TODO_BROADCAST_ALL);
+}
+
 /* Cluster ping extensions.
  *
  * The ping/pong/meet messages support arbitrary extensions to add additional
@@ -4781,6 +4840,10 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender) {
             if (!clusterProcessGossipSection(msg, link)) return 0;
             if (!clusterProcessPingExtensions(msg, link)) return 0;
+
+            /* This relies on the shard id of the sender, which the ping
+             * extensions may have just updated. */
+            if (sender_claims_to_be_primary) clusterHandleNewerPrimaryOfMyShard(sender, sender_claimed_config_epoch);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;

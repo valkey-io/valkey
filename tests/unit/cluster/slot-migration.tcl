@@ -591,46 +591,80 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
     }
 }
 
-# An epoch rise from a primary that owns slots must not finalize another
-# node's importing state. R1 imports slot 1000 from R2, which does not own it
-# (R0 does). R2 then bumps its epoch with its slots unchanged. R1 must keep
-# the importing state and must not take slot 1000 from R0.
-start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 5000} } {
-    set R0_id [R 0 CLUSTER MYID]
-    set R2_id [R 2 CLUSTER MYID]
-
-    test "Epoch bump of a slot-owning primary does not finalize a stale import" {
-        assert_equal {OK} [R 1 CLUSTER SETSLOT 1000 IMPORTING $R2_id]
-        wait_for_slot_state 1 "\[1000-<-$R2_id\]"
-
-        # BUMPEPOCH only raises R2's epoch if R2 is not already the unique max.
-        set e0 [dict get [cluster_get_myself 0] config_epoch]
-        set e1 [dict get [cluster_get_myself 1] config_epoch]
-        set e2 [dict get [cluster_get_myself 2] config_epoch]
-        if {$e2 > $e0 && $e2 > $e1} { R 0 CLUSTER BUMPEPOCH }
-        set cleared [count_log_message -1 "*Slot 1000 is no longer being imported from node $R2_id*"]
-        set reply [R 2 CLUSTER BUMPEPOCH]
-        assert_match {BUMPED *} $reply
-        set e [lindex $reply 1]
-
-        # R1 handles the slot update in the same packet that carries the new epoch.
+# Raise R<idx>'s config epoch. CLUSTER BUMPEPOCH only bumps a node that is not
+# already the unique max, so if R<idx> is, bump R0 first and wait until R<idx>
+# has seen R0's new epoch.
+proc bump_epoch_of {idx} {
+    set reply [R $idx CLUSTER BUMPEPOCH]
+    if {[string match {STILL *} $reply]} {
+        set r0 [R 0 CLUSTER BUMPEPOCH]
+        assert_match {BUMPED *} $r0
+        set e0 [lindex $r0 1]
+        set R0_id [R 0 CLUSTER MYID]
         wait_for_condition 100 100 {
-            [dict get [cluster_get_node_by_id 1 $R2_id] config_epoch] == $e
+            [dict get [cluster_get_node_by_id $idx $R0_id] config_epoch] == $e0
         } else {
-            fail "R1 never saw R2 at config epoch $e"
+            fail "R$idx never saw R0 at config epoch $e0"
         }
-        assert_equal "\[1000-<-$R2_id\]" [get_open_slots 1]
-        assert_equal $cleared [count_log_message -1 "*Slot 1000 is no longer being imported from node $R2_id*"]
-        # Taking the slot over would bump R1's own epoch without consensus.
-        assert_equal $e1 [dict get [cluster_get_myself 1] config_epoch]
-        set owner {}
-        foreach range [R 1 CLUSTER SLOTS] {
-            if {[lindex $range 0] <= 1000 && 1000 <= [lindex $range 1]} {
-                set owner [lindex $range 2 2]
-            }
+        set reply [R $idx CLUSTER BUMPEPOCH]
+    }
+    assert_match {BUMPED *} $reply
+    return [lindex $reply 1]
+}
+
+# R1 imports slot 1000 from R<src>, which does not own it (R0 does). R<src>
+# then bumps its epoch with its slots unchanged. R1 must keep the importing
+# state, must not take slot 1000 from R0, and must not bump its own epoch.
+proc assert_epoch_bump_keeps_stale_import {src} {
+    set R0_id [R 0 CLUSTER MYID]
+    set src_id [R $src CLUSTER MYID]
+    assert_equal {OK} [R 1 CLUSTER SETSLOT 1000 IMPORTING $src_id]
+    wait_for_slot_state 1 "\[1000-<-$src_id\]"
+
+    set e1 [dict get [cluster_get_myself 1] config_epoch]
+    # count_log_message takes a grep regex, not a glob.
+    set cleared_pattern "Slot 1000 is no longer being imported from node $src_id"
+    set cleared [count_log_message -1 $cleared_pattern]
+    set e [bump_epoch_of $src]
+
+    # R1 handles the slot update in the same packet that carries the new epoch.
+    wait_for_condition 100 100 {
+        [dict get [cluster_get_node_by_id 1 $src_id] config_epoch] == $e
+    } else {
+        fail "R1 never saw R$src at config epoch $e"
+    }
+    assert_equal "\[1000-<-$src_id\]" [get_open_slots 1]
+    assert_equal $cleared [count_log_message -1 $cleared_pattern]
+    # Taking the slot over would bump R1's own epoch without consensus.
+    assert_equal $e1 [dict get [cluster_get_myself 1] config_epoch]
+    set owner {}
+    foreach range [R 1 CLUSTER SLOTS] {
+        if {[lindex $range 0] <= 1000 && 1000 <= [lindex $range 1]} {
+            set owner [lindex $range 2 2]
         }
-        assert_equal $R0_id $owner
-        assert_equal {OK} [R 1 CLUSTER SETSLOT 1000 STABLE]
+    }
+    assert_equal $R0_id $owner
+    assert_equal {OK} [R 1 CLUSTER SETSLOT 1000 STABLE]
+}
+
+# An epoch rise from a primary, with its slots unchanged, must not finalize
+# another node's importing state, whether the primary owns slots or not.
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
+    test "Epoch bump of a slot-owning primary does not finalize a stale import" {
+        assert_epoch_bump_keeps_stale_import 2
+    }
+
+    test "Epoch bump of a slot-less primary does not finalize a stale import" {
+        # Turn R3 into a primary that owns no slots.
+        assert_equal {OK} [R 3 CLUSTER RESET]
+        assert_equal {OK} [R 3 CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
+        set R3_id [R 3 CLUSTER MYID]
+        wait_for_condition 100 100 {
+            [catch {cluster_get_node_by_id 1 $R3_id} n] == 0 && [cluster_has_flag $n master]
+        } else {
+            fail "R1 never saw R3 as a primary"
+        }
+        assert_epoch_bump_keeps_stale_import 3
     }
 }
 

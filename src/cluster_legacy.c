@@ -3282,7 +3282,7 @@ static void clusterLogSlotRangeMigration(int first_slot,
  * The 'sender' is the node for which we received a configuration update.
  * Sometimes it is not actually the "Sender" of the information, like in the
  * case we receive the info via an UPDATE packet. */
-void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoch, unsigned char *slots) {
+void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoch, unsigned char *slots, int epoch_only) {
     int j;
     clusterNode *cur_primary = NULL, *new_primary = NULL;
     /* The dirty slots list is a list of slots for which we lose the ownership
@@ -3467,8 +3467,13 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              *
              * 1. Remove the importing state for the specific slot.
              * 2. Finalize the slot's ownership, if I am not already the owner of
-             *    the slot. */
-            if (nodeIsPrimary(myself) && getImportingSlotSource(j) == sender) {
+             *    the slot.
+             *
+             * Skip this when only the sender's config epoch changed. Its slot set
+             * is the same as before, so it did not just give up this slot, and a
+             * bare epoch rise (BUMPEPOCH, epoch collision) must not finalize a
+             * stale importing state. */
+            if (!epoch_only && nodeIsPrimary(myself) && getImportingSlotSource(j) == sender) {
                 serverLog(LL_NOTICE,
                           "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s;"
                           " Clear my importing source for the slot.",
@@ -4718,13 +4723,14 @@ int clusterProcessPacket(clusterLink *link) {
          * because of a stale announcement, a newer configEpoch is the only
          * sign of the failover, so use it to update the migrating-slot
          * targets. The epoch can also rise without a failover (BUMPEPOCH,
-         * epoch collision), so only slot-less primaries take this path:
-         * for a primary that owns slots, running the slot update on a bare
-         * epoch rise could finalize a stale importing state. */
+         * epoch collision), so only slot-less primaries take this path, and
+         * an update triggered only by the epoch does not finalize importing
+         * slots: that could take a slot from its owner on a bare epoch rise. */
 
+        int sender_slots_changed = sender && sender_claims_to_be_primary && memcmp(sender->slots, msg->myslots, sizeof(msg->myslots));
         if (sender && sender_claims_to_be_primary &&
             (sender_last_reported_as_replica || (sender_published_newer_epoch && sender->numslots == 0) ||
-             memcmp(sender->slots, msg->myslots, sizeof(msg->myslots)))) {
+             sender_slots_changed)) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 
@@ -4734,7 +4740,8 @@ int clusterProcessPacket(clusterLink *link) {
             /* 1) If the sender of the message is a primary, and we detected that
              *    the set of slots it claims changed, scan the slots to see if we
              *    need to update our configuration. */
-            clusterUpdateSlotsConfigWith(sender, sender_claimed_config_epoch, msg->myslots);
+            int epoch_only = !sender_last_reported_as_replica && !sender_slots_changed;
+            clusterUpdateSlotsConfigWith(sender, sender_claimed_config_epoch, msg->myslots, epoch_only);
 
             /* 2) We also check for the reverse condition, that is, the sender
              *    claims to serve slots we know are served by a primary with a
@@ -4891,7 +4898,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Check the bitmap of served slots and update our
          * config accordingly. */
-        clusterUpdateSlotsConfigWith(n, reportedConfigEpoch, msg->data.update.nodecfg.slots);
+        clusterUpdateSlotsConfigWith(n, reportedConfigEpoch, msg->data.update.nodecfg.slots, 0);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
         clusterProcessModulePacket(&msg->data.module.msg, sender);
     } else {

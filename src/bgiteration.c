@@ -2461,7 +2461,6 @@ void bgIteration_handleCommandReplication(int dbid,
     }
 
     if (!bgIteration_iterationActive()) return;
-    /* A module thread holding the GIL may replicate a command too. */
     serverAssert(hasMainThreadExclusivity());
 
     /* Some commands are replicated which are not writes (like publish) these can be ignored.

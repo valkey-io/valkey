@@ -809,45 +809,47 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
     }
 }
 
+# Have the server under test MEET a fake node, which joins as a follower.
+# Returns the leader's connection to the fake node after the first AE_ACK.
+proc raft_join_fake_follower {fake_id fake_shard} {
+    # Start listening before MEET so the leader can connect.
+    set cport 0
+    set fd [raft_listen_and_accept cport 5000 {
+        set fake_port [expr {$cport - 10000}]
+        set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
+
+        # Send CLUSTER MEET without waiting for reply (it blocks until
+        # NODE_JOIN commits, which needs our AE_ACK).
+        set meet_client [valkey_deferring_client]
+        $meet_client CLUSTER MEET 127.0.0.1 $fake_port
+    }]
+
+    # Leader sends HELLO + MEET(singleton).
+    set reply [raft_recv $fd 5000]
+    assert_match "HELLO *" $reply
+    set reply [raft_recv $fd 5000]
+    assert_match "MEET *" $reply
+
+    # Reply with HI + ADD_ME (fake node steps down, asks to be added).
+    raft_send $fd "HI $fake_id $fake_addr"
+    raft_send $fd "ADD_ME"
+
+    # Leader receives ADD_ME, invites us, commits NODE_JOIN, sends AE.
+    # Reply with offset=0.
+    set reply [raft_recv $fd 5000]
+    assert_match "AE *" $reply
+    raft_reply_ae_ack $fd $reply 0
+
+    # MEET should now complete. Consume the deferred reply.
+    assert_match {OK} [$meet_client read]
+    $meet_client close
+    return $fd
+}
+
 test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
-        set port [srv 0 port]
-        set node_id [R 0 CLUSTER MYID]
-
         set fake_id [string repeat "a" 40]
-        set fake_shard [string repeat "b" 40]
-
-        # Start listening before MEET so the leader can connect.
-        set cport 0
-        set fd [raft_listen_and_accept cport 5000 {
-            set fake_port [expr {$cport - 10000}]
-            set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
-
-            # Send CLUSTER MEET without waiting for reply (it blocks until
-            # NODE_JOIN commits, which needs our AE_ACK).
-            set meet_client [valkey_deferring_client]
-            $meet_client CLUSTER MEET 127.0.0.1 $fake_port
-        }]
-
-        # Leader sends HELLO + MEET(singleton).
-        set reply [raft_recv $fd 5000]
-        assert_match "HELLO *" $reply
-        set reply [raft_recv $fd 5000]
-        assert_match "MEET *" $reply
-
-        # Reply with HI + ADD_ME (fake node steps down, asks to be added).
-        raft_send $fd "HI $fake_id $fake_addr"
-        raft_send $fd "ADD_ME"
-
-        # Leader receives ADD_ME, invites us, commits NODE_JOIN, sends AE.
-        # Reply with offset=0.
-        set reply [raft_recv $fd 5000]
-        assert_match "AE *" $reply
-        raft_reply_ae_ack $fd $reply 0
-
-        # MEET should now complete. Consume the deferred reply.
-        assert_match {OK} [$meet_client read]
-        $meet_client close
+        set fd [raft_join_fake_follower $fake_id [string repeat "b" 40]]
 
         # Wait for next AE heartbeat.
         set reply [raft_recv $fd 5000]
@@ -896,25 +898,7 @@ proc raft_next_ae_from {fd skip_prev} {
 
 test "Raft proto: leader backs off next_index to the follower's last index on rejection" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
-        set fake_id [string repeat "a" 40]
-        set fake_shard [string repeat "b" 40]
-
-        set cport 0
-        set fd [raft_listen_and_accept cport 5000 {
-            set fake_port [expr {$cport - 10000}]
-            set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
-            set meet_client [valkey_deferring_client]
-            $meet_client CLUSTER MEET 127.0.0.1 $fake_port
-        }]
-        assert_match "HELLO *" [raft_recv $fd 5000]
-        assert_match "MEET *" [raft_recv $fd 5000]
-        raft_send $fd "HI $fake_id $fake_addr"
-        raft_send $fd "ADD_ME"
-        set reply [raft_recv $fd 5000]
-        assert_match "AE *" $reply
-        raft_reply_ae_ack $fd $reply 0
-        assert_match {OK} [$meet_client read]
-        $meet_client close
+        set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
 
         for {set j 0} {$j < 20} {incr j} {
             R 0 config set cluster-announce-hostname "host-$j.com"

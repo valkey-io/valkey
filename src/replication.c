@@ -5138,6 +5138,10 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
 
     cancelReplicationHandshake(0);
 
+    /* A cached primary from before, e.g. if the link to the old primary was
+     * already down, is as unusable as the one dont_cache_primary prevents. */
+    if (full_sync_required) replicationDiscardCachedPrimary();
+
     /* Before destroying our primary state, create a cached primary using
      * our own parameters, to later PSYNC with the new primary. */
     if (was_primary && !full_sync_required) {

@@ -2028,6 +2028,9 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         return 1;
     }
     clusterRaftMaybeStepDown(msg_term);
+    /* The snapshot may move myself to another shard, see todo_full_sync. */
+    char old_shard_id[CLUSTER_NAMELEN];
+    memcpy(old_shard_id, myself->shard_id, CLUSTER_NAMELEN);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
     clusterRaftSetLeader(argv[1]);
@@ -2215,6 +2218,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
 
     rs->todo_save_config = 1;
     rs->todo_connect_nodes = 1;
+    if (memcmp(old_shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) rs->todo_full_sync = 1;
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
@@ -2836,13 +2840,15 @@ static void clusterRaftCron(void) {
                     dictReleaseIterator(di);
                     clusterMsgSendBlockDecrRefCount(block);
                 }
-            } else {
+            } else if (!rs->todo_update_replication) {
                 /* Broadcast leader's own offset on 0 -> non-zero transition. */
                 if (myself->repl_offset == 0 && my_offset > 0) {
                     clusterRaftBroadcastNodeOffset(myself, my_offset);
                 }
             }
-            myself->repl_offset = my_offset;
+            /* After an applied SET_REPLICA_OF, our replication offset is the
+             * old one until beforeSleep has reconfigured replication. */
+            if (!rs->todo_update_replication) myself->repl_offset = my_offset;
             clusterRaftDetectFailures(now);
         }
     }
@@ -2976,10 +2982,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
 
     /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
     if (nodeIsReplica(myself)) {
-        long long new_offset = replicationGetReplicaOffset();
-        if (myself->repl_offset == 0 && new_offset > 0) {
-        }
-        myself->repl_offset = new_offset;
+        myself->repl_offset = replicationGetReplicaOffset();
     }
 
     if (rs->todo_send_ae_ack) {

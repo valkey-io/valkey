@@ -4411,6 +4411,12 @@ int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
     server.current_client = c;
+    /* Commands of blocked clients served after this command can evict clients. Mark this
+     * client so evictClients() skips it. Restore the old value instead of clearing it, since
+     * this function can be re-entered for the same client, e.g. from processEventsWhileBlocked()
+     * when a script times out. */
+    int old_processing = c->flag.processing_command;
+    c->flag.processing_command = 1;
     if (processCommand(c) == C_OK) {
         commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
@@ -4418,7 +4424,11 @@ int processCommandAndResetClient(client *c) {
         if (c->conn) updateClientMemUsageAndBucket(c);
     }
 
-    if (server.current_client == NULL) deadclient = 1;
+    if (server.current_client == NULL) {
+        deadclient = 1;
+    } else {
+        c->flag.processing_command = old_processing;
+    }
     /*
      * Restore the old client, this is needed because when a script
      * times out, we will get into this code from processEventsWhileBlocked.
@@ -7210,6 +7220,12 @@ void evictClients(void) {
             client *c = ln->value;
             if (c->flag.close_asap) {
                 /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
+            if (c->flag.processing_command && c != server.current_client) {
+                /* This client is further up the call stack and its caller still uses it, so it can't be
+                 * freed here. Count its memory as pending so others are not evicted in its place. */
                 pending_freed += c->last_memory_usage;
                 continue;
             }

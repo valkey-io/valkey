@@ -2461,7 +2461,7 @@ void bgIteration_handleCommandReplication(int dbid,
     }
 
     if (!bgIteration_iterationActive()) return;
-    serverAssert(onServerMainThread());
+    serverAssert(hasMainThreadExclusivity());
 
     /* Some commands are replicated which are not writes (like publish) these can be ignored.
      *  Be careful with MULTI which is not a write command, but must be replicated. */

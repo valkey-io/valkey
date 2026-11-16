@@ -313,10 +313,17 @@ run_solo {defrag} {
                 # Added buffer of 300ms to accommodate for slow CI runners
                 validate_latency 500
 
-                # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
+                # Make sure defrag ran during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
-                # mid-cycle.  Just check that we are defragging by the number of hits.
-                assert {[s active_defrag_hits] > 80000}
+                # mid-cycle.  The absolute hit count is not a stable signal either: during loading
+                # defrag only runs from whileBlockedCron, which skips the cycle unless a
+                # millisecond has elapsed, so the count is bounded by the wall-clock duration of
+                # the AOF replay and a fast runner legitimately produces far fewer hits (#3954).
+                # Just check that defrag ran and relocated allocations; config resetstat
+                # above zeroed these counters, so they only cover the debug loadaof window.
+                assert {[s total_active_defrag_time] > 0}
+                assert {[s active_defrag_hits] > 0}
+                assert {[s active_defrag_key_hits] > 0}
             }
             } ;# Active defrag - AOF loading
         }

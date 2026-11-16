@@ -621,7 +621,8 @@ start_cluster 1 2 [list overrides $base_conf] {
 
 # Test valkey-cli --cluster del-node with an unreachable node
 start_cluster 1 2 [list overrides $base_conf] {
-    # Three voters, so a quorum is left after one node is stopped.
+    # With Raft cluster, we have three voters, so a quorum is left after one
+    # node is stopped.
 
     test "del-node: Delete unreachable node without slots" {
         set node3 [srv -2 client]

@@ -3030,11 +3030,13 @@ start_server {tags {"setexpire needs:repl external:skip"}} {
 start_server {tags {"setexpire external:skip"}} {
     test {MULTI/EXEC uses one time for set member expiration} {
         flush_and_disable_active_expiry
-        r SADDEX myset PX 100 MEMBERS 1 m1
+        # SADDEX is queued, so the member's deadline comes from the EXEC time
+        # however long the client takes to reach EXEC.
         r MULTI
+        r SADDEX myset PX 100 MEMBERS 1 m1
         r DEBUG SLEEP 0.2
         r SISMEMBER myset m1
-        assert_equal {OK 1} [r EXEC]
+        assert_equal {1 OK 1} [r EXEC]
         assert_equal 0 [r SISMEMBER myset m1]
     } {} {needs:debug}
 

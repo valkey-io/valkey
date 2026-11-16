@@ -2171,6 +2171,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->replicaof = NULL;
     node->last_in_ping_gossip = 0;
     node->ping_sent = node->pong_received = 0;
+    node->pong_received_mono = 0;
     node->outbound_link_attempt_time = 0;
     node->data_received = 0;
     node->meet_sent = 0;
@@ -4524,6 +4525,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* Update our info about the node */
         if (!link->inbound && type == CLUSTERMSG_TYPE_PONG) {
             link->node->pong_received = now;
+            link->node->pong_received_mono = getMonotonicUs();
             link->node->ping_sent = 0;
 
             /* The PFAIL condition can be reversed without external
@@ -7199,37 +7201,42 @@ static long long clusterStallThresholdMs(void) {
     return max(server.cluster_node_timeout, 2 * (1000 / server.hz));
 }
 
-static int clusterStallDetected(void) {
-    static monotime last_check = 0;
+/* Measures the time since the event loop last polled, which is when it last
+ * read cluster bus messages, or since the last stall it reported. A batch of
+ * commands that are each fast can add up to a stall. 'polled' is set when
+ * called right after a poll. */
+static int clusterStallDetected(int polled) {
+    static monotime last_poll = 0;
     monotime now_us = getMonotonicUs();
-    monotime gap_us = last_check ? now_us - last_check : 0;
-    last_check = now_us;
+    monotime gap_us = last_poll ? now_us - last_poll : 0;
+    if (polled) last_poll = now_us;
 
     /* A replica accepts no writes, and dropping its links could leave it
      * unable to ask for votes when it wakes up just as its primary fails. */
     if (!clusterNodeIsPrimary(myself)) return 0;
     if ((long long)(gap_us / 1000) <= clusterStallThresholdMs()) return 0;
+    last_poll = now_us;
     serverLog(LL_WARNING,
               "Main thread was blocked for %lld ms, longer than cluster-node-timeout. "
-              "Refusing queries until a majority of primaries is reachable again.",
+              "Refusing queries until the cluster state is ok again.",
               (long long)(gap_us / 1000));
     return 1;
 }
 
 /* After a stall longer than the node timeout a primary may already have been
  * failed over, and queued client commands run before clusterCron() can notice.
- * Refuse queries until a majority of primaries answers a PING sent after the
- * stall.
+ * Refuse queries until the cluster state is ok again, which needs a majority of
+ * primaries to answer a PING sent after the stall.
  *
- * Called on both sides of every event loop sleep and before the I/O thread
- * responses handled after the AOF flush. clusterCheckSlowCommand() covers a
- * slow command. A stall elsewhere inside an event handler is only seen at the
- * next check, so the rest of that event batch runs with the old cluster state. */
+ * Called after every event loop sleep. clusterCheckCommandStall() runs before
+ * each client command and catches the stalls that happen while the loop is
+ * awake, such as a slow command, a slow AOF flush, or the process being stopped
+ * between two commands of one batch. */
 void clusterCheckStall(void) {
-    if (!clusterStallDetected() && !server.cluster->stall_links_pending) return;
+    if (!clusterStallDetected(1) && !server.cluster->stall_links_pending) return;
 
     mstime_t now = mstime();
-    server.cluster->stall_time = now;
+    server.cluster->stall_time = getMonotonicUs();
     server.cluster->stall_links_pending = 0;
 
     /* PONGs queued on our links during the stall answer old PINGs. Drop the
@@ -7248,15 +7255,22 @@ void clusterCheckStall(void) {
     clusterUpdateState();
 }
 
-/* Lets the commands queued behind a slow command in the same event batch see
- * the stall. We may be inside a cluster bus handler here, so the next
- * clusterCheckStall() drops the links. A check below the threshold would
- * restart the gap without detecting anything. */
-void clusterCheckSlowCommand(long long duration_us) {
-    if (duration_us / 1000 <= clusterStallThresholdMs() || !clusterStallDetected()) return;
-    server.cluster->stall_time = mstime();
-    server.cluster->stall_links_pending = 1;
-    clusterUpdateState();
+/* Called before a client command is admitted. Links are only dropped from the
+ * event loop, so the next clusterCheckStall() does it.
+ *
+ * Returns 1 from a stall until the cluster state is ok again. Keyed queries
+ * are then refused by getNodeByQuery(), and the caller refuses the writes
+ * that have no keys.
+ *
+ * The check runs between top level commands only. Writes that a MULTI/EXEC or
+ * a script makes after its own slow part still run and are acked. */
+int clusterCheckCommandStall(void) {
+    if (clusterStallDetected(0)) {
+        server.cluster->stall_time = getMonotonicUs();
+        server.cluster->stall_links_pending = 1;
+        clusterUpdateState();
+    }
+    return server.cluster->stall_time != 0;
 }
 
 /* -----------------------------------------------------------------------------
@@ -7529,12 +7543,12 @@ void clusterUpdateState(void) {
                 if (node->voter_election_state == VOTER_NACKED) nacked++;
                 if (node->voter_election_state == VOTER_FAILED_WITHOUT_RESPONSE) failed_without_response++;
                 /* After a stall only a PONG received since our links were
-                 * dropped proves the node is reachable. A stale PONG handled
-                 * just before the drop can share its millisecond. */
+                 * dropped proves the node is reachable. Both times are
+                 * monotonic, so a wall clock step cannot pass an old PONG. */
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0 &&
                     (!server.cluster->stall_time || node == myself ||
                      (!server.cluster->stall_links_pending &&
-                      node->pong_received > server.cluster->stall_time))) {
+                      node->pong_received_mono > server.cluster->stall_time))) {
                     reachable_primaries++;
                 }
             }
@@ -7554,8 +7568,6 @@ void clusterUpdateState(void) {
             new_state = CLUSTER_FAIL;
             new_reason = CLUSTER_FAIL_MINORITY_PARTITION;
             among_minority_time = mstime();
-        } else {
-            server.cluster->stall_time = 0;
         }
     }
 
@@ -7592,7 +7604,10 @@ void clusterUpdateState(void) {
         server.cluster->fail_reason = new_reason;
     }
 
-    if (new_state == CLUSTER_OK) server.cluster->fail_reason = CLUSTER_FAIL_NONE;
+    if (new_state == CLUSTER_OK) {
+        server.cluster->fail_reason = CLUSTER_FAIL_NONE;
+        server.cluster->stall_time = 0;
+    }
 }
 
 /* This function is called after the node startup in order to verify that data

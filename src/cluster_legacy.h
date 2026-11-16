@@ -487,6 +487,7 @@ struct _clusterNode {
     unsigned long long last_in_ping_gossip;  /* The number of the last carried in the ping gossip section */
     mstime_t ping_sent;                      /* Unix time we sent latest ping */
     mstime_t pong_received;                  /* Unix time we received the pong */
+    monotime pong_received_mono;             /* Monotonic time we received a pong on our link */
     mstime_t data_received;                  /* Unix time we received any data */
     mstime_t meet_sent;                      /* Unix time we sent latest meet packet */
     mstime_t fail_time;                      /* Unix time when FAIL flag was set */
@@ -565,8 +566,9 @@ struct clusterState {
     /* The following fields are used by primaries to take state on elections. */
     uint64_t lastVoteEpoch;  /* Epoch of the last vote granted. */
     int todo_before_sleep;   /* Things to do in clusterBeforeSleep(). */
-    mstime_t stall_time;     /* When the main thread last stalled for longer than
-                                the node timeout, 0 once a majority answered. */
+    monotime stall_time;     /* Monotonic time the main thread last stalled for
+                                longer than the node timeout, 0 once the cluster
+                                state is ok again. */
     int stall_links_pending; /* A stall was found where the links could not be
                                 dropped, the next clusterCheckStall() does it. */
     /* Stats */

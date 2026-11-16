@@ -1949,10 +1949,6 @@ static bool processPendingReplStreamDecode(void) {
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
-    /* Must run before processIOThreadsResponses() executes commands that I/O
-     * threads read before or during a stall. */
-    if (server.cluster_enabled) clusterCheckStall();
-
     /* When I/O threads are enabled and there are pending I/O jobs, the poll is offloaded to one of the I/O threads. */
     trySendPollJobToIOThreads();
 
@@ -2092,8 +2088,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        /* The AOF flush above can block for seconds. */
-        if (server.cluster_enabled) clusterCheckStall();
         int io_responses_after = processIOThreadsResponses();
         if (io_responses_after > 0) {
             server.el_iteration_active = true;
@@ -4305,9 +4299,6 @@ void call(client *c, int flags) {
 
     valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
     c->duration += duration;
-
-    /* Commands queued behind a slow one in the same event batch must see the stall. */
-    if (server.cluster_enabled && !server.execution_nesting) clusterCheckSlowCommand(duration);
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
 
@@ -4806,9 +4797,14 @@ int processCommand(client *c) {
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
     int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
-    if (server.cluster_enabled && !obey_client && !is_keyless) {
-        int error_code;
-        clusterNode *n = getNodeByQuery(c, &error_code);
+    /* After a stall the cluster may have failed this primary over. A write
+     * without keys, or an EXEC of such writes, never reaches the cluster state
+     * check in getNodeByQuery(), so refuse it here. */
+    int stall_refused = server.cluster_enabled && !obey_client && clusterCheckCommandStall() &&
+                        is_write_command && (is_keyless || is_exec);
+    if (server.cluster_enabled && !obey_client && (!is_keyless || stall_refused)) {
+        int error_code = CLUSTER_REDIR_DOWN_STATE;
+        clusterNode *n = stall_refused ? NULL : getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);

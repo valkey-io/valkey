@@ -80,7 +80,7 @@ static void monotonicInit_x86linux(void) {
     char clocksource[64];
 
     if (!kernelClocksourceIsTsc(clocksource, sizeof(clocksource))) {
-        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is %s, not using TSC", clocksource);
+        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is %s, not using TSC\n", clocksource);
         return;
     }
 
@@ -131,11 +131,11 @@ static void monotonicInit_x86linux(void) {
     regfree(&constTscRegex);
 
     if (mono_ticks_speed == UINT64_MAX || mono_ticks_speed == 0) {
-        fprintf(stderr, "monotonic: x86 linux, unable to determine clock rate");
+        fprintf(stderr, "monotonic: x86 linux, unable to determine clock rate\n");
         return;
     }
     if (!constantTsc) {
-        fprintf(stderr, "monotonic: x86 linux, 'constant_tsc' flag not present");
+        fprintf(stderr, "monotonic: x86 linux, 'constant_tsc' flag not present\n");
         return;
     }
 
@@ -171,7 +171,7 @@ static monotime getMonotonicUs_aarch64(void) {
 static void monotonicInit_aarch64(void) {
     mono_ticksPerMicrosecond = (long)cntfrq_hz() / 1000L / 1000L;
     if (mono_ticksPerMicrosecond == 0) {
-        fprintf(stderr, "monotonic: aarch64, unable to determine clock rate");
+        fprintf(stderr, "monotonic: aarch64, unable to determine clock rate\n");
         return;
     }
 

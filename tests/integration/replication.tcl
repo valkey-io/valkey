@@ -2903,3 +2903,53 @@ foreach load_mode {disabled on-empty-db} {
         }
     }
 }
+
+# REPLICAOF NO ONE may free the primary client late, e.g. while it has pending
+# I/O, which then caches it after the replication ID was shifted. The node then
+# keeps a cached primary from its previous history. REPLICAOF must not PSYNC
+# with it: once the backlog is freed, writes don't move the offset, and only the
+# replication ID tells the two histories apart.
+start_server {tags {"repl external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    start_server {} {
+        set replica [srv 0 client]
+
+        test "REPLICAOF doesn't PSYNC with a stale cached primary" {
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica didn't sync"
+            }
+            $primary set a 1
+            wait_for_ofs_sync $primary $replica
+
+            set loglines [count_log_lines 0]
+            $replica debug force-free-primary-async 1
+            $replica replicaof no one
+            wait_for_log_messages 0 {"*Caching the disconnected primary state*"} $loglines 50 100
+
+            # Without a backlog, writes don't move the replication offset.
+            $replica config set repl-backlog-ttl 1
+            wait_for_log_messages 0 {"*Replication backlog freed*"} $loglines 100 100
+            $replica set b 2
+
+            $primary config resetstat
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica didn't reconnect"
+            }
+            wait_for_ofs_sync $primary $replica
+            # The write it made as a primary is gone after a full sync.
+            assert_equal 0 [$replica exists b]
+            assert_equal 1 [$replica get a]
+            assert_equal 1 [status $primary sync_full]
+            assert_equal 0 [status $primary sync_partial_ok]
+        }
+    }
+}

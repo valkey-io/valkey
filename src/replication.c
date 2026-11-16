@@ -5140,8 +5140,19 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
     /* Before destroying our primary state, create a cached primary using
      * our own parameters, to later PSYNC with the new primary. */
     if (was_primary && !full_sync_required) {
-        replicationDiscardCachedPrimary();
-        replicationCachePrimaryUsingMyself();
+        /* In cluster mode a restarted replica also gets here, since
+         * primary_host isn't set at startup. loadDataFromDisk() may already
+         * have restored a cached primary with our replid and offset, in the
+         * DB of the replication stream. Keep it: a PSYNC continues the stream
+         * without a SELECT, while a synthesized one would be in DB 0. A cached
+         * primary with another replid or offset is from an earlier point of
+         * our history, e.g. one cached late after REPLICAOF NO ONE, and must
+         * not be used to PSYNC. */
+        if (!server.cached_primary || server.cached_primary->repl_data->reploff != server.primary_repl_offset ||
+            memcmp(server.cached_primary->repl_data->replid, server.replid, CONFIG_RUN_ID_SIZE)) {
+            replicationDiscardCachedPrimary();
+            replicationCachePrimaryUsingMyself();
+        }
     }
 
     /* Fire the role change modules event. */
@@ -5501,8 +5512,10 @@ void replicationCachePrimaryUsingMyself(void) {
      * offset for PSYNC. */
     server.primary_initial_offset = server.primary_repl_offset;
 
-    /* The primary client we create can be set to any DBID, because
-     * the new primary will start its replication stream with SELECT. */
+    /* The primary client we create can be set to any DBID when we turn into
+     * a replica, because the new primary will start its replication stream
+     * with SELECT. A caller that continues a stream without a SELECT, like a
+     * replica restored from an RDB file, selects the DB of the stream. */
     replicationCreatePrimaryClient(NULL, -1);
 
     /* Use our own ID / offset. */

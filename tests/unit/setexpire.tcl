@@ -2678,6 +2678,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
             set got {}
             for {set i 0} {$i < 2000} {incr i} { lappend got [r SRANDMEMBER myset] }
             assert_all_live $got $live_members
+            assert_equal [lsort $live_members] [lsort -unique $got]
             assert_lessthan [chi_square_value $got] 60
 
             set got [r SRANDMEMBER myset -4000]
@@ -2692,6 +2693,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
                     lappend got {*}[r SRANDMEMBER myset $count]
                 }
                 assert_all_live $got $live_members
+                assert_equal [lsort $live_members] [lsort -unique $got]
                 assert_lessthan [chi_square_value $got] 60
             }
 

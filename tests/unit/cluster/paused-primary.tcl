@@ -225,7 +225,7 @@ start_cluster 3 3 {tags {external:skip cluster}} {
 proc test_primary_stopped_under_write_load {} {
     set clients 16
     set writes 300
-    set script {for i = 1, 1000000 do end redis.call('set', KEYS[1], 'v') return redis.call('time')}
+    set script {local t = redis.call('time') for i = 1, 1000000 do end redis.call('set', KEYS[1], 'v') return t}
     set cmd [format_command eval $script 1 "{06S}load"]
 
     # Connect all clients first. A new connection waits for the work queued

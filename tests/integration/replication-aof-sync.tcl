@@ -393,45 +393,76 @@ tags {"repl external:skip"} {
         }
     }
 
-    # Test 7: A disk-based dual channel sync applies the writes it buffered while
-    # loading the RDB file, which doesn't have them. The AOF must get them too, and
-    # still reuse the RDB file as its base.
-    test "Disk-based dual channel sync keeps the buffered writes in the AOF" {
-        start_server {overrides {repl-diskless-sync yes repl-diskless-sync-delay 0 dual-channel-replication-enabled yes save ""}} {
-            set primary [srv 0 client]
-            set primary_host [srv 0 host]
-            set primary_port [srv 0 port]
-            populate 1000 base 100
-            # About 2 seconds to produce the RDB.
-            $primary config set rdb-key-save-delay 2000
+    # Test 7: A dual channel sync applies the writes it buffered while loading the
+    # RDB, which doesn't have them, so the AOF must get them too. A disk-based sync
+    # with aof-use-rdb-preamble reuses the RDB file as the AOF base and writes them
+    # to the INCR file. The other combinations rewrite the AOF instead.
+    foreach diskless_load {disabled swapdb on-empty-db} {
+        foreach preamble {yes no} {
+            test "Dual channel sync keeps the buffered writes in the AOF (repl-diskless-load $diskless_load, aof-use-rdb-preamble $preamble)" {
+                start_server {overrides {repl-diskless-sync yes repl-diskless-sync-delay 0 dual-channel-replication-enabled yes rdbcompression no repl-ping-replica-period 3600 save ""}} {
+                    set primary [srv 0 client]
+                    set primary_host [srv 0 host]
+                    set primary_port [srv 0 port]
+                    populate 1000 base 1000
 
-            start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-load disabled dual-channel-replication-enabled yes save ""}} {
-                set replica [srv 0 client]
-                set replica_log [srv 0 stdout]
+                    start_server [list overrides [list appendonly yes aof-use-rdb-preamble $preamble repl-diskless-load $diskless_load dual-channel-replication-enabled yes loading-process-events-interval-bytes 1024 save ""]] {
+                        set replica [srv 0 client]
+                        set replica_log [srv 0 stdout]
+                        # A diskless load must not take an RDB file left from before as
+                        # the AOF base.
+                        $replica set stale_key stale_value
+                        $replica save
+                        $replica flushall
 
-                $replica replicaof $primary_host $primary_port
-                wait_for_condition 50 100 {
-                    [s -1 rdb_bgsave_in_progress] == 1
-                } else {
-                    fail "The primary didn't start producing the RDB"
+                        # Keep RDB loading unfinished (30s for 1000 keys) until
+                        # the writes below are buffered on the replica.
+                        $replica config set key-load-delay 30000
+                        test_defer [list catch [list $replica config set key-load-delay 0]]
+                        $replica replicaof $primary_host $primary_port
+                        wait_for_condition 200 50 {
+                            [status $replica loading] == 1 &&
+                            [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]]
+                        } else {
+                            fail "Sync didn't start"
+                        }
+                        # The replica buffers these writes while it loads the RDB. Send
+                        # enough data to allocate at least two 16 KB buffer blocks.
+                        set buf_before [status $replica replicas_repl_buffer_size]
+                        set val [string repeat x 1000]
+                        for {set i 0} {$i < 50} {incr i} {
+                            $primary set during$i $val-$i
+                        }
+                        wait_for_condition 200 50 {
+                            [status $replica loading] == 1 &&
+                            [status $replica replicas_repl_buffer_size] >= $buf_before + 32768
+                        } else {
+                            fail "Replica didn't buffer the writes while loading the RDB"
+                        }
+                        $replica config set key-load-delay 0
+                        wait_for_condition 100 100 {
+                            [s -1 rdb_bgsave_in_progress] == 0 && [status $replica master_link_status] eq "up"
+                        } else {
+                            fail "Replica didn't sync"
+                        }
+                        wait_for_ofs_sync $primary $replica
+                        assert {[status $replica replicas_repl_buffer_peak] >= $buf_before + 32768}
+                        assert_equal 1 [count_message_lines $replica_log "PRIMARY <-> REPLICA sync: Finished with success"]
+                        set reused [log_file_matches $replica_log "*Reused RDB file from primary sync as AOF base file*"]
+                        if {$diskless_load eq "disabled" && $preamble} {
+                            assert {$reused}
+                            assert_equal 0 [count_message_lines $replica_log "Background append only file rewriting started"]
+                        } else {
+                            assert {!$reused}
+                            waitForBgrewriteaof $replica
+                        }
+                        assert_equal 1050 [$replica dbsize]
+                        assert_equal [$primary debug digest] [$replica debug digest]
+                        $replica debug loadaof
+                        assert_equal 1050 [$replica dbsize]
+                        assert_equal [$primary debug digest] [$replica debug digest]
+                    }
                 }
-                # The replica buffers these writes while it gets the RDB.
-                for {set i 0} {$i < 50} {incr i} {
-                    $primary set during$i v$i
-                }
-                wait_for_condition 100 100 {
-                    [s -1 rdb_bgsave_in_progress] == 0 && [status $replica master_link_status] eq "up"
-                } else {
-                    fail "Replica didn't sync"
-                }
-                wait_for_ofs_sync $primary $replica
-                # Make sure they were buffered, and so applied right after the load.
-                assert {[status $replica replicas_repl_buffer_peak] > 0}
-                assert {[log_file_matches $replica_log "*Reused RDB file from primary sync as AOF base file*"]}
-                assert_equal 0 [count_message_lines $replica_log "Background append only file rewriting started"]
-                assert_equal 1050 [$replica dbsize]
-                $replica debug loadaof
-                assert_equal 1050 [$replica dbsize]
             }
         }
     }

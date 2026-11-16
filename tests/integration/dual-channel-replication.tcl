@@ -505,6 +505,74 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # Confirm the occurrence of a race condition.
             wait_for_log_messages -1 {"*Dual channel replication: Psync established after rdb load*"} 0 20 100
         }
+
+        # The test below needs the replica to have synced once, so that it has a
+        # replication backlog when promoted. The test above does it, unless it was
+        # skipped.
+        if {![status $replica repl_backlog_active]} {
+            $replica replicaof $primary_host $primary_port
+            wait_and_resume_process 0
+            wait_for_condition 50 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica didn't sync"
+            }
+        }
+
+        test "Psync established after rdb load: replica restarts its AOF at the RDB offset" {
+            # As a primary, the replica gets an offset of its own, far ahead of the
+            # primary's, until the next sync replaces it.
+            $replica replicaof no one
+            $replica set big [string repeat x 100000]
+            # The offset only moves with the backlog the previous sync created.
+            assert {[status $replica master_repl_offset] > [status $primary master_repl_offset] + 50000}
+            test_config_set $replica appendonly yes
+            # Without fsyncs, the replica keeps acknowledging the offset at which it
+            # restarted its AOF after the sync as fsynced.
+            test_config_set $replica appendfsync no
+            waitForBgrewriteaof $replica
+            set loglines [count_log_lines -1]
+            set primary_loglines [count_log_lines 0]
+            set primary_replid [status $primary master_replid]
+
+            # The primary stops itself after the fork. Resume it if the test fails
+            # before it's resumed below.
+            test_defer_fail [list resume_process [srv 0 pid]]
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*PRIMARY <-> REPLICA sync: Finished with success*"} $loglines 50 100
+            # The primary is paused, so PSYNC isn't established yet, but the replica
+            # already took the replication ID and offset of the RDB, and reused the
+            # RDB file as its AOF base.
+            set endoff [lindex [wait_for_log_messages 0 {"*RDB end offset*"} $primary_loglines 50 100] 0]
+            assert {[regexp {RDB end offset ([0-9]+)} $endoff -> rdb_offset]}
+            set replid_before_psync [status $replica master_replid]
+            set offset_before_psync [status $replica master_repl_offset]
+            wait_and_resume_process 0
+            assert_equal $primary_replid $replid_before_psync
+            assert_equal $rdb_offset $offset_before_psync
+            verify_log_message -1 "*Reused RDB file from primary sync as AOF base file*" $loglines
+            wait_for_log_messages -1 {"*Dual channel replication: Psync established after rdb load*"} $loglines 50 100
+            wait_for_condition 50 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica is not synced"
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal [status $primary master_replid] [status $replica master_replid]
+            # The history it had as a primary is gone.
+            assert_equal 0000000000000000000000000000000000000000 [status $replica master_replid2]
+
+            # That offset is the one of the RDB, so the next write isn't fsynced.
+            wait_replica_acked_ofs $primary $replica $replica_host $replica_port
+            $primary set key2 val2
+            assert_equal {0 0} [$primary waitaof 0 1 50]
+
+            # The AOF has everything.
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+            $replica debug loadaof
+            assert_equal [$primary debug digest] [$replica debug digest]
+        }
     }
 }
 
@@ -1683,7 +1751,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $replica config set dual-channel-replication-enabled yes
         $replica config set repl-diskless-load disabled
         # Load the RDB slowly, and serve clients often while applying the buffer.
-        $replica config set key-load-delay 2000
+        $replica config set key-load-delay 20000
         $replica config set loading-process-events-interval-bytes 1024
 
         test "Replica promoted while dual channel sync applies its buffer, with AOF" {
@@ -1694,19 +1762,32 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Sync didn't start"
             }
-            # About 27 MB of writes for the replica to buffer.
-            exec {*}[valkeybenchmark $primary_host $primary_port {-t set -n 600000 -r 600000 --sequential -P 32 -q}]
-            wait_for_condition 200 50 {
-                [s 0 loading] == 1
+            # The replica sleeps when it starts applying the buffer. The interval
+            # between the times it serves clients has then passed, so it serves
+            # the request below before it applies the rest, however fast it is.
+            $primary debug replicate debug sleep 1
+            # About 4.5 MB of writes for the replica to buffer while it loads the RDB.
+            set load_handle [exec {*}[valkeybenchmark $primary_host $primary_port {-t set -n 100000 -r 100000 --sequential -P 32 -q}] >/dev/null &]
+            test_defer [list stop_write_load $load_handle]
+            wait_for_condition 400 50 {
+                [s 0 loading] == 1 &&
+                [s 0 replicas_repl_buffer_size] >= 1000000
             } else {
-                fail "Replica didn't start loading the RDB"
+                fail "Replica didn't load the RDB and buffer writes"
             }
+            stop_write_load $load_handle
+            $replica config set key-load-delay 2000
 
             # REPLICAOF is refused while the RDB is loaded, so keep sending it. The
             # first clients served after that are served while the buffer is applied.
             set rd [valkey_deferring_client]
+            test_defer [list catch [list $rd close]]
+            set deadline [expr {[clock milliseconds] + 30000}]
             while {[catch {$rd replicaof no one; $rd read} err]} {
                 assert_match "*LOADING*" $err
+                if {[clock milliseconds] > $deadline} {
+                    fail "Timed out waiting for replica to finish loading the RDB"
+                }
             }
             $rd close
             wait_for_log_messages 0 {"*Failed to stream local replication buffer into memory*"} 0 100 100
@@ -1714,10 +1795,101 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             assert_equal [s -1 master_replid] [s 0 master_replid2]
             assert_equal [expr {[s 0 master_repl_offset] + 1}] [s 0 second_repl_offset]
             verify_no_log_message 0 "*Finished with success*" 0
+            verify_log_message 0 "*Reused RDB file from primary sync as AOF base file*" 0
 
             # The AOF has the data applied before the promotion.
             $replica config set key-load-delay 0
-            waitForBgrewriteaof $replica
+            set digest [$replica debug digest]
+            $replica debug loadaof
+            assert_equal $digest [$replica debug digest]
+        }
+    }
+}
+
+# Losing the primary link while the buffer is applied also aborts the sync, and the
+# replica then partially resyncs from the data it applied.
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set dual-channel-replication-enabled yes
+    # Keep the buffered writes for the partial resync.
+    $primary config set repl-backlog-size 20mb
+    # Producing the RDB takes about 5 seconds.
+    populate 1000 base 100
+    $primary config set rdb-key-save-delay 5000
+
+    start_server {overrides {appendonly yes}} {
+        set replica [srv 0 client]
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set repl-diskless-load disabled
+        # Load the RDB slowly, and serve clients often while applying the buffer.
+        $replica config set key-load-delay 20000
+        $replica config set loading-process-events-interval-bytes 1024
+
+        test "Replica losing its primary while dual channel sync applies its buffer resyncs partially" {
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [s -1 rdb_bgsave_in_progress] == 1 &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]]
+            } else {
+                fail "Sync didn't start"
+            }
+            # The replica sleeps when it starts applying the buffer. The interval
+            # between the times it serves clients has then passed, so it serves
+            # the request below before it applies the rest, however fast it is.
+            $primary debug replicate debug sleep 1
+            # About 4.5 MB of writes for the replica to buffer while it loads the RDB.
+            set load_handle [exec {*}[valkeybenchmark $primary_host $primary_port {-t set -n 100000 -r 100000 --sequential -P 32 -q}] >/dev/null &]
+            test_defer [list stop_write_load $load_handle]
+            wait_for_condition 400 50 {
+                [s 0 loading] == 1 &&
+                [s 0 replicas_repl_buffer_size] >= 1000000
+            } else {
+                fail "Replica didn't load the RDB and buffer writes"
+            }
+            stop_write_load $load_handle
+            $replica config set key-load-delay 2000
+            set partial_ok [s -1 sync_partial_ok]
+            set full [s -1 sync_full]
+
+            # The primary client is only created once the RDB is loaded, so keep
+            # killing it. The first clients served after that are served while the
+            # buffer is applied.
+            set rd [valkey_deferring_client]
+            test_defer [list catch [list $rd close]]
+            set deadline [expr {[clock milliseconds] + 30000}]
+            while 1 {
+                $rd client kill type master
+                if {[catch {$rd read} killed]} {
+                    assert_match "*LOADING*" $killed
+                } elseif {$killed == 1} {
+                    break
+                } else {
+                    after 10
+                }
+                if {[clock milliseconds] > $deadline} {
+                    fail "Timed out waiting to kill the primary connection"
+                }
+            }
+            $rd close
+            wait_for_log_messages 0 {"*Failed to stream local replication buffer into memory*"} 0 100 100
+            wait_for_condition 100 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica didn't reconnect to its primary"
+            }
+            verify_no_log_message 0 "*Finished with success*" 0
+            wait_for_ofs_sync $primary $replica
+            assert_equal [expr {$partial_ok + 1}] [s -1 sync_partial_ok]
+            assert_equal $full [s -1 sync_full]
+            assert_equal [$primary debug digest] [$replica debug digest]
+
+            # The AOF has the data applied before and after the link was lost.
+            $replica config set key-load-delay 0
             set digest [$replica debug digest]
             $replica debug loadaof
             assert_equal $digest [$replica debug digest]
@@ -1735,7 +1907,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set dual-channel-replication-enabled yes
     populate 1000 base 100
 
-    start_server {overrides {repl-backlog-size 200mb}} {
+    start_server {overrides {repl-backlog-size 20mb}} {
         set replica1 [srv 0 client]
         set replica1_host [srv 0 host]
         set replica1_port [srv 0 port]
@@ -1749,7 +1921,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $replica2 config set dual-channel-replication-enabled yes
             $replica2 config set repl-diskless-load disabled
             # Load the RDB slowly, and serve clients often while applying the buffer.
-            $replica2 config set key-load-delay 2000
+            $replica2 config set key-load-delay 20000
             $replica2 config set loading-process-events-interval-bytes 1024
 
             test "Replica switching primary while dual channel sync applies its buffer keeps its offset" {
@@ -1760,19 +1932,32 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 } else {
                     fail "Sync didn't start"
                 }
-                # About 27 MB of writes for the replica to buffer.
-                exec {*}[valkeybenchmark $primary_host $primary_port {-t set -n 600000 -r 600000 --sequential -P 32 -q}]
-                wait_for_condition 200 50 {
-                    [s 0 loading] == 1
+                # The replica sleeps when it starts applying the buffer. The interval
+                # between the times it serves clients has then passed, so it serves
+                # the request below before it applies the rest, however fast it is.
+                $primary debug replicate debug sleep 1
+                # About 4.5 MB of writes for the replica to buffer while it loads the RDB.
+                set load_handle [exec {*}[valkeybenchmark $primary_host $primary_port {-t set -n 100000 -r 100000 --sequential -P 32 -q}] >/dev/null &]
+                test_defer [list stop_write_load $load_handle]
+                wait_for_condition 400 50 {
+                    [s 0 loading] == 1 &&
+                    [s 0 replicas_repl_buffer_size] >= 1000000
                 } else {
-                    fail "Replica didn't start loading the RDB"
+                    fail "Replica didn't load the RDB and buffer writes"
                 }
+                stop_write_load $load_handle
+                $replica2 config set key-load-delay 2000
 
                 # REPLICAOF is refused while the RDB is loaded, so keep sending it. The
                 # first clients served after that are served while the buffer is applied.
                 set rd [valkey_deferring_client]
+                test_defer [list catch [list $rd close]]
+                set deadline [expr {[clock milliseconds] + 30000}]
                 while {[catch {$rd replicaof $replica1_host $replica1_port; $rd read} err]} {
                     assert_match "*LOADING*" $err
+                    if {[clock milliseconds] > $deadline} {
+                        fail "Timed out waiting for replica to finish loading the RDB"
+                    }
                 }
                 $rd close
                 wait_for_log_messages 0 {"*Failed to stream local replication buffer into memory*"} 0 100 100
@@ -1783,11 +1968,95 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 } else {
                     fail "Replica didn't connect to its new primary"
                 }
+                verify_no_log_message 0 "*Finished with success*" 0
                 assert_equal 1 [s -1 sync_partial_ok]
+                assert_equal 0 [s -1 sync_full]
                 wait_for_ofs_sync $replica1 $replica2
                 assert_equal [$replica1 debug digest] [$replica2 debug digest]
             }
         }
     }
 }
+}
+
+# Dual channel sync creates the backlog before it applies the replication data it
+# buffered, so the backlog has that data, and a sub-replica that stopped right
+# before it can partially resync from the replica.
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set rdbcompression no
+    # Without pings, only the writes below move the offset.
+    $primary config set repl-ping-replica-period 3600
+    populate 1000 base 1000
+
+    start_server {} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set loading-process-events-interval-bytes 1024
+
+        start_server {} {
+            set sub_replica [srv 0 client]
+
+            test "Sub-replica partially resyncs from the data dual channel sync buffered" {
+                $sub_replica replicaof $primary_host $primary_port
+                wait_for_sync $sub_replica
+                wait_for_ofs_sync $primary $sub_replica
+                # Detach it without promoting it, which would change its replication ID.
+                $sub_replica replicaof 127.0.0.1 1
+
+                # Keep RDB loading unfinished (30s for 1000 keys) until the
+                # writes below are buffered on the replica.
+                $replica config set key-load-delay 30000
+                test_defer [list catch [list $replica config set key-load-delay 0]]
+                $replica replicaof $primary_host $primary_port
+                wait_for_condition 200 50 {
+                    [status $replica loading] == 1 &&
+                    [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]]
+                } else {
+                    fail "Sync didn't start"
+                }
+                # The replica buffers these writes while it loads the RDB. Send
+                # enough data to allocate at least two 16 KB buffer blocks.
+                set buf_before [status $replica replicas_repl_buffer_size]
+                set val [string repeat x 500]
+                for {set i 0} {$i < 100} {incr i} {
+                    $primary set during$i $val-$i
+                }
+                wait_for_condition 200 50 {
+                    [status $replica loading] == 1 &&
+                    [status $replica replicas_repl_buffer_size] >= $buf_before + 32768
+                } else {
+                    fail "Replica didn't buffer the writes while loading the RDB"
+                }
+                $replica config set key-load-delay 0
+                wait_for_condition 100 100 {
+                    [s -2 rdb_bgsave_in_progress] == 0 && [status $replica master_link_status] eq "up"
+                } else {
+                    fail "Replica didn't sync"
+                }
+                wait_for_ofs_sync $primary $replica
+                assert {[status $replica replicas_repl_buffer_peak] >= $buf_before + 32768}
+
+                # The sub-replica continues from the offset of the RDB.
+                $sub_replica replicaof $replica_host $replica_port
+                wait_for_condition 100 100 {
+                    [status $sub_replica master_link_status] eq "up"
+                } else {
+                    fail "Sub-replica didn't connect to the replica"
+                }
+                assert_equal 1 [s -1 sync_partial_ok]
+                assert_equal 0 [s -1 sync_full]
+                wait_for_ofs_sync $replica $sub_replica
+                assert_equal [$primary debug digest] [$sub_replica debug digest]
+            }
+        }
+    }
 }

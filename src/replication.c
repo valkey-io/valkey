@@ -4024,7 +4024,7 @@ int dualChannelSyncSuccess(bool rdb_just_loaded, int disk_based_sync) {
         /* Verify sync is still in progress */
         if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
             replicationAbortDualChannelSyncTransfer();
-            if (server.primary) freeClientAsync(server.primary);
+            freeClientAsync(server.primary);
         }
         return C_ERR;
     }

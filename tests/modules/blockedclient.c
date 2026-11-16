@@ -1075,6 +1075,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_Init(ctx, "blockedclient", 1, VALKEYMODULE_APIVER_1)== VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
+    /* "handle-forkless" lets the server use forkless saves with this module loaded. */
+    if (argc >= 1 && !strcasecmp(ValkeyModule_StringPtrLen(argv[0], NULL), "handle-forkless"))
+        ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_FORKLESS);
+
     if (ValkeyModule_CreateCommand(ctx, "acquire_gil", acquire_gil, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 

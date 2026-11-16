@@ -9823,6 +9823,9 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
      * wrong DB for subsequent commands. */
     client *executing_client = server.executing_client;
     int origin_dbid = (executing_client != NULL) ? executing_client->db->id : -1;
+    /* A callback calling SelectDb during EXEC also moves the transaction DB. */
+    int origin_txn_dbid =
+        (executing_client && executing_client->flag.multi) ? executing_client->mstate->transaction_db_id : -1;
 
     while ((ln = listNext(&li))) {
         ValkeyModuleKeyspaceSubscriber *sub = ln->value;
@@ -9838,6 +9841,8 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
                 ctx.client = server.executing_client;
             }
             selectDb(ctx.client, dbid);
+            /* An earlier subscriber may have moved the transaction DB with SelectDb. */
+            if (ctx.client->flag.multi) ctx.client->mstate->transaction_db_id = dbid;
             ctx.flags |= VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION;
 
             /* mark the handler as active to avoid reentrant loops.
@@ -9854,7 +9859,10 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
     }
 
     /* Restore the executing client's originally selected DB. */
-    if (executing_client != NULL) selectDb(executing_client, origin_dbid);
+    if (executing_client != NULL) {
+        selectDb(executing_client, origin_dbid);
+        if (executing_client->flag.multi) executing_client->mstate->transaction_db_id = origin_txn_dbid;
+    }
 
     exitExecutionUnit();
 }

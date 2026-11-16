@@ -176,11 +176,19 @@ bool setTypeHasExpiredMembers(robj *o) {
     return false;
 }
 
+/* Initialize 'iter' over the members of 'o' that carry an expiry, INCLUDING
+ * expired members that have not been reclaimed yet. 'o' must be
+ * hashtable-encoded and have a volatile member index. The caller releases the
+ * iterator with vsetResetIterator(). */
 void setTypeInitVolatileIterator(robj *o, vsetIterator *iter) {
     serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
     vsetInitIterator(setTypeGetVolatileSet(o), iter);
 }
 
+/* Return the number of members of 'o' that carry an expiry, INCLUDING expired
+ * members that have not been reclaimed yet, regardless of the expiration
+ * policy. O(1) for every encoding: the listpack keeps a count header, the vset
+ * tracks its size, and an intset holds no expiries. */
 long long setTypeVolatileCount(robj *o) {
     serverAssert(objectGetType(o) == OBJ_SET);
 
@@ -198,6 +206,12 @@ long long setTypeVolatileCount(robj *o) {
     }
 }
 
+/* Look up 'member' in 'o' and store its expiry in '*expiry', or EXPIRY_NONE
+ * when the member has no expiry. Returns C_OK if the member is visible and
+ * C_ERR if it is absent. An expired member counts as absent, except when the
+ * expiration policy is POLICY_IGNORE_EXPIRE (loading, replication stream,
+ * slot migration, import mode) or inside a setTypeIgnoreTTL() bracket; then
+ * its stored expiry is returned. On C_ERR '*expiry' is EXPIRY_NONE. */
 int setTypeGetExpiry(robj *o, sds member, mstime_t *expiry) {
     *expiry = EXPIRY_NONE;
 

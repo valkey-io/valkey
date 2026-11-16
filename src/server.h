@@ -1289,6 +1289,7 @@ typedef struct ClientFlags {
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
+    uint64_t priority_source : 1;          /* Client connection originated from priority-subnets */
     uint64_t forkless_managed : 1;         /* Client is owned by forkless save. Written only on the
                                             * main thread. The save thread only reads it */
 } ClientFlags;

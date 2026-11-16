@@ -46,6 +46,18 @@ start_server {tags {"socket-prioritization"}} {
             set rep_list [$primary client list flags H]
             assert_match "*flags=*H*" $rep_list
 
+            # Reconfigure priority-subnets dynamically to a subnet that does not include the replica (Issue #4674)
+            $primary config set priority-subnets "192.0.2.0/24"
+            set rep_list [$primary client list flags H]
+            assert_match "*flags=*H*" $rep_list
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+            # Clear priority-subnets dynamically and verify replica priority is still preserved
+            $primary config set priority-subnets ""
+            set rep_list [$primary client list flags H]
+            assert_match "*flags=*H*" $rep_list
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
             set val [string repeat "a" 1024]
             for {set i 0} {$i < 50} {incr i} {
                 $primary set "key:$i" $val

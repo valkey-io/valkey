@@ -2858,6 +2858,9 @@ foreach {src_type sort_cmd} {
     zset {sort src BY nosort GET obj_* STORE dst}
     list {multi; rpush src 1000; sort src GET obj_* STORE dst; exec}
     list {eval {return server.call('sort', KEYS[1], 'GET', 'obj_*', 'STORE', KEYS[2])} 2 src dst}
+    list {multi; rpush src 1000; sort src BY w_* STORE dst; exec}
+    list {multi; rpush src2 7; sort src2 GET h_*->f STORE dst; exec}
+    list {del obj_5; sort src GET obj_* STORE obj_5}
 } {
     start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
         set primary [srv 0 client]
@@ -2898,6 +2901,35 @@ foreach {src_type sort_cmd} {
                 assert_equal [$primary debug digest] [$replica debug digest]
                 assert_equal 0 [s -1 total_forks]
             }
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set primary [srv 0 client]
+    set ph [srv 0 host]
+    set pp [srv 0 port]
+    $primary debug populate 5000 filler 10
+
+    start_server {overrides {save {}}} {
+        set replica [srv 0 client]
+
+        test "Command naming the same new key twice during forkless sync" {
+            $primary config set rdb-key-save-delay 1000
+            $replica replicaof $ph $pp
+            wait_for_condition 50 100 {
+                [s -1 rdb_bgsave_in_progress] == 1
+            } else {
+                fail "Forkless save didn't start"
+            }
+            for {set i 0} {$i < 20} {incr i} {
+                $primary mset newkey_$i 1 newkey_$i 2
+            }
+            $primary config set rdb-key-save-delay 0
+            wait_for_sync $replica
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+            assert_equal 0 [s -1 total_forks]
         }
     }
 }

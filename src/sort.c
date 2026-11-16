@@ -164,9 +164,13 @@ static void sortAddPatternKeys(robj **patterns, int numpatterns, robj *ele, robj
     }
 }
 
+/* Resolves the keys that the BY/GET patterns of a SORT ... STORE command will read, given the current
+ * contents of the source key.  Returns the number of keys and sets *keys to a new array of new
+ * objects, which the caller must release.  Returns 0 (and sets *keys to NULL) if there are none. */
 int sortGetPatternKeys(serverDb *db, int argc, robj **argv, robj ***keys) {
     robj **patterns = zmalloc(sizeof(robj *) * argc);
     int numpatterns = 0, numkeys = 0, cap = 0;
+    bool store = false;
     *keys = NULL;
 
     for (int j = 2; j < argc; j++) {
@@ -179,11 +183,13 @@ int sortGetPatternKeys(serverDb *db, int argc, robj **argv, robj ***keys) {
             if (!isReturnSubstPattern(spat) && strchr(spat, '*')) patterns[numpatterns++] = argv[j + 1];
             j++;
         } else if (!strcasecmp(opt, "store") && leftargs >= 1) {
+            store = true;
             j++;
         }
     }
 
-    robj *sortval = numpatterns ? lookupKeyReadWithFlags(db, argv[1], LOOKUP_NOEFFECTS) : NULL;
+    /* Without STORE, SORT doesn't write and isn't replicated, so the pattern keys aren't needed. */
+    robj *sortval = (numpatterns && store) ? lookupKeyReadWithFlags(db, argv[1], LOOKUP_NOEFFECTS) : NULL;
     if (sortval == NULL) {
         zfree(patterns);
         return 0;

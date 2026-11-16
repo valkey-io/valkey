@@ -2251,6 +2251,7 @@ start_server {tags {"setexpire external:skip"}} {
         test {A replica never reclaims an expired member on its own} {
             $primary FLUSHALL
             $primary DEBUG SET-ACTIVE-EXPIRE 0
+            attach_replica $primary $replica $primary_host $primary_port
 
             $primary SADD myset m1 keepme
             make_members_expired $primary myset {m1}
@@ -2273,6 +2274,7 @@ start_server {tags {"setexpire external:skip"}} {
         test {A promoted replica reclaims its expired members itself} {
             $primary FLUSHALL
             $primary DEBUG SET-ACTIVE-EXPIRE 0
+            attach_replica $primary $replica $primary_host $primary_port
 
             $primary SADD myset m1 m2 keepme
             make_members_expired $primary myset {m1 m2}
@@ -2324,6 +2326,7 @@ start_server {tags {"setexpire external:skip"}} {
         test {A primary loading an RDB at startup feeds SREM for the expired members it skips} {
             $primary FLUSHALL
             $primary DEBUG SET-ACTIVE-EXPIRE 0
+            attach_replica $primary $replica $primary_host $primary_port
             $primary SADD myset live1 live2 expired
             make_members_expired $primary myset {expired}
             assert_equal 3 [$primary SCARD myset]

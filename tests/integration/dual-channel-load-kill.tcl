@@ -44,7 +44,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $primary client kill type replica
             # The replica notices the drop through its main-channel read handler.
             wait_for_log_messages 0 {"*Provisional primary closed connection*"} $loglines 200 10
-            after 2000
+            # The load must end as a cancelled load, not as a truncated RDB file.
+            wait_for_log_messages 0 {"*RDB load aborted because the replication link was lost*"} $loglines 1000 10
             if {![process_is_alive $replica_pid]} {
                 fail "Replica exited after the main channel was dropped during the RDB load (repl-diskless-load $mode, $dataset)"
             }

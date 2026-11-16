@@ -469,8 +469,6 @@ static void clusterRaftSyncSlotMigrationPause(void) {
 }
 
 static void clusterRaftOnSlotOwnershipApplied(void) {
-    clusterUpdateSlotExportsOnOwnershipChange();
-    clusterUpdateSlotImportsOnOwnershipChange();
     if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExporting()) clusterRaftDropSlotMigrationPause();
 }
 

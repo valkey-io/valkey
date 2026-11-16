@@ -2517,55 +2517,59 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
     }
 }
 
-# Live writes that arrive after the bg iterator has finished scanning the
-# keyspace, but before the replica has come online, are not captured by the
-# iterator and cannot yet be served from the shared replication buffer. They
-# must still reach the replica (via the dedicated save buffer) or they are lost
-# -- the offsets converge but the replica is missing keys.
-start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
-    set primary [srv 0 client]
-    set primary_host [srv 0 host]
-    set primary_port [srv 0 port]
-    $primary config set repl-diskless-sync yes
-    $primary config set repl-diskless-sync-delay 0
-    $primary debug populate 800000
-    start_server {overrides {save {}}} {
-        set replica [srv 0 client]
-        test "Writes after bg iterator termination still reach the replica" {
-            # Heavy concurrent write load across the whole save, so writes keep
-            # arriving in the window between the iterator finishing its scan and
-            # the replica coming online -- when such writes are neither captured
-            # by the iterator nor yet served from the shared replication buffer.
-            # This load has proved heavy enough to reliably cause writes to land
-            # in that window.
-            set load1 [start_write_load $primary_host $primary_port 10]
-            set load2 [start_write_load $primary_host $primary_port 10]
-            set load3 [start_write_load $primary_host $primary_port 10]
-            set load4 [start_write_load $primary_host $primary_port 10]
-            wait_for_condition 50 100 {
-                [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 4
-            } else {
-                fail "Write load handlers didn't connect"
+# Writes made after the forkless iterator finishes its scan, but before the
+# replica comes online, are held in the backlog and must reach the replica.
+foreach load_mode {disabled on-empty-db} {
+    start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        # Small uncompressed RDB: fits in the socket buffers, and the replica
+        # processes events after every key while loading.
+        $primary config set rdbcompression no
+        $primary debug populate 1000 key 100
+        start_server {overrides {save {}}} {
+            set replica [srv 0 client]
+            test "Writes after bg iterator termination still reach the replica, repl-diskless-load=$load_mode" {
+                # Hold the replica offline past the cut point and write into it,
+                # instead of racing a write load against it.
+                $replica config set repl-diskless-load $load_mode
+                $replica config set loading-process-events-interval-bytes 1024
+                $replica config set key-load-delay 10000
+                set loglines [count_log_lines -1]
+                $replica replicaof $primary_host $primary_port
+                wait_for_log_messages -1 {"*forkless-save: replication done*"} $loglines 300 100
+                wait_for_condition 300 100 {
+                    [s 0 loading] eq 1
+                } else {
+                    fail "Replica didn't start loading"
+                }
+
+                # New keys, and overwrites and deletes of scanned keys.
+                for {set i 0} {$i < 1000} {incr i} {
+                    $primary set window:$i $i
+                    if {$i < 500} {
+                        $primary set key:$i overwritten
+                        $primary del key:[expr {$i + 500}]
+                    }
+                }
+                # All of them landed before the replica came online.
+                assert_equal 1 [s 0 loading]
+                assert_equal down [s 0 master_link_status]
+
+                $replica config set key-load-delay 0
+                wait_for_condition 500 100 {
+                    [s 0 master_link_status] eq {up}
+                } else {
+                    fail "Replica didn't sync (repl-diskless-load=$load_mode)"
+                }
+                wait_for_ofs_sync $primary $replica
+                assert_equal [$primary dbsize] [$replica dbsize]
+                assert_equal [$primary debug digest] [$replica debug digest]
+                assert_equal 0 [s -1 total_forks]
             }
-            after 200
-            $replica replicaof $primary_host $primary_port
-            wait_for_condition 500 100 {
-                [s 0 master_link_status] eq {up}
-            } else {
-                fail "Replica didn't sync"
-            }
-            # Keep the load running a little past sync completion to cover the
-            # iterator-done -> replica-online handoff, then settle.
-            after 2000
-            stop_write_load $load1
-            stop_write_load $load2
-            stop_write_load $load3
-            stop_write_load $load4
-            wait_load_handlers_disconnected -1
-            wait_for_ofs_sync $primary $replica
-            assert_equal [$primary dbsize] [$replica dbsize]
-            assert_equal [$primary debug digest] [$replica debug digest]
-            assert_equal 0 [s -1 total_forks]
         }
     }
 }
@@ -2578,6 +2582,15 @@ foreach primary_diskless {yes no} {
                             {1 {copy db1:3 db1:copy3 db 1}} {1 {copy db1:4 dst4 db 3 db 3}} {1 {move db1:5 7}}
                             {1 {swapdb 2 3}}} {
             lassign $inline_cmd cmd_db cmd
+            # A to-disk save is cancelled by any FLUSHDB, so those variants can't replay the
+            # command inside the running sync. They assert the cancel and the fresh full sync
+            # that follows instead, and are named accordingly so a CI failure reads correctly.
+            set cancels_to_disk_save [expr {$cmd eq "flushdb" && $primary_diskless eq "no"}]
+            if {$cancels_to_disk_save} {
+                set test_name "FLUSHDB during forkless sync cancels the to-disk save and resyncs"
+            } else {
+                set test_name "[string toupper $cmd] during forkless sync replays correctly"
+            }
             start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
                 set primary [srv 0 client]
                 set ph [srv 0 host]
@@ -2595,7 +2608,7 @@ foreach primary_diskless {yes no} {
                     set replica [srv 0 client]
                     $replica config set repl-diskless-load $replica_load
 
-                    test "[string toupper $cmd] during forkless sync replays correctly (primary diskless=$primary_diskless, replica load=$replica_load)" {
+                    test "$test_name (primary diskless=$primary_diskless, replica load=$replica_load)" {
                         set load1 [start_write_load $ph $pp 8]
                         set load2 [start_write_load $ph $pp 8]
                         wait_for_condition 50 100 {
@@ -2610,10 +2623,18 @@ foreach primary_diskless {yes no} {
                         } else {
                             fail "Forkless save didn't start"
                         }
+                        set loglines [count_log_lines -1]
                         $primary select $cmd_db
                         assert_not_equal 0 [$primary {*}$cmd]
                         $primary select 0
-                        assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                        if {$cancels_to_disk_save} {
+                            # The FLUSHDB cancels the to-disk save at once. rdb_bgsave_in_progress
+                            # only clears on the 200ms snapshot-end poll, so reading it right after
+                            # the reply is racy. Wait for the cancel in the log instead.
+                            wait_for_log_messages -1 {"*forkless save cancelled*"} $loglines 300 100
+                        } else {
+                            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                        }
                         $primary config set rdb-key-save-delay 0
                         wait_for_condition 500 100 {
                             [s 0 master_link_status] eq {up}
@@ -2804,6 +2825,8 @@ foreach kind {multi eval} {
     }
 }
 
+# Writes made while the forkless iterator is still scanning the keyspace are
+# inlined into the RDB stream, and the replica must apply them.
 foreach load_mode {disabled on-empty-db} {
     start_server {tags {"repl external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
         set primary [srv 0 client]
@@ -2812,37 +2835,67 @@ foreach load_mode {disabled on-empty-db} {
         $primary config set forkless-policy prefer-forkless
         $primary config set repl-diskless-sync yes
         $primary config set repl-diskless-sync-delay 0
-        $primary debug populate 200000
+        $primary debug populate 10000
 
         start_server {overrides {save ""}} {
             set replica [srv 0 client]
             $replica config set repl-diskless-load $load_mode
 
             test "Forkless diskless full sync under write load, repl-diskless-load=$load_mode" {
+                # Hold the scan open and write into it, instead of racing a
+                # write load against it.
                 set loglines [count_log_lines -1]
-                set load1 [start_write_load $primary_host $primary_port 60]
-                set load2 [start_write_load $primary_host $primary_port 60]
-                wait_for_condition 50 100 {
-                    [regexp -all {name=LOAD_HANDLER} [$primary client list]] == 2
-                } else {
-                    fail "Write load handlers didn't connect"
-                }
-                after 200
+                $primary config set rdb-key-save-delay 500
                 $replica replicaof $primary_host $primary_port
 
                 # Make sure the forkless socket path (with inline commands) ran.
                 wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
 
-                # Replica must sync while writes are still flowing.
-                wait_for_condition 100 100 {
+                # New keys, and overwrites and deletes in batches as the scan
+                # advances, so they hit both scanned and unscanned keys.
+                foreach scanned {0 1000 2000 3000 4000} {
+                    wait_for_condition 300 100 {
+                        [s -1 current_save_keys_processed] >= $scanned
+                    } else {
+                        fail "Scan didn't reach $scanned keys"
+                    }
+                    # Hold the rest of the scan open for the last batch and the write loads.
+                    if {$scanned == 4000} {
+                        $primary config set rdb-key-save-delay 20000
+                    }
+                    for {set i 0} {$i < 200} {incr i} {
+                        $primary set new:$scanned:$i $i
+                        $primary set key:[expr {$scanned + 2 * $i}] overwritten
+                        $primary del key:[expr {$scanned + 2 * $i + 1}]
+                    }
+                }
+
+                # Two concurrent write loads, until 2 MB of writes have been inlined.
+                set base_offset [s -1 master_repl_offset]
+                set load1 [start_write_load $primary_host $primary_port 120]
+                set load2 [start_write_load $primary_host $primary_port 120]
+                wait_for_condition 600 100 {
+                    [s -1 master_repl_offset] - $base_offset >= 2*1024*1024
+                } else {
+                    fail "Write load didn't reach 2 MB"
+                }
+
+                if {[regexp -all {name=LOAD_HANDLER} [$primary client list]] != 2} {
+                    fail "Both write loads weren't running"
+                }
+                stop_write_load $load1
+                stop_write_load $load2
+                wait_load_handlers_disconnected -1
+                # All of them landed while the iterator was still scanning.
+                assert_equal 1 [s -1 rdb_bgsave_in_progress]
+                assert_equal 0 [log_file_matches [srv -1 stdout] "*forkless-save: replication done*"]
+
+                $primary config set rdb-key-save-delay 0
+                wait_for_condition 500 100 {
                     [s 0 master_link_status] eq {up}
                 } else {
                     fail "Replica didn't sync (repl-diskless-load=$load_mode)"
                 }
-
-                stop_write_load $load1
-                stop_write_load $load2
-                wait_load_handlers_disconnected -1
                 wait_for_ofs_sync $primary $replica
                 assert_equal [$primary dbsize] [$replica dbsize]
                 assert_equal [$primary debug digest] [$replica debug digest]

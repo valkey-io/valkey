@@ -1064,6 +1064,12 @@ start_server {tags {"scripting"}} {
         verify_log_message 0 "*<lua> before  after*" $loglines
     } {} {external:skip}
 
+    test {server.log() skips a first argument that is not a string} {
+        set loglines [count_log_lines 0]
+        run_script {redis.log(redis.LOG_WARNING, {}, 'after-skipped-arg')} 0
+        verify_log_message 0 "*<lua>  after-skipped-arg*" $loglines
+    } {} {external:skip}
+
     test {Correct handling of reused argv (issue #1939)} {
         run_script {
               for i = 0, 10 do

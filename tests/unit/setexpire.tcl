@@ -2797,6 +2797,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
                     r DEL myset
                     r COPY src myset
                     set popped [r SPOP myset $count]
+                    assert_equal $count [llength $popped]
                     assert_equal $count [llength [lsort -unique $popped]]
                     lappend got {*}$popped
                 }
@@ -2819,6 +2820,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
             assert_all_live [list [r SRANDMEMBER src]] $live_members
             foreach count {1 10 300 599 600 700} {
                 set got [r SRANDMEMBER src $count]
+                assert_equal [expr {min($count, 600)}] [llength $got]
                 assert_equal [expr {min($count, 600)}] [llength [lsort -unique $got]]
                 assert_all_live $got $live_members
                 set got [r SRANDMEMBER src -$count]
@@ -2830,6 +2832,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
                 r COPY src myset
                 set popped [r SPOP myset $count]
                 set expected [expr {min($count, 600)}]
+                assert_equal $expected [llength $popped]
                 assert_equal $expected [llength [lsort -unique $popped]]
                 assert_all_live $popped $live_members
                 assert_equal [expr {3600 - $expected}] [r SCARD myset]

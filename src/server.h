@@ -1291,6 +1291,7 @@ typedef struct ClientFlags {
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
     uint64_t forkless_managed : 1;         /* Client is owned by forkless save. Written only on the
                                             * main thread. The save thread only reads it */
+    uint64_t processing_command : 1;       /* Inside processCommandAndResetClient(). */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */

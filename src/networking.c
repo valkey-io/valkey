@@ -4453,7 +4453,10 @@ void commandProcessed(client *c) {
 int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
+    /* Restore the outer value if this client re-enters from a script timeout. */
+    int old_processing = c->flag.processing_command;
     server.current_client = c;
+    c->flag.processing_command = 1;
     if (processCommand(c) == C_OK) {
         commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
@@ -4461,7 +4464,11 @@ int processCommandAndResetClient(client *c) {
         if (c->conn) updateClientMemUsageAndBucket(c);
     }
 
-    if (server.current_client == NULL) deadclient = 1;
+    if (server.current_client == NULL) {
+        deadclient = 1;
+    } else {
+        c->flag.processing_command = old_processing;
+    }
     /*
      * Restore the old client, this is needed because when a script
      * times out, we will get into this code from processEventsWhileBlocked.
@@ -7253,6 +7260,11 @@ void evictClients(void) {
             client *c = ln->value;
             if (c->flag.close_asap) {
                 /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
+            if (c->flag.processing_command && c != server.current_client) {
+                /* Outer frame still holds this client. Count its memory and skip. */
                 pending_freed += c->last_memory_usage;
                 continue;
             }

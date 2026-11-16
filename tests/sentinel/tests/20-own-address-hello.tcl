@@ -114,10 +114,16 @@ test "Sentinel replaces a peer when a new runid announces its address" {
     set host [get_instance_attrib sentinel 1 host]
     set port [get_instance_attrib sentinel 1 port]
     set new [string repeat c 40]
+    # Pause Sentinel 1 so its hellos cannot undo the injected one before we
+    # read it, and give a hello already in flight time to arrive.
+    set pid [get_instance_attrib sentinel 1 pid]
+    pause_process $pid
+    after 200
     S 0 PUBLISH __sentinel__:hello "$host,$port,$new,0,mymaster,[lindex $addr 0],[lindex $addr 1],0"
     set runids [sentinel_runids 0]
     assert_equal -1 [lsearch $runids $old]
     assert_morethan_equal [lsearch $runids $new] 0
+    resume_process $pid
     # Sentinel 1's next real hello takes its address back the same way.
     wait_for_condition 100 100 {
         [lsearch [sentinel_runids 0] $old] >= 0 && [lsearch [sentinel_runids 0] $new] == -1
@@ -132,8 +138,12 @@ test "Sentinel follows a peer's address switch" {
     set host [get_instance_attrib sentinel 1 host]
     set port [get_instance_attrib sentinel 1 port]
     set moved [expr {$port + 1000}]
+    set pid [get_instance_attrib sentinel 1 pid]
+    pause_process $pid
+    after 200
     S 0 PUBLISH __sentinel__:hello "$host,$moved,$peer,0,mymaster,[lindex $addr 0],[lindex $addr 1],0"
     assert_equal $moved [peer_port 0 $peer]
+    resume_process $pid
     wait_for_condition 100 100 {
         [peer_port 0 $peer] == $port
     } else {

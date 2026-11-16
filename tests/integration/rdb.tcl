@@ -244,24 +244,28 @@ start_server [list overrides [list "dir" $server_path rdbchecksum no] keep_persi
 }
 
 # Rename ab to aa. The RDB was saved without a checksum, so the edit loads.
-set fd [open $dump_path r]
-fconfigure $fd -translation binary
-set content [read $fd]
-close $fd
-set pos [string first "[binary format c 2]ab" $content]
-assert_morethan $pos -1
-set fd [open $dump_path w]
-fconfigure $fd -translation binary
-puts -nonewline $fd [string replace $content [expr {$pos + 1}] [expr {$pos + 2}] aa]
-close $fd
+# The save test is skipped under --tags -needs:debug or --only, and then
+# there is no fixture to edit.
+if {[file exists $dump_path]} {
+    set fd [open $dump_path r]
+    fconfigure $fd -translation binary
+    set content [read $fd]
+    close $fd
+    set pos [string first "[binary format c 2]ab" $content]
+    assert_morethan $pos -1
+    set fd [open $dump_path w]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd [string replace $content [expr {$pos + 1}] [expr {$pos + 2}] aa]
+    close $fd
 
-start_server_and_kill_it [list "dir" $server_path] {
-    test {Server should not start if a set repeats a member whose first copy expired} {
-        wait_for_condition 50 100 {
-            [string match {*Duplicate set members detected*} \
-                [exec tail -10 < [dict get $srv stdout]]]
-        } else {
-            fail "Server started even though a set repeats a member!"
+    start_server_and_kill_it [list "dir" $server_path] {
+        test {Server should not start if a set repeats a member whose first copy expired} {
+            wait_for_condition 50 100 {
+                [string match {*Duplicate set members detected*} \
+                    [exec tail -10 < [dict get $srv stdout]]]
+            } else {
+                fail "Server started even though a set repeats a member!"
+            }
         }
     }
 }

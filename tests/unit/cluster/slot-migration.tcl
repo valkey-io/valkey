@@ -542,9 +542,11 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
 }
 
 # Same stale and newer primary claims from a paused R6, sent to the migration
-# source R0. R0 must move slot 609's migration target from R7 to R6. There is
-# no real failback here: forged packets replace R0's link from R6, which could
-# drop R6's vote request to R0.
+# source R0 and to R6's shard peer R7. R0 must move slot 609's migration target
+# from R7 to R6. R7 owns no slots and has a lower epoch than the newer claim,
+# so it must become a replica of R6 instead of keeping a second primary in the
+# shard. There is no real failback here: forged packets replace R0's link from
+# R6, which could drop R6's vote request to R0.
 start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
     set R0_id [R 0 CLUSTER MYID]
@@ -553,7 +555,7 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
     set R6_id [R 6 CLUSTER MYID]
     set R7_id [R 7 CLUSTER MYID]
 
-    test "Source follows a newer epoch after a stale primary claim" {
+    test "Source and shard peer follow a newer epoch after a stale primary claim" {
         assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
         assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
         wait_for_slot_state 0 "\[609->-$R6_id\]"
@@ -566,10 +568,12 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
         assert {$E7 > $E6}
         wait_for_slot_state 0 "\[609->-$R7_id\]"
 
-        wait_for_condition 100 100 {
-            [cluster_node_is_replica_of 0 $R6_id $R7_id]
-        } else {
-            fail "R0 never recorded R6 as a replica of R7"
+        foreach id {0 7} {
+            wait_for_condition 100 100 {
+                [cluster_node_is_replica_of $id $R6_id $R7_id]
+            } else {
+                fail "R$id never recorded R6 as a replica of R7"
+            }
         }
         wait_for_condition 100 100 {
             [dict get [cluster_get_node_by_id 0 $R7_id] config_epoch] == $E7
@@ -578,20 +582,31 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
         }
 
         pause_process [srv -6 pid]
-        set R6_cport [expr {[srv -6 port] + 10000}]
-        send_cluster_packet [srv 0 port] [create_primary_ping $R6_id [srv -6 port] $R6_cport $E6 $E6 $shard_id]
-        wait_for_condition 1000 10 {
-            [cluster_has_flag [cluster_get_node_by_id 0 $R6_id] master]
-        } else {
-            fail "R0 did not process the stale primary claim"
+        foreach id {0 7} {
+            send_cluster_packet [srv -$id port] [create_primary_ping $R6_id [srv -6 port] \
+                [expr {[srv -6 port] + 10000}] $E6 $E6 $shard_id]
+        }
+        foreach id {0 7} {
+            wait_for_condition 1000 10 {
+                [cluster_has_flag [cluster_get_node_by_id $id $R6_id] master]
+            } else {
+                fail "R$id did not process the stale primary claim"
+            }
         }
         assert_equal "\[609->-$R7_id\]" [get_open_slots 0]
+        assert_equal master [get_cluster_role 7]
 
         set E_new [expr {$E7 + 1}]
-        set loglines [count_log_lines 0]
-        send_cluster_packet [srv 0 port] [create_primary_ping $R6_id [srv -6 port] $R6_cport $E_new $E_new $shard_id]
-        wait_for_log_messages 0 [list "*Slot 609 is now being migrated to node $R6_id*"] $loglines 1000 10
+        set loglines0 [count_log_lines 0]
+        set loglines7 [count_log_lines -7]
+        foreach id {0 7} {
+            send_cluster_packet [srv -$id port] [create_primary_ping $R6_id [srv -6 port] \
+                [expr {[srv -6 port] + 10000}] $E_new $E_new $shard_id]
+        }
+        wait_for_log_messages 0 [list "*Slot 609 is now being migrated to node $R6_id*"] $loglines0 1000 10
         assert_equal "\[609->-$R6_id\]" [get_open_slots 0]
+        wait_for_log_messages -7 [list "*Reconfiguring myself as a replica of node $R6_id*"] $loglines7 1000 10
+        assert_equal slave [get_cluster_role 7]
         resume_process [srv -6 pid]
     }
 }
@@ -644,6 +659,67 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
             fail "R3 did not record R6's epoch from the FAIL message"
         }
         send_cluster_packet [srv -3 port] [create_primary_ping $R6_id [srv -6 port] $R6_cport $E_new $E_new $shard_id]
+        wait_for_log_messages -3 [list "*Slot 609 is now being migrated to node $R6_id*"] $loglines 1000 10
+        assert_equal "\[609->-$R6_id\]" [get_open_slots 3]
+        resume_process [srv -6 pid]
+    }
+}
+
+# Returns the shard id that R<idx> records for the node, from CLUSTER SHARDS.
+proc node_shard_id {idx node_id} {
+    foreach shard [R $idx CLUSTER SHARDS] {
+        foreach n [dict get $shard nodes] {
+            if {[dict get $n id] eq $node_id} { return [dict get $shard id] }
+        }
+    }
+    return {}
+}
+
+# A stale primary claim from a paused R6 that carries a previous shard id. R3
+# moves R6 to that shard, so the first claim at a newer epoch, which carries
+# the real shard id, is checked against the old one. The claims that follow
+# must still move slot 609's migration target from R7 to R6.
+start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
+
+    create_empty_shard 6 7
+    set R0_id [R 0 CLUSTER MYID]
+    set R6_id [R 6 CLUSTER MYID]
+    set R7_id [R 7 CLUSTER MYID]
+
+    test "Migration target follows a newer epoch after a stale claim with a previous shard id" {
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+        assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+
+        set E6 [dict get [cluster_get_myself 6] config_epoch]
+        set shard_id [R 6 cluster myshardid]
+        set old_shard_id "0123456789abcdef0123456789abcdef01234567"
+
+        fail_server 6 7
+        set E7 [dict get [cluster_get_myself 7] config_epoch]
+        assert {$E7 > $E6}
+        wait_for_slot_state 3 "\[609->-$R7_id\]"
+        wait_for_condition 100 100 {
+            [cluster_node_is_replica_of 3 $R6_id $R7_id]
+        } else {
+            fail "R3 never recorded R6 as a replica of R7"
+        }
+
+        pause_process [srv -6 pid]
+        set R6_cport [expr {[srv -6 port] + 10000}]
+        send_cluster_packet [srv -3 port] [create_primary_ping $R6_id [srv -6 port] $R6_cport $E6 $E6 $old_shard_id]
+        wait_for_condition 1000 10 {
+            [node_shard_id 3 $R6_id] eq $old_shard_id
+        } else {
+            fail "R3 did not take the previous shard id from the stale claim"
+        }
+        assert_equal "\[609->-$R7_id\]" [get_open_slots 3]
+
+        set E_new [expr {$E7 + 1}]
+        set loglines [count_log_lines -3]
+        foreach i {1 2} {
+            send_cluster_packet [srv -3 port] [create_primary_ping $R6_id [srv -6 port] $R6_cport $E_new $E_new $shard_id]
+        }
         wait_for_log_messages -3 [list "*Slot 609 is now being migrated to node $R6_id*"] $loglines 1000 10
         assert_equal "\[609->-$R6_id\]" [get_open_slots 3]
         resume_process [srv -6 pid]

@@ -4860,18 +4860,37 @@ int clusterProcessPacket(clusterLink *link) {
                     }
                 }
             }
-        } else if (sender && sender_claims_to_be_primary && sender->numslots == 0 &&
-                   isAnySlotInManualMigratingState()) {
+        } else if (sender && sender_claims_to_be_primary && sender->numslots == 0) {
             /* The slot set did not change, so clusterUpdateSlotsConfigWith() did
              * not run. A primary that owns no slots (e.g. in an empty shard) can
-             * still take over the shard of a migration target, for example on a
-             * failback after we already saw it as primary because of a stale
-             * announcement. Re-point those migrating targets to the sender here.
-             * This only changes migrating targets and checks the current state
-             * on every heartbeat, so it does not depend on which message first
-             * carried the sender's newer epoch. A primary that owns slots changes
-             * its slot set when its shard fails over, so it takes the path above. */
-            clusterRepairMigrationTargetsOfPrimary(sender, sender_claimed_config_epoch, msg->myslots);
+             * still have taken over its shard, for example on a failback after
+             * we already saw it as primary because of a stale announcement. Both
+             * checks below compare the current state on every heartbeat, so they
+             * do not depend on which message first carried the sender's newer
+             * epoch, or on its shard id being known when that message arrived.
+             * A primary that owns slots changes its slot set when its shard
+             * fails over, so it takes the path above. */
+
+            /* Re-point migrating targets in the sender's shard to the sender. */
+            if (isAnySlotInManualMigratingState())
+                clusterRepairMigrationTargetsOfPrimary(sender, sender_claimed_config_epoch, msg->myslots);
+
+            /* If we are in the sender's shard, our shard owns no slots and we
+             * have a lower epoch, follow the sender instead of staying a second
+             * primary. This is the same rule as the slot-less special case in
+             * clusterUpdateSlotsConfigWith(). */
+            clusterNode *my_primary = clusterNodeIsPrimary(myself) ? myself : myself->replicaof;
+            if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION) && myself->replicaof != sender &&
+                (!my_primary || my_primary->numslots == 0) &&
+                nodeEpoch(myself) < sender_claimed_config_epoch && areInSameShard(sender, myself)) {
+                serverLog(LL_NOTICE,
+                          "Configuration change detected. Reconfiguring myself "
+                          "as a replica of node %.40s (%s) in shard %.40s",
+                          sender->name, humanNodename(sender), sender->shard_id);
+                clusterSetPrimary(sender, 0, 0);
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG |
+                                     CLUSTER_TODO_BROADCAST_ALL);
+            }
         }
 
         /* If our config epoch collides with the sender's try to fix

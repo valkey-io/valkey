@@ -772,6 +772,6 @@ run_solo {defrag} {
             }
         }
     } else {
-        puts "Jemalloc not available.  Defrag tests skipped."
+        puts "Active defrag not supported by this build (e.g. non-jemalloc or system jemalloc).  Defrag tests skipped."
     }
 } ;# run_solo

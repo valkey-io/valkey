@@ -147,7 +147,8 @@ To compile against jemalloc on Mac OS X systems, use:
     % make MALLOC=jemalloc
 
 To link against the jemalloc installed on the system instead of the bundled
-copy in `deps/jemalloc`, use:
+copy in `deps/jemalloc`, you'll need the jemalloc development package (e.g.
+libjemalloc-dev on Debian/Ubuntu or jemalloc-devel on Fedora/RHEL) and run:
 
     % make MALLOC=system-jemalloc
 

@@ -620,6 +620,7 @@ ENGINE_SERVER_OBJ = \
     t_stream.o \
     t_string.o \
     t_zset.o \
+    traffic.o \
     threads_mngr.o \
     timeout.o \
     tls.o \

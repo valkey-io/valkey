@@ -22,11 +22,17 @@
  * ==========================================================================*/
 
 typedef struct {
-    sds key;        /* Owned copy of the key name, or NULL if the slot is free */
-    int dbid;       /* Database the key was accessed in */
-    uint32_t hash;  /* Cached hash of (key, dbid) for fast reject before compare */
-    uint64_t count; /* Estimated count (upper bound on the true count) */
-    uint64_t error; /* Maximum overestimate vs. the true count */
+    sds key;         /* Owned copy of the key name, or NULL if the slot is free */
+    int dbid;        /* Database the key was accessed in */
+    uint32_t hash;   /* Cached hash of (key, dbid) for fast reject before compare */
+    uint64_t count;  /* Estimated count (upper bound on the true count) */
+    uint64_t error;  /* Maximum overestimate vs. the true count */
+    uint64_t count2; /* Secondary accumulator: one caller-chosen component of the
+                      * weight (e.g. write bytes for traffic tracking). Exact but
+                      * partial — it counts only what was recorded into THIS slot
+                      * under THIS identity, so an eviction resets it while the
+                      * primary count inherits the evicted minimum. Always
+                      * <= count - error. The unweighted API leaves it at 0. */
 } spaceSavingSlot;
 
 /* A single Space-Saving summary. Internal to this file; callers use the
@@ -88,9 +94,14 @@ static void spaceSavingWindowRelease(spaceSavingWindow *w) {
     zfree(w);
 }
 
-static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbid) {
+/* Record one observation of `weight` (weighted Space-Saving: a plain count is
+ * the weight == 1 special case), of which `weight2` is a component tracked in
+ * the secondary accumulator. The [count - error, count] band and the N/K
+ * guarantee are weight-agnostic — they hold over the summed weight just as they
+ * hold over summed ones. */
+static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbid, uint64_t weight, uint64_t weight2) {
     if (!w || !key) return;
-    w->total++;
+    w->total += weight;
     uint32_t h = spaceSavingHashItem(key, dbid);
 
     /* Single pass: look for an existing slot (fast-rejecting on the cached hash
@@ -101,7 +112,8 @@ static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbi
     for (int i = 0; i < w->size; i++) {
         spaceSavingSlot *e = &w->slots[i];
         if (e->hash == h && e->dbid == dbid && sdscmp(e->key, key) == 0) {
-            e->count += 1;
+            e->count += weight;
+            e->count2 += weight2;
             return;
         }
         if (e->count < min_count) {
@@ -110,26 +122,31 @@ static void recordSpaceSavingWindowSample(spaceSavingWindow *w, sds key, int dbi
         }
     }
 
-    /* Room available: insert with count = 1, error = 0. */
+    /* Room available: insert with count = weight, error = 0. */
     if (w->size < w->capacity) {
         spaceSavingSlot *e = &w->slots[w->size++];
         e->key = sdsdup(key);
         e->dbid = dbid;
         e->hash = h;
-        e->count = 1;
+        e->count = weight;
         e->error = 0;
+        e->count2 = weight2;
         return;
     }
 
     /* Full: evict the smallest-count slot. The new item inherits count = the
-     * evicted count + 1; error records the maximum possible overestimate. */
+     * evicted count + weight; error records the maximum possible overestimate.
+     * The secondary accumulator does NOT inherit: it describes only the
+     * observations recorded under this new identity, so it restarts from this
+     * observation's weight2. */
     spaceSavingSlot *e = &w->slots[min_idx];
     sdsfree(e->key);
     e->key = sdsdup(key);
     e->dbid = dbid;
     e->hash = h;
-    e->count = min_count + 1;
+    e->count = min_count + weight;
     e->error = min_count;
+    e->count2 = weight2;
 }
 
 static void spaceSavingWindowRemoveIf(spaceSavingWindow *w, int (*pred)(sds key, int dbid, void *arg), void *arg) {
@@ -172,6 +189,7 @@ static void spaceSavingWindowResize(spaceSavingWindow *w, int new_k) {
         w->slots[i].hash = 0;
         w->slots[i].count = 0;
         w->slots[i].error = 0;
+        w->slots[i].count2 = 0;
     }
     w->capacity = new_k;
 }
@@ -278,7 +296,12 @@ void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us) {
 
 void recordSpaceSavingManagerSample(spaceSavingManager *m, sds key, int dbid) {
     if (!m) return;
-    recordSpaceSavingWindowSample(m->live, key, dbid);
+    recordSpaceSavingWindowSample(m->live, key, dbid, 1, 0);
+}
+
+void recordSpaceSavingManagerSampleWeighted(spaceSavingManager *m, sds key, int dbid, uint64_t weight, uint64_t weight2) {
+    if (!m) return;
+    recordSpaceSavingWindowSample(m->live, key, dbid, weight, weight2);
 }
 
 int spaceSavingManagerCount(spaceSavingManager *m) {
@@ -286,12 +309,17 @@ int spaceSavingManagerCount(spaceSavingManager *m) {
 }
 
 void spaceSavingManagerAt(spaceSavingManager *m, int i, sds *key, int *dbid, uint64_t *count, uint64_t *error) {
+    spaceSavingManagerAt2(m, i, key, dbid, count, error, NULL);
+}
+
+void spaceSavingManagerAt2(spaceSavingManager *m, int i, sds *key, int *dbid, uint64_t *count, uint64_t *error, uint64_t *count2) {
     if (!m || i < 0 || i >= m->frozen->size) return;
     spaceSavingSlot *e = &m->frozen->slots[i];
     if (key) *key = e->key;
     if (dbid) *dbid = e->dbid;
     if (count) *count = e->count;
     if (error) *error = e->error;
+    if (count2) *count2 = e->count2;
 }
 
 void spaceSavingManagerRemoveIf(spaceSavingManager *m, int (*pred)(sds key, int dbid, void *arg), void *arg) {
@@ -302,6 +330,13 @@ void spaceSavingManagerRemoveIf(spaceSavingManager *m, int (*pred)(sds key, int 
 
 uint64_t spaceSavingManagerFrozenTotal(spaceSavingManager *m) {
     return m ? m->frozen->total : 0;
+}
+
+/* Total weight recorded in the in-progress (live) window so far. Partial by
+ * definition — the window has not closed — which is the point: it lets a reader
+ * observe traffic accumulating in real time instead of waiting for the freeze. */
+uint64_t spaceSavingManagerLiveTotal(spaceSavingManager *m) {
+    return m ? m->live->total : 0;
 }
 
 void spaceSavingManagerSetLiveSamplingPercentage(spaceSavingManager *m, int sampling_percentage) {

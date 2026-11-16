@@ -1,0 +1,12 @@
+{
+    "TRAFFIC": {
+        "summary": "A container for per-key traffic tracking commands",
+        "complexity": "Depends on subcommand.",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": -2,
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

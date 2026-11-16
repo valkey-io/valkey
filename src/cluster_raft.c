@@ -1991,8 +1991,11 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             rs->todo_broadcast_ae = 1;
         }
     } else {
-        /* Follower rejected — decrement nextIndex and retry immediately. */
+        /* Follower rejected — back off nextIndex, at most to just past its last entry. */
         if (rd->next_index > 1) rd->next_index--;
+        if (rd->next_index > 1 && follower_last_index < rd->next_index - 1) {
+            rd->next_index = follower_last_index + 1;
+        }
         clusterRaftSendAppendEntries(node->link, node);
     }
     return 1;

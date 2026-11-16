@@ -809,45 +809,47 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
     }
 }
 
+# Have the server under test MEET a fake node, which joins as a follower.
+# Returns the leader's connection to the fake node after the first AE_ACK.
+proc raft_join_fake_follower {fake_id fake_shard} {
+    # Start listening before MEET so the leader can connect.
+    set cport 0
+    set fd [raft_listen_and_accept cport 5000 {
+        set fake_port [expr {$cport - 10000}]
+        set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
+
+        # Send CLUSTER MEET without waiting for reply (it blocks until
+        # NODE_JOIN commits, which needs our AE_ACK).
+        set meet_client [valkey_deferring_client]
+        $meet_client CLUSTER MEET 127.0.0.1 $fake_port
+    }]
+
+    # Leader sends HELLO + MEET(singleton).
+    set reply [raft_recv $fd 5000]
+    assert_match "HELLO *" $reply
+    set reply [raft_recv $fd 5000]
+    assert_match "MEET *" $reply
+
+    # Reply with HI + ADD_ME (fake node steps down, asks to be added).
+    raft_send $fd "HI $fake_id $fake_addr"
+    raft_send $fd "ADD_ME"
+
+    # Leader receives ADD_ME, invites us, commits NODE_JOIN, sends AE.
+    # Reply with offset=0.
+    set reply [raft_recv $fd 5000]
+    assert_match "AE *" $reply
+    raft_reply_ae_ack $fd $reply 0
+
+    # MEET should now complete. Consume the deferred reply.
+    assert_match {OK} [$meet_client read]
+    $meet_client close
+    return $fd
+}
+
 test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
-        set port [srv 0 port]
-        set node_id [R 0 CLUSTER MYID]
-
         set fake_id [string repeat "a" 40]
-        set fake_shard [string repeat "b" 40]
-
-        # Start listening before MEET so the leader can connect.
-        set cport 0
-        set fd [raft_listen_and_accept cport 5000 {
-            set fake_port [expr {$cport - 10000}]
-            set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
-
-            # Send CLUSTER MEET without waiting for reply (it blocks until
-            # NODE_JOIN commits, which needs our AE_ACK).
-            set meet_client [valkey_deferring_client]
-            $meet_client CLUSTER MEET 127.0.0.1 $fake_port
-        }]
-
-        # Leader sends HELLO + MEET(singleton).
-        set reply [raft_recv $fd 5000]
-        assert_match "HELLO *" $reply
-        set reply [raft_recv $fd 5000]
-        assert_match "MEET *" $reply
-
-        # Reply with HI + ADD_ME (fake node steps down, asks to be added).
-        raft_send $fd "HI $fake_id $fake_addr"
-        raft_send $fd "ADD_ME"
-
-        # Leader receives ADD_ME, invites us, commits NODE_JOIN, sends AE.
-        # Reply with offset=0.
-        set reply [raft_recv $fd 5000]
-        assert_match "AE *" $reply
-        raft_reply_ae_ack $fd $reply 0
-
-        # MEET should now complete. Consume the deferred reply.
-        assert_match {OK} [$meet_client read]
-        $meet_client close
+        set fd [raft_join_fake_follower $fake_id [string repeat "b" 40]]
 
         # Wait for next AE heartbeat.
         set reply [raft_recv $fd 5000]
@@ -870,6 +872,57 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
             }
         }
         assert_equal 1 $found "leader should send REPL_OFFSETS with offset 5000"
+
+        close $fd
+    }
+}
+
+# Split the header line of an AE message into its fields.
+proc raft_ae_header {msg} {
+    return [split [lindex [split $msg "\n"] 0] " "]
+}
+
+# Read AE messages until one whose prev-log-idx isn't skip_prev.
+# Returns {prev-log-idx count}, or {} if none arrives.
+proc raft_next_ae_from {fd skip_prev} {
+    for {set i 0} {$i < 30} {incr i} {
+        set reply [raft_recv $fd 5000]
+        if {![string match "AE *" $reply]} continue
+        set fields [raft_ae_header $reply]
+        if {[lindex $fields 3] != $skip_prev} {
+            return [list [lindex $fields 3] [lindex $fields 6]]
+        }
+    }
+    return {}
+}
+
+test "Raft proto: leader backs off next_index to the follower's last index on rejection" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
+
+        for {set j 0} {$j < 20} {incr j} {
+            R 0 config set cluster-announce-hostname "host-$j.com"
+        }
+        set last [CI 0 cluster_raft_last_applied]
+        # Ack until an empty heartbeat, so no older AE is still queued.
+        set fields {}
+        while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
+            set reply [raft_recv $fd 5000]
+            if {[string match "AE *" $reply]} {
+                set fields [raft_ae_header $reply]
+                raft_reply_ae_ack $fd $reply 0
+            }
+        }
+
+        # Reject with a log 10 entries behind; the leader resends from there.
+        set term [CI 0 cluster_raft_current_term]
+        set behind [expr {$last - 10}]
+        raft_send $fd "AE_ACK $term 0 $behind 0"
+        assert_equal [list $behind 10] [raft_next_ae_from $fd $last]
+
+        # A last index past next_index doesn't help; the leader steps back one.
+        raft_send $fd "AE_ACK $term 0 $last 0"
+        assert_equal [list [expr {$behind - 1}] 11] [raft_next_ae_from $fd $behind]
 
         close $fd
     }

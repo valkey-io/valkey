@@ -88,9 +88,30 @@ start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval
                 wait_node_marked_fail $j $id
             }
         }
-        R 7 CONFIG SET cluster-replica-no-failover no
-        R 8 CONFIG SET cluster-replica-no-failover no
-        R 9 CONFIG SET cluster-replica-no-failover no
+
+        # When a replica wins, the failed primary rank of the replicas still
+        # waiting drops and their election delay gets 500 milliseconds shorter
+        # at the same moment, so two of them can find their delay elapsed and
+        # start their election in the same epoch. So only two replicas wait at
+        # a time: first the ones with the lowest and the highest rank, whose
+        # delays are more than 500 milliseconds apart, and the remaining one
+        # once they are primaries. The rank follows the order of the shard ids.
+        set replicas [lsort -index 0 [list \
+            [list [R 7 cluster myshardid] 7] \
+            [list [R 8 cluster myshardid] 8] \
+            [list [R 9 cluster myshardid] 9]]]
+        set lowest [lindex $replicas 0 1]
+        set middle [lindex $replicas 1 1]
+        set highest [lindex $replicas 2 1]
+        R $lowest CONFIG SET cluster-replica-no-failover no
+        R $highest CONFIG SET cluster-replica-no-failover no
+        wait_for_condition 1000 50 {
+            [s -$lowest role] == "master" &&
+            [s -$highest role] == "master"
+        } else {
+            fail "No failover detected, R $lowest is [s -$lowest role] and R $highest is [s -$highest role]"
+        }
+        R $middle CONFIG SET cluster-replica-no-failover no
 
         # Wait for the failover
         wait_for_condition 1000 50 {

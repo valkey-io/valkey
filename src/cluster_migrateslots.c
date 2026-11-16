@@ -818,6 +818,10 @@ void clusterCommandSyncSlotsFinish(client *c) {
 
     addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    /* Avoid duplicate events when a replicated FLUSHALL has already failed the
+     * job. Still accept a different outcome from the primary, since a full sync
+     * may have failed the replica's tracking job locally. */
+    if (job->state == target_state) return;
     finishSlotMigrationJob(job, target_state, message);
 }
 

@@ -2850,6 +2850,12 @@ foreach load_mode {disabled on-empty-db} {
 
                 # Make sure the forkless socket path (with inline commands) ran.
                 wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+                assert_equal 10000 [s -1 current_save_keys_total]
+                wait_for_condition 50 100 {
+                    [s -1 forkless_estimated_seconds_remaining] > 0
+                } else {
+                    fail "forkless_estimated_seconds_remaining was not reported during the full sync"
+                }
 
                 # New keys, and overwrites and deletes in batches as the scan
                 # advances, so they hit both scanned and unscanned keys.

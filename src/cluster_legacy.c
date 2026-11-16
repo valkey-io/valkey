@@ -3599,9 +3599,16 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 }
 
 /* Called for every PING, PONG or MEET packet from 'sender', a node that claims
- * to be a primary with the config epoch 'sender_claimed_config_epoch'. It must
- * be called after the ping extensions of the packet are processed, so that the
- * shard id of 'sender' is up to date.
+ * to be a primary with the config epoch 'sender_claimed_config_epoch', if the
+ * packet carries the shard id of 'sender'. It must be called after the ping
+ * extensions of the packet are processed, so that the shard id of 'sender' is
+ * up to date.
+ *
+ * A packet without the shard id leaves my view of the shard of 'sender' as is,
+ * which may be stale. For example, a node sends the MEET of CLUSTER MEET before
+ * it knows that I support ping extensions, so the MEET carries none. If 'sender'
+ * was in my shard and moved to another shard with CLUSTER RESET before it met
+ * me, it must not make me follow it into its new shard.
  *
  * If I am a primary without slots and 'sender' is a primary of my shard with a
  * greater config epoch, I am a stale primary of the shard of 'sender', so I
@@ -3845,8 +3852,11 @@ static char *getLoadableIpExtension(char *value, int af) {
 
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. Returns 1 if the link is still valid after
- * processing, or 0 if the link was freed due to invalid data. */
-int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
+ * processing, or 0 if the link was freed due to invalid data.
+ *
+ * '*has_shard_id' is set to whether the packet carries the shard id of the
+ * sender. */
+int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link, bool *has_shard_id) {
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
@@ -3942,6 +3952,7 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
      *
      * If sender is a replica, set the shard_id to the shard_id of its primary.
      * Otherwise, we'll set it now. */
+    *has_shard_id = ext_shardid != NULL;
     if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
 
     /* Validate the shard_id received from the network before applying it.
@@ -4838,12 +4849,15 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Get info from the gossip section */
         if (sender) {
+            bool sender_sent_shard_id = false;
             if (!clusterProcessGossipSection(msg, link)) return 0;
-            if (!clusterProcessPingExtensions(msg, link)) return 0;
+            if (!clusterProcessPingExtensions(msg, link, &sender_sent_shard_id)) return 0;
 
             /* This relies on the shard id of the sender, which the ping
-             * extensions may have just updated. */
-            if (sender_claims_to_be_primary) clusterHandleNewerPrimaryOfMyShard(sender, sender_claimed_config_epoch);
+             * extensions may have just updated, so it needs a packet that
+             * carries the shard id. */
+            if (sender_claims_to_be_primary && sender_sent_shard_id)
+                clusterHandleNewerPrimaryOfMyShard(sender, sender_claimed_config_epoch);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;

@@ -281,3 +281,76 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_morethan [dict get [cluster_get_node_by_id 0 $x_id] config_epoch] [dict get [cluster_get_myself 0] config_epoch]
     }
 } stale_primary_one_slot_allocation
+
+# Returns the shard id of the node 'node_id' according to the node 'n'.
+proc stale_primary_shard_of {n node_id} {
+    foreach shard [R $n cluster shards] {
+        foreach node [dict get $shard nodes] {
+            if {[dict get $node id] eq $node_id} {return [dict get $shard id]}
+        }
+    }
+    return {}
+}
+
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-require-full-coverage no}} {
+    test "Empty primary does not follow its former replica into another shard on a packet without its shard id" {
+        set p_id [R 0 cluster myid]
+        set q_id [R 1 cluster myid]
+        set x_id [R 3 cluster myid]
+        wait_for_condition 1000 50 {
+            [s -3 master_link_status] eq {up}
+        } else {
+            fail "R3 did not sync with R0"
+        }
+
+        # R0 gives its only slot to R1 and becomes an empty primary.
+        assert_equal OK [R 1 cluster setslot 0 importing $p_id]
+        assert_equal OK [R 0 cluster setslot 0 migrating $q_id]
+        assert_equal OK [R 1 cluster setslot 0 node $q_id]
+        assert_equal OK [R 0 cluster setslot 0 node $q_id]
+        foreach n {0 1 2 3 4 5} {
+            wait_for_condition 1000 50 {
+                [stale_primary_slot_owner $n 0] eq $q_id
+            } else {
+                fail "R$n did not learn about the slot migration"
+            }
+        }
+        set shard_a [R 0 cluster myshardid]
+        set p_epoch [dict get [cluster_get_myself 0] config_epoch]
+
+        # While R0 is paused, R3 leaves shard A with CLUSTER RESET SOFT, takes a
+        # slot, so that R0 can't follow it as another primary without slots,
+        # gets the greatest config epoch and meets R0. The MEET of CLUSTER MEET
+        # carries no ping extensions, as R3 doesn't know yet that R0 supports
+        # them, so it doesn't carry the new shard id of R3. R0 drops PONGs until
+        # it processed the MEET, so that the MEET is the first packet of R3 that
+        # it processes.
+        assert_equal OK [R 0 debug drop-cluster-packet-filter 1]
+        pause_process [srv 0 pid]
+        assert_equal OK [R 3 cluster reset soft]
+        assert_equal OK [R 3 cluster addslots 16383]
+        R 3 cluster bumpepoch
+        set shard_x [R 3 cluster myshardid]
+        assert_not_equal $shard_a $shard_x
+        assert_morethan [dict get [cluster_get_myself 3] config_epoch] $p_epoch
+        assert_equal OK [R 3 cluster meet [srv 0 host] [srv 0 port]]
+        # Less than the cluster node timeout, which is also the handshake timeout.
+        after 1000
+        resume_process [srv 0 pid]
+        wait_for_condition 1000 10 {
+            [stale_primary_sees_primary 0 $x_id]
+        } else {
+            fail "R0 did not process the MEET of R3"
+        }
+        assert_equal OK [R 0 debug drop-cluster-packet-filter -1]
+
+        # The next packets of R3 carry its shard id.
+        wait_for_condition 1000 50 {
+            [stale_primary_shard_of 0 $x_id] eq $shard_x
+        } else {
+            fail "R0 did not learn the new shard id of R3"
+        }
+        assert_equal [s 0 role] {master} "R0 followed R3 into another shard"
+        assert_equal [R 0 cluster myshardid] $shard_a
+    }
+} stale_primary_one_slot_allocation

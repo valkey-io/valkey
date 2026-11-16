@@ -392,4 +392,47 @@ tags {"repl external:skip"} {
             }
         }
     }
+
+    # Test 7: A disk-based dual channel sync applies the writes it buffered while
+    # loading the RDB file, which doesn't have them. The AOF must get them too, and
+    # still reuse the RDB file as its base.
+    test "Disk-based dual channel sync keeps the buffered writes in the AOF" {
+        start_server {overrides {repl-diskless-sync yes repl-diskless-sync-delay 0 dual-channel-replication-enabled yes save ""}} {
+            set primary [srv 0 client]
+            set primary_host [srv 0 host]
+            set primary_port [srv 0 port]
+            populate 1000 base 100
+            # About 2 seconds to produce the RDB.
+            $primary config set rdb-key-save-delay 2000
+
+            start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-load disabled dual-channel-replication-enabled yes save ""}} {
+                set replica [srv 0 client]
+                set replica_log [srv 0 stdout]
+
+                $replica replicaof $primary_host $primary_port
+                wait_for_condition 50 100 {
+                    [s -1 rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "The primary didn't start producing the RDB"
+                }
+                # The replica buffers these writes while it gets the RDB.
+                for {set i 0} {$i < 50} {incr i} {
+                    $primary set during$i v$i
+                }
+                wait_for_condition 100 100 {
+                    [s -1 rdb_bgsave_in_progress] == 0 && [status $replica master_link_status] eq "up"
+                } else {
+                    fail "Replica didn't sync"
+                }
+                wait_for_ofs_sync $primary $replica
+                # Make sure they were buffered, and so applied right after the load.
+                assert {[status $replica replicas_repl_buffer_peak] > 0}
+                assert {[log_file_matches $replica_log "*Reused RDB file from primary sync as AOF base file*"]}
+                assert_equal 0 [count_message_lines $replica_log "Background append only file rewriting started"]
+                assert_equal 1050 [$replica dbsize]
+                $replica debug loadaof
+                assert_equal 1050 [$replica dbsize]
+            }
+        }
+    }
 }

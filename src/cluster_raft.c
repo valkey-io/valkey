@@ -1993,7 +1993,9 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     } else {
         /* Follower rejected — back off nextIndex, at most to just past its last entry. */
         if (rd->next_index > 1) rd->next_index--;
-        if (follower_last_index + 1 < rd->next_index) rd->next_index = follower_last_index + 1;
+        if (rd->next_index > 1 && follower_last_index < rd->next_index - 1) {
+            rd->next_index = follower_last_index + 1;
+        }
         clusterRaftSendAppendEntries(node->link, node);
     }
     return 1;

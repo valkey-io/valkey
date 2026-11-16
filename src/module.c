@@ -4330,6 +4330,8 @@ int VM_AvoidReplicaTraffic(void) {
  * before in order to restore the old DB number before returning. */
 int VM_SelectDb(ValkeyModuleCtx *ctx, int newid) {
     int retval = selectDb(ctx->client, newid);
+    /* Keep the transaction DB in sync, as selectCommand does, so that EXEC
+     * checks the ACLs of later queued commands against the selected DB. */
     if (retval == C_OK && ctx->client->flag.multi) {
         serverAssert(ctx->client->mstate != NULL);
         ctx->client->mstate->transaction_db_id = newid;

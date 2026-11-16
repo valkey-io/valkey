@@ -387,21 +387,20 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-# Build a clusterbus PING with primary flag, explicit currentEpoch and
-# configEpoch, and a shard id extension. Layout follows
-# create_cluster_meet_packet in packet.tcl.
-proc create_primary_ping {sender_name sender_port sender_cport current_epoch config_epoch shard_id} {
+# Build the fixed clusterbus message header of a primary that owns no slots,
+# with explicit type, currentEpoch and configEpoch. Layout follows
+# create_cluster_meet_packet in packet.tcl. The caller appends the message
+# body and then calls finish_cluster_packet.
+proc create_primary_header {type sender_name sender_port sender_cport current_epoch config_epoch ext_count mflags0} {
     set CLUSTER_NAMELEN 40
     set CLUSTER_SLOTS 16384
     set NET_IP_STR_LEN 46
-    set CLUSTERMSG_TYPE_PING 0
-    set CLUSTERMSG_EXT_TYPE_SHARDID 3
 
     set packet "RCmb"
     append packet [binary format I 0]
     append packet [binary format S 1]
     append packet [binary format S $sender_port]
-    append packet [binary format S $CLUSTERMSG_TYPE_PING]
+    append packet [binary format S $type]
     append packet [binary format S 0]
     append packet [binary format W $current_epoch]
     append packet [binary format W $config_epoch]
@@ -411,25 +410,46 @@ proc create_primary_ping {sender_name sender_port sender_cport current_epoch con
     append packet [string repeat "\x00" [expr {$CLUSTER_SLOTS / 8}]]
     append packet [string repeat "\x00" $CLUSTER_NAMELEN]
     append packet [string repeat "\x00" $NET_IP_STR_LEN]
-    # One extension, and the EXT_DATA message flag (1 << 2).
-    append packet [binary format S 1]
+    append packet [binary format S $ext_count]
     append packet [string repeat "\x00" 30]
     append packet [binary format S 0]
     append packet [binary format S $sender_cport]
     # Primary flag (CLUSTER_NODE_PRIMARY), state CLUSTER_OK, mflags.
     append packet [binary format S 1]
     append packet [binary format c 0]
-    append packet [binary format ccc 4 0 0]
+    append packet [binary format ccc $mflags0 0 0]
+    return $packet
+}
+
+# Write the total length into the header.
+proc finish_cluster_packet {packet} {
+    return [string replace $packet 4 7 [binary format I [string length $packet]]]
+}
+
+# A PING with a shard id extension.
+proc create_primary_ping {sender_name sender_port sender_cport current_epoch config_epoch shard_id} {
+    set CLUSTERMSG_TYPE_PING 0
+    set CLUSTERMSG_EXT_TYPE_SHARDID 3
+    # One extension, and the EXT_DATA message flag (1 << 2).
+    set packet [create_primary_header $CLUSTERMSG_TYPE_PING $sender_name $sender_port $sender_cport \
+        $current_epoch $config_epoch 1 4]
 
     # Shard id extension: length (uint32), type (uint16), unused (uint16),
     # then the NUL-terminated shard id padded to eight bytes.
     set datalen [expr {(([string length $shard_id] + 1 + 7) / 8) * 8}]
     append packet [binary format ISS [expr {8 + $datalen}] $CLUSTERMSG_EXT_TYPE_SHARDID 0]
     append packet $shard_id [string repeat "\x00" [expr {$datalen - [string length $shard_id]}]]
+    return [finish_cluster_packet $packet]
+}
 
-    set totlen [string length $packet]
-    set packet [string replace $packet 4 7 [binary format I $totlen]]
-    return $packet
+# A FAIL message about a node the receiver does not know, so the receiver only
+# processes its header.
+proc create_primary_fail {sender_name sender_port sender_cport current_epoch config_epoch} {
+    set CLUSTERMSG_TYPE_FAIL 3
+    set packet [create_primary_header $CLUSTERMSG_TYPE_FAIL $sender_name $sender_port $sender_cport \
+        $current_epoch $config_epoch 0 0]
+    append packet [string repeat "f" 40]
+    return [finish_cluster_packet $packet]
 }
 
 proc send_cluster_packet {port packet} {
@@ -587,6 +607,59 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
         assert_equal "\[609->-$R6_id\]" [get_open_slots 0]
         wait_for_log_messages -7 [list "*Reconfiguring myself as a replica of node $R6_id*"] $loglines7 1000 10
         assert_equal slave [get_cluster_role 7]
+        resume_process [srv -6 pid]
+    }
+}
+
+# Same stale primary claim from a paused R6 to the observer R3, but the newer
+# epoch first arrives in a FAIL message instead of a PING. R3 records the
+# epoch from any message type, and the next PING carries the same epoch, so R3
+# must move slot 609's migration target from R7 to R6 on the FAIL itself.
+start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
+
+    create_empty_shard 6 7
+    set R0_id [R 0 CLUSTER MYID]
+    set R6_id [R 6 CLUSTER MYID]
+    set R7_id [R 7 CLUSTER MYID]
+
+    test "Migration target follows a newer epoch first seen in a non-PING message" {
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+        assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+
+        set E6 [dict get [cluster_get_myself 6] config_epoch]
+        set shard_id [R 6 cluster myshardid]
+
+        fail_server 6 7
+        set E7 [dict get [cluster_get_myself 7] config_epoch]
+        assert {$E7 > $E6}
+        wait_for_slot_state 3 "\[609->-$R7_id\]"
+        wait_for_condition 100 100 {
+            [cluster_node_is_replica_of 3 $R6_id $R7_id]
+        } else {
+            fail "R3 never recorded R6 as a replica of R7"
+        }
+
+        pause_process [srv -6 pid]
+        set R6_cport [expr {[srv -6 port] + 10000}]
+        send_cluster_packet [srv -3 port] [create_primary_ping $R6_id [srv -6 port] $R6_cport $E6 $E6 $shard_id]
+        wait_for_condition 1000 10 {
+            [cluster_has_flag [cluster_get_node_by_id 3 $R6_id] master]
+        } else {
+            fail "R3 did not process the stale primary claim"
+        }
+        assert_equal "\[609->-$R7_id\]" [get_open_slots 3]
+
+        set E_new [expr {$E7 + 1}]
+        set loglines [count_log_lines -3]
+        send_cluster_packet [srv -3 port] [create_primary_fail $R6_id [srv -6 port] $R6_cport $E_new $E_new]
+        wait_for_condition 1000 10 {
+            [dict get [cluster_get_node_by_id 3 $R6_id] config_epoch] == $E_new
+        } else {
+            fail "R3 did not record R6's epoch from the FAIL message"
+        }
+        wait_for_log_messages -3 [list "*Slot 609 is now being migrated to node $R6_id*"] $loglines 1000 10
+        assert_equal "\[609->-$R6_id\]" [get_open_slots 3]
         resume_process [srv -6 pid]
     }
 }

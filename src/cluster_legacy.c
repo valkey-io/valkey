@@ -4372,6 +4372,16 @@ int clusterProcessPacket(clusterLink *link) {
         }
     }
 
+    /* A newer config epoch from a primary that owns no slots is the only sign
+     * of a failover in its shard. The PING/PONG/MEET handling below uses it to
+     * update the migrating-slot targets, but other packet types (FAIL, UPDATE,
+     * ...) also record the epoch and skip that handling, and the next PING
+     * carries the same epoch. So run the same epoch-only update here. */
+    if (sender_published_newer_epoch && type != CLUSTERMSG_TYPE_PING && type != CLUSTERMSG_TYPE_PONG &&
+        type != CLUSTERMSG_TYPE_MEET && nodeIsPrimary(sender) && sender->numslots == 0) {
+        clusterUpdateSlotsConfigWith(sender, sender_claimed_config_epoch, sender->slots, 1);
+    }
+
     /* Initial processing of PING and MEET requests replying with a PONG. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_MEET) {
         /* We use incoming MEET messages in order to set the address

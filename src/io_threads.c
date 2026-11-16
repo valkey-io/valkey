@@ -715,7 +715,7 @@ int trySendReadToIOThreads(client *c) {
      * During this phase, the main thread writes snapshot data directly via connWrite(). */
     if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
-    c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
+    c->read_flags = canParseCommand(c) && c->cmd_queue.len == 0 ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 

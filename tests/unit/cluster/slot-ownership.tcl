@@ -60,7 +60,11 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}} {
+# The tests below write to primary 0 right after start_cluster returns. A stall
+# longer than cluster-node-timeout there would let the other nodes fail it over,
+# and the write would get MOVED. Use a longer timeout so that stall cannot fail
+# the primary over, while the shutdown and dirty-slot race is still exercised.
+start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100 cluster-node-timeout 10000}} {
     test "Primary lost a slot during the shutdown waiting" {
         R 0 set FOO 0
 
@@ -94,11 +98,11 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
         } else {
             fail "The replica was not converted into primary"
         }
-        assert_error {ERR no such key} {R 3 debug object foo}
+        assert_error {ERR no such key} {R 3 debug object FOO}
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 10000}} {
     test "Primary lost a slot during the manual failover pausing" {
         R 0 set FOO 0
 
@@ -125,7 +129,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 10000}} {
     test "Primary lost a slot during the client pause command" {
         R 0 set FOO 0
 

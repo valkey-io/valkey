@@ -1817,13 +1817,13 @@ start_server {tags {"scripting external:skip tls:skip"}} {
         $rd eval {return 'hello'} 0
         assert_match {*Stopped at*} [$rd read]
 
+        set loglines [count_log_lines 0]
         r config set save "1 1"
         r set foo bar
-        wait_for_condition 50 100 {
-            [s rdb_changes_since_last_save] == 0
-        } else {
-            fail "Save point did not fire while a forked debug session was open"
-        }
+        # The save point is proven by the bgsave start, which the parent logs right
+        # after fork. Waiting for rdb_changes_since_last_save to reach 0 would also
+        # wait for the child's fsync and rename, which can be slow on a loaded runner.
+        wait_for_log_messages 0 {"*Background saving started*"} $loglines 50 100
         $rd close
         r config set save ""
     }

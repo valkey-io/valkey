@@ -1808,7 +1808,7 @@ uint8_t objectGetLFUFrequency(robj *o) {
  * with the decay applied (objectGetLFUFrequency).  However in special cases
  * where we want to avoid changing the memory (like a background thread or a
  * forked save) use this instead. */
-uint8_t objectGetLFUFrequencyReadOnly(robj *o) {
+uint8_t objectGetLFUFrequencyReadOnly(const robj *o) {
     uint8_t freq;
     lfu_getFrequency(objectGetLRU(o), &freq);
     return freq;

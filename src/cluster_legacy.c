@@ -7197,14 +7197,17 @@ void clusterDoBeforeSleep(int flags) {
 static long long clusterStallThresholdMs(void) {
     /* A replica can be promoted soon after the node timeout, so slack on top
      * of it would miss real failovers. The floor keeps the once per
-     * serverCron() idle wakeup, plus jitter, from tripping tiny timeouts. */
+     * serverCron() idle wakeup, plus jitter, from tripping tiny timeouts.
+     * With a low hz the floor can exceed the node timeout (2000 ms at hz 1),
+     * and a stall between the two is then not detected. */
     return max(server.cluster_node_timeout, 2 * (1000 / server.hz));
 }
 
-/* Measures the time since the event loop last polled, which is when it last
- * read cluster bus messages, or since the last stall it reported. A batch of
- * commands that are each fast can add up to a stall. 'polled' is set when
- * called right after a poll. */
+/* Measures the time since the event loop last polled, or since the last stall
+ * it reported. A batch of commands that are each fast can add up to a stall.
+ * The QoS polls inside a batch also read cluster bus messages but are not
+ * counted, so a long batch can trip this while peers still get PONGs.
+ * 'polled' is set when called right after a poll. */
 static int clusterStallDetected(int polled) {
     static monotime last_poll = 0;
     monotime now_us = getMonotonicUs();
@@ -7228,10 +7231,10 @@ static int clusterStallDetected(int polled) {
  * Refuse queries until the cluster state is ok again, which needs a majority of
  * primaries to answer a PING sent after the stall.
  *
- * Called after every event loop sleep. clusterCheckCommandStall() runs before
- * each client command and catches the stalls that happen while the loop is
- * awake, such as a slow command, a slow AOF flush, or the process being stopped
- * between two commands of one batch. */
+ * Called after every event loop sleep, which also catches a slow AOF flush in
+ * beforeSleep(). clusterCheckCommandStall() runs before each client command and
+ * catches the stalls that happen while the loop is awake, such as a slow command
+ * or the process being stopped between two commands of one batch. */
 void clusterCheckStall(void) {
     if (!clusterStallDetected(1) && !server.cluster->stall_links_pending) return;
 

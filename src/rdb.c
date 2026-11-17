@@ -1326,10 +1326,10 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
 
     /* Save the LFU info. */
     if (savelfu) {
-        /* Read without writing the decayed counter back: a forkless save runs this on a
-         * background thread, and only the main thread may write the object header. */
-        uint8_t freq;
-        lfu_getFrequency(objectGetLRU(val), &freq);
+        /* Read without maintaining the LFU value.  A forkless save runs this on
+         * a background thread, and for a forked save, modification would create
+         * additional CoW pressure. */
+        uint8_t freq = objectGetLFUFrequencyReadOnly(val);
         /* We can encode this in exactly two bytes: the opcode and an 8
          * bit counter, since the frequency is logarithmic with a 0-255 range.
          * Note that we do not store the halving time because to reset it

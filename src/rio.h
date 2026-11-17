@@ -44,6 +44,10 @@
 #define RIO_FLAG_CLOSE_ASAP (1 << 2) /* Rio was closed asynchronously during the current rio operation. */
 #define RIO_FLAG_SKIP_RDB_CHECKSUM (1 << 3)
 #define RIO_FLAG_STREAMING_COMPRESSION (1 << 4) /* Input uses whole-stream compression. */
+/* Per-string LZF was sampled at save start (RIO_FLAG_STRING_LZF says whether it
+ * is on), instead of following the live rdbcompression config. */
+#define RIO_FLAG_STRING_LZF_SAMPLED (1 << 5)
+#define RIO_FLAG_STRING_LZF (1 << 6)
 
 #define RIO_TYPE_FILE (1 << 0)
 #define RIO_TYPE_BUFFER (1 << 1)

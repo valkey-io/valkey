@@ -281,6 +281,8 @@ rdbStreamReaderInitResult rdbInitStreamReader(rio *rdb,
 void rdbFreeStreamReader(rio *rdb, streamReader *reader);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, size_t timeout, sds *err);
 int rdbSaveRio(compressionAlgo compression_algo, int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
+int rdbSaveCompressionBegin(rio *rdb, streamWriter *writer, compressionAlgo algo, bool checksum, bool string_lzf);
+int rdbSaveCompressionEnd(rio *rdb, streamWriter *writer, bool finish);
 ssize_t rdbSaveFunctions(rio *rdb);
 int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbSaveInfoReplAuxFields(rio *rdb, rdbSaveInfo *rsi);

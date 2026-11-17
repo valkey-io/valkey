@@ -891,13 +891,14 @@ start_server {} {
         r config set min-string-size-avoid-copy-reply-threaded 0
         r setrange fat 1000000 x
 
-        # The largest client: holds ~10MB of unread GET replies, then runs a long script.
+        # The largest client: holds ~30MB of unread GET replies, then runs a long script. It must stay
+        # larger than the pusher below, so it is always the first eviction candidate.
         set rdX [valkey_deferring_client]
         $rdX client setname executing
         $rdX flush
         assert_equal OK [$rdX read]
         set gets 0
-        while {[client_field executing tot-mem] < [mb 10]} {
+        while {[client_field executing tot-mem] < [mb 30]} {
             $rdX get fat
             $rdX flush
             incr gets
@@ -930,11 +931,17 @@ start_server {} {
             return 'done'
         } 0
         $rdX flush
-        after 100
+        wait_for_condition 100 10 {
+            [catch {r ping} e] && [string match {BUSY*} $e]
+        } else {
+            fail "script did not start"
+        }
 
         # While the script yields, the pusher's unread -BUSY replies push the total over the limit,
         # and each of its commands runs evictClients(), which picks the executing client first.
-        $rdW write [string repeat "PING\r\n" 20000]
+        # ~19MB of replies is far more than the socket buffers can absorb, but less than the
+        # executing client, so the pusher is never the largest client.
+        $rdW write [string repeat "PING\r\n" 200000]
         $rdW flush
 
         wait_for_condition 100 50 {
@@ -942,6 +949,9 @@ start_server {} {
         } else {
             fail "script did not finish"
         }
+        # The pusher's commands must have run while the script was still running.
+        catch {$rdW read} e
+        assert_match {BUSY*} $e
         assert_equal $evicted [r get evicted_during_script]
         wait_for_condition 100 10 {
             ![client_exists executing]

@@ -347,6 +347,15 @@ static void clusterRaftBroadcastNodeOffset(clusterNode *node, long long offset) 
     sdsfree(msg);
 }
 
+/* Our replication offset as we report it to other nodes. After applying a
+ * SET_REPLICA_OF, the replication state still has the old shard's offset
+ * until beforeSleep reconfigures replication, so use the offset the apply
+ * step set until then. */
+static long long clusterRaftMyReplicationOffset(void) {
+    if (RAFT_STATE()->todo_update_replication) return myself->repl_offset;
+    return getNodeReplicationOffset(myself);
+}
+
 /* Build a REPL_OFFSETS message containing all known non-zero offsets.
  * Returns a refcounted send block, or NULL if there's nothing to send.
  * Caller must call clusterMsgSendBlockDecrRefCount when done. */
@@ -358,8 +367,7 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *n = dictGetVal(de);
         if (n->flags & CLUSTER_NODE_JOINING) continue;
-        long long off = (n == myself) ? getNodeReplicationOffset(myself)
-                                      : n->repl_offset;
+        long long off = (n == myself) ? clusterRaftMyReplicationOffset() : n->repl_offset;
         msg = sdscatlen(msg, " ", 1);
         msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
         msg = sdscatfmt(msg, " %I", off);
@@ -2590,10 +2598,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
                 sds hint = wireNewMsg("REPL_OFFSETS");
                 for (int r = 0; r < num_replicas; r++) {
                     clusterNode *replica = clusterNodeGetReplica(node, r);
-                    long long roff = (replica == myself)
-                                         ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
-                                                                  : server.primary_repl_offset)
-                                         : replica->repl_offset;
+                    long long roff = (replica == myself) ? clusterRaftMyReplicationOffset() : replica->repl_offset;
                     hint = sdscatlen(hint, " ", 1);
                     hint = sdscatlen(hint, replica->name, CLUSTER_NAMELEN);
                     hint = sdscatfmt(hint, " %I", roff);
@@ -2825,7 +2830,7 @@ static void clusterRaftCron(void) {
 
             /* Broadcast all replication offsets every 10s so
              * followers have accurate data for CLUSTER SLOTS/SHARDS. */
-            long long my_offset = getNodeReplicationOffset(myself);
+            long long my_offset = clusterRaftMyReplicationOffset();
             if (now - rs->last_repl_offsets_broadcast > REPL_OFFSETS_BROADCAST_PERIOD_MS) {
                 rs->last_repl_offsets_broadcast = now;
                 clusterMsgSendBlock *block = clusterRaftBuildAllOffsetsMsg();
@@ -2840,15 +2845,13 @@ static void clusterRaftCron(void) {
                     dictReleaseIterator(di);
                     clusterMsgSendBlockDecrRefCount(block);
                 }
-            } else if (!rs->todo_update_replication) {
+            } else {
                 /* Broadcast leader's own offset on 0 -> non-zero transition. */
                 if (myself->repl_offset == 0 && my_offset > 0) {
                     clusterRaftBroadcastNodeOffset(myself, my_offset);
                 }
             }
-            /* After an applied SET_REPLICA_OF, our replication offset is the
-             * old one until beforeSleep has reconfigured replication. */
-            if (!rs->todo_update_replication) myself->repl_offset = my_offset;
+            myself->repl_offset = my_offset;
             clusterRaftDetectFailures(now);
         }
     }

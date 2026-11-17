@@ -4009,6 +4009,25 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
         ranges = filtered;
     }
 
+    /* Nothing to propose if the slots already have the target as owner, e.g.
+     * when valkey-cli sends CLUSTER SETSLOT NODE to every node after the
+     * first one's change was applied. Each would cost a consensus round. */
+    if (target) {
+        int changes = 0;
+        for (int i = 0; i < numranges && !changes; i++) {
+            for (int j = ranges[i].start_slot; j <= ranges[i].end_slot; j++) {
+                if (server.cluster->slots[j] != target) {
+                    changes = 1;
+                    break;
+                }
+            }
+        }
+        if (!changes) {
+            if (callback) callback(ctx, NULL);
+            return;
+        }
+    }
+
     /* Singleton with empty log: apply locally without proposing.
      * The entries will be proposed when the first node joins. */
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 &&

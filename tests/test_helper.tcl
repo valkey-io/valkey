@@ -111,6 +111,7 @@ set ::all_tests {
     unit/cluster/cluster-shards
     unit/cluster/divergent-cluster-shardid-conf
     unit/cluster/packet
+    unit/cluster/replica-detach
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0

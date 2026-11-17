@@ -60,6 +60,9 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     }
 }
 
+# Keep other tests from reusing the primary's cluster-bus port after it exits,
+# until the replica has detected the failure and completed its election.
+run_solo "Slot ownership during shutdown" {
 start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}} {
     test "Primary lost a slot during the shutdown waiting" {
         R 0 set FOO 0
@@ -96,6 +99,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
         }
         assert_error {ERR no such key} {R 3 debug object foo}
     }
+}
 }
 
 start_cluster 3 1 {tags {external:skip cluster}} {

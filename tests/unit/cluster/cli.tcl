@@ -616,7 +616,7 @@ start_cluster 1 2 [list overrides $base_conf] {
         } else {
             fail "Nodes don't have expected cluster state"
         }
-    } {} {cluster-raft:skip} ;# Raft: the forgotten node can rejoin via HELLO before CLUSTER RESET
+    }
 } ;# stop servers
 
 # Test valkey-cli --cluster del-node with an unreachable node

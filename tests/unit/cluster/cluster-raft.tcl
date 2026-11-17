@@ -182,4 +182,66 @@ test "Raft: CLUSTER FORGET of a leader with slots fails without a leader transfe
     }
 }
 
+# CLUSTER FORGET without RESET. Pause the forgotten node so commit rides
+# the other follower's ACK; the commit AE must still be delivered.
+test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
+    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set r0 [srv 0 client]
+        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
+        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
+        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
+
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 3 &&
+            [CI 1 cluster_size] == 3 &&
+            [CI 2 cluster_size] == 3
+        } else {
+            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
+        }
+
+        assert_equal [CI 0 cluster_raft_role] "leader"
+        set forgotten_id [R 1 CLUSTER MYID]
+        pause_process [srv -1 pid]
+        if {[catch {
+            assert_equal "OK" [$r0 CLUSTER FORGET $forgotten_id]
+            wait_for_condition 50 100 {
+                ![raft_node_visible $r0 $forgotten_id] &&
+                [CI 0 cluster_size] == 2
+            } else {
+                fail "NODE_FORGET did not drop the paused node on the leader: visible=[raft_node_visible $r0 $forgotten_id] size=[CI 0 cluster_size] nodes={[R 0 CLUSTER NODES]}"
+            }
+        } err]} {
+            resume_process [srv -1 pid]
+            error $err
+        }
+        resume_process [srv -1 pid]
+
+        # Once the forgotten node has applied its NODE_FORGET it has no peers,
+        # so it can't HELLO back. A stub created before that is reaped.
+        wait_for_condition 100 100 {
+            [CI 1 cluster_raft_role] eq "learner" &&
+            [CI 1 cluster_size] == 0
+        } else {
+            fail "forgotten node still a voter size=[CI 1 cluster_size] role=[CI 1 cluster_raft_role]"
+        }
+        wait_for_condition 100 100 {
+            ![raft_node_visible $r0 $forgotten_id] &&
+            [CI 0 cluster_known_nodes] == 2
+        } else {
+            fail "reappeared via HELLO known_nodes=[CI 0 cluster_known_nodes] nodes={[R 0 CLUSTER NODES]}"
+        }
+
+        # A restart must not turn the forgotten node into a fresh singleton leader.
+        restart_server -1 true false
+        wait_for_condition 50 100 {
+            [CI 1 cluster_raft_role] eq "learner" &&
+            [CI 1 cluster_size] == 0 &&
+            [CI 1 cluster_known_nodes] == 1
+        } else {
+            fail "forgotten node restarted as a member role=[CI 1 cluster_raft_role] size=[CI 1 cluster_size] known=[CI 1 cluster_known_nodes]"
+        }
+    }
+}
+
 } ;# tags

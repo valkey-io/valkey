@@ -2005,6 +2005,12 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     }
     raftApplyCommitted();
 
+    /* Forgotten: this link is unbound. Do not ACK. */
+    if (!link->node) {
+        freeClusterLink(link);
+        return 0;
+    }
+
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
      * entries are on stable storage before the leader counts our ACK. */
     rs->todo_send_ae_ack = 1;
@@ -2089,8 +2095,9 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         /* Apply newly committed entries. */
         uint64_t prev_commit = rs->last_applied;
         raftApplyCommitted();
-        /* If the node we were talking to was forgotten, bail out. */
+        /* Forgotten: keep the link while a commit AE is still queued. */
         if (!link->node) {
+            if (listLength(link->send_msg_queue) > 0) return 1;
             freeClusterLink(link);
             return 0;
         }
@@ -2646,8 +2653,11 @@ static void clusterRaftInitLast(void) {
         clusterRaftStartElection();
     }
 
-    /* Fresh single-node cluster: become leader immediately. */
-    if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
+    /* Fresh single-node cluster: become leader immediately. A node that
+     * already applied log entries, such as after NODE_FORGET of ourselves,
+     * is not a fresh singleton and stays a learner. */
+    if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0 &&
+        rs->last_applied == 0) {
         myself->flags &= ~CLUSTER_NODE_LEARNER;
         rs->role = RAFT_ROLE_LEADER;
         if (rs->current_term == 0) rs->current_term = 1;
@@ -2815,11 +2825,33 @@ static void clusterRaftAssertLearnerRole(void) {
     serverAssert((rs->role == RAFT_ROLE_LEARNER) == nodeIsLearner(myself));
 }
 
+/* Drop JOINING nodes that never got NODE_JOIN and have no live link.
+ * HELLO leftovers also get an outbound from clusterConnectNodes(); drop
+ * that once it is old enough for the stub to go idle. A node still waiting
+ * on MEET or NODE_JOIN keeps a young link. MEET after HI only has outbound. */
+static void clusterRaftReapJoiningStubs(void) {
+    mstime_t now = mstime();
+    mstime_t timeout = max(server.cluster_node_timeout, 1000);
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself || !(node->flags & CLUSTER_NODE_JOINING)) continue;
+        if (node->inbound_link && node->link && now - node->link->ctime > timeout)
+            freeClusterLink(node->link);
+        if (node->link || node->inbound_link) continue;
+        if (now - node->ctime > timeout) clusterDelNode(node);
+    }
+    dictReleaseIterator(di);
+}
+
 static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
     clusterRaftAssertLearnerRole();
+
+    clusterRaftReapJoiningStubs();
 
     /* Disconnect dead outbound links after node_timeout/2. data_received tracks
      * the last time we got data on our outbound link (HI, AE_ACK, votes).
@@ -4340,6 +4372,45 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     return RAFT_RESULT_OK;
 }
 
+/* Become a learner and drop all peers so we do not campaign or HELLO back. */
+static void clusterRaftForgetMyself(void) {
+    clusterRaftState *rs = RAFT_STATE();
+
+    myself->flags |= CLUSTER_NODE_LEARNER;
+    rs->role = RAFT_ROLE_LEARNER;
+    memset(rs->leader, 0, CLUSTER_NAMELEN);
+    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
+    server.cluster->size = 0;
+
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself) continue;
+        clusterLink *link = rs->processing_link;
+        if (link && link->node == node) {
+            if (node->link == link) node->link = NULL;
+            if (node->inbound_link == link) node->inbound_link = NULL;
+            link->node = NULL;
+        }
+        clusterDelNode(node);
+    }
+    dictReleaseIterator(di);
+    if (nodeIsReplica(myself)) {
+        myself->flags &= ~CLUSTER_NODE_REPLICA;
+        myself->flags |= CLUSTER_NODE_PRIMARY;
+        myself->replicaof = NULL;
+        rs->todo_update_replication = 1;
+    }
+    rs->todo_update_slot_coverage = 1;
+    clearCachedClusterSlotsResponse();
+    /* Entries committed after our own NODE_FORGET describe a cluster we
+     * have left. Drop them so a restart cannot apply them as a singleton. */
+    rs->commit_index = rs->last_applied;
+    raftLogTruncateFrom(rs->last_applied + 1);
+    rs->todo_save_config = 1;
+}
+
 /* Apply (or validate) a NODE_FORGET entry. Format: "<node-id> <shard-epoch>"
  * When validate_only is set, only validation is performed (no state mutation).
  * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
@@ -4354,8 +4425,6 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
     /* Already forgotten: success (idempotent; may be a no-op log entry). */
     if (!node) goto done;
-    /* Forgetting myself is only validated, as a leader transfer below. */
-    if (node == myself && !validate_only) goto reject;
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
@@ -4373,10 +4442,26 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
         goto done;
     }
 
+    if (node == myself) {
+        clusterRaftForgetMyself();
+        goto done;
+    }
+
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
     bool was_voter = nodeIsVoter(node);
+
+    /* Queue a commit AE. Flush it unless this is processing_link: WriteHandler
+     * may free that link while the packet handler still holds it. */
+    clusterLink *out = NULL;
+    if (rs->role == RAFT_ROLE_LEADER) {
+        out = node->link ? node->link : node->inbound_link;
+        if (out && out->conn) {
+            clusterRaftSendAppendEntries(out, node);
+            if (out != rs->processing_link) clusterWriteHandler(out->conn);
+        }
+    }
 
     /* clusterDelNode() frees the node's links. If we're processing a message
      * from one of them, detach it instead, so the message handler can detect

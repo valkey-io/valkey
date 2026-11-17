@@ -1874,10 +1874,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $rdb_chan close
             fail "primary did not process REPLCONF rdb-channel 0 on the waiting rdb client"
         }
+        # Skip the default grace period
+        $primary debug delay-rdb-client-free-seconds 0
         $rdb_chan close
 
-        # The freed client is protected for a grace period (wait_before_rdb_client_free) before
-        # the server actually frees it. Wait until the server logs that it freed the RDB client.
+        # Wait until the server logs that it freed the RDB client.
         set log [srv 0 stdout]
         wait_for_condition 100 200 {
             [log_file_matches $log "*Freeing RDB client*"]

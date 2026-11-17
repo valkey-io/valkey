@@ -4200,10 +4200,13 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         goto reject;
     }
 
-    /* Guard: if a primary is specified, its shard must match target-shard. */
+    /* Guard: if a primary is specified, its shard must match target-shard,
+     * and it must still be a primary, so that a replica's primary is always
+     * a primary. It may have become a replica since this was proposed. */
     if (sdslen(argv[3]) == CLUSTER_NAMELEN) {
         clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
         if (primary && memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
+        if (primary && (primary == replica || nodeIsReplica(primary))) goto reject;
     }
 
     if (validate_only) goto done;
@@ -4230,6 +4233,28 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
          * data, so its offset no longer counts. Every node applies this, so
          * all nodes see the zero offset at once, e.g. for failover ranking. */
         if (memcmp(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) replica->repl_offset = 0;
+        /* A primary that becomes a replica takes its replicas along, like a
+         * FAILOVER does, so they never replicate a replica. */
+        while (clusterNodeNumReplicas(replica) > 0) {
+            clusterNode *r = clusterNodeGetReplica(replica, 0);
+            clusterNodeRemoveReplica(replica, r);
+            r->replicaof = primary;
+            clusterNodeAddReplica(primary, r);
+            clusterRemoveNodeFromShard(r);
+            memcpy(r->shard_id, primary->shard_id, CLUSTER_NAMELEN);
+            clusterAddNodeToShard(primary->shard_id, r);
+            r->repl_offset = 0;
+            if (r == myself) {
+                serverLog(LL_NOTICE,
+                          "My primary %.40s (%s) became a replica. "
+                          "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
+                          replica->name, humanNodename(replica), primary->name, humanNodename(primary),
+                          primary->shard_id);
+                rs->todo_save_config = 1;
+                rs->todo_update_replication = 1;
+                rs->todo_full_sync = 1;
+            }
+        }
         if (replica == myself) {
             if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
             myself->flags &= ~CLUSTER_NODE_PRIMARY;

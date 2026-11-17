@@ -184,8 +184,13 @@ proc test_replica_config_epoch_failover {type} {
         } elseif {$type == "manual"} {
             R 3 CONFIG SET cluster-replica-no-failover yes
         }
-        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+        # Enable closing the link before the filter, so that every dropped
+        # packet closes its link. A link left open after a drop never answers
+        # the dropped packet, and the sender's TCP stack can hold the packets
+        # that follow, like the PONG R0 broadcasts with its new config epoch,
+        # until after the filter is removed.
         R 3 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 1
+        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
 
         set R0_nodeid [R 0 cluster myid]
 

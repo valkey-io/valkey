@@ -4412,22 +4412,24 @@ int processCommandAndResetClient(client *c) {
     client *old_client = server.current_client;
     server.current_client = c;
     /* Commands of blocked clients served after this command can evict clients. Mark this
-     * client so evictClients() skips it. Restore the old value instead of clearing it, since
-     * this function can be re-entered for the same client, e.g. from processEventsWhileBlocked()
-     * when a script times out. */
-    int old_processing = c->flag.processing_command;
+     * client so evictClients() skips it while it is still up the call stack. A client is
+     * never processed again while it is already processing a command. */
+    serverAssert(!c->flag.processing_command);
     c->flag.processing_command = 1;
     if (processCommand(c) == C_OK) {
         commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
          * processed command. */
         if (c->conn) updateClientMemUsageAndBucket(c);
+        c->flag.processing_command = 0;
     }
 
     if (server.current_client == NULL) {
         deadclient = 1;
     } else {
-        c->flag.processing_command = old_processing;
+        /* processCommand() may return C_ERR with the client only scheduled for an
+         * async close, so clear the flag while it is still allocated. */
+        c->flag.processing_command = 0;
     }
     /*
      * Restore the old client, this is needed because when a script

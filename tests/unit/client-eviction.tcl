@@ -879,6 +879,9 @@ start_server {} {
     } {} {needs:debug tls:skip}
 }
 
+# The caller of a yielding script is protected, so this was never a use after free: before the
+# processing_command skip, eviction marked it close_asap mid-script and its reply was dropped.
+# Now it is left alone until the script returns and evicted afterwards.
 start_server {} {
     test {Yielding EVAL caller is not evicted mid-script by another client's command} {
         r flushdb

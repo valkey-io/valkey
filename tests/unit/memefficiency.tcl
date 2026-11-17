@@ -519,9 +519,11 @@ run_solo {defrag} {
 
         test "Active defrag tracking table: $type" {
             r flushdb sync
-            r config resetstat
             r config set hz 100
             r config set activedefrag no
+            # Disable the previous defrag run before resetting its counters,
+            # so the start wait observes only this test's defrag activity.
+            r config resetstat
             r config set active-defrag-threshold-lower 5
             r config set active-defrag-cycle-min 65
             r config set active-defrag-cycle-max 75

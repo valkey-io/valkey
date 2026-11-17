@@ -341,7 +341,8 @@ client *createClient(connection *conn) {
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -4000,14 +4001,26 @@ int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
     server.current_client = c;
+    /* Commands of blocked clients served after this command can evict clients. Mark this
+     * client so evictClients() skips it while it is still up the call stack. A client is
+     * never processed again while it is already processing a command. */
+    serverAssert(!c->flag.processing_command);
+    c->flag.processing_command = 1;
     if (processCommand(c) == C_OK) {
         commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
          * processed command. */
         if (c->conn) updateClientMemUsageAndBucket(c);
+        c->flag.processing_command = 0;
     }
 
-    if (server.current_client == NULL) deadclient = 1;
+    if (server.current_client == NULL) {
+        deadclient = 1;
+    } else {
+        /* processCommand() may return C_ERR with the client only scheduled for an
+         * async close, so clear the flag while it is still allocated. */
+        c->flag.processing_command = 0;
+    }
     /*
      * Restore the old client, this is needed because when a script
      * times out, we will get into this code from processEventsWhileBlocked.
@@ -6767,11 +6780,21 @@ void evictClients(void) {
     listRewind(server.client_mem_usage_buckets[curr_bucket].clients, &bucket_iter);
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
+
+    /* Memory of clients that were skipped because they can't be freed here */
+    size_t pending_freed = 0;
+
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] + server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
-           client_eviction_limit) {
+           client_eviction_limit + pending_freed) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.processing_command && c != server.current_client) {
+                /* This client is further up the call stack and its caller still uses it, so it can't be
+                 * freed here. Count its memory as pending so others are not evicted in its place. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
             freeClient(c);

@@ -1,6 +1,3 @@
-# Run rank-sensitive elections after other test files: competing workloads
-# can delay votes past the replica rank gap. Keep every election assertion.
-run_solo "replica-migration" {
 # Allocate slot 0 to the last primary and evenly distribute the remaining
 # slots to the remaining primaries.
 proc my_slot_allocation {masters replicas} {
@@ -428,4 +425,3 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
         assert_equal [R 2 dbsize] 0
     }
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
-}

@@ -186,7 +186,7 @@ start_server {tags {"modules external:skip"} overrides {save {} forkless-infrast
         r bgsave
         waitForBgsave r
         assert_equal fork [getInfoProperty [r info persistence] rdb_last_bgsave_type]
-        assert_equal 1 [getInfoProperty [r info stats] forkless_fallbacks_module]
+        assert_equal 1 [getInfoProperty [r info debug] forkless_fallbacks_module]
     }
 }
 

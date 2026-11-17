@@ -2237,7 +2237,7 @@ start_server {tags {"repl external:skip"} overrides {save {} forkless-infrastruc
             $replica replicaof $primary_host $primary_port
             wait_for_sync $replica
 
-            assert_equal 1 [s -1 forkless_fallbacks_missing_inband_repl]
+            assert_equal 1 [getInfoProperty [[srv -1 client] info debug] forkless_fallbacks_missing_inband_repl]
             assert {[s -1 total_forks] > $forks}
             assert_equal $digest [$replica debug digest]
         } {} {needs:debug}
@@ -2266,14 +2266,15 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
         } else {
             fail "Functions-only full sync didn't fork"
         }
-        assert_equal 1 [s forkless_fallbacks_exclude_data]
-        assert_equal 0 [s forkless_fallbacks_missing_inband_repl]
-        assert_equal 0 [s forkless_fallbacks_compression]
-        assert_equal 0 [s forkless_fallbacks_module]
-        assert_equal 0 [s forkless_fallbacks_slot_import]
-        assert_equal 0 [s forkless_fallbacks_old_rdb_version]
+        set dbg [r info debug]
+        assert_equal 1 [getInfoProperty $dbg forkless_fallbacks_exclude_data]
+        assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_missing_inband_repl]
+        assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_compression]
+        assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_module]
+        assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_slot_import]
+        assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_old_rdb_version]
         r config resetstat
-        assert_equal 0 [s forkless_fallbacks_exclude_data]
+        assert_equal 0 [getInfoProperty [r info debug] forkless_fallbacks_exclude_data]
         close $replica
     }
 }
@@ -2305,9 +2306,9 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
         } else {
             fail "Old-version full sync didn't fork"
         }
-        assert_equal 1 [s forkless_fallbacks_old_rdb_version]
-        assert_equal 0 [s forkless_fallbacks_exclude_data]
-        assert_equal 0 [s forkless_fallbacks_missing_inband_repl]
+        assert_equal 1 [getInfoProperty [r info debug] forkless_fallbacks_old_rdb_version]
+        assert_equal 0 [getInfoProperty [r info debug] forkless_fallbacks_exclude_data]
+        assert_equal 0 [getInfoProperty [r info debug] forkless_fallbacks_missing_inband_repl]
         close $replica
         waitForBgsave $primary
         r config resetstat
@@ -2323,8 +2324,8 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
         puts -nonewline $replica "PSYNC ? -1\r\n"
         flush $replica
         wait_for_log_messages 0 {"*Falling back to fork-based save for SYNC: replica does not support inline replication*"} $loglines 50 100
-        assert_equal 1 [s forkless_fallbacks_missing_inband_repl]
-        assert_equal 0 [s forkless_fallbacks_old_rdb_version]
+        assert_equal 1 [getInfoProperty [r info debug] forkless_fallbacks_missing_inband_repl]
+        assert_equal 0 [getInfoProperty [r info debug] forkless_fallbacks_old_rdb_version]
         close $replica
         waitForBgsave $primary
     }
@@ -2337,7 +2338,7 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
             $replica replicaof $primary_host $primary_port
             wait_for_sync $replica
             wait_for_log_messages -1 {"*Falling back to fork-based save for SYNC: cohort needs stream compression*"} $loglines 50 100
-            assert_equal 1 [s -1 forkless_fallbacks_compression]
+            assert_equal 1 [getInfoProperty [[srv -1 client] info debug] forkless_fallbacks_compression]
         }
     }
 }
@@ -2364,7 +2365,7 @@ start_server {tags {"repl needs:other-server external:skip"} overrides {forkless
             assert_equal "val:499" [$replica get key:499]
             # Confirm the fallback to a fork-based save actually happened.
             wait_for_log_messages -1 {"*Falling back to fork-based save for SYNC: replica does not support inline replication*"} $loglines 100 100
-            assert_equal 1 [s -1 forkless_fallbacks_missing_inband_repl]
+            assert_equal 1 [getInfoProperty [[srv -1 client] info debug] forkless_fallbacks_missing_inband_repl]
         }
     }
 }

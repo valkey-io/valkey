@@ -203,7 +203,8 @@ typedef struct {
     unsigned int todo_retry_deferred : 1; /* For proposals that need rebasing of new epoch */
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
-    unsigned int todo_full_sync : 1; /* Myself moved to another shard: don't reuse our data. */
+    unsigned int todo_lost_last_slot : 1; /* Our shard lost its last slot, see below */
+    unsigned int todo_full_sync : 1;      /* Myself moved to another shard: don't reuse our data. */
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
@@ -211,6 +212,9 @@ typedef struct {
     unsigned int todo_broadcast_vote_request : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
+
+    /* The node that got our shard's last slot, for todo_lost_last_slot. */
+    char lost_last_slot_target[CLUSTER_NAMELEN];
 
     /* NODE_INFO divergence detection. */
     sds my_last_committed_info;
@@ -3197,6 +3201,16 @@ static void clusterRaftBeforeSleep(bool blocked) {
         clusterRaftCheckSlotCoverage();
     }
 
+    if (rs->todo_lost_last_slot) {
+        rs->todo_lost_last_slot = 0;
+        clusterNode *target = clusterLookupNode(rs->lost_last_slot_target, CLUSTER_NAMELEN);
+        clusterNode *my_primary = clusterNodeGetPrimary(myself);
+        /* Skip if a later entry already changed it, e.g. we got slots back. */
+        if (target && my_primary && my_primary->numslots == 0 && target != my_primary && target->numslots > 0) {
+            clusterHandleLostLastSlot(target);
+        }
+    }
+
     if (rs->todo_schedule_failover) {
         rs->todo_schedule_failover = 0;
         /* Schedule automatic failover if my primary is still failed. */
@@ -3946,21 +3960,6 @@ static void clusterRaftCancelAutomaticFailover(void) {
  * Node management — propose changes to Raft log
  * -------------------------------------------------------------------------- */
 
-typedef struct {
-    void *orig_ctx;
-    void (*orig_callback)(void *orig_ctx, const char *error);
-    clusterNode *target;
-} slotChangeCallbackCtx;
-
-static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
-    slotChangeCallbackCtx *sc = (slotChangeCallbackCtx *)ctx;
-    if (!error && clusterNodeGetPrimary(myself)->numslots == 0 && sc->target) {
-        clusterHandleLostLastSlot(sc->target);
-    }
-    if (sc->orig_callback) sc->orig_callback(sc->orig_ctx, error);
-    zfree(sc);
-}
-
 /* Compact `in` to slots owned by this node. Does not free `in`.
  * *out is newly allocated, or NULL if none remain. */
 static int raftOwnedDelSlotRanges(slotRange *in, int numranges, slotRange **out) {
@@ -4050,14 +4049,9 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     }
 
     /* Propose through Raft leader. The callback is invoked when the entry is
-     * committed and applied. We use two chained callbacks, to handle some
-     * side-effects like replica migration, before invoking the original
-     * callback. */
-    slotChangeCallbackCtx *sc = zmalloc(sizeof(slotChangeCallbackCtx));
-    sc->orig_ctx = ctx;
-    sc->orig_callback = callback;
-    sc->target = target;
-    clusterRaftPropose(entry, sc, &clusterRaftSlotChangeApplyCallback);
+     * committed and applied. Every node checks on apply whether its shard
+     * lost its last slot, see clusterRaftApplySlotChange(). */
+    clusterRaftPropose(entry, ctx, callback);
     sdsfree(entry);
     zfree(filtered);
 }
@@ -4120,6 +4114,9 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
 
     if (validate_only) goto done;
 
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    int my_shard_had_slots = my_primary && my_primary->numslots > 0;
+
     /* Range fields are argv[range_start_arg] through argv[argc-1]. */
     for (int i = info.range_start_arg; i < argc; i++) {
         int start, end;
@@ -4138,6 +4135,14 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
             if (old_owner) clusterDelSlot(j);
             if (info.target_node) clusterAddSlot(info.target_node, j);
         }
+    }
+
+    /* Every node in the shard that lost its last slot reconfigures itself,
+     * like gossip nodes do when they learn about it. Proposing from apply
+     * isn't safe, so it's done in beforeSleep. */
+    if (my_shard_had_slots && my_primary->numslots == 0 && info.target_node && info.target_node != my_primary) {
+        RAFT_STATE()->todo_lost_last_slot = 1;
+        memcpy(RAFT_STATE()->lost_last_slot_target, info.target_node->name, CLUSTER_NAMELEN);
     }
     goto done;
 

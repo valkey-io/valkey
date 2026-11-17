@@ -360,7 +360,8 @@ start_server {tags {"scripting"}} {
     }
 
     test {FUNCTION - lazy free of restored-over functions does not touch a recreated Lua state} {
-        test_config_set r lazyfree-lazy-user-flush yes
+        set orig_lazy_user_flush [lindex [r config get lazyfree-lazy-user-flush] 1]
+        r config set lazyfree-lazy-user-flush yes
         r function flush sync
         set empty_dump [r function dump]
         for {set i 0} {$i < 65} {incr i} {
@@ -377,6 +378,7 @@ start_server {tags {"scripting"}} {
             fail "lazyfree isn't done"
         }
         catch {r fcall test 0} res
+        r config set lazyfree-lazy-user-flush $orig_lazy_user_flush
         assert_equal $res hello
     }
 

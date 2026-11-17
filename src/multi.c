@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "module.h"
 
 /* ================================ MULTI/EXEC ============================== */
 
@@ -426,6 +427,10 @@ void execCommand(client *c) {
     discardTransaction(c);
 
     server.in_exec = 0;
+    /* Fire after in_exec is cleared, so the callback does not see
+     * VALKEYMODULE_CTX_FLAGS_MULTI. Its writes are still propagated inside
+     * the transaction (see ValkeyModuleEvent_ExecEnd). */
+    moduleFireServerEvent(VALKEYMODULE_EVENT_EXEC_END, 0, NULL);
 }
 
 /* ===================== WATCH (CAS alike for MULTI/EXEC) ===================

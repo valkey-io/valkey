@@ -277,6 +277,17 @@ void swapDbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, voi
     LogNumericEvent(ctx, "swapdb-second", ei->dbnum_second);
 }
 
+void execEndCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
+{
+    VALKEYMODULE_NOT_USED(e);
+
+    /* The event has no subevent or data, and fires outside the transaction. */
+    ValkeyModule_Assert(sub == 0);
+    ValkeyModule_Assert(data == NULL);
+    ValkeyModule_Assert(!(ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_MULTI));
+    LogNumericEvent(ctx, "exec-end", 0);
+}
+
 void configChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
     VALKEYMODULE_NOT_USED(e);
@@ -523,6 +534,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     ValkeyModule_SubscribeToServerEvent(ctx,
         ValkeyModuleEvent_Config, configChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_ExecEnd, execEndCallback);
 
     ValkeyModule_SubscribeToServerEvent(ctx,
         ValkeyModuleEvent_Key, keyInfoCallback);

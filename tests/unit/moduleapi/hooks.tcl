@@ -290,6 +290,51 @@ tags "modules" {
             r module unload testacl
         }
 
+        test {Test exec-end hook fires once per executed transaction} {
+            set before [r hooks.event_count exec-end]
+            r multi
+            r set k1 v1
+            r set k2 v2
+            assert_equal {OK OK} [r exec]
+            assert_equal [expr {$before + 1}] [r hooks.event_count exec-end]
+
+            # Writes outside a transaction, including a script, do not end one.
+            r set k3 v3
+            r eval {redis.call('set', KEYS[1], '1'); redis.call('set', KEYS[2], '2')} 2 ta tb
+            assert_equal [expr {$before + 1}] [r hooks.event_count exec-end]
+        }
+
+        test {Test exec-end hook does not fire when the transaction does not run} {
+            set before [r hooks.event_count exec-end]
+            r multi
+            r set k1 v1
+            r discard
+
+            r multi
+            catch {r set k1} e
+            assert_error {EXECABORT*} {r exec}
+
+            set rd [valkey_client]
+            r watch k1
+            $rd set k1 changed
+            r multi
+            r set k1 v2
+            assert_equal {} [r exec]
+            $rd close
+
+            assert_equal $before [r hooks.event_count exec-end]
+        }
+
+        test {Test exec-end hook fires while loading transactions from the AOF} {
+            r multi
+            r set aofk1 v1
+            r set aofk2 v2
+            r exec
+            set before [r hooks.event_count exec-end]
+            r debug loadaof
+            assert_lessthan $before [r hooks.event_count exec-end]
+        }
+
         # replication related tests
         set master [srv 0 client]
         set master_host [srv 0 host]
@@ -321,6 +366,18 @@ tags "modules" {
             test {Test replica-online hook} {
                 assert_equal [r -1 hooks.event_count replica-online] 1
                 assert_equal [r -1 hooks.event_count replica-offline] 0
+            }
+
+            test {Test exec-end hook on a replica applying transactions} {
+                set before [r hooks.event_count exec-end]
+                r -1 multi
+                r -1 set rk1 v1
+                r -1 set rk2 v2
+                r -1 exec
+                # A script with several writes is propagated as MULTI/EXEC.
+                r -1 eval {redis.call('set', KEYS[1], '1'); redis.call('set', KEYS[2], '2')} 2 tra trb
+                wait_for_ofs_sync $master $replica
+                assert_equal [expr {$before + 2}] [r hooks.event_count exec-end]
             }
 
             test {Test master link down hook} {

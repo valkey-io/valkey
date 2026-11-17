@@ -12797,6 +12797,7 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED */
+    -1,                                            /* VALKEYMODULE_EVENT_EXEC_END */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -13210,6 +13211,36 @@ static uint64_t moduleEventVersions[] = {
  *       - VALKEYMODULE_ACL_LOG_KEY / VALKEYMODULE_ACL_LOG_CHANNEL:
  *         the denied key or channel name from argv
  *       - All other ACL subevents: NULL
+ *
+ * * ValkeyModuleEvent_ExecEnd
+ *
+ *     Called after EXEC has executed a MULTI/EXEC transaction, once the
+ *     transaction is no longer in progress. It fires only when EXEC executes
+ *     the transaction, including an empty one; it is not fired when the
+ *     transaction is discarded or aborted (DISCARD, EXECABORT, a changed
+ *     WATCHed key, an unmet EXEC condition, or a rejected EXEC).
+ *
+ *     It fires for a client's own EXEC, for the replication link on a
+ *     replica, and during AOF loading. On a replica and during AOF loading it
+ *     fires once per MULTI/EXEC in the replication stream or the AOF, not once
+ *     per EXEC on the primary: the primary wraps what it propagates in
+ *     MULTI/EXEC whenever one execution unit (a command, a transaction or a
+ *     script) propagates more than one write, for example a write that also
+ *     deletes an expired key. So a replica may fire it for a command that was
+ *     not a transaction on the primary, and does not fire it for a
+ *     transaction with one write or none. Either way the event matches what
+ *     the replica sees: writes it applies inside a MULTI/EXEC carry
+ *     VALKEYMODULE_CTX_FLAGS_MULTI, and the event follows them.
+ *
+ *     This lets a module that defers work for keys modified inside a
+ *     transaction (keyspace notifications carry VALKEYMODULE_CTX_FLAGS_MULTI)
+ *     learn when the transaction ends, instead of inferring it from later
+ *     commands. The callback is meant for module-internal work: it must not
+ *     block the client and must not modify the keyspace. A write made from it
+ *     is propagated inside the transaction, so it is applied again wherever
+ *     the transaction is replayed, where the event fires again. There is no
+ *     subevent and the data pointer is NULL. The context is on DB 0, not on
+ *     the transaction's DB.
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event

@@ -656,5 +656,180 @@ start_server {} {
     }
 }
 
-} ;# tags
+# A blocked client served after another client's command made its key ready is re-executed under
+# server.current_client = <blocked client>, and processCommand() evicts clients first. The client that
+# made the key ready is still executing then, and must not be freed: it is not server.current_client,
+# so freeClient() would free it right away and the outer command would go on to use it.
+start_server {} {
+    test {BLMPOP + maxmemory-clients: eviction during ready-key reexec does not free the executing client} {
+        r flushdb
+        r client no-evict on
+        r config set maxmemory-clients 100mb
+        r config set client-output-buffer-limit "normal 0 0 0"
 
+        r setrange fat 300000 x
+        # Many small elements: a BLMPOP of half of them is a ~2MB reply that is copied into the
+        # output buffer of the client that gets it.
+        set count 20000
+        # Load from a short-lived client: r is no-evict, so its memory is only refreshed by
+        # clientsCron, and a stale charge for this ~4MB command could drop after the total is sampled.
+        set loader [redis_client]
+        $loader rpush src {*}[lrepeat [expr {$count * 2}] [string repeat e 100]]
+        $loader close
+        wait_for_condition 50 100 {
+            [s connected_clients] == 1
+        } else {
+            fail "loader client did not disconnect"
+        }
+
+        # Two blocked clients on the same key. The first one served adds its reply to the clients'
+        # memory, the second one is the one whose command evicts.
+        set rdA [redis_deferring_client]
+        set rdB [redis_deferring_client]
+        foreach {name rd} [list waiter_a $rdA waiter_b $rdB] {
+            $rd client setname $name
+            $rd flush
+            assert_equal OK [$rd read]
+            $rd blmpop 0 1 mylist left count $count
+            $rd flush
+        }
+        wait_for_blocked_clients_count 2
+
+        # The largest client, holding GET replies it does not read. Its commands are what ready the key.
+        set rdX [redis_deferring_client]
+        $rdX client setname executing
+        $rdX flush
+        assert_equal OK [$rdX read]
+        set gets 0
+        while {[client_field executing tot-mem] < [mb 3]} {
+            $rdX get fat
+            $rdX flush
+            incr gets
+            wait_for_condition 100 10 {
+                [string match "calls=$gets,*" [cmdrstat get r]]
+            } else {
+                fail "executing client did not run its GET"
+            }
+        }
+
+        # Limit just above the current total: the check of the executing client's own command passes,
+        # but the reply of the first served client brings the total over it before the second one runs.
+        set total [s mem_clients_normal]
+        r config set maxmemory-clients [expr {$total + [mb 1]}]
+        set evicted [s evicted_clients]
+
+        $rdX rename src mylist
+        $rdX flush
+
+        # Evicting the executing client here would free it under its own command: the server
+        # crashes, or reports a use after free under ASan. Once the command is done it is an
+        # ordinary eviction candidate, so the client itself may be evicted shortly after.
+        wait_for_condition 100 10 {
+            [s evicted_clients] > $evicted
+        } else {
+            fail "no client was evicted"
+        }
+        assert_equal PONG [r ping]
+        assert_equal 0 [r exists src]
+        foreach rd [list $rdA $rdB] {
+            set reply [$rd read]
+            assert_equal mylist [lindex $reply 0]
+            assert_equal $count [llength [lindex $reply 1]]
+        }
+        wait_for_condition 100 10 {
+            ![client_exists executing]
+        } else {
+            fail "executing client was not evicted"
+        }
+
+        catch {$rdA close}
+        catch {$rdB close}
+        catch {$rdX close}
+    }
+}
+
+# The caller of a yielding script is protected, so this was never a use after free: before the
+# processing_command skip, eviction marked it close_asap mid-script and its reply was dropped.
+# Now it is left alone until the script returns and evicted afterwards.
+start_server {} {
+    test {Yielding EVAL caller is not evicted mid-script by another client's command} {
+        r flushdb
+        r client no-evict on
+        r config set maxmemory-clients 100mb
+        r config set client-output-buffer-limit "normal 0 0 0"
+        r config set busy-reply-threshold 10
+        r setrange fat 1000000 x
+
+        # The largest client: holds ~30MB of unread GET replies, then runs a long script. It must stay
+        # larger than the pusher below, so it is always the first eviction candidate.
+        set rdX [redis_deferring_client]
+        $rdX client setname executing
+        $rdX flush
+        assert_equal OK [$rdX read]
+        set gets 0
+        while {[client_field executing tot-mem] < [mb 30]} {
+            $rdX get fat
+            $rdX flush
+            incr gets
+            wait_for_condition 100 10 {
+                [string match "calls=$gets,*" [cmdrstat get r]]
+            } else {
+                fail "executing client did not run its GET"
+            }
+        }
+
+        set rdW [redis_deferring_client]
+        $rdW client setname pusher
+        $rdW flush
+        assert_equal OK [$rdW read]
+
+        set total [s mem_clients_normal]
+        r config set maxmemory-clients [expr {$total + [mb 1]}]
+        set evicted [s evicted_clients]
+
+        # The script yields past busy-reply-threshold, records evicted_clients at its end, and returns.
+        $rdX eval {
+            local t0 = redis.call('TIME')
+            local start = t0[1] * 1000000 + t0[2]
+            while true do
+                local t = redis.call('TIME')
+                if (t[1] * 1000000 + t[2]) - start > 1000000 then break end
+            end
+            local info = redis.call('INFO', 'stats')
+            redis.call('SET', 'evicted_during_script', string.match(info, 'evicted_clients:(%d+)'))
+            return 'done'
+        } 0
+        $rdX flush
+        wait_for_condition 100 10 {
+            [catch {r ping} e] && [string match {BUSY*} $e]
+        } else {
+            fail "script did not start"
+        }
+
+        # While the script yields, the pusher's unread -BUSY replies push the total over the limit,
+        # and each of its commands runs evictClients(), which picks the executing client first.
+        # ~19MB of replies is far more than the socket buffers can absorb, but less than the
+        # executing client, so the pusher is never the largest client.
+        $rdW write [string repeat "PING\r\n" 200000]
+        $rdW flush
+
+        wait_for_condition 100 50 {
+            ![catch {r exists evicted_during_script} e] && $e
+        } else {
+            fail "script did not finish"
+        }
+        # The pusher's commands must have run while the script was still running.
+        catch {$rdW read} e
+        assert_match {BUSY*} $e
+        assert_equal $evicted [r get evicted_during_script]
+        wait_for_condition 100 10 {
+            ![client_exists executing]
+        } else {
+            fail "executing client was not evicted after its script"
+        }
+        catch {$rdX close}
+        catch {$rdW close}
+    }
+}
+
+} ;# tags

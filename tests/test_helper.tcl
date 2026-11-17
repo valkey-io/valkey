@@ -109,6 +109,7 @@ set ::all_tests {
     unit/cluster/cluster-multiple-meets
     unit/cluster/cluster-reliable-meet
     unit/cluster/cluster-shards
+    unit/cluster/divergent-cluster-shardid-conf
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0

@@ -257,8 +257,12 @@ test "Shutting down primary wait for replica after previous block" {
             # Call shutdown.
             $primary_deferring shutdown
 
+            # BLPOP can still be blocked while SHUTDOWN waits in its input
+            # buffer. Wait for SHUTDOWN itself before closing this client.
             wait_for_condition 100 100 {
-                [string match "*connected_clients:2*" [$primary info clients]] && [string match "*blocked_clients:1*" [$primary info clients]]
+                [string match "*connected_clients:2*" [$primary info clients]] &&
+                [string match "*blocked_clients:1*" [$primary info clients]] &&
+                [string match "*cmd=shutdown*" [$primary client list]]
             } else {
                 set client_info [$primary info clients]
                 fail "Shutdown did not trigger block. Current INFO CLIENTS output: $client_info"

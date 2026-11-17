@@ -345,6 +345,7 @@ proc cleanup {} {
     catch {exec rm -rf {*}[glob tests/tmp/nodes.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/rdb-slot-import-*]}
     if {!$::quiet} {puts "OK"}
 }
 
@@ -845,6 +846,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::leaks 0
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1
+        # The crash report's fast memory test scribbles over every anonymous
+        # mapping, including Valgrind's own, which buries a real crash under
+        # bogus memcheck errors and can abort Valgrind itself.
+        lappend ::global_overrides crash-memcheck-enabled no
     } elseif {$opt eq {--stack-logging}} {
         if {[string match {*Darwin*} [exec uname -a]]} {
             set ::leaks 1
@@ -1131,7 +1136,7 @@ proc is_mptcp_available {} {
 }
 
 # With the parallel test running multiple server instances at the same time
-# we need a fast enough computer, otherwise a lot of tests may generate
+# we need a fast enough computer; otherwise, a lot of tests may generate
 # false positives.
 # If the computer is too slow we revert the sequential test without any
 # parallelism, that is, clients == 1.

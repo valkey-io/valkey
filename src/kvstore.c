@@ -465,7 +465,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
 }
 
 /*
- * This functions increases size of kvstore to match desired number.
+ * This function increases size of kvstore to match desired number.
  * It resizes all individual hash tables, unless predicate indicates otherwise.
  *
  * Based on the parameter `try_expand`, appropriate hashtable expand API is invoked.
@@ -729,7 +729,7 @@ void kvstoreTryResizeHashtables(kvstore *kvs, int limit) {
  * of CPU time at every call of this function to perform some rehashing.
  *
  * The function returns the amount of microsecs spent if some rehashing was
- * performed, otherwise 0 is returned. */
+ * performed; otherwise, 0 is returned. */
 uint64_t kvstoreIncrementallyRehash(kvstore *kvs, uint64_t threshold_us) {
     if (listLength(kvs->rehashing) == 0) return 0;
 

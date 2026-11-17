@@ -391,7 +391,7 @@ int streamCompareID(streamID *a, streamID *b) {
 
 /* Retrieves the ID of the stream edge entry. An edge is either the first or
  * the last ID in the stream, and may be a tombstone. To filter out tombstones,
- * set the'skip_tombstones' argument to 1. */
+ * set the 'skip_tombstones' argument to 1. */
 void streamGetEdgeID(stream *s, int first, int skip_tombstones, streamID *edge_id) {
     streamIterator si;
     int64_t numfields;
@@ -479,10 +479,14 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
 
     size_t lp_bytes = 0;      /* Total bytes in the tail listpack. */
     unsigned char *lp = NULL; /* Tail listpack pointer. */
+    /* What the rax holds for the key this call writes, NULL if it holds nothing.
+     * Only used to skip a raxInsert storing a pointer the rax already has. */
+    unsigned char *rax_lp = NULL;
 
     if (!raxEOF(&ri)) {
         /* Get a reference to the tail node listpack. */
         lp = ri.data;
+        rax_lp = ri.data;
         lp_bytes = lpBytes(lp);
     }
     raxStop(&ri);
@@ -544,7 +548,8 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         if (new_node) {
             /* Shrink extra pre-allocated memory */
             lp = lpShrinkToFit(lp);
-            if (ri.data != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+            if (rax_lp != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
+            rax_lp = NULL; /* the rest of this call writes rax_key, a new key */
             lp = NULL;
             lp_bytes = 0;
         }
@@ -573,7 +578,6 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
             lp = lpAppend(lp, (unsigned char *)field, sdslen(field));
         }
         lp = lpAppendInteger(lp, 0); /* primary entry zero terminator. */
-        raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
         /* The first entry we insert, has obviously the same fields of the
          * primary entry. */
         flags |= STREAM_ITEM_FLAG_SAMEFIELDS;
@@ -654,7 +658,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     lp = lpAppendInteger(lp, lp_count);
 
     /* Insert back into the tree in order to update the listpack pointer. */
-    if (ri.data != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
+    if (rax_lp != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
     s->length++;
     s->entries_added++;
     s->total_lp_bytes += lpBytes(lp) - lp_bytes;
@@ -674,9 +678,9 @@ typedef struct {
     /* XADD + XTRIM common options */
     int trim_strategy;         /* TRIM_STRATEGY_* */
     int trim_strategy_arg_idx; /* Index of the trim threshold, for rewriting. */
-    int limit_arg_idx;         /* Index of the LIMIT token in argv if it was given,
-                                * 0 otherwise. Used to strip the redundant LIMIT
-                                * option when rewriting the command for propagation. */
+    int limit_arg_idx;         /* Index of the first LIMIT token in argv if it was
+                                * given, 0 otherwise. Used to strip the redundant LIMIT
+                                * options when rewriting the command for propagation. */
     int approx_trim;           /* If 1 only delete whole radix tree nodes, so
                                 * the trim argument is not applied verbatim. */
     long long limit;           /* Maximum amount of entries to trim. If 0, no limitation
@@ -989,8 +993,9 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
                 return -1;
             }
             limit_given = 1;
-            args->limit_arg_idx = i; /* Remember LIMIT position so the rewrite path
-                                      * can drop the two-arg LIMIT option entirely. */
+            /* Remember the first LIMIT position so the rewrite path can drop
+             * every two-arg LIMIT option, since LIMIT may be repeated. */
+            if (!args->limit_arg_idx) args->limit_arg_idx = i;
             i++;
         } else if (xadd && !strcasecmp(opt, "nomkstream")) {
             args->no_mkstream = 1;
@@ -1052,7 +1057,7 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
 /* Initialize the stream iterator, so that we can call iterating functions
  * to get the next items. This requires a corresponding streamIteratorStop()
  * at the end. The 'rev' parameter controls the direction. If it's zero the
- * iteration is from the start to the end element (inclusive), otherwise
+ * iteration is from the start to the end element (inclusive); otherwise,
  * if rev is non-zero, the iteration is reversed.
  *
  * Once the iterator is initialized, we iterate like this:
@@ -1119,7 +1124,7 @@ void streamIteratorStart(streamIterator *si, stream *s, streamID *start, streamI
 }
 
 /* Return 1 and store the current item ID at 'id' if there are still
- * elements within the iteration range, otherwise return 0 in order to
+ * elements within the iteration range; otherwise, return 0 in order to
  * signal the iteration terminated. */
 int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
     while (1) { /* Will stop when element > stop_key or end of radix tree. */
@@ -1484,7 +1489,14 @@ void streamReplyWithCGLag(client *c, stream *s, streamCG *cg) {
     } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
         /* No fragmentation ahead means that the group's logical reads counter
          * is valid for performing the lag calculation. */
-        lag = (long long)s->entries_added - cg->entries_read;
+        if (!s->length || streamCompareID(&cg->last_id, &s->first_id) < 0) {
+            /* The group is positioned before the first entry, so entries it
+             * hasn't read may have been trimmed (XTRIM doesn't update
+             * max_deleted_entry_id). Everything left in the stream is unread. */
+            lag = (long long)s->length;
+        } else {
+            lag = (long long)s->entries_added - cg->entries_read;
+        }
         valid = 1;
     } else {
         /* Attempt to retrieve the group's last ID logical read counter. */
@@ -1945,7 +1957,7 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
 /* Parse a stream ID in the format given by clients to the server, that is
  * <ms>-<seq>, and converts it into a streamID structure. If
  * the specified ID is invalid C_ERR is returned and an error is reported
- * to the client, otherwise C_OK is returned. The ID may be in incomplete
+ * to the client; otherwise, C_OK is returned. The ID may be in incomplete
  * form, just stating the milliseconds time part of the stream. In such a case
  * the missing part is set according to the value of 'missing_seq' parameter.
  *
@@ -2100,33 +2112,43 @@ static void streamRewriteApproxTrim(client *c, stream *s, streamAddTrimArgs *arg
  * the trim that will run on the replay side is fully deterministic
  * and the LIMIT cap can no longer fire.
  * More critically, when the migration tool sends the rewritten command
- * without marking it as 'mustObeyClient', the destination DB will return an error.*/
-void streamRewriteStripLimit(client *c, int limit_idx) {
-    /* limit_idx points at the "LIMIT" token; limit_idx + 1 is the count. */
-    serverAssert(limit_idx > 0 && limit_idx + 1 < c->argc);
+ * without marking it as 'mustObeyClient', the destination DB will return an error.
+ *
+ * LIMIT may be repeated, so drop every "LIMIT <count>" in argv[limit_idx..end),
+ * where limit_idx is the first LIMIT token and 'end' is one past the last option
+ * argument. Every option argument was parsed as a keyword, '~', '=', an integer or a
+ * stream ID, so a "LIMIT" string among them can only be a LIMIT token. The rewritten
+ * trim argument may be integer encoded, hence the sdsEncodedObject() check.
+ * Returns the number of arguments removed. */
+static int streamRewriteStripAllLimits(client *c, int limit_idx, int end) {
+    serverAssert(limit_idx > 0 && limit_idx + 1 < end && end <= c->argc);
     serverAssert(c->argv != c->original_argv);
 
-    robj *limit_tok = c->argv[limit_idx];
-    robj *limit_val = c->argv[limit_idx + 1];
-
-    c->argv_len_sum -= getStringObjectLen(limit_tok);
-    c->argv_len_sum -= getStringObjectLen(limit_val);
-
-    /* Intentionally shrink the argv vector by dropping the two "LIMIT <count>" slots,
-     * shifting the tail (everything after them) two slots left. */
-    int tail = c->argc - (limit_idx + 2);
-    if (tail > 0) {
-        memmove(&c->argv[limit_idx],
-                &c->argv[limit_idx + 2],
-                sizeof(robj *) * tail);
+    /* Compact argv in a single pass. Shifting the tail once per pair is
+     * quadratic in the number of pairs. */
+    int dst = limit_idx;
+    int j = limit_idx;
+    while (j < end) {
+        robj *o = c->argv[j];
+        if (sdsEncodedObject(o) && !strcasecmp(objectGetVal(o), "limit")) {
+            serverAssert(j + 1 < end);
+            robj *limit_val = c->argv[j + 1];
+            c->argv_len_sum -= getStringObjectLen(o);
+            c->argv_len_sum -= getStringObjectLen(limit_val);
+            decrRefCount(o);
+            decrRefCount(limit_val);
+            j += 2;
+        } else {
+            c->argv[dst++] = o;
+            j++;
+        }
     }
 
-    c->argc -= 2;
-    c->argv[c->argc] = NULL;
-    c->argv[c->argc + 1] = NULL;
-
-    decrRefCount(limit_tok);
-    decrRefCount(limit_val);
+    int removed = end - dst;
+    memmove(&c->argv[dst], &c->argv[end], sizeof(robj *) * (c->argc - end));
+    c->argc -= removed;
+    memset(&c->argv[c->argc], 0, sizeof(robj *) * removed);
+    return removed;
 }
 
 /* XADD key [(MAXLEN [~|=] <count> | MINID [~|=] <id> | MAXBYTES [~|=] <bytes>) [LIMIT <entries>]] [NOMKSTREAM]
@@ -2149,6 +2171,14 @@ void xaddCommand(client *c) {
      * database. */
     if (parsed_args.id_given && parsed_args.seq_given && parsed_args.id.ms == 0 && parsed_args.id.seq == 0) {
         addReplyError(c, "The ID specified in XADD must be greater than 0-0");
+        return;
+    }
+
+    /* Same for elements streamAppendItem would refuse as too large. */
+    size_t totelelen = 0;
+    for (int j = field_pos; j < c->argc; j++) totelelen += sdslen(objectGetVal(c->argv[j]));
+    if (totelelen > STREAM_LISTPACK_MAX_SIZE) {
+        addReplyError(c, "Elements are too large to be stored");
         return;
     }
 
@@ -2194,8 +2224,7 @@ void xaddCommand(client *c) {
 
             if (parsed_args.limit_arg_idx) {
                 serverAssert(parsed_args.limit_arg_idx < idpos);
-                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
-                idpos -= 2;
+                idpos -= streamRewriteStripAllLimits(c, parsed_args.limit_arg_idx, idpos);
             }
         }
     }
@@ -2636,7 +2665,7 @@ static void streamFreeConsumerVoid(void *sc) {
 
 /* Create a new consumer group in the context of the stream 's', having the
  * specified name, last server ID and reads counter. If a consumer group with
- * the same name already exists NULL is returned, otherwise the pointer to the
+ * the same name already exists NULL is returned; otherwise, the pointer to the
  * consumer group is returned. */
 streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, long long entries_read) {
     if (s->cgroups == NULL) s->cgroups = raxNew();
@@ -2664,7 +2693,7 @@ void streamFreeCGVoid(void *cg) {
 }
 
 /* Lookup the consumer group in the specified stream and returns its
- * pointer, otherwise if there is no such group, NULL is returned. */
+ * pointer; otherwise, if there is no such group, NULL is returned. */
 streamCG *streamLookupCG(stream *s, sds groupname) {
     if (s->cgroups == NULL) return NULL;
     void *cg = NULL;
@@ -2938,7 +2967,7 @@ void xsetidCommand(client *c) {
 
     /* If the stream has at least one item, we want to check that the user
      * is setting a last ID that is equal or greater than the current top
-     * item, otherwise the fundamental ID monotonicity assumption is violated. */
+     * item; otherwise, the fundamental ID monotonicity assumption is violated. */
     if (s->length > 0) {
         streamID maxid;
         streamLastValidID(s, &maxid);
@@ -3243,7 +3272,7 @@ void xpendingCommand(client *c) {
  * 4. FORCE:
  *      Creates the pending message entry in the PEL even if certain
  *      specified IDs are not already in the PEL assigned to a different
- *      client. However the message must be exist in the stream, otherwise
+ *      client. However the message must be exist in the stream; otherwise,
  *      the IDs of nonexistent messages are ignored.
  *
  * 5. JUSTID:
@@ -3429,7 +3458,7 @@ void xclaimCommand(client *c) {
                 if (nack->consumer) raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
             }
             nack->delivery_time = deliverytime;
-            /* Set the delivery attempts counter if given, otherwise
+            /* Set the delivery attempts counter if given; otherwise,
              * autoincrement unless JUSTID option provided */
             if (retrycount >= 0) {
                 nack->delivery_count = retrycount;
@@ -4063,7 +4092,7 @@ void xtrimCommand(client *c) {
             streamRewriteApproxTrim(c, s, &parsed_args);
 
             if (parsed_args.limit_arg_idx) {
-                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
+                streamRewriteStripAllLimits(c, parsed_args.limit_arg_idx, c->argc);
             }
         }
 

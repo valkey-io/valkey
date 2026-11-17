@@ -919,3 +919,40 @@ TEST_F(SocketPrioritizationTest, QoSEventLoopStatsMetrics) {
     close(fds[1]);
     aeDeleteEventLoop(main_loop);
 }
+
+/* Test that high-priority events are not drained when the caller does not
+ * request AE_FILE_EVENTS, consistent with how normal file events are skipped. */
+TEST_F(SocketPrioritizationTest, QoSEventsSkippedWithoutFileEventsFlag) {
+    int normal_pipe[2];
+    int qos_pipe[2];
+    ASSERT_EQ(pipe(normal_pipe), 0);
+    ASSERT_EQ(pipe(qos_pipe), 0);
+    fcntl(normal_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe[0], F_SETFL, O_NONBLOCK);
+
+    ASSERT_EQ(aeCreateFileEvent(server.el, normal_pipe[0], AE_READABLE, testNormalEventCallback, NULL), AE_OK);
+    ASSERT_EQ(aeCreateFileEvent(server.el, qos_pipe[0], AE_READABLE | AE_HIGH_PRIORITY, testQoSEventCallback, NULL), AE_OK);
+
+    char c = 'x';
+    ASSERT_EQ(write(normal_pipe[1], &c, 1), 1);
+    ASSERT_EQ(write(qos_pipe[1], &c, 1), 1);
+
+    /* Time events only: neither the normal nor the priority handler may run. */
+    g_execution_count = 0;
+    aeProcessEvents(server.el, AE_TIME_EVENTS | AE_DONT_WAIT);
+    EXPECT_EQ(g_execution_count, 0);
+
+    /* The events are level-triggered, so they are still pending and are
+     * served once file events are requested. The priority one goes first. */
+    aeProcessEvents(server.el, AE_FILE_EVENTS | AE_DONT_WAIT);
+    ASSERT_EQ(g_execution_count, 2);
+    EXPECT_EQ(g_execution_order[0], 999);
+    EXPECT_EQ(g_execution_order[1], normal_pipe[0]);
+
+    aeDeleteFileEvent(server.el, normal_pipe[0], AE_READABLE);
+    aeDeleteFileEvent(server.el, qos_pipe[0], AE_READABLE);
+    close(normal_pipe[0]);
+    close(normal_pipe[1]);
+    close(qos_pipe[0]);
+    close(qos_pipe[1]);
+}

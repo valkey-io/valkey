@@ -2003,6 +2003,20 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
 
 /* --- Random entries --- */
 
+/* Rehashes after sampling that called hashtableScan 'scans' times. While
+ * shrinking, each scan call visits 2^(exp0 - exp1) buckets of the old table, so
+ * one rehash step per sample makes repeated sampling quadratic in the old table
+ * size. Each step rehashes at least one old bucket, so take one step per old
+ * bucket the scans visited. */
+static void rehashStepOnSampleIfNeeded(hashtable *ht, size_t scans) {
+    size_t steps = 1;
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < ht->bucket_exp[0]) {
+        steps = scans * numBuckets(ht->bucket_exp[0] - ht->bucket_exp[1]);
+    }
+    if (ht->pause_rehash || resize_policy != HASHTABLE_RESIZE_ALLOW) return;
+    while (steps-- && hashtableIsRehashing(ht)) rehashStepOnReadIfNeeded(ht);
+}
+
 /* Points 'found' to a random entry in the hash table and returns 1. Returns 0
  * if the table is empty. */
 int hashtableRandomEntry(hashtable *ht, void **found) {
@@ -2042,10 +2056,12 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
+    size_t scans = 0;
     while (samples.seen < count) {
         hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        scans++;
     }
-    rehashStepOnReadIfNeeded(ht);
+    rehashStepOnSampleIfNeeded(ht, scans);
     /* samples.seen is the number of entries scanned. It may be greater than
      * the requested count and the size of the dst array. */
     return samples.seen <= count ? samples.seen : count;

@@ -5827,8 +5827,13 @@ void clusterRequestFailoverAuth(void) {
      * set the CLUSTERMSG_FLAG0_FORCEACK bit in the header as well.
      *
      * In this case, we hope that other primary nodes will not refuse to vote because
-     * they did not receive the FAIL message in time. */
-    if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
+     * they did not receive the FAIL message in time. That is only a propagation delay,
+     * so we don't force the vote once our FAIL is older than the time after which a
+     * primary clears it when it can reach the failed primary again (see
+     * clearNodeFailureIfNeeded). A primary that does not see the failure by then
+     * knows more than we do, for example when only we lost contact with the primary. */
+    if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica() &&
+        mstime() - myself->replicaof->fail_time <= server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT) {
         msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
     }
 

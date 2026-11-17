@@ -727,7 +727,16 @@ start_server {} {
         # Many small elements: a BLMPOP of half of them is a ~2MB reply that is copied into the
         # output buffer of the client that gets it.
         set count 20000
-        r rpush src {*}[lrepeat [expr {$count * 2}] [string repeat e 100]]
+        # Load from a short-lived client: r is no-evict, so its memory is only refreshed by
+        # clientsCron, and a stale charge for this ~4MB command could drop after the total is sampled.
+        set loader [valkey_client]
+        $loader rpush src {*}[lrepeat [expr {$count * 2}] [string repeat e 100]]
+        $loader close
+        wait_for_condition 50 100 {
+            [s connected_clients] == 1
+        } else {
+            fail "loader client did not disconnect"
+        }
 
         # Two blocked clients on the same key. The first one served adds its reply to the clients'
         # memory, the second one is the one whose command evicts.
@@ -778,6 +787,16 @@ start_server {} {
         }
         assert_equal PONG [r ping]
         assert_equal 0 [r exists src]
+        foreach rd [list $rdA $rdB] {
+            set reply [$rd read]
+            assert_equal mylist [lindex $reply 0]
+            assert_equal $count [llength [lindex $reply 1]]
+        }
+        wait_for_condition 100 10 {
+            ![client_exists executing]
+        } else {
+            fail "executing client was not evicted"
+        }
 
         catch {$rdA close}
         catch {$rdB close}
@@ -860,5 +879,78 @@ start_server {} {
     } {} {needs:debug tls:skip}
 }
 
-} ;# tags
+start_server {} {
+    test {Yielding EVAL caller is not evicted mid-script by another client's command} {
+        r flushdb
+        r client no-evict on
+        r config set maxmemory-clients 100mb
+        r config set client-output-buffer-limit "normal 0 0 0"
+        r config set busy-reply-threshold 10
+        r config set min-io-threads-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply-threaded 0
+        r setrange fat 1000000 x
 
+        # The largest client: holds ~10MB of unread GET replies, then runs a long script.
+        set rdX [valkey_deferring_client]
+        $rdX client setname executing
+        $rdX flush
+        assert_equal OK [$rdX read]
+        set gets 0
+        while {[client_field executing tot-mem] < [mb 10]} {
+            $rdX get fat
+            $rdX flush
+            incr gets
+            wait_for_condition 100 10 {
+                [client_field executing tot-cmds] >= $gets + 1
+            } else {
+                fail "executing client did not run its GET"
+            }
+        }
+
+        set rdW [valkey_deferring_client]
+        $rdW client setname pusher
+        $rdW flush
+        assert_equal OK [$rdW read]
+
+        set total [s mem_clients_normal]
+        r config set maxmemory-clients [expr {$total + [mb 1]}]
+        set evicted [s evicted_clients]
+
+        # The script yields past busy-reply-threshold, records evicted_clients at its end, and returns.
+        $rdX eval {
+            local t0 = redis.call('TIME')
+            local start = t0[1] * 1000000 + t0[2]
+            while true do
+                local t = redis.call('TIME')
+                if (t[1] * 1000000 + t[2]) - start > 1000000 then break end
+            end
+            local info = redis.call('INFO', 'stats')
+            redis.call('SET', 'evicted_during_script', string.match(info, 'evicted_clients:(%d+)'))
+            return 'done'
+        } 0
+        $rdX flush
+        after 100
+
+        # While the script yields, the pusher's unread -BUSY replies push the total over the limit,
+        # and each of its commands runs evictClients(), which picks the executing client first.
+        $rdW write [string repeat "PING\r\n" 20000]
+        $rdW flush
+
+        wait_for_condition 100 50 {
+            ![catch {r exists evicted_during_script} e] && $e
+        } else {
+            fail "script did not finish"
+        }
+        assert_equal $evicted [r get evicted_during_script]
+        wait_for_condition 100 10 {
+            ![client_exists executing]
+        } else {
+            fail "executing client was not evicted after its script"
+        }
+        catch {$rdX close}
+        catch {$rdW close}
+    }
+}
+
+} ;# tags

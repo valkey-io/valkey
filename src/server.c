@@ -4656,6 +4656,9 @@ void unprepareCommand(client *c) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
+    /* evictClients() below relies on this flag to skip clients that are still
+     * executing further up the stack. Callers must go through processCommandAndResetClient(). */
+    debugServerAssert(c->flag.processing_command);
     serverAssert(!c->flag.blocked && !c->flag.unblocked);
 
     if (!scriptIsTimedOut()) {

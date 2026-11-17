@@ -6,6 +6,13 @@
 
 #include <stdint.h>
 #include "test_help.h"
+
+/* Daily also enables the legacy tests compiled inside quicklist.c. */
+#ifdef SERVER_TEST
+#define TEST_ACCURATE UNIT_TEST_ACCURATE
+#define TEST_LARGE_MEMORY UNIT_TEST_LARGE_MEMORY
+#endif
+
 #include "../quicklist.c"
 
 int test_quicklistMergeSizeOverflowRejected(int argc, char **argv, int flags) {

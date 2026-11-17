@@ -106,6 +106,8 @@ set ::all_tests {
     unit/cluster/cluster-response-tls
     unit/cluster/failure-marking
     unit/cluster/cluster-aux-field-validation
+    unit/cluster/cluster-multiple-meets
+    unit/cluster/cluster-reliable-meet
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0

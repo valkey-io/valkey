@@ -2910,3 +2910,65 @@ foreach load_mode {disabled on-empty-db} {
         }
     }
 }
+
+# Active hash field expiry on the primary during a forkless full sync must
+# reach the replica, both for hashes already sent and for hashes not yet sent.
+
+# Number of hashes h:0..h:199 that have only their 2 persistent fields left.
+proc forkless_field_expiry_reaped {client} {
+    set n 0
+    for {set h 0} {$h < 200} {incr h} {
+        if {[$client hlen h:$h] == 2} { incr n }
+    }
+    return $n
+}
+
+start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    start_server {overrides {save ""}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test "Active hash field expiry during a forkless full sync reaches the replica" {
+            # The filler keys keep the scan from queueing (and holding in use) all of
+            # the hashes at once, which would keep their fields from expiring until sent.
+            $primary debug populate 2000 a 10
+            for {set h 0} {$h < 200} {incr h} {
+                $primary hset h:$h f0 v f1 v f2 v f3 v f4 v keep1 v keep2 v
+            }
+
+            # Expire fields while part of the keyspace has been sent and part has not.
+            $primary config set rdb-key-save-delay 2000
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [s -1 current_save_keys_processed] >= 700
+            } else {
+                fail "scan did not progress"
+            }
+            $primary config set rdb-key-save-delay 10000
+            for {set h 0} {$h < 200} {incr h} {
+                $primary hpexpire h:$h 100 FIELDS 5 f0 f1 f2 f3 f4
+            }
+            wait_for_condition 100 100 {
+                [forkless_field_expiry_reaped $primary] >= 100
+            } else {
+                fail "primary did not expire the fields"
+            }
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_condition 200 100 {
+                [s -1 rdb_bgsave_in_progress] == 0 &&
+                [status $replica master_link_status] eq "up" &&
+                [forkless_field_expiry_reaped $primary] == 200
+            } else {
+                fail "sync did not finish"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            # DEBUG DIGEST skips expired fields, so compare the field counts.
+            assert_equal 200 [forkless_field_expiry_reaped $replica]
+        }
+    }
+}

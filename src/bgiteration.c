@@ -460,9 +460,10 @@ static long long bgIterator_timeproc_id;
 // Incremented on each new iteration, this is updated in dbEntry metadata whenever an entry is modified.
 static uint32_t bgIteration_epoch = 1;
 
-/* If true, the iterators' cur_cmd_may_replicate flag was determined in the last call to
- * blockClientIfRequired.  Otherwise, we skipped over computing this flag (maybe because it was a
- * READ command).
+/* If true, the iterators' cur_cmd_may_replicate flag was determined for the current top-level
+ * command (or a write nested inside it).  Otherwise, we skipped over computing this flag (maybe
+ * because it was a READ command).  The flag is only cleared at top level, so a nested READ
+ * (inside EXEC, a script, or RM_Call) doesn't hide the flags of the write that contains it.
  * If this is true, AND we are in the context of executing a command inside of call(), then we
  * should respect the setting of cur_cmd_may_replicate. */
 static bool iteratorReplicationFlagsWereUpdated;
@@ -2336,7 +2337,8 @@ void bgIteration_swapdb(int db1, int db2) {
 // PUBLIC API
 bool bgIteration_blockClientIfRequired(client *c) {
     serverAssert(hasMainThreadExclusivity());
-    iteratorReplicationFlagsWereUpdated = false;
+    // Don't clear this when in a nested command (like a GET inside a MULTI)
+    if (server.in_call == 0) iteratorReplicationFlagsWereUpdated = false;
     if (!bgIteration_iterationActive()) return false;
     if (!isWriteCmd(c->cmd)) return false;
 
@@ -2473,6 +2475,17 @@ void bgIteration_handleCommandReplication(int dbid,
         sdsfree(sdsArgv);
     }
 
+    /* If we are within the context of 'call', then blockClientIfRequired was invoked.  However,
+     * remember that the replication flags might not have been updated and we can still arrive here.
+     * Example, a top-level read command (which doesn't update replication flags) causes an
+     * expiration (which replicates a DEL). */
+    bool blockClientIfRequiredWasCalled = (server.in_call > 0);
+    bool useReplicationFlags = (blockClientIfRequiredWasCalled && iteratorReplicationFlagsWereUpdated);
+    if (!useReplicationFlags) {
+        // curCmdMissingKeys is only valid when we are using the replication flags (and stale otherwise)
+        listEmpty(curCmdMissingKeys);
+    }
+
     /* In the case that a key is touched in a different DB (COPY/MOVE) the key is recorded as
      *  a "special" key and than handled below. */
     int special_dbid = 0;
@@ -2540,11 +2553,14 @@ void bgIteration_handleCommandReplication(int dbid,
                  *       handle it as a "missing key" below.  If we were to try to handle it as a
                  *       standard "missing key", we would get the DBID incorrect. */
 
-            } else if (listLength(curCmdMissingKeys) > 0 &&
-                       cmd->proc != multiCommand && cmd->proc != execCommand) {
+            } else if (listLength(curCmdMissingKeys) > 0 && cmd->proc != multiCommand &&
+                       cmd->proc != execCommand && !isDeleteCmd(cmd) && cmd->proc != hdelCommand) {
                 /* MULTI/EXEC are ignored because they are injected around a transaction by
                  * propagateToBgIteration without passing through bgIteration_blockClientIfRequired.
-                 * curCmdMissingKeys holds the keys of a command inside the transaction. */
+                 * curCmdMissingKeys holds the keys of a command inside the transaction.
+                 * Deletes are ignored because they never create keys.  A DEL/HDEL from a lazy
+                 * expiry in a nested READ would otherwise re-process the list of the enclosing
+                 * write, adding its new keys to early_iterate_entries a second time. */
                 listIter missingIt;
                 listNode *missingNode;
                 listRewind(curCmdMissingKeys, &missingIt);
@@ -2572,6 +2588,13 @@ void bgIteration_handleCommandReplication(int dbid,
                 }
             }
         }
+
+        // ** The code above maintains iterator state (regardless of replication)
+        // ** The code below performs the replication (if necessary) and can be skipped
+        if (!(it->iteration_flags & BGITERATOR_FLAG_REPLICATION)) continue;
+
+        bool replicate = false;
+        if (useReplicationFlags) replicate = it->cur_cmd_may_replicate;
 
         /* Deletes (and unlinks) are special.
          * Developer context:  For most commands, we call bgIteration_blockClientIfRequired before
@@ -2613,33 +2636,40 @@ void bgIteration_handleCommandReplication(int dbid,
          *  we hit this routine.  In the case of EXPIRE/EVICT, they propagate happens before the key
          *  is deleted.  So if the key is missing, we can use the cached replication decision.  But
          *  if the key still exists (indicating EXPIRE/EVICT) we evaluate it specially. */
-        bool shouldReplicateDelCommand = false;
-        bool isDelCommand = isDeleteCmd(cmd);
-        if (isDelCommand) {
+        if (isDeleteCmd(cmd)) {
             sds key = objectGetVal(argv[1]);
             dbEntry *de = dbFind(server.db[dbid], key);
             serverAssert(de == NULL); // dbEntry should be removed before replication (self-check)
-            if (it->keyset_iter->isKeyInScope(it->keyset_iter, key)) {
-                bool blockClientIfRequiredWasCalled = (server.in_call > 0);
-                if (blockClientIfRequiredWasCalled && iteratorReplicationFlagsWereUpdated) {
-                    // Here we know that the DEL is related to the running command
-                    shouldReplicateDelCommand = it->cur_cmd_may_replicate;
-                } else {
-                    /* Otherwise, it's something like active expiration or eviction (unrelated).
+            if (!replicate) {
+                if (it->keyset_iter->isKeyInScope(it->keyset_iter, key)) {
+                    /* Otherwise, it's something like active expiration or eviction (unrelated), or a
+                     * lazy expiration in a READ nested inside a write whose decision didn't account
+                     * for this key.
                      * Replicate the DEL if the iterator had already accounted for this key: either
                      * the scan has passed its position, or it was expedited early.  The
                      * early-expedite signal was captured into it->last_key_delete_was_early in
                      * bgIteration_keyDelete before the entry was removed from early_iterate_entries. */
                     if (it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) ||
                         it->last_key_delete_was_early) {
-                        shouldReplicateDelCommand = true;
+                        replicate = true;
                     }
                 }
             }
         }
 
-        bool replicate = (it->iteration_flags & BGITERATOR_FLAG_REPLICATION &&
-                          ((!isDelCommand && it->cur_cmd_may_replicate) || shouldReplicateDelCommand));
+        /* An HDEL that the replication flags don't replicate: active hash field expiry, lazy expiry
+         * on a read (top-level or nested inside a write), or a client HDEL that isn't replicating.
+         * Like a DEL, decide by the key's state: replicate if the iterator has already passed the
+         * key (or sent it early).  Otherwise the iterator will send the key later in its current
+         * state, which already reflects the expired fields.  Unlike a DEL, the key usually still
+         * exists here (the final HDEL is followed by a real DEL, handled above). */
+        if (!replicate && cmd->proc == hdelCommand) {
+            sds key = objectGetVal(argv[1]);
+            if (it->keyset_iter->isKeyInScope(it->keyset_iter, key) &&
+                iteratorHasPassedKey(it, dbid, key, dbFind(server.db[dbid], key))) {
+                replicate = true;
+            }
+        }
 
         if (replicate) {
             /* We will replicate the command in these cases:

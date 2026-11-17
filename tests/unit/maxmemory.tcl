@@ -470,7 +470,7 @@ start_server {tags {"maxmemory external:skip io-threads:skip"}} {
         }
 
         # we need to wait one second for the client querybuf excess memory to be
-        # trimmed by cron, otherwise the INFO used_memory and CONFIG maxmemory
+        # trimmed by cron; otherwise, the INFO used_memory and CONFIG maxmemory
         # below (on slow machines) won't be "atomic" and won't trigger eviction.
         after 1100
 
@@ -589,6 +589,10 @@ start_server {tags {"maxmemory" "external:skip"}} {
         r del foo 
         r set foo a
         assert {[r object freq foo] == 5}
+        set rd [valkey_client]
+        test_defer [list $rd close]
+        $rd readraw 1
+        assert_equal [expr {$::force_resp3 ? {_} : {$-1}}] [$rd object freq missing]
     }
 }
 

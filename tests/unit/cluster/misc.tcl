@@ -191,14 +191,42 @@ proc get_nodes_conf_path {srv_idx} {
 # failure and it will cause cluster config file save to fail at the rename.
 proc create_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
-    if {[file exists $cluster_conf_path]} { exec rm -rf $cluster_conf_path }
-    exec mkdir -p $cluster_conf_path
+    # Retry: a background config save can recreate nodes.conf between the rm and the mkdir.
+    wait_for_condition 50 100 {
+        ![catch {exec rm -rf $cluster_conf_path; exec mkdir -p $cluster_conf_path}]
+    } else {
+        fail "Could not create folder $cluster_conf_path"
+    }
 }
 
 # Remove the folder (or nodes.conf) that we created from create_nodes_conf_folder.
 proc remove_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
     exec rm -rf $cluster_conf_path
+}
+
+proc file_inode {path} {
+    file stat $path st
+    return $st(ino)
+}
+
+# The temp files a save leaves behind, if any. A save writes one and renames it
+# over the cluster config file, so none should survive a completed save.
+proc leftover_nodes_conf_tmp_files {srv_idx} {
+    return [glob -nocomplain "[get_nodes_conf_path $srv_idx].tmp-*"]
+}
+
+# Wait until node srv_idx has no temp files left. A drain does not stop new
+# saves: cluster bus messages can start one right after it, and that save's
+# temp file exists until its rename fails and it deletes the file. So drain
+# and check again a few times. A temp file that is never deleted still fails.
+proc wait_for_no_nodes_conf_tmp_files {srv_idx} {
+    wait_for_condition 10 100 {
+        [R $srv_idx debug bio-drain BIO_CLUSTER_SAVE] eq {OK} &&
+        [leftover_nodes_conf_tmp_files $srv_idx] eq {}
+    } else {
+        fail "Node $srv_idx left temp files: [leftover_nodes_conf_tmp_files $srv_idx]"
+    }
 }
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
@@ -276,6 +304,12 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
 
+        # A node whose renames keep failing must not accumulate temp files. This
+        # holds before this commit too; it is here to keep the invariant from
+        # regressing as the save path is reordered.
+        wait_for_no_nodes_conf_tmp_files 0
+        wait_for_no_nodes_conf_tmp_files 1
+
         # Check the info field is err.
         assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
         assert_equal "err" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
@@ -324,6 +358,45 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         # cluster_config_last_save_time must have advanced after a successful save.
         assert_morethan_equal [getInfoProperty [R 0 cluster info] cluster_config_last_save_time] $last_save_time_0
         assert_morethan_equal [getInfoProperty [R 1 cluster info] cluster_config_last_save_time] $last_save_time_1
+    }
+}
+
+start_server {tags {external:skip cluster singledb} overrides {cluster-enabled yes}} {
+    test {nodes.conf stays locked after the config is saved} {
+        set dir [lindex [r config get dir] 1]
+        set cluster_conf [lindex [r config get cluster-config-file] 1]
+        set conf_path [file join $dir $cluster_conf]
+
+        # Every save publishes nodes.conf with rename(), which puts a new inode
+        # under the name. Force one, then confirm the running node still holds
+        # the lock that stops a second node from using the same file.
+        set inode_before [file_inode $conf_path]
+        assert_equal {OK} [r cluster saveconfig]
+        wait_for_condition 50 100 {
+            [file_inode $conf_path] != $inode_before
+        } else {
+            fail "the save did not replace $cluster_conf"
+        }
+
+        # flock() does not exist on Solaris, so clusterLockConfig() does not lock
+        # at all there and a second node is expected to start.
+        if {$::tcl_platform(os) ne "SunOS"} {
+            set logfile [file join $dir second-node.log]
+            set pid [exec $::VALKEY_SERVER_BIN --port 0 \
+                         --unixsocket [file join $dir second-node.sock] \
+                         --cluster-enabled yes \
+                         --dir $dir \
+                         --cluster-config-file $cluster_conf \
+                         --logfile $logfile &]
+
+            wait_for_condition 100 100 {
+                ![process_is_alive $pid]
+            } else {
+                catch {exec kill -9 $pid}
+                fail "a second node started while $cluster_conf was already in use"
+            }
+            assert_match "*already used by a different Cluster node*" [exec cat $logfile]
+        }
     }
 }
 

@@ -24,6 +24,24 @@ start_server {tags {"modules"}} {
         lsort [r scan.scan_key hh1]
     } {{f1 1}}
 
+    test {Module scan hash listpack skips expired fields} {
+        r debug set-active-expire 0
+        r del hhexp
+        r hset hhexp f1 v1 f2 v2
+        r hpexpire hhexp 1 FIELDS 1 f1
+        wait_for_condition 50 10 {
+            [r hgetall hhexp] eq {f2 v2}
+        } else {
+            fail "field f1 did not expire"
+        }
+        # f1 is expired but not reaped
+        assert_equal 2 [r hlen hhexp]
+        assert_encoding listpack hhexp
+        set res [lsort [r scan.scan_key hhexp]]
+        r debug set-active-expire 1
+        set res
+    } {{f2 v2}} {needs:debug}
+
     test {Module scan hash dict} {
         r config set hash-max-ziplist-entries 2
         r hmset hh3 f1 v1 f2 v2 f3 v3
@@ -82,6 +100,24 @@ start_server {tags {"modules"}} {
         assert_encoding listpack rh1
         lsort [r scan.scan_key_raw rh1]
     } {{f1 1}}
+
+    test {Module scan_key_raw hash listpack skips expired fields} {
+        r debug set-active-expire 0
+        r del rhexp
+        r hset rhexp f1 v1 f2 v2
+        r hpexpire rhexp 1 FIELDS 1 f1
+        wait_for_condition 50 10 {
+            [r hgetall rhexp] eq {f2 v2}
+        } else {
+            fail "field f1 did not expire"
+        }
+        # f1 is expired but not reaped
+        assert_equal 2 [r hlen rhexp]
+        assert_encoding listpack rhexp
+        set res [lsort [r scan.scan_key_raw rhexp]]
+        r debug set-active-expire 1
+        set res
+    } {{f2 v2}} {needs:debug}
 
     test {Module scan_key_raw hash dict} {
         r del rh3

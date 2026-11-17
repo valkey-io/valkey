@@ -759,8 +759,31 @@ uint8_t rioCheckType(rio *r) {
         return RIO_TYPE_BUFFER;
     } else if (r->read == rioConnRead) {
         return RIO_TYPE_CONN;
-    } else {
-        /* r->read == rioFdRead */
+    } else if (r->read == rioFdRead) {
         return RIO_TYPE_FD;
+    } else if (r->read == rioConnsetRead) {
+        return RIO_TYPE_CONNSET;
     }
+    return 0;
+}
+
+void rioFreeConnectionFromConnset(rio *r, connection *conn_to_free) {
+    for (int i = 0; i < r->io.connset.numconns; i++) {
+        if (r->io.connset.conns[i] == conn_to_free) {
+            int last = --r->io.connset.numconns;
+            r->io.connset.conns[i] = r->io.connset.conns[last];
+            r->io.connset.state[i] = r->io.connset.state[last];
+            /* The connset only borrows conns; the owning client frees them on
+             * the main thread. Don't touch refs or close here. */
+            return;
+        }
+    }
+}
+
+/* Return the connset error state (errno) for conn, or 0 if healthy/not found. */
+int rioConnsetConnErrno(rio *r, connection *conn) {
+    for (int i = 0; i < r->io.connset.numconns; i++) {
+        if (r->io.connset.conns[i] == conn) return r->io.connset.state[i];
+    }
+    return 0;
 }

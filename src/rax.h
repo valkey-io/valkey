@@ -36,7 +36,7 @@
 /* Representation of a radix tree as implemented in this file, that contains
  * the strings "foo", "foobar" and "footer" after the insertion of each
  * word. When the node represents a key inside the radix tree, we write it
- * between [], otherwise it is written between ().
+ * between []; otherwise, it is written between ().
  *
  * This is the vanilla representation:
  *
@@ -197,7 +197,6 @@ int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
-int raxFindLongestPrefix(rax *rax, unsigned char *s, size_t len, size_t *matched_len, void **value);
 size_t raxForEachPrefix(rax *rax, unsigned char *s, size_t len, raxPrefixCallback callback, void *context);
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));

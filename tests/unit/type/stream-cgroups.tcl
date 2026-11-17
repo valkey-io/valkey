@@ -1226,6 +1226,38 @@ start_server {
         assert_equal [dict get $group lag] 0
     }
 
+    test {Consumer group lag after XTRIM removes unread entries} {
+        r DEL x
+        for {set i 1} {$i <= 6} {incr i} {
+            r XADD x $i-0 data $i
+        }
+        r XGROUP CREATE x g1 0
+        r XREADGROUP GROUP g1 c1 COUNT 1 STREAMS x >
+        r XTRIM x MAXLEN 2
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group lag] 2
+
+        r XREADGROUP GROUP g1 c1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 6
+        assert_equal [dict get $group lag] 0
+    }
+
+    test {Consumer group lag after XTRIM empties the stream} {
+        r DEL x
+        for {set i 1} {$i <= 6} {incr i} {
+            r XADD x $i-0 data $i
+        }
+        r XGROUP CREATE x g1 0
+        r XREADGROUP GROUP g1 c1 COUNT 1 STREAMS x >
+        r XTRIM x MAXLEN 0
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group lag] 0
+    }
+
     test {Consumer group lag with XDELs} {
         r DEL x
         r XADD x 1-0 data a
@@ -1342,7 +1374,7 @@ start_server {
         set reply [r XINFO STREAM x FULL]
         set group [lindex [dict get $reply groups] 0]
         assert_equal [dict get $group entries-read] 5
-        assert_equal [dict get $group lag] 2
+        assert_equal [dict get $group lag] 1
         set group [lindex [dict get $reply groups] 1]
         assert_equal [dict get $group entries-read] {}
         assert_equal [dict get $group lag] 1
@@ -1405,7 +1437,7 @@ start_server {
         set reply [r XINFO STREAM x FULL]
         set group [lindex [dict get $reply groups] 0]
         assert_equal [dict get $group entries-read] 5
-        assert_equal [dict get $group lag] 3
+        assert_equal [dict get $group lag] 2
         set group [lindex [dict get $reply groups] 1]
         assert_equal [dict get $group entries-read] {}
         assert_equal [dict get $group lag] 2
@@ -1838,6 +1870,28 @@ start_server {
 
             assert_equal 1 [expr {[get_replica_calls $replica xack] - $xack_before}]
             assert_equal 1 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
+            assert_equal 0 [get_replica_calls $replica xackdel]
+            assert_equal 0 [$replica XLEN stream]
+            assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]
+        }
+
+        test {XACKDEL KEEPREF on already deleted entry propagates XACK only} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+            $master XDEL stream 1-0
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xdel_before [get_replica_calls $replica xdel]
+
+            # Entry is already deleted from stream, so only XACK is propagated
+            assert_equal {1} [$master XACKDEL stream grp KEEPREF IDS 1 1-0]
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 1 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 0 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
             assert_equal 0 [get_replica_calls $replica xackdel]
             assert_equal 0 [$replica XLEN stream]
             assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]

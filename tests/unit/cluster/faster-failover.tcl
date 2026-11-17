@@ -294,7 +294,7 @@ start_cluster 5 7 {tags {external:skip cluster tls:skip} overrides {cluster-ping
             R 1 cluster failover takeover
             wait_for_condition 1000 50 {
                 [s -1 role] == "master" &&
-                [s -6 role] == "slave" $$
+                [s -6 role] == "slave" &&
                 [s -11 role] == "slave"
             } else {
                 fail "R1 did not become primary after manual failover"

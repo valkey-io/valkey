@@ -363,3 +363,49 @@ TEST_F(UtilTest, TestWritePointerWithPadding) {
         ASSERT_EQ(buf[i], 0u);
     }
 }
+
+/* getSecureRandomHexChars() must emit only [0-9a-f] and must not write past
+ * len. The charset is the documented contract, so it is an oracle independent
+ * of whichever generator backs the call. */
+TEST_F(UtilTest, TestSecureRandomHexCharsCharset) {
+    char buf[128];
+    const size_t len = sizeof(buf) - 1;
+
+    buf[len] = '#'; /* Canary. */
+    ASSERT_EQ(getSecureRandomHexChars(buf, len), 1);
+
+    for (size_t i = 0; i < len; i++) {
+        ASSERT_TRUE((buf[i] >= '0' && buf[i] <= '9') || (buf[i] >= 'a' && buf[i] <= 'f'))
+            << "byte " << i << " outside the documented charset";
+    }
+    ASSERT_EQ(buf[len], '#') << "wrote past len";
+}
+
+/* Every byte position must actually be written. Prefill with a canary and draw
+ * repeatedly: a position left untouched keeps the canary in every draw, which
+ * catches a partial fill or a chunking loop that stops short. A working CSPRNG
+ * leaves a given position equal to the canary in all 24 draws with probability
+ * 2^-192, so a false failure is not a practical concern.
+ *
+ * A plain memcmp against the canary buffer would not catch this: memcmp stops
+ * at the first difference, so a half-filled buffer still compares unequal. */
+TEST_F(UtilTest, TestSecureRandomBytesFillsEveryPosition) {
+    const size_t kLen = 64;
+    const unsigned char kCanary = 0xA5;
+    const int kDraws = 24;
+    unsigned char probe[kLen + 1];
+    bool differed[kLen] = {false};
+
+    for (int draw = 0; draw < kDraws; draw++) {
+        memset(probe, kCanary, sizeof(probe));
+        ASSERT_EQ(getSecureRandomBytes(probe, kLen), 1);
+        ASSERT_EQ(probe[kLen], kCanary) << "wrote past len";
+        for (size_t i = 0; i < kLen; i++) {
+            if (probe[i] != kCanary) differed[i] = true;
+        }
+    }
+
+    for (size_t i = 0; i < kLen; i++) {
+        ASSERT_TRUE(differed[i]) << "byte " << i << " was never written in " << kDraws << " draws";
+    }
+}

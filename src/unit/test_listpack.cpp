@@ -1138,6 +1138,131 @@ TEST_F(ListpackTest, listpackLpValidateIntegrity) {
     lpFree(lp);
 }
 
+/* Write 'l' into 'buf' using 'width' bytes with the listpack backlen group
+ * layout: the first byte holds the most significant group of seven bits without
+ * the continuation bit, every following byte holds the next group with it set.
+ * For 16383, 2097151 and 268435455 both the minimal width and one byte more
+ * occur in persisted listpacks, the minimal one having been written by 9.1.0
+ * through 9.1.2 and the wider one by every other version. */
+static void encodeBacklenWidth(unsigned char *buf, uint64_t l, int width) {
+    for (int i = 0; i < width; i++) {
+        buf[i] = (l >> (7 * (width - 1 - i))) & 127;
+        if (i) buf[i] |= 128;
+    }
+}
+
+/* Build a listpack holding a single 32 bit string entry whose encoded length,
+ * backlen excluded, is exactly 'enclen', with the backlen written in 'width'
+ * bytes. */
+static unsigned char *createBacklenListpack(uint64_t enclen, int width, unsigned char fill) {
+    uint32_t datalen = (uint32_t)(enclen - 5); /* 1 encoding byte + 4 length bytes */
+    size_t total = LP_HDR_SIZE + enclen + width + 1;
+    unsigned char *lp = (unsigned char *)zmalloc(total);
+
+    lp[0] = total & 0xff;
+    lp[1] = (total >> 8) & 0xff;
+    lp[2] = (total >> 16) & 0xff;
+    lp[3] = (total >> 24) & 0xff;
+    lp[4] = 1; /* one element */
+    lp[5] = 0;
+
+    unsigned char *p = lp + LP_HDR_SIZE;
+    *p++ = LP_ENCODING_32BIT_STR;
+    *p++ = datalen & 0xff;
+    *p++ = (datalen >> 8) & 0xff;
+    *p++ = (datalen >> 16) & 0xff;
+    *p++ = (datalen >> 24) & 0xff;
+    memset(p, fill, datalen);
+    p += datalen;
+    encodeBacklenWidth(p, enclen, width);
+    p += width;
+    *p = LP_EOF;
+    return lp;
+}
+
+TEST_F(ListpackTest, listpackBothBacklenWidthsAreReadable) {
+    /* 16383 and 2097151 are two of the three entry lengths that encoders before
+     * 46d37e4d5e wrote with one backlen byte more than lpEncodeBacklen() now
+     * does. Both widths exist in persisted listpacks, so reading must accept
+     * either. 268435455, the third, is skipped: it needs a 256MB entry. */
+    const uint64_t boundaries[] = {16383, 2097151};
+    const int narrow[] = {2, 3};
+
+    for (size_t i = 0; i < sizeof(boundaries) / sizeof(boundaries[0]); i++) {
+        uint64_t enclen = boundaries[i];
+        uint32_t datalen = (uint32_t)(enclen - 5);
+
+        for (int extra = 0; extra <= 1; extra++) {
+            int width = narrow[i] + extra;
+            unsigned char *lp = createBacklenListpack(enclen, width, 'x');
+            char trace[64];
+            snprintf(trace, sizeof(trace), "enclen %llu backlen width %d", (unsigned long long)enclen, width);
+            SCOPED_TRACE(trace);
+
+            ASSERT_EQ(lpBytes(lp), (size_t)(LP_HDR_SIZE + enclen + width + 1));
+            ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 1);
+            ASSERT_EQ(lpLength(lp), 1u);
+
+            unsigned char *p = lpFirst(lp);
+            ASSERT_TRUE(p != nullptr);
+
+            unsigned int slen = 0;
+            long long lval = 0;
+            unsigned char *val = lpGetValue(p, &slen, &lval);
+            ASSERT_TRUE(val != nullptr);
+            ASSERT_EQ(slen, datalen);
+            ASSERT_EQ(val[0], 'x');
+            ASSERT_EQ(val[datalen - 1], 'x');
+
+            /* Forward and backward traversal must land on the same entry. */
+            ASSERT_TRUE(lpNext(lp, p) == nullptr);
+            ASSERT_EQ(lpLast(lp), p);
+            ASSERT_EQ(lpSeek(lp, 0), p);
+            ASSERT_EQ(lpSeek(lp, -1), p);
+
+            lpFree(lp);
+        }
+    }
+}
+
+TEST_F(ListpackTest, listpackMinimalBacklenSurvivesMutation) {
+    /* An entry carrying the minimal backlen, the width 9.1.0 through 9.1.2
+     * wrote and the one this version no longer emits, can still be appended
+     * after, replaced and deleted: each of those paths measures the existing
+     * entry. */
+    unsigned char *lp = createBacklenListpack(16383, 2, 'x');
+
+    lp = lpAppend(lp, (unsigned char *)"tail", 4);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 1);
+    ASSERT_EQ(lpLength(lp), 2u);
+
+    unsigned int slen = 0;
+    long long lval = 0;
+    unsigned char *p = lpFirst(lp);
+    lp = lpReplace(lp, &p, (unsigned char *)"small", 5);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 1);
+    ASSERT_EQ(lpLength(lp), 2u);
+
+    unsigned char *val = lpGetValue(lpFirst(lp), &slen, &lval);
+    ASSERT_EQ(slen, 5u);
+    ASSERT_EQ(memcmp(val, "small", 5), 0);
+    val = lpGetValue(lpLast(lp), &slen, &lval);
+    ASSERT_EQ(slen, 4u);
+    ASSERT_EQ(memcmp(val, "tail", 4), 0);
+
+    lpFree(lp);
+
+    lp = createBacklenListpack(16383, 2, 'x');
+    lp = lpAppend(lp, (unsigned char *)"tail", 4);
+    lp = lpDeleteRange(lp, 0, 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 1);
+    ASSERT_EQ(lpLength(lp), 1u);
+    val = lpGetValue(lpFirst(lp), &slen, &lval);
+    ASSERT_EQ(slen, 4u);
+    ASSERT_EQ(memcmp(val, "tail", 4), 0);
+    lpFree(lp);
+}
+
 TEST_F(ListpackTest, listpackNumberOfElementsExceedsLP_HDR_NUMELE_UNKNOWN) {
     /* Test number of elements exceeds LP_HDR_NUMELE_UNKNOWN */
     unsigned char *lp;

@@ -2966,7 +2966,6 @@ void resetServerStats(void) {
     server.stat_forkless_fallbacks_slot_import = 0;
     server.stat_forkless_fallbacks_exclude_data = 0;
     server.stat_forkless_fallbacks_missing_inband_repl = 0;
-    server.stat_forkless_fallbacks_compression = 0;
     server.stat_forkless_fallbacks_old_rdb_version = 0;
     server.stat_rejected_conn = 0;
     server.stat_rejected_priority_conn = 0;
@@ -7253,7 +7252,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "forkless_fallbacks_slot_import:%lld\r\n", server.stat_forkless_fallbacks_slot_import,
                 "forkless_fallbacks_exclude_data:%lld\r\n", server.stat_forkless_fallbacks_exclude_data,
                 "forkless_fallbacks_missing_inband_repl:%lld\r\n", server.stat_forkless_fallbacks_missing_inband_repl,
-                "forkless_fallbacks_compression:%lld\r\n", server.stat_forkless_fallbacks_compression,
+                /* Kept for INFO compatibility: forkless saves now support stream compression. */
+                "forkless_fallbacks_compression:%d\r\n", 0,
                 "forkless_fallbacks_old_rdb_version:%lld\r\n", server.stat_forkless_fallbacks_old_rdb_version));
 
         info = forkless_catDebugInfo(info);

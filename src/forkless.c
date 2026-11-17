@@ -19,6 +19,7 @@ typedef struct {
     bool terminated;
     bool cancel_requested; /* Set by a cancel that arrives after iteration finished. */
     int write_target;
+    streamWriter compression_writer; /* Attached to save_rio for lz4/zstd saves. */
     union {
         struct {
             sds temp_file;
@@ -29,6 +30,10 @@ typedef struct {
             char eofmark[RDB_EOF_MARK_SIZE];
             int req;
             int rdbver;
+            compressionAlgo compr; /* The cohort's wire codec. */
+            /* rdbchecksum and per-string LZF, sampled on the main thread. */
+            bool checksum;
+            bool string_lzf;
             sds header_buf;
             sds footer_buf;
         } repl;
@@ -234,8 +239,15 @@ static int writeSyncPreamble(forklessSaveInfo *saveInfo) {
         return C_ERR;
     }
 
-    /* Now enable checksum for the RDB itself (header + body + tail). */
-    if (server.rdb_checksum) {
+    /* Now set up the RDB itself (header + body + tail): compress it in the
+     * cohort's codec, and checksum it unless it is compressed or rdbchecksum
+     * is off. The $EOF framing stays outside both. */
+    if (rdbSaveCompressionBegin(&saveInfo->save_rio, &saveInfo->compression_writer, saveInfo->u.repl.compr,
+                                saveInfo->u.repl.checksum, saveInfo->u.repl.string_lzf) == C_ERR) {
+        serverLog(LL_WARNING, "forkless-save: failed to initialize RDB compression");
+        return C_ERR;
+    }
+    if (!(saveInfo->save_rio.flags & RIO_FLAG_SKIP_RDB_CHECKSUM)) {
         saveInfo->save_rio.update_cksum = rioGenericUpdateChecksum;
     }
 
@@ -376,8 +388,9 @@ static void *forklessSaveProcessor(void *arg) {
               items, message);
 
     /* For socket saves, finish the stream through the connset: write the staged
-     * tail (repl aux + module AFTER_RDB aux), then emit the EOF opcode + checksum
-     * and the EOF end marker here. */
+     * tail (repl aux + module AFTER_RDB aux), then emit the EOF opcode + checksum,
+     * complete the compressed frame (if any), and write the plain EOF end marker
+     * here. */
     if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
         if (!terminated && err == C_OK) {
             sds footer = saveInfo->u.repl.footer_buf;
@@ -389,6 +402,9 @@ static void *forklessSaveProcessor(void *arg) {
                 err = C_ERR;
             } else if (rdbWriteEofAndChecksum(&saveInfo->save_rio) == C_ERR) {
                 serverLog(LL_WARNING, "forkless-save: error writing RDB EOF/checksum to connset");
+                err = C_ERR;
+            } else if (rdbSaveCompressionEnd(&saveInfo->save_rio, &saveInfo->compression_writer, true) == C_ERR) {
+                serverLog(LL_WARNING, "forkless-save: error finishing the compressed RDB stream");
                 err = C_ERR;
             } else if (rdbWriteEofMarkEnd(&saveInfo->save_rio, saveInfo->u.repl.eofmark) == C_ERR) {
                 serverLog(LL_WARNING, "forkless-save: error writing diskless EOF end marker");
@@ -415,6 +431,8 @@ static void *forklessSaveProcessor(void *arg) {
         }
         if (!terminated && listLength(saveInfo->u.repl.clients) == 0) err = C_ERR;
 
+        /* A failed or cancelled save abandons the compressed frame. */
+        rdbSaveCompressionEnd(&saveInfo->save_rio, &saveInfo->compression_writer, false);
         rioFreeConnset(&saveInfo->save_rio);
     }
 
@@ -494,6 +512,7 @@ static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
     stopSaving(success);
     /* Finalize the save state in any case. */
     rdbClearSaveState(time(NULL));
+    server.rdb_child_sync_algo = ALGO_NONE;
 
     if (cancelled) {
         serverLog(LL_WARNING, "forkless-save: forkless save cancelled. %lld seconds.", (long long)server.rdb_save_time_last);
@@ -512,6 +531,7 @@ static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
     atomic_store_explicit(&server.stat_current_save_keys_total, 0, memory_order_relaxed);
 
     if (saveInfo->write_target == RDB_WRITE_TARGET_DISK) {
+        serverAssert(saveInfo->save_rio.stream_writer == NULL);
         serverAssert(saveInfo->u.file.temp_file == NULL);
         serverAssert(saveInfo->u.file.final_file == NULL);
     } else {
@@ -678,6 +698,15 @@ static void forklessSaveComplete(bool terminated, void *privdata) {
         if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
             saveInfo->err_code = rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE) == C_ERR ? C_ERR : C_OK;
         }
+        /* Complete the compressed frame (if any) while still on the main thread;
+         * the background close job only flushes the bytes already buffered. A
+         * failed or cancelled save just releases the codec, and the temp file is
+         * deleted by the close job. */
+        bool finish = !saveInfo->terminated && saveInfo->err_code == C_OK;
+        if (rdbSaveCompressionEnd(&saveInfo->save_rio, &saveInfo->compression_writer, finish) == C_ERR) {
+            serverLog(LL_WARNING, "forkless-save: error finishing the compressed RDB stream");
+            saveInfo->err_code = C_ERR;
+        }
 
         /* Done writing, capture bytes written (regardless of pass/fail) */
         saveInfo->bytes_written = saveInfo->save_rio.processed_bytes;
@@ -778,6 +807,16 @@ int forklessSaveToDisk(const char *filename) {
         rioSetReclaimCache(&saveInfo->save_rio, 1);
     }
 
+    /* Honor rdbcompression like a fork-based save. The codec and rdbchecksum
+     * are sampled here once, before the header is written. */
+    compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
+    if (rdbSaveCompressionBegin(&saveInfo->save_rio, &saveInfo->compression_writer, compression_algo,
+                                server.rdb_checksum, server.rdb_compression != RDB_COMPRESSION_NO) == C_ERR) {
+        /* Nothing was started yet, so skip the save-failed bookkeeping in werr. */
+        serverLog(LL_WARNING, "forkless-save: failed to initialize RDB compression");
+        goto cleanup;
+    }
+
     int rc = forklessSaveCommonStart(saveInfo, REPLICA_REQ_NONE, RDB_VERSION);
     if (rc != C_OK) goto werr;
 
@@ -801,6 +840,8 @@ int forklessSaveToDisk(const char *filename) {
 werr:
     forklessMarkSaveFailed(saveInfo);
 
+cleanup:
+    rdbSaveCompressionEnd(&saveInfo->save_rio, &saveInfo->compression_writer, false);
     if (file != NULL) {
         if (fclose(file) != 0) {
             serverLog(LL_WARNING, "forkless-save: Could not close temp file [%s]: %s",
@@ -960,7 +1001,7 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
     return true;
 }
 
-int forklessSaveToSockets(int req, int rdbver) {
+int forklessSaveToSockets(int req, int rdbver, compressionAlgo compr) {
     serverAssert(onServerMainThread());
     serverAssert(currentForklessSave == NULL);
 
@@ -970,6 +1011,10 @@ int forklessSaveToSockets(int req, int rdbver) {
     saveInfo->write_target = RDB_WRITE_TARGET_SOCKET;
     saveInfo->u.repl.req = req;
     saveInfo->u.repl.rdbver = rdbver;
+    /* Sample the stream settings here; the bg thread applies them. */
+    saveInfo->u.repl.compr = compr;
+    saveInfo->u.repl.checksum = server.rdb_checksum;
+    saveInfo->u.repl.string_lzf = server.rdb_compression != RDB_COMPRESSION_NO;
 
     /* Collect matching replicas in WAIT_BGSAVE_END state (already set up by startBgsaveForReplication) */
     saveInfo->u.repl.clients = listCreate();
@@ -981,7 +1026,7 @@ int forklessSaveToSockets(int req, int rdbver) {
         client *c = listNodeValue(ln);
         serverAssert(c->repl_data);
         if (c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-            isReplicaInCohort(c, req, rdbver, ALGO_NONE)) {
+            isReplicaInCohort(c, req, rdbver, compr)) {
             client_ids = sdscatprintf(client_ids, " %s (client %llu)", replicationGetReplicaName(c),
                                       (unsigned long long)c->id);
             listAddNodeTail(saveInfo->u.repl.clients, c);

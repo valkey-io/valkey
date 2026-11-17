@@ -551,9 +551,13 @@ ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
     /* Try LZF compression. Values under 20 bytes don't compress, skip those.
      * Skip per-string LZF when the rio has whole-stream compression so we
      * don't compress twice; standalone rios (DUMP, AOF rewrite, diskless)
-     * still hit this path. rdb may be NULL when rdbSavedObjectLen() calculates
-     * the encoded length without writing the object. */
-    if (server.rdb_compression != RDB_COMPRESSION_NO && len > 20 && !(rdb && rdb->stream_writer)) {
+     * still hit this path. A save whose settings were sampled at its start
+     * (rdbSaveCompressionBegin) keeps them; any other rio, or a NULL one when
+     * rdbSavedObjectLen() calculates the encoded length, follows the live
+     * config. */
+    bool lzf = server.rdb_compression != RDB_COMPRESSION_NO;
+    if (rdb && (rdb->flags & RIO_FLAG_STRING_LZF_SAMPLED)) lzf = rdb->flags & RIO_FLAG_STRING_LZF;
+    if (lzf && len > 20 && !(rdb && rdb->stream_writer)) {
         n = rdbSaveLzfStringObject(rdb, s, len);
         if (n == -1) return -1;
         if (n > 0) return n;
@@ -1609,9 +1613,6 @@ werr:
     return C_ERR;
 }
 
-static int rdbCompressionInit(rio *rdb, streamWriter *writer, compressionAlgo algo, bool codec_checksum);
-static void rdbCompressionFree(rio *rdb, streamWriter *writer);
-
 /* This helper function is only used for diskless replication. It wraps
  * rdbSaveRio() with a prefix and suffix around the generated RDB dump. The
  * prefix is:
@@ -1667,18 +1668,51 @@ static int rdbCompressionWrite(void *ctx, const uint8_t *data, size_t len) {
     return rioWriteRaw((rio *)ctx, data, len) ? C_OK : C_ERR;
 }
 
-static int rdbCompressionInit(rio *rdb,
-                              streamWriter *writer,
-                              compressionAlgo algo,
-                              bool codec_checksum) {
-    if (streamWriterInit(writer, algo, codec_checksum, rdbCompressionWrite, rdb) == C_ERR) return C_ERR;
-    rioAttachStreamWriter(rdb, writer);
+/* Prepare 'rdb' for writing an RDB compressed with 'algo'. For whole-stream
+ * codecs, 'writer' is initialized and attached so later logical writes are
+ * compressed; ALGO_NONE and ALGO_LZF attach nothing. The CRC64 trailer is
+ * disabled when the stream is compressed or 'checksum' (rdbchecksum) is off,
+ * so this must run before the RDB header is written. 'checksum' also enables
+ * the codec checksum. 'string_lzf' fixes whether strings are LZF-compressed
+ * when the stream is not, so a save in progress ignores later rdbcompression
+ * changes. Reads no server config, so the caller decides when the settings are
+ * sampled. */
+int rdbSaveCompressionBegin(rio *rdb, streamWriter *writer, compressionAlgo algo, bool checksum, bool string_lzf) {
+    bool use_streaming_compression = algo != ALGO_NONE && algo != ALGO_LZF;
+
+    rdb->flags |= RIO_FLAG_STRING_LZF_SAMPLED;
+    if (string_lzf) rdb->flags |= RIO_FLAG_STRING_LZF;
+
+    if (use_streaming_compression) {
+        if (streamWriterInit(writer, algo, checksum, rdbCompressionWrite, rdb) == C_ERR) return C_ERR;
+        rioAttachStreamWriter(rdb, writer);
+    }
+
+    if (use_streaming_compression || !checksum) {
+        rdb->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
+        rdb->update_cksum = NULL;
+        rdb->cksum = 0;
+    }
     return C_OK;
 }
 
-static void rdbCompressionFree(rio *rdb, streamWriter *writer) {
+/* Release the writer attached by rdbSaveCompressionBegin(); does nothing when
+ * no writer is attached. With 'finish', the compressed frame is completed
+ * first, so pass it only after the whole RDB was written successfully;
+ * otherwise the frame is abandoned without writing more bytes. Returns C_ERR,
+ * and flags a write error on 'rdb', only if finishing the frame fails. */
+int rdbSaveCompressionEnd(rio *rdb, streamWriter *writer, bool finish) {
+    if (rdb->stream_writer == NULL) return C_OK;
+    serverAssert(rdb->stream_writer == writer);
+
+    int retval = C_OK;
+    if (finish && streamWriterFinish(writer) == C_ERR) {
+        rdb->flags |= RIO_FLAG_WRITE_ERROR;
+        retval = C_ERR;
+    }
     rioDetachStreamWriter(rdb);
     streamWriterFree(writer);
+    return retval;
 }
 
 /* Save logical RDB bytes, applying whole-stream compression when requested.
@@ -1698,29 +1732,18 @@ static void rdbCompressionFree(rio *rdb, streamWriter *writer) {
  * is enabled. */
 int rdbSaveRio(compressionAlgo compression_algo, int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     streamWriter compression_writer;
-    bool use_streaming_compression = compression_algo != ALGO_NONE && compression_algo != ALGO_LZF;
 
-    if (use_streaming_compression) {
-        if (rdbCompressionInit(rdb, &compression_writer, compression_algo, server.rdb_checksum) == C_ERR) {
-            if (error) *error = EIO;
-            return C_ERR;
-        }
-    }
-
-    if (use_streaming_compression || !server.rdb_checksum) {
-        rdb->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
-        rdb->update_cksum = NULL;
-        rdb->cksum = 0;
+    if (rdbSaveCompressionBegin(rdb, &compression_writer, compression_algo, server.rdb_checksum,
+                                server.rdb_compression != RDB_COMPRESSION_NO) == C_ERR) {
+        if (error) *error = EIO;
+        return C_ERR;
     }
 
     int retval = rdbSaveRioInternal(req, rdbver, rdb, error, rdbflags, rsi);
-    if (retval == C_OK && use_streaming_compression && streamWriterFinish(&compression_writer) == C_ERR) {
-        rdb->flags |= RIO_FLAG_WRITE_ERROR;
+    if (rdbSaveCompressionEnd(rdb, &compression_writer, retval == C_OK) == C_ERR) {
         if (error) *error = EIO;
         retval = C_ERR;
     }
-
-    if (use_streaming_compression) rdbCompressionFree(rdb, &compression_writer);
     return retval;
 }
 

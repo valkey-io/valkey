@@ -62,7 +62,73 @@ proc assert_rdb_checksum_flags {client mode expected} {
 set ::rdbcompression_zstd_supported 0
 set ::rdbcompression_modes {lz4}
 
-start_server {overrides {save "" enable-debug-command local}} {
+# Deterministic dataset in several types, with values well above the 20-byte
+# per-string LZF threshold, so the sizes of different saves are comparable.
+proc populate_compressible_dataset {} {
+    for {set i 0} {$i < 200} {incr i} {
+        r set "string:$i" [string repeat "value:$i " 64]
+    }
+    for {set i 0} {$i < 10} {incr i} {
+        for {set j 0} {$j < 50} {incr j} {
+            r rpush "list:$i" [string repeat "item:$j " 8]
+            r hset "hash:$i" "field:$j" [string repeat "value:$j " 8]
+            r sadd "set:$i" "member:$j"
+            r zadd "zset:$i" $j "member:$j"
+        }
+    }
+}
+
+# Run a BGSAVE under the given forkless-policy and check that it really used the
+# expected method, so a silent fallback to fork cannot pass a forkless test.
+proc bgsave_with_policy {policy bgsave_type} {
+    r config set forkless-policy $policy
+    assert_match {*Background saving started*} [r bgsave]
+    waitForBgsave r
+    assert_equal $bgsave_type [s rdb_last_bgsave_type]
+    assert_equal ok [s rdb_last_bgsave_status]
+}
+
+proc temp_rdb_files {client} {
+    set dir [lindex [$client config get dir] 1]
+    return [glob -nocomplain -directory $dir temp-*.rdb]
+}
+
+# Decode a whole-stream compressed RDB with the codec's command line tool and
+# return the logical RDB. Skips the test only when the tool is missing or
+# cannot decode a known-valid frame; once the tool works, failing to decode
+# the server's frame fails the test.
+proc decode_compressed_rdb_file {path mode} {
+    if {[auto_execok $mode] eq ""} {
+        skip "$mode command line tool is not installed"
+    }
+    # "VALKEY probe" with the checksums the server writes: LZ4 block and
+    # content checksums, Zstd content checksum.
+    set probe_hex [dict get {
+        lz4 04224d187440bd0c00008056414c4b45592070726f62651c6a1c3a000000001c6a1c3a
+        zstd 28b52ffd240c61000056414c4b45592070726f626569cc7c64
+    } $mode]
+    set probe_frame [tmpfile rdb-probe-frame]
+    write_binary_file $probe_frame [binary format H* $probe_hex]
+    set incompatible [catch {exec $mode -q -d -c $probe_frame} probe]
+    file delete $probe_frame
+    if {$incompatible || $probe ne "VALKEY probe"} {
+        skip "$mode command line tool cannot decode a known-valid frame: $probe"
+    }
+
+    set frame [tmpfile rdb-frame]
+    set logical [tmpfile rdb-logical]
+    # Strip the 7-byte VCS envelope to get a standard LZ4 or Zstd frame.
+    write_binary_file $frame [string range [read_binary_file $path] 7 end]
+    set failed [catch {exec $mode -q -d -c $frame > $logical} err]
+    set data [read_binary_file $logical]
+    file delete $frame $logical
+    if {$failed} {
+        fail "$mode command line tool cannot decode the RDB frame: $err"
+    }
+    return $data
+}
+
+start_server {overrides {save "" enable-debug-command local forkless-infrastructure-enabled yes}} {
     set ::rdbcompression_zstd_supported [config_value_supported r rdbcompression zstd]
     if {$::rdbcompression_zstd_supported} {
         lappend ::rdbcompression_modes zstd
@@ -147,42 +213,219 @@ start_server {overrides {save "" enable-debug-command local}} {
         }
     }
 
-    foreach mode $::rdbcompression_modes {
-        test "Changing compression config during active $mode BGSAVE does not affect the in-flight save" {
-            r config set rdbcompression $mode
-            r config set rdb-key-save-delay 10000
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
+        foreach mode $::rdbcompression_modes {
+            test "Changing compression config during active $mode $bgsave_type BGSAVE does not affect the in-flight save" {
+                r config set forkless-policy $policy
+                r config set rdbcompression $mode
+                r config set rdb-key-save-delay 10000
+                with_cleanup {
+                    r flushall
+                    for {set i 0} {$i < 128} {incr i} {
+                        r set "bgsave-race:$mode:$i" [string repeat "payload:$i " 128]
+                    }
+                    set digest [debug_digest]
+
+                    assert_match {*Background saving started*} [r bgsave]
+                    wait_for_condition 200 10 {
+                        [s rdb_bgsave_in_progress] eq 1
+                    } else {
+                        fail "$mode BGSAVE did not start in time"
+                    }
+                    assert_equal $bgsave_type [s rdb_current_bgsave_type]
+
+                    # The save must keep the codec it started with.
+                    r config set rdbcompression yes
+
+                    wait_for_condition 500 10 {
+                        [s rdb_bgsave_in_progress] eq 0
+                    } else {
+                        fail "$mode BGSAVE did not finish in time"
+                    }
+                    r config set rdb-key-save-delay 0
+
+                    assert_equal ok [s rdb_last_bgsave_status]
+                    assert_equal "yes" [lindex [r config get rdbcompression] 1]
+                    assert_rdb_envelope r $mode
+                    assert_equal "OK" [r debug reload nosave]
+                    assert_equal $digest [debug_digest]
+
+                    assert_equal "OK" [r save]
+                    assert_equal "VALKEY" [string range [read_dump_rdb_header_bytes r] 0 5]
+                } {
+                    catch {r config set rdb-key-save-delay 0}
+                    catch {r config set rdbcompression yes}
+                    catch {r config set forkless-policy require-fork}
+                }
+            }
+        }
+    }
+
+    # Per-string LZF is sampled at save start too: turning it off mid-save must
+    # not leave the rest of the keyspace uncompressed.
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
+        test "Disabling rdbcompression during an active $bgsave_type BGSAVE keeps per-string LZF" {
+            r config set forkless-policy $policy
             with_cleanup {
                 r flushall
                 for {set i 0} {$i < 128} {incr i} {
-                    r set "bgsave-race:$mode:$i" [string repeat "payload:$i " 128]
+                    r set "lzf-race:$i" [string repeat "payload:$i " 128]
                 }
+                set digest [debug_digest]
+                r config set rdbcompression no
+                assert_equal "OK" [r save]
+                set plain_size [file size [dump_rdb_path r]]
+                r config set rdbcompression yes
+                assert_equal "OK" [r save]
+                set lzf_size [file size [dump_rdb_path r]]
+                assert {$lzf_size * 4 < $plain_size}
 
+                r config set rdb-key-save-delay 10000
                 assert_match {*Background saving started*} [r bgsave]
                 wait_for_condition 200 10 {
                     [s rdb_bgsave_in_progress] eq 1
                 } else {
-                    fail "$mode BGSAVE did not start in time"
+                    fail "BGSAVE did not start in time"
                 }
-
-                # The child must keep the compression setting inherited at fork.
-                r config set rdbcompression yes
-
+                assert_equal $bgsave_type [s rdb_current_bgsave_type]
+                r config set rdbcompression no
                 wait_for_condition 500 10 {
                     [s rdb_bgsave_in_progress] eq 0
                 } else {
-                    fail "$mode BGSAVE did not finish in time"
+                    fail "BGSAVE did not finish in time"
                 }
                 r config set rdb-key-save-delay 0
+                assert_equal ok [s rdb_last_bgsave_status]
 
-                assert_equal "yes" [lindex [r config get rdbcompression] 1]
-                assert_rdb_envelope r $mode
-
-                assert_equal "OK" [r save]
-                assert_equal "VALKEY" [string range [read_dump_rdb_header_bytes r] 0 5]
+                # Close to the LZF size, far below the plain one.
+                set size [file size [dump_rdb_path r]]
+                assert {$size * 2 < $lzf_size + $plain_size}
+                assert_equal "OK" [r debug reload nosave]
+                assert_equal $digest [debug_digest]
             } {
                 catch {r config set rdb-key-save-delay 0}
                 catch {r config set rdbcompression yes}
+                catch {r config set forkless-policy require-fork}
             }
+        }
+    }
+
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
+        test "$bgsave_type BGSAVE honors every rdbcompression mode" {
+            set sizes [dict create]
+            with_cleanup {
+                foreach mode [list no yes lzf {*}$::rdbcompression_modes] {
+                    r config set rdbcompression $mode
+                    r flushall
+                    populate_compressible_dataset
+                    set digest [debug_digest]
+
+                    bgsave_with_policy $policy $bgsave_type
+                    if {$mode in {lz4 zstd}} {
+                        assert_rdb_envelope r $mode
+                        assert_rdb_checksum_flags r $mode 1
+                    } else {
+                        assert_equal "VALKEY" [string range [read_dump_rdb_header_bytes r] 0 5]
+                    }
+                    dict set sizes $mode [file size [dump_rdb_path r]]
+
+                    assert_equal "OK" [r debug reload nosave]
+                    assert_equal $digest [debug_digest] "$mode digest"
+                }
+                foreach mode [list yes lzf {*}$::rdbcompression_modes] {
+                    assert_lessthan [dict get $sizes $mode] [dict get $sizes no] "$mode size"
+                }
+                # Whole-stream codecs must beat per-string LZF on this dataset.
+                foreach mode $::rdbcompression_modes {
+                    assert_lessthan [dict get $sizes $mode] [dict get $sizes lzf] "$mode size"
+                }
+            } {
+                catch {r config set rdbcompression yes}
+                catch {r config set forkless-policy require-fork}
+            }
+        }
+
+        foreach mode $::rdbcompression_modes {
+            test "Empty dataset $mode $bgsave_type BGSAVE saves and loads correctly" {
+                r config set rdbcompression $mode
+                r flushall
+                with_cleanup {
+                    bgsave_with_policy $policy $bgsave_type
+                    assert_rdb_envelope r $mode
+                    assert_equal "OK" [r debug reload nosave]
+                    assert_equal 0 [r dbsize]
+                } {
+                    catch {r config set rdbcompression yes}
+                    catch {r config set forkless-policy require-fork}
+                }
+            }
+
+            # The loader and valkey-check-rdb skip the logical CRC64 of
+            # compressed input, so decode the frame to check its trailer.
+            test "$mode $bgsave_type BGSAVE writes a zero CRC64 trailer inside the frame" {
+                r config set rdbcompression $mode
+                r flushall
+                with_cleanup {
+                    populate_compressible_dataset
+                    bgsave_with_policy $policy $bgsave_type
+                    assert_rdb_envelope r $mode
+                    set logical [decode_compressed_rdb_file [dump_rdb_path r] $mode]
+                    assert_equal "VALKEY" [string range $logical 0 5]
+                    # RDB_OPCODE_EOF followed by an all-zero CRC64.
+                    assert_equal "\xff[string repeat \x00 8]" [string range $logical end-8 end]
+                } {
+                    catch {r config set rdbcompression yes}
+                    catch {r config set forkless-policy require-fork}
+                }
+            }
+        }
+
+        foreach abort {cancel flushall} {
+            test "lz4 $bgsave_type BGSAVE aborted by [string toupper $abort] leaves dump.rdb and no temp file" {
+                r config set rdbcompression lz4
+                with_cleanup {
+                    r flushall
+                    populate_compressible_dataset
+                    bgsave_with_policy $policy $bgsave_type
+                    set original [read_binary_file [dump_rdb_path r]]
+
+                    r config set rdb-key-save-delay 100000
+                    assert_match {*Background saving started*} [r bgsave]
+                    assert_equal 1 [s rdb_bgsave_in_progress]
+                    assert_equal $bgsave_type [s rdb_current_bgsave_type]
+                    if {$abort eq "cancel"} {
+                        assert_equal {Background saving cancelled} [r bgsave cancel]
+                    } else {
+                        r flushall
+                    }
+                    wait_for_condition 50 100 {
+                        [s rdb_bgsave_in_progress] == 0 && [temp_rdb_files r] eq {}
+                    } else {
+                        fail "aborted BGSAVE did not clean up: [temp_rdb_files r]"
+                    }
+                    assert_equal $original [read_binary_file [dump_rdb_path r]]
+                } {
+                    catch {r config set rdb-key-save-delay 0}
+                    catch {r config set rdbcompression yes}
+                    catch {r config set forkless-policy require-fork}
+                }
+            }
+        }
+    }
+
+    test {valkey-check-rdb validates an lz4 forkless BGSAVE} {
+        r config set rdbcompression lz4
+        r flushall
+        with_cleanup {
+            populate_compressible_dataset
+            bgsave_with_policy prefer-forkless forkless
+            set result [exec $::VALKEY_CHECK_RDB_BIN [dump_rdb_path r] --stats --format info]
+            assert_match {*RDB looks OK!*} $result
+            assert_match {*Logical RDB CRC64 skipped for streaming-compressed input*} $result
+            assert_match {*type.string.keys.total:200*} $result
+        } {
+            catch {r config set rdbcompression yes}
+            catch {r config set forkless-policy require-fork}
         }
     }
 
@@ -353,7 +596,7 @@ start_server {overrides {save "" enable-debug-command local}} {
 
 }
 
-start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
+start_server {overrides {save "" enable-debug-command local rdbchecksum no forkless-infrastructure-enabled yes}} {
     foreach mode $::rdbcompression_modes {
         test "rdbchecksum controls [string toupper $mode] frame checksums" {
             r config set rdbcompression $mode
@@ -373,6 +616,27 @@ start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
             restart_server 0 true false
             assert_equal $digest [debug_digest]
             assert_equal [string repeat "data10 " 100] [r get "$mode-nocksum:10"]
+        }
+    }
+
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
+        foreach mode $::rdbcompression_modes {
+            test "rdbchecksum controls [string toupper $mode] frame checksums of a $bgsave_type BGSAVE" {
+                r config set rdbcompression $mode
+                r flushall
+                with_cleanup {
+                    populate_compressible_dataset
+                    set digest [debug_digest]
+
+                    bgsave_with_policy $policy $bgsave_type
+                    assert_rdb_envelope r $mode
+                    assert_rdb_checksum_flags r $mode 0
+                    assert_equal "OK" [r debug reload nosave]
+                    assert_equal $digest [debug_digest]
+                } {
+                    catch {r config set forkless-policy require-fork}
+                }
+            }
         }
     }
 }

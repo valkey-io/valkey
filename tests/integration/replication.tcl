@@ -2269,7 +2269,6 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
         set dbg [r info debug]
         assert_equal 1 [getInfoProperty $dbg forkless_fallbacks_exclude_data]
         assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_missing_inband_repl]
-        assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_compression]
         assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_module]
         assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_slot_import]
         assert_equal 0 [getInfoProperty $dbg forkless_fallbacks_old_rdb_version]
@@ -2333,12 +2332,13 @@ start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-i
     start_server {overrides {save {} repl-compression lz4}} {
         set replica [srv 0 client]
 
-        test "Compressed full sync counts its fork fallback reason" {
+        test "Compressed diskless full sync uses forkless" {
             set loglines [count_log_lines -1]
+            set forks [s -1 total_forks]
             $replica replicaof $primary_host $primary_port
             wait_for_sync $replica
-            wait_for_log_messages -1 {"*Falling back to fork-based save for SYNC: cohort needs stream compression*"} $loglines 50 100
-            assert_equal 1 [getInfoProperty [[srv -1 client] info debug] forkless_fallbacks_compression]
+            wait_for_log_messages -1 {"*target: replicas sockets*compression: lz4*method: forkless*"} $loglines 50 100
+            assert_equal $forks [s -1 total_forks]
         }
     }
 }
@@ -2827,8 +2827,9 @@ foreach kind {multi eval} {
 }
 
 # Writes made while the forkless iterator is still scanning the keyspace are
-# inlined into the RDB stream, and the replica must apply them.
-foreach load_mode {disabled on-empty-db} {
+# inlined into the RDB stream, and the replica must apply them. With
+# repl-compression the inlined commands travel inside the compressed stream.
+foreach {load_mode compression} {disabled no on-empty-db no on-empty-db lz4} {
     start_server {tags {"repl external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
@@ -2836,13 +2837,17 @@ foreach load_mode {disabled on-empty-db} {
         $primary config set forkless-policy prefer-forkless
         $primary config set repl-diskless-sync yes
         $primary config set repl-diskless-sync-delay 0
+        $primary config set repl-compression $compression
         $primary debug populate 10000
 
         start_server {overrides {save ""}} {
             set replica [srv 0 client]
             $replica config set repl-diskless-load $load_mode
+            $replica config set repl-compression $compression
+            set codec [expr {$compression eq "no" ? "none" : $compression}]
+            set suffix [expr {$compression eq "no" ? "" : ", repl-compression=$compression"}]
 
-            test "Forkless diskless full sync under write load, repl-diskless-load=$load_mode" {
+            test "Forkless diskless full sync under write load, repl-diskless-load=$load_mode$suffix" {
                 # Hold the scan open and write into it, instead of racing a
                 # write load against it.
                 set loglines [count_log_lines -1]
@@ -2850,7 +2855,7 @@ foreach load_mode {disabled on-empty-db} {
                 $replica replicaof $primary_host $primary_port
 
                 # Make sure the forkless socket path (with inline commands) ran.
-                wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+                wait_for_log_messages -1 [list "*target: replicas sockets*compression: $codec*method: forkless*"] $loglines 100 100
                 assert_equal 10000 [s -1 current_save_keys_total]
                 wait_for_condition 50 100 {
                     [s -1 forkless_estimated_seconds_remaining] > 0

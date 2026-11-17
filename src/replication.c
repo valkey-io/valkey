@@ -1367,8 +1367,8 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
 
     int chosen_save_type = resolveBgsaveType();
 
-    /* Forkless output can only emit an uncompressed RDB, and on a socket also
-     * requires the replica to support inline replication.
+    /* Forkless saves stream-compress like fork-based ones, but on a socket
+     * forkless requires the replica to support inline replication.
      * For any cohort it cannot serve, fall back to fork. */
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
         const char *reason = NULL;
@@ -1381,9 +1381,6 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         } else if (rdbver < 81) {
             server.stat_forkless_fallbacks_old_rdb_version++;
             reason = "cohort requires an RDB version older than 81";
-        } else if (sync_compression_algo != ALGO_NONE) {
-            server.stat_forkless_fallbacks_compression++;
-            reason = "cohort needs stream compression";
         }
         if (reason != NULL) {
             serverLog(LL_NOTICE, "Falling back to fork-based save for SYNC: %s", reason);
@@ -1408,7 +1405,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
 
     if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
         if (socket_target) {
-            if (forklessSaveToSockets(req, rdbver) == C_ERR) {
+            if (forklessSaveToSockets(req, rdbver, sync_compression_algo) == C_ERR) {
                 fail_msg = "Can't start the forkless process for a diskless full sync";
                 goto error;
             }
@@ -1417,6 +1414,11 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
                 fail_msg = "Can't start the forkless process for a disk-based full sync";
                 goto error;
             }
+            /* The save writes dump.rdb in rdbcompression, which a disk-based sync
+             * only uses when it equals the wire codec. Record it so that only
+             * replicas of that codec attach to the save in flight; the save
+             * resets it when it ends. */
+            server.rdb_child_sync_algo = sync_compression_algo;
         }
     } else if (socket_target) {
         if (rdbSaveToReplicasSockets(req, rdbver, sync_compression_algo, rsiptr) == C_ERR) {

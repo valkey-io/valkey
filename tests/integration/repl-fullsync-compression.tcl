@@ -304,10 +304,11 @@ start_server {tags {"repl rdb-compression external:skip"} overrides {save ""}} {
 # advertised from its repl-compression at handshake time. rdb-key-save-delay
 # 13000 (~2s over 155 keys x 13ms: above one PSYNC round trip, under
 # wait_for_sync's ~5s budget on slow runners) keeps the save in flight while the
-# joiner arrives.
+# joiner arrives. Each case runs under both forkless policies: a forkless save
+# writes the same file, so it must gate joiners the same way.
 # ============================================================================
 
-start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides {save "" enable-debug-command local}} {
+start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides {save "" enable-debug-command local forkless-infrastructure-enabled yes}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -321,53 +322,53 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
         start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
             set joiner [srv 0 client]
 
-            foreach {name rdbcompr primary_repl joiner_repl should_join expected_compressed} {
-                "plain save, non-capable joiner attaches"      yes no  no  1 0
-                "plain save, capable joiner attaches"          yes no  lz4 1 0
-                "compressed save, non-capable joiner diverts"  lz4 lz4 no  0 1
-                "compressed save, capable joiner attaches"     lz4 lz4 lz4 1 1
-            } {
-                test "Piggyback: $name" {
-                    with_cleanup {
-                        $primary config set rdbcompression $rdbcompr
-                        $primary config set repl-compression $primary_repl
-                        $joiner config set repl-compression $joiner_repl
-                        $primary config set rdb-key-save-delay 13000
-                        populate_compressible_dataset $primary piggy 150
-                        set primary_loglines [count_log_lines -2]
+            foreach {policy method} {require-fork fork prefer-forkless forkless} {
+                foreach {name rdbcompr primary_repl joiner_repl should_join expected_compressed} {
+                    "plain save, non-capable joiner attaches"      yes no  no  1 0
+                    "plain save, capable joiner attaches"          yes no  lz4 1 0
+                    "compressed save, non-capable joiner diverts"  lz4 lz4 no  0 1
+                    "compressed save, capable joiner attaches"     lz4 lz4 lz4 1 1
+                } {
+                    set label [expr {$method eq "fork" ? "" : " ($method)"}]
+                    test "Piggyback$label: $name" {
+                        with_cleanup {
+                            $primary config set forkless-policy $policy
+                            $primary config set rdbcompression $rdbcompr
+                            $primary config set repl-compression $primary_repl
+                            $joiner config set repl-compression $joiner_repl
+                            $primary config set rdb-key-save-delay 13000
+                            populate_compressible_dataset $primary piggy 150
+                            set primary_loglines [count_log_lines -2]
 
-                        $trigger replicaof $primary_host $primary_port
-                        if {$rdbcompr eq "lz4"} {
-                            wait_for_log_messages -2 {"*target: disk*compression: lz4*"} \
+                            $trigger replicaof $primary_host $primary_port
+                            set codec [expr {$rdbcompr eq "lz4" ? "lz4" : "none"}]
+                            wait_for_log_messages -2 [list "*target: disk*compression: $codec*method: $method*"] \
                                 $primary_loglines 50 100
-                        } else {
-                            wait_for_log_messages -2 {"*Starting BGSAVE for SYNC with target: disk*"} \
-                                $primary_loglines 50 100
+
+                            $joiner replicaof $primary_host $primary_port
+                            if {$should_join} {
+                                wait_for_log_messages -2 {"*Waiting for end of BGSAVE for SYNC*"} \
+                                    $primary_loglines 50 100
+                                # Prove the joiner piggybacked onto the running save rather than
+                                # triggering a second BGSAVE round: the primary is -2 in this
+                                # doubly-nested start_server scope, so neither the attach-refusal
+                                # nor the next-save-wait message must appear.
+                                verify_no_log_message -2 "*Can't attach the replica to the current BGSAVE*" $primary_loglines
+                                verify_no_log_message -2 "*Waiting for next BGSAVE for SYNC*" $primary_loglines
+                            } else {
+                                wait_for_log_messages -2 {"*Can't attach the replica to the current BGSAVE*"} \
+                                    $primary_loglines 50 100
+                            }
+
+                            $primary config set rdb-key-save-delay 0
+                            assert_replica_synced $primary $trigger "($name, trigger)"
+                            assert_replica_synced $primary $joiner "($name, joiner)"
+                            assert_equal $expected_compressed [rdb_is_compressed $primary]
+                        } {
+                            $primary config set rdb-key-save-delay 0
+                            $joiner replicaof no one
+                            $trigger replicaof no one
                         }
-
-                        $joiner replicaof $primary_host $primary_port
-                        if {$should_join} {
-                            wait_for_log_messages -2 {"*Waiting for end of BGSAVE for SYNC*"} \
-                                $primary_loglines 50 100
-                            # Prove the joiner piggybacked onto the running save rather than
-                            # triggering a second BGSAVE round: the primary is -2 in this
-                            # doubly-nested start_server scope, so neither the attach-refusal
-                            # nor the next-save-wait message must appear.
-                            verify_no_log_message -2 "*Can't attach the replica to the current BGSAVE*" $primary_loglines
-                            verify_no_log_message -2 "*Waiting for next BGSAVE for SYNC*" $primary_loglines
-                        } else {
-                            wait_for_log_messages -2 {"*Can't attach the replica to the current BGSAVE*"} \
-                                $primary_loglines 50 100
-                        }
-
-                        $primary config set rdb-key-save-delay 0
-                        assert_replica_synced $primary $trigger "($name, trigger)"
-                        assert_replica_synced $primary $joiner "($name, joiner)"
-                        assert_equal $expected_compressed [rdb_is_compressed $primary]
-                    } {
-                        $primary config set rdb-key-save-delay 0
-                        $joiner replicaof no one
-                        $trigger replicaof no one
                     }
                 }
             }
@@ -548,6 +549,63 @@ start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-dis
         }
     }
 
+}
+
+# Forkless full sync honors repl-compression on both targets, like fork: a
+# diskless round streams the cohort's codec, and a disk round sends a dump.rdb
+# that the forkless save wrote in rdbcompression (equal to the wire codec, or the
+# sync would divert to diskless). total_forks proves which method ran. The
+# replica loads on-empty-db: a swapdb replica lacks inline replication and would
+# make forkless fall back to fork.
+start_server {tags {"repl rdb-compression external:skip"} overrides {save "" forkless-infrastructure-enabled yes repl-diskless-sync-delay 0 rdb-del-sync-files no}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    set modes {lz4}
+    if {$::fullsync_zstd_supported} {
+        lappend modes zstd
+    }
+
+    foreach {policy method} {require-fork fork prefer-forkless forkless} {
+        foreach mode $modes {
+            foreach {diskless target} {yes "replicas sockets" no disk} {
+                test "[string toupper $mode] full sync to $target with forkless-policy $policy uses $method" {
+                    $primary config set forkless-policy $policy
+                    $primary config set repl-diskless-sync $diskless
+                    $primary config set rdbcompression $mode
+                    $primary config set repl-compression $mode
+                    populate_compressible_dataset $primary "fl-$mode-$diskless"
+
+                    start_server [list overrides [list save "" repl-compression $mode repl-diskless-load on-empty-db]] {
+                        set replica [srv 0 client]
+                        set primary_loglines [count_log_lines -1]
+                        set replica_loglines [count_log_lines 0]
+                        set forks [s -1 total_forks]
+                        $replica replicaof $primary_host $primary_port
+
+                        assert_replica_synced $primary $replica "($mode $target $policy)"
+                        wait_for_log_messages -1 [list "*target: $target*compression: $mode*method: $method*"] \
+                            $primary_loglines 50 100
+                        wait_for_log_messages 0 [list "*Loading compressed RDB (algo=$mode)*"] \
+                            $replica_loglines 50 100
+                        if {$method eq "forkless"} {
+                            assert_equal $forks [s -1 total_forks]
+                        } else {
+                            assert_morethan [s -1 total_forks] $forks
+                        }
+                        if {$diskless eq "no"} {
+                            assert_equal [dict get {lz4 1 zstd 2} $mode] [rdb_compression_codec $primary]
+                        }
+
+                        $primary set "fl-$mode-$diskless:post" after
+                        wait_for_value_to_propagate_to_replica $primary $replica "fl-$mode-$diskless:post"
+                        $replica replicaof no one
+                    }
+                }
+            }
+        }
+    }
 }
 
 # Transcode matrix: doing a disk-based load, the replica writes dump.rdb in its

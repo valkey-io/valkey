@@ -217,17 +217,29 @@ test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
         }
         resume_process [srv -1 pid]
 
-        after 2000
+        # Once the forgotten node has applied its NODE_FORGET it has no peers,
+        # so it can't HELLO back. A stub created before that is reaped.
+        wait_for_condition 100 100 {
+            [CI 1 cluster_raft_role] eq "learner" &&
+            [CI 1 cluster_size] == 0
+        } else {
+            fail "forgotten node still a voter size=[CI 1 cluster_size] role=[CI 1 cluster_raft_role]"
+        }
+        wait_for_condition 100 100 {
+            ![raft_node_visible $r0 $forgotten_id] &&
+            [CI 0 cluster_known_nodes] == 2
+        } else {
+            fail "reappeared via HELLO known_nodes=[CI 0 cluster_known_nodes] nodes={[R 0 CLUSTER NODES]}"
+        }
 
-        set problems {}
-        if {[raft_node_visible $r0 $forgotten_id] || [CI 0 cluster_known_nodes] != 2} {
-            lappend problems "reappeared via HELLO known_nodes=[CI 0 cluster_known_nodes] nodes={[R 0 CLUSTER NODES]}"
-        }
-        if {[CI 1 cluster_raft_role] ne "learner" || [CI 1 cluster_size] != 0} {
-            lappend problems "forgotten node still a voter size=[CI 1 cluster_size] role=[CI 1 cluster_raft_role]"
-        }
-        if {[llength $problems] > 0} {
-            fail [join $problems "; "]
+        # A restart must not turn the forgotten node into a fresh singleton leader.
+        restart_server -1 true false
+        wait_for_condition 50 100 {
+            [CI 1 cluster_raft_role] eq "learner" &&
+            [CI 1 cluster_size] == 0 &&
+            [CI 1 cluster_known_nodes] == 1
+        } else {
+            fail "forgotten node restarted as a member role=[CI 1 cluster_raft_role] size=[CI 1 cluster_size] known=[CI 1 cluster_known_nodes]"
         }
     }
 }

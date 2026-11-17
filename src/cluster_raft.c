@@ -2653,8 +2653,11 @@ static void clusterRaftInitLast(void) {
         clusterRaftStartElection();
     }
 
-    /* Fresh single-node cluster: become leader immediately. */
-    if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
+    /* Fresh single-node cluster: become leader immediately. A node that
+     * already applied log entries, such as after NODE_FORGET of ourselves,
+     * is not a fresh singleton and stays a learner. */
+    if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0 &&
+        rs->last_applied == 0) {
         myself->flags &= ~CLUSTER_NODE_LEARNER;
         rs->role = RAFT_ROLE_LEADER;
         if (rs->current_term == 0) rs->current_term = 1;
@@ -2824,7 +2827,8 @@ static void clusterRaftAssertLearnerRole(void) {
 
 /* Drop JOINING nodes that never got NODE_JOIN and have no live link.
  * HELLO leftovers also get an outbound from clusterConnectNodes(); drop
- * that so the stub can go idle. MEET after HI only has outbound — keep it. */
+ * that once it is old enough for the stub to go idle. A node still waiting
+ * on MEET or NODE_JOIN keeps a young link. MEET after HI only has outbound. */
 static void clusterRaftReapJoiningStubs(void) {
     mstime_t now = mstime();
     mstime_t timeout = max(server.cluster_node_timeout, 1000);
@@ -2833,7 +2837,8 @@ static void clusterRaftReapJoiningStubs(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !(node->flags & CLUSTER_NODE_JOINING)) continue;
-        if (node->inbound_link && node->link) freeClusterLink(node->link);
+        if (node->inbound_link && node->link && now - node->link->ctime > timeout)
+            freeClusterLink(node->link);
         if (node->link || node->inbound_link) continue;
         if (now - node->ctime > timeout) clusterDelNode(node);
     }
@@ -4399,6 +4404,10 @@ static void clusterRaftForgetMyself(void) {
     }
     rs->todo_update_slot_coverage = 1;
     clearCachedClusterSlotsResponse();
+    /* Entries committed after our own NODE_FORGET describe a cluster we
+     * have left. Drop them so a restart cannot apply them as a singleton. */
+    rs->commit_index = rs->last_applied;
+    raftLogTruncateFrom(rs->last_applied + 1);
     rs->todo_save_config = 1;
 }
 

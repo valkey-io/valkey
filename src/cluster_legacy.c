@@ -7262,8 +7262,9 @@ void clusterCheckStall(void) {
  * are then refused by getNodeByQuery(), and the caller refuses the writes
  * that have no keys.
  *
- * The check runs between top level commands only. Writes that a MULTI/EXEC or
- * a script makes after its own slow part still run and are acked. */
+ * The check runs before each top level command and before a keyless write that
+ * a script or module makes. The other writes that a MULTI/EXEC or a script
+ * makes after its own slow part still run and are acked. */
 int clusterCheckCommandStall(void) {
     if (clusterStallDetected(0)) {
         server.cluster->stall_time = getMonotonicUs();

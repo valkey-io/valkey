@@ -6981,7 +6981,12 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         c->flag.readonly = ctx->client->flag.readonly;
         c->flag.asking = ctx->client->flag.asking;
         c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
-        if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
+        /* A write without keys skips the cluster state check in
+         * getNodeByQuery(), so refuse it here after a stall, as processCommand()
+         * does for a top level command. */
+        int stall_refused = (cmd_flags & CMD_WRITE) && (c->read_flags & READ_FLAGS_NO_KEYS) && clusterCheckCommandStall();
+        if (stall_refused) error_code = CLUSTER_REDIR_DOWN_STATE;
+        if (stall_refused || getNodeByQuery(c, &error_code) != getMyClusterNode()) {
             serverAssert(reply_error_msg == NULL);
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {

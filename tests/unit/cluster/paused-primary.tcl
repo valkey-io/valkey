@@ -180,6 +180,46 @@ start_cluster 3 3 {tags {external:skip cluster}} {
 start_cluster 3 3 {tags {external:skip cluster}} {
     set key "{06S}key"
 
+    test "Paused primary does not acknowledge a write without keys inside a script after its replica took over" {
+        # Mixing a keyed write with a keyless one is fine while the cluster is
+        # healthy.
+        assert_equal {OK} [R 0 eval "server.call('set', KEYS\[1\], 'v') return server.call('flushall')" 1 $key]
+        assert_equal {OK} [R 0 set $key before-failover]
+        assert_equal {1} [R 0 wait 1 5000]
+
+        # An EVAL without a shebang keeps EVAL's own flags, so it is not a
+        # write when admitted. The FLUSHALL it calls has no keys, so only a
+        # stall check in the script's own call path can refuse it.
+        set rd [valkey_deferring_client 0]
+        set primary_pid [srv 0 pid]
+        pause_process $primary_pid
+        $rd eval "return server.call('flushall')" 0
+
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "Replica 3 was not promoted"
+        }
+        resume_process $primary_pid
+
+        catch {$rd read} reply
+        if {![regexp {^(CLUSTERDOWN|MOVED) |while the cluster is down} $reply]} {
+            fail "Paused primary replied '$reply' to a script FLUSHALL after failover"
+        }
+        $rd close
+
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave}
+        } else {
+            fail "Old primary did not become a replica"
+        }
+        assert_equal {before-failover} [R 3 get $key]
+    }
+}
+
+start_cluster 3 3 {tags {external:skip cluster}} {
+    set key "{06S}key"
+
     test "Primary does not acknowledge a write after a batch of commands that outlasts the node timeout" {
         assert_equal {OK} [R 0 set $key before-failover]
         assert_equal {1} [R 0 wait 1 5000]

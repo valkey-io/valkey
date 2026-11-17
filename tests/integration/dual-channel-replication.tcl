@@ -1660,6 +1660,14 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     }
 }
 
+# Open a raw socket to the server, over TLS when the suite runs with --tls.
+proc raw_socket {host port} {
+    if {$::tls} {
+        return [::tls::socket $host $port]
+    }
+    return [socket $host $port]
+}
+
 # Return the number of times the REPLCONF command has been processed by the server.
 proc replconf_calls {client} {
     set stats [$client info commandstats]
@@ -1794,18 +1802,20 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         test_config_set $primary repl-ping-replica-period 3600
         set refusal "sending an error to its replica: 'REPLCONF rdb-channel is not allowed after SYNC/PSYNC'"
         # Create the backlog with a throwaway full SYNC, so the PSYNC below can
-        # get +CONTINUE even when this test runs alone. The client is closed
-        # right away; the backlog stays on the primary.
+        # get +CONTINUE even when this test runs alone. The REPLCONF reply is read
+        # first, since SYNC is refused while a reply is pending. The client is closed
+        # once the backlog exists; the backlog stays on the primary.
         set tmp_chan [valkey $primary_host $primary_port 0 $::tls]
+        test_defer {catch {$tmp_chan close}}
+        assert_equal OK [$tmp_chan REPLCONF capa eof]
         $tmp_chan deferred 1
-        $tmp_chan REPLCONF capa eof
         $tmp_chan SYNC
-        $tmp_chan close
         wait_for_condition 50 100 {
             [status $primary repl_backlog_active] == 1
         } else {
             fail "throwaway SYNC did not create the replication backlog"
         }
+        $tmp_chan close
         for {set i 0} {$i < 100} {incr i} { $primary set key-$i $i }
         set replid [status $primary master_replid]
         # Offset just past the current end: +CONTINUE carries no backlog bytes,
@@ -1887,7 +1897,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set refusal "sending an error to its replica: 'REPLCONF rdb-only is not allowed after SYNC/PSYNC'"
 
         # Plain socket, so the test controls exactly what the replica sends.
-        set fd [socket $primary_host $primary_port]
+        set fd [raw_socket $primary_host $primary_port]
         test_defer {catch {close $fd}}
         fconfigure $fd -translation binary -blocking 1
         puts -nonewline $fd "REPLCONF capa eof capa psync2\r\n"
@@ -1947,7 +1957,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary set k1 v1
         $primary set k2 v2
 
-        set fdA [socket $primary_host $primary_port]
+        set fdA [raw_socket $primary_host $primary_port]
         test_defer {catch {close $fdA}}
         fconfigure $fdA -translation binary -blocking 1
         puts -nonewline $fdA "REPLCONF capa eof capa psync2\r\n"
@@ -1962,6 +1972,24 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         flush $fdA
         wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*"} 0 500 20
 
+        # Replica C attaches to the same full-RDB BGSAVE. With the gate, A is
+        # disconnected; without persistence the primary kills the child when its
+        # last waiting replica drops, so C keeps the BGSAVE that B is checked against.
+        # C comes after A in the replica list, so without the gate B still meets A first.
+        set attach_from [count_log_lines 0]
+        set fdC [raw_socket $primary_host $primary_port]
+        test_defer {catch {close $fdC}}
+        fconfigure $fdC -translation binary -blocking 1
+        puts -nonewline $fdC "REPLCONF capa eof capa psync2\r\n"
+        flush $fdC
+        assert_equal "+OK" [string trimright [gets $fdC] "\r"]
+        puts -nonewline $fdC "REPLCONF version 255.255.255\r\n"
+        flush $fdC
+        assert_equal "+OK" [string trimright [gets $fdC] "\r"]
+        puts -nonewline $fdC "PSYNC ? -1\r\n"
+        flush $fdC
+        wait_for_log_messages 0 {"*Waiting for end of BGSAVE for SYNC*"} $attach_from 500 20
+
         # Post-SYNC: A changes its own requirements while it waits for the BGSAVE.
         set refusal_from [count_log_lines 0]
         puts -nonewline $fdA "REPLCONF rdb-filter-only \"\" getack 1\r\n"
@@ -1971,11 +1999,13 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         wait_for_log_messages 0 {"*sending an error to its replica: 'REPLCONF rdb-filter-only is not allowed after SYNC/PSYNC'*"} $refusal_from 50 100
         # Round trip on another client, so A's command is processed before B connects.
         $primary ping
+        # The original BGSAVE must still be running, so B is checked against it.
+        assert_equal 1 [s 0 rdb_bgsave_in_progress]
 
         set attach_before [count_log_message 0 "Waiting for end of BGSAVE for SYNC"]
         set refuse_before [count_log_message 0 "Can't attach the replica to the current BGSAVE"]
 
-        set fdB [socket $primary_host $primary_port]
+        set fdB [raw_socket $primary_host $primary_port]
         test_defer {catch {close $fdB}}
         fconfigure $fdB -translation binary -blocking 1
         puts -nonewline $fdB "REPLCONF capa eof capa psync2\r\n"

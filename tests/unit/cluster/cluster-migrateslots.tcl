@@ -3114,6 +3114,41 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    test "Replica takes the primary's FINISH after a swapdb full sync during an import" {
+        set key "{6ZJ}:full-sync-import"
+        assert_equal 16383 [R 2 CLUSTER KEYSLOT $key]
+        R 3 config set repl-diskless-load swapdb
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set job_name [get_job_name 2 16383]
+        wait_for_migration_field 3 $job_name state occurring-on-primary
+        wait_for_migration_field 0 $job_name state waiting-for-paused
+
+        # The full sync fails the replica's tracking job, while the primary's
+        # import is still waiting for the source to pause.
+        set syncs [status [Rn 0] sync_full]
+        R 0 debug change-repl-id
+        R 0 client kill type replica
+        wait_for_condition 100 100 {
+            [status [Rn 0] sync_full] > $syncs && [status [Rn 3] master_link_status] eq "up"
+        } else {
+            fail "Replica did not full sync"
+        }
+        wait_for_migration_field 3 $job_name state failed
+
+        # Verify writes made after the full sync survive FINISH reconciliation.
+        assert_equal OK [R 2 SET $key value]
+        set_debug_prevent_pause 0
+        wait_for_migration_field 0 $job_name state success
+        wait_for_ofs_sync [Rn 0] [Rn 3]
+        assert_equal success [dict get [get_migration_by_name 3 $job_name] state]
+        assert_equal value [R 0 GET $key]
+        assert_equal [R 0 DEBUG DIGEST] [R 3 DEBUG DIGEST]
+        wait_for_countkeysinslot 2 16383 0
+    }
+}
+
 start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no forkless-infrastructure-enabled yes forkless-policy prefer-forkless save "" repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     set node0_id [R 0 CLUSTER MYID]
 
@@ -3153,5 +3188,36 @@ start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluste
         wait_for_migration_field 0 $jobname state failed
         set_debug_prevent_pause 0
         R 0 flushall
+    }
+
+    test "Slot export snapshot that cannot fork during a forkless BGSAVE leaves the source able to migrate again" {
+        # A forkless BGSAVE has no child process, so the export does not wait
+        # for it, but serverFork() still refuses to fork while it runs. The
+        # export then takes its fork-failure path.
+        R 1 debug populate 100 {fk} 10
+        # Hold 'bgsave' (1s * 100 = 100s) until the fork fails.
+        # It is released after fork failure us confirmed.
+        R 1 config set rdb-key-save-delay 1000000
+        R 1 bgsave
+        assert_equal 1 [getInfoProperty [R 1 info persistence] rdb_bgsave_in_progress]
+        assert_equal forkless [getInfoProperty [R 1 info persistence] rdb_current_bgsave_type]
+
+        set loglines [count_log_lines -1]
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_log_messages -1 {"*Can't begin slot migration snapshot in background: fork: Operation already in progress*"} $loglines 100 100
+        wait_for_migration_field 1 $jobname state failed
+        assert_equal 1 [getInfoProperty [R 1 info persistence] rdb_bgsave_in_progress]
+
+        # Release the save.
+        R 1 config set rdb-key-save-delay 0
+        waitForBgsave [Rn 1]
+
+        # The failed attempt must not leave snapshot pipe state behind: the
+        # next export asserts that none is set when it starts.
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        wait_for_migration 0 16383
+        assert_equal PONG [R 1 ping]
+        R 1 flushall
     }
 }

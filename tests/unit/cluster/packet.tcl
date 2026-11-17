@@ -332,6 +332,8 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
         $rd cluster info
         resume_process $pid
 
+        # CLUSTER INFO omits per-message counters while they are zero.
+        set seen 0
         regexp {cluster_stats_messages_ping_received:(\d+)} [$rd read] -> seen
         assert_lessthan $seen $count
 

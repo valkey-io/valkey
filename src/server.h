@@ -3428,7 +3428,7 @@ void *objectGetVal(const robj *o);
 sds objectGetKey(const robj *o);
 mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
-uint8_t objectGetLFUFrequencyReadOnly(robj *o);
+uint8_t objectGetLFUFrequencyReadOnly(const robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
 

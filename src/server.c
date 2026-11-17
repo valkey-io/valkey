@@ -4799,11 +4799,12 @@ int processCommand(client *c) {
     int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
     /* After a stall the cluster may have failed this primary over. A write
      * without keys, or an EXEC of such writes, never reaches the cluster state
-     * check in getNodeByQuery(), so refuse it here. */
+     * check in getNodeByQuery(), so refuse it here with the error that a keyed
+     * write gets while the cluster is down. */
     int stall_refused = server.cluster_enabled && !obey_client && clusterCheckCommandStall() &&
                         is_write_command && (is_keyless || is_exec);
     if (server.cluster_enabled && !obey_client && (!is_keyless || stall_refused)) {
-        int error_code = CLUSTER_REDIR_DOWN_STATE;
+        int error_code = server.cluster_allow_reads_when_down ? CLUSTER_REDIR_DOWN_RO_STATE : CLUSTER_REDIR_DOWN_STATE;
         clusterNode *n = stall_refused ? NULL : getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {

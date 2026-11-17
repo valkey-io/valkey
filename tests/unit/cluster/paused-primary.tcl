@@ -217,6 +217,81 @@ start_cluster 3 3 {tags {external:skip cluster}} {
     }
 }
 
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-reads-when-down yes}} {
+    set key "{06S}key"
+
+    test "Paused primary refuses writes without keys as read only when reads are allowed while the cluster is down" {
+        assert_equal {OK} [R 0 set $key before-failover]
+        assert_equal {1} [R 0 wait 1 5000]
+
+        set rd_keyed [valkey_deferring_client 0]
+        set rd_keyless [valkey_deferring_client 0]
+        set rd_script [valkey_deferring_client 0]
+        set primary_pid [srv 0 pid]
+        pause_process $primary_pid
+        $rd_keyed set $key after-failover
+        $rd_keyless flushall
+        $rd_script eval "return server.call('flushall')" 0
+
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "Replica 3 was not promoted"
+        }
+        resume_process $primary_pid
+
+        # A keyless write gets the text that a keyed one gets from
+        # getNodeByQuery().
+        catch {$rd_keyed read} keyed_reply
+        catch {$rd_keyless read} keyless_reply
+        catch {$rd_script read} script_reply
+        foreach rd [list $rd_keyed $rd_keyless $rd_script] {
+            $rd close
+        }
+        assert_match {CLUSTERDOWN*only accepts read commands} $keyed_reply
+        assert_equal $keyed_reply $keyless_reply
+        assert_match {*while the cluster is down and readonly*} $script_reply
+
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave}
+        } else {
+            fail "Old primary did not become a replica"
+        }
+        assert_equal {before-failover} [R 3 get $key]
+    }
+}
+
+start_cluster 3 3 {tags {external:skip cluster}} {
+    set key "{06S}key"
+
+    test "Demoted primary answers a write without keys as a replica" {
+        assert_equal {OK} [R 0 set $key before-failover]
+        assert_equal {1} [R 0 wait 1 5000]
+
+        set primary_pid [srv 0 pid]
+        pause_process $primary_pid
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "Replica 3 was not promoted"
+        }
+
+        # With the other primaries stopped, no majority answers the old primary
+        # after it wakes, so its cluster state stays down while it learns that
+        # it was replaced.
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
+        resume_process $primary_pid
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave}
+        } else {
+            fail "Old primary did not become a replica"
+        }
+        assert_equal {fail} [CI 0 cluster_state]
+        assert_error {READONLY*} {R 0 flushall}
+    }
+}
+
 start_cluster 3 3 {tags {external:skip cluster}} {
     set key "{06S}key"
 

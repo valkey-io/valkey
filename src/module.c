@@ -6985,7 +6985,9 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
          * getNodeByQuery(), so refuse it here after a stall, as processCommand()
          * does for a top level command. */
         int stall_refused = (cmd_flags & CMD_WRITE) && (c->read_flags & READ_FLAGS_NO_KEYS) && clusterCheckCommandStall();
-        if (stall_refused) error_code = CLUSTER_REDIR_DOWN_STATE;
+        if (stall_refused) {
+            error_code = server.cluster_allow_reads_when_down ? CLUSTER_REDIR_DOWN_RO_STATE : CLUSTER_REDIR_DOWN_STATE;
+        }
         if (stall_refused || getNodeByQuery(c, &error_code) != getMyClusterNode()) {
             serverAssert(reply_error_msg == NULL);
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {

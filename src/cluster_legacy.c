@@ -7258,9 +7258,10 @@ void clusterCheckStall(void) {
 /* Called before a client command is admitted. Links are only dropped from the
  * event loop, so the next clusterCheckStall() does it.
  *
- * Returns 1 from a stall until the cluster state is ok again. Keyed queries
- * are then refused by getNodeByQuery(), and the caller refuses the writes
- * that have no keys.
+ * Returns 1 on a primary from a stall until the cluster state is ok again.
+ * Keyed queries are then refused by getNodeByQuery(), and the callers refuse
+ * the writes that have no keys. A primary that was demoted meanwhile answers
+ * as a replica does.
  *
  * The check runs before each top level command and before a keyless write that
  * a script or module makes. The other writes that a MULTI/EXEC or a script
@@ -7271,7 +7272,7 @@ int clusterCheckCommandStall(void) {
         server.cluster->stall_links_pending = 1;
         clusterUpdateState();
     }
-    return server.cluster->stall_time != 0;
+    return server.cluster->stall_time != 0 && clusterNodeIsPrimary(myself);
 }
 
 /* -----------------------------------------------------------------------------

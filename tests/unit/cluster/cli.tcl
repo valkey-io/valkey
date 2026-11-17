@@ -696,4 +696,76 @@ start_multiple_servers 3 [list overrides $base_conf] {
     }
 } ;# stop servers
 
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
+start_multiple_servers 3 [list overrides $base_conf] {
+    test {Create cluster for reshard migration failure test} {
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
+
+        wait_for_cluster_state ok
+    }
+
+    test {valkey-cli reshard propagates migration failure} {
+        # key9184688 maps to slot 10923, which is initially owned by node 2.
+        set key key9184688
+        set slot [R 2 cluster keyslot $key]
+        set source_id [R 2 cluster myid]
+        set target_id [R 0 cluster myid]
+
+        # Leave the same key on both nodes so MIGRATE fails with BUSYKEY.
+        assert_equal OK [R 0 cluster setslot $slot importing $source_id]
+        assert_equal OK [R 0 asking]
+        assert_equal OK [R 0 set $key target]
+        assert_equal OK [R 0 cluster setslot $slot stable]
+        assert_equal OK [R 2 set $key source]
+
+        set status [catch {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard \
+                127.0.0.1:[srv 0 port] \
+                --cluster-to $target_id \
+                --cluster-from $source_id \
+                --cluster-slots 1
+        } output]
+        assert_equal 1 $status
+    }
+} ;# stop servers
+
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
+start_multiple_servers 3 [list overrides $base_conf] {
+    test {Create cluster for rebalance migration failure test} {
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
+
+        wait_for_cluster_state ok
+    }
+
+    test {valkey-cli rebalance propagates migration failure} {
+        # key9184688 maps to slot 10923, which is initially owned by node 2.
+        set key key9184688
+        set slot [R 2 cluster keyslot $key]
+        set source_id [R 2 cluster myid]
+
+        # Either node 0 or node 1 can be selected as the first destination.
+        # Leave the same key on both so MIGRATE fails in either case.
+        foreach target {0 1} {
+            assert_equal OK [R $target cluster setslot $slot importing $source_id]
+            assert_equal OK [R $target asking]
+            assert_equal OK [R $target set $key target]
+            assert_equal OK [R $target cluster setslot $slot stable]
+        }
+        assert_equal OK [R 2 set $key source]
+
+        set status [catch {
+            exec $::VALKEY_CLI_BIN --cluster rebalance \
+                127.0.0.1:[srv 0 port] \
+                --cluster-weight $source_id=0
+        } output]
+        assert_equal 1 $status
+    }
+} ;# stop servers
+
 }

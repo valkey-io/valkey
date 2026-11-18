@@ -2850,6 +2850,12 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     clusterSendFail(node->name);
 }
 
+/* The age of a FAIL flag after which a voting primary clears it, when it can
+ * reach the failed node again and nobody has taken over its slots. */
+static mstime_t clusterFailUndoTime(void) {
+    return server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT;
+}
+
 /* This function is called only if a node is marked as FAIL, but we are able
  * to reach it again. It checks if there are the conditions to undo the FAIL
  * state. */
@@ -2875,8 +2881,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * 1) The FAIL state is old enough.
      * 2) It is yet serving slots from our point of view (not failed over).
      * Apparently no one is going to fix these slots, clear the FAIL flag. */
-    if (clusterNodeIsVotingPrimary(node) &&
-        (now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT)) {
+    if (clusterNodeIsVotingPrimary(node) && (now - node->fail_time) > clusterFailUndoTime()) {
         serverLog(
             LL_NOTICE,
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
@@ -5829,11 +5834,11 @@ void clusterRequestFailoverAuth(void) {
      * In this case, we hope that other primary nodes will not refuse to vote because
      * they did not receive the FAIL message in time. That is only a propagation delay,
      * so we don't force the vote once our FAIL is older than the time after which a
-     * primary clears it when it can reach the failed primary again (see
+     * voting primary clears it when it can reach the failed primary again (see
      * clearNodeFailureIfNeeded). A primary that does not see the failure by then
      * knows more than we do, for example when only we lost contact with the primary. */
     if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica() &&
-        mstime() - myself->replicaof->fail_time <= server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT) {
+        mstime() - myself->replicaof->fail_time <= clusterFailUndoTime()) {
         msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
     }
 

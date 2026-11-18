@@ -62,7 +62,13 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
         }
         assert {[cluster_has_flag [cluster_get_node_by_id 3 $R0_nodeid] fail]}
 
-        # R3 retries 4 times cluster-node-timeout after its first election.
+        # R3 retries 4 times cluster-node-timeout after its first election. If it already
+        # retried, R1 and R2 may have seen R0 as failed, so the run was too slow for this
+        # test and a grant below would not point at the FORCEACK bug.
+        if {[count_log_message -3 "Starting a failover election"] != 1} {
+            fail "R3 retried its election before R1 and R2 cleared the FAIL flag of R0"
+        }
+
         # R1 and R2 both see R0 as up and must refuse.
         set loglines1 [count_log_lines -1]
         set loglines2 [count_log_lines -2]

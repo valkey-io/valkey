@@ -251,7 +251,7 @@ test "Regression test for a crash when calling SHARDS during handshake" {
     # This line would previously crash, since all the outbound
     # connections were in handshake state.
     R 8 CLUSTER SHARDS
-}
+} {} {cluster-raft:skip} ;# RESET+MEET handshake is gossip; Raft rejects merging two clusters
 
 test "Cluster is up" {
     wait_for_cluster_state ok

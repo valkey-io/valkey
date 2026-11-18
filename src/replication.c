@@ -3987,7 +3987,7 @@ int streamReplDataBufToDb(client *c) {
             processInputBuffer(c);
             replStreamProgressCallback(processed_bytes, used, &last_progress_callback);
             processed_bytes += used;
-            if (!server.pending_repl_data.blocks) {
+            if (!server.pending_repl_data.blocks || primaryConnBrokenWhileStreaming(c)) {
                 blockingOperationEnds();
                 return C_ERR;
             }

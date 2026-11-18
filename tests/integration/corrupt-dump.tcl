@@ -903,5 +903,41 @@ test {corrupt payload: LZF string length overflows the allocation size} {
     }
 }
 
+test {corrupt payload: stream listpack with a non-minimal integer encoding of the entry flags} {
+    # streamTrim() used to restore its cursor from a byte offset taken before
+    # lpReplaceInteger() re-encoded the flags of the record it deleted.
+    # lpReplaceInteger() always writes the minimal encoding, so a record whose
+    # flags arrived in a wider (but valid) form shrinks the listpack and the
+    # stale offset overshoots the next record.
+    #
+    # Here the first record's flags are stored as a 64-bit int
+    # (\xF4\x02\x00..\x00\x09) where XADD would have written a 7-bit uint
+    # (\x02\x01).
+    set stream_wide_flags "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x35\x35\x00\x00\x00\x11\x00\x02\x01\x00\x01\x01\x01\x81\x66\x02\x00\x01\xF4\x02\x00\x00\x00\x00\x00\x00\x00\x09\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x02\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\x5D\xBD\x8D\x05\xE9\xF0\xC9\xCB"
+
+    # The same stream with the flags in their canonical encoding.
+    set stream_canonical_flags "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x2D\x2D\x00\x00\x00\x11\x00\x02\x01\x00\x01\x01\x01\x81\x66\x02\x00\x01\x02\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x02\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\xA1\xDF\xE0\xE1\x48\xC5\xF8\x85"
+
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        foreach {key payload trim} [list _wide_flags_maxlen $stream_wide_flags {maxlen 1} \
+                                         _wide_flags_minid $stream_wide_flags {minid 2-0} \
+                                         _canonical_flags $stream_canonical_flags {maxlen 1}] {
+            assert_equal OK [r restore $key 0 $payload]
+            assert_equal 2 [r xlen $key]
+            assert_equal {{1-0 {f v}} {2-0 {g w}}} [r xrange $key - +]
+            assert_equal 1 [r xtrim $key {*}$trim]
+            assert_equal 1 [r xlen $key]
+            assert_equal {{2-0 {g w}}} [r xrange $key - +]
+            assert_equal 3-0 [r xadd $key 3-0 h x]
+        }
+        r debug reload
+        foreach key {_wide_flags_maxlen _wide_flags_minid _canonical_flags} {
+            assert_equal 2 [r xlen $key]
+            assert_equal {{2-0 {g w}} {3-0 {h x}}} [r xrange $key - +]
+        }
+        r ping
+    }
+}
+
 } ;# tags
 

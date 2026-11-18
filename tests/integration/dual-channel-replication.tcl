@@ -1994,9 +1994,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set refusal_from [count_log_lines 0]
         puts -nonewline $fdA "REPLCONF rdb-filter-only \"\" getack 1\r\n"
         flush $fdA
-        # The refusal is logged, which shows the exact error path ran, not an
-        # unknown-option or missing-argument reply.
-        wait_for_log_messages 0 {"*sending an error to its replica: 'REPLCONF rdb-filter-only is not allowed after SYNC/PSYNC'*"} $refusal_from 50 100
         # Round trip on another client, so A's command is processed before B connects.
         $primary ping
         # The original BGSAVE must still be running, so B is checked against it.
@@ -2023,7 +2020,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         } else {
             fail "replica B got no decision on the in-progress BGSAVE"
         }
-        assert_equal $attach_before [count_log_message 0 "Waiting for end of BGSAVE for SYNC"]
+        assert_equal [count_log_message 0 "Waiting for end of BGSAVE for SYNC"] $attach_before \
+            "replica B attached to a BGSAVE that writes a full RDB"
+        # Checked after the cohort assertion, so a regression reports the wrong attach above.
+        # The refusal is logged, which shows the exact error path ran, not an
+        # unknown-option or missing-argument reply.
+        wait_for_log_messages 0 {"*sending an error to its replica: 'REPLCONF rdb-filter-only is not allowed after SYNC/PSYNC'*"} $refusal_from 50 100
         assert_equal PONG [$primary ping]
     }
 }

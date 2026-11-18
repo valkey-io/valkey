@@ -1862,7 +1862,7 @@ void replconfCommand(client *c) {
             /* REPLCONF RDB-ONLY is used to identify the client only wants
              * RDB snapshot without replication buffer. */
             /* Not allowed after SYNC/PSYNC. The error reply disconnects the replica. */
-            if (c->flag.replica) {
+            if (getClientType(c) == CLIENT_TYPE_REPLICA) {
                 addReplyErrorFormat(c, "REPLCONF rdb-only is not allowed after SYNC/PSYNC");
                 return;
             }
@@ -1881,7 +1881,7 @@ void replconfCommand(client *c) {
              * We might want to add the complementing "RDB-FILTER-EXCLUDE" to
              * filter out certain data. */
             /* Not allowed after SYNC/PSYNC. The error reply disconnects the replica. */
-            if (c->flag.replica) {
+            if (getClientType(c) == CLIENT_TYPE_REPLICA) {
                 addReplyErrorFormat(c, "REPLCONF rdb-filter-only is not allowed after SYNC/PSYNC");
                 return;
             }
@@ -1915,7 +1915,7 @@ void replconfCommand(client *c) {
             }
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-channel")) {
             /* Not allowed after SYNC/PSYNC. The error reply disconnects the replica. */
-            if (c->flag.replica) {
+            if (getClientType(c) == CLIENT_TYPE_REPLICA) {
                 addReplyErrorFormat(c, "REPLCONF rdb-channel is not allowed after SYNC/PSYNC");
                 return;
             }

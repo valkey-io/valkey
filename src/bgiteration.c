@@ -442,6 +442,7 @@ static dict *inUseEntries; // dbEntry -> ref count
 /* Key values in the current command which don't exist in the DB yet.  Needed for determination of
  * replication for NON-consistent iterations. */
 static list *curCmdMissingKeys; // list of robj
+static list *curCmdPatternKeys; // list of robj
 
 /* A counter of the total amount of memory used for buffered replication data.  This amount is
  * excluded when computing the need for evictions. */
@@ -1208,6 +1209,16 @@ static bool expediteKeysForCopy(bgIterator *it,
 }
 
 
+/* Adds a key that doesn't exist yet to curCmdMissingKeys.  A command may name the same new key more
+ * than once (MSET k 1 k 2, or a SORT whose STORE key is also one of its pattern keys), but each new
+ * key must be added to early_iterate_entries only once after the command runs. */
+static void addCurCmdMissingKey(hashtable **missingKeys, robj *oKey) {
+    if (*missingKeys == NULL) *missingKeys = hashtableCreate(&tempKeysetHashtableType);
+    if (!hashtableAdd(*missingKeys, oKey)) return; // Already collected
+    incrRefCount(oKey);
+    listAddNodeHead(curCmdMissingKeys, oKey);
+}
+
 /* There are several cases where a client must be blocked on write operations.  (Clients never need
  * to be blocked for read operations.)
  *
@@ -1300,6 +1311,7 @@ static bool expediteKeysForWrite(bgIterator *it,
         /* Identification of missing keys is only needed for non-consistent iteration.  This only
          * needs to be collected once (on the 1st non-consistent iteration). */
         bool collectMissing = (listLength(curCmdMissingKeys) == 0);
+        hashtable *missingKeys = NULL; // set of robj(sds), dedupes curCmdMissingKeys
 
         if (it->iteration_flags & BGITERATOR_FLAG_REPLICATION) {
             // CONSISTENT = NO,  REPLICATION = YES
@@ -1313,10 +1325,7 @@ static bool expediteKeysForWrite(bgIterator *it,
                 sds key = objectGetVal(oKey);
                 dbEntry *de = (server.db[dbid]) ? dbFind(server.db[dbid], key) : NULL;
                 if (de == NULL) {
-                    if (collectMissing) {
-                        incrRefCount(oKey);
-                        listAddNodeHead(curCmdMissingKeys, oKey);
-                    }
+                    if (collectMissing) addCurCmdMissingKey(&missingKeys, oKey);
                     continue;
                 }
                 if (iteratorHasPassedKey(it, dbid, key, de)) {
@@ -1376,10 +1385,7 @@ static bool expediteKeysForWrite(bgIterator *it,
                 sds key = objectGetVal(oKey);
                 dbEntry *de = (server.db[dbid]) ? dbFind(server.db[dbid], key) : NULL;
                 if (de == NULL) {
-                    if (collectMissing) {
-                        incrRefCount(oKey);
-                        listAddNodeHead(curCmdMissingKeys, oKey);
-                    }
+                    if (collectMissing) addCurCmdMissingKey(&missingKeys, oKey);
                     continue;
                 }
                 if (isEntryInuseByAnyIterator(de)) {
@@ -1388,6 +1394,7 @@ static bool expediteKeysForWrite(bgIterator *it,
                 }
             }
         }
+        if (missingKeys) hashtableRelease(missingKeys);
     }
 
     return mustBlock;
@@ -1882,15 +1889,52 @@ static bool expediteKeysForWriteOnAllIterators(int dbid,
                                                hashtable *waitingOnKeys) {
     bool mustBlock = false;
 
+    /* Only replicating iterators need the SORT pattern keys, so don't resolve them (which walks the
+     * whole source key) unless one of those is active. */
+    bool anyReplicating = false;
     listIter li;
     listNode *node;
     listRewind(allIterators, &li);
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
-        if (expediteKeysForWrite(it, dbid, cmd, argc, argv, keyrefs, numKeys, waitingOnKeys))
+        if (it->iteration_flags & BGITERATOR_FLAG_REPLICATION) anyReplicating = true;
+    }
+
+    robj **pattern_argv = NULL;
+    keyReference *pattern_keyrefs = NULL;
+    int num_pattern_keys = 0;
+    if (cmd->proc == sortCommand && anyReplicating && server.db[dbid]) {
+        robj **pattern_keys;
+        num_pattern_keys = sortGetPatternKeys(server.db[dbid], argc, argv, &pattern_keys);
+        if (num_pattern_keys) {
+            pattern_argv = zmalloc(sizeof(robj *) * (argc + num_pattern_keys));
+            memcpy(pattern_argv, argv, sizeof(robj *) * argc);
+            pattern_keyrefs = zmalloc(sizeof(keyReference) * (numKeys + num_pattern_keys));
+            memcpy(pattern_keyrefs, keyrefs, sizeof(keyReference) * numKeys);
+            for (int i = 0; i < num_pattern_keys; i++) {
+                pattern_argv[argc + i] = pattern_keys[i];
+                pattern_keyrefs[numKeys + i] = (keyReference){.pos = argc + i, .flags = CMD_KEY_RO};
+                listAddNodeTail(curCmdPatternKeys, pattern_keys[i]);
+            }
+            zfree(pattern_keys);
+        }
+    }
+
+    listRewind(allIterators, &li);
+    while ((node = listNext(&li)) != NULL) {
+        bgIterator *it = listNodeValue(node);
+        bool use_pattern_keys = num_pattern_keys && (it->iteration_flags & BGITERATOR_FLAG_REPLICATION);
+        if (expediteKeysForWrite(it, dbid, cmd,
+                                 use_pattern_keys ? argc + num_pattern_keys : argc,
+                                 use_pattern_keys ? pattern_argv : argv,
+                                 use_pattern_keys ? pattern_keyrefs : keyrefs,
+                                 use_pattern_keys ? numKeys + num_pattern_keys : numKeys,
+                                 waitingOnKeys))
             mustBlock = true;
     }
 
+    zfree(pattern_argv);
+    zfree(pattern_keyrefs);
     return mustBlock;
 }
 
@@ -2263,6 +2307,10 @@ void bgIteration_init(void) {
     serverAssert(curCmdMissingKeys != NULL);
     listSetFreeMethod(curCmdMissingKeys, decrRefCountVoid);
 
+    curCmdPatternKeys = listCreate();
+    serverAssert(curCmdPatternKeys != NULL);
+    listSetFreeMethod(curCmdPatternKeys, decrRefCountVoid);
+
     bufferedReplicationBytes = 0;
 
     if (BGITERATION_DEBUG) {
@@ -2370,6 +2418,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
     bool mustBlock = false;
     hashtable *waitOnKeys = hashtableCreate(&tempKeysetHashtableType); // set of robj(sds)
     listEmpty(curCmdMissingKeys);
+    listEmpty(curCmdPatternKeys);
 
     if (c->cmd->proc == execCommand) {
         mustBlock = expediteKeysForMultiExec(c, waitOnKeys);
@@ -2381,10 +2430,14 @@ bool bgIteration_blockClientIfRequired(client *c) {
         if (numkeys > 0) {
             mustBlock = expediteKeysForWriteOnAllIterators(
                 c->db->id, c->cmd, c->argc, c->argv, keyrefs, numkeys, waitOnKeys);
-            // We shouldn't need to block on a command within a multi (that's not a script)
-            serverAssert(!(mustBlock && c->flag.multi && !c->flag.script));
+            /* Keys of a command within a multi were expedited when the EXEC was processed, so we
+             * shouldn't need to block here.  Scripts don't declare all their keys, and neither does
+             * SORT with BY/GET patterns: its pattern keys depend on the source key, which an earlier
+             * command in the transaction may have changed. */
+            bool undeclaredKeys = c->flag.script || (c->flag.multi && c->cmd->proc == sortCommand);
+            serverAssert(!(mustBlock && c->flag.multi && !undeclaredKeys));
 
-            if (mustBlock && (c->flag.script)) {
+            if (mustBlock && undeclaredKeys) {
                 /* For scripts, we will block for keys declared in EVAL/EVALSHA/FCALL.
                  *  However, scripts are NOT required to declare keys.  Even if it declares keys,
                  *  it's not declaring the DB for the key.  After a SELECT or SWAPDB, we might be on

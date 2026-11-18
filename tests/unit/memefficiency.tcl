@@ -300,6 +300,7 @@ run_solo {defrag} {
                 r config set active-defrag-cycle-min 50
                 r config set active-defrag-cycle-max 50
                 r config set activedefrag yes
+                # MULTI/EXEC so no defrag cycle starts between the load and disabling defrag
                 r multi
                 r debug loadaof
                 r config set activedefrag no

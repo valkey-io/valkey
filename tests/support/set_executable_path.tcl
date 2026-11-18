@@ -27,12 +27,25 @@ set ::VALKEY_CHECK_AOF_BIN [valkey_bin_absolute_path "valkey-check-aof"]
 set ::VALKEY_CHECK_RDB_BIN [valkey_bin_absolute_path "valkey-check-rdb"]
 set ::VALKEY_SENTINEL_BIN  [valkey_bin_absolute_path "valkey-sentinel"]
 
-# TLS module path: in CMake builds it's in lib/, in Make builds it's in src/
+# TLS module directory: in CMake builds it's in lib/, in Make builds it's in src/
 if {[info exists ::env(VALKEY_BIN_DIR)]} {
     # CMake build: lib/ is sibling to bin/
-    set ::VALKEY_TLS_MODULE [file join [file dirname $::VALKEY_BIN_DIR] "lib" "valkey-tls${::VALKEY_PROG_SUFFIX}.so"]
+    set tls_module_dir [file join [file dirname $::VALKEY_BIN_DIR] "lib"]
 } else {
-    set ::VALKEY_TLS_MODULE "[pwd]/src/valkey-tls${::VALKEY_PROG_SUFFIX}.so"
+    set tls_module_dir "[pwd]/src"
+}
+
+# The Makefile names the module with a '.so' suffix on every platform, while CMake uses the
+# platform's own suffix, which is '.dylib' on macOS. Look for the platform suffix first and
+# fall back to '.so'. If neither exists, keep the '.so' path so loading reports that name.
+set tls_module_suffixes [expr {$::tcl_platform(os) eq "Darwin" ? {.dylib .so} : {.so}}]
+set ::VALKEY_TLS_MODULE [file join $tls_module_dir "valkey-tls${::VALKEY_PROG_SUFFIX}.so"]
+foreach suffix $tls_module_suffixes {
+    set tls_module_path [file join $tls_module_dir "valkey-tls${::VALKEY_PROG_SUFFIX}$suffix"]
+    if {[file exists $tls_module_path]} {
+        set ::VALKEY_TLS_MODULE $tls_module_path
+        break
+    }
 }
 
 if {![file executable $::VALKEY_SERVER_BIN]} {

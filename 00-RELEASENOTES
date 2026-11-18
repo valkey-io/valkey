@@ -11,6 +11,69 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 8.1.12  -  Released Wed 18 November 2026
+-----------------------------------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
+
+### Security Fixes
+* CVE-2026-130822: Fix a use-after-free crash in client eviction when maxmemory-clients is enabled by @nadav-levanoni (#5435)
+
+### Bug Fixes
+* Fix a server crash when a key name of 2 GiB or more is sampled for eviction, and incorrect comparison of strings of 2 GiB or more by @madolson (#5133)
+* Correct command metadata to describe the `ZINCRBY` increment and `ZINTER`/`ZINTERSTORE`/`ZUNION`/`ZUNIONSTORE` weights as doubles instead of integers by @sarthakaggarwal97 (#5210)
+* Propagate `PFADD` elements applied before a corrupted-HLL INVALIDOBJ error so replicas and the AOF stay consistent with the primary by @madolson (#5128)
+* Fix a server panic when a Lua script returns or raises an error table whose metatable has an `__index` metamethod that raises an error by @madolson (#5118)
+* Mark the `RESTORE` and `RESTORE-ASKING` `IDLETIME` and `FREQ` options as mutually exclusive in command metadata by @sarthakaggarwal97 (#5212)
+* Fix a memory leak when `server.register_function` named arguments are repeated in a different letter case by @madolson (#5120)
+* Fix a server crash when a module never sets a postponed reply length; the leftover placeholder is now filled with an empty array by @madolson (#5159)
+* Fix quadratic slowdown in `HRANDFIELD` and `SRANDMEMBER` with counts on collections whose elements differ only in letter case by @madolson (#5167)
+* Fix a crash in a cluster replica whose primary was removed from the nodes table when another primary claims an unassigned slot by @madolson (#5184)
+* Fix `SCRIPT KILL` and `FUNCTION KILL` not stopping Lua scripts that loop inside nested coroutines, and script timeouts not being detected when work is spread across coroutines by @madolson (#5108)
+* Fix an out-of-bounds write in `PFADD` and `PFMERGE` on a corrupted sparse HyperLogLog ending in a truncated XZERO opcode by rejecting it as invalid by @madolson (#5124)
+* Fix a server abort in `PFADD` and `PFMERGE` on short sparse HyperLogLogs when `hll-sparse-max-bytes` is set to 31 or less by @madolson (#5138)
+* Fix a server crash in `SORT` and `SORT_RO` with `BY` or `GET` patterns when an element is 2 GiB or larger by @madolson (#5146)
+* Fix `ValkeyModule_Calloc` and `ValkeyModule_TryCalloc` returning an undersized buffer when `nmemb * size` overflows by @madolson (#5155)
+* Fix `ValkeyModule_CallReplyAttributeElement` always returning an error on RESP3 attribute replies by @madolson (#5157)
+* Fix `EXEC` succeeding after a key that was already expired at `WATCH` time is overwritten, which can happen on replicas by @madolson (#5169)
+* Correct expiry command metadata to show that `XX` can be combined with `GT` or `LT`, rather than all four conditions being mutually exclusive by @sarthakaggarwal97 (#5213)
+* Fix `PFMERGE` with no source keys bypassing ACL key permissions and failing in `COMMAND GETKEYS`, and a crash in module commands whose keynum key spec starts past the last argument by @madolson (#5087)
+* Fix a memory leak when a script or module command is refused by ACL while the ACL log is disabled with `acllog-max-len 0` by @madolson (#5162)
+* Fix a crash on the first `FUNCTION LOAD` after startup when the shebang engine name contains a NUL byte by @madolson (#5115)
+* Fix `FCALL` errors or a crash when `FUNCTION FLUSH SYNC` runs before the lazy free triggered by `FUNCTION RESTORE` of more than 64 functions has completed by @madolson (#5105)
+* Fix `notify-keyspace-events` dropping the `n` (new key) flag from `CONFIG GET` and `CONFIG REWRITE` when `A` is also set by @pirate329 (#5199)
+* Fix a cluster node failing to restart with an assertion after a gossip entry carrying the MYSELF flag adds a second myself node to nodes.conf by @madolson (#5134)
+* Fix `ACL LOAD` not disconnecting default user clients subscribed to channels the reloaded rules no longer allow by @madolson (#5085)
+* Fix long stalls in `ZRANDMEMBER`, `SRANDMEMBER`, `SPOP` and `HRANDFIELD` on a small key left over from a much larger one while its hashtable shrinks by @madolson (#5170)
+* Fix a crash in active defrag when a database's keyspace is replaced mid-scan by `FLUSHDB ASYNC`, `FLUSHALL ASYNC`, `SWAPDB` or a replica's flush before full sync by @taham0 (#4968)
+* Allow modules to block RESP3 clients that are subscribed to Pub/Sub channels instead of failing `ValkeyModule_BlockClient` with ENOTSUP by @quanyeyang (#4863)
+* Bound the time spent per cycle evicting keys from the client tracking table, avoiding long stalls after lowering `tracking-table-max-keys` by @tanmayBeginsJourney (#4775)
+* Fix a memory leak in `ValkeyModule_GetCommandKeysWithFlags` when introspecting commands with large key lists by @christopherlim98 (#5046)
+* Correct `SENTINEL SIMULATE-FAILURE` metadata so `COMMAND DOCS` shows the required mode argument and its tokens by @sarthakaggarwal97 (#5208)
+* Fix a TLS busy loop that consumed 100% CPU when a connection's read or write handler was removed while OpenSSL was waiting for the opposite event by @yairgott (#3510)
+* Fix a crash caused by a NULL pointer dereference when all timer events in an event loop are pending deletion by @royenheart (#4351)
+* Fix a node staying stuck in PFAIL when its PING is lost while the peer's own traffic keeps the cluster link alive by @enjoy-binbin (#4171)
+* Fix `SORT` key extraction so a `STORE` destination named like an option can no longer bypass ACL checks and write to an unauthorized key by @madolson (#4665)
+* Fix `GEOSEARCH` returning empty results for exact zero-distance matches on builds where floating-point contraction breaks the latitude distance calculation by @Baraa-Hasheesh (#4777)
+* Fix a crash when a replication role change command such as `REPLICAOF` or `CLUSTER REPLICATE` arrives over a replication link by @madolson (#5187)
+* Fix `XADD` rejected for oversized elements leaving behind an empty stream key on the primary that is never replicated or written to the AOF by @madolson (#5178)
+* Redact credentials of rejected `HELLO`, `AUTH` and `MIGRATE` commands so passwords no longer leak to MONITOR and the commandlog by @madolson (#5180)
+* Fix an assertion crash on 64-bit builds when `LSET` merges list nodes whose combined size exceeds 4GB, reachable through a crafted `RESTORE` payload by @madolson (#5163)
+* Ignore invalid ping extension values from cluster peers that would corrupt nodes.conf and prevent the node from restarting by @madolson (#5137)
+* Prevent a replica crash when the primary wrongly replies +CONTINUE to a full resync request; the replica now drops the link and retries by @madolson (#5126)
+* Bound the bytes the cluster bus reads per event so a peer with a constant read backlog cannot starve clients, cron and heartbeats by @madolson (#5161)
+* Fail `CONFIG REWRITE` when the old config file reads short instead of writing uninitialized memory into the new config file by @madolson (#5158)
+* Restore acceptance of hexadecimal floats (such as `0x10`) in sorted set score ranges and `SORT` when built with `USE_FAST_FLOAT=yes` by @quanyeyang (#4875)
+* Reclaim client-side caching tracking table entries left by disconnected clients, fixing a memory leak under read-heavy workloads, and include the tracking table in active defrag by @rayjinghaolei (#4190)
+* Correct `ZADD` and `LCS` metadata so `COMMAND DOCS` and valkey-cli hints no longer present `NX` with `GT`/`LT` or `LEN` with `IDX` as valid combinations by @rainsupreme (#5244)
+* Fix a Sentinel crash when a monitored replica's `INFO` reply contains no `master_host` by @smkher (#4929)
+* Fix a use-after-free in streams when `XADD` creates a new node, which could leave a dangling pointer hit by later reads such as `XRANGE` by @Baraa-Hasheesh (#4711)
+* Reject inbound cluster bus packets larger than 16MB, except Pub/Sub and module messages, so a peer cannot make a node buffer up to 4GB from a single header by @madolson (#5065)
+* Fix `XINFO GROUPS` and `XINFO STREAM ... FULL` reporting too-high consumer group lag after `XTRIM` or a trimming `XADD` removes unread entries by @Sasidharan3094 (#4983)
+* Fix AOF load failure after a crash leaves a torn annotation at the end of the file; it is now treated as a short read and can be truncated by `aof-load-truncated` or `valkey-check-aof --fix` by @sumitk163 (#5349)
+* Correct the `SENTINEL GET-PRIMARY-ADDR-BY-NAME` reply schema to allow the null reply returned for an unknown primary name by @rainsupreme (#5246)
+* Fix a crash after `REPLICAOF NO ONE` with TLS and a connection leak after `REPLICAOF` to a new primary when the old primary client is freed asynchronously due to pending I/O by @yaronsananes (#3719)
+
 Valkey 8.1.11  -  Released Mon 26 October 2026
 ----------------------------------------------
 
@@ -439,6 +502,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Caiyi Wu @Codebells
 * charsyam @charsyam
 * chenshi @chenshi5012
+* Christopher Lim @christopherlim98
 * chx9 @chx9
 * chzhoo @chzhoo
 * Danish Mehmood @danish-mehmood
@@ -450,6 +514,7 @@ We appreciate the efforts of all who contributed code to this release!
 * jeon1226 @jeon1226
 * Jerry Zhao @thweetkomputer
 * Jim Brunner @JimB123
+* Jinghao Lei @rayjinghaolei
 * jjuleslasarte @jjuleslasarte
 * Josef Šimánek @simi
 * Jungwoo Song @bluayer
@@ -474,6 +539,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Parth Patel @parthpatel
 * Pierre @pieturin
 * Ping Xie @PingXie
+* pirate329 @pirate329
 * pkhartsk @pkhartsk
 * Qu Chen @QuChen88
 * Quanye Yang @quanyeyang
@@ -488,6 +554,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Rueian @rueian
 * sananes @yaronsananes
 * Sarthak Aggarwal @sarthakaggarwal97
+* Sasidharan Gopal @Sasidharan3094
 * Saurabh K @smkher
 * secwall @secwall
 * Seungmin Lee @sungming2
@@ -499,8 +566,12 @@ We appreciate the efforts of all who contributed code to this release!
 * skyfirelee @artikell
 * Stav Ben-Tov @stav-bentov
 * Stefan Mueller @muelstefamzn
+* Sumit Sharma @sumitk163
 * sushil paneru @sushilpaneru1
+* Taeknology @Taeknology
 * Tal Shachar @talxsha
+* Tanmay Mohan @tanmayBeginsJourney
+* Tarik Ermis @tarikermis
 * Thalia Archibald @thaliaarchi
 * Tjaden Hess @tjade273
 * Uri Yagelnik @uriyage
@@ -514,6 +585,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Wen Hui @hwware
 * xiaocj @xiaocj
 * Xuyang WANG @Nugine
+* Yair Gottdenker @yairgott
 * Yanqi Lv @lyq2333
 * Yury Fridlyand @Yury-Fridlyand
 * zackcam @zackcam
@@ -522,4 +594,5 @@ We appreciate the efforts of all who contributed code to this release!
 * zixuan zhao @azuredream
 * Zvi Schneider @zvi-code
 * 烈香 @hengyoush
+* 皇心 @royenheart
 * 风去幽墨 @fengquyoumo

@@ -410,6 +410,7 @@ TEST_F(UtilTest, TestSecureRandomBytesFillsEveryPosition) {
     }
 }
 
+/* Check the escaped bytes and preservation of an existing SDS prefix. */
 static void assertEscapedJson(const char *in, size_t len, const char *expected) {
     sds s = escapeJsonString(sdsnew("prefix:"), in, len);
     ASSERT_EQ(sdslen(s), strlen(expected));

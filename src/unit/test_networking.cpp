@@ -988,10 +988,10 @@ TEST_F(NetworkingTest, TestWriteDoneStopsWritesToCloseAsapClient) {
 
     processClientIOWriteDone(c);
 
-    ASSERT_EQ(c->io_write_state, CLIENT_IDLE);
-    ASSERT_EQ(c->conn->write_handler, nullptr);
-    ASSERT_EQ(fc->postpone_state, 0);
-    ASSERT_FALSE(c->conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE);
+    EXPECT_EQ(c->io_write_state, CLIENT_IDLE);
+    EXPECT_EQ(c->conn->write_handler, nullptr);
+    EXPECT_EQ(fc->postpone_state, 0);
+    EXPECT_FALSE(c->conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE);
 
     zfree(c);
     connFreeFake(fc);

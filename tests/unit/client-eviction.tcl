@@ -793,17 +793,32 @@ start_server {} {
         set evicted [s evicted_clients]
 
         # The script yields past busy-reply-threshold, records evicted_clients at its end, and returns.
+        # It keeps yielding until the pusher's replies have pushed the total 1MB past the limit, so
+        # the post-script eviction does not depend on how many replies the server got through in a
+        # fixed time. INFO is checked only every 10ms, so the loop stays cheap and the server still
+        # reads the pusher's socket often (the Lua hook is the only yield point). A 3 second cap
+        # keeps a stuck pusher from hanging the test.
         $rdX eval {
+            local limit = tonumber(ARGV[1])
             local t0 = redis.call('TIME')
             local start = t0[1] * 1000000 + t0[2]
+            local last = start
             while true do
+                -- Pure Lua work between redis.call()s, so the 100000-instruction hook fires often.
+                for _ = 1, 1000 do end
                 local t = redis.call('TIME')
-                if (t[1] * 1000000 + t[2]) - start > 1000000 then break end
+                local now = t[1] * 1000000 + t[2]
+                if now - start > 3000000 then break end
+                if now - last > 10000 then
+                    last = now
+                    local mem = string.match(redis.call('INFO', 'memory'), 'mem_clients_normal:(%d+)')
+                    if tonumber(mem) > limit then break end
+                end
             end
             local info = redis.call('INFO', 'stats')
             redis.call('SET', 'evicted_during_script', string.match(info, 'evicted_clients:(%d+)'))
             return 'done'
-        } 0
+        } 0 [expr {$total + [mb 2]}]
         $rdX flush
         wait_for_condition 100 10 {
             [catch {r ping} e] && [string match {BUSY*} $e]
@@ -811,10 +826,11 @@ start_server {} {
             fail "script did not start"
         }
 
-        # While the script yields, the pusher's unread -BUSY replies push the total over the limit,
-        # and each of its commands runs evictClients(), which picks the executing client first.
-        # ~19MB of replies is far more than the socket buffers can absorb, but less than the
-        # executing client, so the pusher is never the largest client.
+        # While the script yields, the pusher's unread -BUSY replies push the total over the limit.
+        # Its commands run evictClients() with the executing client counted as pending, so the
+        # pusher is not evicted, and the script ends once the pusher's memory is over the limit.
+        # The kernel socket buffers may absorb some replies, which is why the script waits on the
+        # memory condition rather than on time.
         $rdW write [string repeat "PING\r\n" 200000]
         $rdW flush
 
@@ -830,7 +846,7 @@ start_server {} {
         wait_for_condition 100 10 {
             ![client_exists executing]
         } else {
-            fail "executing client was not evicted after its script"
+            fail "executing client was not evicted after its script (limit [r config get maxmemory-clients], mem_clients_normal [s mem_clients_normal], evicted_clients [s evicted_clients])"
         }
         catch {$rdX close}
         catch {$rdW close}

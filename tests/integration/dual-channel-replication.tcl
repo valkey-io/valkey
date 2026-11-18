@@ -1771,7 +1771,8 @@ foreach compression {no lz4} {
             $replica config set loading-process-events-interval-bytes 1024
             # Hold the RDB load until the test releases it. Events are served
             # every 1 KB of RDB, so the replica keeps reading the main channel.
-            $replica config set key-load-delay 2000
+            # Hold it long enough (~200s) for slow builds to buffer the commands.
+            $replica config set key-load-delay 10000
 
             test "Replica aborts streaming when the primary link breaks mid-stream (repl-compression $compression)" {
                 set loglines [count_log_lines 0]

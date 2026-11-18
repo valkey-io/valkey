@@ -328,9 +328,7 @@ start_server {tags {"dump"}} {
         r set key "Some Value"
         # A port with no listener: the connection is refused.
         set port [find_available_port $::baseport $::portcount]
-        set e {}
-        catch {r migrate 127.0.0.1 $port key $db 1000} e
-        assert_match {IOERR*connecting*} $e
+        assert_error {IOERR*connecting*} {r migrate 127.0.0.1 $port key $db 1000}
         assert {[r exists key] == 1}
     } {} {external:skip}
 

@@ -1972,6 +1972,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         puts -nonewline $fdA "PSYNC ? -1\r\n"
         flush $fdA
         wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*"} 0 500 20
+        # Stop the child so the BGSAVE stays in progress until B's decision.
+        # The test framework resumes it when the test ends, before the deferred cleanup.
+        pause_process [get_child_pid 0]
 
         # Replica C attaches to the same full-RDB BGSAVE. With the gate, A is
         # disconnected; without persistence the primary kills the child when its

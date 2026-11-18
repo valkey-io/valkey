@@ -340,7 +340,7 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         }
         set r1_id [R 1 cluster myid]
         R 0 cluster meet 127.0.0.1 [srv -1 port]
-        raft_add_voter 0 $r1_id
+        raft_add_voter 0 1
         wait_for_raft_cluster_size 2
     }
 }

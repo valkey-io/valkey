@@ -91,7 +91,7 @@ The architecture is split into a **control plane**, the Cluster V2 cluster bus, 
 
 The foundation for every durability mode is a mechanism that **delays replies, not command execution**, until a write is durable. It is called the Dirty Key Tracker, or reply blocking.
 
-* **Execute immediately, hold the reply.** A command runs right away and its reply goes into the client output buffer (COB). A byte-precise boundary in the COB stops the networking layer from flushing past it until the *committed offset* catches up. A pipelined client can have several boundaries, which unblock one after another.  
+* **Execute immediately, hold the reply.** A command runs right away and its reply goes into the client output buffer (COB). A byte-precise boundary in the COB stops the networking layer from flushing past it until the *committed offset* catches up. A pipelined client can have several boundaries, which unblock one after another. Each boundary also records the node's *replication ID* when the command ran. A boundary releases its reply as OK only while the node is still primary with that same replication ID.  
 * **Uncommitted key tracking.** Modified keys are tracked per database, together with the replication offset at which they were dirtied. A **read** of an uncommitted key is reply-blocked just like a write, so no client ever sees uncommitted state. This includes non-replicating replies, such as `SETNX` returning `0` because of a write that isn't durable yet.  
 * **Keyspace-wide reads.** Commands that read the keyspace as a whole, not specific keys (`SCAN`, `KEYS`, `RANDOMKEY`, `DBSIZE`, `INFO keyspace`), can't be checked key by key. Their replies are held until the node's committed offset reaches the applied offset at the time the command ran.  
 * **Expiry and eviction.** Deletes caused by expiry or eviction are replicated writes, so the deleted key is marked dirty like any other write. A read that finds a key missing because it was just expired or evicted is held until that delete commits. Otherwise a client could read nil and then, after a failover, read the old value again.  
@@ -259,8 +259,8 @@ Leases run in both directions between the primary and each eligible replica. The
 
 **Lease durations.** The replica read lease is, by default, shorter than the primary lease. The read lease, plus the time from the end of the read-lease wait until the demotion commits to the cluster bus (including timers and scheduling), plus the time from sending data to the replica until its acknowledgement arrives, plus the clock-drift margin, plus twice the maximum clock drift, must be less than the primary lease. The send-to-acknowledgement time is there because the primary's lease runs from when it sent the data, while the demotion wait runs from when the acknowledgement arrived. The extra drift term is there because the primary times both intervals on its own clock. Then when a sync replica fails:
 
-* The primary waits only for the short read lease before it demotes the replica. Writes stall for that window, and no longer.  
-* The demotion commits before the primary's own lease from that replica would expire. So the primary normally doesn't have to stop serving reads. Committing to the cluster bus has no hard upper bound on latency (for example, during a Raft leader election). If the demotion takes longer, the primary stops serving reads until it commits.
+* The primary waits for the short read lease, then proposes the demotion on the cluster bus. The replica keeps counting toward the commit point until the demotion commits, because no write may commit without its acknowledgement while it is still eligible. So writes stall for the read lease plus the time the demotion takes to commit. If the replica's acknowledgements resume within the read lease, there is no demotion and no cluster-bus entry; the lease itself absorbs ordinary jitter.  
+* The demotion normally commits before the primary's own lease from that replica would expire, so the primary normally doesn't have to stop serving reads. Committing to the cluster bus has no hard upper bound on latency (for example, during a Raft leader election). If the demotion takes longer, writes keep stalling and the primary stops serving reads until it commits. Cluster-bus commit latency is therefore part of the write-availability budget during a replica outage. It never affects safety.
 
 The longer primary lease only matters when the primary itself fails or is partitioned. It sets how long a replica waits before taking over.
 
@@ -306,7 +306,7 @@ Writes are never reported as successful until they commit. While a fault is bein
 * **`NOREPLICAS`**: the write was rejected before it executed. It definitely didn't happen and is safe to retry.  
 * **`UNCOMMITTED`**: the write executed on the primary but couldn't be committed, so **its outcome is unknown**. It may still commit later, for example when a replica that already received it is promoted into the sync replica set, or it may be lost in a failover. Clients should treat it like a timeout: retry only idempotent operations, or read the key back to check.
 
-A primary that steps down while replies are held also returns `UNCOMMITTED` for them, because the new primary decides whether those writes survive.
+A primary that learns it has stepped down returns `UNCOMMITTED` for every reply held under its old replication ID, because the new primary decides whether those writes survive. Offsets can be reused after a full resync, so a held reply is tied to the replication ID it was held under (section 1), never to its offset alone.
 
 ### **Failover**
 

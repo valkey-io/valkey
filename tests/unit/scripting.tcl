@@ -1820,10 +1820,11 @@ start_server {tags {"scripting external:skip tls:skip"}} {
         set loglines [count_log_lines 0]
         r config set save "1 1"
         r set foo bar
-        # The save point is proven by the bgsave start, which the parent logs right
-        # after fork. Waiting for rdb_changes_since_last_save to reach 0 would also
-        # wait for the child's fsync and rename, which can be slow on a loaded runner.
-        wait_for_log_messages 0 {"*Background saving started*"} $loglines 50 100
+        # serverCron logs this line when the save point fires, before starting the
+        # save, so it does not depend on the save type (fork or forkless). Waiting for
+        # rdb_changes_since_last_save to reach 0 would also wait for the save to
+        # finish writing, which can be slow on a loaded runner.
+        wait_for_log_messages 0 {"*changes in * seconds. Saving*"} $loglines 50 100
         $rd close
         r config set save ""
     }

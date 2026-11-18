@@ -224,7 +224,8 @@ typedef struct {
     int votes_received;
     int pre_votes_received;
     mstime_t election_timeout;            /* Randomized timeout */
-    mstime_t last_heartbeat;              /* Last time we heard from leader */
+    mstime_t last_heartbeat;              /* Election timer start */
+    mstime_t last_leader_contact;         /* Last AE or snapshot from a leader, for the lease */
     mstime_t pre_vote_started;            /* Last time we started a pre-vote round */
     mstime_t last_repl_offsets_broadcast; /* Last REPL_OFFSETS broadcast */
     mstime_t joiner_since;                /* When we became a joiner (for timeout) */
@@ -1968,6 +1969,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
+    rs->last_leader_contact = rs->last_heartbeat;
     clusterRaftSetLeader(argv[1]);
 
     /* Log consistency check: verify prev_log_index/term match. Entries have
@@ -2185,6 +2187,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     memcpy(old_shard_id, myself->shard_id, CLUSTER_NAMELEN);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
+    rs->last_leader_contact = rs->last_heartbeat;
     clusterRaftSetLeader(argv[1]);
 
     /* If we're already past the snapshot, ignore. */
@@ -2436,14 +2439,18 @@ static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last
     if (rs->role == RAFT_ROLE_JOINER) return 0;
     if (nodeIsLearner(myself)) return 0;
 
-    /* Deny vote if we recently heard from the leader (leader lease).
-     * Use the base node-timeout, not the randomized election timeout —
-     * the randomization is for staggering elections, not for lease duration. */
+    /* Deny vote if we are the leader or recently heard from it (leader
+     * lease, Raft thesis 4.2.3). Only contact with the leader counts, not
+     * our own election timer, which also restarts on startup and after a
+     * pre-vote round. Use the base node-timeout, not the randomized election
+     * timeout — the randomization is for staggering elections, not for lease
+     * duration. */
+    if (rs->role == RAFT_ROLE_LEADER) return 0;
     mstime_t now = monotonicMs();
     mstime_t lease = server.cluster_node_timeout;
     if (lease < 1000) lease = 1000;
-    if (rs->leader[0] != '\0' &&
-        now - rs->last_heartbeat < lease) {
+    if (rs->leader[0] != '\0' && rs->last_leader_contact != 0 &&
+        now - rs->last_leader_contact < lease) {
         return 0;
     }
 

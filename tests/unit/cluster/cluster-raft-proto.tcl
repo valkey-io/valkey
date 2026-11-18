@@ -362,6 +362,49 @@ test "Raft proto: PRE_VOTE granted after node-timeout even with randomized elect
     }
 }
 
+test "Raft proto: PRE_VOTE lease only counts contact with the leader" {
+    # The lease must not restart with our own election timer, which happens
+    # on startup and when a pre-vote round times out. Otherwise two followers
+    # can deny each other's pre-votes for a long time after the leader fails.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+
+        # Form a 2-node cluster with a fake leader, as above.
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        raft_send $fd "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd]
+        close $fd
+
+        # After a restart, the persisted leader has no lease.
+        restart_server 0 true false
+        assert_equal $leader_id [CI 0 cluster_raft_leader]
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "PRE_VOTE_REQ $leader_id 2 2 1"
+        assert_match "PRE_VOTE 2 1" [raft_recv $fd]
+
+        # Nor right after our own pre-vote round times out.
+        wait_for_condition 500 10 {
+            [CI 0 cluster_raft_role] eq "pre-candidate"
+        } else {
+            fail "no pre-vote"
+        }
+        wait_for_condition 500 10 {
+            [CI 0 cluster_raft_role] eq "follower"
+        } else {
+            fail "pre-vote round did not time out"
+        }
+        raft_send $fd "PRE_VOTE_REQ $leader_id 2 2 1"
+        assert_match "PRE_VOTE 2 1" [raft_recv $fd]
+        close $fd
+    }
+}
+
 test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]

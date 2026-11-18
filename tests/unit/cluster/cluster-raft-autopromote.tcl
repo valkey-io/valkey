@@ -2,32 +2,26 @@
 
 source tests/support/cluster_raft.tcl
 
-# Servers 1..n-1. Skip the bootstrap leader so DELVOTER/FORGET do not pick it.
-proc raft_peer_ids {n} {
-    set ids [list]
+# Server index in 1..n-1. Skip the bootstrap leader so demotion and FORGET do not pick it.
+proc raft_find_learner {leader n} {
     for {set i 1} {$i < $n} {incr i} {
-        lappend ids [R $i CLUSTER MYID]
-    }
-    return $ids
-}
-
-proc raft_find_learner {leader ids} {
-    foreach id $ids {
+        set id [R $i CLUSTER MYID]
         if {[cluster_has_flag [cluster_get_node_by_id $leader $id] learner]} {
-            return $id
+            return $i
         }
     }
-    return ""
+    return -1
 }
 
-proc raft_find_voter {leader ids {exclude ""}} {
-    foreach id $ids {
-        if {$id eq $exclude} continue
+proc raft_find_voter {leader n {exclude -1}} {
+    for {set i 1} {$i < $n} {incr i} {
+        if {$i == $exclude} continue
+        set id [R $i CLUSTER MYID]
         if {![cluster_has_flag [cluster_get_node_by_id $leader $id] learner]} {
-            return $id
+            return $i
         }
     }
-    return ""
+    return -1
 }
 
 # Unapplied log entries of `type` in nodes.conf.
@@ -64,8 +58,8 @@ start_cluster 5 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
 
 start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: manual ADDVOTER above target is not demoted" {
-        set remaining [raft_find_learner 0 [raft_peer_ids 6]]
-        assert {$remaining ne ""}
+        set remaining [raft_find_learner 0 6]
+        assert {$remaining > 0}
         raft_add_voter 0 $remaining
         wait_for_raft_cluster_size 6
         after 2000
@@ -75,12 +69,19 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
 
 start_cluster 5 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: DELVOTER below target is applied, then the learner is promoted" {
-        set target [raft_find_voter 0 [raft_peer_ids 5]]
-        assert {$target ne ""}
-        assert_equal OK [R 0 CLUSTER DELVOTER $target]
+        set target [raft_find_voter 0 5]
+        assert {$target > 0}
+        set target_id [R $target CLUSTER MYID]
+        raft_set_voter $target no
+        wait_for_condition 100 50 {
+            [cluster_has_flag [cluster_get_node_by_id 0 $target_id] learner]
+        } else {
+            fail "demotion was not applied: size=[CI 0 cluster_size]"
+        }
+        raft_set_voter $target auto
         wait_for_condition 200 100 {
             [CI 0 cluster_size] == 5 &&
-            ![cluster_has_flag [cluster_get_node_by_id 0 $target] learner]
+            ![cluster_has_flag [cluster_get_node_by_id 0 $target_id] learner]
         } else {
             fail "size=[CI 0 cluster_size]"
         }
@@ -89,35 +90,27 @@ start_cluster 5 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
 
 start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: DELVOTER at/above target is allowed" {
-        set peer_ids [raft_peer_ids 6]
-        set remaining [raft_find_learner 0 $peer_ids]
-        assert {$remaining ne ""}
+        set remaining [raft_find_learner 0 6]
+        assert {$remaining > 0}
         raft_add_voter 0 $remaining
         wait_for_raft_cluster_size 6
-        set target [raft_find_voter 0 $peer_ids $remaining]
-        assert {$target ne ""}
-        R 0 CLUSTER DELVOTER $target
+        set target [raft_find_voter 0 6 $remaining]
+        assert {$target > 0}
+        raft_set_voter $target no
         wait_for_raft_cluster_size 5
     }
 }
 
 start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: paused voter does not cause promotion beyond target" {
-        set peer_ids [raft_peer_ids 6]
-        set remaining [raft_find_learner 0 $peer_ids]
-        assert {$remaining ne ""}
-        set pause_i 0
-        for {set i 0} {$i < [llength $peer_ids]} {incr i} {
-            if {![cluster_has_flag [cluster_get_node_by_id 0 [lindex $peer_ids $i]] learner]} {
-                set pause_i [expr {$i + 1}]
-                break
-            }
-        }
-        assert {$pause_i > 0}
+        set remaining [raft_find_learner 0 6]
+        set pause_i [raft_find_voter 0 6]
+        assert {$remaining > 0 && $pause_i > 0}
+        set remaining_id [R $remaining CLUSTER MYID]
         pause_process [srv -$pause_i pid]
         after 2000
         assert_equal 5 [CI 0 cluster_size]
-        assert {[cluster_has_flag [cluster_get_node_by_id 0 $remaining] learner]}
+        assert {[cluster_has_flag [cluster_get_node_by_id 0 $remaining_id] learner]}
         resume_process [srv -$pause_i pid]
     }
 }
@@ -203,27 +196,31 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}}
         set id [R 1 CLUSTER MYID]
         pause_process [srv -1 pid]
         pause_process [srv -2 pid]
-        set c1 [valkey_deferring_client]
-        set c2 [valkey_deferring_client]
-        $c1 CLUSTER DELVOTER $id
+
+        set cport [expr {[srv 0 port] + 10000}]
+        set fd [raft_connect_fake_node 127.0.0.1 $cport [string repeat "e" 40] \
+            "127.0.0.1:9001@19001,,tls-port=0,shard-id=[string repeat "f" 40]"]
+        raft_send $fd "PROPOSE DEL_VOTER $id"
         after 300
-        $c2 CLUSTER DELVOTER $id
+        raft_send $fd "PROPOSE DEL_VOTER $id"
         after 300
         assert_equal 1 [raft_inflight_count [srv 0 client] DEL_VOTER]
 
+        close $fd
         resume_process [srv -1 pid]
         resume_process [srv -2 pid]
-        assert_equal OK [$c1 read]
-        assert_equal OK [$c2 read]
-        $c1 close
-        $c2 close
+        wait_for_condition 100 50 {
+            [raft_inflight_count [srv 0 client] DEL_VOTER] == 0
+        } else {
+            fail "DEL_VOTER did not apply"
+        }
     }
 }
 
 start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 500}} {
     test "Raft autopromote: leader change preserves the voter set and ADDVOTER works" {
-        set remaining [raft_find_learner 0 [raft_peer_ids 6]]
-        assert {$remaining ne ""}
+        set remaining [raft_find_learner 0 6]
+        assert {$remaining > 0}
 
         set old_term [CI 0 cluster_raft_current_term]
         pause_process [srv 0 pid]
@@ -256,23 +253,23 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 500}} {
 
 start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: forgetting a voter promotes another learner" {
-        set peer_ids [raft_peer_ids 6]
-        set learner [raft_find_learner 0 $peer_ids]
-        set target [raft_find_voter 0 $peer_ids]
-        assert {$learner ne "" && $target ne ""}
-        set target_idx [expr {[lsearch -exact $peer_ids $target] + 1}]
+        set learner [raft_find_learner 0 6]
+        set target [raft_find_voter 0 6]
+        assert {$learner > 0 && $target > 0}
+        set learner_id [R $learner CLUSTER MYID]
+        set target_id [R $target CLUSTER MYID]
         # Pause first so the forgotten node cannot MEET back in before the wait.
-        pause_process [srv -$target_idx pid]
-        assert_equal OK [R 0 CLUSTER FORGET $target]
+        pause_process [srv -$target pid]
+        assert_equal OK [R 0 CLUSTER FORGET $target_id]
         wait_for_condition 200 100 {
             [CI 0 cluster_size] == 5 &&
-            [cluster_get_node_by_id 0 $target] eq {} &&
-            ![cluster_has_flag [cluster_get_node_by_id 0 $learner] learner]
+            [cluster_get_node_by_id 0 $target_id] eq {} &&
+            ![cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]
         } else {
-            resume_process [srv -$target_idx pid]
+            resume_process [srv -$target pid]
             fail "size=[CI 0 cluster_size]"
         }
-        resume_process [srv -$target_idx pid]
+        resume_process [srv -$target pid]
     }
 }
 

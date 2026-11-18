@@ -84,6 +84,26 @@ tags {"check-rdb external:skip logreqres:skip"} {
         } result
         assert_match {*db.2.type.string.keys.total:0*} $result
     }
+
+    test {Check RDB stats when a key precedes any SELECTDB} {
+        # String key "k" -> "v" without SELECTDB, EOF, zero checksum.
+        set rdb [tmpfile no-selectdb.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 00016b0176ff0000000000000000]
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result
+        assert_match {*db.0.type.string.keys.total:1*} $result
+    }
+
+    test {Check RDB with a DB ID too large for the stats} {
+        # SELECTDB 4294967295, string key "k" -> "v", EOF, zero checksum.
+        set rdb [tmpfile huge-selectdb.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe80ffffffff00016b0176ff0000000000000000]
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result
+        assert_match {*Invalid DB ID 4294967295*} $result
+    }
 }
 
 tags {"check-rdb network external:skip logreqres:skip"} {

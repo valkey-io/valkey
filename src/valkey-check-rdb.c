@@ -639,7 +639,7 @@ void rdbCheckSetupSignals(void) {
  * otherwise the already open file 'fp' is checked. */
 int redis_check_rdb(char *rdbfilename, FILE *fp) {
     uint64_t dbid;
-    int selected_dbid = -1;
+    int selected_dbid = 0; /* Like the server, keys before any SELECT go to DB 0. */
     int type, rdbver;
     char buf[1024];
     long long expiretime;
@@ -740,6 +740,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             rdbstate.doing = RDB_CHECK_DOING_READ_LEN;
             if ((dbid = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             rdbCheckInfo("Selecting DB ID %llu", (unsigned long long)dbid);
+            /* The DB ID indexes the stats array, sized (dbid + 1) * OBJ_TYPE_MAX
+             * as an int. */
+            if (dbid >= INT_MAX / OBJ_TYPE_MAX) {
+                rdbCheckError("Invalid DB ID %llu in RDB", (unsigned long long)dbid);
+                goto err;
+            }
             selected_dbid = dbid;
             if (selected_dbid > rdbstate.databases) {
                 rdbstate.databases = dbid;

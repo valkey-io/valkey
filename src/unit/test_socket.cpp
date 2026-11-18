@@ -7,6 +7,8 @@
 #include "generated_wrappers.hpp"
 
 #include <cerrno>
+#include <sys/socket.h>
+#include <unistd.h>
 
 extern "C" {
 #include "connection.h"
@@ -33,8 +35,11 @@ class SocketTest : public ::testing::Test {
 };
 
 TEST_F(SocketTest, BlockingConnectRetriesWhenAeWaitIsInterrupted) {
-    EXPECT_CALL(mock, anetTcpNonBlockConnect(_, _, _)).WillOnce(Return(FAKE_FD));
-    EXPECT_CALL(mock, aeWait(FAKE_FD, AE_WRITABLE, _))
+    /* A real socket, so any check on the connected fd (such as SO_ERROR) sees a healthy socket. */
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    EXPECT_CALL(mock, anetTcpNonBlockConnect(_, _, _)).WillOnce(Return(sv[0]));
+    EXPECT_CALL(mock, aeWait(sv[0], AE_WRITABLE, _))
         .WillOnce(DoAll(Assign(&errno, EINTR), Return(-1)))
         .WillOnce(Return(AE_WRITABLE));
 
@@ -42,6 +47,8 @@ TEST_F(SocketTest, BlockingConnectRetriesWhenAeWaitIsInterrupted) {
     EXPECT_EQ(connBlockingConnect(conn, "127.0.0.1", 1234, 10000), C_OK);
     EXPECT_EQ(conn->state, CONN_STATE_CONNECTED);
     closeConn(conn);
+    close(sv[0]);
+    close(sv[1]);
 }
 
 TEST_F(SocketTest, BlockingConnectReturnsTimeoutWhenInterruptedPastDeadline) {

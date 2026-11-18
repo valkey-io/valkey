@@ -1575,6 +1575,9 @@ static void raftLogApply(raftLogEntry *e) {
             if (joined && (!existing || (joined->flags & CLUSTER_NODE_JOINING))) {
                 first_join = true;
                 joined->flags &= ~CLUSTER_NODE_JOINING;
+                /* A node joins as a primary. A node created by our own MEET
+                 * handshake has no role yet. */
+                if (!(joined->flags & CLUSTER_NODE_REPLICA)) joined->flags |= CLUSTER_NODE_PRIMARY;
                 if (learner) {
                     joined->flags |= CLUSTER_NODE_LEARNER;
                 } else {
@@ -4250,11 +4253,20 @@ static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only) 
 
     if (validate_only) goto done;
 
-    /* Transfer slots from old primary to new primary. */
+    /* Transfer slots, and migrating/importing markers that point at the old
+     * primary, to the new primary. */
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
         if (server.cluster->slots[j] == primary) {
             clusterDelSlot(j);
             clusterAddSlot(replica, j);
+        }
+        if (getImportingSlotSource(j) == primary) {
+            setImportingSlotSource(j, replica);
+            rs->todo_save_config = 1;
+        }
+        if (getMigratingSlotDest(j) == primary) {
+            setMigratingSlotDest(j, replica);
+            rs->todo_save_config = 1;
         }
     }
 

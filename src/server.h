@@ -1235,8 +1235,9 @@ typedef struct ClientFlags {
                                       * knows that it does not need the cache and required a full sync. With this
                                       * flag, we won't cache the primary in freeClient. */
     uint64_t fake : 1;               /* This is a fake client without a real connection. */
-    uint64_t reserved : 4;           /* Reserved for future use */
+    uint64_t reserved : 3;           /* Reserved for future use */
 } ClientFlags;
+static_assert(sizeof(ClientFlags) == sizeof(uint64_t), "ClientFlags must fit the native raw_flag");
 
 typedef struct client {
     uint64_t id; /* Client incremental unique ID. */

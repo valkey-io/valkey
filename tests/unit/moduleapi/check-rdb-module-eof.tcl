@@ -43,7 +43,7 @@ tags "modules external:skip" {
     test {Startup load of an RDB truncated inside a module value exits} {
         set port [find_available_port $::baseport $::portcount]
         set exited [run_with_deadline 10 $server_path/startup.out \
-            src/valkey-server --port $port --dir $server_path --dbfilename truncated.rdb \
+            $::VALKEY_SERVER_BIN --port $port --dir $server_path --dbfilename truncated.rdb \
             --save "" --loadmodule $testmodule --logfile $server_path/startup.log]
         set output [exec cat $server_path/startup.out]
         assert_equal $exited 1 "valkey-server still running after 10s; checker output: $output"

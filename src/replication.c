@@ -3947,10 +3947,6 @@ int streamReplDataBufToDb(client *c) {
     listNode *cur = NULL;
     time_t last_progress_callback = mstime();
     while (server.pending_repl_data.blocks && (cur = listFirst(server.pending_repl_data.blocks))) {
-        if (primaryConnBrokenWhileStreaming(c)) {
-            blockingOperationEnds();
-            return C_ERR;
-        }
         /* Buffered blocks hold wire bytes: with the push reader active they
          * decode straight into the query buffer (which also advances
          * read_reploff by the decoded count); once the reader has retired to

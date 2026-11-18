@@ -125,6 +125,13 @@ endif ()
 # Build options (allocator, tls, rdma et al)
 # ----------------------------------------------------
 
+# Allow `MALLOC` as an alias for `BUILD_MALLOC` so the Makefile spelling
+# (`MALLOC=<libname>`) also works with CMake. Both resolve to BUILD_MALLOC.
+if (MALLOC)
+    set(BUILD_MALLOC "${MALLOC}" CACHE STRING "Allocator to build with" FORCE)
+    unset(MALLOC CACHE)
+endif ()
+
 if (NOT BUILD_MALLOC)
     if (APPLE)
         set(BUILD_MALLOC "libc")
@@ -164,20 +171,25 @@ message(STATUS "Using ${MALLOC_LIB}")
 # TLS support
 if (BUILD_TLS)
     valkey_parse_build_option(${BUILD_TLS} USE_TLS)
-    if (USE_TLS EQUAL 1)
-        # Only search for OpenSSL if needed
+    set(BUILD_TLS_MODULE 0)
+    if (USE_TLS EQUAL 1 OR USE_TLS EQUAL 2)
+        # Both builtin and module builds need OpenSSL
         find_package(OpenSSL REQUIRED)
         message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
         message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
         include_directories(${OPENSSL_INCLUDE_DIR})
     endif ()
 
-    if (USE_TLS EQUAL 1)
+    if (USE_TLS EQUAL 2)
+        message(STATUS "Building TLS as a module")
+        add_valkey_server_compiler_options("-DUSE_OPENSSL=2")
+        set(BUILD_TLS_MODULE 2)
+    elseif (USE_TLS EQUAL 1)
+        message(STATUS "Building TLS as builtin")
         add_valkey_server_compiler_options("-DUSE_OPENSSL=1")
         add_valkey_server_compiler_options("-DBUILD_TLS_MODULE=0")
     else ()
-        # Build TLS as a module RDMA can only be built as a module. So disable it
-        message(WARNING "BUILD_TLS can be one of: [ON | OFF | 1 | 0], but '${BUILD_TLS}' was provided")
+        message(WARNING "BUILD_TLS can be one of: [yes | no | module | 1 | 0], but '${BUILD_TLS}' was provided")
         message(STATUS "TLS support is disabled")
         set(USE_TLS 0)
     endif ()
@@ -259,6 +271,13 @@ else ()
 endif ()
 
 # Sanitizer
+# Allow `SANITIZER` as an alias for `BUILD_SANITIZER` so the Makefile spelling
+# (`SANITIZER=<type>`) also works with CMake. Both resolve to BUILD_SANITIZER.
+if (SANITIZER)
+    set(BUILD_SANITIZER "${SANITIZER}" CACHE STRING "Sanitizer to build with" FORCE)
+    unset(SANITIZER CACHE)
+endif ()
+
 if (BUILD_SANITIZER)
     # Common CFLAGS
     list(APPEND VALKEY_SANITIZER_CFLAGS "-fno-sanitize-recover=all")
@@ -316,6 +335,25 @@ if (BUILD_ZSTD)
                    INTERFACE_LINK_OPTIONS "${ZSTD_STATIC_LDFLAGS_OTHER}")
 else ()
     message(STATUS "Zstandard support is disabled")
+endif ()
+
+# libbacktrace support
+set(USE_LIBBACKTRACE_ENABLED 0)
+if (USE_LIBBACKTRACE)
+    valkey_parse_build_option(${USE_LIBBACKTRACE} USE_LIBBACKTRACE_ENABLED)
+    if (USE_LIBBACKTRACE_ENABLED EQUAL 1)
+        add_valkey_server_compiler_options("-DUSE_LIBBACKTRACE")
+        if (LIBBACKTRACE_PREFIX)
+            include_directories("${LIBBACKTRACE_PREFIX}/include")
+            add_valkey_server_linker_option("-L${LIBBACKTRACE_PREFIX}/lib")
+        endif ()
+        add_valkey_server_linker_option("-lbacktrace")
+        message(STATUS "libbacktrace support is enabled")
+    else ()
+        message(STATUS "libbacktrace support is disabled")
+    endif ()
+else ()
+    message(STATUS "libbacktrace support is disabled")
 endif ()
 
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
@@ -394,10 +432,6 @@ unset(PYTHON_EXE CACHE)
 unset(HAVE_C11_ATOMIC CACHE)
 unset(USE_TLS CACHE)
 unset(USE_RDMA CACHE)
-unset(BUILD_TLS CACHE)
-unset(BUILD_RDMA CACHE)
-unset(BUILD_ZSTD CACHE)
-unset(BUILD_MALLOC CACHE)
 unset(USE_JEMALLOC CACHE)
 unset(BUILD_TLS_MODULE CACHE)
 unset(BUILD_TLS_BUILTIN CACHE)

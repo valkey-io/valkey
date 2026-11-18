@@ -49,7 +49,6 @@ if (NOT BUILD_LUA STREQUAL "no")
                    INSTALL_RPATH_USE_LINK_PATH TRUE
                    BUILD_WITH_INSTALL_RPATH TRUE)
 endif ()
-unset(BUILD_LUA CACHE)
 
 if (VALKEY_RELEASE_BUILD)
     # Enable LTO for Release build
@@ -69,7 +68,6 @@ if (BUILD_SANITIZER)
     target_compile_options(valkey-server PRIVATE ${VALKEY_SANITIZER_CFLAGS})
     target_link_options(valkey-server PRIVATE ${VALKEY_SANITIZER_LDFLAGS})
 endif ()
-unset(BUILD_SANITIZER CACHE)
 
 # Target: valkey-cli
 list(APPEND CLI_LIBS "fpconv")
@@ -112,6 +110,8 @@ if (BUILD_TLS_MODULE)
     message(STATUS "Building TLS as a module")
     set(MODULE_NAME "valkey-tls")
     add_library(${MODULE_NAME} SHARED ${VALKEY_TLS_MODULE_SRCS})
+    # tls.c includes the generated release.h
+    add_dependencies(${MODULE_NAME} release_header)
     target_compile_options(${MODULE_NAME} PRIVATE -DUSE_OPENSSL=2 -DBUILD_TLS_MODULE=2)
     if (APPLE)
         # Some symbols can only be resolved during runtime (they exist in the executable)
@@ -119,6 +119,7 @@ if (BUILD_TLS_MODULE)
     endif ()
     target_link_libraries(${MODULE_NAME} valkey::valkey_tls OpenSSL::SSL)
     set_target_properties(${MODULE_NAME} PROPERTIES PREFIX "")
+    valkey_install_bin(${MODULE_NAME})
 endif ()
 
 if (BUILD_EXAMPLE_MODULES)

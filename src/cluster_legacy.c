@@ -84,7 +84,6 @@ int clusterDelNodeSlots(clusterNode *node);
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
-static int clusterReplicaChainReaches(clusterNode *node, clusterNode *target);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -694,23 +693,6 @@ static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
  * Initialization
  * -------------------------------------------------------------------------- */
 
-/* Returns a node whose replicaof chain leads back to itself, or NULL if the
- * loaded config has no replicaof cycle (for example A -> B -> A). */
-static clusterNode *clusterFindReplicaofCycle(void) {
-    clusterNode *found = NULL;
-    dictIterator *di = dictGetIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *n = dictGetVal(de);
-        if (n->replicaof && clusterReplicaChainReaches(n->replicaof, n)) {
-            found = n;
-            break;
-        }
-    }
-    dictReleaseIterator(di);
-    return found;
-}
-
 /* Load the cluster config from 'filename'.
  *
  * If the file does not exist or is zero-length (this may happen because
@@ -1083,17 +1065,6 @@ int clusterLoadConfig(char *filename) {
     }
     /* Config sanity check */
     if (server.cluster->myself == NULL) goto fmterr;
-
-    /* A replicaof cycle cannot be resolved from the file alone, since there is
-     * no way to tell which link is stale, and it can make
-     * clusterNodeGetPrimary() loop forever. Refuse to load it. */
-    clusterNode *cycle_node = clusterFindReplicaofCycle();
-    if (cycle_node) {
-        serverLog(LL_WARNING,
-                  "Replicaof cycle detected: node %.40s replicates node %.40s, whose replicaof chain leads back to it",
-                  cycle_node->name, cycle_node->replicaof->name);
-        goto fmterr;
-    }
 
     zfree(line);
     fclose(fp);

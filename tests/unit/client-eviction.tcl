@@ -753,10 +753,11 @@ start_server {} {
             }
         }
 
-        # Limit just above the current total: the check of the executing client's own command passes,
-        # but the reply of the first served client brings the total over it before the second one runs.
+        # The first served reply (~2.17MB) pushes the total over the limit while the executing client is
+        # still mid-command. The margin must stay below one reply to keep covering that path, and above
+        # both replies minus the executing client's memory so waiter_a is not evicted too.
         set total [s mem_clients_normal]
-        r config set maxmemory-clients [expr {$total + [mb 1]}]
+        r config set maxmemory-clients [expr {$total + [mb 1] + [kb 512]}]
         set evicted [s evicted_clients]
 
         $rdX rename src mylist

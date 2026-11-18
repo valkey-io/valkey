@@ -377,3 +377,49 @@ start_cluster 1 1 {tags {external:skip cluster} } {
      
     }
 }
+
+# A replica restarted from an RDB file partially resyncs, and the replication
+# stream continues in the DB it was in, without a SELECT: both the writes made
+# while the replica was down, replayed from the backlog, and the next ones.
+start_cluster 1 1 {tags {external:skip cluster} overrides {save {900 1}}} {
+    test "Restarted replica partially resyncs in the DB of the replication stream" {
+        set primary [srv 0 client]
+        set replica [srv -1 client]
+        wait_for_condition 100 100 {
+            [status $replica master_link_status] eq "up"
+        } else {
+            fail "Replica didn't sync"
+        }
+        $primary select 5
+        $primary set a 1
+        wait_for_ofs_sync $primary $replica
+        $primary config resetstat
+
+        # The replica saves an RDB file at shutdown. Without it, the replica would
+        # restart from the RDB file of its initial sync, and the backlog it then
+        # gets would start with a SELECT.
+        catch {$replica shutdown}
+        wait_for_condition 50 100 {
+            ![is_alive [srv -1 pid]]
+        } else {
+            fail "Replica didn't exit"
+        }
+        $primary set b 2
+        restart_server -1 true false
+        set replica [srv -1 client]
+        wait_for_condition 100 100 {
+            [status $replica master_link_status] eq "up"
+        } else {
+            fail "Replica didn't reconnect"
+        }
+        assert_equal 0 [status $primary sync_full]
+        assert_equal 1 [status $primary sync_partial_ok]
+
+        $primary set c 3
+        wait_for_ofs_sync $primary $replica
+        $replica readonly
+        $replica select 5
+        assert_equal 2 [$replica get b]
+        assert_equal 3 [$replica get c]
+    }
+}

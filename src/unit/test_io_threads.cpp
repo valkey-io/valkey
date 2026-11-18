@@ -51,12 +51,14 @@ TEST(IOThreadsTest, JobsFinishedCounterHasItsOwnCacheLine) {
 
 static bool second_batch_client_processed;
 
+/* Provide the completion signal checked after the first client's re-entry. */
 static int processSecondBatchClient(client *c) {
     (void)c;
     second_batch_client_processed = true;
     return C_OK;
 }
 
+/* Re-enter the event loop as a busy script would, before the batch completes. */
 static int processFirstBatchClient(client *c) {
     (void)c;
     ProcessingEventsWhileBlocked = 1;

@@ -324,6 +324,16 @@ start_server {tags {"dump"}} {
         }
     } {} {external:skip}
 
+    test {MIGRATE to a port with no listener fails while connecting} {
+        r set key "Some Value"
+        # A port with no listener: the connection is refused.
+        set port [find_available_port $::baseport $::portcount]
+        set e {}
+        catch {r migrate 127.0.0.1 $port key $db 1000} e
+        assert_match {IOERR*connecting*} $e
+        assert {[r exists key] == 1}
+    } {} {external:skip}
+
     test {MIGRATE can migrate multiple keys at once} {
         set first [srv 0 client]
         r set key1 "v1"

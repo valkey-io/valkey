@@ -17,7 +17,7 @@ Valkey 8.0.13  -  Released Wed 18 November 2026
 Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
 
 ### Security Fixes
-* CVE-2026-130822: Fix a use-after-free crash in client eviction when maxmemory-clients is enabled by @nadav-levanoni
+* CVE-2026-130822: Fix a use-after-free crash in client eviction when maxmemory-clients is enabled by @nadav-levanoni (#5435)
 
 ### Bug Fixes
 * Fix a crash during eviction sampling, and hangs, crashes, or duplicate set members in key comparison, when a key name or member reaches 2 GiB by @madolson (#5133)

@@ -1972,6 +1972,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         puts -nonewline $fdA "PSYNC ? -1\r\n"
         flush $fdA
         wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*"} 0 500 20
+        # The log line is written before the fork, so wait until the child exists.
+        wait_for_condition 50 100 {
+            [s 0 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "BGSAVE child was not started"
+        }
         # Stop the child so the BGSAVE stays in progress until B's decision.
         # The test framework resumes it when the test ends, before the deferred cleanup.
         pause_process [get_child_pid 0]

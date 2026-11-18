@@ -1938,8 +1938,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
     test "REPLCONF rdb-filter-only after SYNC does not change the cohort of an in-progress disk BGSAVE" {
         # Replica A starts a full-RDB disk BGSAVE and waits for it. A then sends
-        # rdb-filter-only after its SYNC. The reply is suppressed by the trailing
-        # getack, as in the handshake. The RDB being written for A is still full.
+        # rdb-filter-only after its SYNC, followed by getack. Without the fix, getack
+        # suppresses the reply, so A stays connected with the changed filter. With the
+        # fix, the guard returns before getack. The RDB being written for A is still full.
         # Replica B then sends the same rdb-filter-only before its own PSYNC. If A's
         # changed replica_req is used for the cohort match, B attaches to a BGSAVE
         # whose content it did not ask for.
@@ -1992,10 +1993,16 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
         # Post-SYNC: A changes its own requirements while it waits for the BGSAVE.
         set refusal_from [count_log_lines 0]
+        set replconf_before [replconf_calls $primary]
         puts -nonewline $fdA "REPLCONF rdb-filter-only \"\" getack 1\r\n"
         flush $fdA
-        # Round trip on another client, so A's command is processed before B connects.
-        $primary ping
+        # calls also counts refused commands, so this confirms A's REPLCONF was
+        # processed, with or without the fix, before B connects.
+        wait_for_condition 50 100 {
+            [replconf_calls $primary] > $replconf_before
+        } else {
+            fail "primary did not process A's REPLCONF"
+        }
         # The original BGSAVE must still be running, so B is checked against it.
         assert_equal 1 [s 0 rdb_bgsave_in_progress]
 

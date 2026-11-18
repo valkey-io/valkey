@@ -82,15 +82,15 @@ proc test_migrated_replica {type} {
         # The node may not be able to initiate an election in time due to
         # problems with cluster communication. If an election is initiated,
         # we make sure the offset of server 3 / 7 is 0.
-        if {[count_log_message -3 "Start of election"] != 0} {
-            verify_log_message -3 "*Start of election*offset 0*" 0
+        if {[count_log_message -3 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -3 {(Start of election|scheduling failover).*offset 0} 0
         }
-        if {[count_log_message -7 "Start of election"] != 0} {
-            verify_log_message -7 "*Start of election*offset 0*" 0
+        if {[count_log_message -7 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -7 {(Start of election|scheduling failover).*offset 0} 0
         }
 
         # Make sure the right replica gets the higher rank.
-        verify_log_message -4 "*Start of election*rank #0*" 0
+        verify_log_message_re -4 {(Start of election|scheduling failover).*rank #0} 0
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
@@ -135,11 +135,11 @@ proc test_migrated_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_migrated_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
@@ -187,13 +187,13 @@ proc test_nonempty_replica {type} {
             fail "Failover does not happened"
         }
 
-        verify_log_message -4 "*Start of election*rank #0*" 0
+        verify_log_message_re -4 {(Start of election|scheduling failover).*rank #0} 0
 
         # The node may not be able to initiate an election in time due to
         # problems with cluster communication. If an election is initiated,
         # we make sure server 7 gets the lower rank and it's offset is 0.
-        if {[count_log_message -7 "Start of election"] != 0} {
-            verify_log_message -7 "*Start of election*offset 0*" 0
+        if {[count_log_message -7 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -7 {(Start of election|scheduling failover).*offset 0} 0
         }
 
         # Wait for the cluster to be ok.
@@ -231,12 +231,66 @@ proc test_nonempty_replica {type} {
     }
 } ;# proc
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_nonempty_replica "sigstop"
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+# A replica whose link to its primary is down holds a cached primary. If it
+# moves to another shard, that cached primary must not be used to report an
+# offset, or the replica can win a failover of the new shard without its data.
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+    test "Migrated replica with a cached primary does not win the failover" {
+        # Give the old shard a higher offset than the new shard.
+        R 0 set key_991803 [string repeat "x" 1024]
+        R 3 set key_977613 [string repeat "y" 10240]
+        wait_for_ofs_sync [srv 0 client] [srv -4 client]
+        wait_for_ofs_sync [srv -3 client] [srv -7 client]
+
+        # Keep the full sync with the new primary from finishing.
+        R 0 config set rdb-key-save-delay 100000000
+        R 4 config set cluster-replica-validity-factor 0
+        R 7 config set cluster-replica-validity-factor 0
+
+        # Cut 7 off from its primary 3 so that 7 keeps a cached primary.
+        R 3 config set requirepass cached-primary-test
+        R 3 client kill type replica
+        wait_for_condition 100 100 {
+            [s -7 master_link_status] eq {down}
+        } else {
+            fail "Replica 7 is still connected to primary 3"
+        }
+        set old_offset [s -7 slave_repl_offset]
+
+        # Move 7 to shard 0.
+        R 7 cluster replicate [R 0 cluster myid]
+        wait_for_condition 100 100 {
+            [get_my_primary_peer 7] eq "[srv 0 host]:[srv 0 port]"
+        } else {
+            fail "Replica 7 did not move to primary 0"
+        }
+
+        set offset_after_move [s -7 slave_repl_offset]
+
+        # Fail primary 0. Replica 4 has the data and must win.
+        catch {R 0 shutdown nosave}
+        wait_for_condition 1000 50 {
+            [s -4 role] eq {master} || [s -7 role] eq {master}
+        } else {
+            fail "No failover happened"
+        }
+        assert_equal {master} [s -4 role]
+        assert_equal {slave} [s -7 role]
+
+        # 7 had none of shard 0's data, so it must not have reported the
+        # old shard's offset.
+        assert_lessthan $offset_after_move $old_offset
+
+        R 3 config set requirepass ""
+    }
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 proc test_sub_replica {type} {

@@ -203,6 +203,7 @@ typedef struct {
     unsigned int todo_retry_deferred : 1; /* For proposals that need rebasing of new epoch */
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
+    unsigned int todo_full_sync : 1; /* Myself moved to another shard: don't reuse our data. */
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
@@ -359,6 +360,14 @@ static void clusterRaftBroadcastNodeOffset(clusterNode *node, long long offset) 
     sdsfree(msg);
 }
 
+/* Our replication offset as we report it to other nodes. While a replication
+ * update is pending, the replication state may still have the old shard's
+ * offset, so use myself->repl_offset, which a move to another shard resets. */
+static long long clusterRaftMyReplicationOffset(void) {
+    if (RAFT_STATE()->todo_update_replication) return myself->repl_offset;
+    return getNodeReplicationOffset(myself);
+}
+
 /* Build a REPL_OFFSETS message containing all known non-zero offsets.
  * Returns a refcounted send block, or NULL if there's nothing to send.
  * Caller must call clusterMsgSendBlockDecrRefCount when done. */
@@ -370,8 +379,7 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *n = dictGetVal(de);
         if (n->flags & CLUSTER_NODE_JOINING) continue;
-        long long off = (n == myself) ? getNodeReplicationOffset(myself)
-                                      : n->repl_offset;
+        long long off = (n == myself) ? clusterRaftMyReplicationOffset() : n->repl_offset;
         msg = sdscatlen(msg, " ", 1);
         msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
         msg = sdscatfmt(msg, " %I", off);
@@ -2145,6 +2153,9 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         return 1;
     }
     clusterRaftMaybeStepDown(msg_term);
+    /* The snapshot may move myself to another shard, see todo_full_sync. */
+    char old_shard_id[CLUSTER_NAMELEN];
+    memcpy(old_shard_id, myself->shard_id, CLUSTER_NAMELEN);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
     clusterRaftSetLeader(argv[1]);
@@ -2332,6 +2343,10 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
 
     rs->todo_save_config = 1;
     rs->todo_connect_nodes = 1;
+    if (memcmp(old_shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
+        rs->todo_full_sync = 1;
+        myself->repl_offset = 0; /* As when applying SET_REPLICA_OF. */
+    }
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
@@ -2706,10 +2721,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
                 sds hint = wireNewMsg("REPL_OFFSETS");
                 for (int r = 0; r < num_replicas; r++) {
                     clusterNode *replica = clusterNodeGetReplica(node, r);
-                    long long roff = (replica == myself)
-                                         ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
-                                                                  : server.primary_repl_offset)
-                                         : replica->repl_offset;
+                    long long roff = (replica == myself) ? clusterRaftMyReplicationOffset() : replica->repl_offset;
                     hint = sdscatlen(hint, " ", 1);
                     hint = sdscatlen(hint, replica->name, CLUSTER_NAMELEN);
                     hint = sdscatfmt(hint, " %I", roff);
@@ -2975,7 +2987,7 @@ static void clusterRaftCron(void) {
 
             /* Broadcast all replication offsets every 10s so
              * followers have accurate data for CLUSTER SLOTS/SHARDS. */
-            long long my_offset = getNodeReplicationOffset(myself);
+            long long my_offset = clusterRaftMyReplicationOffset();
             if (now - rs->last_repl_offsets_broadcast > REPL_OFFSETS_BROADCAST_PERIOD_MS) {
                 rs->last_repl_offsets_broadcast = now;
                 clusterMsgSendBlock *block = clusterRaftBuildAllOffsetsMsg();
@@ -3105,6 +3117,36 @@ static void clusterRaftBeforeSleep(bool blocked) {
         if (clusterRaftHasPeerMembers()) rs->todo_broadcast_ae = 1;
     }
 
+    /* Reconfigure replication before acking, so that the ack and the
+     * failover ranking below see our offset after a SET_REPLICA_OF, e.g. 0
+     * after moving to another shard, not the offset from before it. */
+    if (rs->todo_update_replication) {
+        rs->todo_update_replication = 0;
+        /* Set when SET_REPLICA_OF or a snapshot moved myself to another
+         * shard. myself is already in the new shard by now. */
+        int full_sync = rs->todo_full_sync;
+        rs->todo_full_sync = 0;
+        if (nodeIsReplica(myself) && myself->replicaof) {
+            clusterNode *primary = myself->replicaof;
+            /* Only call clusterSetPrimary if the target's address changed, or
+             * if we moved to another shard at the same address, e.g. another
+             * node took over that address. */
+            if (full_sync || !server.primary_host ||
+                strcmp(server.primary_host, primary->ip) != 0 ||
+                server.primary_port != getNodeDefaultReplicationPort(primary)) {
+                if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) full_sync = 1;
+                clusterSetPrimary(primary, full_sync, full_sync);
+            }
+        } else if (nodeIsPrimary(myself) && server.primary_host) {
+            replicationUnsetPrimary();
+        }
+    }
+
+    /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
+    if (nodeIsReplica(myself)) {
+        myself->repl_offset = replicationGetReplicaOffset();
+    }
+
     if (rs->todo_send_ae_ack) {
         rs->todo_send_ae_ack = 0;
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
@@ -3173,34 +3215,15 @@ static void clusterRaftBeforeSleep(bool blocked) {
                 /* Replica priority is the same. Lexicographically compare node id. */
                 if (memcmp(sibling->name, myself->name, CLUSTER_NAMELEN) < 0) rank++;
             }
-            rs->failover_time = monotonicMs() + rank * 1000;
-            serverLog(LL_NOTICE, "Primary %.40s failed, scheduling failover (rank %d).",
-                      myself->replicaof->name, rank);
+            mstime_t delay = rank * 1000;
+            rs->failover_time = monotonicMs() + delay;
+            /* The parenthesized part matches the gossip election log, so tests
+             * can check the rank and offset the same way for both. */
+            serverLog(LL_NOTICE,
+                      "Primary %.40s failed, scheduling failover in %lld milliseconds "
+                      "(rank #%d, offset %lld, replica priority %u).",
+                      myself->replicaof->name, (long long)delay, rank, my_offset, myself->replica_priority);
         }
-    }
-
-    if (rs->todo_update_replication) {
-        rs->todo_update_replication = 0;
-        if (nodeIsReplica(myself) && myself->replicaof) {
-            clusterNode *primary = myself->replicaof;
-            /* Only call clusterSetPrimary if replication target changed. */
-            if (!server.primary_host ||
-                strcmp(server.primary_host, primary->ip) != 0 ||
-                server.primary_port != getNodeDefaultReplicationPort(primary)) {
-                int same_shard = memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) == 0;
-                clusterSetPrimary(primary, !same_shard, !same_shard);
-            }
-        } else if (nodeIsPrimary(myself) && server.primary_host) {
-            replicationUnsetPrimary();
-        }
-    }
-
-    /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
-    if (nodeIsReplica(myself)) {
-        long long new_offset = replicationGetReplicaOffset();
-        if (myself->repl_offset == 0 && new_offset > 0) {
-        }
-        myself->repl_offset = new_offset;
     }
 }
 
@@ -4179,12 +4202,19 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
         if (!primary) goto reject;
         if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
+        /* A replica that moves to another shard has none of the new shard's
+         * data, so its offset no longer counts. Every node applies this, so
+         * all nodes see the zero offset at once, e.g. for failover ranking. */
+        if (memcmp(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) replica->repl_offset = 0;
         if (replica == myself) {
             if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
             myself->flags &= ~CLUSTER_NODE_PRIMARY;
             myself->flags |= CLUSTER_NODE_REPLICA;
             myself->replicaof = primary;
             clusterNodeAddReplica(primary, myself);
+            /* Our data belongs to the shard we leave, so the new primary
+             * must not treat it as a partial copy of its own. */
+            if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) rs->todo_full_sync = 1;
             clusterRemoveNodeFromShard(myself);
             memcpy(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN);
             clusterAddNodeToShard(primary->shard_id, myself);

@@ -1501,6 +1501,8 @@ void sinterstoreCommand(client *c) {
     sinterGenericCommand(c, c->argv + 2, c->argc - 2, c->argv[1], 0, 0);
 }
 
+/* Build a union or difference, storing it at dstkey or replying with its members.
+ * The largest union input is a cardinality lower bound used to pre-size the result. */
 void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstkey, int op) {
     robj **sets = zmalloc(sizeof(robj *) * setnum);
     setTypeIterator *si;

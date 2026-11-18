@@ -4229,7 +4229,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             memrev64ifbe(&cksum);
             if (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) {
                 serverLog(LL_NOTICE, "RDB file was saved with checksum disabled: skipped checksum for this transfer");
-            } else if (cksum == 0) {
+            } else if (cksum == 0 && !(rdbflags & RDBFLAGS_AOF_INTEGRITY)) {
                 serverLog(LL_NOTICE, "RDB file was saved with checksum disabled: no check performed.");
             } else if (cksum != expected) {
                 serverLog(LL_WARNING,

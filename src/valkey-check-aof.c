@@ -66,6 +66,7 @@ static time_t to_timestamp = 0;
 static uint64_t expected_running_checksum = 0;
 static int integrity_chain_active = 0;
 static int rdb_tail_allowed = 1;
+extern int rdbCheckRequireChecksum;
 static off_t integrity_block_start = 0;
 static off_t integrity_payload_start = 0;
 static off_t integrity_validated_until = 0;
@@ -198,7 +199,7 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
         return -1;
     }
 
-    if (integrity_chain_active && !strncmp(buf, "#HDR:", 5)) {
+    if (integrity_chain_active && !strncmp(buf, AOF_HDR_V1, strlen(AOF_HDR_V1))) {
         aofHeader hdr;
         const char *err;
         if (aofParseHeader(buf, strlen(buf), &hdr, &err) == C_ERR) {
@@ -641,6 +642,7 @@ void checkMultiPartAof(char *dirpath, char *manifest_filepath, int fix) {
         if (am->base_aof_info->integrity && !aof_preamble) checkBaseCrc(aof_filename, aof_filepath);
         integrity_chain_active = 0;
         rdb_tail_allowed = !am->base_aof_info->integrity;
+        rdbCheckRequireChecksum = am->base_aof_info->integrity;
         ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preamble);
         /* The chain of the first INCR file starts where the base says. */
         if (am->base_aof_info->has_checksum) expected_running_checksum = am->base_aof_info->last_checksum;

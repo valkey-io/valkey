@@ -438,8 +438,6 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath, int *checksum_mismatch) {
             } else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_FILE_TYPE)) {
                 ai->file_type = (argv[i + 1])[0];
             } else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_FILE_INTEGRITY)) {
-                /* Refuse unknown values, which a later version could use for a different
-                 * format, rather than load such a file unverified. */
                 if (strcmp(argv[i + 1], "0") && strcmp(argv[i + 1], "1")) {
                     err = "Invalid integrity value in AOF manifest";
                     goto loaderr;
@@ -1196,6 +1194,19 @@ int startAppendOnly(void) {
     return C_OK;
 }
 
+/* Returns 1 if the file is a plain RDB file, not a streaming-compressed one, saved with
+ * a checksum: its CRC64 trailer isn't zero. */
+static int rdbFileHasChecksum(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL) return 0;
+    char sig[6];
+    uint64_t cksum = 0;
+    int ok = fread(sig, sizeof(sig), 1, fp) == 1 && (!memcmp(sig, "REDIS0", 6) || !memcmp(sig, "VALKEY", 6)) &&
+             fseeko(fp, -(off_t)sizeof(cksum), SEEK_END) == 0 && fread(&cksum, sizeof(cksum), 1, fp) == 1;
+    fclose(fp);
+    return ok && cksum != 0;
+}
+
 /* Try to restart AOF after replica full sync by adopting `server.rdb_filename`
  * as the new BASE file (RDB preamble mode), avoiding a redundant AOFRW.
  * Returns C_OK on success; on C_ERR caller should fallback to
@@ -1229,6 +1240,15 @@ int restartAOFWithSyncRdb(void) {
         goto cleanup;
     }
     rdbfile_renamed = 1;
+
+    /* With integrity, the RDB checksum protects the base, if it has one. A streaming-
+     * compressed RDB is left unmarked, since it relies on codec checksums instead. */
+    if (server.aof_integrity_check && rdbFileHasChecksum(new_base_filepath)) {
+        temp_am->base_aof_info->integrity = 1;
+        /* The new INCR file below starts a new chain. */
+        temp_am->base_aof_info->has_checksum = 1;
+        temp_am->base_aof_info->last_checksum = 0;
+    }
 
     /* Mark existing incr AOF files as history BEFORE creating the new one,
      * so the new incr entry is not inadvertently moved to history. */
@@ -2254,7 +2274,8 @@ int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, 
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL, aof_filepath) != RDB_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE | (verify_crc ? RDBFLAGS_AOF_INTEGRITY : 0), NULL, aof_filepath) !=
+            RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -2331,7 +2352,7 @@ int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, 
                 break;
             }
             if (verify_crc) rctx.crc = crc64(rctx.crc, (unsigned char *)buf, strlen(buf));
-            if (verify && !strncmp(buf, "#HDR:", 5)) {
+            if (verify && !strncmp(buf, AOF_HDR_V1, strlen(AOF_HDR_V1))) {
                 /* The server never writes a header inside a block. If there is one, drop
                  * the rest of the buffered block and continue from the file, since the
                  * block below is read from the file. */
@@ -3773,6 +3794,9 @@ cleanup:
     }
     server.aof_rewrite_time_last = time(NULL) - server.aof_rewrite_time_start;
     server.aof_rewrite_time_start = -1;
-    /* Schedule a new rewrite if we are waiting for it to switch the AOF ON. */
-    if (server.aof_state == AOF_WAIT_REWRITE) server.aof_rewrite_scheduled = 1;
+    /* Schedule a new rewrite if we are waiting for it to switch the AOF ON, or while
+     * integrity is enabled and some AOF file was written without it. */
+    if (server.aof_state == AOF_WAIT_REWRITE ||
+        (server.aof_state == AOF_ON && server.aof_integrity_check && !aofManifestAllIntegrity(server.aof_manifest)))
+        server.aof_rewrite_scheduled = 1;
 }

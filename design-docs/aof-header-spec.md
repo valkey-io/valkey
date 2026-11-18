@@ -123,7 +123,7 @@ Integrity is a property of each AOF file, recorded in the manifest.
 
 ## 6. Versioning and Extensibility
 
-- **Versioning**: The version token (e.g., `v1`) defines the strict grammar. If a breaking change is made (e.g., changing the checksum algorithm), the version MUST be bumped to `v2`. A loader verifying a file MUST fail on an unknown version.
+- **Versioning**: The version token (e.g., `v1`) defines the strict grammar. A loader skips a header with an unknown version like any other annotation.
 - **Extensibility**: Within a version (e.g., `v1`), the parser MUST ignore any unrecognized fields. This allows a server running only integrity checks to safely skip `replid` and `reploff` fields, ensuring forward compatibility.
 
 ---

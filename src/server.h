@@ -163,7 +163,8 @@ struct ValkeyModule;
 #define LOG_MAX_LEN 1024                                      /* Default maximum length of syslog messages.*/
 #define AOF_REWRITE_ITEMS_PER_CMD 64
 #define AOF_ANNOTATION_LINE_MAX_LEN 1024
-#define AOF_CRC "#CRC:" /* CRC64 of the preceding bytes of a RESP base file written with integrity. */
+#define AOF_CRC "#CRC:"       /* CRC64 of the preceding bytes of a RESP base file written with integrity. */
+#define AOF_HDR_V1 "#HDR:v1;" /* Start of a v1 AOF header. A header of another version is skipped. */
 #define CONFIG_RUN_ID_SIZE 40
 #define RDB_EOF_MARK_SIZE 40
 #define CONFIG_REPL_BACKLOG_MIN_SIZE (1024 * 16) /* 16k */

@@ -482,9 +482,11 @@ tags {"aof-integrity external:skip"} {
         }
     }
 
-    test "AOF integrity: malformed headers are format errors" {
-        foreach {hdr err} [list "#HDR:v1;len:abc;checksum:1;\r\n" "*invalid len*" \
-                                "#HDR:v2;len:4;checksum:1;\r\n" "*unsupported header version*"] {
+    test "AOF integrity: a command after a malformed header or a header of an unknown version is a format error" {
+        # A header of an unknown version is skipped like any annotation, so the command
+        # after it lacks a header.
+        foreach {hdr err} [list "#HDR:v1;len:abc;checksum:1;\r\n" "*Malformed AOF integrity header*invalid len*" \
+                                "#HDR:v2;len:4;checksum:1;\r\n" "*lacks an integrity header*"] {
             set sp [tmpdir server.aof-integrity-malformed-header]
             start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check yes] keep_persistence true] {
                 r set k1 v1
@@ -492,7 +494,7 @@ tags {"aof-integrity external:skip"} {
             }
             append_binary_file $incr "$hdr*1\r\n"
             start_server [list overrides [list dir $sp appendonly yes aof-integrity-check yes aof-load-truncated yes] keep_persistence true wait_ready false] {
-                wait_for_log_messages 0 [list "*Malformed AOF integrity header*$err"] 0 10 1000
+                wait_for_log_messages 0 [list $err] 0 10 1000
                 wait_for_condition 50 100 {
                     [is_alive [srv pid]] == 0
                 } else {
@@ -923,9 +925,26 @@ tags {"aof-integrity external:skip"} {
             r set k1 v1
             r bgrewriteaof
             waitForBgrewriteaof r
+            set base [get_base_aof_path r]
+            set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]
         }
         start_server [list overrides [concat $overrides aof-load-truncated no] keep_persistence true] {
             assert_equal v1 [r get k1]
+        }
+
+        # Such a base always has a checksum, so a zeroed one is corruption rather than a
+        # disabled checksum.
+        set raw [read_binary_file $base]
+        write_binary_file $base "[string range $raw 0 end-8][string repeat "\x00" 8]"
+        catch {exec $::VALKEY_CHECK_AOF_BIN $manifest} output
+        assert_match {*RDB CRC error*} $output
+        start_server [list overrides $overrides keep_persistence true wait_ready false] {
+            wait_for_log_messages 0 {"*Wrong RDB checksum*"} 0 10 1000
+            wait_for_condition 50 100 {
+                [is_alive [srv pid]] == 0
+            } else {
+                fail "Server is still running despite a zeroed RDB checksum"
+            }
         }
 
         set sp_lz4 [tmpdir server.aof-integrity-rdb-base-lz4-no-rdbchecksum]
@@ -981,10 +1000,12 @@ tags {"aof-integrity external:skip"} {
         }
     }
 
-    foreach mode {disabled swapdb} {
-        test "AOF integrity: a replica's AOF stays verifiable after a full sync (repl-diskless-load $mode)" {
-            set sp [tmpdir server.aof-integrity-repl-$mode]
-            start_server {overrides {save ""}} {
+    # A disk-based load reuses the primary's RDB file as the base, which is marked as written
+    # with integrity if the RDB has a checksum, so a restart doesn't need to rewrite the AOF.
+    foreach {mode primary_rdbchecksum} {disabled yes disabled no swapdb yes} {
+        test "AOF integrity: a replica's AOF stays verifiable after a full sync (repl-diskless-load $mode, primary rdbchecksum $primary_rdbchecksum)" {
+            set sp [tmpdir server.aof-integrity-repl-$mode-$primary_rdbchecksum]
+            start_server [list overrides [list save "" rdbchecksum $primary_rdbchecksum]] {
                 set primary [srv 0 client]
                 set primary_host [srv 0 host]
                 set primary_port [srv 0 port]
@@ -1006,12 +1027,16 @@ tags {"aof-integrity external:skip"} {
                     wait_for_ofs_sync $primary $replica
                     set dir [lindex [$replica config get dir] 1]
                 }
-                assert_match {*All AOF files and manifest are valid*} \
-                    [exec $::VALKEY_CHECK_AOF_BIN [file join $dir appendonlydir appendonly.aof.manifest]]
+                set manifest [file join $dir appendonlydir appendonly.aof.manifest]
+                assert_match {*All AOF files and manifest are valid*} [exec $::VALKEY_CHECK_AOF_BIN $manifest]
+                set base_marked [string match "*type b integrity 1*" [read_binary_file $manifest]]
+                assert_equal [expr {$primary_rdbchecksum eq "yes"}] $base_marked
                 start_server [list overrides [list dir $dir appendonly yes aof-integrity-check yes aof-load-truncated no] keep_persistence true] {
                     assert_equal v1 [r get k1]
                     assert_equal v2 [r get k2]
                     assert_equal {} [r get local]
+                    # A base without integrity is rewritten.
+                    assert_equal [expr {!$base_marked}] [expr {[s aof_rewrite_scheduled] || [s aof_rewrites] > 0}]
                 }
             }
         }
@@ -1228,10 +1253,12 @@ tags {"aof-integrity external:skip"} {
             }
             r set k3 v3
             catch {exec kill -9 [get_child_pid 0]}
+            # The rewrite is retried, since an INCR file lacks integrity, so wait for the
+            # failure to be handled.
             wait_for_condition 100 100 {
-                [s aof_rewrite_in_progress] == 0
+                [s aof_last_bgrewrite_status] eq "err"
             } else {
-                fail "AOF rewrite didn't stop"
+                fail "AOF rewrite failure wasn't handled"
             }
             set dir [lindex [r config get dir] 1]
         }
@@ -1245,7 +1272,7 @@ tags {"aof-integrity external:skip"} {
         }
     }
 
-    test "AOF integrity: a restart rewrites the AOF while any file lacks integrity" {
+    test "AOF integrity: a failed rewrite is retried while any file lacks integrity, also after a restart" {
         set sp [tmpdir server.aof-integrity-failed-enable]
         start_server [list overrides [list dir $sp appendonly yes appendfsync always aof-integrity-check no rdb-key-save-delay 10000000] keep_persistence true] {
             r set k1 v1
@@ -1256,11 +1283,12 @@ tags {"aof-integrity external:skip"} {
             } else {
                 fail "AOF rewrite didn't start"
             }
+            set rewrites [s aof_rewrites]
             catch {exec kill -9 [get_child_pid 0]}
             wait_for_condition 100 100 {
-                [s aof_rewrite_in_progress] == 0
+                [s aof_rewrites] > $rewrites && [s aof_rewrite_in_progress] == 1
             } else {
-                fail "AOF rewrite didn't stop"
+                fail "The failed AOF rewrite wasn't retried"
             }
             r set k2 v2
             set manifest [file join [lindex [r config get dir] 1] appendonlydir appendonly.aof.manifest]

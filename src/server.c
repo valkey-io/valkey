@@ -2467,6 +2467,7 @@ void initServerConfig(void) {
     server.aof_cur_timestamp = 0;
     server.aof_running_checksum = 0;
     server.aof_integrity_active = 0;
+    server.aof_last_replid[0] = '\0';
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
@@ -5303,6 +5304,7 @@ int finishShutdown(void) {
         /* Append only file: flush buffers and fsync() the AOF at exit */
         serverLog(LL_NOTICE, "Calling fsync() on the AOF file.");
         flushAppendOnlyFile(1);
+        aofRecordReplicationOffset();
         if (valkey_fsync(server.aof_fd) == -1) {
             serverLog(LL_WARNING, "Fail to fsync the AOF file: %s.", strerror(errno));
         }
@@ -7723,14 +7725,62 @@ int checkForSentinelMode(int argc, char **argv, char *exec_name) {
     return 0;
 }
 
+/* Restores the replication ID / offset that the loaded data corresponds to, to
+ * allow partial resynchronizations after a restart. Returns 1 if rsi has them. */
+static int restoreReplicationInfo(rdbSaveInfo *rsi) {
+    if (!rsi->repl_id_is_set || rsi->repl_offset < 0 ||
+        /* Leave room for the primary's offset increment and rebase. */
+        rsi->repl_offset == LLONG_MAX || server.primary_repl_offset > LLONG_MAX - rsi->repl_offset ||
+        /* Note that older implementations may save a repl_stream_db
+         * of -1 inside the RDB file in a wrong way, see more
+         * information in function rdbPopulateSaveInfo. */
+        rsi->repl_stream_db < 0 || rsi->repl_stream_db >= server.dbnum)
+        return 0;
+
+    if (!iAmPrimary()) {
+        memcpy(server.replid, rsi->repl_id, sizeof(server.replid));
+        server.primary_repl_offset = rsi->repl_offset;
+        /* If this is a replica, create a cached primary from this
+         * information, in order to allow partial resynchronizations
+         * with primaries. */
+        replicationCachePrimaryUsingMyself();
+        selectDb(server.cached_primary, rsi->repl_stream_db);
+    } else {
+        /* If this is a primary, we can save the replication info
+         * as secondary ID and offset, in order to allow replicas
+         * to partial resynchronizations with primaries. */
+        memcpy(server.replid2, rsi->repl_id, sizeof(server.replid));
+        server.second_replid_offset = rsi->repl_offset + 1;
+        /* Loading an RDB file creates the backlog first, to feed it the
+         * deletions of expired keys. */
+        if (!server.repl_backlog) createReplicationBacklog();
+        /* Rebase primary_repl_offset from rsi.repl_offset. */
+        server.primary_repl_offset += rsi->repl_offset;
+        server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
+        rebaseReplicationBuffer(rsi->repl_offset);
+        server.repl_no_replicas_since = time(NULL);
+    }
+    return 1;
+}
+
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
     ustime_t start = ustime();
     if (server.aof_state == AOF_ON) {
-        int ret = loadAppendOnlyFiles(server.aof_manifest);
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        int ret = loadAppendOnlyFiles(server.aof_manifest, server.aof_repl_offsets ? &rsi : NULL);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR) exit(1);
         if (ret != AOF_NOT_EXIST)
             serverLog(LL_NOTICE, "DB loaded from append only file: %.3f seconds", (float)(ustime() - start) / 1000000);
+
+        /* Restore the replication ID / offset recorded in the AOF. */
+        if (restoreReplicationInfo(&rsi)) {
+            serverLog(LL_NOTICE, "Restored replication ID %s, offset %lld and DB %d from the append only file",
+                      rsi.repl_id, rsi.repl_offset, rsi.repl_stream_db);
+        } else if (server.aof_repl_offsets && !iAmPrimary() && (ret == AOF_OK || ret == AOF_TRUNCATED)) {
+            serverLog(LL_NOTICE, "The append only file doesn't end with a recorded replication offset, so this "
+                                 "replica will need a full sync");
+        }
     } else {
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         int rsi_is_valid = 0;
@@ -7747,34 +7797,7 @@ void loadDataFromDisk(void) {
             serverLog(LL_NOTICE, "DB loaded from disk: %.3f seconds", (float)(ustime() - start) / 1000000);
 
             /* Restore the replication ID / offset from the RDB file. */
-            if (rsi.repl_id_is_set && rsi.repl_offset != -1 &&
-                /* Note that older implementations may save a repl_stream_db
-                 * of -1 inside the RDB file in a wrong way, see more
-                 * information in function rdbPopulateSaveInfo. */
-                rsi.repl_stream_db != -1) {
-                rsi_is_valid = 1;
-                if (!iAmPrimary()) {
-                    memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
-                    server.primary_repl_offset = rsi.repl_offset;
-                    /* If this is a replica, create a cached primary from this
-                     * information, in order to allow partial resynchronizations
-                     * with primaries. */
-                    replicationCachePrimaryUsingMyself();
-                    selectDb(server.cached_primary, rsi.repl_stream_db);
-                } else {
-                    /* If this is a primary, we can save the replication info
-                     * as secondary ID and offset, in order to allow replicas
-                     * to partial resynchronizations with primaries. */
-                    memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
-                    server.second_replid_offset = rsi.repl_offset + 1;
-                    /* Rebase primary_repl_offset from rsi.repl_offset. */
-                    server.primary_repl_offset += rsi.repl_offset;
-                    serverAssert(server.repl_backlog);
-                    server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
-                    rebaseReplicationBuffer(rsi.repl_offset);
-                    server.repl_no_replicas_since = time(NULL);
-                }
-            }
+            rsi_is_valid = restoreReplicationInfo(&rsi);
         } else if (rdb_load_ret != RDB_NOT_EXIST) {
             serverLog(LL_WARNING, "Fatal error loading the DB, check server logs. Exiting.");
             exit(1);

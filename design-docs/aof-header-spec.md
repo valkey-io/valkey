@@ -67,6 +67,7 @@ CRLF            = %x0D %x0A ; \r\n
 3. **Field Order**: Fields MAY appear in any order.
 4. **Decimal Representation**: Values for `len`, `checksum`, and `reploff` MUST be represented as decimal integers without a sign, and `len` and `checksum` MUST fit in 64 bits.
 5. **Maximum Length**: The header line, including its CRLF, MUST NOT exceed 1023 bytes.
+6. **Replication Fields**: `replid` and `reploff` MUST appear at most once. `replid` MUST have 40 characters, and `reploff` MUST have no leading zeros and fit in a signed 64-bit integer.
 
 ---
 
@@ -76,8 +77,8 @@ CRLF            = %x0D %x0A ; \r\n
 | :--- | :--- | :--- |
 | `len` | Decimal Integer | **Required.** The number of bytes in the block, starting right after the header's CRLF. |
 | `checksum` | Decimal Integer | **Required in files written with integrity.** The running CRC64 at the end of the block, see section 4. |
-| `replid` | Hex String (40 chars) | **Optional.** The replication ID associated with this state. |
-| `reploff` | Decimal Integer | **Optional.** The replication offset associated with this state. |
+| `replid` | String (40 chars) | **Optional.** The replication ID, when it differs from the last one in the file, see section 6. |
+| `reploff` | Decimal Integer | **Optional.** The replication offset at the end of the block, see section 6. |
 
 ### Header Variants based on Server State:
 
@@ -87,10 +88,11 @@ CRLF            = %x0D %x0A ; \r\n
   #HDR:v1;len:45;checksum:1234567890123456789;
   ```
 
-- **Replication State (planned)**:
-  A future feature to restore the replication state from the AOF would add `reploff`, and optionally `replid`, to the same header.
+- **Replication Offsets Enabled (`aof-replication-offsets yes`)**:
+  Adds `reploff`, and `replid` when needed, before `checksum` if there's one.
   ```text
-  #HDR:v1;len:45;replid:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2;reploff:100500;checksum:1234567890123456789;
+  #HDR:v1;len:45;replid:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2;reploff:100500;
+  #HDR:v1;len:45;reploff:100545;checksum:1234567890123456789;
   ```
 
 ---
@@ -101,8 +103,8 @@ If the `checksum` field is present, its value is calculated as follows:
 
 1. **Scope**: The checksum is a continuous CRC64 of the stream.
 2. **Coverage**: The checksum covers every byte of its block, the header line and the payload (of length specified by `len`), except the checksum value itself. It's calculated as if the value were empty.
-   - Specifically, for the header: `#HDR:v1;len:45;replid:abc;checksum:12345;\r\n`
-   - The checksummed header string is: `#HDR:v1;len:45;replid:abc;checksum:;\r\n`
+   - Specifically, for the header: `#HDR:v1;len:45;reploff:100500;checksum:12345;\r\n`
+   - The checksummed header string is: `#HDR:v1;len:45;reploff:100500;checksum:;\r\n`
 3. **Validation**: The loader calculates `CRC64(PreviousChecksum, HeaderString + PayloadData)` and compares it to the parsed `checksum` value.
 4. **Chain**: `PreviousChecksum` is the `checksum` of the previous block. The chain continues across INCR files and AOF rewrites: the first block of an INCR file continues from the end of the INCR file before it. The first INCR file after a base continues from the checksum recorded for the base. The chain restarts from 0 after a file written without integrity, or after a base without a recorded checksum.
 
@@ -117,18 +119,32 @@ Integrity is a property of each AOF file, recorded in the manifest.
 - **RDB base files**: They are protected by the RDB checksum, which is written and verified even if `rdbchecksum` is disabled. Nothing follows the RDB.
 - **Manifest keys**: A file line can have `integrity 1`, for a file written with integrity. The base line can also have `checksum <n>`: the running checksum when the rewrite that created it started, which the first INCR file continues from, since the base's content isn't part of the chain.
 - **Manifest checksum**: If any file line has `integrity 1` or a `checksum`, the manifest ends with a `# manifest-checksum: <n>` line, holding the CRC64 (starting from 0, decimal) of all the bytes before that line, line terminators included. Nothing follows it.
-- **Loading**: Files are only verified when `aof-integrity-check` is enabled. Otherwise, headers are skipped like other annotations, and since the end of the last INCR file isn't verified, it's no longer treated as an integrity file. With `aof-load-truncated yes`, an integrity file is only truncated at the end of a verified block, when the block after it is incomplete, and only if it's the last file. A last block whose `len` was corrupted to a larger value can't be told apart from a torn write, so it's truncated too. A checksum mismatch is an error, and so is an empty base written with integrity.
+- **Loading**: Files are only verified when `aof-integrity-check` is enabled. Otherwise, headers are skipped like other annotations, except to restore the replication offset, see section 6. Since the end of the last INCR file isn't verified, it's no longer treated as an integrity file. With `aof-load-truncated yes`, an integrity file is only truncated at the end of a verified block, when the block after it is incomplete, and only if it's the last file. A last block whose `len` was corrupted to a larger value can't be told apart from a torn write, so it's truncated too. A checksum mismatch is an error, and so is an empty base written with integrity.
 
 ---
 
-## 6. Versioning and Extensibility
+## 6. Replication Offsets
+
+With `aof-replication-offsets yes`, the AOF records the replication ID and offset of its data, so that a restarted server can partially resynchronize, as with the ones an RDB file records.
+
+- **Headers**: A header has `reploff`, the replication offset at the end of its block, whenever an RDB file would record it: on a replica that has a primary, connected or not, or on a primary with a replication backlog. The first header with `reploff` of each file also has `replid`, the replication ID, and so does a header after the ID changes. Otherwise, the ID is the one of the last header of the file that has it. Such headers are written with or without integrity.
+- **Replication Stream DB**: The replication stream can select a DB without writing to the AOF, e.g. for `PUBLISH` from another DB. If the AOF has another DB selected, a block with `reploff` ends with a `SELECT` of the DB of the replication stream, so the DB selected at the end of the block is the one of the stream at that offset.
+- **Shutdown**: The offset also grows without writes, e.g. with `PUBLISH`. At shutdown, the server writes a block that only selects the DB of the stream, to record the last offset. It's best effort: a failure to write it doesn't stop the shutdown. A short write that can't be undone leaves a torn block, as for any other write.
+- **Base Files**: An RDB base has the `repl-id`, `repl-offset` and `repl-stream-db` aux fields. So does the RDB file that a replica reuses as its base after a full sync, which has those of its primary. A RESP base ends with a block like those of INCR files, with `replid` and `reploff`, that only selects the DB of the stream. The CRC of the base covers it.
+- **Writes Not in the AOF**: The offset assumes that the AOF gets every write that replicas get. A write sent only to replicas, e.g. with Lua's `server.set_repl()` or a module call with the `A` flag, isn't in the AOF: after a restart, the primary doesn't have it, while its replicas, which partially resynchronize, keep it.
+- **Loading**: The `reploff` of a header applies once the last byte of its block is loaded. The server restores the replication ID and offset only if the loaded data ends with such a block, and not, for example, if commands without a header follow it. A block that ends past the end of the last file was torn, and it's truncated as a whole, as with integrity. Without integrity, a header corrupted on disk can't be detected.
+- **valkey-check-aof**: In the last file, it also treats a header that parses as the start of a block, with or without integrity: `--fix` truncates a torn block as a whole, and `--truncate-to-timestamp` truncates the block that has the timestamp as a whole.
+
+---
+
+## 7. Versioning and Extensibility
 
 - **Versioning**: The version token (e.g., `v1`) defines the strict grammar. A loader skips a header with an unknown version like any other annotation.
 - **Extensibility**: Within a version (e.g., `v1`), the parser MUST ignore any unrecognized fields. This allows a server running only integrity checks to safely skip `replid` and `reploff` fields, ensuring forward compatibility.
 
 ---
 
-## 7. Alternatives Considered: Base64-Encoded Packed Binary
+## 8. Alternatives Considered: Base64-Encoded Packed Binary
 
 We considered using a packed binary layout encoded in Base64 for maximum storage efficiency.
 

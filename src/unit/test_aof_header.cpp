@@ -21,6 +21,8 @@ static int parseHeader(const char *line, aofHeader *hdr) {
     return aofParseHeader(line, strlen(line), hdr, &err);
 }
 
+#define TEST_REPLID "0123456789abcdef0123456789abcdef01234567"
+
 TEST(AofHeaderTest, ParsesHeader) {
     aofHeader hdr;
     ASSERT_EQ(parseHeader("#HDR:v1;len:45;checksum:1234;\r\n", &hdr), C_OK);
@@ -29,6 +31,30 @@ TEST(AofHeaderTest, ParsesHeader) {
     ASSERT_TRUE(hdr.has_checksum);
     ASSERT_EQ(hdr.checksum_start, strlen("#HDR:v1;len:45;checksum:"));
     ASSERT_EQ(hdr.checksum_end, strlen("#HDR:v1;len:45;checksum:1234"));
+    ASSERT_FALSE(hdr.has_replid);
+    ASSERT_FALSE(hdr.has_reploff);
+}
+
+TEST(AofHeaderTest, ParsesReplicationFields) {
+    aofHeader hdr;
+    ASSERT_EQ(parseHeader("#HDR:v1;len:45;replid:" TEST_REPLID ";reploff:100500;checksum:9;\r\n", &hdr), C_OK);
+    ASSERT_TRUE(hdr.has_replid);
+    ASSERT_STREQ(hdr.replid, TEST_REPLID);
+    ASSERT_TRUE(hdr.has_reploff);
+    ASSERT_EQ(hdr.reploff, 100500);
+    ASSERT_EQ(hdr.checksum, 9u);
+
+    /* The replication ID is only recorded when it changes. */
+    ASSERT_EQ(parseHeader("#HDR:v1;len:0;reploff:0;\r\n", &hdr), C_OK);
+    ASSERT_FALSE(hdr.has_replid);
+    ASSERT_TRUE(hdr.has_reploff);
+    ASSERT_EQ(hdr.reploff, 0);
+
+    /* A replication ID without an offset. */
+    ASSERT_EQ(parseHeader("#HDR:v1;len:0;replid:" TEST_REPLID ";\r\n", &hdr), C_OK);
+    ASSERT_TRUE(hdr.has_replid);
+    ASSERT_STREQ(hdr.replid, TEST_REPLID);
+    ASSERT_FALSE(hdr.has_reploff);
 }
 
 TEST(AofHeaderTest, ParsesFullRangeChecksum) {
@@ -40,7 +66,7 @@ TEST(AofHeaderTest, ParsesFullRangeChecksum) {
 
 TEST(AofHeaderTest, IgnoresUnknownFields) {
     aofHeader hdr;
-    ASSERT_EQ(parseHeader("#HDR:v1;len:45;replid:abc;reploff:7;maxlen:5;checksum:9;\r\n", &hdr), C_OK);
+    ASSERT_EQ(parseHeader("#HDR:v1;len:45;foo:abc;bar:7;maxlen:5;checksum:9;\r\n", &hdr), C_OK);
     ASSERT_EQ(hdr.len, 45);
     ASSERT_EQ(hdr.checksum, 9u);
 }
@@ -50,6 +76,16 @@ TEST(AofHeaderTest, ParsesFieldsInAnyOrder) {
     ASSERT_EQ(parseHeader("#HDR:v1;foo:1;checksum:9;bar:2;len:45;\r\n", &hdr), C_OK);
     ASSERT_EQ(hdr.len, 45);
     ASSERT_EQ(hdr.checksum, 9u);
+}
+
+TEST(AofHeaderTest, ParsesReplicationFieldsInAnyOrder) {
+    aofHeader hdr;
+    ASSERT_EQ(parseHeader("#HDR:v1;reploff:9223372036854775807;checksum:9;replid:" TEST_REPLID ";len:0;\r\n", &hdr),
+              C_OK);
+    ASSERT_EQ(hdr.len, 0);
+    ASSERT_EQ(hdr.checksum, 9u);
+    ASSERT_STREQ(hdr.replid, TEST_REPLID);
+    ASSERT_EQ(hdr.reploff, 9223372036854775807LL);
 }
 
 TEST(AofHeaderTest, ChecksumsHeaderWithoutItsValue) {
@@ -95,6 +131,26 @@ TEST(AofHeaderTest, RejectsMalformedHeaders) {
         "\r\n",                                              /* Only CRLF. */
         "#HDR:v1;len:45;fo o:1;checksum:1;\r\n",             /* Space in a key. */
         "#HDR:v1;len:45;foo:a\tb;checksum:1;\r\n",           /* Control character in a value. */
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        aofHeader hdr;
+        ASSERT_EQ(parseHeader(invalid[i], &hdr), C_ERR) << invalid[i];
+    }
+}
+
+TEST(AofHeaderTest, RejectsMalformedReplicationFields) {
+    const char *invalid[] = {
+        "#HDR:v1;len:45;reploff:-1;\r\n",                                              /* Negative. */
+        "#HDR:v1;len:45;reploff:07;\r\n",                                              /* Leading zero. */
+        "#HDR:v1;len:45;reploff:+1;\r\n",                                              /* Sign. */
+        "#HDR:v1;len:45;reploff:1x;\r\n",                                              /* Trailing garbage. */
+        "#HDR:v1;len:45;reploff:;\r\n",                                                /* Empty. */
+        "#HDR:v1;len:45;reploff:9223372036854775808;\r\n",                             /* Overflow. */
+        "#HDR:v1;len:45;reploff:1;reploff:2;\r\n",                                     /* Duplicate reploff. */
+        "#HDR:v1;len:45;replid:abc;reploff:1;\r\n",                                    /* Not 40 characters. */
+        "#HDR:v1;len:45;replid:" TEST_REPLID "8;reploff:1;\r\n",                       /* 41 characters. */
+        "#HDR:v1;len:45;replid:;reploff:1;\r\n",                                       /* Empty replid. */
+        "#HDR:v1;len:45;replid:" TEST_REPLID ";replid:" TEST_REPLID ";reploff:1;\r\n", /* Duplicate replid. */
     };
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
         aofHeader hdr;

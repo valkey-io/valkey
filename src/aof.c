@@ -1007,6 +1007,8 @@ int openNewIncrAofForAppend(void) {
     server.aof_last_incr_size = 0;
     /* Reset the aof_last_incr_fsync_offset. */
     server.aof_last_incr_fsync_offset = 0;
+    /* The first header of each INCR file records the replication ID. */
+    server.aof_last_replid[0] = '\0';
     /* Update `server.aof_manifest`. */
     if (temp_am) aofManifestFreeAndUpdate(temp_am);
     return C_OK;
@@ -1307,6 +1309,7 @@ int restartAOFWithSyncRdb(void) {
     /* The new INCR file starts a new chain after the new base. */
     server.aof_running_checksum = 0;
     server.aof_integrity_active = server.aof_integrity_check;
+    server.aof_last_replid[0] = '\0';
     server.aof_state = AOF_ON;
 
     serverLog(LL_NOTICE, "Reused RDB file from primary sync as AOF base file: %s", new_base_filename);
@@ -1432,6 +1435,37 @@ static int aofWriteRetryBuf(void) {
     return C_OK;
 }
 
+/* Appends a SELECT to the AOF buffer if the AOF has another DB selected. */
+static void aofSelectDb(int dictid) {
+    if (dictid == -1 || dictid == server.aof_selected_db) return;
+    char seldb[64];
+    snprintf(seldb, sizeof(seldb), "%d", dictid);
+    server.aof_buf =
+        sdscatprintf(server.aof_buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
+    server.aof_selected_db = dictid;
+}
+
+/* Set while flushing a block that only records the replication offset. Nothing
+ * acknowledged depends on it, so failing to write it isn't fatal, even with
+ * appendfsync always. */
+static int aof_offset_block = 0;
+
+/* With aof-replication-offsets, writes a block to record the current replication
+ * offset if no write was flushed with it, e.g. at shutdown: the offset also grows
+ * without writes, e.g. with PUBLISH. The block only selects the DB of the
+ * replication stream. */
+void aofRecordReplicationOffset(void) {
+    rdbSaveInfo rsi;
+    if (server.aof_state != AOF_ON || !server.aof_repl_offsets || sdslen(server.aof_buf) ||
+        sdslen(server.aof_retry_buf) || server.aof_last_write_status != C_OK || !rdbPopulateSaveInfo(&rsi))
+        return;
+    server.aof_selected_db = -1; /* Select it even if it's already selected. */
+    aofSelectDb(rsi.repl_stream_db);
+    aof_offset_block = 1;
+    flushAppendOnlyFile(1);
+    aof_offset_block = 0;
+}
+
 /* Write the append only file buffer on disk.
  *
  * Since we are required to write the AOF before replying to the client,
@@ -1522,30 +1556,59 @@ void flushAppendOnlyFile(int force) {
         usleep(server.aof_flush_sleep);
     }
 
+    /* With aof-replication-offsets, the header also records the replication offset
+     * at the end of the block, whenever an RDB file would record it. */
+    rdbSaveInfo rsi;
+    rdbSaveInfo *rsiptr = server.aof_repl_offsets ? rdbPopulateSaveInfo(&rsi) : NULL;
+    /* Replication can select a DB without writing to the AOF, e.g. for PUBLISH. If
+     * the AOF has another DB selected, select the one of the replication stream at
+     * the end of the block, so that it's known at that offset. */
+    if (rsiptr) aofSelectDb(rsi.repl_stream_db);
+
     size_t expected_len = sdslen(server.aof_buf);
+    int integrity = server.aof_integrity_active;
+    int replid_recorded = 0;
     uint64_t checksum = 0;
-    char hdr[128];
+    char hdr[256];
     int hdr_len = 0;
     struct iovec iov[2];
     int iovcnt = 0;
 
-    if (server.aof_integrity_active) {
+    if (integrity || rsiptr) {
         char *p = hdr;
         memcpy(p, "#HDR:v1;len:", 12);
         p += 12;
         p += ull2string(p, sizeof(hdr) - (p - hdr), (unsigned long long)sdslen(server.aof_buf));
-        memcpy(p, ";checksum:", 10);
-        p += 10;
-
-        /* The checksum covers the whole block except its own value. The running
-         * checksum is only updated once the block is on disk, see below. */
-        checksum = crc64(server.aof_running_checksum, (unsigned char *)hdr, p - hdr);
-        checksum = crc64(checksum, (unsigned char *)";\r\n", 3);
-        checksum = crc64(checksum, (unsigned char *)server.aof_buf, sdslen(server.aof_buf));
-
-        p += ull2string(p, sizeof(hdr) - (p - hdr), (unsigned long long)checksum);
-        memcpy(p, ";\r\n", 3);
-        p += 3;
+        *p++ = ';';
+        if (rsiptr) {
+            /* The replication ID is recorded in the first header of each INCR file,
+             * and whenever it changes. */
+            if (strcmp(server.replid, server.aof_last_replid)) {
+                memcpy(p, "replid:", 7);
+                p += 7;
+                memcpy(p, server.replid, CONFIG_RUN_ID_SIZE);
+                p += CONFIG_RUN_ID_SIZE;
+                *p++ = ';';
+                replid_recorded = 1;
+            }
+            memcpy(p, "reploff:", 8);
+            p += 8;
+            p += ll2string(p, sizeof(hdr) - (p - hdr), server.primary_repl_offset);
+            *p++ = ';';
+        }
+        if (integrity) {
+            memcpy(p, "checksum:", 9);
+            p += 9;
+            /* The checksum covers the whole block except its own value. The running
+             * checksum is only updated once the block is on disk, see below. */
+            checksum = crc64(server.aof_running_checksum, (unsigned char *)hdr, p - hdr);
+            checksum = crc64(checksum, (unsigned char *)";\r\n", 3);
+            checksum = crc64(checksum, (unsigned char *)server.aof_buf, sdslen(server.aof_buf));
+            p += ull2string(p, sizeof(hdr) - (p - hdr), (unsigned long long)checksum);
+            *p++ = ';';
+        }
+        memcpy(p, "\r\n", 2);
+        p += 2;
         hdr_len = p - hdr;
         expected_len += hdr_len;
 
@@ -1624,7 +1687,15 @@ void flushAppendOnlyFile(int force) {
         }
 
         /* Handle the AOF write error. */
-        if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
+        if (aof_offset_block && nwritten == -1) {
+            /* Nothing acknowledged depends on a block that only records the
+             * replication offset, so drop it. The next write selects its DB. A
+             * short write that couldn't be undone is handled as for other writes. */
+            sdsclear(server.aof_buf);
+            server.aof_selected_db = -1;
+            return;
+        }
+        if (server.aof_fsync == AOF_FSYNC_ALWAYS && !aof_offset_block) {
             /* We can't recover when the fsync policy is ALWAYS since the reply
              * for the client is already in the output buffers (both writes and
              * reads), and the changes to the db can't be rolled back. Since we
@@ -1645,23 +1716,21 @@ void flushAppendOnlyFile(int force) {
                 server.aof_current_size += nwritten;
                 server.aof_last_incr_size += nwritten;
 
-                if (hdr_len) {
-                    /* Part of the block is on disk: keep the rest so that it's completed
-                     * before anything else, and chain the next block from this one. */
-                    if ((size_t)nwritten < (size_t)hdr_len) {
-                        /* Failed during header write. Save remaining header and all data. */
-                        server.aof_retry_buf = sdscatlen(server.aof_retry_buf, hdr + nwritten, hdr_len - nwritten);
-                        server.aof_retry_buf = sdscatlen(server.aof_retry_buf, server.aof_buf, sdslen(server.aof_buf));
-                    } else {
-                        /* Header fully written, failed during data write. */
-                        size_t data_written = nwritten - hdr_len;
-                        server.aof_retry_buf = sdscatlen(server.aof_retry_buf, server.aof_buf + data_written, sdslen(server.aof_buf) - data_written);
-                    }
-                    sdsclear(server.aof_buf);
-                    server.aof_running_checksum = checksum;
+                /* Part of the block is on disk: keep the rest so that it's completed
+                 * before anything else, which may get a header, and chain the next
+                 * block from this one. */
+                if ((size_t)nwritten < (size_t)hdr_len) {
+                    /* Failed during header write. Save remaining header and all data. */
+                    server.aof_retry_buf = sdscatlen(server.aof_retry_buf, hdr + nwritten, hdr_len - nwritten);
+                    server.aof_retry_buf = sdscatlen(server.aof_retry_buf, server.aof_buf, sdslen(server.aof_buf));
                 } else {
-                    sdsrange(server.aof_buf, nwritten, -1);
+                    /* Header fully written, failed during data write. */
+                    size_t data_written = nwritten - hdr_len;
+                    server.aof_retry_buf = sdscatlen(server.aof_retry_buf, server.aof_buf + data_written, sdslen(server.aof_buf) - data_written);
                 }
+                sdsclear(server.aof_buf);
+                if (integrity) server.aof_running_checksum = checksum;
+                if (replid_recorded) memcpy(server.aof_last_replid, server.replid, sizeof(server.aof_last_replid));
             }
             return; /* We'll try again on the next call... */
         }
@@ -1672,7 +1741,8 @@ void flushAppendOnlyFile(int force) {
             serverLog(LL_NOTICE, "AOF write error looks solved. The server can write again.");
             server.aof_last_write_status = C_OK;
         }
-        if (hdr_len) server.aof_running_checksum = checksum;
+        if (integrity) server.aof_running_checksum = checksum;
+        if (replid_recorded) memcpy(server.aof_last_replid, server.replid, sizeof(server.aof_last_replid));
     }
     server.aof_current_size += nwritten;
     server.aof_last_incr_size += nwritten;
@@ -1700,6 +1770,11 @@ try_fsync:
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
         if (valkey_fsync(server.aof_fd) == -1) {
+            /* As for a write error, see above. */
+            if (aof_offset_block) {
+                serverLog(LL_WARNING, "Can't fsync the replication offset to the AOF: %s", strerror(errno));
+                return;
+            }
             serverLog(LL_WARNING,
                       "Can't persist AOF for fsync error when the "
                       "AOF fsync policy is 'always': %s. Exiting...",
@@ -1807,14 +1882,7 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
 
     /* The DB this command was targeting is not the same as the last command
      * we appended. To issue a SELECT command is needed. */
-    if (dictid != -1 && dictid != server.aof_selected_db) {
-        char seldb[64];
-
-        snprintf(seldb, sizeof(seldb), "%d", dictid);
-        server.aof_buf =
-            sdscatprintf(server.aof_buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
-        server.aof_selected_db = dictid;
-    }
+    aofSelectDb(dictid);
 
     /* All commands should be propagated the same way in AOF as in replication.
      * No need for AOF-specific translation. */
@@ -2124,7 +2192,7 @@ int aofChecksumBlock(FILE *fp, long long len, char *buf, uint64_t *crc) {
     return C_OK;
 }
 
-/* Parses an AOF integrity header line, including its CRLF, as specified in
+/* Parses an AOF header line, including its CRLF, as specified in
  * design-docs/aof-header-spec.md. Unknown fields are ignored. Returns C_OK and
  * fills *hdr, or C_ERR with *err describing the problem. */
 int aofParseHeader(const char *line, size_t linelen, aofHeader *hdr, const char **err) {
@@ -2183,6 +2251,27 @@ int aofParseHeader(const char *line, size_t linelen, aofHeader *hdr, const char 
             hdr->has_checksum = 1;
             hdr->checksum_start = val - line;
             hdr->checksum_end = hdr->checksum_start + vallen;
+        } else if (keylen == 7 && !memcmp(key, "reploff", 7)) {
+            if (hdr->has_reploff) {
+                *err = "duplicate reploff field";
+                return C_ERR;
+            }
+            if (!string2ll(val, vallen, &hdr->reploff) || hdr->reploff < 0) {
+                *err = "invalid reploff";
+                return C_ERR;
+            }
+            hdr->has_reploff = 1;
+        } else if (keylen == 6 && !memcmp(key, "replid", 6)) {
+            if (hdr->has_replid) {
+                *err = "duplicate replid field";
+                return C_ERR;
+            }
+            if (vallen != CONFIG_RUN_ID_SIZE) {
+                *err = "invalid replid";
+                return C_ERR;
+            }
+            memcpy(hdr->replid, val, CONFIG_RUN_ID_SIZE);
+            hdr->has_replid = 1;
         }
     }
     if (!seen_len) {
@@ -2190,6 +2279,59 @@ int aofParseHeader(const char *line, size_t linelen, aofHeader *hdr, const char 
         return C_ERR;
     }
     return C_OK;
+}
+
+/* Tracks the replication offset recorded in the AOF while loading it. The offset
+ * in a header applies once the last byte of its block is loaded, and it can only
+ * be restored if nothing else is loaded after that block. */
+typedef struct {
+    int valid;                           /* The data loaded so far ends where rsi was recorded. */
+    rdbSaveInfo rsi;                     /* Replication ID, offset and stream DB at that point. */
+    char replid[CONFIG_RUN_ID_SIZE + 1]; /* Last replication ID in the current file. */
+    off_t block_end;                     /* End of the block whose offset is pending, or -1. */
+    long long block_reploff;             /* Offset at the end of that block. */
+} aofReplTracker;
+
+/* The data loaded so far ends at the end of a block that recorded reploff. */
+static void aofReplCommit(aofReplTracker *t, long long reploff, client *c) {
+    /* A block always ends after a whole transaction. */
+    t->valid = !c->flag.multi;
+    memcpy(t->rsi.repl_id, t->replid, sizeof(t->replid));
+    t->rsi.repl_id_is_set = 1;
+    t->rsi.repl_offset = reploff;
+    t->rsi.repl_stream_db = c->db->id;
+}
+
+/* Called for a header that ends at offset 'end' of the file, or NULL if malformed. */
+static void aofReplTrackHeader(aofReplTracker *t, const aofHeader *hdr, off_t end, client *c) {
+    t->block_end = -1;
+    if (!hdr) {
+        /* A malformed header may have recorded a new replication ID. */
+        t->valid = 0;
+        t->replid[0] = '\0';
+        return;
+    }
+    if (hdr->has_replid) memcpy(t->replid, hdr->replid, sizeof(t->replid));
+    /* Each file records the replication ID before the first offset. */
+    if (!hdr->has_reploff || !t->replid[0] || hdr->len > LLONG_MAX - (long long)end) return;
+    if (hdr->len == 0) {
+        aofReplCommit(t, hdr->reploff, c);
+    } else {
+        t->block_end = end + hdr->len;
+        t->block_reploff = hdr->reploff;
+    }
+}
+
+/* Called for a command that ends at offset 'end' of the file. */
+static void aofReplTrackCommand(aofReplTracker *t, off_t end, client *c) {
+    if (end == t->block_end) {
+        aofReplCommit(t, t->block_reploff, c);
+    } else {
+        /* The data loaded no longer ends where an offset was recorded. */
+        t->valid = 0;
+        if (end < t->block_end) return; /* The rest of the block follows. */
+    }
+    t->block_end = -1;
 }
 
 /* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
@@ -2202,8 +2344,9 @@ int aofParseHeader(const char *line, size_t linelen, aofHeader *hdr, const char 
  * 'integrity' tells whether the file was written with integrity: an INCR file
  * then has integrity headers, and a RESP base file ends with its CRC. They are
  * verified only when aof-integrity-check is enabled. 'last_file' tells whether
- * it's the last file of the AOF. */
-int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, int last_file) {
+ * it's the last file of the AOF. If 'repl' isn't NULL, it tracks the replication
+ * offset recorded in the AOF. */
+int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, int last_file, aofReplTracker *repl) {
     struct client *fakeClient;
     struct valkey_stat sb;
     int old_aof_state = server.aof_state;
@@ -2274,8 +2417,9 @@ int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, 
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE | (verify_crc ? RDBFLAGS_AOF_INTEGRITY : 0), NULL, aof_filepath) !=
-            RDB_OK) {
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE | (verify_crc ? RDBFLAGS_AOF_INTEGRITY : 0), repl ? &rsi : NULL,
+                       aof_filepath) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -2293,6 +2437,11 @@ int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, 
                 goto fmterr;
             }
             verify_crc = 0; /* The RDB has its own checksum. */
+            /* An RDB base records the replication offset in aux fields. */
+            if (repl) {
+                repl->valid = rsi.repl_id_is_set && rsi.repl_offset != -1 && rsi.repl_stream_db != -1;
+                repl->rsi = rsi;
+            }
             valid_up_to = ftello(fp);
             loadingAbsProgress(valid_up_to);
             last_progress_report_size = valid_up_to;
@@ -2417,7 +2566,28 @@ int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, 
                     goto readerr;
                 }
                 integrity_validated_until = current_pos + hdr.len;
+                if (hdr.len == 0 && server.aof_load_truncated && !fakeClient->flag.multi)
+                    valid_up_to = current_pos;
                 server.aof_running_checksum = computed_checksum;
+                if (repl) aofReplTrackHeader(repl, &hdr, current_pos, fakeClient);
+            } else if (repl && !strncmp(buf, AOF_HDR_V1, strlen(AOF_HDR_V1))) {
+                /* Not verified, so only used for the replication offset. */
+                aofHeader hdr;
+                const char *err;
+                off_t end = aofReadOffset(&rctx);
+                int parsed = aofParseHeader(buf, strlen(buf), &hdr, &err) == C_OK;
+                /* A block that ends past the end of the file was torn. Truncate it as a
+                 * whole, as with integrity, so that later writes can't be taken as the
+                 * rest of it. */
+                if (parsed && file_size != -1 && hdr.len > file_size - end) {
+                    serverLog(LL_WARNING, "AOF block in %s at offset %lld extends past the end of the file", filename,
+                              (long long)(end - (off_t)strlen(buf)));
+                    if (last_file) goto uxeof;
+                    parsed = 0;
+                }
+                if (parsed && hdr.len == 0 && server.aof_load_truncated && !fakeClient->flag.multi)
+                    valid_up_to = end;
+                aofReplTrackHeader(repl, parsed ? &hdr : NULL, end, fakeClient);
             }
             continue;
         }
@@ -2466,6 +2636,7 @@ int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, 
         if (lr == LOAD_CMD_MULTI_START) valid_before_multi = valid_up_to;
 
         if (server.aof_load_truncated) valid_up_to = aofReadOffset(&rctx);
+        if (repl) aofReplTrackCommand(repl, aofReadOffset(&rctx), fakeClient);
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }
 
@@ -2481,7 +2652,6 @@ int loadSingleAppendOnlyFile(char *filename, aof_file_type type, int integrity, 
 
 loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). */
     loadingIncrProgress(ftello(fp) - last_progress_report_size);
-    server.aof_state = old_aof_state;
     goto cleanup;
 
 readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
@@ -2567,8 +2737,14 @@ oomerr: /* An argument too large to allocate. */
     /* fall through to cleanup. */
 
 cleanup:
+    /* A block doesn't continue in the next file. */
+    if (repl) {
+        repl->block_end = -1;
+        repl->replid[0] = '\0';
+    }
     if (fakeClient) freeClient(fakeClient);
     zfree(block_buf);
+    server.aof_state = old_aof_state;
     server.current_client = old_cur_client;
     server.executing_client = old_exec_client;
     fclose(fp);
@@ -2576,14 +2752,18 @@ cleanup:
     return ret;
 }
 
-/* Load the AOF files according the aofManifest pointed by am. */
-int loadAppendOnlyFiles(aofManifest *am) {
+/* Load the AOF files according the aofManifest pointed by am. If rsi isn't NULL,
+ * it gets the replication ID / offset recorded in the AOF, if the loaded data ends
+ * where they were recorded. */
+int loadAppendOnlyFiles(aofManifest *am, rdbSaveInfo *rsi) {
     serverAssert(am != NULL);
     int status, ret = AOF_OK;
     long long start;
     off_t total_size = 0, base_size = 0;
     sds aof_name;
     int total_num, aof_num = 0, last_file;
+    aofReplTracker tracker = {.block_end = -1};
+    aofReplTracker *repl = rsi ? &tracker : NULL;
 
     /* If the 'server.aof_filename' file exists in dir, we may be starting
      * from an old server version. We will use enter upgrade mode in three situations.
@@ -2654,7 +2834,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
         base_size = getAppendOnlyFileSize(aof_name, NULL);
         last_file = ++aof_num == total_num;
         start = ustime();
-        ret = loadSingleAppendOnlyFile(aof_name, AOF_FILE_TYPE_BASE, am->base_aof_info->integrity, last_file);
+        ret = loadSingleAppendOnlyFile(aof_name, AOF_FILE_TYPE_BASE, am->base_aof_info->integrity, last_file, repl);
         if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
             /* The chain of the first INCR file starts where the base says. */
             if (server.aof_integrity_check && am->base_aof_info->has_checksum)
@@ -2687,7 +2867,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
             updateLoadingFileName(aof_name);
             last_file = ++aof_num == total_num;
             start = ustime();
-            ret = loadSingleAppendOnlyFile(aof_name, AOF_FILE_TYPE_INCR, ai->integrity, last_file);
+            ret = loadSingleAppendOnlyFile(aof_name, AOF_FILE_TYPE_INCR, ai->integrity, last_file, repl);
             if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
                 serverLog(LL_NOTICE, "DB loaded from incr file %s: %.3f seconds", aof_name,
                           (float)(ustime() - start) / 1000000);
@@ -2723,6 +2903,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
      * executed early, but that shouldn't be a problem since everything will be
      * fine after the first AOFRW. */
     server.aof_rewrite_base_size = base_size;
+    if (repl && repl->valid) *rsi = repl->rsi;
 
 cleanup:
     stopLoading(ret == AOF_OK || ret == AOF_TRUNCATED);
@@ -3349,6 +3530,19 @@ werr:
     return C_ERR;
 }
 
+/* Ends a RESP base with a block like those of INCR files, which records the
+ * replication ID / offset of the data, and selects the DB of the replication
+ * stream. */
+static int rewriteReplicationOffsetRio(rio *aof, rdbSaveInfo *rsi) {
+    char seldb[32], cmd[64], hdr[128];
+    int seldb_len = ll2string(seldb, sizeof(seldb), rsi->repl_stream_db);
+    int cmd_len = snprintf(cmd, sizeof(cmd), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", seldb_len, seldb);
+    int hdr_len = snprintf(hdr, sizeof(hdr), "#HDR:v1;len:%d;replid:%s;reploff:%lld;\r\n", cmd_len, server.replid,
+                           server.primary_repl_offset);
+    if (rioWrite(aof, hdr, hdr_len) == 0 || rioWrite(aof, cmd, cmd_len) == 0) return C_ERR;
+    return C_OK;
+}
+
 /* Write a sequence of commands able to fully rebuild the dataset into
  * "filename". Used both by REWRITEAOF and BGREWRITEAOF.
  *
@@ -3360,6 +3554,8 @@ int rewriteAppendOnlyFile(char *filename) {
     rio aof;
     FILE *fp = NULL;
     char tmpfile[256];
+    /* The base records the replication ID / offset of its data, like an RDB file. */
+    rdbSaveInfo rsi, *rsiptr = server.aof_repl_offsets ? rdbPopulateSaveInfo(&rsi) : NULL;
 
     /* Note that we have to use a different temp name here compared to the
      * one used by rewriteAppendOnlyFileBackground() function. */
@@ -3383,13 +3579,14 @@ int rewriteAppendOnlyFile(char *filename) {
         int error;
         compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
         if (rdbSaveRio(compression_algo, REPLICA_REQ_NONE, RDB_VERSION, &aof, &error,
-                       RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+                       RDBFLAGS_AOF_PREAMBLE, rsiptr) == C_ERR) {
             errno = error;
             goto werr;
         }
     } else {
         if (server.aof_rewrite_integrity) aof.update_cksum = rioGenericUpdateChecksum;
         if (rewriteAppendOnlyFileRio(&aof) == C_ERR) goto werr;
+        if (rsiptr && rewriteReplicationOffsetRio(&aof, rsiptr) == C_ERR) goto werr;
         if (server.aof_rewrite_integrity) {
             char crc[64];
             int len = snprintf(crc, sizeof(crc), "%s%llu\r\n", AOF_CRC, (unsigned long long)aof.cksum);
@@ -3458,10 +3655,11 @@ int rewriteAppendOnlyFileBackground(void) {
         return C_ERR;
     }
 
-    /* We set aof_selected_db to -1 in order to force the next call to the
-     * feedAppendOnlyFile() to issue a SELECT command. */
-    server.aof_selected_db = -1;
     flushAppendOnlyFile(1);
+    /* We set aof_selected_db to -1 in order to force the next call to the
+     * feedAppendOnlyFile() to issue a SELECT command. This is done after the
+     * flush, which can still SELECT a DB in the current INCR file. */
+    server.aof_selected_db = -1;
     if (sdslen(server.aof_retry_buf) > 0 || sdslen(server.aof_buf) > 0) {
         serverLog(LL_WARNING, "Can't start AOF rewrite while pending AOF data could not be flushed");
         server.aof_lastbgrewrite_status = C_ERR;

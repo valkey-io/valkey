@@ -67,9 +67,40 @@ static uint64_t expected_running_checksum = 0;
 static int integrity_chain_active = 0;
 static int rdb_tail_allowed = 1;
 extern int rdbCheckRequireChecksum;
-static off_t integrity_block_start = 0;
-static off_t integrity_payload_start = 0;
-static off_t integrity_validated_until = 0;
+static int protected_resp_base = 0;
+/* The last block of the file: from an integrity header, or from any header that
+ * parses in the last file without integrity (see processAnnotations()). */
+static off_t block_start = 0;
+static off_t block_payload_start = 0;
+static off_t block_end = 0;
+
+/* Computes the CRC64 of the first 'len' bytes of 'fp'. */
+static uint64_t computeBaseCrc(FILE *fp, char *filename, off_t len) {
+    uint64_t crc = 0;
+    unsigned char buf[16 * 1024];
+    rewind(fp);
+    while (len > 0) {
+        size_t to_read = len > (off_t)sizeof(buf) ? sizeof(buf) : (size_t)len;
+        if (fread(buf, to_read, 1, fp) != 1) {
+            printf("Failed to read BASE AOF %s, aborting...\n", filename);
+            exit(1);
+        }
+        crc = crc64(crc, buf, to_read);
+        len -= to_read;
+    }
+    return crc;
+}
+
+/* Appends a fresh #CRC line at 'pos' after truncating a protected RESP base. */
+static void writeBaseCrc(FILE *fp, char *filename, off_t pos) {
+    char crc_line[64];
+    int len = snprintf(crc_line, sizeof(crc_line), "%s%llu\r\n", AOF_CRC,
+                       (unsigned long long)computeBaseCrc(fp, filename, pos));
+    if (fseeko(fp, pos, SEEK_SET) == -1 || fwrite(crc_line, len, 1, fp) != 1 || fflush(fp)) {
+        printf("Failed to write checksum to BASE AOF %s\n", filename);
+        exit(1);
+    }
+}
 
 int consumeNewline(char *buf) {
     if (buf[0] != '\r' || buf[1] != '\n') {
@@ -182,10 +213,13 @@ int processRESP(FILE *fp, char *filename, int *out_multi) {
  * Note that in Multi Part AOF, this truncation is only allowed when the last_file
  * parameter is 1.
  *
+ * A header starts a block, which is only truncated as a whole. 'size' is the size
+ * of the file.
+ *
  * Returns 1 to continue, 0 if the AOF was truncated to the timestamp, or -1 on an
  * error, with 'error' set.
  **/
-int processAnnotations(FILE *fp, char *filename, int last_file) {
+int processAnnotations(FILE *fp, char *filename, int last_file, off_t size) {
     char buf[AOF_ANNOTATION_LINE_MAX_LEN];
 
     epos = ftello(fp);
@@ -229,11 +263,27 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
             printf("Error seeking in AOF file %s: %s\n", filename, strerror(errno));
             exit(1);
         }
-        integrity_block_start = epos;
-        integrity_payload_start = current_pos;
-        integrity_validated_until = current_pos + hdr.len;
+        block_start = epos;
+        block_payload_start = current_pos;
+        block_end = current_pos + hdr.len;
 
         expected_running_checksum = computed_checksum;
+    } else if (last_file && !strncmp(buf, AOF_HDR_V1, strlen(AOF_HDR_V1))) {
+        /* Without integrity, the server still uses the headers for the replication
+         * offset with aof-replication-offsets, and then truncates a torn last block
+         * as a whole. Check the same way, which is also fine without that config. */
+        aofHeader hdr;
+        const char *err;
+        off_t current_pos = ftello(fp);
+        if (aofParseHeader(buf, strlen(buf), &hdr, &err) == C_OK) {
+            if (hdr.len > size - current_pos) {
+                ERROR("AOF block of %lld bytes extends past the end of the file", hdr.len);
+                return -1;
+            }
+            block_start = epos;
+            block_payload_start = current_pos;
+            block_end = current_pos + hdr.len;
+        }
     }
 
     if (to_timestamp && strncmp(buf, "#TS:", 4) == 0) {
@@ -245,8 +295,8 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
             exit(1);
         }
         if (ts <= to_timestamp) return 1;
-        /* A timestamp inside an integrity block is truncated together with its block. */
-        off_t trunc_pos = (integrity_chain_active && epos < integrity_validated_until) ? integrity_block_start : epos;
+        /* A timestamp inside a block is truncated together with its block. */
+        off_t trunc_pos = epos < block_end ? block_start : epos;
         if (trunc_pos == 0) {
             printf("AOF %s has nothing before timestamp %jd, "
                    "aborting...\n",
@@ -267,10 +317,11 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
             printf("Failed to truncate AOF %s to timestamp %jd\n", filename, (intmax_t)to_timestamp);
             exit(1);
         } else {
-            if (trunc_pos < epos && epos > integrity_payload_start) {
-                printf("The timestamp is inside an integrity block, so the %lld bytes of the block before it "
+            if (protected_resp_base) writeBaseCrc(fp, filename, trunc_pos);
+            if (trunc_pos < epos && epos > block_payload_start) {
+                printf("The timestamp is inside a block, so the %lld bytes of the block before it "
                        "were truncated too\n",
-                       (long long)(epos - integrity_payload_start));
+                       (long long)(epos - block_payload_start));
             }
             return 0;
         }
@@ -290,9 +341,9 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
 
     /* Block offsets are per file. The caller sets the chain state (integrity_chain_active
      * and the expected running checksum). */
-    integrity_validated_until = 0;
-    integrity_block_start = 0;
-    integrity_payload_start = 0;
+    block_end = 0;
+    block_start = 0;
+    block_payload_start = 0;
 
     FILE *fp = fopen(aof_filepath, "r+");
     if (fp == NULL) {
@@ -330,8 +381,8 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
     }
 
     while (1) {
-        /* Inside a verified integrity block, the file can only be truncated at the block start. */
-        if (!multi && (!integrity_chain_active || ftello(fp) >= integrity_validated_until)) pos = ftello(fp);
+        /* Inside a block, the file can only be truncated at the block start. */
+        if (!multi && ftello(fp) >= block_end) pos = ftello(fp);
         if (fgets(buf, sizeof(buf), fp) == NULL) {
             if (feof(fp)) {
                 break;
@@ -346,19 +397,19 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
         }
 
         if (buf[0] == '#') {
-            int ret = processAnnotations(fp, aof_filepath, last_file);
+            int ret = processAnnotations(fp, aof_filepath, last_file, size);
             if (ret == 0) {
                 fclose(fp);
                 return AOF_CHECK_TIMESTAMP_TRUNCATED;
             }
             if (ret < 0) break;
         } else if (buf[0] == '*') {
-            if (integrity_chain_active && ftello(fp) >= integrity_validated_until) {
+            if (integrity_chain_active && ftello(fp) >= block_end) {
                 ERROR("AOF command at offset %lld lacks an integrity header", (long long)ftello(fp));
                 break;
             }
             if (!processRESP(fp, aof_filepath, &multi)) break;
-            if (integrity_chain_active && ftello(fp) > integrity_validated_until) {
+            if (integrity_chain_active && ftello(fp) > block_end) {
                 ERROR("AOF command extends past the end of its integrity block");
                 break;
             }
@@ -408,6 +459,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
                 printf("Failed to truncate AOF %s\n", aof_filename);
                 exit(1);
             } else {
+                if (protected_resp_base) writeBaseCrc(fp, aof_filepath, pos);
                 fclose(fp);
                 return AOF_CHECK_TRUNCATED;
             }
@@ -564,19 +616,7 @@ void checkBaseCrc(char *filename, char *filepath) {
     }
 
     /* The CRC covers everything before its line. */
-    off_t remaining = sb.st_size - tail_len + crc_line;
-    uint64_t crc = 0;
-    unsigned char buf[16 * 1024];
-    rewind(fp);
-    while (remaining > 0) {
-        size_t to_read = remaining > (off_t)sizeof(buf) ? sizeof(buf) : (size_t)remaining;
-        if (fread(buf, to_read, 1, fp) != 1) {
-            printf("Failed to read BASE AOF %s, aborting...\n", filename);
-            exit(1);
-        }
-        crc = crc64(crc, buf, to_read);
-        remaining -= to_read;
-    }
+    uint64_t crc = computeBaseCrc(fp, filename, sb.st_size - tail_len + crc_line);
     fclose(fp);
     if (crc != expected) {
         printf("BASE AOF %s checksum mismatch. Calculated %llu, got %llu\n", filename, (unsigned long long)crc,
@@ -639,11 +679,13 @@ void checkMultiPartAof(char *dirpath, char *manifest_filepath, int fix) {
         int aof_preamble = fileIsRDB(aof_filepath);
 
         printf("Start to check BASE AOF (%s format).\n", aof_preamble ? "RDB" : "RESP");
-        if (am->base_aof_info->integrity && !aof_preamble) checkBaseCrc(aof_filename, aof_filepath);
+        protected_resp_base = am->base_aof_info->integrity && !aof_preamble;
+        if (protected_resp_base) checkBaseCrc(aof_filename, aof_filepath);
         integrity_chain_active = 0;
         rdb_tail_allowed = !am->base_aof_info->integrity;
         rdbCheckRequireChecksum = am->base_aof_info->integrity;
         ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preamble);
+        protected_resp_base = 0;
         /* The chain of the first INCR file starts where the base says. */
         if (am->base_aof_info->has_checksum) expected_running_checksum = am->base_aof_info->last_checksum;
         printAofStyle(ret, aof_filename, (char *)"BASE AOF");

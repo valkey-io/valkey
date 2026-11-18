@@ -1838,8 +1838,8 @@ typedef struct {
     sds file_name;           /* file name */
     long long file_seq;      /* file sequence */
     aof_file_type file_type; /* file type */
-    int integrity;           /* Written with integrity headers. */
-    int has_checksum;        /* Whether last_checksum is known. */
+    bool integrity;          /* Written with integrity headers. */
+    bool has_checksum;       /* Whether last_checksum is known. */
     uint64_t last_checksum;  /* For a base, the running checksum when it was created, where the
                                 first INCR file's chain starts. */
 } aofInfo;
@@ -1856,13 +1856,17 @@ typedef struct {
                                      disk, we need to persist it immediately. */
 } aofManifest;
 
-/* A parsed AOF integrity header, see aofParseHeader(). */
+/* A parsed AOF header, see aofParseHeader(). */
 typedef struct {
     long long len;     /* Length of the block that follows the header. */
     uint64_t checksum; /* Running checksum at the end of the block. */
-    int has_checksum;
+    bool has_checksum;
     size_t checksum_start; /* Offset of the checksum value in the header line. */
     size_t checksum_end;   /* Offset right after the checksum value. */
+    long long reploff;     /* Replication offset at the end of the block. */
+    bool has_reploff;
+    char replid[CONFIG_RUN_ID_SIZE + 1]; /* Replication ID. */
+    bool has_replid;
 } aofHeader;
 
 /*-----------------------------------------------------------------------------
@@ -2194,10 +2198,13 @@ struct valkeyServer {
     int aof_integrity_check;            /* Enable metadata integrity check in AOF */
     int aof_integrity_active;           /* The current INCR file is written with integrity headers. */
     uint64_t aof_running_checksum;      /* Current AOF running checksum */
+    int aof_repl_offsets;               /* Record the replication offset in AOF headers. */
+    /* Replication ID last recorded in the current INCR file. */
+    char aof_last_replid[CONFIG_RUN_ID_SIZE + 1];
     uint64_t aof_rewrite_base_checksum; /* AOF running checksum at the start of rewrite */
     int aof_rewrite_integrity;          /* The INCR file opened at the start of rewrite has integrity headers. */
-    sds aof_retry_buf;                  /* Unwritten remainder of a partially written AOF block (header + commands),
-                                           used when integrity is enabled. It must be written before anything else. */
+    sds aof_retry_buf;                  /* Unwritten remainder of a partially written AOF block (header + commands).
+                                           It must be written before anything else. */
     int aof_lastbgrewrite_status;       /* C_OK or C_ERR */
     unsigned long aof_delayed_fsync;    /* delayed AOF fsync() counter */
     int aof_rewrite_incremental_fsync;  /* fsync incrementally while aof rewriting? */
@@ -3563,7 +3570,8 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc);
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);
 void aofRemoveTempFile(pid_t childpid, int from_signal);
 int rewriteAppendOnlyFileBackground(void);
-int loadAppendOnlyFiles(aofManifest *am);
+int loadAppendOnlyFiles(aofManifest *am, rdbSaveInfo *rsi);
+void aofRecordReplicationOffset(void);
 void stopAppendOnly(void);
 int startAppendOnly(void);
 int restartAOFWithSyncRdb(void);

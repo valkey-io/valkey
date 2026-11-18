@@ -66,7 +66,8 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Reject inbound cluster bus packets larger than 16MB, except Pub/Sub and module messages, so a peer cannot make a node buffer up to 4GB from a single header by @madolson (#5065)
 * Fix `XINFO GROUPS` and `XINFO STREAM ... FULL` reporting too-high consumer group lag after `XTRIM` or a trimming `XADD` removes unread entries by @Sasidharan3094 (#4983)
 * Fix AOF load failure after a crash leaves a torn annotation at the end of the file; it is now treated as a short read and can be truncated by `aof-load-truncated` or `valkey-check-aof --fix` by @sumitk163 (#5349)
-* Correct the `SENTINEL GET-MASTER-ADDR-BY-NAME` reply schema to allow the null reply returned for an unknown primary name by @rainsupreme (#5246)
+* Prevent replicas from processing stale cluster packets and incorrectly promoting themselves to an empty primary within a shard by @zhijun42 (#2811)
+* Correct the `SENTINEL GET-PRIMARY-ADDR-BY-NAME` reply schema to allow the null reply returned for an unknown primary name by @rainsupreme (#5246)
 * Fix a use-after-free crash when client eviction under `maxmemory-clients` frees a client that is still executing a command which unblocked another client by @nadav-levanoni (#5435)
 * Fix a crash after `REPLICAOF NO ONE` with TLS and a connection leak after `REPLICAOF` to a new primary when the old primary client is freed asynchronously due to pending I/O by @yaronsananes (#3719)
 

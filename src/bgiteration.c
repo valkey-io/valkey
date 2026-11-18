@@ -2172,6 +2172,12 @@ void bgIteratorTerminate(bgIterator *it) {
 
     mutexQueueAdd(it->items_for_iterator, (void *)&STATIC_ITEM_TERMINATED);
 
+    /* When we tell the keyset iterator that a flushDb -1 is being performed, the iterator closes
+     * out its reference to the current DB.  This is an easy way to close out the kvstore pointer
+     * before we get around to fully releasing the iterator.  This allows rehashing to resume, and
+     * guards against the possibility that the DB might get deleted before we clean our references. */
+    it->keyset_iter->flushDb(it->keyset_iter, -1);
+
     it->terminated = true;
 }
 

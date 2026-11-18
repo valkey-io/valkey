@@ -1209,11 +1209,13 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_error "WRONGTYPE*" {r delex foo ifeq "test"}
     }
 
-# The 24 byte size class only exists with an 8 byte quantum, as in the bundled
-# jemalloc. A system jemalloc usually has a 16 byte quantum.
-if {[string match {*jemalloc*} [s mem_allocator]] &&
-    ([catch {r debug mallctl arenas.quantum} quantum] || $quantum == 8)} {
+if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {
+        # The 24 byte size class only exists with an 8 byte quantum, as in the
+        # bundled jemalloc. A system jemalloc usually has a 16 byte quantum.
+        if {[r debug mallctl arenas.quantum] != 8} {
+            skip "needs jemalloc with quantum 8"
+        }
         # Check that we can fit 9 bytes of key + value into a 24 byte
         # allocation, including the serverObject itself.
         r set quux xyzzy

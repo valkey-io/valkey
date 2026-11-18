@@ -70,6 +70,7 @@ struct clusterNode {
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
     unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
+    int voter_policy;                       /* cluster-voter wish (CLUSTER_VOTER_*). */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     void *protocol_data;                    /* Protocol-specific data (e.g. clusterNodeLegacyData) */
 };

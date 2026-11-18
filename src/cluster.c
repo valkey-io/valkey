@@ -245,6 +245,11 @@ void clusterUpdateMyselfFlags(void) {
         myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
         updated |= CLUSTER_UPDATED_NOFAILOVER;
     }
+    /* The config is this node's wish. Raft publishes it in NODE_INFO and
+     * only the leader turns it into ADD_VOTER or DEL_VOTER. */
+    if (myself->voter_policy != server.cluster_voter) {
+        myself->voter_policy = server.cluster_voter;
+    }
     clusterNotifyMyselfUpdated(updated);
 }
 

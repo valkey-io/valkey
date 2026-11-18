@@ -510,28 +510,27 @@ complexity to the leader's replication logic.
 
 #### Automatic learner promotion
 
-The leader runs a one-way reconciliation controller that promotes
-caught-up learners to voters until the voting set reaches
-`RAFT_TARGET_VOTERS` (5). It is intentionally minimal:
+The leader reconciles each node's `cluster-voter` wish (`auto`, `yes`,
+or `no`; default `auto`) into the voting set. The wish is carried in the
+address string of `NODE_JOIN` and `NODE_INFO` (`voter=yes` or `voter=no`;
+absent means `auto`) and does not change `cluster_size` by itself. Only
+the leader appends `ADD_VOTER` or `DEL_VOTER`. A node always joins as a
+learner, including when it is configured `yes`.
 
-- **Leader-only and one-way.** Only the leader promotes; it never
-  demotes. When `size >= RAFT_TARGET_VOTERS` it is a no-op. Below the
-  target, including a single node, nothing happens until an eligible
-  learner exists.
-- **Reuses ADD_VOTER.** There is no new node flag or entry type. Apply
-  goes through `clusterRaftApplyAddVoter`, the single membership-change
-  point.
-- **Shrinking.** `CLUSTER FORGET` of a voter decrements `size`, down to
-  one node. `CLUSTER DELVOTER` demotes a voter to a learner, down to one
-  voter, and rejects demoting the leader or the last voter. The demoted
-  node stays in the cluster, so the next cron promotes it again when it
-  is still eligible. After a forget, the controller promotes another
-  caught-up learner when one exists. A manual `ADD_VOTER` may push
-  `size` above the target; the controller does not demote it back.
+- **auto.** Promote a caught-up learner while `size < RAFT_TARGET_VOTERS`
+  (5). At the target this is a no-op. Switching back from `yes` while
+  above the target does not demote.
+- **yes.** The same catch-up check, then promote even when the voting
+  set is already at the target.
+- **no.** Do not promote. If the node is already a voter, demote it and
+  leave it a learner. The leader does not demote itself, and does not
+  demote the last voter.
 
-A candidate is eligible only when it is a learner, has finished joining
-(no MEET flag), is not failed, has an active link, and its `match_index`
-has caught up with the leader's last log index.
+A promotion candidate must have finished joining (no MEET flag), not be
+failed, have an active link, and have `match_index` caught up with the
+leader's last log index. `CLUSTER FORGET` of a voter can still shrink
+the set down to one node. Afterwards the controller promotes another
+eligible `auto` or `yes` learner when one exists.
 
 To avoid overlapping membership transitions, the leader enforces **at
 most one quorum-changing entry in flight**, where a transition's identity

@@ -442,7 +442,8 @@ static void clusterRaftMaybeSendTimeoutNow(void);
 static bool raftEntryAffectsQuorum(int type, sds data);
 static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data);
 static clusterNode *clusterRaftSelectPromotionCandidate(void);
-static void clusterRaftAutoPromoteLearner(void);
+static clusterNode *clusterRaftSelectDemotionCandidate(void);
+static void clusterRaftReconcileVoters(void);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -1537,6 +1538,7 @@ static void clusterRaftClearOptionalNodeInfo(clusterNode *node) {
     sdsclear(node->announce_client_ipv6);
     sdsclear(node->availability_zone);
     node->replica_priority = 0;
+    node->voter_policy = CLUSTER_VOTER_AUTO;
 }
 
 /* True if the entry changes the voting set (server.cluster->size). Safe on
@@ -2354,6 +2356,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     sdsfree(my_addr);
     myself->flags &= ~(CLUSTER_NODE_NOFAILOVER | CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL);
     if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES) myself->flags |= CLUSTER_NODE_NOFAILOVER;
+    /* Local config wins over the wish saved in the snapshot address. */
+    myself->voter_policy = server.cluster_voter;
 
     /* Do what applying the skipped slot changes would have done locally. The
      * old owners are still valid, since nodes are only deleted below. */
@@ -2958,9 +2962,9 @@ static void clusterRaftReapJoiningStubs(void) {
     dictReleaseIterator(di);
 }
 
-/* Pick a learner eligible for automatic promotion to voter. A candidate must
- * be a learner that finished joining (no MEET flag), is not marked failed,
- * has an active link, and has fully caught up with the leader's log. */
+/* A caught-up learner the leader may promote. cluster-voter no is never
+ * eligible. yes is eligible above the target. auto is eligible only while
+ * the voting set is below RAFT_TARGET_VOTERS. */
 static clusterNode *clusterRaftSelectPromotionCandidate(void) {
     uint64_t last = raftLogLastIndex();
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -2968,6 +2972,8 @@ static clusterNode *clusterRaftSelectPromotionCandidate(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *n = dictGetVal(de);
         if (!nodeIsLearner(n)) continue;
+        if (n->voter_policy == CLUSTER_VOTER_NO) continue;
+        if (n->voter_policy != CLUSTER_VOTER_YES && server.cluster->size >= RAFT_TARGET_VOTERS) continue;
         if (n->flags & CLUSTER_NODE_MEET) continue;
         if (nodeFailed(n)) continue;
         if (!n->link) continue;
@@ -2979,30 +2985,54 @@ static clusterNode *clusterRaftSelectPromotionCandidate(void) {
     return NULL;
 }
 
-/* Leader-only, one-way reconciliation controller: promote caught-up learners
- * to voters until the voting set reaches RAFT_TARGET_VOTERS. Reuses the
- * ADD_VOTER path. Never demotes; when size >= target it is a no-op. Stops
- * while any membership transition is in flight. */
-static void clusterRaftAutoPromoteLearner(void) {
-    clusterRaftState *rs = RAFT_STATE();
-    if (rs->role != RAFT_ROLE_LEADER) return;
-    if (server.cluster->size >= RAFT_TARGET_VOTERS) return;
+/* A voter that set cluster-voter no. Not the leader, and not the last voter. */
+static clusterNode *clusterRaftSelectDemotionCandidate(void) {
+    if (server.cluster->size <= 1) return NULL;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (n == myself || !nodeIsVoter(n)) continue;
+        if (n->voter_policy != CLUSTER_VOTER_NO) continue;
+        dictReleaseIterator(di);
+        return n;
+    }
+    dictReleaseIterator(di);
+    return NULL;
+}
 
-    clusterNode *candidate = clusterRaftSelectPromotionCandidate();
-    if (!candidate) return;
-
-    sds data = sdsnewlen(candidate->name, CLUSTER_NAMELEN);
-    /* Only one membership transition in flight at a time. */
-    if (clusterRaftQuorumChangeStatus(RAFT_ENTRY_ADD_VOTER, data) != RAFT_QC_NONE) {
+/* Append one ADD_VOTER or DEL_VOTER, unless a quorum change is already in flight. */
+static void clusterRaftProposeMembershipChange(int type, const char *entry_name, clusterNode *node) {
+    sds data = sdsnewlen(node->name, CLUSTER_NAMELEN);
+    if (clusterRaftQuorumChangeStatus(type, data) != RAFT_QC_NONE) {
         sdsfree(data);
         return;
     }
 
-    sds entry = sdsnew("ADD_VOTER ");
+    sds entry = sdsnew(entry_name);
+    entry = sdscatlen(entry, " ", 1);
     entry = sdscatsds(entry, data);
     clusterRaftPropose(entry, NULL, NULL);
     sdsfree(data);
     sdsfree(entry);
+}
+
+/* Leader-only. Turn each node's cluster-voter wish into one membership
+ * change. Demote a voter that asked to be a learner before promoting anyone.
+ * Stops while any quorum change is in flight. */
+static void clusterRaftReconcileVoters(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->role != RAFT_ROLE_LEADER) return;
+
+    clusterNode *demote = clusterRaftSelectDemotionCandidate();
+    if (demote) {
+        clusterRaftProposeMembershipChange(RAFT_ENTRY_DEL_VOTER, "DEL_VOTER", demote);
+        return;
+    }
+
+    clusterNode *promote = clusterRaftSelectPromotionCandidate();
+    if (!promote) return;
+    clusterRaftProposeMembershipChange(RAFT_ENTRY_ADD_VOTER, "ADD_VOTER", promote);
 }
 
 static void clusterRaftCron(void) {
@@ -3158,7 +3188,7 @@ static void clusterRaftCron(void) {
             }
             myself->repl_offset = my_offset;
             clusterRaftDetectFailures(now);
-            clusterRaftAutoPromoteLearner();
+            clusterRaftReconcileVoters();
         }
     }
 
@@ -4668,30 +4698,6 @@ static void clusterRaftAutoFailoverCallback(void *ctx, const char *error) {
     }
 }
 
-static void clusterRaftCommandCompletion(void *ctx, const char *error) {
-    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
-    if (!c) return;
-    if (error) {
-        addReplyError(c, error);
-    } else {
-        addReply(c, shared.ok);
-    }
-    unblockClientAsync(c);
-}
-
-static void clusterRaftProposeVoterChange(const char *entry_name, const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    if (id_len != CLUSTER_NAMELEN) {
-        if (callback) callback(ctx, "invalid node id");
-        return;
-    }
-
-    sds entry = sdsnew(entry_name);
-    entry = sdscatlen(entry, " ", 1);
-    entry = sdscatlen(entry, node_id, CLUSTER_NAMELEN);
-    clusterRaftPropose(entry, ctx, callback);
-    sdsfree(entry);
-}
-
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterRaftState *rs = RAFT_STATE();
     if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
@@ -4952,28 +4958,6 @@ static int clusterRaftSpecialCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
         addReply(c, shared.ok);
         return 1;
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "addvoter") && c->argc == 3) {
-        void *h = blockClientAsync(c);
-        clusterRaftProposeVoterChange("ADD_VOTER", objectGetVal(c->argv[2]),
-                                      sdslen(objectGetVal(c->argv[2])), h, clusterRaftCommandCompletion);
-        return 1;
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "delvoter") && c->argc == 3) {
-        void *h = blockClientAsync(c);
-        clusterRaftProposeVoterChange("DEL_VOTER", objectGetVal(c->argv[2]),
-                                      sdslen(objectGetVal(c->argv[2])), h, clusterRaftCommandCompletion);
-        return 1;
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "raft") && c->argc == 4) {
-        if (!strcasecmp(objectGetVal(c->argv[2]), "add-voter")) {
-            void *h = blockClientAsync(c);
-            clusterRaftProposeVoterChange("ADD_VOTER", objectGetVal(c->argv[3]),
-                                          sdslen(objectGetVal(c->argv[3])), h, clusterRaftCommandCompletion);
-            return 1;
-        } else if (!strcasecmp(objectGetVal(c->argv[2]), "del-voter")) {
-            void *h = blockClientAsync(c);
-            clusterRaftProposeVoterChange("DEL_VOTER", objectGetVal(c->argv[3]),
-                                          sdslen(objectGetVal(c->argv[3])), h, clusterRaftCommandCompletion);
-            return 1;
-        }
     }
     return 0;
 }

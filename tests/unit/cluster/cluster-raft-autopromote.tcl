@@ -57,13 +57,17 @@ start_cluster 5 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
 }
 
 start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
-    test "Raft autopromote: manual ADDVOTER above target is not demoted" {
+    test "Raft autopromote: yes above target stays; extra auto voters are demoted" {
         set remaining [raft_find_learner 0 6]
         assert {$remaining > 0}
+        set remaining_id [R $remaining CLUSTER MYID]
         raft_add_voter 0 $remaining
-        wait_for_raft_cluster_size 6
-        after 2000
-        assert_equal 6 [CI 0 cluster_size]
+        wait_for_condition 200 100 {
+            [CI 0 cluster_size] == 5 &&
+            ![cluster_has_flag [cluster_get_node_by_id 0 $remaining_id] learner]
+        } else {
+            fail "size=[CI 0 cluster_size] remaining learner=[cluster_has_flag [cluster_get_node_by_id 0 $remaining_id] learner]"
+        }
     }
 }
 
@@ -93,7 +97,6 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
         set remaining [raft_find_learner 0 6]
         assert {$remaining > 0}
         raft_add_voter 0 $remaining
-        wait_for_raft_cluster_size 6
         set target [raft_find_voter 0 6 $remaining]
         assert {$target > 0}
         raft_set_voter $target no
@@ -218,7 +221,7 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}}
 }
 
 start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 500}} {
-    test "Raft autopromote: leader change preserves the voter set and ADDVOTER works" {
+    test "Raft autopromote: leader change: yes stays a voter after auto demotes back to 5" {
         set remaining [raft_find_learner 0 6]
         assert {$remaining > 0}
 
@@ -245,9 +248,11 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 500}} {
         }
         assert {$new_leader_idx > 0}
 
+        set remaining_id [R $remaining CLUSTER MYID]
         raft_add_voter $new_leader_idx $remaining
         resume_process [srv 0 pid]
-        wait_for_raft_cluster_size 6
+        wait_for_raft_cluster_size 5
+        assert {![cluster_has_flag [cluster_get_node_by_id $new_leader_idx $remaining_id] learner]}
     }
 }
 

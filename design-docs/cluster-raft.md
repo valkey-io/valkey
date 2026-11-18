@@ -518,10 +518,10 @@ the leader appends `ADD_VOTER` or `DEL_VOTER`. A node always joins as a
 learner, including when it is configured `yes`.
 
 - **auto.** Promote a caught-up learner while `size < RAFT_TARGET_VOTERS`
-  (5). At the target this is a no-op. Switching back from `yes` while
-  above the target does not demote.
+  (5). At the target this is a no-op. If `size` is above the target,
+  demote an auto voter until the set is 5 again.
 - **yes.** The same catch-up check, then promote even when the voting
-  set is already at the target.
+  set is already at the target. yes is never demoted automatically.
 - **no.** Do not promote. If the node is already a voter, demote it and
   leave it a learner. The leader does not demote itself, and does not
   demote the last voter.

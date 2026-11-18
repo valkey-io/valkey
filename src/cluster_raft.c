@@ -2985,20 +2985,28 @@ static clusterNode *clusterRaftSelectPromotionCandidate(void) {
     return NULL;
 }
 
-/* A voter that set cluster-voter no. Not the leader, and not the last voter. */
+/* A voter the leader may demote. Not the leader, and not the last voter.
+ * Prefer cluster-voter no. If the voting set is above RAFT_TARGET_VOTERS,
+ * an auto voter is also eligible. yes is never demoted. */
 static clusterNode *clusterRaftSelectDemotionCandidate(void) {
     if (server.cluster->size <= 1) return NULL;
+    clusterNode *auto_excess = NULL;
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *n = dictGetVal(de);
         if (n == myself || !nodeIsVoter(n)) continue;
-        if (n->voter_policy != CLUSTER_VOTER_NO) continue;
-        dictReleaseIterator(di);
-        return n;
+        if (n->voter_policy == CLUSTER_VOTER_NO) {
+            dictReleaseIterator(di);
+            return n;
+        }
+        if (auto_excess == NULL && n->voter_policy == CLUSTER_VOTER_AUTO &&
+            server.cluster->size > RAFT_TARGET_VOTERS) {
+            auto_excess = n;
+        }
     }
     dictReleaseIterator(di);
-    return NULL;
+    return auto_excess;
 }
 
 /* Append one ADD_VOTER or DEL_VOTER, unless a quorum change is already in flight. */
@@ -3018,7 +3026,7 @@ static void clusterRaftProposeMembershipChange(int type, const char *entry_name,
 }
 
 /* Leader-only. Turn each node's cluster-voter wish into one membership
- * change. Demote a voter that asked to be a learner before promoting anyone.
+ * change. Demote first (no, then excess auto above the target), then promote.
  * Stops while any quorum change is in flight. */
 static void clusterRaftReconcileVoters(void) {
     clusterRaftState *rs = RAFT_STATE();

@@ -340,7 +340,7 @@ proc test_sub_replica {type} {
         }
 
         # Make sure server 7 got a sub-replica log.
-        verify_log_message -7 "*I'm a sub-replica!*" 0
+        verify_log_message_re -7 {I'm a sub-replica!|My primary .* became a replica} 0
 
         if {$type == "shutdown"} {
             # Shutdown primary 0.
@@ -415,11 +415,11 @@ proc test_sub_replica {type} {
     }
 }
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
@@ -535,16 +535,15 @@ test "Replica migration to orphaned primaries" {
 
 # Now test the migration to a primary which used to be a replica, after
 # a failover.
-start_cluster 5 10 {tags {external:skip cluster cluster-raft:skip} overrides {shutdown-timeout 0}} {
+start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}} {
     test "Primary #12 should get at least one migrated replica" {
         # Kill replica #7 of primary #2. Only replica left is #12 now"
         pause_process [srv -7 pid]
 
         # Killing primary node #2, #12 should failover
-        set current_epoch [CI 1 cluster_current_epoch]
         pause_process [srv -2 pid]
         wait_for_condition 1000 50 {
-            [CI 1 cluster_current_epoch] > $current_epoch
+            [s -12 role] eq {master}
         } else {
             fail "No failover detected"
         }

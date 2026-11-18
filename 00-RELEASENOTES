@@ -77,7 +77,7 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Mark the absolute timestamp arguments of `HEXPIREAT` and `HPEXPIREAT` as `unix-time` in `COMMAND DOCS`, matching `EXPIREAT` and `PEXPIREAT` by @rainsupreme (#5245)
 * Correct `ZADD` and `LCS` metadata so `COMMAND DOCS` and valkey-cli hints no longer present `NX` with `GT`/`LT` or `LEN` with `IDX` as valid combinations by @rainsupreme (#5244)
 * Fail `CONFIG REWRITE` when the old config file reads short instead of writing uninitialized memory into the new config file by @madolson (#5158)
-* Restore acceptance of hexadecimal float sorted set scores (such as `0x10`), keeping replication and AOF replay compatible with Valkey 9.0 by @quanyeyang (#4875)
+* Restore acceptance of hexadecimal floats (such as `0x10`) in sorted set score ranges and `SORT` when built with `USE_FAST_FLOAT=yes` by @quanyeyang (#4875)
 * Fix a Sentinel crash when a monitored replica's `INFO` reply contains no `master_host` by @smkher (#4929)
 * Fix a use-after-free in streams when `XADD` creates a new node, which could leave a dangling pointer hit by later reads such as `XRANGE` by @Baraa-Hasheesh (#4711)
 * Reject inbound cluster bus packets larger than 16MB, except Pub/Sub and module messages, so a peer cannot make a node buffer up to 4GB from a single header by @madolson (#5065)

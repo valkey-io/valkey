@@ -1111,12 +1111,8 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t reserved : 1;                 /* Reserved for future use */
 } ClientFlags;
-/* Ensure ClientFlags never silently grows beyond two uint64_t words.
- * If this fires, move a flag to a separate field or widen the limit. */
-static_assert(sizeof(ClientFlags) <= sizeof(uint64_t) * 2,
-              "ClientFlags exceeds 128 bits; add a new word or remove a flag");
+static_assert(sizeof(ClientFlags) == sizeof(uint64_t), "ClientFlags must fit the native raw_flag");
 
 typedef struct ClientPubSubData {
     dict *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
@@ -1224,10 +1220,7 @@ typedef struct client {
     robj **original_argv; /* Arguments of original command if arguments were rewritten. */
     /* Client flags and state indicators */
     union {
-        struct {
-            uint64_t raw_flag1;
-            uint64_t raw_flag2;
-        };
+        uint64_t raw_flag;
         struct ClientFlags flag;
     };
     uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */

@@ -690,7 +690,7 @@ proc raft_join_fake_follower {fake_id fake_shard} {
     set cport 0
     set fd [raft_listen_and_accept cport 5000 {
         set fake_port [expr {$cport - 10000}]
-        set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
+        set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard,voter=no"
 
         # Send CLUSTER MEET without waiting for reply (it blocks until
         # NODE_JOIN commits, which needs our AE_ACK).

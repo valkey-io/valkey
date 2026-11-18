@@ -607,7 +607,7 @@ TEST_F(FbtreeTest, PeekEmpty) {
 
 TEST_F(FbtreeTest, PeekDoesNotMoveIterator) {
     const int total = NODE_SIZE * 7 / 2;
-    char first[8], last[8], buf[8];
+    char first[32], last[32], buf[32];
     for (int i = 0; i < total; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         insert(buf);
@@ -653,7 +653,7 @@ TEST_F(FbtreeTest, PeekDoesNotMoveIterator) {
 
     /* After a seek the peeks are the cursor's two neighbours. */
     const int rank = NODE_SIZE + 3;
-    char before[8], at[8];
+    char before[32], at[32];
     snprintf(before, sizeof(before), "k%03d", rank - 1);
     snprintf(at, sizeof(at), "k%03d", rank);
     fbtreeSeekToRank(&it, rank);

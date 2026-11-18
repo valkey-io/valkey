@@ -811,8 +811,10 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 
 # engine_lua.so
 # FORCE runs the sub-make on every build so it can rebuild changed Lua sources.
+# CC and AR are passed explicitly, as the values read from .make-settings are
+# not exported to sub-makes.
 $(LUA_MODULE_NAME): .make-prerequisites FORCE
-	$(MAKE) -C modules/lua OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
+	$(MAKE) -C modules/lua CC="$(CC)" AR="$(AR)" OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
 
 .PHONY: FORCE
 FORCE:

@@ -191,20 +191,25 @@ $(WRAP_DIR):
 # read it: it fails with "error: Invalid record" or "Unsupported stack probing
 # method" for every object. The server's -O level is passed: without it the
 # compiler generates -O0 code (llc defaults to -O2), which makes LZF in the
-# sanitizer builds about twice as slow.
+# sanitizer builds about twice as slow. The -m flags (-m32, -march=...) are
+# passed too, as the compiler generates code for its own target, not the one
+# recorded in the bitcode.
 #
 # llvm-nm is passed explicitly: Homebrew LLVM installs no plain 'nm', so 'nm'
 # would be Apple's. The CMake build (wrap-objects.py) uses llvm-nm as well.
 #
-# The steps are joined with && so that a failing step stops the build. With ';'
-# a failure in generate-redefine-syms.py left an empty syms file, and
-# llvm-objcopy then wrote an object without the renames.
+# set -e makes a failing step stop the build. Without it a failure in
+# generate-redefine-syms.py left an empty syms file, and llvm-objcopy then wrote
+# an object without the renames. 'file' runs outside the 'if', where set -e does
+# not apply, so that a missing 'file' fails the build instead of the bitcode
+# being copied unchanged.
 define wrap-object
 	@mkdir -p $(dir $@)
 	@set -e; \
-	if file $< | grep -q "LLVM.*bitcode"; then \
+	kind=$$(file $<); \
+	if echo "$$kind" | grep -q "LLVM.*bitcode"; then \
 		native=$(WRAP_DIR)/$*_temp.o; \
-		$(CC) $(filter -O%,$(SERVER_OPT)) -c -x ir $< -o $$native; \
+		$(CC) $(filter -O% -m%,$(SERVER_OPT) $(CFLAGS)) -c -x ir $< -o $$native; \
 	else \
 		native=$<; \
 	fi; \

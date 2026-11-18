@@ -347,10 +347,9 @@ static void clusterRaftBroadcastNodeOffset(clusterNode *node, long long offset) 
     sdsfree(msg);
 }
 
-/* Our replication offset as we report it to other nodes. After applying a
- * SET_REPLICA_OF, the replication state still has the old shard's offset
- * until beforeSleep reconfigures replication, so use the offset the apply
- * step set until then. */
+/* Our replication offset as we report it to other nodes. While a replication
+ * update is pending, the replication state may still have the old shard's
+ * offset, so use myself->repl_offset, which a move to another shard resets. */
 static long long clusterRaftMyReplicationOffset(void) {
     if (RAFT_STATE()->todo_update_replication) return myself->repl_offset;
     return getNodeReplicationOffset(myself);
@@ -2968,15 +2967,15 @@ static void clusterRaftBeforeSleep(bool blocked) {
      * after moving to another shard, not the offset from before it. */
     if (rs->todo_update_replication) {
         rs->todo_update_replication = 0;
-        /* Set when applying SET_REPLICA_OF, since myself is already in the
-         * new shard by the time we get here. */
+        /* Set when SET_REPLICA_OF or a snapshot moved myself to another
+         * shard. myself is already in the new shard by now. */
         int full_sync = rs->todo_full_sync;
         rs->todo_full_sync = 0;
         if (nodeIsReplica(myself) && myself->replicaof) {
             clusterNode *primary = myself->replicaof;
-            /* Only call clusterSetPrimary if replication target changed, or
-             * if we moved to another shard, e.g. by a snapshot, while the
-             * target stayed the same. */
+            /* Only call clusterSetPrimary if the target's address changed, or
+             * if we moved to another shard at the same address, e.g. another
+             * node took over that address. */
             if (full_sync || !server.primary_host ||
                 strcmp(server.primary_host, primary->ip) != 0 ||
                 server.primary_port != getNodeDefaultReplicationPort(primary)) {

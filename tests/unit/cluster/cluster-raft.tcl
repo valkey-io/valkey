@@ -9,8 +9,8 @@ proc raft_form_cluster {num_voters num_nodes} {
     for {set i 1} {$i < $num_nodes} {incr i} {
         R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
     }
-    for {set i 1} {$i < $num_voters} {incr i} {
-        raft_add_voter 0 [R $i CLUSTER MYID]
+    for {set i $num_voters} {$i < $num_nodes} {incr i} {
+        raft_set_voter $i no
     }
     wait_for_condition 100 100 {
         [raft_cluster_formed $num_voters $num_nodes]
@@ -168,8 +168,6 @@ test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
         set r0 [srv 0 client]
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
         $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
-        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
-        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
 
         wait_for_condition 50 100 {
             [CI 0 cluster_size] == 3 &&
@@ -185,10 +183,10 @@ test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
         if {[catch {
             assert_equal "OK" [$r0 CLUSTER FORGET $forgotten_id]
             wait_for_condition 50 100 {
-                ![raft_node_visible $r0 $forgotten_id] &&
+                [cluster_get_node_by_id 0 $forgotten_id] eq {} &&
                 [CI 0 cluster_size] == 2
             } else {
-                fail "NODE_FORGET did not drop the paused node on the leader: visible=[raft_node_visible $r0 $forgotten_id] size=[CI 0 cluster_size] nodes={[R 0 CLUSTER NODES]}"
+                fail "NODE_FORGET did not drop the paused node on the leader: size=[CI 0 cluster_size] nodes={[R 0 CLUSTER NODES]}"
             }
         } err]} {
             resume_process [srv -1 pid]
@@ -205,7 +203,7 @@ test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
             fail "forgotten node still a voter size=[CI 1 cluster_size] role=[CI 1 cluster_raft_role]"
         }
         wait_for_condition 100 100 {
-            ![raft_node_visible $r0 $forgotten_id] &&
+            [cluster_get_node_by_id 0 $forgotten_id] eq {} &&
             [CI 0 cluster_known_nodes] == 2
         } else {
             fail "reappeared via HELLO known_nodes=[CI 0 cluster_known_nodes] nodes={[R 0 CLUSTER NODES]}"

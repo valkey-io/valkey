@@ -84,7 +84,7 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Fix `XINFO GROUPS` and `XINFO STREAM ... FULL` reporting too-high consumer group lag after `XTRIM` or a trimming `XADD` removes unread entries by @Sasidharan3094 (#4983)
 * Fix shutdown-triggered failover promoting a replica that has `cluster-replica-no-failover yes` by @simonasr (#5033)
 * Fix AOF load failure after a crash leaves a torn annotation at the end of the file; it is now treated as a short read and can be truncated by `aof-load-truncated` or `valkey-check-aof --fix` by @sumitk163 (#5349)
-* Correct the `SENTINEL GET-MASTER-ADDR-BY-NAME` reply schema to allow the null reply returned for an unknown primary name by @rainsupreme (#5246)
+* Correct the `SENTINEL GET-PRIMARY-ADDR-BY-NAME` reply schema to allow the null reply returned for an unknown primary name by @rainsupreme (#5246)
 * Fix a crash after `REPLICAOF NO ONE` with TLS and a connection leak after `REPLICAOF` to a new primary when the old primary client is freed asynchronously due to pending I/O by @yaronsananes (#3719)
 
 Valkey 9.0.7  -  Released Mon 26 October 2026

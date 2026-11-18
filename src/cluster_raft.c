@@ -2226,7 +2226,10 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
 
     rs->todo_save_config = 1;
     rs->todo_connect_nodes = 1;
-    if (memcmp(old_shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) rs->todo_full_sync = 1;
+    if (memcmp(old_shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
+        rs->todo_full_sync = 1;
+        myself->repl_offset = 0; /* As when applying SET_REPLICA_OF. */
+    }
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
@@ -2971,8 +2974,10 @@ static void clusterRaftBeforeSleep(bool blocked) {
         rs->todo_full_sync = 0;
         if (nodeIsReplica(myself) && myself->replicaof) {
             clusterNode *primary = myself->replicaof;
-            /* Only call clusterSetPrimary if replication target changed. */
-            if (!server.primary_host ||
+            /* Only call clusterSetPrimary if replication target changed, or
+             * if we moved to another shard, e.g. by a snapshot, while the
+             * target stayed the same. */
+            if (full_sync || !server.primary_host ||
                 strcmp(server.primary_host, primary->ip) != 0 ||
                 server.primary_port != getNodeDefaultReplicationPort(primary)) {
                 if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) full_sync = 1;

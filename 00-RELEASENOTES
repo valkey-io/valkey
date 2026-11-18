@@ -41,7 +41,7 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Correct command metadata so the `numfields` count argument of hash field commands is no longer associated with a key specification by @sarthakaggarwal97 (#5211)
 * Fix `PFMERGE` with no source keys bypassing ACL key permissions and failing in `COMMAND GETKEYS`, and a crash in module commands whose keynum key spec starts past the last argument by @madolson (#5087)
 * Fix `HSETEX` and `MSETEX` with a repeated EX, PX or EXAT option being rejected by replicas and lost on AOF reload by @madolson (#5088)
-* Fix a memory leak when a script or module command is refused by ACL while the ACL log is disabled with `acllog-max-len 0` by @madolson (#5162)
+* Fix a memory leak when a module command is refused by ACL while the ACL log is disabled with `acllog-max-len 0` by @madolson (#5162)
 * Fix a crash on the first `FUNCTION LOAD` after startup when the shebang engine name contains a NUL byte by @madolson (#5115)
 * Fix an active defrag crash when a large set, sorted set or list is replaced by a hashtable-encoded hash while it is being defragmented by @madolson (#5164)
 * Fix `FCALL` errors or a crash when `FUNCTION FLUSH SYNC` runs before the lazy free triggered by `FUNCTION RESTORE` of more than 64 functions has completed by @madolson (#5105)

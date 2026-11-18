@@ -63,7 +63,7 @@ Upgrade urgency SECURITY: This release includes security fixes we recommend you 
 * Prevent a replica crash when the primary wrongly replies +CONTINUE to a full resync request; the replica now drops the link and retries by @madolson (#5126)
 * Bound the bytes the cluster bus reads per event so a peer with a constant read backlog cannot starve clients, cron and heartbeats by @madolson (#5161)
 * Fail `CONFIG REWRITE` when the old config file reads short instead of writing uninitialized memory into the new config file by @madolson (#5158)
-* Restore acceptance of hexadecimal float sorted set scores (such as `0x10`), keeping replication and AOF replay compatible with Valkey 9.0 by @quanyeyang (#4875)
+* Restore acceptance of hexadecimal floats (such as `0x10`) in sorted set score ranges and `SORT` when built with `USE_FAST_FLOAT=yes` by @quanyeyang (#4875)
 * Reclaim client-side caching tracking table entries left by disconnected clients, fixing a memory leak under read-heavy workloads, and include the tracking table in active defrag by @rayjinghaolei (#4190)
 * Correct `ZADD` and `LCS` metadata so `COMMAND DOCS` and valkey-cli hints no longer present `NX` with `GT`/`LT` or `LEN` with `IDX` as valid combinations by @rainsupreme (#5244)
 * Fix a Sentinel crash when a monitored replica's `INFO` reply contains no `master_host` by @smkher (#4929)

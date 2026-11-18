@@ -224,7 +224,8 @@ typedef struct {
     int votes_received;
     int pre_votes_received;
     mstime_t election_timeout;            /* Randomized timeout */
-    mstime_t last_heartbeat;              /* Election timer start */
+    mstime_t election_timer_start;        /* Follower or candidate */
+    mstime_t last_heartbeat_sent;         /* Leader: last AE broadcast */
     mstime_t last_leader_contact;         /* Last AE or snapshot from a leader, for the lease */
     mstime_t pre_vote_started;            /* Last time we started a pre-vote round */
     mstime_t last_repl_offsets_broadcast; /* Last REPL_OFFSETS broadcast */
@@ -494,7 +495,7 @@ static void clusterRaftStepDown(mstime_t now, const char *reason) {
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = now;
+    rs->election_timer_start = now;
     rs->todo_save_config = 1;
     if (rs->role != old_role)
         serverLog(LL_NOTICE, "Stepping down: %s.", reason);
@@ -534,7 +535,7 @@ static void clusterRaftSingletonStepDown(void) {
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     /* Clear singleton log — the leader's log is authoritative. */
     raftLogTruncateFrom(1);
     rs->last_applied = 0;
@@ -1968,8 +1969,8 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->last_heartbeat = monotonicMs();
-    rs->last_leader_contact = rs->last_heartbeat;
+    rs->election_timer_start = monotonicMs();
+    rs->last_leader_contact = rs->election_timer_start;
     clusterRaftSetLeader(argv[1]);
 
     /* Log consistency check: verify prev_log_index/term match. Entries have
@@ -2186,8 +2187,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     char old_shard_id[CLUSTER_NAMELEN];
     memcpy(old_shard_id, myself->shard_id, CLUSTER_NAMELEN);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->last_heartbeat = monotonicMs();
-    rs->last_leader_contact = rs->last_heartbeat;
+    rs->election_timer_start = monotonicMs();
+    rs->last_leader_contact = rs->election_timer_start;
     clusterRaftSetLeader(argv[1]);
 
     /* If we're already past the snapshot, ignore. */
@@ -2536,7 +2537,7 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
                    clusterRaftCanGrantVote(rs, candidate_last_index, candidate_last_term)) {
             granted = 1;
             memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
-            rs->last_heartbeat = monotonicMs(); /* Reset election timer */
+            rs->election_timer_start = monotonicMs(); /* Reset election timer */
             rs->todo_save_config = 1;
             serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
         }
@@ -2582,7 +2583,7 @@ static void clusterRaftBecomeLeader(void) {
          * heard from it, so failure detection kicks in faster. This
          * matters if the old leader is also a primary. */
         if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-            RAFT_NODE(peer)->last_ack_time = rs->last_heartbeat;
+            RAFT_NODE(peer)->last_ack_time = rs->election_timer_start;
         } else {
             RAFT_NODE(peer)->last_ack_time = monotonicMs();
         }
@@ -2593,6 +2594,7 @@ static void clusterRaftBecomeLeader(void) {
     uint64_t noop_idx = raftLogLastIndex() + 1;
     raftLogAppend(raftLogCreate(rs->current_term, noop_idx, RAFT_ENTRY_NOOP, sdsempty()));
     /* Immediate heartbeat to assert leadership. */
+    rs->last_heartbeat_sent = monotonicMs();
     clusterRaftBroadcastAppendEntries();
 }
 
@@ -2654,7 +2656,7 @@ static void clusterRaftStartElection(void) {
     memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
     rs->votes_received = 1; /* Vote for self */
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     rs->todo_save_config = 1;
     /* Defer sending RequestVote until after the term bump and self-vote
      * are persisted. Otherwise a crash could allow double-voting. */
@@ -2678,7 +2680,7 @@ static void clusterRaftInit(void) {
     server.cluster->protocol_data = rs;
     rs->role = RAFT_ROLE_FOLLOWER;
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
     rs->deferred_meets = listCreate();
@@ -2949,7 +2951,7 @@ static void clusterRaftCron(void) {
         /* Follower/candidate: check election timeout. */
         if (nodeIsVoter(myself) &&
             (rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_CANDIDATE) &&
-            now - rs->last_heartbeat > rs->election_timeout) {
+            now - rs->election_timer_start > rs->election_timeout) {
             clusterRaftStartPreVote();
         }
 
@@ -2957,7 +2959,7 @@ static void clusterRaftCron(void) {
             now - rs->pre_vote_started > rs->election_timeout) {
             rs->role = RAFT_ROLE_FOLLOWER;
             clusterRaftRandomizeElectionTimeout();
-            rs->last_heartbeat = now;
+            rs->election_timer_start = now;
         }
 
         if (rs->role == RAFT_ROLE_LEADER &&
@@ -3020,8 +3022,8 @@ static void clusterRaftCron(void) {
             /* Send periodic heartbeats. */
             mstime_t heartbeat_interval = rs->election_timeout / 10;
             if (heartbeat_interval < 100) heartbeat_interval = 100;
-            if (now - rs->last_heartbeat > heartbeat_interval) {
-                rs->last_heartbeat = now;
+            if (now - rs->last_heartbeat_sent > heartbeat_interval) {
+                rs->last_heartbeat_sent = now;
                 clusterRaftBroadcastAppendEntries();
             }
 

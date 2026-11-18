@@ -486,6 +486,11 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [r ACL DRYRUN command-test EVAL "" 3 rw rw]
         assert_equal "OK" [r ACL DRYRUN command-test EVAL "" 3 rw read]
 
+        # Test PFMERGE without source keys, the source key spec starts past the last argument
+        assert_equal "OK" [r ACL DRYRUN command-test PFMERGE rw]
+        assert_match {*has no permissions to access the 'read' key*} [r ACL DRYRUN command-test PFMERGE read]
+        assert_match {*has no permissions to access the 'nothing' key*} [r ACL DRYRUN command-test PFMERGE nothing]
+
         # Test GEORADIUS which uses the last type of keyspec, keyword
         assert_equal "OK" [r ACL DRYRUN command-test GEORADIUS read longitude latitude radius M STOREDIST write]
         assert_equal "OK" [r ACL DRYRUN command-test GEORADIUS read longitude latitude radius M]

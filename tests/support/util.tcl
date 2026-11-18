@@ -202,10 +202,13 @@ proc waitForBgrewriteaof r {
 }
 
 proc wait_for_sync {r {maxtries 50} {delay 100}} {
+    # A replica that fails to load the payload terminates, so catch the error
+    # from the lost connection and report it as a test failure rather than
+    # letting it surface as an I/O error aborting the whole run.
     wait_for_condition $maxtries $delay {
-        [status $r master_link_status] eq "up"
+        [catch {status $r master_link_status} res] == 0 && $res eq "up"
     } else {
-        fail "replica didn't sync in time"
+        fail "replica didn't sync in time (master_link_status: '$res')"
     }
 }
 
@@ -252,7 +255,7 @@ proc wait_for_ofs_sync {r1 r2} {
 
 proc wait_done_loading r {
     wait_for_condition 50 100 {
-        [catch {$r ping} e] == 0
+        [catch {{*}$r ping} e] == 0
     } else {
         fail "Loading DB is taking too much time."
     }
@@ -525,6 +528,7 @@ proc formatCommand {args} {
 }
 
 proc csvdump r {
+    wait_done_loading $r
     set o {}
     if {$::singledb} {
         set maxdb 1
@@ -821,7 +825,23 @@ proc wait_process_paused {pid {retries auto}} {
     }
 }
 
+# The process is resumed automatically when the current test ends. Use
+# pause_process_persistent to keep it paused across tests. Outside a test it
+# behaves like pause_process_persistent.
 proc pause_process pid {
+    if {$::cur_test eq ""} {
+        pause_process_persistent $pid
+        return
+    }
+    if {[lsearch -exact $::test_paused_pids $pid] < 0} {
+        lappend ::test_paused_pids $pid
+    }
+    pause_process_persistent $pid
+}
+
+# Like pause_process, but the process stays paused until resume_process is
+# called, even after the current test ends.
+proc pause_process_persistent pid {
     exec kill -SIGSTOP $pid
     # We sent the signal, so the stop is near-immediate. Keep the short budget.
     wait_process_paused $pid 50
@@ -829,6 +849,10 @@ proc pause_process pid {
 
 proc resume_process pid {
     exec kill -SIGCONT $pid
+    set idx [lsearch -exact $::test_paused_pids $pid]
+    if {$idx >= 0} {
+        set ::test_paused_pids [lreplace $::test_paused_pids $idx $idx]
+    }
 }
 
 proc cmdrstat {cmd r} {
@@ -861,7 +885,7 @@ proc fuzzy_traffic_commands_by_type {} {
     set list_commands {LINDEX LINSERT LLEN LPOP LPOS LPUSH LPUSHX LRANGE LREM LSET LTRIM RPOP RPOPLPUSH RPUSH RPUSHX}
     set set_commands {SADD SCARD SDIFF SDIFFSTORE SINTER SINTERSTORE SISMEMBER SMEMBERS SMOVE SPOP SRANDMEMBER SREM SSCAN SUNION SUNIONSTORE}
     set stream_commands {XACK XADD XCLAIM XDEL XGROUP XINFO XLEN XPENDING XRANGE XREAD XREADGROUP XREVRANGE XTRIM}
-    set pathhash_commands {PHCARD PHDEL PHDELPREFIX PHEXISTS PHGET PHGETALL PHLONGEST PHMGET PHMSET PHPREFIXES PHSCAN PHSET}
+    set pathhash_commands {PHPATHCOUNT PHDEL PHPATHDEL PHPATHEXISTS PHGET PHGETALL PHMGET PHMSET PHPREFIXES PHSCAN PHPATHSCAN PHSET}
     return [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands pathhash $pathhash_commands]
 }
 
@@ -1229,7 +1253,7 @@ proc get_nonloopback_addr {} {
 }
 
 proc get_nonloopback_client {} {
-    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
+    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls {-servername localhost}]
 }
 
 # The following functions and variables are used only when running large-memory

@@ -194,13 +194,23 @@ class OrderedIndexTest : public ::testing::Test {
         return count;
     }
 
+    /* A "-" or "+" bound, on either side, stands for the infinite sentinel. */
+    static sds lexBound(const char *str) {
+        if (strcmp(str, "-") == 0) return shared.minstring;
+        if (strcmp(str, "+") == 0) return shared.maxstring;
+        return sdsnew(str);
+    }
+    static void freeLexBound(sds bound) {
+        if (bound != shared.minstring && bound != shared.maxstring) sdsfree(bound);
+    }
+
     /* Seek to lex range using const char*. */
     void seekToLexRange(OrderedIndexIterator *it, const char *min_str, const char *max_str, int min_ex, int max_ex, long offset) {
-        sds min = sdsnew(min_str);
-        sds max = sdsnew(max_str);
+        sds min = lexBound(min_str);
+        sds max = lexBound(max_str);
         orderedIndexSeekToLexRange(it, min, max, min_ex, max_ex, offset);
-        sdsfree(min);
-        sdsfree(max);
+        freeLexBound(min);
+        freeLexBound(max);
     }
 
     /* Assert full forward traversal matches expected element names. */
@@ -1043,6 +1053,29 @@ TEST_F(OrderedIndexTest, ReverseIteration) {
     orderedIndexResetIterator(&iter);
 }
 
+TEST_F(OrderedIndexTest, NanScoreBoundMatchesNothing) {
+    populateSequential(10);
+    double nan = std::nan("");
+
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 0.0, nan, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, nan, 9.0, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByScore(oi, 0.0, nan, 0, 0, NULL, NULL), 0UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByScore(oi, nan, 9.0, 0, 0, NULL, NULL), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 10UL);
+
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, 0.0, nan, 0, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, nan, 9.0, 0, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, 0.0, nan, 0, 0, -1);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    verifyOI();
+}
+
 TEST_F(OrderedIndexTest, SeekToScoreRange) {
     for (int i = 0; i < 5; i++) {
         char buf[32];
@@ -1268,6 +1301,145 @@ TEST_F(OrderedIndexTest, SeekToLexRange) {
     /* Out of range positive offset */
     seekToLexRange(&it, "banana", "date", 0, 0, 10);
     ASSERT_EQ(orderedIndexNext(&it), nullptr);
+    orderedIndexResetIterator(&it);
+}
+
+/* The offset is applied as rank arithmetic. Check where it lands against the
+ * element-by-element walk it replaces: both directions, inclusive, exclusive
+ * and absent bounds, both sentinels, on a tree with an inner level. */
+TEST_F(OrderedIndexTest, SeekToLexRangeOffsetLandsByRank) {
+    const int n = 1000;
+    char buf[16];
+    for (int i = 0; i < n; i++) {
+        snprintf(buf, sizeof(buf), "m%04d", i);
+        insert(0.0, buf);
+    }
+
+    struct Case {
+        const char *min, *max;
+        int min_ex, max_ex;
+        long offset;
+        int expect; /* index of the element the first step returns, -1 for none */
+    };
+    const Case cases[] = {
+        /* forward, inclusive near bound */
+        {"m0100", "m0900", 0, 0, 0, 100},
+        {"m0100", "m0900", 0, 0, 1, 101},
+        {"m0100", "m0900", 0, 0, 500, 600},
+        {"m0100", "m0900", 0, 0, 800, 900},
+        {"m0100", "m0900", 0, 0, 801, -1}, /* past the far bound, inside the tree */
+        {"m0100", "m0900", 0, 0, 5000, -1},
+        /* forward, exclusive or absent near bound */
+        {"m0100", "m0900", 1, 0, 0, 101},
+        {"m0100", "m0900", 1, 1, 798, 899},
+        {"m0100", "m0900", 1, 1, 799, -1},
+        {"m0100x", "m0900", 0, 0, 0, 101},
+        {"m0100x", "m0900", 0, 0, 799, 900},
+        /* forward from the '-' sentinel */
+        {"-", "m0010", 0, 0, 7, 7},
+        {"-", "m0010", 0, 1, 10, -1},
+        {"-", "+", 0, 0, 999, 999},
+        {"-", "+", 0, 0, 1000, -1},
+        /* backward, inclusive near bound: -1 is the last element in range */
+        {"m0100", "m0900", 0, 0, -1, 900},
+        {"m0100", "m0900", 0, 0, -2, 899},
+        {"m0100", "m0900", 0, 0, -801, 100},
+        {"m0100", "m0900", 0, 0, -802, -1},
+        {"m0100", "m0900", 0, 0, -5000, -1},
+        /* backward, exclusive or absent near bound */
+        {"m0100", "m0900", 0, 1, -1, 899},
+        {"m0100", "m0900", 1, 1, -799, 101},
+        {"m0100", "m0900", 1, 1, -800, -1},
+        {"m0100", "m0900x", 0, 0, -1, 900},
+        {"m0100", "m0899x", 0, 0, -1, 899},
+        /* backward from the '+' sentinel */
+        {"m0990", "+", 0, 0, -1, 999},
+        {"m0990", "+", 0, 0, -10, 990},
+        {"m0990", "+", 1, 0, -10, -1},
+        {"-", "+", 0, 0, -1000, 0},
+        {"-", "+", 0, 0, -1001, -1},
+        /* extreme offsets must not overflow */
+        {"m0001", "+", 0, 0, LONG_MAX, -1},
+        {"-", "m0998", 0, 0, LONG_MIN, -1},
+    };
+
+    OrderedIndexIterator it;
+    for (const Case &c : cases) {
+        SCOPED_TRACE(::testing::Message() << c.min << (c.min_ex ? " ex" : "") << " .. " << c.max << (c.max_ex ? " ex" : "") << " offset " << c.offset);
+        orderedIndexInitIterator(&it, oi);
+        seekToLexRange(&it, c.min, c.max, c.min_ex, c.max_ex, c.offset);
+        OrderedIndexItem *pos = c.offset < 0 ? orderedIndexPrev(&it) : orderedIndexNext(&it);
+        if (c.expect < 0) {
+            EXPECT_EQ(pos, nullptr);
+        } else {
+            ASSERT_NE(pos, nullptr);
+            snprintf(buf, sizeof(buf), "m%04d", c.expect);
+            assertElement(pos, buf);
+        }
+        orderedIndexResetIterator(&it);
+    }
+}
+
+/* The seek checks the far bound itself, like the score seek: an inverted or
+ * empty range, or an offset that lands beyond the far bound, leaves nothing
+ * to iterate in either direction. */
+TEST_F(OrderedIndexTest, SeekToLexRangeChecksFarBound) {
+    for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
+
+    struct Case {
+        const char *min, *max;
+        int min_ex, max_ex;
+        long offset;
+    };
+    const Case empty[] = {
+        /* inverted */
+        {"cherry", "banana", 0, 0, 0},
+        {"cherry", "banana", 0, 0, -1},
+        /* empty */
+        {"", "", 1, 1, 0},
+        {"", "", 1, 1, -1},
+        /* equal bounds, one side exclusive */
+        {"banana", "banana", 1, 0, 0},
+        {"banana", "banana", 0, 1, -1},
+        /* the offset lands outside the far bound */
+        {"banana", "date", 0, 0, 3},
+        {"banana", "date", 0, 0, -4},
+        /* a sentinel on the near side, the only element on the far side excluded */
+        {"elderberry", "+", 1, 0, -1},
+        {"-", "apple", 0, 1, 0},
+        /* nothing on the near side */
+        {"zzz", "+", 0, 0, 0},
+        {"-", "a", 0, 0, -1},
+        /* crossed sentinels */
+        {"+", "a", 0, 0, 0},
+        {"+", "a", 0, 0, -1},
+        {"b", "-", 0, 0, 0},
+        {"b", "-", 0, 0, -1},
+        {"+", "-", 0, 0, 0},
+    };
+
+    OrderedIndexIterator it;
+    for (const Case &c : empty) {
+        SCOPED_TRACE(::testing::Message() << c.min << (c.min_ex ? " ex" : "") << " .. " << c.max << (c.max_ex ? " ex" : "") << " offset " << c.offset);
+        orderedIndexInitIterator(&it, oi);
+        seekToLexRange(&it, c.min, c.max, c.min_ex, c.max_ex, c.offset);
+        EXPECT_EQ(orderedIndexNext(&it), nullptr);
+        EXPECT_EQ(orderedIndexPrev(&it), nullptr);
+        orderedIndexResetIterator(&it);
+    }
+
+    /* The last element on each side is still reachable. */
+    OrderedIndexItem *pos;
+    orderedIndexInitIterator(&it, oi);
+    seekToLexRange(&it, "banana", "date", 0, 0, 2);
+    ASSERT_NE((pos = orderedIndexNext(&it)), nullptr);
+    assertElement(pos, "date");
+    orderedIndexResetIterator(&it);
+
+    orderedIndexInitIterator(&it, oi);
+    seekToLexRange(&it, "banana", "date", 0, 0, -3);
+    ASSERT_NE((pos = orderedIndexPrev(&it)), nullptr);
+    assertElement(pos, "banana");
     orderedIndexResetIterator(&it);
 }
 
@@ -2734,4 +2906,75 @@ TEST_F(OrderedIndexTest, HtConsistency_ByLex_EmptyRange) {
     sdsfree(min);
     sdsfree(max);
     simHtFree(&simulatedHt);
+}
+
+/* ========== Inline Leaf Compaction Through the Index ========== */
+
+/* Scattered deletes through the interface must re-pack leaves. Measured by
+ * the structure estimate, which counts leaves exactly, against a twin index
+ * that ran the same deletes with compaction parked. */
+TEST_F(OrderedIndexTest, DeleteKeepsLeavesPacked) {
+    const int N = 5000;
+    size_t mem[2];
+    for (int parked = 0; parked < 2; parked++) {
+        OrderedIndexItem **items = (OrderedIndexItem **)zmalloc(sizeof(OrderedIndexItem *) * N);
+        for (int i = 0; i < N; i++) {
+            char b[32];
+            int n = snprintf(b, sizeof(b), "e%06d", i);
+            items[i] = orderedIndexInsert(oi, (double)(i * 7919 % 1000), b, (size_t)n);
+        }
+
+        /* Delete 60% in a scattered order. */
+        orderedIndexSetCompactionAllowed(!parked);
+        for (int i = 0; i < N; i++) {
+            if (i % 5 == 1 || i % 5 == 3) continue;
+            orderedIndexDelete(oi, items[i]);
+        }
+        orderedIndexSetCompactionAllowed(1);
+        zfree(items);
+
+        VERIFY_INTEGRITY(oi);
+        EXPECT_EQ(orderedIndexLength(oi), (unsigned long)N * 2 / 5);
+        mem[parked] = orderedIndexEstimateStructureMemory(oi);
+
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
+    }
+    EXPECT_LT(mem[0] * 3, mem[1] * 2);
+}
+
+/* A score update is a delete followed by an insert, so a churn of score
+ * updates must not let the leaf count drift upward: every leaf that a
+ * reinsertion splits is paid back by compaction where the deletes land.
+ * Compared against a twin that ran the same churn with compaction parked. */
+TEST_F(OrderedIndexTest, UpdateScoreChurnKeepsLeavesBounded) {
+    const int N = 5000;
+    const int UPDATES = 100000;
+    size_t mem[2];
+    for (int parked = 0; parked < 2; parked++) {
+        OrderedIndexItem **items = (OrderedIndexItem **)zmalloc(sizeof(OrderedIndexItem *) * N);
+        for (int i = 0; i < N; i++) {
+            char b[32];
+            int n = snprintf(b, sizeof(b), "m%06d", i);
+            items[i] = orderedIndexInsert(oi, (double)i, b, (size_t)n);
+        }
+
+        uint32_t seed = 100000;
+        orderedIndexSetCompactionAllowed(!parked);
+        for (int u = 0; u < UPDATES; u++) {
+            int i = test_rand_range(&seed, 0, N - 1);
+            double score = (double)test_rand_range(&seed, 0, 999999);
+            items[i] = orderedIndexUpdateScore(oi, items[i], score);
+        }
+        orderedIndexSetCompactionAllowed(1);
+        zfree(items);
+
+        VERIFY_INTEGRITY(oi);
+        EXPECT_EQ(orderedIndexLength(oi), (unsigned long)N);
+        mem[parked] = orderedIndexEstimateStructureMemory(oi);
+
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
+    }
+    EXPECT_LT(mem[0] * 10, mem[1] * 9);
 }

@@ -71,7 +71,6 @@
                     {
                         "name": "numfields",
                         "type": "integer",
-                        "key_spec_index": 0,
                         "multiple": false,
                         "minimum": 1
                     },

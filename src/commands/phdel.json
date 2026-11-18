@@ -1,6 +1,6 @@
 {
     "PHDEL": {
-        "summary": "Deletes fields or the complete payload at a path in a path hash.",
+        "summary": "Deletes fields or the complete payload at a path in a path hash. Deletes the key if the last path was removed.",
         "complexity": "O(L + F*U) when deleting specified fields, where L is the path length, F is the number of requested fields, and U is the payload field lookup cost. O(L + S) when deleting the complete payload, where S is the number of stored fields in the payload.",
         "group": "pathhash",
         "since": "9.2.0",

@@ -11,7 +11,7 @@ start_server {tags {"acl external:skip"}} {
         r ACL USERS
     } {default newuser}
 
-    test {Usernames can not contain spaces or null characters} {
+    test {Usernames cannot contain spaces or null characters} {
         catch {r ACL setuser "a a"} err
         set err
     } {*Usernames can't contain spaces or null characters*}
@@ -833,6 +833,15 @@ start_server {tags {"acl external:skip"}} {
         assert {[llength [r ACL LOG]] == 0}
     }
 
+    test {ACLLOG - zero max length does not leak refused script keys} {
+        test_config_set r acllog-max-len 0
+        set before [s used_memory]
+        r AUTH antirez foo
+        r EVAL {for i = 1, 200 do server.pcall('set', ARGV[1], '1') end} 0 [string repeat x 100000]
+        r AUTH default ""
+        assert_lessthan [expr {[s used_memory] - $before}] 5000000
+    }
+
     test {ACL LOG entries are limited to a maximum amount} {
         r ACL LOG RESET
         r CONFIG SET acllog-max-len 5
@@ -918,7 +927,7 @@ start_server {tags {"acl external:skip"}} {
        assert_match "*ACL GENPASS argument must be the number*" $err2
     }
 
-    test {Default user can not be removed} {
+    test {Default user cannot be removed} {
        catch {r ACL deluser default} err
        set err
     } {ERR The 'default' user cannot be removed}
@@ -1067,6 +1076,81 @@ start_server {tags {"acl external:skip"}} {
         assert_error "*wrong number of arguments for 'acl|digest' command" {r ACL DIGEST extra}
     }
 
+    test {ACL DIGEST follows the rules of a role} {
+        # A user only names the roles it holds, so an edit to a role does not
+        # change any user line. The role has to be hashed on its own.
+        set before [r ACL DIGEST]
+        r ACL setrole digestrole ~role:a* +get
+        r ACL setuser digestmember on >digestpass role=digestrole
+        set created [r ACL DIGEST]
+        assert {$created ne $before}
+
+        r ACL setrole digestrole resetkeys ~role:b*
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setrole digestrole resetkeys ~role:a*
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestmember
+        r ACL delrole digestrole
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST does not cancel out a role and a user sharing a name} {
+        # Role names are only checked for valid characters, so a role and a
+        # user can carry the same name. Their lines must not cancel out.
+        set before [r ACL DIGEST]
+        r ACL setrole digesttwin ~twin:* +get
+        r ACL setuser digesttwin on >twinpass ~twin:* +get
+
+        set both [r ACL DIGEST]
+        assert {$both ne $before}
+        r ACL deluser digesttwin
+        set one [r ACL DIGEST]
+        assert {$one ne $both}
+        assert {$one ne $before}
+
+        r ACL delrole digesttwin
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    # SHA256 of an arbitrary string, computed by the server itself: a password
+    # is stored as its SHA256 hex digest.
+    proc acl_sha256_hex {s} {
+        r ACL setuser digestprobe reset >$s
+        set hash [lindex [dict get [r ACL getuser digestprobe] passwords] 0]
+        r ACL deluser digestprobe
+        return $hash
+    }
+
+    proc acl_hex_xor {a b} {
+        set out ""
+        for {set i 0} {$i < [string length $a]} {incr i 2} {
+            scan [string range $a $i [expr {$i + 1}]] %x x
+            scan [string range $b $i [expr {$i + 1}]] %x y
+            append out [format %02x [expr {$x ^ $y}]]
+        }
+        return $out
+    }
+
+    test {ACL DIGEST is the XOR of the SHA256 of every ACL LIST line} {
+        # The two tests above still pass if the leading user and role keywords
+        # are dropped from what gets hashed, because a user line always carries
+        # flags and passwords that a role line does not. This pins the whole
+        # hashed content instead, keywords included.
+        r ACL setrole digestcontract ~c:* +get
+        r ACL setuser digestcontract on >digestpass ~c:* +get
+
+        set lines [r ACL LIST]
+        set expected [string repeat 0 64]
+        foreach line $lines {
+            set expected [acl_hex_xor $expected [acl_sha256_hex $line]]
+        }
+        assert_equal $expected [r ACL DIGEST]
+
+        r ACL deluser digestcontract
+        r ACL delrole digestcontract
+    }
+
     test {ACL DIGEST needs permission to run} {
         r ACL setuser digestnoperm on >digestpass ~* +acl|whoami
         r AUTH digestnoperm digestpass
@@ -1100,7 +1184,7 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         r PUBLISH hello world
     }
 
-    test {default: with config acl-pubsub-default resetchannels after reset, can not access any channels} {
+    test {default: with config acl-pubsub-default resetchannels after reset, cannot access any channels} {
         r CONFIG SET acl-pubsub-default resetchannels
         r ACL setuser default reset on nopass ~* +@all
         assert_error {*NOPERM*channel*} {r SUBSCRIBE foo}
@@ -1335,8 +1419,8 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         close $fd
     }
 
-    # Every file below keeps the default user as it already is, so that the
-    # client running the test is never disconnected by the reload.
+    # The client running the tests is never disconnected by a reload, since it
+    # is not a pub/sub client.
     test {ACL DIGEST is unchanged by an ACL LOAD of an equivalent file} {
         write_digest_acl_file $aclfile {
             "user default on nopass ~* &* +@all"
@@ -1370,6 +1454,46 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         }
         r ACL LOAD
         assert {[r ACL DIGEST] ne $digest}
+    }
+
+    test {ACL LOAD disconnects default user clients subscribed to revoked channels} {
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        set rd [valkey_deferring_client]
+        test_defer [list $rd close]
+        $rd SUBSCRIBE secret
+        $rd read
+
+        set rd_pattern [valkey_deferring_client]
+        test_defer [list $rd_pattern close]
+        $rd_pattern PSUBSCRIBE *
+        $rd_pattern read
+
+        set rd_public [valkey_deferring_client]
+        test_defer [list $rd_public close]
+        $rd_public SUBSCRIBE public
+        $rd_public read
+
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* resetchannels &public +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        r AUTH alice alice
+        r PUBLISH secret test-message
+        catch {$rd read} e
+        assert_match {*I/O error*} $e
+        catch {$rd_pattern read} e
+        assert_match {*I/O error*} $e
+
+        # A subscription the new rules still allow survives the reload.
+        r PUBLISH public test-message
+        assert_equal {message public test-message} [$rd_public read]
     }
 }
 

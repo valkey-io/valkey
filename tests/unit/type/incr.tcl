@@ -151,6 +151,17 @@ start_server {tags {"incr"}} {
             # perform divisions.
     } {ERR *would produce*} {valgrind:skip}
 
+    test {INCRBYFLOAT rejects a NaN increment} {
+        r set foo 0
+        assert_error "*value is not a valid float*" {r incrbyfloat foo nan}
+    }
+
+    test {INCRBYFLOAT with an infinite field value} {
+        r set foo inf
+        assert_error "*would produce NaN or Infinity*" {r incrbyfloat foo -inf}
+        assert_equal inf [r get foo]
+    } {} {valgrind:skip}
+
     test {INCRBYFLOAT decrement} {
         r set foo 1
         roundFloat [r incrbyfloat foo -1.1]
@@ -192,6 +203,19 @@ start_server {tags {"incr"}} {
         assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
         assert_equal "pmessage * __keyspace@${db}__:foo expire" [$rd read]
         assert_equal "pmessage * __keyevent@${db}__:expire foo" [$rd read]
+        # Removing an expiry via PERSIST emits a persist event.
+        r increx foo byint 1 persist
+        assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
+        assert_equal "pmessage * __keyspace@${db}__:foo persist" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:persist foo" [$rd read]
+        # PERSIST on a key without TTL does not emit a persist event.
+        r increx foo byint 1 persist
+        assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
+        r del foo
+        assert_equal "pmessage * __keyspace@${db}__:foo del" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:del foo" [$rd read]
         $rd close
         r config set notify-keyspace-events ""
     }
@@ -350,6 +374,8 @@ start_server {tags {"incr"}} {
         assert_error "ERR value is not a valid float" {r increx foo byfloat 1}
     }
 
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulation will return a finite result on 1e4932 + 1e4932
     test {INCREX BYFLOAT positive arithmetic overflow returns [curr_val, 0]} {
         set big [ldbl_overflow_operand]
         r del foo
@@ -359,7 +385,10 @@ start_server {tags {"incr"}} {
         set res [r increx foo byfloat $big]
         assert_equal 0 [lindex $res 1]
         assert_equal $big [r get foo]
-    }
+    } {} {valgrind:skip}
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulation will return a finite result on 1e4932 + 1e4932
     test {INCREX BYFLOAT negative arithmetic overflow returns [curr_val, 0]} {
         set big [ldbl_overflow_operand]
         r del foo
@@ -368,7 +397,10 @@ start_server {tags {"incr"}} {
         set res [r increx foo byfloat -$big]
         assert_equal 0 [lindex $res 1]
         assert_equal -$big [r get foo]
-    }
+    } {} {valgrind:skip}
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulation will return a finite result on 1e4932 + 1e4932
     test {INCREX BYFLOAT overflow preserves existing TTL} {
         set big [ldbl_overflow_operand]
         r del foo
@@ -376,7 +408,10 @@ start_server {tags {"incr"}} {
         r increx foo byfloat $big
         assert_range [r ttl foo] 1 100
         assert_equal $big [r get foo]
-    }
+    } {} {valgrind:skip}
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulation will return a finite result on 1e4932 + 1e4932
     test {INCREX BYFLOAT overflow does not apply the command's expiration} {
         set big [ldbl_overflow_operand]
         # A rejected operation should not set a TTL on a key that has none...
@@ -389,7 +424,7 @@ start_server {tags {"incr"}} {
         r set foo $big ex 100
         r increx foo byfloat $big ex 60
         assert_range [r ttl foo] 61 100
-    }
+    } {} {valgrind:skip}
 
     test {INCREX reports the increment that was actually applied} {
         # A long double cannot represent every integer at these magnitudes, so
@@ -532,6 +567,400 @@ start_server {tags {"incr"}} {
             assert_equal {0}   [r read]
             r readraw 0
         }
+    }
+
+    test {INCREX LBOUND and UBOUND in integer mode} {
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 ubound 20]
+        assert_equal 15 [r get k]
+
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 ubound 15]
+        assert_equal 15 [r get k]
+
+        # Exceeds UBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 12]
+        assert_equal 10 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 10]
+        assert_equal 10 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 5]
+        assert_equal 10 [r get k]
+
+        # Bound constrains result, not direction
+        r set k 10
+        assert_equal {5 -5} [r increx k byint -5 ubound 5]
+        assert_equal 5 [r get k]
+
+        r set k 10
+        assert_equal {5 -5} [r increx k byint -5 lbound 0]
+        assert_equal 5 [r get k]
+
+        r set k 10
+        assert_equal {5 -5} [r increx k byint -5 lbound 5]
+        assert_equal 5 [r get k]
+
+        # Exceeds LBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byint -5 lbound 8]
+        assert_equal 10 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 lbound 20]
+        assert_equal 10 [r get k]
+
+        # Both bounds specified
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 lbound 0 ubound 20]
+        assert_equal 15 [r get k]
+
+        # LBOUND == UBOUND
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 lbound 10 ubound 10]
+        assert_equal 10 [r get k]
+    }
+
+    test {INCREX SATURATE clamps to bound} {
+        r set k 10
+        assert_equal {12 2} [r increx k byint 5 ubound 12 saturate]
+        assert_equal 12 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 10 saturate]
+        assert_equal 10 [r get k]
+
+        # Clamps to bound even when moving opposite to requested increment!
+        r set k 10
+        assert_equal {5 -5} [r increx k byint 5 ubound 5 saturate]
+        assert_equal 5 [r get k]
+
+        r set k 10
+        assert_equal {8 -2} [r increx k byint -5 lbound 8 saturate]
+        assert_equal 8 [r get k]
+
+        r set k 10
+        assert_equal {20 10} [r increx k byint -5 lbound 20 saturate]
+        assert_equal 20 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 lbound 10 ubound 10 saturate]
+        assert_equal 10 [r get k]
+
+        # SATURATE with no bounds is plain increment
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 saturate]
+        assert_equal 15 [r get k]
+        assert_equal {16 1} [r increx k saturate]
+        assert_equal 16 [r get k]
+
+        # SATURATE on integer overflow/underflow clamps to type limits or bounds
+        r set k 9223372036854775807
+        assert_equal {9223372036854775807 0} [r increx k byint 1 saturate]
+        assert_equal {9223372036854775807 0} [r increx k byint 1 ubound 9223372036854775807 saturate]
+
+        r set k [expr {9223372036854775807 - 7}]
+        assert_equal {9223372036854775807 7} [r increx k byint 10 saturate]
+        assert_equal 9223372036854775807 [r get k]
+
+        r set k 10
+        assert_equal {100 90} [r increx k byint 9223372036854775807 ubound 100 saturate]
+        assert_equal 100 [r get k]
+
+        # Integer overflow with UBOUND but without SATURATE is declined
+        r set k 10
+        assert_equal {10 0} [r increx k byint 9223372036854775807 ubound 100]
+        assert_equal 10 [r get k]
+
+        r set k [expr {-9223372036854775808 + 7}]
+        assert_equal {-9223372036854775808 -7} [r increx k byint -10 saturate]
+        assert_equal -9223372036854775808 [r get k]
+
+        r set k -10
+        assert_equal {-100 -90} [r increx k byint -9223372036854775807 lbound -100 saturate]
+        assert_equal -100 [r get k]
+
+        r set k -10
+        assert_equal {-10 0} [r increx k byint -9223372036854775807 lbound -100]
+        assert_equal -10 [r get k]
+    }
+
+    test {INCREX LBOUND, UBOUND, SATURATE in float mode} {
+        r set k 10
+        assert_equal {12.5 2.5} [r increx k byfloat 2.5 lbound 5.0 ubound 15.0]
+        assert_equal 12.5 [r get k]
+
+        # Out of bounds without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat 5.5 ubound 12.5]
+        assert_equal 10 [r get k]
+
+        # SATURATE clamps in float mode
+        r set k 10
+        assert_equal {12.5 2.5} [r increx k byfloat 5.5 ubound 12.5 saturate]
+        assert_equal 12.5 [r get k]
+
+        r set k 10
+        assert_equal {8 -2} [r increx k byfloat -6.0 lbound 8.0 saturate]
+        assert_equal 8 [r get k]
+
+        # Float overflow with UBOUND and SATURATE
+        set big [ldbl_overflow_operand]
+        r set k 10
+        assert_equal {100 90} [r increx k byfloat $big ubound 100 saturate]
+        assert_equal 100 [r get k]
+
+        # Float overflow with UBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat $big ubound 100]
+        assert_equal 10 [r get k]
+
+        # Float underflow with LBOUND and SATURATE
+        r set k 10
+        assert_equal {-100 -110} [r increx k byfloat -$big lbound -100 saturate]
+        assert_equal -100 [r get k]
+
+        # Float underflow with LBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat -$big lbound -100]
+        assert_equal 10 [r get k]
+
+        # Float overflow with SATURATE and no bounds saturates to type limit
+        r set k $big
+        set res [r increx k byfloat $big saturate]
+        assert_equal [r get k] [lindex $res 0]
+    }
+
+    test {INCREX bounds on missing key: creation depends on SATURATE} {
+        r del k
+        assert_equal {1 1} [r increx k ubound 5]
+        assert_equal 1 [r exists k]
+        assert_equal 1 [r get k]
+
+        r del k
+        assert_equal {0 0} [r increx k ubound 0]
+        assert_equal 0 [r exists k]
+
+        r del k
+        assert_equal {0 0} [r increx k ubound 0 saturate]
+        assert_equal 1 [r exists k]
+        assert_equal 0 [r get k]
+
+        r del k
+        assert_equal {0 0} [r increx k lbound 5]
+        assert_equal 0 [r exists k]
+
+        r del k
+        assert_equal {5 5} [r increx k lbound 5 saturate]
+        assert_equal 1 [r exists k]
+        assert_equal 5 [r get k]
+    }
+
+    test {INCREX bounds with expiration} {
+        # Bound-declined does not apply TTL
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 5 ex 100]
+        assert_equal -1 [r ttl k]
+
+        r set k 10 ex 500
+        assert_equal {10 0} [r increx k byint 5 ubound 5 ex 100]
+        assert_range [r ttl k] 400 500
+
+        # Saturated success applies TTL
+        r set k 10
+        assert_equal {12 2} [r increx k byint 5 ubound 12 saturate ex 100]
+        assert_range [r ttl k] 1 100
+    }
+
+    test {INCREX bound validation errors} {
+        r set k 10
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byint 5 lbound 20 ubound 0}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byint 5 lbound 20 ubound 0 saturate}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound 20.0 ubound 0.0}
+
+        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k byint 5 ubound 12.5}
+        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k ubound abc}
+        assert_error "*ERR LBOUND is not an integer or out of range*" {r increx k lbound abc}
+
+        assert_error "*ERR UBOUND is not a valid float*" {r increx k byfloat 1.0 ubound abc}
+        assert_error "*ERR LBOUND is not a valid float*" {r increx k byfloat 1.0 lbound abc}
+
+        # Fractional bound is valid in float mode
+        assert_equal {11 1} [r increx k byfloat 1.0 lbound 0.5 ubound 15.5]
+
+        # Missing bound value is a syntax error
+        assert_error "*ERR syntax error*" {r increx k lbound}
+        assert_error "*ERR syntax error*" {r increx k ubound}
+
+        # Integer mode rejects inf for bounds
+        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k ubound inf}
+        assert_error "*ERR LBOUND is not an integer or out of range*" {r increx k lbound inf}
+    }
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulates long double with double precision, so inf bounds
+    # and ldbl_overflow_operand() don't behave as expected.
+    test {INCREX inf bound validation} {
+        r set k 10
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 ubound -inf}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound inf}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound +inf}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound inf ubound -inf}
+        r set k 10
+        assert_equal {11 1} [r increx k byfloat 1.0 ubound inf]
+        r set k 10
+        assert_equal {11 1} [r increx k byfloat 1.0 ubound +inf]
+        r set k 10
+        assert_equal {11 1} [r increx k byfloat 1.0 lbound -inf]
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat 1.0 lbound -inf ubound -inf]
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat 1.0 lbound inf ubound inf]
+    } {} {valgrind:skip}
+
+    test {INCREX applied delta overflow errors} {
+        r set k 9223372036854775807
+        assert_error "*ERR applied increment would overflow*" {r increx k byint -5 ubound -9223372036854775808 saturate}
+        assert_equal 9223372036854775807 [r get k]
+    }
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulates long double with double precision, so inf bounds
+    # and ldbl_overflow_operand() don't behave as expected.
+    test {INCREX BYFLOAT applied delta Infinity errors} {
+        set big [ldbl_overflow_operand]
+        r set k -$big
+        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat $big lbound $big saturate}
+        assert_equal -$big [r get k]
+
+        r set k 10
+        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound -inf ubound -inf saturate}
+        assert_equal 10 [r get k]
+        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound inf ubound inf saturate}
+        assert_equal 10 [r get k]
+    } {} {valgrind:skip}
+
+    test {INCREX PERSIST option} {
+        # Removes TTL on existing key with TTL
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k persist]
+        assert_equal -1 [r ttl k]
+        assert_equal 11 [r get k]
+
+        r set k 10.5 ex 500
+        assert_equal {11.5 1} [r increx k byfloat 1.0 persist]
+        assert_equal -1 [r ttl k]
+        assert_equal 11.5 [r get k]
+
+        # Key without TTL remains persisted
+        r set k 10
+        assert_equal {11 1} [r increx k persist]
+        assert_equal -1 [r ttl k]
+
+        # Absent key created with no TTL
+        r del k
+        assert_equal {1 1} [r increx k persist]
+        assert_equal -1 [r ttl k]
+        assert_equal 1 [r get k]
+
+        # Overflow declined preserves existing TTL
+        r set k 9223372036854775807 ex 500
+        assert_equal {9223372036854775807 0} [r increx k byint 1 persist]
+        assert_range [r ttl k] 400 500
+
+        # Bound declined preserves existing TTL
+        r set k 10 ex 500
+        assert_equal {10 0} [r increx k byint 5 ubound 5 persist]
+        assert_range [r ttl k] 400 500
+
+        r set k 10 ex 500
+        assert_equal {10 0} [r increx k byfloat 5.0 ubound 5.0 persist]
+        assert_range [r ttl k] 400 500
+
+        # PERSIST is mutually exclusive with expiration options and ENX
+        assert_error "*ERR syntax error*" {r increx k ex 10 persist}
+        assert_error "*ERR syntax error*" {r increx k persist ex 10}
+        assert_error "*ERR syntax error*" {r increx k persist enx}
+        assert_error "*ERR syntax error*" {r increx k enx persist}
+    }
+
+    # This test can't be executed on x86 when valgrind is enabled,
+    # valgrind simulates long double with double precision, so inf bounds
+    # and ldbl_overflow_operand() don't behave as expected.
+    test {INCREX BYFLOAT overflow with PERSIST preserves existing TTL} {
+        set big [ldbl_overflow_operand]
+        r set k $big ex 500
+        set res [r increx k byfloat $big persist]
+        assert_equal 0 [lindex $res 1]
+        assert_equal $big [r get k]
+        assert_range [r ttl k] 400 500
+    } {} {valgrind:skip}
+
+    test {INCREX rejects repeated options} {
+        r set k 10
+        foreach args {
+            {nx nx} {xx xx} {persist persist}
+            {ex 10 ex 20} {px 10000 px 20000}
+            {exat 4102444800 exat 4102444801} {pxat 4102444800000 pxat 4102444800001}
+            {ex 100 enx enx} {saturate saturate}
+            {byint 1 byint 2} {byfloat 1 byfloat 2}
+            {lbound 0 lbound 1} {ubound 100 ubound 200}
+        } {
+            assert_error "*ERR syntax error*" [list r increx k {*}$args]
+        }
+        # Nothing was applied by the rejected commands.
+        assert_equal 10 [r get k]
+        assert_equal -1 [r ttl k]
+
+        # Legacy commands keep accepting their repeated options.
+        r del k2
+        assert_equal OK [r set k2 10 nx nx]
+        assert_equal OK [r set k 10 xx xx]
+        assert_equal 10 [r getex k persist persist]
+    }
+
+    test {INCREX ENX option} {
+        r set k 10
+        assert_error "*ERR ENX flag requires an expiration*" {r increx k enx}
+
+        # Key without TTL: expiration is applied
+        r set k 10
+        assert_equal {11 1} [r increx k ex 100 enx]
+        assert_range [r ttl k] 1 100
+
+        # Key WITH TTL: increment applied, existing TTL preserved
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k ex 100 enx]
+        assert_range [r ttl k] 400 500
+
+        # Key WITH TTL: PX expiration preserved
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k px 100000 enx]
+        assert_range [r ttl k] 400 500
+
+        # Absent key: expiration is applied
+        r del k
+        assert_equal {1 1} [r increx k ex 100 enx]
+        assert_range [r ttl k] 1 100
+
+        # Past EXAT on key without TTL deletes key
+        r set k 10
+        assert_equal {11 1} [r increx k exat 100 enx]
+        assert_equal 0 [r exists k]
+
+        # Past EXAT on key WITH TTL keeps key and preserves TTL
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k exat 100 enx]
+        assert_equal 1 [r exists k]
+        assert_range [r ttl k] 400 500
+
+        # Overflow declined does not apply expiration
+        r set k 9223372036854775807
+        assert_equal {9223372036854775807 0} [r increx k byint 1 ex 100 enx]
+        assert_equal -1 [r ttl k]
     }
 
     test {INCRBY INCRBYFLOAT DECRBY against unhappy path} {

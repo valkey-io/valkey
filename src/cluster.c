@@ -152,7 +152,7 @@ void createDumpPayload(rio *payload, robj *o, robj *key, int dbid) {
 
 /* Verify that the RDB version of the dump payload matches the one of this
  * instance and that the checksum is ok.
- * If the DUMP payload looks valid C_OK is returned, otherwise C_ERR
+ * If the DUMP payload looks valid C_OK is returned; otherwise, C_ERR
  * is returned. If rdbver_ptr is not NULL, its populated with the value read
  * from the input buffer. */
 int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
@@ -246,6 +246,9 @@ void restoreCommand(client *c) {
         return;
     } else if (ttl < 0) {
         addReplyError(c, "Invalid TTL value, must be >= 0");
+        return;
+    } else if (!absttl && ttl > LLONG_MAX - commandTimeSnapshot()) {
+        addReplyErrorExpireTime(c);
         return;
     }
 
@@ -406,7 +409,7 @@ void migrateCloseSocket(robj *host, robj *port) {
     sdsfree(name);
 }
 
-void migrateCloseTimedoutSockets(void) {
+void migrateCloseTimedOutSockets(void) {
     dictIterator *di = dictGetSafeIterator(server.migrate_cached_sockets);
     dictEntry *de;
 
@@ -449,6 +452,19 @@ void migrateCommand(client *c) {
     int first_key = 3; /* Argument index of the first key. */
     int num_keys = 1;  /* By default only migrate the 'key' argument. */
 
+    /* Redact credentials before parsing the options, since a rejected command
+     * is still shown in MONITOR and the commandlog. */
+    for (j = 6; j < c->argc; j++) {
+        const char *opt = objectGetVal(c->argv[j]);
+        if (!strcasecmp(opt, "keys")) break;
+        if (!strcasecmp(opt, "auth")) {
+            if (j + 1 < c->argc) redactClientCommandArgument(c, ++j);
+        } else if (!strcasecmp(opt, "auth2")) {
+            if (j + 1 < c->argc) redactClientCommandArgument(c, ++j);
+            if (j + 1 < c->argc) redactClientCommandArgument(c, ++j);
+        }
+    }
+
     /* Parse additional options */
     for (j = 6; j < c->argc; j++) {
         int moreargs = (c->argc - 1) - j;
@@ -463,16 +479,13 @@ void migrateCommand(client *c) {
             }
             j++;
             password = objectGetVal(c->argv[j]);
-            redactClientCommandArgument(c, j);
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "auth2")) {
             if (moreargs < 2) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
             username = objectGetVal(c->argv[++j]);
-            redactClientCommandArgument(c, j);
             password = objectGetVal(c->argv[++j]);
-            redactClientCommandArgument(c, j);
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "keys")) {
             if (sdslen(objectGetVal(c->argv[3])) != 0) {
                 addReplyError(c, "When using MIGRATE KEYS option, the key argument"
@@ -985,6 +998,9 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
     initGetKeysResult(&result);
     int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
     int slot = -1;
+    /* Callers may reuse the same flags across commands, so drop any result
+     * left over from a previous call. */
+    *read_flags &= ~(READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT);
     if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
     for (int i = 0; i < numkeys; i++) {
         sds key = objectGetVal(argv[result.keys[i].pos]);
@@ -1109,7 +1125,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
     /* If we are migrating or importing this slot, we need to check
      * if we have all the keys in the request (the only way we
-     * can safely serve the request, otherwise we return a TRYAGAIN
+     * can safely serve the request; otherwise, we return a TRYAGAIN
      * error). To do so we set the importing/migrating state and
      * increment a counter for every missing key. */
     if (clusterNodeIsPrimary(myself) || c->flag.readonly) {

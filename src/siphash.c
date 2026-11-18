@@ -317,7 +317,7 @@ const uint8_t vectors_sip64[64][8] = {
 
 
 /* Test siphash using a test vector. Returns 0 if the function passed
- * all the tests, otherwise 1 is returned.
+ * all the tests; otherwise, 1 is returned.
  *
  * IMPORTANT: The test vector is for SipHash 2-4. Before running
  * the test revert back the siphash() function to 2-4 rounds since

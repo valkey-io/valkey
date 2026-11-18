@@ -77,7 +77,30 @@ Two approaches were explored for the data path:
 
 The architecture is split into a **control plane**, the Cluster V2 cluster bus, which manages cluster metadata, and a **data plane**, which replicates writes.
 
-![Architecture: the client reads and writes through the primary, which replicates synchronously to two sync replicas and asynchronously to an async replica. Every node runs the Cluster V2 Raft log, which records the primary and the sync replica set.](sync-replication/image1.png)
+```mermaid
+flowchart TB
+    C([Client]) -->|reads and writes| P
+
+    subgraph Shard
+        P[Node 1: Primary]
+        S1[Node 2: Sync replica]
+        S2[Node 3: Sync replica]
+        A[Node 4: Async replica]
+    end
+
+    P -->|sync replication| S1
+    P -->|sync replication| S2
+    P -.->|async, up to committed offset| A
+
+    Bus[("Cluster V2 cluster bus<br/>Raft log on every node<br/>primary, eligible and ineligible replicas")]
+
+    P <-->|primary and sync replica set| Bus
+    S1 <--> Bus
+    S2 <--> Bus
+    A <-.-> Bus
+```
+
+*Architecture: the client reads and writes through the primary, which replicates synchronously to two sync replicas and asynchronously to an async replica. Every node runs the Cluster V2 Raft log, which records the primary and the sync replica set.*
 
 * **Control plane: the Cluster V2 cluster bus.** A new Raft-based cluster bus that runs on the Valkey nodes themselves. It durably and consistently stores each shard's configuration (primary, eligible replicas, ineligible replicas) and slot ownership. In this design, the cluster bus acts as PacificA's configuration manager (its metadata store). There is no separate metadata service.  
 * **Data plane: synchronous replication.** The primary streams writes to its replicas over the existing replication link. A write is committed, and the client is acknowledged, only once every replica in the sync replica set has acknowledged it. Async replicas receive the stream only up to the committed offset, and never sit on the write's critical path.  
@@ -142,7 +165,44 @@ Every node tracks its own committed offset, and reply unblocking on a node depen
 
 Sync replicas use **dirty key tracking**. They apply each write as soon as it arrives but treat the modified keys as dirty, and a read of a dirty key is held until the replica's committed offset passes the write. This makes reads from sync replicas linearizable while the replica holds a read lease.
 
-![Write path: the primary assigns the write an offset, applies it and marks the key dirty, then forwards it to both sync replicas, which apply it and mark it dirty. Reads of the key are held until the committed offset passes the write. After both ACKs the primary commits and replies, and REPLCONF COMMIT releases held reads on the replicas.](sync-replication/image2.png)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant C2 as Client 2
+    participant P as Primary
+    participant R1 as Sync replica 1
+    participant R2 as Sync replica 2
+
+    Note over C,R2: key1 = old_data
+    C->>P: SET key1 new_data
+    Note over P: Offset 101: apply, mark key1 dirty
+    par Replicate
+        P->>R1: Write at offset 101
+    and
+        P->>R2: Write at offset 101
+    end
+    Note over R1,R2: Apply, mark key1 dirty
+    par Acknowledge
+        R1->>P: REPLCONF ACK 101
+    and
+        R2->>P: REPLCONF ACK 101
+    end
+    C2-xR2: GET key1 (held, key1 dirty)
+    C2-xP: GET key1 (held, key1 dirty)
+    Note over P: Committed offset reaches 101<br/>key1 clean, reads released
+    P-->>C2: new_data
+    P-->>C: +OK
+    par Commit notification
+        P->>R1: REPLCONF COMMIT 101
+    and
+        P->>R2: REPLCONF COMMIT 101
+    end
+    Note over R1,R2: Committed offset reaches 101<br/>key1 clean, reads released
+    R2-->>C2: new_data
+```
+
+*Write path: the primary assigns the write an offset, applies it and marks the key dirty, then forwards it to both sync replicas, which apply it and mark it dirty. Reads of the key are held until the committed offset passes the write. After both ACKs the primary commits and replies, and REPLCONF COMMIT releases held reads on the replicas.*
 
 A write-ahead mode for sync replicas is deferred and tracked separately in the **Deferred: Write-ahead replica reads** section. In that mode, replica reads never block but are only serializable.
 
@@ -224,7 +284,29 @@ The primary starts a promotion whenever the sync replica set is below `target-sy
 
 If the replica falls behind or fails before step 4, the primary simply removes it from the commit calculation. It was never eligible, so no cluster bus change is needed. If the compare-and-set fails because the primary has lost primaryship, the primary steps down.
 
-![Promotion: the ineligible replica syncs and acks. Once it has caught up to the committed offset, commits also wait for its ACK, leases are established, and a cluster bus compare-and-set moves it to eligible.](sync-replication/image3.png)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as Primary
+    participant R as Replica
+    participant B as Cluster bus
+
+    Note over R: Ineligible (async replica)
+    R->>P: REPLCONF CAPA SYNC, PSYNC
+    P->>R: Replication stream (up to committed offset)
+    R->>P: REPLCONF ACK offset
+    Note over P: Steps 1-2, one main-thread step:<br/>R's ACK ≥ committed offset (or end of inherited log), lag OK<br/>commits now wait for R's ACK<br/>R's stream no longer capped at committed offset
+    P->>R: Replication stream (uncommitted writes too)
+    R->>P: REPLCONF ACK offset
+    Note over P: Step 3: R's ACK starts the primary lease<br/>No lease messages. No echo yet, so no read lease
+    P->>B: CAS: move R to eligible
+    B-->>P: Committed
+    Note over R: Step 4: R is a sync replica<br/>counts toward min-sync-replicas
+    P->>R: REPLCONF COMMIT (echoes R's ACK)
+    Note over R: Read lease starts
+```
+
+*Promotion: the ineligible replica syncs and acks. Once it has caught up to the committed offset, commits also wait for its ACK, and its REPLCONF ACK starts the primary lease, with no separate lease messages. A cluster bus compare-and-set then moves it to eligible, and the primary starts echoing its ACKs in REPLCONF COMMIT, which starts its read lease.*
 
 ### **Demotion: sync replica to async replica**
 
@@ -237,7 +319,33 @@ The primary demotes a sync replica when its lease can't be renewed, when its rep
 
 If the compare-and-set can't commit because the primary is partitioned from the cluster bus quorum, the demotion never completes and replies stay held. The partitioned primary eventually loses its lease and is replaced. It can't silently drop durability.
 
-![Demotion: a sync replica stops responding. The reply to a write is held until the replica's lease expires, the primary moves it to ineligible through the cluster bus, recomputes the committed offset without it, replies, and starts a promotion if below target.](sync-replication/image4.png)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant P as Primary
+    participant R as Sync replica
+    participant B as Cluster bus
+
+    C->>P: SET key1 v
+    P->>R: Write
+    Note over P: Step 1: commit still needs R's ACK<br/>reply to Client held
+    alt R unresponsive
+        Note over R: No ACK
+        Note over P: Step 2: stop echoing R's ACKs, keep counting them<br/>wait until R's read lease must have expired,<br/>timed from the last ACK echoed in a sent COMMIT
+    else Planned demotion of a healthy R
+        P->>R: Drop read lease (request closes the link)
+        R-->>P: Read lease dropped
+        Note over P: Confirmation counts only if no ACK from R since the request<br/>an ACK after the confirmation cancels it
+    end
+    P->>B: CAS: move R to ineligible
+    B-->>P: Committed
+    Note over P: Step 3: stop counting R's ACKs<br/>recompute committed offset without R
+    P-->>C: +OK once the remaining sync replicas acked<br/>(UNCOMMITTED if set < min-sync-replicas)
+    Note over P: Step 4: below min, new writes get NOREPLICAS<br/>below target, start a promotion
+```
+
+*Demotion: a sync replica stops responding. The reply to a write is held while the primary stops echoing the replica's ACKs and waits out its read lease (or, in a planned demotion, until the replica confirms it has dropped it). The primary then moves it to ineligible through the cluster bus, recomputes the committed offset without it, replies, and starts a promotion if below target.*
 
 ## 5\. Leases, fault detection, and failover
 
@@ -310,7 +418,37 @@ A primary that learns it has stepped down returns `UNCOMMITTED` for every reply 
 
 ### **Failover**
 
-![Failover: the primary fails and its lease expires. S1, with the higher offset, wins the compare-and-set to become primary, S2's attempt is rejected, S2 resyncs from S1, and the client's retried write goes to the new primary.](sync-replication/image5.png)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant P as Node P
+    participant S1 as Node S1
+    participant S2 as Node S2
+    participant B as Cluster bus
+
+    Note over P,S2: Primary P, eligible S1 and S2
+    loop Leases ride on replication traffic
+        P->>S1: Stream + REPLCONF COMMIT
+        S1->>P: REPLCONF ACK
+        P->>S2: Stream + REPLCONF COMMIT
+        S2->>P: REPLCONF ACK
+    end
+    Note over P: Fails
+    C-xP: Write (times out)
+    Note over S1,S2: Primary lease expires<br/>delay by offset rank: S1 is higher, tries first
+    S1->>B: CAS: primary S1, eligible S2, P ineligible
+    B-->>S1: Committed
+    S2->>B: CAS: primary S2, eligible S1, P ineligible
+    B--xS2: Rejected
+    S2->>S1: PSYNC
+    S1-->>S2: Partial resync (full resync if S2 is ahead)
+    Note over S1: Reconcile: commit the inherited log<br/>then serve clients
+    C->>S1: Retried write (routed to new primary)
+    S1-->>C: +OK
+```
+
+*Failover: the primary fails and its lease expires. S1, with the higher offset, wins the compare-and-set to become primary, S2's attempt is rejected, S2 resyncs from S1, and the client's retried write goes to the new primary.*
 
 **After failover**, the new primary applies the `target-sync-replicas` and `min-sync-replicas` settings, and it promotes remaining caught-up replicas to restore the target.
 
@@ -469,7 +607,46 @@ In write-ahead mode, a sync replica **buffers and logs** each incoming write but
 
 ## Write path
 
-![Write-ahead replica reads: sync replicas buffer and log the write without applying it, so replica reads return the old value until REPLCONF COMMIT arrives and the buffered write is applied.](sync-replication/image6.png)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant C2 as Client 2
+    participant P as Primary
+    participant R1 as Sync replica 1
+    participant R2 as Sync replica 2
+
+    Note over C,R2: key1 = old_data
+    C->>P: SET key1 new_data
+    Note over P: Offset 101: apply, mark key1 dirty
+    par Replicate
+        P->>R1: Write at offset 101
+    and
+        P->>R2: Write at offset 101
+    end
+    Note over R1,R2: Buffer and log the write<br/>do not apply it
+    par Acknowledge
+        R1->>P: REPLCONF ACK 101
+    and
+        R2->>P: REPLCONF ACK 101
+    end
+    C2->>R1: GET key1
+    R1-->>C2: old_data (served, not held)
+    C2-xP: GET key1 (held, key1 dirty)
+    Note over P: Committed offset reaches 101
+    P-->>C2: new_data
+    P-->>C: +OK
+    par Commit notification
+        P->>R1: REPLCONF COMMIT 101
+    and
+        P->>R2: REPLCONF COMMIT 101
+    end
+    Note over R1,R2: Apply the buffered write
+    C2->>R1: GET key1
+    R1-->>C2: new_data
+```
+
+*Write-ahead replica reads: sync replicas buffer and log the write without applying it, so replica reads return the old value until REPLCONF COMMIT arrives and the buffered write is applied.*
 
 ## Questions to resolve
 

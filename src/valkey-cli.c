@@ -3304,7 +3304,10 @@ static int isSensitiveCommand(int argc, char **argv) {
         }
         return 0;
         /* HELLO [protover [AUTH username password] [SETNAME clientname]] */
-    } else if (argc > 4 && !strcasecmp(argv[0], "hello")) {
+    } else if (argc > 3 && !strcasecmp(argv[0], "hello")) {
+        /* "HELLO AUTH username password" lacks protover and is rejected by the
+         * server, but it still contains the password. */
+        if (!strcasecmp(argv[1], "AUTH")) return 1;
         for (int j = 2; j < argc; j++) {
             int moreargs = argc - 1 - j;
             if (!strcasecmp(argv[j], "AUTH") && moreargs >= 2) {

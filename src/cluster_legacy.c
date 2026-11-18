@@ -4671,14 +4671,14 @@ int clusterProcessPacket(clusterLink *link) {
                  * replicaof cycle and trip the assertion in clusterNodeGetPrimary().
                  * We keep the current link and let the claimed primary's own
                  * packet, which announces its primary role, correct our view. */
-                if (sender_claimed_primary && sender->replicaof != sender_claimed_primary &&
-                    clusterReplicaChainReaches(sender_claimed_primary, sender)) {
+                int primary_changed = sender_claimed_primary && sender->replicaof != sender_claimed_primary;
+                if (primary_changed && clusterReplicaChainReaches(sender_claimed_primary, sender)) {
                     serverLog(LL_NOTICE,
                               "Ignoring claim of node %.40s (%s) that it replicates node %.40s (%s): in our view the claimed "
                               "primary replicates it, directly or through a chain, so adopting the claim would close a replicaof cycle",
                               sender->name, humanNodename(sender), sender_claimed_primary->name,
                               humanNodename(sender_claimed_primary));
-                } else if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
+                } else if (primary_changed) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, humanNodename(sender), sender_claimed_primary->name,

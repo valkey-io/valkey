@@ -3,8 +3,10 @@
 
 source tests/support/cluster_raft.tcl
 
-# Form a cluster led by node 0, with nodes 1..num_voters-1 as voters and the
-# rest as learners.
+# MEET everyone and let auto-promotion form the voting set. start_cluster is
+# not used: it assigns slots, and NODE_FORGET rejects a primary that still
+# owns them. Extra nodes (num_voters..num_nodes-1) keep cluster-voter no so
+# they stay learners.
 proc raft_form_cluster {num_voters num_nodes} {
     for {set i 1} {$i < $num_nodes} {incr i} {
         R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
@@ -165,19 +167,8 @@ test "Raft: CLUSTER FORGET of a leader with slots fails without a leader transfe
 # the other follower's ACK; the commit AE must still be delivered.
 test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
     start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        raft_form_cluster 3 3
         set r0 [srv 0 client]
-        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
-
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 3 &&
-            [CI 1 cluster_size] == 3 &&
-            [CI 2 cluster_size] == 3
-        } else {
-            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
-        }
-
-        assert_equal [CI 0 cluster_raft_role] "leader"
         set forgotten_id [R 1 CLUSTER MYID]
         pause_process [srv -1 pid]
         if {[catch {

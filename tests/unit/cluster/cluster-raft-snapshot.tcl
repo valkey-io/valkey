@@ -1,7 +1,5 @@
 # Test Raft log snapshot (InstallSnapshot) behavior.
 
-source tests/support/cluster_raft.tcl
-
 tags {external:skip cluster singledb} {
 
 # The node IDs in each shard of CLUSTER SHARDS, sorted, for comparing the
@@ -327,7 +325,6 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         assert_morethan [CI 0 cluster_raft_current_term] $term
         assert_equal 1 [CI 0 cluster_size]
 
-        # A node joining it as a voter is counted in the size.
         # A reset node has an empty log, so its last log term must be 0.
         # Otherwise it would claim a newer log than it has in elections.
         restart_server -1 true false
@@ -338,9 +335,7 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         } else {
             fail "snapshotTerm was not reset: [exec grep vars $nodes_conf]"
         }
-        set r1_id [R 1 cluster myid]
         R 0 cluster meet 127.0.0.1 [srv -1 port]
-        raft_add_voter 0 1
         wait_for_raft_cluster_size 2
     }
 }

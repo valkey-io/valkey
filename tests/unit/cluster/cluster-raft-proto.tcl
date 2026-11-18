@@ -923,33 +923,9 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
 # to the raft log (commit index unchanged, cluster state unchanged).
 # --------------------------------------------------------------------------
 
-start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
-    # Shared setup: form cluster and assign slots.
-    R 0 CLUSTER MEET [srv -1 host] [srv -1 port]
-
-    wait_for_condition 50 100 {
-        [CI 0 cluster_size] == 2 &&
-        [CI 1 cluster_size] == 2
-    } else {
-        fail "Cluster did not form"
-    }
-
-    R 0 CLUSTER ADDSLOTSRANGE 0 16383
-
-    wait_for_condition 50 100 {
-        [CI 0 cluster_slots_assigned] == 16384 &&
-        [CI 1 cluster_slots_assigned] == 16384
-    } else {
-        fail "Slots not assigned"
-    }
-
+start_cluster 1 1 {overrides {cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
     set node_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
-
-    # Make r1 a replica of r0. This commits a SET_REPLICA_OF entry
-    # which bumps the shard epoch from 0 to 1.
-    R 1 CLUSTER REPLICATE $node_id
-
     set port [srv 0 port]
     set cport [expr {$port + 10000}]
 

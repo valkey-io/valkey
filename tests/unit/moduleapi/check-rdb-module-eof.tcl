@@ -32,6 +32,13 @@ tags "modules external:skip" {
     puts -nonewline $fd [string range $data 0 [expr {$end - 1}]]
     close $fd
 
+    # Same file, untruncated, but with the module value's EOF opcode replaced
+    # by an opcode the module value format does not define.
+    assert_equal [string index $data $end] "\x00"
+    set fd [open $server_path/badopcode.rdb wb]
+    puts -nonewline $fd [string replace $data $end $end "\x09"]
+    close $fd
+
     test {valkey-check-rdb reports an RDB truncated inside a module value} {
         set exited [run_with_deadline 10 $server_path/check.out \
             $::VALKEY_CHECK_RDB_BIN $server_path/truncated.rdb]
@@ -48,6 +55,15 @@ tags "modules external:skip" {
         set output [exec cat $server_path/startup.out]
         assert_equal $exited 1 "valkey-server still running after 10s; checker output: $output"
         assert_match {*Unexpected EOF reading RDB file*} [exec cat $server_path/startup.log]
+        assert_match {*RDB ERROR DETECTED*} $output
+    }
+
+    test {valkey-check-rdb reports an unknown opcode inside a module value} {
+        set exited [run_with_deadline 10 $server_path/badopcode.out \
+            $::VALKEY_CHECK_RDB_BIN $server_path/badopcode.rdb]
+        set output [exec cat $server_path/badopcode.out]
+        assert_equal $exited 1 "valkey-check-rdb still running after 10s; output: $output"
+        assert_match {*Unknown opcode 9 in module test___dt value*} $output
         assert_match {*RDB ERROR DETECTED*} $output
     }
 }

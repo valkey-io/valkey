@@ -377,3 +377,67 @@ start_cluster 1 1 {tags {external:skip cluster} } {
      
     }
 }
+
+# The replication stream continues in the DB it was in, without a SELECT, when a
+# restarted replica partially resyncs: both the writes made while the replica was
+# down, replayed from the backlog, and the next ones.
+foreach persistence {rdb aof} {
+    if {$persistence eq "rdb"} {
+        # Without an RDB file saved at shutdown, the replica would restart from the
+        # RDB file of its initial sync, and the backlog it then gets would start
+        # with a SELECT.
+        set overrides {appendonly no save {900 1}}
+    } else {
+        set overrides {appendonly yes aof-replication-offsets yes}
+    }
+    set ::multidb_persistence $persistence
+    start_cluster 1 1 [list tags {external:skip cluster} overrides $overrides] {
+        test "Restarted replica partially resyncs in the DB of the replication stream ($::multidb_persistence)" {
+            set primary [srv 0 client]
+            set replica [srv -1 client]
+            wait_for_condition 100 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica didn't sync"
+            }
+            $primary select 5
+            $primary set a 1
+            wait_for_ofs_sync $primary $replica
+            if {$::multidb_persistence eq "aof"} {
+                wait_for_condition 100 100 {
+                    [set info [$replica info persistence]] ne "" &&
+                    [getInfoProperty $info aof_rewrite_scheduled] == 0 &&
+                    [getInfoProperty $info aof_rewrite_in_progress] == 0
+                } else {
+                    fail "Replica didn't finish its initial AOF rewrite"
+                }
+            }
+            $primary config resetstat
+
+            catch {$replica shutdown}
+            wait_for_condition 50 100 {
+                ![is_alive [srv -1 pid]]
+            } else {
+                fail "Replica didn't exit"
+            }
+            $primary set b 2
+            restart_server -1 true false
+            set replica [srv -1 client]
+            wait_for_condition 100 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica didn't reconnect"
+            }
+            assert_equal 0 [status $primary sync_full]
+            assert_equal 1 [status $primary sync_partial_ok]
+
+            # The replication stream is still in DB 5, so these writes have no SELECT.
+            $primary set c 3
+            wait_for_ofs_sync $primary $replica
+            $replica readonly
+            $replica select 5
+            assert_equal 2 [$replica get b]
+            assert_equal 3 [$replica get c]
+        }
+    }
+}

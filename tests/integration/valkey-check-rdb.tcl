@@ -89,9 +89,10 @@ tags {"check-rdb external:skip logreqres:skip"} {
         # String key "k" -> "v" without SELECTDB, EOF, zero checksum.
         set rdb [tmpfile no-selectdb.rdb]
         write_binary_file $rdb [binary format a9H* REDIS0009 00016b0176ff0000000000000000]
-        catch {
+        set status [catch {
             exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
-        } result
+        } result]
+        assert_equal 0 $status
         assert_match {*db.0.type.string.keys.total:1*} $result
     }
 
@@ -99,9 +100,13 @@ tags {"check-rdb external:skip logreqres:skip"} {
         # SELECTDB 4294967295, string key "k" -> "v", EOF, zero checksum.
         set rdb [tmpfile huge-selectdb.rdb]
         write_binary_file $rdb [binary format a9H* REDIS0009 fe80ffffffff00016b0176ff0000000000000000]
-        catch {
+        set status [catch {
             exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
-        } result
+        } result options]
+        assert_equal 1 $status
+        set errorcode [dict get $options -errorcode]
+        assert_equal CHILDSTATUS [lindex $errorcode 0]
+        assert_equal 1 [lindex $errorcode 2]
         assert_match {*Invalid DB ID 4294967295*} $result
     }
 }

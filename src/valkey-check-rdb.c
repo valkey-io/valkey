@@ -740,9 +740,9 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             rdbstate.doing = RDB_CHECK_DOING_READ_LEN;
             if ((dbid = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             rdbCheckInfo("Selecting DB ID %llu", (unsigned long long)dbid);
-            /* The DB ID indexes the stats array, sized (dbid + 1) * OBJ_TYPE_MAX
-             * as an int. */
-            if (dbid >= INT_MAX / OBJ_TYPE_MAX) {
+            /* The DB ID is kept in an int, and with --stats it also indexes the
+             * stats array, sized (dbid + 1) * OBJ_TYPE_MAX as an int. */
+            if (dbid > INT_MAX || (rdbCheckStats && dbid >= INT_MAX / OBJ_TYPE_MAX)) {
                 rdbCheckError("Invalid DB ID %llu in RDB", (unsigned long long)dbid);
                 goto err;
             }

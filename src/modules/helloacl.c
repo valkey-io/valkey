@@ -112,7 +112,7 @@ int HelloACL_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 int HelloACL_Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
-    return ValkeyModule_ReplyWithSimpleString(ctx, "Request timedout");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
 }
 
 /* Private data frees data for HELLOACL.AUTHASYNC command. */

@@ -70,6 +70,7 @@ void clusterUpdateMyselfHumanNodename(void);
 void clusterUpdateMyselfAvailabilityZone(void);
 void clusterUpdateMyselfReplicaPriority(void);
 
+int clusterPublishMessageLengthValid(robj *channel, robj *message);
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
 void clusterBroadcastPong(int target);
 
@@ -138,7 +139,7 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
 clusterNode *getNodeByQuery(client *c, int *error_code);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
-void migrateCloseTimedoutSockets(void);
+void migrateCloseTimedOutSockets(void);
 unsigned int keyHashSlot(const char *key, int keylen);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);

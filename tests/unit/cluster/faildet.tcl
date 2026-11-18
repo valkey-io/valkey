@@ -9,8 +9,8 @@ test "Cluster should start ok" {
 set paused_pid5 [srv -5 pid]
 set paused_pid6 [srv -6 pid]
 test "Killing two slave nodes" {
-    pause_process $paused_pid5
-    pause_process $paused_pid6
+    pause_process_persistent $paused_pid5
+    pause_process_persistent $paused_pid6
 }
 
 test "Cluster should be still up" {
@@ -26,7 +26,7 @@ test "Cluster should be still up" {
 
 set paused_pid [srv -5 pid]
 test "Killing one master node" {
-    pause_process $paused_pid
+    pause_process_persistent $paused_pid
 }
 
 # Note: the only slave of instance 0 is already down so no
@@ -43,7 +43,7 @@ test "Cluster should be down now" {
 }
 
 test "Restarting master node" {
-    pause_process $paused_pid
+    pause_process_persistent $paused_pid
 }
 
 test "Cluster should be up again" {

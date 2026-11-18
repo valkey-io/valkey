@@ -627,7 +627,7 @@ void latencyCommandReplyWithLatestEvents(client *c) {
 }
 
 #define LATENCY_GRAPH_COLS 80
-sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
+sds latencyCommandGenSparkline(char *event, struct latencyTimeSeries *ts) {
     int j;
     struct sequence *seq = createSparklineSequence();
     sds graph = sdsempty();
@@ -701,7 +701,7 @@ void latencyCommand(client *c) {
         ts = dictGetVal(de);
         event = dictGetKey(de);
 
-        graph = latencyCommandGenSparkeline(event, ts);
+        graph = latencyCommandGenSparkline(event, ts);
         addReplyVerbatim(c, graph, sdslen(graph), "txt");
         sdsfree(graph);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "latest") && c->argc == 2) {

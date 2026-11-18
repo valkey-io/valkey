@@ -36,7 +36,7 @@ test "The nofailover flag is propagated" {
 }
 
 test "Killing one master node" {
-    pause_process [srv 0 pid]
+    pause_process_persistent [srv 0 pid]
 }
 
 test "Cluster should be still down after some time" {

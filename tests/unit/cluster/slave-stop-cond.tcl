@@ -57,7 +57,7 @@ test "Break master-slave link and prevent further reconnections" {
     assert {[R 5 read] eq {OK OK}}
 
     # Kill the master so that a reconnection will not be possible.
-    pause_process $paused_pid
+    pause_process_persistent $paused_pid
 }
 
 test "Slave #5 is reachable and alive" {

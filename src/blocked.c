@@ -105,8 +105,8 @@ void freeClientBlockingState(client *c) {
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
-    /* Replicated clients should never be blocked unless pause or module */
-    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    /* Replicated clients should never be blocked unless pause, module or blocked in use. */
+    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE && btype != BLOCKED_INUSE));
 
     initClientBlockingState(c);
 
@@ -182,11 +182,22 @@ void processUnblockedClients(void) {
                 continue;
             }
         }
+        uint64_t id = c->id;
+        int may_invoke_handlers = connUpdateStateMayInvokeHandlers(c->conn);
         /* If we have a queued command, execute it now. */
         if (processPendingCommandAndInputBuffer(c) == C_ERR) {
             continue;
         }
         beforeNextClient(c);
+
+        /* handleReadJobs() skips blocked and throttled clients and leaves the transport's READ
+         * postponed while cmd_queue is non-empty. Release it now that the queue is drained. A
+         * client throttled again has no read handler, so it keeps READ until its next release. */
+        if (!may_invoke_handlers) continue;
+        c = lookupClientByID(id);
+        if (!c || !c->conn || !connHasReadHandler(c->conn)) continue;
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
+        connUpdateState(c->conn);
     }
 }
 

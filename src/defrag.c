@@ -925,6 +925,9 @@ static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privda
     static defragKeysCtx ctx; // STATIC - this persists
     if (endtime == 0) {
         ctx.dbid = dbid;
+        /* Drop keys left over from a previous DbKeys stage that was aborted. */
+        if (defrag_later) listEmpty(defrag_later);
+        defrag_later_cursor = 0;
         // Don't return yet.  Call the helper with endtime==0 below.
     }
     serverAssert(ctx.dbid == dbid);

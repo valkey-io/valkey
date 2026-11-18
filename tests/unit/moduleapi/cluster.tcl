@@ -182,7 +182,7 @@ start_cluster 3 0 [list config_lines $modules] {
 
     test "Kill a cluster node and wait for fail state" {
         # kill node3 in cluster
-        pause_process $node3_pid
+        pause_process_persistent $node3_pid
 
         wait_for_condition 1000 50 {
             [CI 0 cluster_state] eq {fail} &&

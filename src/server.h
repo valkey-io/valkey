@@ -720,7 +720,7 @@ typedef enum {
 
 /* Voting policy of a cluster node, see cluster-voter. */
 typedef enum {
-    CLUSTER_VOTER_AUTO = 0, /* Leader may promote while below the target(default). */
+    CLUSTER_VOTER_AUTO = 0, /* Promote below the target; demote above it. */
     CLUSTER_VOTER_NO,       /* Stay a learner. Demote if already a voter. */
     CLUSTER_VOTER_YES,      /* Promote once caught up, even above the target. */
 } cluster_voter_policy;

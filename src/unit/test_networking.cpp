@@ -972,3 +972,27 @@ TEST_F(NetworkingTest, TestReadDoneKeepsPostponeWhileWritePending) {
     zfree(c);
     connFreeFake(fc);
 }
+
+/* After an IO write, a close_asap client skips postWriteToClient(), so its
+ * output cursor is behind the bytes just sent. Its write handler must be
+ * removed, with the write postpone cleared, or those bytes are sent again. */
+TEST_F(NetworkingTest, TestWriteDoneStopsWritesToCloseAsapClient) {
+    fakeConnection *fc = connCreateFake();
+    fc->conn.state = CONN_STATE_CONNECTED;
+    client *c = (client *)zcalloc(sizeof(client));
+    c->conn = &fc->conn;
+    c->flag.close_asap = 1;
+    c->io_write_state = CLIENT_COMPLETED_IO;
+    connSetWriteHandler(c->conn, sendReplyToClient);
+    connSetPostponeUpdateState(c->conn, CONN_POSTPONE_WRITE);
+
+    processClientIOWriteDone(c);
+
+    ASSERT_EQ(c->io_write_state, CLIENT_IDLE);
+    ASSERT_EQ(c->conn->write_handler, nullptr);
+    ASSERT_EQ(fc->postpone_state, 0);
+    ASSERT_FALSE(c->conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE);
+
+    zfree(c);
+    connFreeFake(fc);
+}

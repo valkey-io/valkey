@@ -777,6 +777,7 @@ static valkeyReply skippedReply;
  * as command replies. */
 static valkeyReply skippedPushReply = {.type = VALKEY_REPLY_PUSH};
 
+/* Preserve top-level errors as owned replies for redirect/error handling. */
 static void *createSkippedString(const valkeyReadTask *task, char *str, size_t len) {
     if (task->parent != NULL || task->type != VALKEY_REPLY_ERROR) return &skippedReply;
     valkeyReply *r = zcalloc(sizeof(*r));
@@ -819,6 +820,7 @@ static void *createSkippedBool(const valkeyReadTask *task, int bval) {
     return &skippedReply;
 }
 
+/* Shared parser placeholders outlive callbacks; only error replies are owned. */
 static void freeBenchmarkReply(void *reply) {
     if (reply == &skippedReply || reply == &skippedPushReply) return;
     valkeyReply *r = reply;

@@ -745,6 +745,9 @@ static bool pauseRehashing(dbEntry *de) {
         hashtablePauseRehashing(zs->ht);
         return true;
     }
+    case OBJ_ENCODING_PATH_HASH:
+        pathHashTypePauseRehashing(de);
+        return true;
     default:
         return false;
     }
@@ -762,7 +765,8 @@ static void resumeRehashing(dbEntry *de) {
         hashtableResumeRehashing(zs->ht);
         break;
     }
-    default:
+    case OBJ_ENCODING_PATH_HASH:
+        pathHashTypeResumeRehashing(de);
         break;
     }
 }

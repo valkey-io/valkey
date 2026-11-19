@@ -113,6 +113,37 @@ void pathHashTypeDigest(unsigned char *digest, robj *o) {
     raxStop(&paths);
 }
 
+/* A read of a hashtable-encoded payload may run an incremental rehash step on it
+ * (rehashStepOnReadIfNeeded). A background save thread serializes a path hash by
+ * walking each payload with an unsafe iterator, so a concurrent read can free the
+ * payload's old table under the save thread. Pause rehashing on every hashtable
+ * payload before handing the object to the save thread, and resume afterwards.
+ * Listpack payloads are not affected. Writes to the key must stay blocked between
+ * pause and resume so both calls observe the same set of payloads. */
+static void pathHashSetPayloadRehashingPaused(robj *o, int pause) {
+    pathHashObject *path_hash = objectGetVal(o);
+    raxIterator paths;
+    raxStart(&paths, path_hash->index);
+    raxSeek(&paths, "^", NULL, 0);
+    while (raxNext(&paths)) {
+        robj *payload = paths.data;
+        if (payload->encoding != OBJ_ENCODING_HASHTABLE) continue;
+        if (pause)
+            hashtablePauseRehashing(objectGetVal(payload));
+        else
+            hashtableResumeRehashing(objectGetVal(payload));
+    }
+    raxStop(&paths);
+}
+
+void pathHashTypePauseRehashing(robj *o) {
+    pathHashSetPayloadRehashingPaused(o, 1);
+}
+
+void pathHashTypeResumeRehashing(robj *o) {
+    pathHashSetPayloadRehashingPaused(o, 0);
+}
+
 static robj *pathHashLookupPayload(robj *o, robj *path) {
     if (o == NULL) return NULL;
     pathHashObject *path_hash = objectGetVal(o);

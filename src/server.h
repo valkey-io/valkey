@@ -3886,6 +3886,8 @@ size_t pathHashTypeMemUsage(robj *o, size_t sample_size);
 void pathHashTypeDigest(unsigned char *digest, robj *o);
 size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len);
 int rewritePathHashObject(rio *r, robj *key, robj *o);
+void pathHashTypePauseRehashing(robj *o);
+void pathHashTypeResumeRehashing(robj *o);
 void phsetCommand(client *c);
 void phmsetCommand(client *c);
 void phgetCommand(client *c);

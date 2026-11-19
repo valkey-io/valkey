@@ -3730,14 +3730,18 @@ void processClientIOWriteDone(client *c) {
     serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
     c->io_write_state = CLIENT_IDLE;
 
-    /* Don't post-process-writes to clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return;
-
     int mask = 0;
     if (c->io_read_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_COMPLETED_IO)
         mask |= CONN_POSTPONE_READ;
 
     connSetPostponeUpdateState(c->conn, mask);
+
+    /* Closing client: skip post-write, but drop the write handler or it resends from a stale cursor. Must follow the postpone reset for TLS. */
+    if (c->flag.close_asap) {
+        connSetWriteHandler(c->conn, NULL);
+        return;
+    }
+
     if (postWriteToClient(c) == C_ERR) return;
 
     /* connUpdateState may sync-invoke handlers for some transports (e.g. RDMA)

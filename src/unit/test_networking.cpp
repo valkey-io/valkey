@@ -973,9 +973,7 @@ TEST_F(NetworkingTest, TestReadDoneKeepsPostponeWhileWritePending) {
     connFreeFake(fc);
 }
 
-/* After an IO write, a close_asap client skips postWriteToClient(), so its
- * output cursor is behind the bytes just sent. Its write handler must be
- * removed, with the write postpone cleared, or those bytes are sent again. */
+/* A close_asap client must lose its write handler and its write postpone after an IO write; fails if the check moves above connSetPostponeUpdateState(). */
 TEST_F(NetworkingTest, TestWriteDoneStopsWritesToCloseAsapClient) {
     fakeConnection *fc = connCreateFake();
     fc->conn.state = CONN_STATE_CONNECTED;

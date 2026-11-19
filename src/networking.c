@@ -3736,9 +3736,7 @@ void processClientIOWriteDone(client *c) {
 
     connSetPostponeUpdateState(c->conn, mask);
 
-    /* Don't post-process-writes to clients that are going to be closed anyway.
-     * The output cursor was not advanced past the bytes just written, so remove
-     * the write handler or a later write sends them again. */
+    /* Closing client: skip post-write, but drop the write handler or it resends from a stale cursor. Must follow the postpone reset for TLS. */
     if (c->flag.close_asap) {
         connSetWriteHandler(c->conn, NULL);
         return;

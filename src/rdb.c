@@ -4247,6 +4247,10 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         }
     }
 
+    /* The progress callback runs after each read, so a cancel can land on the
+     * last read of the load, which then succeeds. The load is still cancelled. */
+    if (rioGetAsyncCloseError(rdb)) goto eoferr;
+
     if (empty_keys_skipped) {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld, all fields expired hashes: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped, rdb_last_load_all_fields_expired);

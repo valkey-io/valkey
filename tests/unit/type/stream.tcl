@@ -1853,6 +1853,19 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
     }
 }
 
+start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 2}} {
+    test {XTRIM that leaves a node with no live entries can propagate correctly} {
+        r XADD s 1-0 f v
+        r XADD s 2-0 f v
+        r XDEL s 2-0
+        assert_equal 1 [r XTRIM s MINID 2-0]
+        assert_equal 0 [r XTRIM s MINID 3-0]
+        set keys [dict get [r XINFO STREAM s] radix-tree-keys]
+        r debug loadaof
+        assert_equal $keys [dict get [r XINFO STREAM s] radix-tree-keys]
+    }
+}
+
 start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-max-entries 10}} {
     test {XTRIM with ~ MAXLEN can propagate correctly} {
         for {set j 0} {$j < 100} {incr j} {

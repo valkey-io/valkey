@@ -210,7 +210,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Replica redirects key access in migrating slots" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -224,7 +224,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Replica of migrating node returns ASK redirect after READONLY" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -241,7 +241,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Replica of migrating node returns TRYAGAIN after READONLY" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -258,7 +258,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"

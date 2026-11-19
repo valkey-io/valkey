@@ -1933,7 +1933,8 @@ void clusterCommand(client *c) {
         if (!strcasecmp(sub, "meet") || !strcasecmp(sub, "addslots") ||
             !strcasecmp(sub, "addslotsrange") || !strcasecmp(sub, "delslots") ||
             !strcasecmp(sub, "delslotsrange") || !strcasecmp(sub, "flushslots") ||
-            /* Only SETSLOT NODE blocks. MIGRATING, IMPORTING and STABLE are local. */
+            /* Only SETSLOT NODE proposes a Raft entry and blocks on it. MIGRATING,
+             * IMPORTING and STABLE set markers and replicate them, without Raft. */
             (!strcasecmp(sub, "setslot") && c->argc >= 4 && !strcasecmp(objectGetVal(c->argv[3]), "node")) ||
             !strcasecmp(sub, "replicate") ||
             !strcasecmp(sub, "failover") || !strcasecmp(sub, "forget") ||

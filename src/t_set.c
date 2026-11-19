@@ -1367,7 +1367,7 @@ robj *setTypeDup(robj *o) {
         setTypeIgnoreTTL(o, true);
         si = setTypeInitIterator(o);
         char *str;
-        size_t len;
+        size_t len = 0; /* setTypeNext() leaves it unset for an intset, which GCC cannot rule out here. */
         int64_t intobj;
         while (setTypeNext(si, &str, &len, &intobj) != -1) {
             mstime_t expiry = smemberGetExpiry(str);

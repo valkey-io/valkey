@@ -367,11 +367,11 @@ proc test_sub_replica {type} {
         # The node may not be able to initiate an election in time due to
         # problems with cluster communication. If an election is initiated,
         # we make sure the offset of server 3 / 7 is 0.
-        if {[count_log_message -3 "Start of election"] != 0} {
-            verify_log_message -3 "*Start of election*offset 0*" 0
+        if {[count_log_message -3 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -3 {(Start of election|scheduling failover).*offset 0} 0
         }
-        if {[count_log_message -7 "Start of election"] != 0} {
-            verify_log_message -7 "*Start of election*offset 0*" 0
+        if {[count_log_message -7 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -7 {(Start of election|scheduling failover).*offset 0} 0
         }
 
         # Wait for the cluster to be ok.
@@ -564,3 +564,38 @@ start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}}
         resume_process [srv -2 pid]
     }
 } ;# start_cluster
+
+# R2 is an empty primary with replicas R3 and R4.
+proc empty_primary_slot_allocation {masters replicas} {
+    R 0 cluster addslotsrange 0 8191
+    R 1 cluster addslotsrange 8192 16383
+}
+
+proc empty_primary_replica_allocation {masters replicas} {
+    set r2_id [R 2 cluster myid]
+    R 3 cluster replicate $r2_id
+    R 4 cluster replicate $r2_id
+}
+
+start_cluster 3 2 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
+    test "Replicas follow an empty primary that becomes a replica" {
+        set addr "[srv 0 host]:[srv 0 port]"
+        R 2 cluster replicate [R 0 cluster myid]
+        wait_for_condition 1000 50 {
+            [get_my_primary_peer 2] eq $addr &&
+            [get_my_primary_peer 3] eq $addr &&
+            [get_my_primary_peer 4] eq $addr
+        } else {
+            fail "R2, R3 and R4 didn't all become replicas of R0"
+        }
+        set shard_id [R 0 cluster myshardid]
+        wait_for_condition 1000 50 {
+            [R 2 cluster myshardid] eq $shard_id &&
+            [R 3 cluster myshardid] eq $shard_id &&
+            [R 4 cluster myshardid] eq $shard_id
+        } else {
+            fail "R2, R3 and R4 aren't in R0's shard"
+        }
+        wait_for_cluster_propagation
+    }
+} empty_primary_slot_allocation empty_primary_replica_allocation ;# start_cluster

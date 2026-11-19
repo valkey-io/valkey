@@ -769,7 +769,8 @@ static void resumeRehashing(dbEntry *de) {
         break;
     }
     case OBJ_ENCODING_PATH_HASH: {
-        pathHashTypeResumeRehashing(objectGetVal(de));
+        pathHashObject *ph = objectGetVal(de);
+        pathHashTypeResumeRehashing(ph);
         break;
     }
     default:

@@ -2259,7 +2259,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
         replica->repl_data->repldboff += nwritten;
         server.stat_net_repl_output_bytes += nwritten;
         if (replica->repl_data->repldboff < server.rdb_pipe_bufflen) {
-            replica->repl_data->repl_last_partial_write = server.unixtime;
+            replica->repl_data->repl_last_partial_write = getMonotonicUs();
             return; /* more data to write.. */
         }
     }
@@ -2336,7 +2336,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
             if (nwritten != server.rdb_pipe_bufflen) {
-                replica->repl_data->repl_last_partial_write = server.unixtime;
+                replica->repl_data->repl_last_partial_write = getMonotonicUs();
                 server.rdb_pipe_numconns_writing++;
                 connSetWriteHandler(conn, rdbPipeWriteHandler);
             }
@@ -2366,7 +2366,7 @@ void slotMigrationPipeWriteHandler(struct connection *conn) {
         target->repl_data->repldboff += nwritten;
         server.stat_net_cluster_slot_export_bytes += nwritten;
         if (target->repl_data->repldboff < server.slot_migration_pipe_bufflen) {
-            target->repl_data->repl_last_partial_write = server.unixtime;
+            target->repl_data->repl_last_partial_write = getMonotonicUs();
             return; /* more data to write.. */
         }
     }
@@ -6065,7 +6065,7 @@ void replicationCron(void) {
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
                 server.rdb_write_target == RDB_WRITE_TARGET_SOCKET) {
                 if (replica->repl_data->repl_last_partial_write != 0 &&
-                    (server.unixtime - replica->repl_data->repl_last_partial_write) > server.repl_timeout) {
+                    elapsedSec(replica->repl_data->repl_last_partial_write) > (unsigned)server.repl_timeout) {
                     serverLog(LL_WARNING, "Disconnecting timedout replica (full sync): %s",
                               replicationGetReplicaName(replica));
                     freeClient(replica);

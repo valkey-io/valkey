@@ -745,6 +745,11 @@ static bool pauseRehashing(dbEntry *de) {
         hashtablePauseRehashing(zs->ht);
         return true;
     }
+    case OBJ_ENCODING_PATH_HASH: {
+        pathHashObject *ph = objectGetVal(de);
+        pathHashTypePauseRehashing(ph);
+        return true;
+    }
     default:
         return false;
     }
@@ -760,6 +765,11 @@ static void resumeRehashing(dbEntry *de) {
     case OBJ_ENCODING_BTREE: { // SORTED SET
         zset *zs = objectGetVal(de);
         hashtableResumeRehashing(zs->ht);
+        break;
+    }
+    case OBJ_ENCODING_PATH_HASH: {
+        pathHashObject *ph = objectGetVal(de);
+        pathHashTypeResumeRehashing(ph);
         break;
     }
     default:

@@ -571,6 +571,14 @@ bool setTypeListpackIsValidAt(unsigned char *lp, unsigned char *p) {
     return !lpIsMetadata(lpStart(lp)) || listpackObjectItemIsValid(setTypeListpackGetExpiry(lp, p));
 }
 
+/* Return 'p', or the first entry after it that is visible, or NULL. Out of line
+ * so that setTypeNext() keeps a short path for listpacks without volatile
+ * members: inlined, its loop setup ran on every step of every iteration. */
+static __attribute__((noinline)) unsigned char *setTypeListpackSkipHidden(unsigned char *lp, unsigned char *p) {
+    while (p != NULL && !listpackObjectItemIsValid(setTypeListpackGetExpiry(lp, p))) p = lpNext(lp, p);
+    return p;
+}
+
 /* Factory method to return a set that *can* hold "value". When the object has
  * an integer-encodable value, an intset will be returned. Otherwise, a listpack
  * or a regular hash table.
@@ -916,7 +924,7 @@ int setTypeNext(setTypeIterator *si, char **str, size_t *len, int64_t *llele) {
         } else {
             lpi = lpNext(lp, lpi);
         }
-        while (lpi != NULL && !setTypeListpackIsValidAt(lp, lpi)) lpi = lpNext(lp, lpi);
+        if (lpi != NULL && lpIsMetadata(lpStart(lp))) lpi = setTypeListpackSkipHidden(lp, lpi);
         if (lpi == NULL) return -1;
         si->lpi = lpi;
         unsigned int l;

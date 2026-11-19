@@ -1924,7 +1924,8 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         ri->auth_user = sdsnew(argv[2]);
     } else if (!strcasecmp(argv[0], "current-epoch") && argc == 2) {
         /* current-epoch <epoch> */
-        unsigned long long current_epoch = strtoull(argv[1], NULL, 10);
+        unsigned long long current_epoch;
+        if (!string2ull(argv[1], strlen(argv[1]), &current_epoch)) return "Invalid current-epoch.";
         if (current_epoch > sentinel.current_epoch) sentinel.current_epoch = current_epoch;
     } else if (!strcasecmp(argv[0], "myid") && argc == 2) {
         if (strlen(argv[1]) != CONFIG_RUN_ID_SIZE) return "Malformed Sentinel id in myid option.";
@@ -1933,7 +1934,9 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         /* config-epoch <name> <epoch> */
         ri = sentinelGetPrimaryByName(argv[1]);
         if (!ri) return "No such master with specified name.";
-        ri->config_epoch = strtoull(argv[2], NULL, 10);
+        unsigned long long config_epoch;
+        if (!string2ull(argv[2], strlen(argv[2]), &config_epoch)) return "Invalid config-epoch.";
+        ri->config_epoch = config_epoch;
         /* The following update of current_epoch is not really useful as
          * now the current epoch is persisted on the config file, but
          * we leave this check here for redundancy. */
@@ -2811,7 +2814,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
      * 0=ip,1=port,2=runid,3=current_epoch,4=primary_name,
      * 5=primary_ip,6=primary_port,7=primary_config_epoch. */
     int numtokens, port, removed, primary_port;
-    uint64_t current_epoch, primary_config_epoch;
+    unsigned long long current_epoch, primary_config_epoch;
     char **token = sdssplitlen(hello, hello_len, ",", 1, &numtokens);
     sentinelValkeyInstance *si, *primary;
 
@@ -2820,12 +2823,17 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
         primary = sentinelGetPrimaryByName(token[4]);
         if (!primary) goto cleanup; /* Unknown primary, skip the message. */
 
+        /* Sentinels always send unsigned epochs. Drop the message if one of
+         * them is not a valid unsigned number: a negative value would wrap
+         * to a huge epoch and become our current epoch. */
+        if (!string2ull(token[3], sdslen(token[3]), &current_epoch) ||
+            !string2ull(token[7], sdslen(token[7]), &primary_config_epoch))
+            goto cleanup;
+
         /* First, try to see if we already have this sentinel. */
         port = atoi(token[1]);
         primary_port = atoi(token[6]);
         si = getSentinelValkeyInstanceByAddrAndRunID(primary->sentinels, token[0], port, token[2]);
-        current_epoch = strtoull(token[3], NULL, 10);
-        primary_config_epoch = strtoull(token[7], NULL, 10);
 
         if (!si) {
             /* If not, remove all the sentinels that have the same runid

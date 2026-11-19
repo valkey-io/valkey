@@ -732,24 +732,6 @@ static genericIterator *clusterSlotIteratorCreate(const int *slots, size_t slots
  *                        General iteration support (across all iterators)
  * ============================================================================================= */
 
-/* A path hash keeps a separate hash object per path, so rehashing must be paused or resumed on
- * each payload that is hashtable encoded. Pause and resume must see the same payloads, which holds
- * because writes to a key in use by an iterator are blocked. */
-static void setPathHashRehashingPaused(pathHashObject *path_hash, bool pause) {
-    raxIterator ri;
-    raxStart(&ri, path_hash->index);
-    raxSeek(&ri, "^", NULL, 0);
-    while (raxNext(&ri)) {
-        robj *payload = ri.data;
-        if (payload->encoding != OBJ_ENCODING_HASHTABLE) continue;
-        if (pause)
-            hashtablePauseRehashing(objectGetVal(payload));
-        else
-            hashtableResumeRehashing(objectGetVal(payload));
-    }
-    raxStop(&ri);
-}
-
 /* While an item is potentially in use by a background thread, we can't have rehashing by the main
  * thread.  Returns true if rehashing was paused. */
 static bool pauseRehashing(dbEntry *de) {
@@ -765,7 +747,7 @@ static bool pauseRehashing(dbEntry *de) {
         return true;
     }
     case OBJ_ENCODING_PATH_HASH: {
-        setPathHashRehashingPaused(objectGetVal(de), true);
+        pathHashTypePauseRehashing(objectGetVal(de));
         return true;
     }
     default:
@@ -786,7 +768,7 @@ static void resumeRehashing(dbEntry *de) {
         break;
     }
     case OBJ_ENCODING_PATH_HASH: {
-        setPathHashRehashingPaused(objectGetVal(de), false);
+        pathHashTypeResumeRehashing(objectGetVal(de));
         break;
     }
     default:

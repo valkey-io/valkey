@@ -360,9 +360,10 @@ test "SENTINEL IS-PRIMARY-DOWN-BY-ADDR rejects a negative epoch" {
     assert_match "*Invalid epoch*" $err
     catch {S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $primary_ip 1 -1 $sentinel_id} err
     assert_match "*Invalid epoch*" $err
-    # The current epoch must not have been changed: a vote for the next
-    # epoch is still granted.
-    set result [S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $primary_ip $primary_port 100 $sentinel_id]
+    # The current epoch must not have been changed: a vote for the next epoch
+    # is still granted. Kept below the epoch 99 used by later tests, as the
+    # sentinels are shared between test files.
+    set result [S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $primary_ip $primary_port 51 $sentinel_id]
     assert_equal $sentinel_id [lindex $result 1]
-    assert_equal {100} [lindex $result 2]
+    assert_equal {51} [lindex $result 2]
 }

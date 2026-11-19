@@ -4165,11 +4165,6 @@ done:
     return result;
 }
 
-/* Apply (or validate) a SET_REPLICA_OF entry.
- * Format: "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
- * When validate_only is set, only validation is performed (no state mutation).
- * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
- * RAFT_RESULT_REJECTED describing the failure. */
 /* Make node a replica of primary, in primary's shard. */
 static void clusterRaftSetNodePrimary(clusterNode *node, clusterNode *primary) {
     clusterRaftState *rs = RAFT_STATE();
@@ -4196,6 +4191,11 @@ static void clusterRaftSetNodePrimary(clusterNode *node, clusterNode *primary) {
     }
 }
 
+/* Apply (or validate) a SET_REPLICA_OF entry.
+ * Format: "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
+ * When validate_only is set, only validation is performed (no state mutation).
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only) {
     clusterRaftState *rs = RAFT_STATE();
     RaftProposalResult result = RAFT_RESULT_OK;
@@ -4257,14 +4257,12 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         while (clusterNodeNumReplicas(replica) > 0) {
             clusterNode *r = clusterNodeGetReplica(replica, 0);
             clusterRaftSetNodePrimary(r, primary);
-            r->repl_offset = 0;
             if (r == myself) {
                 serverLog(LL_NOTICE,
                           "My primary %.40s (%s) became a replica. "
                           "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
                           replica->name, humanNodename(replica), primary->name, humanNodename(primary),
                           primary->shard_id);
-                rs->todo_full_sync = 1;
             }
         }
         clusterRaftSetNodePrimary(replica, primary);

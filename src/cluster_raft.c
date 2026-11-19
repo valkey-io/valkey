@@ -266,11 +266,13 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 typedef struct {
-    uint64_t next_index;
-    uint64_t match_index;
+    uint64_t next_index;                  /* Probing: resend from here. Replicating: first unsent entry */
+    uint64_t match_index;                 /* Last entry known to match the follower's log */
     mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
     mstime_t last_snapshot_time;          /* Last time we sent INSTALL_SNAPSHOT to this peer */
+    uint64_t last_snapshot_index;         /* Last index of that snapshot */
     unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
+    unsigned int replicating : 1;         /* Acked an AE: pipeline the next ones */
 } clusterNodeRaftData;
 
 #define RAFT_NODE(n) ((clusterNodeRaftData *)(n)->protocol_data)
@@ -1605,6 +1607,7 @@ static void raftLogApply(raftLogEntry *e) {
                 if (peer && peer != myself) {
                     RAFT_NODE(peer)->next_index = 1;
                     RAFT_NODE(peer)->match_index = 0;
+                    RAFT_NODE(peer)->replicating = 0;
                     RAFT_NODE(peer)->last_ack_time = monotonicMs();
                 }
             }
@@ -1852,11 +1855,14 @@ static void clusterRaftSendInstallSnapshot(clusterLink *link, clusterNode *node)
               (unsigned long long)rs->snapshot_term);
     /* next_index is updated by the AE_ACK sent after installing it. */
     RAFT_NODE(node)->last_snapshot_time = monotonicMs();
+    RAFT_NODE(node)->last_snapshot_index = rs->last_applied;
 }
 
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
     clusterNodeRaftData *rd = RAFT_NODE(node);
+
+    if (!link || !link->conn) return;
 
     uint64_t next = rd->next_index;
 
@@ -1899,6 +1905,7 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
               node->name, (unsigned long long)next, (unsigned long long)prev_index,
               (unsigned long long)rs->commit_index, count);
     clusterRaftSendMsg(link, msg);
+    if (rd->replicating) rd->next_index = next + count;
 }
 
 static void clusterRaftBroadcastAppendEntries(void) {
@@ -2070,7 +2077,11 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     if (success) {
         /* Follower accepted — update matchIndex/nextIndex. */
         rd->match_index = follower_last_index;
-        rd->next_index = follower_last_index + 1;
+        if (!rd->replicating || rd->next_index < follower_last_index + 1)
+            rd->next_index = follower_last_index + 1;
+        rd->replicating = 1;
+        /* Installed: a newer snapshot needn't wait for the resend timeout. */
+        if (follower_last_index >= rd->last_snapshot_index) rd->last_snapshot_time = 0;
         if (rs->transfer_deadline &&
             memcmp(node->name, rs->transfer_target, CLUSTER_NAMELEN) == 0) {
             clusterRaftMaybeSendTimeoutNow();
@@ -2115,6 +2126,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         }
     } else {
         /* Follower rejected — back off nextIndex, at most to just past its last entry. */
+        rd->replicating = 0;
         if (rd->next_index > 1) rd->next_index--;
         if (rd->next_index > 1 && follower_last_index < rd->next_index - 1) {
             rd->next_index = follower_last_index + 1;
@@ -2537,6 +2549,7 @@ static void clusterRaftBecomeLeader(void) {
         if (peer == myself) continue;
         RAFT_NODE(peer)->next_index = last + 1;
         RAFT_NODE(peer)->match_index = 0;
+        RAFT_NODE(peer)->replicating = 0;
         RAFT_NODE(peer)->pending_fail_change = 0;
         /* For the old leader, backdate last_ack_time to when we last
          * heard from it, so failure detection kicks in faster. This
@@ -3472,6 +3485,12 @@ static void clusterRaftPostConnect(struct clusterLink *link) {
     if (myself->ip[0] == '\0' && server.cluster_announce_ip == NULL) {
         connAddrSockName(link->conn, myself->ip, sizeof(myself->ip), NULL);
         serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
+    }
+    /* AEs queued on the old link are lost. */
+    clusterNodeRaftData *rd = link->node ? RAFT_NODE(link->node) : NULL;
+    if (rd && rd->replicating) {
+        rd->replicating = 0;
+        rd->next_index = rd->match_index + 1;
     }
     clusterRaftSendGreeting(link, "HELLO");
     if (link->node && nodeInHandshake(link->node)) {
@@ -4488,6 +4507,8 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     if (rs->role == RAFT_ROLE_LEADER) {
         out = node->link ? node->link : node->inbound_link;
         if (out && out->conn) {
+            /* Deleted next: also resend the entries in flight. */
+            if (RAFT_NODE(node)->replicating) RAFT_NODE(node)->next_index = RAFT_NODE(node)->match_index + 1;
             clusterRaftSendAppendEntries(out, node);
             if (out != rs->processing_link) clusterWriteHandler(out->conn);
         }

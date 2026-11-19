@@ -705,6 +705,39 @@ unsigned char *lpGetValue(unsigned char *p, unsigned int *slen, long long *lval)
     return vstr;
 }
 
+/* Whether the 'len' bytes at 'a' and 'b' are equal. Entries up to 64 bytes,
+ * the default listpack value limits, are compared inline: a memcmp() call in
+ * lpFind()'s loop forces the compiler to keep the entry pointer in a register
+ * that survives the call, and when it runs out of those it spills and reloads
+ * the pointer on every step of the search. */
+static inline int lpBytesEqual(const unsigned char *a, const unsigned char *b, uint32_t len) {
+    if (len > 64) return memcmp(a, b, len) == 0;
+    if (len >= 8) {
+        uint64_t x, y;
+        /* The last word overlaps the one before when len is not a multiple of 8. */
+        for (uint32_t i = 0; i + 8 < len; i += 8) {
+            memcpy(&x, a + i, 8);
+            memcpy(&y, b + i, 8);
+            if (x != y) return 0;
+        }
+        memcpy(&x, a + len - 8, 8);
+        memcpy(&y, b + len - 8, 8);
+        return x == y;
+    }
+    if (len >= 4) {
+        uint32_t x, y, u, v;
+        memcpy(&x, a, 4);
+        memcpy(&y, b, 4);
+        memcpy(&u, a + len - 4, 4);
+        memcpy(&v, b + len - 4, 4);
+        return x == y && u == v;
+    }
+    for (uint32_t i = 0; i < len; i++) {
+        if (a[i] != b[i]) return 0;
+    }
+    return 1;
+}
+
 /* Find pointer to the entry equal to the specified entry. Skip 'skip' entries
  * between every comparison. Returns NULL when the field could not be found. */
 unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uint32_t slen, unsigned int skip) {
@@ -734,7 +767,7 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
             if (value) {
                 /* check the value doesn't reach outside the listpack before accessing it */
                 assert(p >= lp + LP_HDR_SIZE && p + entry_size < lp + lp_bytes);
-                if (slen == ll && memcmp(value, s, slen) == 0) {
+                if (slen == ll && lpBytesEqual(value, s, slen)) {
                     return p;
                 }
             } else {

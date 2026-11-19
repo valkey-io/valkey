@@ -2138,6 +2138,17 @@ static bool clusterRaftIsLocalOnlyNode(clusterNode *node, dict *snapshot_ids) {
     return !in_snapshot;
 }
 
+/* Every node in a shard that lost its last slot reconfigures itself, like
+ * gossip nodes do when they learn about it. Proposing from apply isn't
+ * safe, so it's done in beforeSleep. */
+static void clusterRaftCheckLostLastSlot(bool my_shard_had_slots, clusterNode *target) {
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    if (my_shard_had_slots && my_primary->numslots == 0 && target && target != my_primary) {
+        RAFT_STATE()->todo_lost_last_slot = 1;
+        memcpy(RAFT_STATE()->lost_last_slot_target, target->name, CLUSTER_NAMELEN);
+    }
+}
+
 /* INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<node lines> */
 static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count) {
     if (argc < 5) return 1;
@@ -2219,6 +2230,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
      * removed nodes leave their shard. */
     clusterNode **old_owners = zmalloc(sizeof(server.cluster->slots));
     memcpy(old_owners, server.cluster->slots, sizeof(server.cluster->slots));
+    clusterNode *old_primary = clusterNodeGetPrimary(myself);
+    bool my_shard_had_slots = old_primary->numslots > 0;
     for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlotKeepChannels(j);
 
     /* Clear raft log. */
@@ -2281,14 +2294,17 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
 
     /* Do what applying the skipped slot changes would have done locally. The
      * old owners are still valid, since nodes are only deleted below. */
+    clusterNode *new_owner_of_ours = NULL;
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
         if (old_owners[j] != server.cluster->slots[j]) {
             removeChannelsInSlot(j);
             hotkeysPurgeSlot(j);
             clusterRaftUpdateLocalSlotState(j, old_owners[j], server.cluster->slots[j]);
+            if (old_owners[j] == old_primary && server.cluster->slots[j]) new_owner_of_ours = server.cluster->slots[j];
         }
     }
     zfree(old_owners);
+    clusterRaftCheckLostLastSlot(my_shard_had_slots, new_owner_of_ours);
 
     /* Remove nodes not present in the snapshot. */
     {
@@ -4116,8 +4132,7 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
 
     if (validate_only) goto done;
 
-    clusterNode *my_primary = clusterNodeGetPrimary(myself);
-    int my_shard_had_slots = my_primary && my_primary->numslots > 0;
+    bool my_shard_had_slots = clusterNodeGetPrimary(myself)->numslots > 0;
 
     /* Range fields are argv[range_start_arg] through argv[argc-1]. */
     for (int i = info.range_start_arg; i < argc; i++) {
@@ -4139,13 +4154,7 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
         }
     }
 
-    /* Every node in the shard that lost its last slot reconfigures itself,
-     * like gossip nodes do when they learn about it. Proposing from apply
-     * isn't safe, so it's done in beforeSleep. */
-    if (my_shard_had_slots && my_primary->numslots == 0 && info.target_node && info.target_node != my_primary) {
-        RAFT_STATE()->todo_lost_last_slot = 1;
-        memcpy(RAFT_STATE()->lost_last_slot_target, info.target_node->name, CLUSTER_NAMELEN);
-    }
+    clusterRaftCheckLostLastSlot(my_shard_had_slots, info.target_node);
     goto done;
 
 reject:

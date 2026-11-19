@@ -296,6 +296,52 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
     }
 }
 
+# R2 owns a single slot, so moving it away empties R2's shard.
+proc one_slot_on_r2_allocation {masters replicas} {
+    R 0 cluster addslotsrange 0 8191
+    R 1 cluster addslotsrange 8192 16382
+    R 2 cluster addslots 16383
+}
+
+start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
+
+    # Nodes join as learners. Make all three voters.
+    raft_promote_start_cluster_voters 3
+    test "Raft snapshot: a node learns from a snapshot that its shard lost its last slot" {
+        assert_equal "leader" [CI 0 cluster_raft_role]
+        set r0_id [R 0 cluster myid]
+        set r2_id [R 2 cluster myid]
+
+        # Move R2's last slot while R2 is down, and trim the log, so that R2
+        # learns about it from a snapshot.
+        catch {R 2 shutdown}
+        assert_equal OK [R 0 cluster setslot 16383 node $r0_id]
+        for {set j 0} {$j < 140} {incr j} {
+            R 0 config set cluster-announce-hostname "host-e-$j.com"
+        }
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_log_entries] < 128
+        } else {
+            fail "leader did not trim log"
+        }
+
+        # Like gossip, R2 becomes a replica of the node that got its slot.
+        restart_server -2 true false
+        wait_for_condition 100 100 {
+            [s -2 role] eq {slave} && [s -2 master_port] == [srv 0 port]
+        } else {
+            fail "R2 didn't become a replica of R0 (role=[s -2 role])"
+        }
+        assert_equal 1 [count_log_message -2 "Installed snapshot"]
+        verify_log_message -2 "*Lost my last slot during slot migration*" 0
+        wait_for_condition 50 100 {
+            [dict get [cluster_get_node_by_id 1 $r2_id] slaveof] eq $r0_id
+        } else {
+            fail "R1 doesn't see R2 as a replica of R0"
+        }
+    }
+} one_slot_on_r2_allocation
+
 start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
     test "Raft snapshot: singleton that has been in a cluster keeps its term and size on restart" {

@@ -845,7 +845,7 @@ foreach type {single multiple single_multiple} {
         assert_equal {0} [r exists myset]
         # SPOP only does a write lookup, so it must not count a keyspace hit.
         assert_equal {0} [s keyspace_hits]
-    }
+    } {} {needs:config-resetstat}
 
     test "SPOP new implementation: code path #1 propagate as DEL or UNLINK" {
         r del myset1{t} myset2{t}

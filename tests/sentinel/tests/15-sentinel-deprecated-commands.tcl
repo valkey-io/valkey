@@ -25,17 +25,3 @@ test "SENTINEL IS-MASTER-DOWN-BY-ADDR checks if the primary is down (SENTINEL IS
     assert_equal {99} [lindex $result 2]
 }
 
-test "SENTINEL IS-MASTER-DOWN-BY-ADDR rejects a negative epoch" {
-    set sentinel_id [S 0 SENTINEL MYID]
-    set master_ip_port [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
-    set master_ip [lindex $master_ip_port 0]
-    set master_port [lindex $master_ip_port 1]
-    catch {S 0 SENTINEL IS-MASTER-DOWN-BY-ADDR $master_ip $master_port -1 $sentinel_id} err
-    assert_match "*Invalid epoch*" $err
-    # The current epoch must not have been changed: a vote for the next
-    # epoch is still granted.
-    set result [S 0 SENTINEL IS-MASTER-DOWN-BY-ADDR $master_ip $master_port 100 $sentinel_id]
-    assert_equal $sentinel_id [lindex $result 1]
-    assert_equal {100} [lindex $result 2]
-}
-

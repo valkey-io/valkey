@@ -98,13 +98,20 @@ proc migrate_slot {from to slot} {
     assert_equal {OK} [R $to CLUSTER SETSLOT $slot IMPORTING $from_id]
 }
 
-# Returns 1 when no node in the cluster flags $node_id as pfail or fail.
-proc node_seen_healthy_by_all {node_id} {
+# Returns 1 when every node agrees on the shard's roles and epoch.
+proc replica_seen_by_all {replica_id primary_id epoch} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        set node [cluster_get_node_by_id $j $node_id]
+        set node [cluster_get_node_by_id $j $replica_id]
         # A node turned into an empty node no longer knows the whole cluster.
         if {$node eq {}} continue
-        if {[cluster_has_flag $node fail?] || [cluster_has_flag $node fail]} {
+        set primary [cluster_get_node_by_id $j $primary_id]
+        if {$primary eq {} ||
+            ![cluster_has_flag $node slave] ||
+            [dict get $node slaveof] ne $primary_id ||
+            [dict get $node config_epoch] != $epoch ||
+            ![cluster_has_flag $primary master] ||
+            [dict get $primary config_epoch] != $epoch ||
+            [cluster_has_flag $node fail?] || [cluster_has_flag $node fail]} {
             return 0
         }
     }
@@ -114,10 +121,15 @@ proc node_seen_healthy_by_all {node_id} {
 # Give the shard back to $primary with a manual failover.
 proc failback {primary} {
     set primary_id [R $primary CLUSTER MYID]
+    set current_primary [cluster_get_myself_primary $primary]
+    set current_primary_id [dict get $current_primary id]
+    set epoch [dict get $current_primary config_epoch]
+    # CLUSTER SLOTS cannot establish role convergence for an empty shard.
+    # A stale primary announcement can otherwise make the new primary ignore MFSTART.
     wait_for_condition 100 100 {
-        [node_seen_healthy_by_all $primary_id] == 1
+        [replica_seen_by_all $primary_id $current_primary_id $epoch] == 1
     } else {
-        fail "node $primary_id is still flagged as failing by some node"
+        fail "shard roles and epoch did not converge before failing back to $primary_id"
     }
     assert_equal {OK} [R $primary cluster failover]
     wait_for_role $primary master

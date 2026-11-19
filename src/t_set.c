@@ -848,8 +848,14 @@ void spopWithCountCommand(client *c) {
      * the number of elements inside the set: simply return the whole set. */
     if (count >= size) {
         /* Reply with the entire set directly. There is no need to build a
-         * copy of it, because the set is deleted right after. */
-        addReplySetMembers(c, set);
+         * copy of it, because the set is deleted right after. A module may
+         * change or delete the key from the spop notification above, so
+         * look the key up again before using it. */
+        set = lookupKeyWrite(c->db, c->argv[1]);
+        if (set == NULL)
+            addReply(c, shared.emptyset[c->resp]);
+        else if (!checkType(c, set, OBJ_SET))
+            addReplySetMembers(c, set);
 
         /* Delete the set as it is now empty */
         dbDelete(c->db, c->argv[1]);

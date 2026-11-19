@@ -171,7 +171,10 @@ start_server {tags {"modules"}} {
         test "Module key handle closes cleanly after a Call turns its string into a $enc zset" {
             r config set zset-max-listpack-entries $max_entries
             r del k src
+            # A RAW string makes dbSetValue swap the zset into the robj the
+            # handle still points at. An EMBSTR would be replaced instead.
             r set k [string repeat x 300]
+            assert_equal raw [r object encoding k]
             r zadd src 1 a 2 b 3 c
             assert_equal $enc [r object encoding src]
             # Key type 1 is STRING, 5 is ZSET.

@@ -747,7 +747,8 @@ static bool pauseRehashing(dbEntry *de) {
         return true;
     }
     case OBJ_ENCODING_PATH_HASH: {
-        pathHashTypePauseRehashing(objectGetVal(de));
+        pathHashObject *ph = objectGetVal(de);
+        pathHashTypePauseRehashing(ph);
         return true;
     }
     default:

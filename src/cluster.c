@@ -555,6 +555,15 @@ void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     clusterUpdateSlotImportsOnOwnershipChange();
 }
 
+/* Completion of our replica migration. With gossip it takes effect
+ * immediately, with Raft when the change is committed. Until then, we
+ * don't decide to migrate again. */
+static void clusterReplicaMigrationDone(void *ctx, const char *error) {
+    UNUSED(ctx);
+    UNUSED(error);
+    server.cluster->replica_migration_in_progress = 0;
+}
+
 /* Called by cluster internals when a node has lost its last slot. Triggers
  * replica migration. */
 void clusterHandleLostLastSlot(clusterNode *target) {
@@ -565,7 +574,8 @@ void clusterHandleLostLastSlot(clusterNode *target) {
                   "Lost my last slot during slot migration. "
                   "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
                   target->name, humanNodename(target), target->shard_id);
-        clusterCurrentBus->setReplicaOf(target, NULL, NULL);
+        server.cluster->replica_migration_in_progress = 1;
+        clusterCurrentBus->setReplicaOf(target, NULL, clusterReplicaMigrationDone);
     } else if (nodeIsPrimary(myself)) {
         serverLog(LL_NOTICE,
                   "My last slot was migrated to node %.40s (%s) "
@@ -583,15 +593,6 @@ void clusterHandleLostLastSlot(clusterNode *target) {
  * -------------------------------------------------------------------------- */
 
 #define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
-
-/* Completion of our replica migration. With gossip it takes effect
- * immediately, with Raft when the change is committed. Until then, we
- * don't decide to migrate again. */
-static void clusterReplicaMigrationDone(void *ctx, const char *error) {
-    UNUSED(ctx);
-    UNUSED(error);
-    server.cluster->replica_migration_in_progress = 0;
-}
 
 /* This function is responsible to decide if this replica should be migrated
  * to a different (orphaned) primary. It is called by the clusterCron() function

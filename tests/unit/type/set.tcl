@@ -833,6 +833,20 @@ foreach type {single multiple single_multiple} {
     }
     }
 
+    test "SPOP new implementation: code path #1 hashtable" {
+        r del myset
+        set content {}
+        for {set i 0} {$i < 200} {incr i} { lappend content "m$i" }
+        r sadd myset {*}$content
+        assert_encoding hashtable myset
+        r config resetstat
+        set res [r spop myset 1000]
+        assert_equal [lsort $content] [lsort $res]
+        assert_equal {0} [r exists myset]
+        # SPOP only does a write lookup, so it must not count a keyspace hit.
+        assert_equal {0} [s keyspace_hits]
+    }
+
     test "SPOP new implementation: code path #1 propagate as DEL or UNLINK" {
         r del myset1{t} myset2{t}
         r sadd myset1{t} 1 2 3 4 5

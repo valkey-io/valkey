@@ -40,8 +40,6 @@
  * Set Commands
  *----------------------------------------------------------------------------*/
 
-void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstkey, int op);
-
 /* Factory method to return a set that *can* hold "value". When the object has
  * an integer-encodable value, an intset will be returned. Otherwise, a listpack
  * or a regular hash table.
@@ -793,6 +791,23 @@ void scardCommand(client *c) {
     addReplyLongLong(c, setTypeSize(o));
 }
 
+/* Reply with all the members of the set, as a set reply. */
+static void addReplySetMembers(client *c, robj *set) {
+    setTypeIterator *si = setTypeInitIterator(set);
+    char *str;
+    size_t len;
+    int64_t llele;
+
+    addReplySetLen(c, setTypeSize(set));
+    while (setTypeNext(si, &str, &len, &llele) != -1) {
+        if (str)
+            addReplyBulkCBuffer(c, str, len);
+        else
+            addReplyBulkLongLong(c, llele);
+    }
+    setTypeReleaseIterator(si);
+}
+
 /* Handle the "SPOP key <count>" variant. The normal version of the
  * command is handled by the spopCommand() function itself. */
 
@@ -832,8 +847,9 @@ void spopWithCountCommand(client *c) {
      * The number of requested elements is greater than or equal to
      * the number of elements inside the set: simply return the whole set. */
     if (count >= size) {
-        /* We just return the entire set */
-        sunionDiffGenericCommand(c, c->argv + 1, 1, NULL, SET_OP_UNION);
+        /* Reply with the entire set directly. There is no need to build a
+         * copy of it, because the set is deleted right after. */
+        addReplySetMembers(c, set);
 
         /* Delete the set as it is now empty */
         dbDelete(c->db, c->argv[1]);
@@ -1507,7 +1523,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
     robj *dstset = NULL;
     int dstset_encoding = OBJ_ENCODING_INTSET;
     char *str;
-    size_t len;
+    size_t len = 0;
     int64_t llval;
     int encoding;
     int j, cardinality = 0;
@@ -1653,15 +1669,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
 
     /* Output the content of the resulting set, if not in STORE mode */
     if (!dstkey) {
-        addReplySetLen(c, cardinality);
-        si = setTypeInitIterator(dstset);
-        while (setTypeNext(si, &str, &len, &llval) != -1) {
-            if (str)
-                addReplyBulkCBuffer(c, str, len);
-            else
-                addReplyBulkLongLong(c, llval);
-        }
-        setTypeReleaseIterator(si);
+        addReplySetMembers(c, dstset);
         server.lazyfree_lazy_server_del ? freeObjAsync(NULL, dstset, -1) : decrRefCount(dstset);
     } else {
         /* If we have a target key where to store the resulting set

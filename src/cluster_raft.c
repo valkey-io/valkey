@@ -3204,6 +3204,8 @@ static void clusterRaftBeforeSleep(bool blocked) {
     if (rs->todo_lost_last_slot) {
         rs->todo_lost_last_slot = 0;
         clusterNode *target = clusterLookupNode(rs->lost_last_slot_target, CLUSTER_NAMELEN);
+        /* Follow the slots if the target failed over since. */
+        if (target) target = clusterNodeGetPrimary(target);
         clusterNode *my_primary = clusterNodeGetPrimary(myself);
         /* Skip if a later entry already changed it, e.g. we got slots back. */
         if (target && my_primary && my_primary->numslots == 0 && target != my_primary && target->numslots > 0) {
@@ -4207,20 +4209,28 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         goto reject;
     }
 
-    /* Guard: if a primary is specified, its shard must match target-shard,
-     * and it must still be a primary, so that a replica's primary is always
-     * a primary. It may have become a replica since this was proposed. */
-    if (sdslen(argv[3]) == CLUSTER_NAMELEN) {
-        clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
-        if (primary && memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
-        if (primary && (primary == replica || nodeIsReplica(primary))) goto reject;
+    /* The primary, or "-" to promote. If it has become a replica since this
+     * was proposed, follow it to its primary, so that a replica's primary is
+     * always a primary. Both must be in the target shard, so a node doesn't
+     * implicitly switch to another shard. */
+    clusterNode *primary = NULL;
+    if (sdslen(argv[3]) != 1 || argv[3][0] != '-') {
+        clusterNode *requested = clusterLookupNode(argv[3], sdslen(argv[3]));
+        if (!requested) goto reject;
+        if (memcmp(requested->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
+        primary = clusterNodeGetPrimary(requested);
+        if (primary == replica) goto reject;
+        if (!validate_only && primary != requested && replica == myself) {
+            serverLog(LL_NOTICE, "Node %.40s (%s) became a replica. Replicating its primary %.40s (%s) instead.",
+                      requested->name, humanNodename(requested), primary->name, humanNodename(primary));
+        }
     }
 
     if (validate_only) goto done;
 
     if (replica == myself) rs->todo_save_config = 1;
 
-    if (sdslen(argv[3]) == 1 && argv[3][0] == '-') {
+    if (!primary) {
         /* Promote to primary with the target-shard from the entry. */
         if (nodeIsReplica(replica)) {
             if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
@@ -4233,9 +4243,6 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         memcpy(replica->shard_id, target_shard, CLUSTER_NAMELEN);
         clusterAddNodeToShard(target_shard, replica);
     } else {
-        clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
-        if (!primary) goto reject;
-        if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
         /* A primary that becomes a replica takes its replicas along, like a
          * FAILOVER does, so they never replicate a replica. */
         while (clusterNodeNumReplicas(replica) > 0) {

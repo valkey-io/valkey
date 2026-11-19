@@ -129,7 +129,7 @@ tags {"check-rdb external:skip logreqres:skip"} {
         set errorcode [dict get $options -errorcode]
         assert_equal CHILDSTATUS [lindex $errorcode 0]
         assert_equal 1 [lindex $errorcode 2]
-        assert_match {*Invalid DB ID 268435455*} $result
+        assert_match {*DB ID 268435455 is too large for --stats (max 268435454)*} $result
     }
 }
 

@@ -742,8 +742,13 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             rdbCheckInfo("Selecting DB ID %llu", (unsigned long long)dbid);
             /* The DB ID is kept in an int, and with --stats it also indexes the
              * stats array, sized (dbid + 1) * OBJ_TYPE_MAX as an int. */
-            if (dbid > INT_MAX || (rdbCheckStats && dbid >= INT_MAX / OBJ_TYPE_MAX)) {
+            if (dbid > INT_MAX) {
                 rdbCheckError("Invalid DB ID %llu in RDB", (unsigned long long)dbid);
+                goto err;
+            }
+            if (rdbCheckStats && dbid >= INT_MAX / OBJ_TYPE_MAX) {
+                rdbCheckError("DB ID %llu is too large for --stats (max %d)", (unsigned long long)dbid,
+                              INT_MAX / OBJ_TYPE_MAX - 1);
                 goto err;
             }
             selected_dbid = dbid;

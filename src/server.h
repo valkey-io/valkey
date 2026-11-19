@@ -1346,9 +1346,10 @@ typedef struct ClientReplicationData {
     int repl_applied_dbid;               /* DB selected at repl_applied in the stream, if this is a slot import. */
     long long repl_ack_off;              /* Replication ack offset, if this is a replica. */
     long long repl_aof_off;              /* Replication AOF fsync ack offset, if this is a replica. */
-    long long repl_ack_time;             /* Replication ack time, if this is a replica. */
-    long long repl_last_partial_write;   /* The last time the server did a partial write from the RDB child pipe to this
-                                            replica  */
+    monotime repl_ack_time;              /* Monotonic time of the last replication ACK. */
+    monotime repl_wait_start;            /* Monotonic time when this replica started waiting for BGSAVE. */
+    monotime repl_last_partial_write;    /* Monotonic time of the last partial write from the RDB child pipe to this
+                                            replica, or 0 if none is pending. */
     long long psync_initial_offset;      /* FULLRESYNC reply offset other replicas
                                             copying this replica output buffer
                                             should use. */

@@ -11,6 +11,95 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.2.0 GA  -  Released Wed 18 November 2026
+-------------------------------------------------
+
+Upgrade urgency LOW: This is the first stable release of Valkey 9.2.
+
+### Performance and Efficiency Improvements
+* Fix long stalls in `SRANDMEMBER`, `ZRANDMEMBER`, `HRANDFIELD` and `SPOP` on a small key whose hashtable is still shrinking from a much larger size by @madolson (#5170)
+* Stop treating `LINDEX`, `LRANGE` and `LPOS` as format-changing commands during forkless background iteration, so list reads no longer get write-style handling by @JimB123 (#5283)
+* Keep the forkless save queue growing under write load by not counting keys expedited by writes as leftover work by @taham0 (#5298)
+* Make BCAST client tracking cost scale with the prefixes a key matches instead of all registered prefixes, so many unmatched prefixes no longer slow writes and the event loop by @madolson (#5183)
+* Reclaim memory from sorted sets that shrink or have frequent score updates by compacting sparse B+tree leaves on delete by @rainsupreme (#4526)
+
+### Bug Fixes
+* Fix `PFMERGE` with no source keys bypassing ACL key permissions and failing in `COMMAND GETKEYS`, and a crash in module commands whose keynum key spec starts past the last argument by @madolson (#5087)
+* Fix `SCRIPT KILL` and `FUNCTION KILL` not stopping Lua scripts that loop inside nested coroutines, and script timeouts not being detected when work is spread across coroutines by @madolson (#5108)
+* Fix a server crash in `SORT` and `SORT_RO` with `BY` or `GET` patterns when an element is 2 GiB or larger by @madolson (#5146)
+* Fix `ValkeyModule_Calloc` and `ValkeyModule_TryCalloc` returning an undersized buffer when `nmemb * size` overflows by @madolson (#5155)
+* Fix `EXEC` succeeding after a key that was already expired at `WATCH` time is overwritten, which can happen on replicas by @madolson (#5169)
+* Fix a crash on the first `FUNCTION LOAD` after startup when the shebang engine name contains a NUL byte by @madolson (#5115)
+* Fix a crash in a cluster replica whose primary was removed from the nodes table when another primary claims an unassigned slot by @madolson (#5184)
+* Fix an active defrag crash when a large set, sorted set or list is replaced by a hashtable-encoded hash while it is being defragmented by @madolson (#5164)
+* Fix an out-of-bounds write in `PFADD` and `PFMERGE` on a corrupted sparse HyperLogLog ending in a truncated XZERO opcode by rejecting it as invalid by @madolson (#5124)
+* Fix a server abort in `PFADD` and `PFMERGE` on short sparse HyperLogLogs when `hll-sparse-max-bytes` is set to 31 or less by @madolson (#5138)
+* Fix forkless saves writing corrupted set members to the RDB when `ZUNION`, `ZINTER`, `ZINTERCARD` or `ZDIFF` reads the same set concurrently by @madolson (#5110)
+* Fix a crash when the Lua debugger is started on an empty or newline-only script by @madolson (#5117)
+* Fix a cluster node failing to restart with an assertion after a gossip entry carrying the MYSELF flag adds a second myself node to nodes.conf by @madolson (#5134)
+* Fix `ACL LOAD` not disconnecting default user clients subscribed to channels the reloaded rules no longer allow by @madolson (#5085)
+* Fix a Sentinel crash when a monitored replica's `INFO` reply contains no `master_host` by @smkher (#4929)
+* Fix throttled write commands being executed twice when using RDMA with IO threads by @madolson (#5160)
+* Fail `CONFIG REWRITE` when the old config file reads short instead of writing uninitialized memory into the new config file by @madolson (#5158)
+* Fix Lua `server.error_reply()` returning stale heap memory as the error message when given a string of 2 GiB or more by @madolson (#5122)
+* Fix a use-after-free in streams when `XADD` creates a new node, which could leave a dangling pointer hit by later reads such as `XRANGE` by @Baraa-Hasheesh (#4711)
+* Fix `XINFO GROUPS` and `XINFO STREAM ... FULL` reporting too-high consumer group lag after `XTRIM` or a trimming `XADD` removes unread entries by @Sasidharan3094 (#4983)
+* Fix forkless background iteration being left inside an open `MULTI` after a script or `MULTI`/`EXEC` when there are no replicas and AOF is off by @harrylin98 (#5316)
+* Fix use of uninitialized variables in `valkey-cli` cluster key migration when `SELECT` fails on the source node by @PoisonGodv (#5311)
+* Fix an assertion failure when `FLUSHALL` or `SHUTDOWN` cancels a failed forkless save that still has a `FLUSHDB` or `SWAPDB` queued by @dgershko (#5326)
+* Fix AOF load failure after a crash leaves a torn annotation at the end of the file; it is now treated as a short read and can be truncated by `aof-load-truncated` or `valkey-check-aof --fix` by @sumitk163 (#5349)
+* Fix Lua `server.log()` blocking the server for seconds when called with thousands of arguments, with no `-BUSY` reply or `SCRIPT KILL` by @madolson (#5104)
+* Bound the number of memory regions the crash report's fast memory test records on Linux to avoid overflowing its region list by @JimB123 (#5379)
+* Fix a replica assertion when a timed-out script ends while the replication throttler holds the primary client, possible right after a failover with `repl-throttling-enabled yes` by @asagege (#5389)
+* Fix a primary assertion when `FLUSHDB` runs right at the end of a forkless full sync by @sarthakaggarwal97 (#5365)
+* Fix a primary assertion when a module thread holding the GIL performs a replicated write during a forkless save or full sync; affects modules that set `VALKEYMODULE_OPTIONS_HANDLE_FORKLESS` by @Baraa-Hasheesh (#5432)
+* Fix `CONFIG SET priority-subnets` demoting replica and slot migration connections from high priority, and fix drift in the active priority client counter by @satheeshaGowda (#4681)
+* Fix a source primary assertion on the next `CLUSTER MIGRATESLOTS` and a pipe descriptor leak after a slot migration snapshot fails to fork, such as during a forkless BGSAVE by @Baraa-Hasheesh (#5359)
+* Fix excessive copy-on-write memory during fork-based saves and a data race in forkless saves under an LFU `maxmemory-policy` by @madolson (#5445)
+* Fix a use-after-free crash when a blocked client's re-executed command evicts the client still executing a command under `maxmemory-clients` by @nadav-levanoni (#5435)
+* Fix access to a freed database when `FLUSHDB` and `SWAPDB` in the same transaction terminate a background iteration by @JimB123 (#5462)
+
+### Command and API Updates
+* Correct the `since` version of the `SISMEMBER` `XX` option to 9.2.0 in the command metadata by @PoisonGodv (#5310)
+* Allow null in the reply schemas of `GEOHASH`, `OBJECT FREQ`, `OBJECT IDLETIME` and `OBJECT REFCOUNT` for missing members and keys by @sarthakaggarwal97 (#5209)
+* Correct the `SENTINEL GET-MASTER-ADDR-BY-NAME` reply schema to allow the null reply returned for an unknown primary name by @rainsupreme (#5246)
+
+### Cluster and Replication
+* Fix `HSETEX` and `MSETEX` with a repeated EX, PX or EXAT option being rejected by replicas and lost on AOF reload by @madolson (#5088)
+* Reject inbound cluster bus packets larger than 16MB, except Pub/Sub and module messages, so a peer cannot make a node buffer up to 4GB from a single header by @madolson (#5065)
+* Fix replicas retrying full sync in a loop when the primary rejects `PSYNC` and the replica falls back to `SYNC` by @murphyjacob4 (#5280)
+* Strip every repeated `LIMIT` when propagating `XADD` and `XTRIM`, so tools replaying the replication stream no longer get a syntax error by @madolson (#4893)
+* Fix shutdown-triggered failover promoting a replica that has `cluster-replica-no-failover yes` by @simonasr (#5033)
+* Fix replication throttling starting earlier than intended when the replica output buffer limit is set below `repl-backlog-size` by @enjoy-binbin (#5338)
+* Fix Sentinel counting stale primary-down reports from peers toward quorum, which could trigger an unwanted failover of a healthy primary by @akasakariko (#4913)
+* Sentinel refuses to start when its config directory is not writable, instead of silently failing to save state by @sgissi (#5376)
+* Fix replicas reporting duplicate import-aborted module events for one slot import when `FLUSHALL` on the primary fails an atomic slot migration by @sarthakaggarwal97 (#5367)
+* Fix `MSETEX` in cluster mode skipping `MOVED` and `CROSSSLOT` checks and its writes not being forwarded during atomic slot migration by @bhuvanprakash (#4951)
+* Fix replication of `HDEL` commands generated by active hash field expiration during a forkless full sync by @JimB123 (#5460)
+
+### Configuration
+* Fix `notify-keyspace-events` dropping the `n` (new key) flag from `CONFIG GET` and `CONFIG REWRITE` when `A` is also set by @pirate329 (#5199)
+
+### Module API Changes
+* Fix `ValkeyModule_CallReplyAttributeElement` always returning an error on RESP3 attribute replies by @madolson (#5157)
+
+### Observability and Logging
+* Fix a memory leak when a script or module command is refused by ACL while the ACL log is disabled with `acllog-max-len 0` by @madolson (#5162)
+* Fix `FCALL` errors or a crash when `FUNCTION FLUSH SYNC` runs before the lazy free triggered by `FUNCTION RESTORE` of more than 64 functions has completed by @madolson (#5105)
+* Improve `MEMORY USAGE` accuracy for btree-encoded sorted sets by counting leaf nodes exactly instead of extrapolating from a sample by @rainsupreme (#5045)
+* Remove the `# Hotkeys` INFO section and its `hotkeys_last_window_samples` and `hotkeys_last_window_duration_ms` fields, which only shipped in the 9.2 release candidates by @ranshid (#5340)
+* Report `forkless_estimated_seconds_remaining` and the other forkless progress INFO fields during a diskless forkless full sync instead of `-1`/`0` by @nitaicaro (#5436)
+* Move the `forkless_fallbacks_*` counters from the `INFO` stats section to `INFO debug` by @nitaicaro (#5442)
+* Remove the `forkless_fallbacks_old_rdb_version` counter from `INFO debug` along with the redundant old RDB version fork fallback for full sync by @nitaicaro (#5461)
+
+### CLI and Tools
+* Make `valkey-check-rdb` report invalid slot import ranges in an RDB file instead of silently passing them by @enjoy-binbin (#4470)
+* Add p99.9 latency to the `valkey-benchmark` summary, `--rps` report and CSV output by @lucasyonge (#5377)
+* Fix `valkey-cli --cluster reshard` and `rebalance` exiting with a success status when slot migration fails by @imasahiro (#4853)
+
+### Build and Tooling
+* Fix a compile error in the select event loop backend on platforms that fall back to it, such as Emscripten (WebAssembly) by @notjiya-dev (#5299)
+
 Valkey 9.2.0-rc2  -  Released Wed 04 November 2026
 --------------------------------------------------
 
@@ -339,10 +428,12 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Alon Arenberg @alon-arenberg
 * Amariah Abishai @AmariahAK
 * Arshid @arshidkv12
+* Asuka @akasakariko
 * Avi Fenesh @avifenesh
 * bandalgomsu @bandalgomsu
 * Bara' Hasheesh @Baraa-Hasheesh
 * Benson-li @li-benson
+* Bhuvan Prakash @bhuvanprakash
 * Binbin @enjoy-binbin
 * Björn Svensson @bjosv
 * bodong.ybd @yangbodong22011
@@ -397,17 +488,22 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Madelyn Olson @madolson
 * Mark Atwood @MarkAtwood
 * martinrvisser @martinrvisser
+* Masahiro Ide @imasahiro
 * Md Aakib Alam Ansari @0xAakibAlam
 * michellee-10 @michellee-10
 * mqudah @mohammedgqudah
+* Muhammad Taha @taham0
+* Nadav Levanoni @nadav-levanoni
 * nanyan @nanyan0312
 * Nick Iaquinto @nickiaq
 * Nikhil Manglore @Nikhil-Manglore
 * nitaicaro @nitaicaro
+* notjiya-dev @notjiya-dev
 * Omer Rubinstein @omerrubi-amzn
 * Ping Xie @PingXie
 * pirate329 @pirate329
 * pkhartsk @pkhartsk
+* poisongodv @PoisonGodv
 * Prithvi S Rao @prithvirao13
 * Quanye Yang @quanyeyang
 * Raghav Muddur @nmvk
@@ -422,6 +518,7 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Sakshi Yadav @ydsakshi
 * sananes @yaronsananes
 * Sarthak Aggarwal @sarthakaggarwal97
+* Sasidharan Gopal @Sasidharan3094
 * Satheesha CH Gowda @satheeshaGowda
 * Saurabh K @smkher
 * Sebastian Turner @sebxt
@@ -429,16 +526,21 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * shanezx-sc @shanezx-sc
 * Shubham S Taple @ShubhamTaple
 * Shun Takahashi @moko-poi
+* SHUVA JYOTI KAR @shuvajyotikar13
+* Silvio Gissi @sgissi
+* Simonas Rupšys @simonasr
 * SiYeon Hwang @lowgiant
 * skyfirelee @artikell
 * Smail KOURTA @skourta
 * Sourav Singh Rawat @frostzt
 * Stav Ben Shahar @stavBenShahar
 * Stefan Wang @1fanwang
+* Sumit Sharma @sumitk163
 * sunliqiang @Pyolar
 * sushil paneru @sushilpaneru1
 * Taeknology @Taeknology
 * Tanmay Mohan @tanmayBeginsJourney
+* Tarik Ermis @tarikermis
 * Tjaden Hess @tjade273
 * tomhanks @xiejing-dev
 * Tristan Su @foobar
@@ -447,6 +549,7 @@ Upgrade urgency LOW: This is the first release candidate of Valkey 9.2.0.
 * Vasiliy Koshkin @melancholictheory
 * Vasily Nemtsov @nemtsv
 * Viktor Söderqvist @zuiderkwast
+* Vishal Chand @vish-chan
 * VoletiRam @VoletiRam
 * WooSeung Kim @beyondwin
 * xiaocj @xiaocj

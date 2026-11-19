@@ -74,6 +74,16 @@ PROPOSE <entry>
     Forwards a proposal from a follower to the leader. The entry
     uses the same format as log entries (type followed by data).
 
+UNCHANGED <index> <entry>
+    Reply to PROPOSE for an entry that wouldn't change anything, as found
+    by the leader's pre-validation: a SLOT_CHANGE for the current owner,
+    a SET_REPLICA_OF that is already in effect, or a NODE_FORGET of an
+    unknown node. The leader sends it instead of appending the entry, if
+    it has applied its whole log and has a fresh quorum, so that its state
+    is the latest committed one. Otherwise it appends the entry, which
+    also succeeds when applied. The proposer replies OK to its client
+    once it has applied up to <index>, the leader's last applied index.
+
 FAILOVER_PREPARE
     Sent by a replica to its primary to request a coordinated failover.
     The primary pauses writes and replies with FAILOVER_PAUSED. Not a

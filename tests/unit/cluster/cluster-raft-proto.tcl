@@ -1101,6 +1101,84 @@ test "Raft proto: SET_REPLICA_OF follows a target that became a replica in its s
     }
 }
 
+test "Raft proto: a proposal the leader says is unchanged completes once applied up to its index" {
+    # The node proposes a slot change that the leader has already committed
+    # but the node hasn't applied yet. The leader replies UNCHANGED with its
+    # last applied index. The node replies OK only after applying that far,
+    # so the client sees the change on the node it sent the command to.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+
+        # A forms a 2-node cluster and leads it.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+
+        # The node proposes slot 0 to itself.
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        set entry [string range $propose [string length "PROPOSE "] end]
+
+        # A says it's unchanged as of index 3, which the node doesn't have.
+        raft_send $out_a "UNCHANGED 3 $entry"
+        after 200
+        wait_for_blocked_client
+        assert_equal {} [lindex [R 0 cluster slots] 0]
+
+        # Once the node applies index 3, it replies OK. Another identical
+        # proposal, which A appended, completes too, when the entry is
+        # applied. Both are made before.
+        set rd2 [valkey_deferring_client]
+        $rd2 cluster addslots 0
+        assert_equal $propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        raft_send $fd_a "AE $a_id 1 2 1 3 1\n1 $entry"
+        assert_equal {OK} [$rd read]
+        assert_equal {OK} [$rd2 read]
+        assert_equal 0 [lindex [R 0 cluster slots] 0 0]
+
+        $rd close
+        $rd2 close
+        foreach fd [list $fd_a $out_a] {close $fd}
+    }
+}
+
+test "Raft proto: the leader doesn't append a slot change that changes nothing" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set f_shard [string repeat "9" 40]
+        set fd [raft_join_fake_follower $f_id $f_shard]
+        R 0 cluster addslots 0
+        wait_for_condition 50 100 {
+            [lindex [R 0 cluster slots] 0 0] eq 0
+        } else {
+            fail "slot 0 not assigned"
+        }
+        set last [CI 0 cluster_raft_last_applied]
+
+        # A forwarded SETSLOT NODE for the current owner gets UNCHANGED with
+        # the leader's last applied index, and nothing is appended.
+        set entry "SLOT_CHANGE $node_id 1 $node_id 1 0"
+        raft_send $fd "PROPOSE $entry"
+        set reply [raft_recv_until $fd "UNCHANGED *"]
+        assert_equal "UNCHANGED $last $entry" $reply
+        after 100
+        assert_equal $last [CI 0 cluster_raft_commit_index]
+        close $fd
+    }
+}
+
 # --------------------------------------------------------------------------
 # Shard epoch: stale proposal rejection tests (parameterized).
 # These verify that the leader rejects stale proposals BEFORE appending

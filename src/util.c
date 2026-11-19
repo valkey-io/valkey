@@ -678,6 +678,9 @@ int string2ull(const char *s, size_t slen, unsigned long long *value) {
         *value = ll;
         return 1;
     }
+    /* strtoull() accepts leading whitespace, '+' and '-' (negating the
+     * result), so only fall back to it for plain digit strings. */
+    if (slen == 0 || !isdigit((unsigned char)s[0])) return 0;
     errno = 0;
     char *endptr = NULL;
     *value = strtoull(s, &endptr, 10);

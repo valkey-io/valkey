@@ -6,12 +6,15 @@ test "Sentinel ignores hello messages with a negative epoch" {
     set master_ip [get_instance_attrib valkey $master_id host]
     set master_port [get_instance_attrib valkey $master_id port]
 
-    # Negative current epoch, then negative primary config epoch.
-    R $master_id publish __sentinel__:hello "127.0.0.1,31098,$fake_runid,-1,mymaster,$master_ip,$master_port,0"
-    R $master_id publish __sentinel__:hello "127.0.0.1,31098,$fake_runid,1,mymaster,$master_ip,$master_port,-1"
-    after 1000
-
     foreach_sentinel_id id {
+        # PUBLISH on a Sentinel processes the hello before replying, so no
+        # wait is needed. Negative current epoch, negative primary config
+        # epoch, and a negative epoch below LLONG_MIN.
+        foreach epochs {{-1 0} {1 -1} {-9223372036854775809 0}} {
+            lassign $epochs cur cfg
+            S $id publish __sentinel__:hello "127.0.0.1,31098,$fake_runid,$cur,mymaster,$master_ip,$master_port,$cfg"
+        }
+
         # The whole message was dropped, so the sender was not added.
         assert_no_match "*$fake_runid*" [S $id SENTINEL SENTINELS mymaster]
 

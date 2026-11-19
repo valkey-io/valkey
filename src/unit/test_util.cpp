@@ -133,6 +133,38 @@ TEST_F(UtilTest, TestString2l) {
 #endif
 }
 
+TEST_F(UtilTest, TestString2ull) {
+    char buf[32];
+    unsigned long long value;
+
+    valkey_strlcpy(buf, "0", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, 0ULL);
+
+    valkey_strlcpy(buf, "18446744073709551615", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, ULLONG_MAX);
+
+    valkey_strlcpy(buf, "18446744073709551616", sizeof(buf)); /* overflow */
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
+
+    valkey_strlcpy(buf, "-1", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
+
+    /* Below LLONG_MIN: must not wrap through the strtoull() fallback. */
+    valkey_strlcpy(buf, "-9223372036854775809", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
+
+    valkey_strlcpy(buf, "-18446744073709551615", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
+
+    valkey_strlcpy(buf, "+18446744073709551615", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
+
+    valkey_strlcpy(buf, " 18446744073709551615", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
+}
+
 TEST_F(UtilTest, TestString2ullBase16AsyncSignalSafe) {
     char buf[32];
     unsigned long long value;

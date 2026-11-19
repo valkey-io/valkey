@@ -309,10 +309,10 @@ start_server {tags {"cli logreqres:skip"}} {
     }
 
     test_tty_cli "Escape character in JSON mode" {
-        # reverse solidus and double quote
-        r hset solidus "\\" "\""
-        assert_equal "1) \"\\\\\"\n2) \"\\\"\"" [run_cli hgetall solidus]
-        assert_equal {{"\\":"\""}} [run_cli --json hgetall solidus]
+        # reverse escapes and double quote
+        r hset escapes "\\" "\""
+        assert_equal "1) \"\\\\\"\n2) \"\\\"\"" [run_cli hgetall escapes]
+        assert_equal {{"\\":"\""}} [run_cli --json hgetall escapes]
         # non printable (0xF0 in ISO-8859-1, not UTF-8(0xC3 0xB0))
         set eth "\u00f0\u0065"
         r hset eth test $eth

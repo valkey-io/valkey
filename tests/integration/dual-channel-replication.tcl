@@ -1845,6 +1845,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
         # Drive the real dual-channel rdb-channel handshake:
         set rdb_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer { catch {$rdb_chan close} }
         assert_equal "+OK" [$rdb_chan REPLCONF capa eof rdb-only 1 rdb-channel 1 listening-port 0]
 
         # SYNC returns the $ENDOFF line once the fork has admitted this client.
@@ -1858,7 +1859,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         wait_for_condition 50 100 {
             [string match {*replicas_waiting_psync:1*} [$primary info replication]]
         } else {
-            $rdb_chan close
             fail "rdb-channel client was not added to replicas_waiting_psync"
         }
 
@@ -1871,17 +1871,16 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         wait_for_condition 50 100 {
             [replconf_calls $primary] > $replconf_before
         } else {
-            $rdb_chan close
             fail "primary did not process REPLCONF rdb-channel 0 on the waiting rdb client"
         }
         # Skip the default grace period
         $primary debug delay-rdb-client-free-seconds 0
         $rdb_chan close
 
-        # Wait until the server logs that it freed the RDB client.
-        set log [srv 0 stdout]
+        # Wait until the RDB client is unregistered. The "Freeing RDB client" log
+        # line is written before a free that can still be deferred by pending I/O.
         wait_for_condition 100 200 {
-            [log_file_matches $log "*Freeing RDB client*"]
+            [$primary client list id $rdb_client_id] eq ""
         } else {
             fail "primary did not free the disconnected rdb client within the grace period"
         }
@@ -1895,6 +1894,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set offset [status $primary repl_backlog_first_byte_offset]
 
         set main_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer { catch {$main_chan close} }
         assert_equal "+OK" [$main_chan REPLCONF capa eof capa psync2]
 
         # With the fix, the freed id was removed from the rax on free, so

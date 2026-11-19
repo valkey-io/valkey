@@ -4159,6 +4159,32 @@ done:
  * When validate_only is set, only validation is performed (no state mutation).
  * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
  * RAFT_RESULT_REJECTED describing the failure. */
+/* Make node a replica of primary, in primary's shard. */
+static void clusterRaftSetNodePrimary(clusterNode *node, clusterNode *primary) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (memcmp(node->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) {
+        /* A replica that moves to another shard has none of the new shard's
+         * data, so its offset no longer counts. Every node applies this, so
+         * all nodes see the zero offset at once, e.g. for failover ranking. */
+        node->repl_offset = 0;
+        /* Our data belongs to the shard we leave, so the new primary must
+         * not treat it as a partial copy of its own. */
+        if (node == myself) rs->todo_full_sync = 1;
+    }
+    if (node->replicaof) clusterNodeRemoveReplica(node->replicaof, node);
+    node->flags &= ~CLUSTER_NODE_PRIMARY;
+    node->flags |= CLUSTER_NODE_REPLICA;
+    node->replicaof = primary;
+    clusterNodeAddReplica(primary, node);
+    clusterRemoveNodeFromShard(node);
+    memcpy(node->shard_id, primary->shard_id, CLUSTER_NAMELEN);
+    clusterAddNodeToShard(primary->shard_id, node);
+    if (node == myself) {
+        rs->todo_save_config = 1;
+        rs->todo_update_replication = 1;
+    }
+}
+
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only) {
     clusterRaftState *rs = RAFT_STATE();
     RaftProposalResult result = RAFT_RESULT_OK;
@@ -4210,20 +4236,11 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
         if (!primary) goto reject;
         if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
-        /* A replica that moves to another shard has none of the new shard's
-         * data, so its offset no longer counts. Every node applies this, so
-         * all nodes see the zero offset at once, e.g. for failover ranking. */
-        if (memcmp(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) replica->repl_offset = 0;
         /* A primary that becomes a replica takes its replicas along, like a
          * FAILOVER does, so they never replicate a replica. */
         while (clusterNodeNumReplicas(replica) > 0) {
             clusterNode *r = clusterNodeGetReplica(replica, 0);
-            clusterNodeRemoveReplica(replica, r);
-            r->replicaof = primary;
-            clusterNodeAddReplica(primary, r);
-            clusterRemoveNodeFromShard(r);
-            memcpy(r->shard_id, primary->shard_id, CLUSTER_NAMELEN);
-            clusterAddNodeToShard(primary->shard_id, r);
+            clusterRaftSetNodePrimary(r, primary);
             r->repl_offset = 0;
             if (r == myself) {
                 serverLog(LL_NOTICE,
@@ -4231,34 +4248,10 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
                           "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
                           replica->name, humanNodename(replica), primary->name, humanNodename(primary),
                           primary->shard_id);
-                rs->todo_save_config = 1;
-                rs->todo_update_replication = 1;
                 rs->todo_full_sync = 1;
             }
         }
-        if (replica == myself) {
-            if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
-            myself->flags &= ~CLUSTER_NODE_PRIMARY;
-            myself->flags |= CLUSTER_NODE_REPLICA;
-            myself->replicaof = primary;
-            clusterNodeAddReplica(primary, myself);
-            /* Our data belongs to the shard we leave, so the new primary
-             * must not treat it as a partial copy of its own. */
-            if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) rs->todo_full_sync = 1;
-            clusterRemoveNodeFromShard(myself);
-            memcpy(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN);
-            clusterAddNodeToShard(primary->shard_id, myself);
-            rs->todo_update_replication = 1;
-        } else {
-            if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
-            replica->flags &= ~CLUSTER_NODE_PRIMARY;
-            replica->flags |= CLUSTER_NODE_REPLICA;
-            replica->replicaof = primary;
-            clusterNodeAddReplica(primary, replica);
-            clusterRemoveNodeFromShard(replica);
-            memcpy(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN);
-            clusterAddNodeToShard(primary->shard_id, replica);
-        }
+        clusterRaftSetNodePrimary(replica, primary);
     }
 
     /* Bump both shard epochs after successful apply. */

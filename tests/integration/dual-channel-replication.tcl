@@ -1659,3 +1659,389 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         }
     }
 }
+
+# Open a raw socket to the server, over TLS when the suite runs with --tls.
+proc raw_socket {host port} {
+    if {$::tls} {
+        return [::tls::socket $host $port]
+    }
+    return [socket $host $port]
+}
+
+# Return the number of times the REPLCONF command has been processed by the server.
+proc replconf_calls {client} {
+    set stats [$client info commandstats]
+    if {[regexp {cmdstat_replconf:calls=(\d+)} $stats -> calls]} {
+        return $calls
+    }
+    return 0
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set repl-backlog-size [expr {10 ** 6}]
+    $primary config set loglevel notice
+
+    test "Dual channel: REPLCONF rdb-channel 0 is refused on a waiting rdb client, which is removed from replicas_waiting_psync" {
+        # REPLCONF rdb-channel 0 on an rdb client still tracked in replicas_waiting_psync
+        # must be refused without clearing repl_rdb_channel. The client is then freed and
+        # must be removed from replicas_waiting_psync, so its id no longer resolves.
+        set refusal "sending an error to its replica: 'REPLCONF rdb-channel is not allowed after SYNC/PSYNC'"
+
+        # Hold the RDB transfer open until the refusal is seen. rdb-key-save-delay is
+        # applied per key in the fork child, so write keys and set the delay before SYNC.
+        # Without the hold, a small RDB can finish before REPLCONF is sent, and the
+        # postponed client then loses its read handler before the primary reads it.
+        for {set i 0} {$i < 100} {incr i} { $primary set rdb-hold-$i $i }
+        # Deferred scripts run in reverse order: the delay is restored before waiting
+        # for the RDB child, so no BGSAVE leaks into the next test.
+        test_config_set $primary rdb-key-save-delay 100000
+        test_defer {
+            wait_for_condition 200 100 {
+                [s 0 rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "RDB child did not finish after the rdb client was freed"
+            }
+        }
+
+        # Drive the real dual-channel rdb-channel handshake:
+        set rdb_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer {catch {$rdb_chan close}}
+        assert_equal "+OK" [$rdb_chan REPLCONF capa eof rdb-only 1 rdb-channel 1 listening-port 0]
+
+        # SYNC returns the $ENDOFF line once the fork has admitted this client.
+        # The 4th field is the rdb client id we need.
+        set endoff_line [$rdb_chan SYNC]
+        assert_match {$ENDOFF:*} $endoff_line
+        set rdb_client_id [lindex [split $endoff_line " "] 3]
+        assert {$rdb_client_id ne ""}
+
+        # The fork admits this client to the wait set. Wait for it to appear.
+        wait_for_condition 50 100 {
+            [string match {*replicas_waiting_psync:1*} [$primary info replication]]
+        } else {
+            fail "rdb-channel client was not added to replicas_waiting_psync"
+        }
+
+        # The RDB must still be in progress and the rdb client still connected before
+        # REPLCONF is sent. Otherwise the refusal below cannot be read from the client.
+        assert_equal 1 [s 0 rdb_bgsave_in_progress]
+        assert {[string match "*id=$rdb_client_id *" [$primary client list]]}
+
+        set refused_before [count_log_message 0 $refusal]
+        set freed_before [count_log_message 0 "Freeing RDB client"]
+
+        # Send REPLCONF rdb-channel 0 on the rdb client after SYNC. Replicas cannot
+        # receive replies, so the primary logs the refusal and disconnects the client.
+        # The reply is deferred because the RDB payload sits in front of it on this socket.
+        $rdb_chan deferred 1
+        catch {$rdb_chan REPLCONF rdb-channel 0}
+        wait_for_condition 50 100 {
+            [count_log_message 0 $refusal] > $refused_before
+        } else {
+            fail "primary did not refuse REPLCONF rdb-channel 0 on the rdb client"
+        }
+        catch {$rdb_chan close}
+
+        # Skip the default grace period only now, so the disconnected rdb client is freed.
+        # DEBUG has no getter, so restore the default (DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE).
+        test_defer {$primary debug delay-rdb-client-free-seconds 5}
+        $primary debug delay-rdb-client-free-seconds 0
+
+        # Wait until the server logs that it freed the disconnected RDB client.
+        wait_for_condition 100 200 {
+            [count_log_message 0 "Freeing RDB client"] > $freed_before
+        } else {
+            fail "primary did not free the disconnected rdb client within the grace period"
+        }
+
+        # The server must still be alive, and the freed client must not be counted as waiting.
+        assert_equal PONG [$primary ping]
+        wait_for_condition 50 100 {
+            [string match {*replicas_waiting_psync:0*} [$primary info replication]]
+        } else {
+            fail "freed rdb client is still counted in replicas_waiting_psync"
+        }
+
+        # Trigger the use-after-free check. set-rdb-client-id only does a rax lookup, so
+        # it cannot crash by itself. The dereference happens in PSYNC and on the next
+        # propagated write. PSYNC needs the real replid and an offset inside the backlog range,
+        # so write a few keys first.
+        set replid [status $primary master_replid]
+        for {set i 0} {$i < 100} {incr i} { $primary set key-$i $i }
+        set offset [status $primary repl_backlog_first_byte_offset]
+
+        set main_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer {catch {$main_chan close}}
+        assert_equal "+OK" [$main_chan REPLCONF capa eof capa psync2]
+
+        # The freed id was removed from the rax on free, so set-rdb-client-id must
+        # refuse it. Without the fix, it is accepted and the PSYNC below dereferences freed memory.
+        set idreply [$main_chan REPLCONF set-rdb-client-id $rdb_client_id]
+        if {[string match "+OK*" $idreply]} {
+            $main_chan deferred 1
+            catch {$main_chan PSYNC $replid $offset}
+        }
+        assert_match "-ERR Unrecognized RDB client id*" $idreply
+
+        # Validate server is still responsive with correct info stats
+        assert_equal PONG [$primary ping]
+        assert_match {*replicas_waiting_psync:0*} [$primary info replication]
+    }
+
+    test "Dual channel: REPLCONF rdb-channel is refused on a replica connection after PSYNC" {
+        # A partial resync (+CONTINUE) sends no RDB payload, so the reply to a
+        # REPLCONF sent right after it is readable without draining a payload.
+        # Stop PINGs to replicas so no bytes enter the stream while we read replies.
+        test_config_set $primary repl-ping-replica-period 3600
+        set refusal "sending an error to its replica: 'REPLCONF rdb-channel is not allowed after SYNC/PSYNC'"
+        # Create the backlog with a throwaway full SYNC, so the PSYNC below can
+        # get +CONTINUE even when this test runs alone. The REPLCONF reply is read
+        # first, since SYNC is refused while a reply is pending. The client is closed
+        # once the backlog exists; the backlog stays on the primary.
+        set tmp_chan [valkey $primary_host $primary_port 0 $::tls]
+        test_defer {catch {$tmp_chan close}}
+        assert_equal OK [$tmp_chan REPLCONF capa eof]
+        $tmp_chan deferred 1
+        $tmp_chan SYNC
+        wait_for_condition 50 100 {
+            [status $primary repl_backlog_active] == 1
+        } else {
+            fail "throwaway SYNC did not create the replication backlog"
+        }
+        $tmp_chan close
+        for {set i 0} {$i < 100} {incr i} { $primary set key-$i $i }
+        set replid [status $primary master_replid]
+        # Offset just past the current end: +CONTINUE carries no backlog bytes,
+        # so the next bytes on the socket are the REPLCONF replies.
+        set offset [expr {[status $primary master_repl_offset] + 1}]
+
+        # After PSYNC the connection is a replica. Each rdb-channel value is refused
+        # with the CRITICAL log line, and the primary disconnects the replica, because
+        # replicas cannot receive replies. Each value gets a new connection.
+        foreach val {0 1 2} {
+            # Not readraw: the client must raise on a read error.
+            set main_chan [valkey $primary_host $primary_port 0 $::tls]
+            test_defer [list catch [list $main_chan close]]
+            assert_equal "OK" [$main_chan REPLCONF capa eof capa psync2]
+            assert_match "*CONTINUE*" [$main_chan PSYNC $replid $offset]
+
+            set refused_before [count_log_message 0 $refusal]
+            set err ""
+            catch {$main_chan REPLCONF rdb-channel $val} err
+            # The connection is closed, so the reply read fails.
+            assert_match "*I/O error*" $err
+            wait_for_condition 50 100 {
+                [count_log_message 0 $refusal] > $refused_before
+            } else {
+                fail "primary did not log the refusal for REPLCONF rdb-channel $val"
+            }
+            catch {$main_chan close}
+
+            # The server still responds after the refusal.
+            assert_equal PONG [$primary ping]
+        }
+    }
+
+    # The three tests below cover the pre-SYNC path: a fresh connection that has not
+    # sent SYNC or PSYNC must get +OK for each option, and the connection must stay
+    # usable afterwards. Each test uses its own client, so no state carries over.
+    # The client is created with readraw 1 so the status line is exactly "+OK".
+    # readraw is then switched to 0 so PING returns the parsed reply "PONG".
+
+    test "Dual channel: REPLCONF rdb-channel 0 returns +OK before SYNC on a fresh connection" {
+        set c [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer {$c close}
+        assert_equal "+OK" [$c REPLCONF rdb-channel 0]
+        $c readraw 0
+        assert_equal PONG [$c ping]
+    }
+
+    test "Dual channel: REPLCONF rdb-only 0 returns +OK before SYNC on a fresh connection" {
+        set c [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer {$c close}
+        assert_equal "+OK" [$c REPLCONF rdb-only 0]
+        $c readraw 0
+        assert_equal PONG [$c ping]
+    }
+
+    test "Dual channel: REPLCONF rdb-filter-only functions returns +OK before SYNC on a fresh connection" {
+        set c [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer {$c close}
+        assert_equal "+OK" [$c REPLCONF rdb-filter-only functions]
+        $c readraw 0
+        assert_equal PONG [$c ping]
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set loglevel notice
+
+    test "REPLCONF rdb-only with ack after SYNC does not crash the primary" {
+        # REPLCONF applies rdb-only before it reaches the ack branch in the same
+        # call, and the ack branch returns without a reply. On base, the ack branch
+        # then asserts (!repl_rdbonly) in replicaStartCommandStream on an ONLINE
+        # diskless replica. The refusal must disconnect the replica instead.
+        set refusal "sending an error to its replica: 'REPLCONF rdb-only is not allowed after SYNC/PSYNC'"
+
+        # Plain socket, so the test controls exactly what the replica sends.
+        set fd [raw_socket $primary_host $primary_port]
+        test_defer {catch {close $fd}}
+        fconfigure $fd -translation binary -blocking 1
+        puts -nonewline $fd "REPLCONF capa eof capa psync2\r\n"
+        flush $fd
+        assert_equal "+OK" [string trimright [gets $fd] "\r"]
+
+        puts -nonewline $fd "PSYNC ? -1\r\n"
+        flush $fd
+        # Drain the RDB so the replica reaches ONLINE and waits for its first ACK.
+        fconfigure $fd -blocking 0
+        wait_for_condition 200 25 {
+            [catch {read $fd}] >= 0 && [count_log_message 0 "Synchronization with replica .* succeeded"] > 0
+        } else {
+            fail "replica sync did not succeed"
+        }
+
+        # The replica must be ONLINE and waiting for its first ACK before the probe.
+        wait_for_condition 200 25 {
+            [catch {read $fd}] >= 0 && [string match "*state=online*" [$primary info replication]]
+        } else {
+            fail "replica did not come online"
+        }
+
+        puts -nonewline $fd "REPLCONF rdb-only 1 ack 0\r\n"
+        flush $fd
+        # The primary drops the replica. A read error (reset) or EOF both mean closed.
+        wait_for_condition 100 50 {
+            [catch {read $fd}] || [eof $fd]
+        } else {
+            fail "replica connection was not closed after REPLCONF rdb-only"
+        }
+
+        assert_equal 0 [count_log_message 0 "ASSERTION FAILED"]
+        wait_for_log_messages 0 [list "*$refusal*"] 0 500 20
+        wait_for_log_messages 0 {"*Replica generated a reply to command 'replconf', disconnecting it*"} 0 500 20
+        assert_equal PONG [$primary ping]
+    }
+
+    test "REPLCONF rdb-filter-only after SYNC does not change the cohort of an in-progress disk BGSAVE" {
+        # Replica A starts a full-RDB disk BGSAVE and waits for it. A then sends
+        # rdb-filter-only after its SYNC, followed by getack. Without the fix, getack
+        # suppresses the reply, so A stays connected with the changed filter. With the
+        # fix, the guard returns before getack. The RDB being written for A is still full.
+        # Replica B then sends the same rdb-filter-only before its own PSYNC. If A's
+        # changed replica_req is used for the cohort match, B attaches to a BGSAVE
+        # whose content it did not ask for.
+        # Deferred scripts run in reverse order: the sockets close and the configs are
+        # restored before waiting for the BGSAVE, so no BGSAVE leaks into the next test.
+        test_config_set $primary repl-diskless-sync no
+        test_config_set $primary rdb-key-save-delay 1000000
+        test_defer {
+            wait_for_condition 200 50 {
+                [s 0 rdb_bgsave_in_progress] == 0
+            } else {
+                fail "BGSAVE did not finish"
+            }
+        }
+        $primary set k1 v1
+        $primary set k2 v2
+
+        set fdA [raw_socket $primary_host $primary_port]
+        test_defer {catch {close $fdA}}
+        fconfigure $fdA -translation binary -blocking 1
+        puts -nonewline $fdA "REPLCONF capa eof capa psync2\r\n"
+        flush $fdA
+        assert_equal "+OK" [string trimright [gets $fdA] "\r"]
+        # A real replica reports its version. Without it the RDB version is
+        # low, and the BGSAVE falls back to a socket target.
+        puts -nonewline $fdA "REPLCONF version 255.255.255\r\n"
+        flush $fdA
+        assert_equal "+OK" [string trimright [gets $fdA] "\r"]
+        puts -nonewline $fdA "PSYNC ? -1\r\n"
+        flush $fdA
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: disk*"} 0 500 20
+        # The log line is written before the fork, so wait until the child exists.
+        wait_for_condition 50 100 {
+            [s 0 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "BGSAVE child was not started"
+        }
+        # Stop the child so the BGSAVE stays in progress until B's decision.
+        # The test framework resumes it when the test ends, before the deferred cleanup.
+        pause_process [get_child_pid 0]
+
+        # Replica C attaches to the same full-RDB BGSAVE. With the gate, A is
+        # disconnected; without persistence the primary kills the child when its
+        # last waiting replica drops, so C keeps the BGSAVE that B is checked against.
+        # C comes after A in the replica list, so without the gate B still meets A first.
+        set attach_from [count_log_lines 0]
+        set fdC [raw_socket $primary_host $primary_port]
+        test_defer {catch {close $fdC}}
+        fconfigure $fdC -translation binary -blocking 1
+        puts -nonewline $fdC "REPLCONF capa eof capa psync2\r\n"
+        flush $fdC
+        assert_equal "+OK" [string trimright [gets $fdC] "\r"]
+        puts -nonewline $fdC "REPLCONF version 255.255.255\r\n"
+        flush $fdC
+        assert_equal "+OK" [string trimright [gets $fdC] "\r"]
+        puts -nonewline $fdC "PSYNC ? -1\r\n"
+        flush $fdC
+        wait_for_log_messages 0 {"*Waiting for end of BGSAVE for SYNC*"} $attach_from 500 20
+
+        # Post-SYNC: A changes its own requirements while it waits for the BGSAVE.
+        set refusal_from [count_log_lines 0]
+        set replconf_before [replconf_calls $primary]
+        puts -nonewline $fdA "REPLCONF rdb-filter-only \"\" getack 1\r\n"
+        flush $fdA
+        # calls also counts refused commands, so this confirms A's REPLCONF was
+        # processed, with or without the fix, before B connects.
+        wait_for_condition 50 100 {
+            [replconf_calls $primary] > $replconf_before
+        } else {
+            fail "primary did not process A's REPLCONF"
+        }
+        # The original BGSAVE must still be running, so B is checked against it.
+        assert_equal 1 [s 0 rdb_bgsave_in_progress]
+
+        set attach_before [count_log_message 0 "Waiting for end of BGSAVE for SYNC"]
+        set refuse_before [count_log_message 0 "Can't attach the replica to the current BGSAVE"]
+
+        set fdB [raw_socket $primary_host $primary_port]
+        test_defer {catch {close $fdB}}
+        fconfigure $fdB -translation binary -blocking 1
+        puts -nonewline $fdB "REPLCONF capa eof capa psync2\r\n"
+        flush $fdB
+        assert_equal "+OK" [string trimright [gets $fdB] "\r"]
+        puts -nonewline $fdB "REPLCONF rdb-filter-only \"\"\r\n"
+        flush $fdB
+        assert_equal "+OK" [string trimright [gets $fdB] "\r"]
+        puts -nonewline $fdB "PSYNC ? -1\r\n"
+        flush $fdB
+
+        wait_for_condition 200 25 {
+            [count_log_message 0 "Waiting for end of BGSAVE for SYNC"] > $attach_before ||
+            [count_log_message 0 "Can't attach the replica to the current BGSAVE"] > $refuse_before
+        } else {
+            fail "replica B got no decision on the in-progress BGSAVE"
+        }
+        assert_equal [count_log_message 0 "Waiting for end of BGSAVE for SYNC"] $attach_before \
+            "replica B attached to a BGSAVE that writes a full RDB"
+        # Checked after the cohort assertion, so a regression reports the wrong attach above.
+        # The refusal is logged, which shows the exact error path ran, not an
+        # unknown-option or missing-argument reply.
+        wait_for_log_messages 0 {"*sending an error to its replica: 'REPLCONF rdb-filter-only is not allowed after SYNC/PSYNC'*"} $refusal_from 50 100
+        assert_equal PONG [$primary ping]
+    }
+}

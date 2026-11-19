@@ -93,6 +93,15 @@ class NetworkingTest : public ::testing::Test {
         /* Initialize server fields that are accessed by networking functions */
         server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = -1; /* Disable tracking */
         server.debug_client_enforce_reply_list = 0;
+        /* Freeing a replica client removes it from the psync-wait rax, which the
+         * server creates in initServer(). The fake clients here never go through
+         * that path, so create it here. */
+        server.replicas_waiting_psync = raxNew();
+    }
+
+    void TearDown() override {
+        raxFree(server.replicas_waiting_psync);
+        server.replicas_waiting_psync = NULL;
     }
 };
 

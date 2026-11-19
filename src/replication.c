@@ -538,6 +538,8 @@ void removeReplicaFromPsyncWait(client *replica_main_client) {
     replBufBlock *o;
     /* Get replBufBlock pointed by this replica */
     client *replica_rdb_client = lookupRdbClientByID(replica_main_client->repl_data->associated_rdb_client_id);
+    /* Callers must confirm the rdb client exists via lookupRdbClientByID() first. */
+    serverAssert(replica_rdb_client != NULL);
     ln = replica_rdb_client->repl_data->ref_repl_buf_node;
     o = ln ? listNodeValue(ln) : NULL;
     if (o != NULL) {
@@ -670,12 +672,15 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
-    if (replica->flag.repl_rdb_channel) {
-        uint64_t rdb_cid = htonu64(replica->id);
-        if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
-            dualChannelServerLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
-                                 replicationGetReplicaName(replica), (long long unsigned int)replica->id);
-        }
+    /* Remove the client from the psync-wait set keyed on its own id. We do this
+     * unconditionally rather than gating on replica->flag.repl_rdb_channel, as the
+     * flag can be cleared while an entry is still tracked, and raxRemove() is a
+     * no-op when the key is absent. Gating on the flag could leave a freed client
+     * pointer in the rax that a later PSYNC would dereference. */
+    uint64_t rdb_cid = htonu64(replica->id);
+    if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
+        dualChannelServerLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
+                             replicationGetReplicaName(replica), (long long unsigned int)replica->id);
     }
     if (replica->repl_data->ref_repl_buf_node != NULL) {
         /* Decrease the start buffer node reference count. */
@@ -1806,11 +1811,13 @@ void freeClientReplicationData(client *c) {
  *
  * - rdb-only <0|1>
  * Only wants RDB snapshot without replication buffer.
+ * Not allowed after SYNC/PSYNC.
  *
  * - rdb-filter-only <include-filters>
  * Define "include" filters for the RDB snapshot. Currently we only support
  * a single include filter: "functions". Passing an empty string "" will
  * result in an empty RDB.
+ * Not allowed after SYNC/PSYNC.
  *
  * - version <major.minor.patch>
  * The replica reports its version.
@@ -1818,6 +1825,7 @@ void freeClientReplicationData(client *c) {
  * - rdb-channel <1|0>
  * Used to identify the client as a replica's rdb connection in a dual channel
  * sync session.
+ * Not allowed after SYNC/PSYNC.
  *
  * - set-rdb-client-id <client-id>
  * Used to identify the current replica main channel with existing rdb-connection
@@ -1923,6 +1931,11 @@ void replconfCommand(client *c) {
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-only")) {
             /* REPLCONF RDB-ONLY is used to identify the client only wants
              * RDB snapshot without replication buffer. */
+            /* Not allowed after SYNC/PSYNC. The error reply disconnects the replica. */
+            if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+                addReplyErrorFormat(c, "REPLCONF rdb-only is not allowed after SYNC/PSYNC");
+                return;
+            }
             long rdb_only = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &rdb_only, NULL) != C_OK) return;
             if (rdb_only == 1)
@@ -1937,6 +1950,11 @@ void replconfCommand(client *c) {
              * aux fields, ...
              * We might want to add the complementing "RDB-FILTER-EXCLUDE" to
              * filter out certain data. */
+            /* Not allowed after SYNC/PSYNC. The error reply disconnects the replica. */
+            if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+                addReplyErrorFormat(c, "REPLCONF rdb-filter-only is not allowed after SYNC/PSYNC");
+                return;
+            }
             int filter_count, i;
             sds *filters;
             if (!(filters = sdssplitargs(objectGetVal(c->argv[j + 1]), &filter_count))) {
@@ -1966,6 +1984,11 @@ void replconfCommand(client *c) {
                 return;
             }
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-channel")) {
+            /* Not allowed after SYNC/PSYNC. The error reply disconnects the replica. */
+            if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+                addReplyErrorFormat(c, "REPLCONF rdb-channel is not allowed after SYNC/PSYNC");
+                return;
+            }
             long start_with_offset = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &start_with_offset, NULL) != C_OK) {
                 return;

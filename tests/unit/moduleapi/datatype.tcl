@@ -139,3 +139,45 @@ start_server {tags {"modules"}} {
         assert_morethan [r memory usage $large_key] 100000
     }
 }
+
+start_server {tags {"modules external:skip"}} {
+    r module load $testmodule
+
+    test {valkey-check-rdb exits on an RDB truncated inside a module value} {
+        # The marker is shorter than 20 bytes, so it is not LZF compressed
+        # and we can find it in the RDB file.
+        set marker MODULE_VALUE_MARKER
+        r flushall
+        r datatype.set dtkey 100 $marker
+        r save
+
+        set dir [lindex [r config get dir] 1]
+        set rdb [file join $dir [lindex [r config get dbfilename] 1]]
+        set fd [open $rdb r]
+        fconfigure $fd -translation binary
+        set data [read $fd]
+        close $fd
+        set idx [string first $marker $data]
+        assert {$idx > 0}
+
+        # Cut the file right after the string, before the module EOF opcode.
+        set cut [expr {$idx + [string length $marker] - 1}]
+        set truncated [file join $dir truncated-module.rdb]
+        set out [file join $dir truncated-module.out]
+        set fd [open $truncated w]
+        fconfigure $fd -translation binary
+        puts -nonewline $fd [string range $data 0 $cut]
+        close $fd
+
+        set pid [exec $::VALKEY_CHECK_RDB_BIN $truncated > $out 2>@1 &]
+        wait_for_condition 50 100 {
+            ![process_is_alive $pid]
+        } else {
+            catch {exec kill -9 $pid}
+            fail "valkey-check-rdb hangs on a truncated module value"
+        }
+        set result [exec cat $out]
+        assert_match {*RDB ERROR DETECTED*} $result
+        assert_match {*Short read reading opcode from module*} $result
+    }
+}

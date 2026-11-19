@@ -1982,6 +1982,14 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
             if (rdbLoadBinaryDoubleValue(rdb, &val) == -1) {
                 rdbReportCorruptRDB("Error reading double from module %s value", modulename);
             }
+        } else if (opcode == RDB_LENERR && rioGetReadError(rdb)) {
+            /* Short read. The read error is sticky, so without this check
+             * the loop would spin forever. */
+            rdbReportReadError("Short read reading opcode from module %s value", modulename);
+            return NULL;
+        } else {
+            rdbReportCorruptRDB("Unknown opcode %llu in module %s value", (unsigned long long)opcode, modulename);
+            return NULL;
         }
     }
     return createStringObject("module-dummy-value", 18);

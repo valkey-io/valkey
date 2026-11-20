@@ -570,6 +570,20 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_equal $reported [list $default $one $all] "bytes for --memkeys, --memkeys-samples 1, --memkeys-samples 0"
     }
 
+    test "Memkeys rejects invalid sample counts before connecting" {
+        # A missing socket distinguishes an option error from a connection error.
+        set socket [tmpfile "missing.sock"]
+        foreach count {{} garbage 0junk -1 { 0} {0 } 9223372036854775808} {
+            set code [catch {
+                exec $::VALKEY_CLI_BIN -s $socket --memkeys-samples $count > /dev/null
+            } stderr options]
+            set detail "sample count '$count'"
+            assert_equal 1 $code $detail
+            assert_match {CHILDSTATUS * 1} [dict get $options -errorcode] $detail
+            assert_equal "Invalid memkeys sample count. Must be a non-negative integer." $stderr $detail
+        }
+    }
+
     proc test_valkey_cli_repl {} {
         set fd [open_cli "--replica"]
         wait_for_condition 500 100 {

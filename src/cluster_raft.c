@@ -464,9 +464,9 @@ static void clusterRaftHoldSlotMigrationPause(void) {
 }
 
 static void clusterRaftDropSlotMigrationPause(void) {
-    clusterRaftState *rs = RAFT_STATE();
-    rs->slot_migration_pause = 0;
-    unpauseActions(PAUSE_DURING_SLOT_MIGRATION);
+    RAFT_STATE()->slot_migration_pause = 0;
+    /* Another export may still be in FAILOVER_PAUSED with mf_end set. */
+    slotExportTryUnpause();
 }
 
 /* Isolated leader: peer cluster-bus links are gone, so SLOT_CHANGE can
@@ -492,12 +492,12 @@ static int clusterRaftLogFullyApplied(void) {
 /* The migration job clears this pause after 2s. Keep it until SLOT_CHANGE
  * is applied, so a partitioned source cannot ACK a write that apply drops.
  * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
- * proposal, and the sticky flag would re-pause the node with LLONG_MAX. */
+ * proposal, and a sibling still snapshotting is not a granted handoff. */
 static void clusterRaftSyncSlotMigrationPause(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (!rs->slot_migration_pause && clusterIsAnySlotExportFailoverGranted()) rs->slot_migration_pause = 1;
     if (!rs->slot_migration_pause) return;
-    if (!clusterIsAnySlotExporting() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
+    if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
         clusterRaftLeaderHasQuorumLinks()) {
         clusterRaftDropSlotMigrationPause();
         return;
@@ -506,13 +506,13 @@ static void clusterRaftSyncSlotMigrationPause(void) {
 }
 
 static void clusterRaftOnSlotOwnershipApplied(void) {
-    if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExporting() && clusterRaftLogFullyApplied())
+    if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
         clusterRaftDropSlotMigrationPause();
 }
 
 static void clusterRaftReleaseSlotMigrationPauseIfCaughtUp(void) {
     clusterRaftState *rs = RAFT_STATE();
-    if (!rs->slot_migration_pause || clusterIsAnySlotExporting()) return;
+    if (!rs->slot_migration_pause || clusterIsAnySlotExportFailoverGranted()) return;
     if (!clusterRaftLogFullyApplied()) return;
     clusterRaftDropSlotMigrationPause();
 }

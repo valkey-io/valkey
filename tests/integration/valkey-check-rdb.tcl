@@ -90,21 +90,15 @@ tags {"check-rdb external:skip logreqres:skip"} {
         # checksum. The DB ID is valid (databases accepts up to INT_MAX).
         set rdb [tmpfile high-db-id.rdb]
         write_binary_file $rdb [binary format a9H* REDIS0009 fe80000186a000016b0176ff0000000000000000]
-        set out [tmpfile high-db-id.out]
-        set start [clock milliseconds]
-        set pid [exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info >& $out &]
-        set exited 0
-        for {set i 0} {$i < 100} {incr i} {
-            if {![process_is_alive $pid]} { set exited 1; break }
-            after 100
-        }
-        if {!$exited} { catch {exec kill -9 $pid} }
-        set elapsed [expr {[clock milliseconds] - $start}]
-        assert_equal 1 $exited "valkey-check-rdb --stats still running after ${elapsed} ms, [file size $out] bytes written"
-        assert_match {*db.0.type.string.keys.total:0*} [exec cat $out]
-        assert_match {*db.100000.type.string.keys.total:1*} [exec cat $out]
+        set failed [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result]
+        assert_equal 0 $failed
+        assert_match {*RDB looks OK!*} $result
+        assert_match {*db.0.type.string.keys.total:0*} $result
+        assert_match {*db.100000.type.string.keys.total:1*} $result
         # DB 99999 was never selected and holds nothing.
-        assert_no_match {*db.99999.*} [exec cat $out]
+        assert_no_match {*db.99999.*} $result
     }
 
     test {Check RDB stats prints selected DBs in ascending order and skips unselected ones} {

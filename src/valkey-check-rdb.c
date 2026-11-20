@@ -94,6 +94,7 @@ struct {
     int stats_num;
     uint64_t *stats_dbids; /* DB ID of each block group, in order of first use */
     size_t stats_dbs_num;  /* number of block groups: DB 0 plus each selected DB */
+    dict *stats_dbs_map;   /* DB ID -> position of its block group in stats_dbids */
     size_t stats_idx;      /* first block of the selected DB, index into stats */
     char *stats_output;
 } rdbstate;
@@ -265,15 +266,23 @@ void freeRdbProfile(rdbStats **statss, size_t num) {
     zfree(statss);
 }
 
+/* Keys are DB IDs stored in the key pointer itself. The default hash and key
+ * compare work on the pointer bits, which is what we want here. */
+static dictType statsDbsMapType = {
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = zfree,
+};
+
 /* Return the index in rdbstate.stats of the first block of DB 'dbid'. The
  * blocks of a DB are allocated the first time the file selects it, so the
  * cost follows the number of selected DBs and not the highest DB ID. */
 static size_t statsIndexForDb(uint64_t dbid) {
-    for (size_t i = 0; i < rdbstate.stats_dbs_num; i++) {
-        if (rdbstate.stats_dbids[i] == dbid) return i * OBJ_TYPE_MAX;
-    }
+    dictEntry *existing;
+    dictEntry *de = dictAddRaw(rdbstate.stats_dbs_map, (void *)(uintptr_t)dbid, &existing);
+    if (de == NULL) return dictGetUnsignedIntegerVal(existing) * OBJ_TYPE_MAX;
 
     size_t n = rdbstate.stats_dbs_num;
+    dictSetUnsignedIntegerVal(de, n);
     rdbstate.stats_dbids = zrealloc(rdbstate.stats_dbids, sizeof(uint64_t) * (n + 1));
     rdbstate.stats_dbids[n] = dbid;
     rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, (n + 1) * OBJ_TYPE_MAX);
@@ -1035,6 +1044,8 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     rdbstate.stats_dbids = zmalloc(sizeof(uint64_t));
     rdbstate.stats_dbids[0] = 0;
     rdbstate.stats_dbs_num = 1;
+    rdbstate.stats_dbs_map = dictCreate(&statsDbsMapType);
+    dictSetUnsignedIntegerVal(dictAddRaw(rdbstate.stats_dbs_map, (void *)(uintptr_t)0, NULL), 0);
     rdbstate.stats_idx = 0;
     rdbstate.functions_num = 0;
     rdbstate.lua_scripts = 0;
@@ -1060,5 +1071,6 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     if (fp) return (retval == 0) ? C_OK : C_ERR;
     freeRdbProfile(rdbstate.stats, rdbstate.stats_num);
     zfree(rdbstate.stats_dbids);
+    dictRelease(rdbstate.stats_dbs_map);
     exit(retval);
 }

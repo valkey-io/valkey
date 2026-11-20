@@ -963,6 +963,58 @@ test "Raft proto: leader doesn't resend entries in flight" {
     }
 }
 
+# Ack AEs from fd until one that reaches index.
+proc raft_ack_until {fd index} {
+    while 1 {
+        set reply [raft_recv $fd 5000]
+        if {[string match "AE *" $reply] && [raft_reply_ae_ack $fd $reply 0] >= $index} return
+    }
+}
+
+test "Raft proto: an entry commits on a quorum of voters, learners don't count" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        # Join all first: with two voters, a join needs a voter's ACK.
+        set learner_fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
+        foreach c {c d e} {
+            lappend voter_ids [string repeat $c 40]
+            lappend voter_fds [raft_join_fake_follower [lindex $voter_ids end] [string repeat "f" 40]]
+        }
+        lassign $voter_fds a_fd b_fd c_fd
+
+        # ADDVOTER needs the learner to have the whole log. All voters ack it.
+        set added {}
+        foreach id $voter_ids fd $voter_fds {
+            raft_ack_until $fd [CI 0 cluster_raft_last_applied]
+            set target [expr {[CI 0 cluster_raft_commit_index] + 1}]
+            set rd [valkey_deferring_client]
+            $rd CLUSTER ADDVOTER $id
+            foreach v $added { raft_ack_until $v $target }
+            assert_equal OK [$rd read]
+            $rd close
+            lappend added $fd
+        }
+        assert_equal 4 [CI 0 cluster_size]
+
+        # 4 voters, quorum 3: the leader and voter A aren't enough.
+        set target [expr {[CI 0 cluster_raft_commit_index] + 1}]
+        set rd [valkey_deferring_client]
+        $rd config set cluster-announce-hostname "host-1.com"
+        raft_ack_until $learner_fd $target
+        raft_ack_until $a_fd $target
+        after 200
+        assert_equal [expr {$target - 1}] [CI 0 cluster_raft_commit_index]
+
+        raft_ack_until $b_fd $target
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_commit_index] >= $target
+        } else {
+            fail "entry not committed on a quorum of voters"
+        }
+        $rd close
+        foreach fd [list $learner_fd $a_fd $b_fd $c_fd] { close $fd }
+    }
+}
+
 test "Raft proto: outbound link without HI is dropped and reconnected" {
     # The real node joins a fake leader. Its outbound link to the leader goes
     # to a listener that accepts the connection but never replies, like a

@@ -2036,6 +2036,43 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     return 1;
 }
 
+static int raftCompareIndexDesc(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return (x < y) - (x > y);
+}
+
+/* Commit the highest index that a quorum of voters has, if it's from the
+ * current term (Raft paper §5.4.2). Terms never decrease along the log, so if
+ * it isn't, no lower index is either. */
+static void clusterRaftAdvanceCommitIndex(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t last_index = raftLogLastIndex();
+    int quorum = clusterRaftQuorum();
+    uint64_t *match = zmalloc(sizeof(uint64_t) * dictSize(server.cluster->nodes));
+    int count = 0;
+
+    match[count++] = last_index; /* Myself, the leader, always a voter */
+    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *peer = dictGetVal(de);
+        if (peer == myself) continue;
+        if (!nodeIsVoter(peer)) continue;
+        /* Never count past our own log. */
+        uint64_t m = RAFT_NODE(peer)->match_index;
+        match[count++] = m < last_index ? m : last_index;
+    }
+    dictReleaseIterator(di);
+
+    if (count >= quorum) {
+        qsort(match, count, sizeof(uint64_t), raftCompareIndexDesc);
+        uint64_t candidate = match[quorum - 1];
+        if (candidate > rs->commit_index && raftLogTermAt(candidate) == rs->current_term)
+            rs->commit_index = candidate;
+    }
+    zfree(match);
+}
+
 static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, sds *argv) {
     /* argv: AE_ACK <term> <success> <last-log-index> [<repl-offset>] */
     if (argc < 4) return 1;
@@ -2091,29 +2128,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             clusterRaftMaybeSendTimeoutNow();
         }
 
-        /* Check if we can advance commitIndex (Raft paper §5.3/§5.4). */
-        for (uint64_t i = rs->log_count; i > 0; i--) {
-            uint64_t idx = rs->log[i - 1]->index;
-            if (idx <= rs->commit_index) break;
-            if (rs->log[i - 1]->term != rs->current_term) continue;
-
-            int matches = 1; /* Myself, the leader, always a voter */
-            dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-            dictEntry *de;
-            while ((de = dictNext(di)) != NULL) {
-                clusterNode *peer = dictGetVal(de);
-                if (peer == myself) continue;
-                if (!nodeIsVoter(peer)) continue;
-                if (RAFT_NODE(peer)->match_index >= idx) matches++;
-            }
-            dictReleaseIterator(di);
-
-            int quorum = clusterRaftQuorum();
-            if (matches >= quorum) {
-                rs->commit_index = idx;
-                break;
-            }
-        }
+        clusterRaftAdvanceCommitIndex();
 
         /* Apply newly committed entries. */
         uint64_t prev_commit = rs->last_applied;

@@ -2710,16 +2710,18 @@ static int parseOptions(int argc, char **argv) {
             config.memkeys = 1;
             config.memkeys_samples = MEMKEYS_SAMPLES_DEFAULT;
         } else if (!strcmp(argv[i], "--memkeys-samples") && !lastarg) {
-            const char *arg = argv[++i];
-            char *endptr;
-            errno = 0;
-            long long samples = strtoll(arg, &endptr, 10);
-            if (endptr == arg || *endptr != '\0' || errno == ERANGE || arg[0] == '-' || isspace((unsigned char)arg[0])) {
-                fprintf(stderr, "Invalid memkeys sample count. Must be a non-negative integer.\n");
-                exit(1);
-            }
             config.memkeys = 1;
-            config.memkeys_samples = samples;
+            const char *arg = argv[++i];
+            /* Only literal "0" samples all; other inputs retain the historical atoi behavior. */
+            if (!strcmp(arg, "0")) {
+                config.memkeys_samples = 0;
+            } else {
+                unsigned samples = atoi(arg);
+                if (samples == 0)
+                    config.memkeys_samples = MEMKEYS_SAMPLES_DEFAULT;
+                else
+                    config.memkeys_samples = samples;
+            }
         } else if (!strcmp(argv[i], "--hotkeys")) {
             config.hotkeys = 1;
             config.hotkeys_count = HOTKEYS_COUNT;

@@ -2573,6 +2573,8 @@ struct valkeyServer {
     int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
     int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkeys_manager;
+    int initialized; /* Set at the end of initServer(). A crash report before that
+                      * has no server state to log, see printCrashReport(). */
 };
 
 #define MAX_KEYS_BUFFER 256

@@ -509,6 +509,13 @@ start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}}
     }
 } ;# start_cluster
 
+# The number of NOREPLICAS error replies server j has sent.
+proc noreplicas_error_count {j} {
+    set stat [errorrstat NOREPLICAS [Rn $j]]
+    if {![regexp {count=(\d+)} $stat -> count]} { return 0 }
+    return $count
+}
+
 proc test_cluster_setslot_broadcast {} {
     test "valkey-cli ignores NOREPLICAS error when broadcasting the last CLUSTER SETSLOT to a non-source primary" {
         # Primary 3 owns only slot 0 (my_slot_allocation). Move it to primary 0.
@@ -535,6 +542,7 @@ proc test_cluster_setslot_broadcast {} {
         } else {
             fail "valkey-cli did not reach the reshard confirmation, output below:\n$result"
         }
+        set noreplicas_before [noreplicas_error_count 1]
         set replica_pid [s -5 process_id]
         pause_process $replica_pid
         puts $fd yes
@@ -564,7 +572,8 @@ proc test_cluster_setslot_broadcast {} {
         if {$code != 0} {
             fail "valkey-cli --cluster reshard returns non-zero exit code, output below:\n$result"
         }
-        assert_match {*NOREPLICAS*} [exec cat [srv -1 stdout]]
+        # Primary 1 replied NOREPLICAS to the broadcast, exactly once.
+        assert_equal [expr {$noreplicas_before + 1}] [noreplicas_error_count 1]
 
         wait_for_condition 1000 50 {
             [cluster_config_consistent] eq 1

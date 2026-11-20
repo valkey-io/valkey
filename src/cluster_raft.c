@@ -2128,7 +2128,8 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             clusterRaftMaybeSendTimeoutNow();
         }
 
-        clusterRaftAdvanceCommitIndex();
+        /* Only a voter's ACK past commitIndex can advance it. */
+        if (nodeIsVoter(node) && follower_last_index > rs->commit_index) clusterRaftAdvanceCommitIndex();
 
         /* Apply newly committed entries. */
         uint64_t prev_commit = rs->last_applied;

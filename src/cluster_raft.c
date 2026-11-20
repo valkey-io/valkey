@@ -53,6 +53,7 @@ typedef enum {
     RAFT_RESULT_STALE_EPOCH,     /* Rejected due to stale shard epoch (retryable). */
     RAFT_RESULT_REJECTED,        /* Rejected for other reasons (terminal). */
     RAFT_RESULT_LEADER_TRANSFER, /* Retry after the leader has changed. */
+    RAFT_RESULT_UNCHANGED,       /* Valid, but applying it wouldn't change anything. */
 } RaftProposalResult;
 
 /* Human-readable error messages returned to clients via callbacks. */
@@ -69,6 +70,7 @@ typedef enum {
 static inline const char *raftProposalResultMsg(RaftProposalResult result) {
     switch (result) {
     case RAFT_RESULT_OK: return NULL;
+    case RAFT_RESULT_UNCHANGED: return NULL;
     case RAFT_RESULT_STALE_EPOCH: return STALE_SHARD_EPOCH_REJECTION_MSG;
     case RAFT_RESULT_REJECTED: return GENERIC_PROPOSAL_REJECTION_MSG;
     case RAFT_RESULT_LEADER_TRANSFER: return GENERIC_PROPOSAL_REJECTION_MSG;
@@ -154,6 +156,7 @@ typedef struct {
     mstime_t propose_time; /* Last time it was sent to the leader, for expiry */
     int retries;           /* Remaining epoch-retry attempts */
     int deferred;          /* Waiting for epoch advance before re-propose */
+    uint64_t wait_index;   /* Got UNCHANGED: complete once applied up to this */
 } raftPendingProposal;
 
 /* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
@@ -411,6 +414,8 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
 static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result);
+static void clusterRaftCompleteUnchangedProposals(void);
+static bool clusterRaftLeaderStateIsCurrent(void);
 static RaftProposalResult clusterRaftPreValidate(int type, sds data);
 static void clusterRaftAutoFailoverCallback(void *ctx, const char *error);
 static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
@@ -960,6 +965,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->ctime = monotonicMs();
         pp->propose_time = pp->ctime;
         pp->deferred = 0;
+        pp->wait_index = 0;
         /* Entry types carrying shard epochs get automatic retry. */
         switch (type) {
         case RAFT_ENTRY_FAILOVER:
@@ -1181,7 +1187,19 @@ static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info
     return (argc > 4);
 }
 
+/* True if we're the leader and our state is the latest committed one: our
+ * whole log is applied and we still have a quorum, so no newer leader can
+ * have committed more. Then a proposal that wouldn't change our state can be
+ * answered without appending it. */
+static bool clusterRaftLeaderStateIsCurrent(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->role == RAFT_ROLE_LEADER && rs->last_applied == raftLogLastIndex() &&
+           !clusterRaftTransferSent() && clusterRaftLeaderHasFreshQuorum(monotonicMs());
+}
+
 /* Pre-validate a proposal on the leader before appending to the log.
+ * Returns RAFT_RESULT_UNCHANGED for SLOT_CHANGE, SET_REPLICA_OF and
+ * NODE_FORGET that wouldn't change anything, if our state is current.
  * Reuses the apply functions in validate_only mode.
  * Returns RAFT_RESULT_OK if valid, or RAFT_RESULT_STALE_EPOCH /
  * RAFT_RESULT_REJECTED describing why it failed. */
@@ -1209,7 +1227,10 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     default:
         break;
     }
-    if (result != RAFT_RESULT_OK && result != RAFT_RESULT_LEADER_TRANSFER) {
+    /* Only trusted with our state up to date. Otherwise, e.g. for A-B-A where
+     * B is appended but not yet applied, the second A would look unchanged. */
+    if (result == RAFT_RESULT_UNCHANGED && !clusterRaftLeaderStateIsCurrent()) result = RAFT_RESULT_OK;
+    if (result != RAFT_RESULT_OK && result != RAFT_RESULT_LEADER_TRANSFER && result != RAFT_RESULT_UNCHANGED) {
         serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (%s). data: %s",
                   raftEntryTypeName(type), raftProposalResultMsg(result), data);
     }
@@ -1238,6 +1259,22 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     /* Pre-validate on the leader to reject stale/invalid proposals. */
     RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+
+    /* Nothing to append. The proposer completes once it has applied
+     * everything we have. */
+    if (pre_result == RAFT_RESULT_UNCHANGED) {
+        if (link) {
+            sds msg = wireNewMsg("UNCHANGED");
+            msg = sdscatfmt(msg, " %U ", (unsigned long long)rs->last_applied);
+            msg = sdscatlen(msg, entry, sdslen(entry));
+            msg = wireFinishMsg(msg);
+            clusterRaftSendMsg(link, msg);
+        }
+        sdsfree(data);
+        sdsfree(entry);
+        return 1;
+    }
+
     if (pre_result == RAFT_RESULT_LEADER_TRANSFER && !clusterRaftRequestLeaderTransfer()) {
         serverLog(LL_NOTICE, "Rejecting NODE_FORGET for myself: no eligible voter for leadership transfer.");
         pre_result = RAFT_RESULT_REJECTED;
@@ -1268,6 +1305,47 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     }
 
     sdsfree(entry);
+    return 1;
+}
+
+/* Complete the proposals the leader answered with UNCHANGED, once we've applied up
+ * to the leader's state at that time, so the caller sees the change. */
+static void clusterRaftCompleteUnchangedProposals(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (!pp->wait_index || pp->wait_index > rs->last_applied) continue;
+        if (pp->callback) pp->callback(pp->ctx, NULL);
+        sdsfree(pp->data);
+        zfree(pp);
+        listDelNode(rs->pending_proposals, ln);
+    }
+}
+
+/* UNCHANGED <leader-last-applied> <type> <data...>: the leader didn't append
+ * our proposal, because it wouldn't change anything. */
+static int clusterRaftProcessUnchanged(int argc, sds *argv) {
+    if (argc < 3) return 1;
+    uint64_t index = strtoull(argv[1], NULL, 10);
+    int type = raftEntryTypeByName(argv[2]);
+    if (type < 0 || index == 0) return 1;
+    sds data = (argc > 3) ? sdsjoinsds(argv + 3, argc - 3, " ", 1) : sdsempty();
+    clusterRaftState *rs = RAFT_STATE();
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (!pp->wait_index && pp->type == type && !sdscmp(pp->data, data)) {
+            pp->wait_index = index;
+            break;
+        }
+    }
+    sdsfree(data);
+    clusterRaftCompleteUnchangedProposals();
     return 1;
 }
 
@@ -1525,6 +1603,9 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
+        /* One that got UNCHANGED is done. Identical proposals are
+         * interchangeable, so this completes another one. */
+        if (pp->wait_index) continue;
         if (pp->type == type && !sdscmp(pp->data, data)) {
             /* Resent to the new leader by the retry on leader change. */
             if (result == RAFT_RESULT_LEADER_TRANSFER) return;
@@ -1825,6 +1906,7 @@ static void raftApplyCommitted(void) {
         rs->snapshot_term = e->term;
         raftLogApply(e);
     }
+    clusterRaftCompleteUnchangedProposals();
 }
 
 /* --------------------------------------------------------------------------
@@ -2357,6 +2439,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->last_applied = snap_index;
     rs->commit_index = snap_index;
     rs->snapshot_term = snap_term;
+    clusterRaftCompleteUnchangedProposals();
 
     serverLog(LL_NOTICE, "Installed snapshot from %.40s (index=%llu, term=%llu).",
               argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
@@ -2839,6 +2922,9 @@ static void clusterRaftRetryProposals(int include_pending) {
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
+
+        /* Already answered, waiting for us to catch up. */
+        if (pp->wait_index) continue;
 
         /* For deferred entries, update to latest shard epoch */
         if (pp->deferred) {
@@ -3382,6 +3468,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessPropose(link, argc, argv);
     } else if (!strcasecmp(argv[0], "REJECT")) {
         ret = clusterRaftProcessReject(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "UNCHANGED")) {
+        ret = clusterRaftProcessUnchanged(argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "INSTALL_SNAPSHOT")) {
@@ -4149,7 +4237,22 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
         goto reject;
     }
 
-    if (validate_only) goto done;
+    if (validate_only) {
+        /* Unchanged if every slot already has the target as owner, e.g. when
+         * valkey-cli sends CLUSTER SETSLOT NODE to every node. */
+        bool unchanged = info.target_node || !strcmp(argv[2], "-");
+        for (int i = info.range_start_arg; i < argc; i++) {
+            char *p = strchr(argv[i], '-');
+            int start = atoi(argv[i]);
+            int end = p ? atoi(p + 1) : start;
+            if (start < 0 || end >= CLUSTER_SLOTS || start > end) goto reject;
+            for (int j = start; j <= end && unchanged; j++) {
+                if (server.cluster->slots[j] != info.target_node) unchanged = false;
+            }
+        }
+        if (unchanged) result = RAFT_RESULT_UNCHANGED;
+        goto done;
+    }
 
     bool my_shard_had_slots = clusterNodeGetPrimary(myself)->numslots > 0;
 
@@ -4254,7 +4357,14 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         }
     }
 
-    if (validate_only) goto done;
+    if (validate_only) {
+        /* Unchanged if the node already replicates the (resolved) primary, or
+         * is already a primary in the target shard. */
+        bool unchanged = primary ? nodeIsReplica(replica) && replica->replicaof == primary
+                                 : nodeIsPrimary(replica) && !memcmp(replica->shard_id, target_shard, CLUSTER_NAMELEN);
+        if (unchanged) result = RAFT_RESULT_UNCHANGED;
+        goto done;
+    }
 
     if (replica == myself) rs->todo_save_config = 1;
 
@@ -4510,7 +4620,10 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
 
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
     /* Already forgotten: success (idempotent; may be a no-op log entry). */
-    if (!node) goto done;
+    if (!node) {
+        if (validate_only) result = RAFT_RESULT_UNCHANGED;
+        goto done;
+    }
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {

@@ -70,6 +70,19 @@ foreach mode {{} COORDINATED} {
             fail "Failover did not complete"
         }
 
+        # In a coordinated failover the rewrite would run in the same queued
+        # transaction as CLIENT UNPAUSE, which can finish after the role change.
+        if {$mode eq "COORDINATED"} {
+            foreach port [list $primary_port $replica_port] {
+                wait_for_condition 100 100 {
+                    [catch {nocfg_call $port info commandstats} stats] == 0 &&
+                    [string match "*cmdstat_client|unpause*" $stats]
+                } else {
+                    fail "Sentinel did not finish reconfiguring the instance on port $port"
+                }
+            }
+        }
+
         foreach port [list $primary_port $replica_port] {
             assert_no_match "*cmdstat_config|rewrite*" [nocfg_call $port info commandstats]
             assert_no_match "*errorstat_ERR*" [nocfg_call $port info errorstats]

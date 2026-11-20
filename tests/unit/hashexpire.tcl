@@ -1666,10 +1666,10 @@ start_server {tags {"hashexpire"}} {
         r copy myhash{t} nwhash{t}
 
         # Verify initial TTL state
-        # memory_usage skips the strict check under libc malloc, where MEMORY
-        # USAGE of the copy can differ by an allocator chunk.
+        # With libc malloc, MEMORY USAGE of the copy can differ by an allocator chunk.
         assert_equal [r OBJECT ENCODING myhash{t}] [r OBJECT ENCODING nwhash{t}]
-        assert_equal [memory_usage myhash{t}] [memory_usage nwhash{t}]
+        set mem_src [r MEMORY USAGE myhash{t}]
+        assert_range [r MEMORY USAGE nwhash{t}] [expr {$mem_src - 16}] [expr {$mem_src + 16}]
         assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
         assert_equal "v1 v3 v4" [r HMGET nwhash{t} f1 f3 f4]
         assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f1] [r HEXPIRETIME nwhash{t} FIELDS 1 f1] 

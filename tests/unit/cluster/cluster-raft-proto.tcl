@@ -1173,6 +1173,13 @@ test "Raft proto: the leader doesn't append a slot change that changes nothing" 
         raft_send $fd "PROPOSE $entry"
         set reply [raft_recv_until $fd "UNCHANGED *"]
         assert_equal "UNCHANGED $last $entry" $reply
+
+        # One with a slot out of range is rejected, also after an unchanged one.
+        foreach ranges {16384 {0 16384}} {
+            set entry "SLOT_CHANGE $node_id 1 $node_id 1 $ranges"
+            raft_send $fd "PROPOSE $entry"
+            assert_equal "REJECT rejected $entry" [raft_recv_until $fd "REJECT *"]
+        }
         after 100
         assert_equal $last [CI 0 cluster_raft_commit_index]
         close $fd

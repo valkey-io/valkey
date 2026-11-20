@@ -4221,21 +4221,17 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
     if (validate_only) {
         /* Unchanged if every slot already has the target as owner, e.g. when
          * valkey-cli sends CLUSTER SETSLOT NODE to every node. */
-        if (info.target_node || !strcmp(argv[2], "-")) {
-            result = RAFT_RESULT_UNCHANGED;
-            for (int i = info.range_start_arg; i < argc && result == RAFT_RESULT_UNCHANGED; i++) {
-                char *p = strchr(argv[i], '-');
-                int start = atoi(argv[i]);
-                int end = p ? atoi(p + 1) : start;
-                if (start < 0 || end >= CLUSTER_SLOTS || start > end) goto reject;
-                for (int j = start; j <= end; j++) {
-                    if (server.cluster->slots[j] != info.target_node) {
-                        result = RAFT_RESULT_OK;
-                        break;
-                    }
-                }
+        bool unchanged = info.target_node || !strcmp(argv[2], "-");
+        for (int i = info.range_start_arg; i < argc; i++) {
+            char *p = strchr(argv[i], '-');
+            int start = atoi(argv[i]);
+            int end = p ? atoi(p + 1) : start;
+            if (start < 0 || end >= CLUSTER_SLOTS || start > end) goto reject;
+            for (int j = start; j <= end && unchanged; j++) {
+                if (server.cluster->slots[j] != info.target_node) unchanged = false;
             }
         }
+        if (unchanged) result = RAFT_RESULT_UNCHANGED;
         goto done;
     }
 

@@ -896,6 +896,21 @@ proc raft_next_ae_from {fd skip_prev} {
     return {}
 }
 
+# Ack AEs until an empty heartbeat, so no older AE is still queued.
+# Returns the leader's last applied index.
+proc raft_ack_until_idle {fd} {
+    set last [CI 0 cluster_raft_last_applied]
+    set fields {}
+    while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
+        set reply [raft_recv $fd 5000]
+        if {[string match "AE *" $reply]} {
+            set fields [raft_ae_header $reply]
+            raft_reply_ae_ack $fd $reply 0
+        }
+    }
+    return $last
+}
+
 test "Raft proto: leader backs off next_index to the follower's last index on rejection" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
@@ -903,16 +918,7 @@ test "Raft proto: leader backs off next_index to the follower's last index on re
         for {set j 0} {$j < 20} {incr j} {
             R 0 config set cluster-announce-hostname "host-$j.com"
         }
-        set last [CI 0 cluster_raft_last_applied]
-        # Ack until an empty heartbeat, so no older AE is still queued.
-        set fields {}
-        while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
-            set reply [raft_recv $fd 5000]
-            if {[string match "AE *" $reply]} {
-                set fields [raft_ae_header $reply]
-                raft_reply_ae_ack $fd $reply 0
-            }
-        }
+        set last [raft_ack_until_idle $fd]
 
         # Reject with a log 10 entries behind; the leader resends from there.
         set term [CI 0 cluster_raft_current_term]
@@ -923,6 +929,35 @@ test "Raft proto: leader backs off next_index to the follower's last index on re
         # A last index past next_index doesn't help; the leader steps back one.
         raft_send $fd "AE_ACK $term 0 $last 0"
         assert_equal [list [expr {$behind - 1}] 11] [raft_next_ae_from $fd $behind]
+
+        close $fd
+    }
+}
+
+test "Raft proto: leader doesn't resend entries in flight" {
+    # The leader drops a link without AE_ACKs after half the node timeout.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
+        set last [raft_ack_until_idle $fd]
+
+        for {set i 0} {$i < 5} {incr i} {
+            R 0 MULTI
+            for {set j 0} {$j < 20} {incr j} {
+                R 0 config set cluster-announce-hostname "host-$i-$j.com"
+            }
+            R 0 EXEC
+        }
+
+        # Without AE_ACKs, each AE continues where the previous one ended.
+        set next [expr {$last + 1}]
+        while {$next <= $last + 100} {
+            set reply [raft_recv $fd 5000]
+            if {![string match "AE *" $reply]} continue
+            set fields [raft_ae_header $reply]
+            assert_equal [expr {$next - 1}] [lindex $fields 3]
+            incr next [lindex $fields 6]
+        }
+        assert_equal [list [expr {$last + 100}] 0] [raft_next_ae_from $fd -1]
 
         close $fd
     }

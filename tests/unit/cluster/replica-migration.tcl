@@ -508,3 +508,120 @@ start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}}
         resume_process [srv -2 pid]
     }
 } ;# start_cluster
+
+proc test_cluster_setslot_broadcast {} {
+    test "valkey-cli ignores NOREPLICAS error when broadcasting the last CLUSTER SETSLOT to a non-source primary" {
+        # Server 5 is the replica of primary 1, which is neither the source
+        # (3) nor the target (0). Pause it once the target has taken the slot,
+        # so that primary 1 does not get the ACK for the pre-replicated
+        # broadcast SETSLOT NODE. It replies NOREPLICAS after the 2 second
+        # timeout, and the rebalance must still succeed. valkey-cli does not
+        # talk to the replica after it starts, so the replica stays paused
+        # until valkey-cli exits, however long the steps before take.
+        set addr "[srv 0 host]:[srv 0 port]"
+        set myid [R 3 CLUSTER MYID]
+        set cmd [list $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0]
+        set fd [open [concat [list |] $cmd [list 2>@1]] r]
+        test_defer { catch {close $fd} }
+
+        wait_for_log_messages 0 {"*Assigning slot 0 to node*"} 0 1000 10
+        set replica_pid [s -5 process_id]
+        pause_process $replica_pid
+
+        # Keep the replica paused until valkey-cli exits.
+        fconfigure $fd -blocking 0
+        set result ""
+        wait_for_condition 300 100 {
+            [string length [append result [read $fd]]] >= 0 && [eof $fd]
+        } else {
+            fail "valkey-cli --cluster rebalance did not exit"
+        }
+        resume_process $replica_pid
+        # On a nonblocking pipe, close returns 0 even when the child failed.
+        fconfigure $fd -blocking 1
+
+        set code [catch {close $fd} close_err]
+        if {$code != 0} {
+            set result "$result\n$close_err"
+        }
+        # The slot moves whatever valkey-cli reports: every node, including the
+        # primary that replied NOREPLICAS, ends up with slot 0 on the target.
+        # Check it first, so a failure below shows the error was spurious.
+        set target_id [R 0 CLUSTER MYID]
+        wait_for_condition 1000 50 {
+            [slot_owner_on_all_nodes 0] eq $target_id
+        } else {
+            fail "Slot 0 is not owned by the target on every node"
+        }
+        if {$code != 0} {
+            fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
+        }
+
+        wait_for_condition 1000 50 {
+            [cluster_config_consistent] eq 1
+        } else {
+            fail "Cluster configuration did not converge after the rebalance"
+        }
+    }
+}
+
+# Returns the owner of the slot if every node agrees on it, or "" otherwise.
+proc slot_owner_on_all_nodes {slot} {
+    set owners {}
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        set owner ""
+        foreach range [R $j CLUSTER SLOTS] {
+            if {[lindex $range 0] <= $slot && $slot <= [lindex $range 1]} {
+                set owner [lindex $range 2 2]
+            }
+        }
+        lappend owners $owner
+    }
+    if {[llength [lsort -unique $owners]] == 1} { return [lindex $owners 0] }
+    return ""
+}
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_cluster_setslot_broadcast
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+proc test_cluster_setslot_replica_paused {side} {
+    test "valkey-cli fails the reshard when the $side's replica does not ACK CLUSTER SETSLOT" {
+        # Primary 3 owns only slot 0 (my_slot_allocation). Move it to primary 0.
+        # Server 4 is the replica of the target (0), server 7 the replica of
+        # the source (3). With the replica paused, its primary replies
+        # NOREPLICAS to the first SETSLOT it gets: IMPORTING on the target, or
+        # MIGRATING on the source. Unlike the broadcast to the other primaries,
+        # these steps must succeed for the slot to move, so valkey-cli must
+        # fail, and the slot must stay on the source.
+        set source_id [R 3 CLUSTER MYID]
+        set target_id [R 0 CLUSTER MYID]
+        set replica [expr {$side eq "target" ? 4 : 7}]
+        set addr "[srv 0 host]:[srv 0 port]"
+        set cmd [list $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster reshard $addr \
+            --cluster-from $source_id --cluster-to $target_id --cluster-slots 1 --cluster-yes]
+
+        set replica_pid [s -$replica process_id]
+        pause_process $replica_pid
+        set code [catch {exec {*}$cmd 2>@1} result]
+        set errcode $::errorCode
+        resume_process $replica_pid
+
+        assert_equal 1 $code
+        assert_equal CHILDSTATUS [lindex $errcode 0]
+        assert_match {*NOREPLICAS*} $result
+
+        wait_for_condition 1000 50 {
+            [cluster_config_consistent] eq 1
+        } else {
+            fail "Cluster configuration did not converge after the failed reshard"
+        }
+        assert_equal $source_id [slot_owner_on_all_nodes 0]
+    }
+}
+
+foreach side {target source} {
+    start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+        test_cluster_setslot_replica_paused $side
+    } my_slot_allocation cluster_allocate_replicas ;# start_cluster
+}

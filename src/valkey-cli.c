@@ -5546,8 +5546,25 @@ clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, i
             clusterManagerNode *n = ln->value;
             if (n == target || n == source) continue; /* already done */
             if (n->flags & CLUSTER_MANAGER_FLAG_REPLICA) continue;
-            success = clusterManagerSetSlot(n, target, slot, "node", err);
-            if (!success) return 0;
+            char *setslot_err = NULL;
+            success = clusterManagerSetSlot(n, target, slot, "node", &setslot_err);
+            /* A primary with online replicas blocks this command until they
+             * ACK it. If a replica is slow to ACK, the primary replies with
+             * NOREPLICAS after the timeout, and it does not apply the command.
+             * The target already owns the slot and the new owner reaches this
+             * node through gossip, so this is not an error, the same as the
+             * source node above. */
+            if (!success && !strncmp(setslot_err, "NOREPLICAS", strlen("NOREPLICAS"))) success = 1;
+            if (!success) {
+                if (err) {
+                    *err = setslot_err;
+                } else {
+                    CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, setslot_err);
+                    zfree(setslot_err);
+                }
+                return 0;
+            }
+            zfree(setslot_err);
         }
     }
     /* Update the node logical config */

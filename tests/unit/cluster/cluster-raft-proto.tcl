@@ -958,14 +958,15 @@ test "Raft proto: successful AE_ACK continues catch-up without a heartbeat" {
         while {![catch {raft_recv $fd 500}]} {}
 
         set term [CI 0 cluster_raft_current_term]
-        raft_send $fd "AE_ACK $term 1 $last 0"
+        # Report progress without catching up, so the leader sends the rest.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 1}] 0"
 
         # Heartbeat interval is election_timeout/10 (>= 2s here).
         set reply [raft_recv $fd 1000]
         assert_match "AE *" $reply
         set fields [raft_ae_header $reply]
-        assert_equal $last [lindex $fields 3]
-        assert_equal $tail [lindex $fields 6]
+        assert_equal [expr {$last + 1}] [lindex $fields 3]
+        assert_equal [expr {$tail - 1}] [lindex $fields 6]
 
         close $fd
     }

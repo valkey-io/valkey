@@ -2069,6 +2069,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
     if (success) {
         /* Follower accepted — update matchIndex/nextIndex. */
+        uint64_t prev_match = rd->match_index;
         rd->match_index = follower_last_index;
         rd->next_index = follower_last_index + 1;
         if (rs->transfer_deadline &&
@@ -2113,8 +2114,9 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         if (rs->last_applied > prev_commit) {
             rs->todo_broadcast_ae = 1;
         }
-        /* Still behind, and no broadcast is queued: don't wait for a heartbeat. */
+        /* This ACK made progress and the peer is still behind: don't wait for a heartbeat. */
         if (rs->role == RAFT_ROLE_LEADER && !rs->todo_broadcast_ae &&
+            follower_last_index > prev_match &&
             rd->next_index <= raftLogLastIndex()) {
             clusterRaftSendAppendEntries(node->link, node);
         }

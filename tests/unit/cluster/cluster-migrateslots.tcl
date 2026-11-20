@@ -1482,7 +1482,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER SETSLOT 0 NODE $node0_id]
             wait_for_migration 0 0
         }
-    }
+    } {} {cluster-raft:skip} ;# CLUSTER BUMPEPOCH is a Raft no-op; slot takeover uses gossip epochs
 
     test "Export unpauses itself even if slot failover doesn't occur" {
         assert_does_not_resync {

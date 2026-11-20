@@ -1,6 +1,7 @@
 # Source must not ACK a write that applying SLOT_CHANGE will delete.
-# Both tests pause at FAILOVER-GRANTED, wait past the 2s export timeout, SET,
-# then resume Raft. They only differ in how SLOT_CHANGE is stalled on the source.
+# The grant-window tests pause at FAILOVER-GRANTED, wait past the 2s export
+# timeout, SET, then resume Raft. They only differ in how SLOT_CHANGE is stalled.
+# A third test checks that failing before grant does not leave Raft paused.
 source tests/support/cluster_raft.tcl
 
 proc raft_migration_state {idx} {
@@ -40,6 +41,65 @@ proc raft_assert_write_not_lost {writer dst key} {
     if {![catch {$writer read} reply]} {
         assert_equal OK $reply
         assert_equal after [R $dst GET $key] "Source acknowledged a write lost during slot handoff"
+    }
+}
+
+start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-protocol raft cluster-node-timeout 60000 cluster-manual-failover-timeout 500}} {
+    raft_promote_start_cluster_voters 3
+    assert_equal leader [CI 0 cluster_raft_role]
+
+    test "Raft: pre-grant export failure does not stick a write pause" {
+        # Hold the source at REQUEST-PAUSE until the target is frozen, then
+        # let it pause. The target cannot REQUEST-FAILOVER while asleep, so
+        # cancel happens in FAILOVER_PAUSED, where SLOT_CHANGE cannot follow.
+        set src 2
+        set dst 0
+        set slot 16383
+        set key "{6ZJ}:handoff"
+        assert_equal $slot [R $src CLUSTER KEYSLOT $key]
+        assert_equal OK [R $src SET $key before]
+        R $src DEBUG SLOTMIGRATION PREVENT-PAUSE 1
+        test_defer {R $src DEBUG SLOTMIGRATION PREVENT-PAUSE 0}
+        set sleeper [valkey_deferring_client [expr {-$dst}]]
+        test_defer [list $sleeper close]
+        R $src CLUSTER MIGRATESLOTS SLOTSRANGE $slot $slot NODE [R $dst CLUSTER MYID]
+        wait_for_condition 100 10 {
+            [raft_migration_state $dst] eq "waiting-for-paused"
+        } else {
+            fail "Target did not request pause ([raft_migration_state $dst])"
+        }
+        $sleeper DEBUG SLEEP 2
+        R $src DEBUG SLOTMIGRATION PREVENT-PAUSE 0
+        wait_for_condition 100 10 {
+            [raft_migration_state $src] eq "failover-paused"
+        } else {
+            fail "Source did not pause ([raft_migration_state $src])"
+        }
+        assert_equal failover-paused [raft_migration_state $src]
+        R $src CLUSTER CANCELSLOTMIGRATIONS
+        wait_for_condition 100 10 {
+            [raft_migration_state $src] in {failed cancelled}
+        } else {
+            fail "Source did not cancel ([raft_migration_state $src])"
+        }
+        $sleeper read
+
+        set src_id [R $src CLUSTER MYID]
+        for {set i 0} {$i < 3} {incr i} {
+            R $i DEBUG DISABLE-CLUSTER-RECONNECTION 1
+            test_defer [list R $i DEBUG DISABLE-CLUSTER-RECONNECTION 0]
+        }
+        for {set i 0} {$i < 3} {incr i} {
+            if {$i == $src} continue
+            R $src DEBUG CLUSTERLINK KILL all [R $i CLUSTER MYID]
+            R $i DEBUG CLUSTERLINK KILL all $src_id
+        }
+        wait_for_condition 50 20 {
+            [s -$src paused_reason] eq "none"
+        } else {
+            fail "Raft re-paused writes after a pre-grant failure ([s -$src paused_reason])"
+        }
+        assert_equal OK [R $src SET $key after]
     }
 }
 

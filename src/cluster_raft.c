@@ -460,10 +460,12 @@ static int clusterRaftLogFullyApplied(void) {
 }
 
 /* The migration job clears this pause after 2s. Keep it until SLOT_CHANGE
- * is applied, so a partitioned source cannot ACK a write that apply drops. */
+ * is applied, so a partitioned source cannot ACK a write that apply drops.
+ * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
+ * proposal, and the sticky flag would re-pause the node with LLONG_MAX. */
 static void clusterRaftSyncSlotMigrationPause(void) {
     clusterRaftState *rs = RAFT_STATE();
-    if (getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) rs->slot_migration_pause = 1;
+    if (!rs->slot_migration_pause && clusterIsAnySlotExportFailoverGranted()) rs->slot_migration_pause = 1;
     if (!rs->slot_migration_pause) return;
     if (!clusterIsAnySlotExporting() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
         clusterRaftLeaderHasQuorumLinks()) {

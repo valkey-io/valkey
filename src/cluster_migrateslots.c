@@ -1969,6 +1969,22 @@ bool clusterIsAnySlotExporting(void) {
     return false;
 }
 
+/* True if any in-progress export has granted failover to the target. */
+bool clusterIsAnySlotExportFailoverGranted(void) {
+    if (!server.cluster_enabled || !server.cluster) return false;
+    if (!server.cluster->slot_migration_jobs) return false;
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = ln->value;
+        if (job->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!isSlotMigrationJobInProgress(job)) continue;
+        if (job->state == SLOT_EXPORT_FAILOVER_GRANTED) return true;
+    }
+    return false;
+}
+
 void clusterFailAllSlotExportsWithMessage(char *message) {
     listNode *ln;
     listIter li;

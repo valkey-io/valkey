@@ -84,6 +84,59 @@ tags {"check-rdb external:skip logreqres:skip"} {
         } result
         assert_match {*db.2.type.string.keys.total:0*} $result
     }
+
+    test {Check RDB stats cost does not grow with the highest selected DB ID} {
+        # One string key k=v in DB 100000: SELECTDB 100000, key, EOF, zero
+        # checksum. The DB ID is valid (databases accepts up to INT_MAX).
+        set rdb [tmpfile high-db-id.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe80000186a000016b0176ff0000000000000000]
+        set out [tmpfile high-db-id.out]
+        set start [clock milliseconds]
+        set pid [exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info >& $out &]
+        set exited 0
+        for {set i 0} {$i < 100} {incr i} {
+            if {![process_is_alive $pid]} { set exited 1; break }
+            after 100
+        }
+        if {!$exited} { catch {exec kill -9 $pid} }
+        set elapsed [expr {[clock milliseconds] - $start}]
+        assert_equal 1 $exited "valkey-check-rdb --stats still running after ${elapsed} ms, [file size $out] bytes written"
+        assert_match {*db.0.type.string.keys.total:0*} [exec cat $out]
+        assert_match {*db.100000.type.string.keys.total:1*} [exec cat $out]
+        # DB 99999 was never selected and holds nothing.
+        assert_no_match {*db.99999.*} [exec cat $out]
+    }
+
+    test {Check RDB stats prints selected DBs in ascending order and skips unselected ones} {
+        # SELECTDB 5 with key k=v, SELECTDB 2 with key m=v, EOF, zero checksum.
+        set rdb [tmpfile unordered-dbs.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe0500016b0176fe0200016d0176ff0000000000000000]
+        set failed [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result]
+        assert_equal 0 $failed
+        assert_match {*db.2.type.string.keys.total:1*} $result
+        assert_match {*db.5.type.string.keys.total:1*} $result
+        assert_no_match {*db.1.*} $result
+        assert_no_match {*db.3.*} $result
+        assert_no_match {*db.4.*} $result
+        set pos0 [string first "db.0.type.string" $result]
+        set pos2 [string first "db.2.type.string" $result]
+        set pos5 [string first "db.5.type.string" $result]
+        assert_equal 1 [expr {$pos0 >= 0 && $pos0 < $pos2 && $pos2 < $pos5}]
+    }
+
+    test {Check RDB stats reports DB 0 once when the file selects it} {
+        # SELECTDB 0 with key k=v, SELECTDB 2 with key m=v, EOF, zero checksum.
+        set rdb [tmpfile explicit-db0.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe0000016b0176fe0200016d0176ff0000000000000000]
+        set failed [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result]
+        assert_equal 0 $failed
+        assert_match {*db.0.type.string.keys.total:1*} $result
+        assert_equal 1 [llength [regexp -all -inline {db\.0\.type\.string\.keys\.total:} $result]]
+    }
 }
 
 tags {"check-rdb network external:skip logreqres:skip"} {

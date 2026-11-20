@@ -205,6 +205,7 @@ jobs:
 
   test-valgrind-modified-tests:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'unstable'
     timeout-minutes: 1440
     steps:
       - name: Checkout Valkey
@@ -217,19 +218,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          base="$BASE_SHA"
-          if [ -z "$base" ]; then
-            git fetch --no-tags --depth=1 origin unstable
-            base=$(git rev-parse FETCH_HEAD)
-          fi
-          files=$(git diff --name-only --diff-filter=d "$base" "${HEAD_SHA:-HEAD}" -- \
+          files=$(git diff --name-only --diff-filter=d "$BASE_SHA...$HEAD_SHA" -- \
             'tests/unit/**.tcl' 'tests/integration/**.tcl' \
             ':(exclude)tests/unit/moduleapi/**' | tr '\n' ' ')
           echo "files=$files"
           echo "files=$files" >> $GITHUB_OUTPUT
       - name: make
         if: steps.collect.outputs.files != ''
-        run: make valgrind SERVER_CFLAGS='-Werror'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libzstd-dev
+          make valgrind SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes
       - name: testprep
         if: steps.collect.outputs.files != ''
         run: sudo apt-get install -y tcl8.6 tclx valgrind

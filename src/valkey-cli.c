@@ -7764,12 +7764,13 @@ static int clusterApplyReshardTable(list *table, clusterManagerNode *target, int
     }
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerReshardTableItem *item = ln->value;
-        char *err;
+        char *err = NULL;
         if (opts & CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION) {
             /* For atomic slot migration, we move everything as one command */
             int result = clusterManagerMoveSlotRangesASM(item->source, target, item->slot_ranges, opts, &err);
             if (!result) {
                 clusterManagerLogErr("Atomic slot migration failed: %s\n", err);
+                zfree(err);
                 return result;
             }
         }
@@ -7789,6 +7790,7 @@ static int clusterApplyReshardTable(list *table, clusterManagerNode *target, int
                 int result = clusterManagerMoveSlot(item->source, target, slot, opts, &err);
                 if (!result) {
                     clusterManagerLogErr("clusterManagerMoveSlot failed: %s\n", err);
+                    zfree(err);
                     return result;
                 }
                 printf("#");

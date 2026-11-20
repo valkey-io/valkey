@@ -1513,6 +1513,99 @@ start_server {
         }
     }
 
+    test {Consumer group lag when last-delivered-id is deleted via XDEL} {
+        # 1. XDEL of last-delivered-id (max_deleted_entry_id == last_id) followed by
+        #    XTRIM MAXLEN 0 and XADD preserves valid entries-read and lag: (2, 2) -> (2, 2) -> (2, 3)
+        r DEL k
+        r XGROUP CREATE k g $ MKSTREAM
+        r XADD k 1-1 f a
+        r XADD k 2-2 f b
+        r XREADGROUP GROUP g c STREAMS k >
+        r XADD k 3-3 f c
+        r XADD k 4-4 f d
+
+        r XDEL k 2-2
+        set group [lindex [r XINFO GROUPS k] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 2
+
+        r XTRIM k MAXLEN 0
+        set group [lindex [r XINFO GROUPS k] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 2
+
+        r XADD k 5-5 f e
+        set group [lindex [r XINFO GROUPS k] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 3
+
+        # 1b. XDEL of all already-read entries (1-1 and 2-2) followed by
+        #     XTRIM MAXLEN 0 and XADD preserves valid entries-read and lag: (2, 2) -> (2, 2) -> (2, 3)
+        r DEL k1b
+        r XGROUP CREATE k1b g $ MKSTREAM
+        r XADD k1b 1-1 f a
+        r XADD k1b 2-2 f b
+        r XREADGROUP GROUP g c STREAMS k1b >
+        r XADD k1b 3-3 f c
+        r XADD k1b 4-4 f d
+
+        r XDEL k1b 1-1 2-2
+        set group [lindex [r XINFO GROUPS k1b] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 2
+
+        r XTRIM k1b MAXLEN 0
+        set group [lindex [r XINFO GROUPS k1b] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 2
+
+        r XADD k1b 5-5 f e
+        set group [lindex [r XINFO GROUPS k1b] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] 3
+
+        # 2. Control: tombstone strictly ahead of last-delivered-id (3-3 > 2-2) yields null lag
+        #    both before and after trimming to empty and re-adding
+        r DEL k2
+        r XGROUP CREATE k2 g $ MKSTREAM
+        r XADD k2 1-1 f a
+        r XADD k2 2-2 f b
+        r XREADGROUP GROUP g c STREAMS k2 >
+        r XADD k2 3-3 f c
+        r XADD k2 4-4 f d
+
+        r XDEL k2 3-3
+        set group [lindex [r XINFO GROUPS k2] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] {}
+
+        r XTRIM k2 MAXLEN 0
+        set group [lindex [r XINFO GROUPS k2] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] {}
+
+        r XADD k2 5-5 f e
+        set group [lindex [r XINFO GROUPS k2] 0]
+        assert_equal [dict get $group entries-read] 2
+        assert_equal [dict get $group lag] {}
+
+        # 3. Reading further on a non-empty stream after XDEL of last-delivered-id preserves
+        #    entries-read and lag instead of invalidating the counter
+        r DEL k3
+        r XGROUP CREATE k3 g $ MKSTREAM
+        r XADD k3 1-1 f a
+        r XADD k3 2-2 f b
+        r XREADGROUP GROUP g c STREAMS k3 >
+        r XADD k3 3-3 f c
+        r XADD k3 4-4 f d
+        r XDEL k3 2-2
+
+        r XREADGROUP GROUP g c COUNT 1 STREAMS k3 >
+        set group [lindex [r XINFO GROUPS k3] 0]
+        assert_equal [dict get $group entries-read] 3
+        assert_equal [dict get $group lag] 1
+    }
+
     test {Loading from legacy (Redis <= v6.2.x, rdb_ver < 10) persistence} {
         # The payload was DUMPed from a v5 instance after:
         # XADD x 1-0 data a

@@ -2581,9 +2581,10 @@ static void clusterRaftBecomeLeader(void) {
         RAFT_NODE(peer)->pending_fail_change = 0;
         /* For the old leader, backdate last_ack_time to when we last
          * heard from it, so failure detection kicks in faster. This
-         * matters if the old leader is also a primary. */
+         * matters if the old leader is also a primary. 0 means never
+         * checked, so use now if we haven't heard from a leader. */
         if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-            RAFT_NODE(peer)->last_ack_time = rs->election_timer_start;
+            RAFT_NODE(peer)->last_ack_time = rs->last_leader_contact ? rs->last_leader_contact : monotonicMs();
         } else {
             RAFT_NODE(peer)->last_ack_time = monotonicMs();
         }

@@ -928,6 +928,49 @@ test "Raft proto: leader backs off next_index to the follower's last index on re
     }
 }
 
+test "Raft proto: successful AE_ACK continues catch-up without a heartbeat" {
+    # A learner ACK does not advance commit. After the leader already
+    # committed more log, the next AE used to wait for a heartbeat.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
+
+        set last [CI 0 cluster_raft_last_applied]
+        set fields {}
+        while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
+            set reply [raft_recv $fd 5000]
+            if {[string match "AE *" $reply]} {
+                set fields [raft_ae_header $reply]
+                raft_reply_ae_ack $fd $reply 0
+            }
+        }
+
+        R 0 MULTI
+        for {set j 0} {$j < 10} {incr j} {
+            R 0 config set cluster-announce-hostname "tail-$j.com"
+        }
+        R 0 EXEC
+        set new_last [CI 0 cluster_raft_last_applied]
+        set tail [expr {$new_last - $last}]
+        assert_equal 10 $tail
+
+        # Drop the AE from the proposals themselves. The ACK below is
+        # what must trigger the resend, not a leftover queued message.
+        while {![catch {raft_recv $fd 500}]} {}
+
+        set term [CI 0 cluster_raft_current_term]
+        raft_send $fd "AE_ACK $term 1 $last 0"
+
+        # Heartbeat interval is election_timeout/10 (>= 2s here).
+        set reply [raft_recv $fd 1000]
+        assert_match "AE *" $reply
+        set fields [raft_ae_header $reply]
+        assert_equal $last [lindex $fields 3]
+        assert_equal $tail [lindex $fields 6]
+
+        close $fd
+    }
+}
+
 test "Raft proto: outbound link without HI is dropped and reconnected" {
     # The real node joins a fake leader. Its outbound link to the leader goes
     # to a listener that accepts the connection but never replies, like a

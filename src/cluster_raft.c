@@ -2113,6 +2113,11 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         if (rs->last_applied > prev_commit) {
             rs->todo_broadcast_ae = 1;
         }
+        /* Still behind, and no broadcast is queued: don't wait for a heartbeat. */
+        if (rs->role == RAFT_ROLE_LEADER && !rs->todo_broadcast_ae &&
+            rd->next_index <= raftLogLastIndex()) {
+            clusterRaftSendAppendEntries(node->link, node);
+        }
     } else {
         /* Follower rejected — back off nextIndex, at most to just past its last entry. */
         if (rd->next_index > 1) rd->next_index--;

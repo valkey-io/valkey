@@ -203,7 +203,8 @@ typedef struct {
     unsigned int todo_retry_deferred : 1; /* For proposals that need rebasing of new epoch */
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
-    unsigned int todo_full_sync : 1; /* Myself moved to another shard: don't reuse our data. */
+    unsigned int todo_lost_last_slot : 1; /* Our shard lost its last slot, see below */
+    unsigned int todo_full_sync : 1;      /* Myself moved to another shard: don't reuse our data. */
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
@@ -211,6 +212,9 @@ typedef struct {
     unsigned int todo_broadcast_vote_request : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
+
+    /* The node that got our shard's last slot, for todo_lost_last_slot. */
+    char lost_last_slot_target[CLUSTER_NAMELEN];
 
     /* NODE_INFO divergence detection. */
     sds my_last_committed_info;
@@ -2134,6 +2138,17 @@ static bool clusterRaftIsLocalOnlyNode(clusterNode *node, dict *snapshot_ids) {
     return !in_snapshot;
 }
 
+/* Every node in a shard that lost its last slot reconfigures itself, like
+ * gossip nodes do when they learn about it. Proposing from apply isn't
+ * safe, so it's done in beforeSleep. */
+static void clusterRaftCheckLostLastSlot(bool my_shard_had_slots, clusterNode *target) {
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    if (my_shard_had_slots && my_primary->numslots == 0 && target && target != my_primary) {
+        RAFT_STATE()->todo_lost_last_slot = 1;
+        memcpy(RAFT_STATE()->lost_last_slot_target, target->name, CLUSTER_NAMELEN);
+    }
+}
+
 /* INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<node lines> */
 static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count) {
     if (argc < 5) return 1;
@@ -2215,6 +2230,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
      * removed nodes leave their shard. */
     clusterNode **old_owners = zmalloc(sizeof(server.cluster->slots));
     memcpy(old_owners, server.cluster->slots, sizeof(server.cluster->slots));
+    clusterNode *old_primary = clusterNodeGetPrimary(myself);
+    bool my_shard_had_slots = old_primary->numslots > 0;
     for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlotKeepChannels(j);
 
     /* Clear raft log. */
@@ -2277,14 +2294,17 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
 
     /* Do what applying the skipped slot changes would have done locally. The
      * old owners are still valid, since nodes are only deleted below. */
+    clusterNode *new_owner_of_ours = NULL;
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
         if (old_owners[j] != server.cluster->slots[j]) {
             removeChannelsInSlot(j);
             hotkeysPurgeSlot(j);
             clusterRaftUpdateLocalSlotState(j, old_owners[j], server.cluster->slots[j]);
+            if (old_owners[j] == old_primary && server.cluster->slots[j]) new_owner_of_ours = server.cluster->slots[j];
         }
     }
     zfree(old_owners);
+    clusterRaftCheckLostLastSlot(my_shard_had_slots, new_owner_of_ours);
 
     /* Remove nodes not present in the snapshot. */
     {
@@ -3197,6 +3217,18 @@ static void clusterRaftBeforeSleep(bool blocked) {
         clusterRaftCheckSlotCoverage();
     }
 
+    if (rs->todo_lost_last_slot) {
+        rs->todo_lost_last_slot = 0;
+        clusterNode *target = clusterLookupNode(rs->lost_last_slot_target, CLUSTER_NAMELEN);
+        /* Follow the slots if the target failed over since. */
+        if (target) target = clusterNodeGetPrimary(target);
+        clusterNode *my_primary = clusterNodeGetPrimary(myself);
+        /* Skip if a later entry already changed it, e.g. we got slots back. */
+        if (target && my_primary && my_primary->numslots == 0 && target != my_primary && target->numslots > 0) {
+            clusterHandleLostLastSlot(target);
+        }
+    }
+
     if (rs->todo_schedule_failover) {
         rs->todo_schedule_failover = 0;
         /* Schedule automatic failover if my primary is still failed. */
@@ -3946,21 +3978,6 @@ static void clusterRaftCancelAutomaticFailover(void) {
  * Node management — propose changes to Raft log
  * -------------------------------------------------------------------------- */
 
-typedef struct {
-    void *orig_ctx;
-    void (*orig_callback)(void *orig_ctx, const char *error);
-    clusterNode *target;
-} slotChangeCallbackCtx;
-
-static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
-    slotChangeCallbackCtx *sc = (slotChangeCallbackCtx *)ctx;
-    if (!error && clusterNodeGetPrimary(myself)->numslots == 0 && sc->target) {
-        clusterHandleLostLastSlot(sc->target);
-    }
-    if (sc->orig_callback) sc->orig_callback(sc->orig_ctx, error);
-    zfree(sc);
-}
-
 /* Compact `in` to slots owned by this node. Does not free `in`.
  * *out is newly allocated, or NULL if none remain. */
 static int raftOwnedDelSlotRanges(slotRange *in, int numranges, slotRange **out) {
@@ -4050,14 +4067,9 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     }
 
     /* Propose through Raft leader. The callback is invoked when the entry is
-     * committed and applied. We use two chained callbacks, to handle some
-     * side-effects like replica migration, before invoking the original
-     * callback. */
-    slotChangeCallbackCtx *sc = zmalloc(sizeof(slotChangeCallbackCtx));
-    sc->orig_ctx = ctx;
-    sc->orig_callback = callback;
-    sc->target = target;
-    clusterRaftPropose(entry, sc, &clusterRaftSlotChangeApplyCallback);
+     * committed and applied. Every node checks on apply whether its shard
+     * lost its last slot, see clusterRaftApplySlotChange(). */
+    clusterRaftPropose(entry, ctx, callback);
     sdsfree(entry);
     zfree(filtered);
 }
@@ -4120,6 +4132,8 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
 
     if (validate_only) goto done;
 
+    bool my_shard_had_slots = clusterNodeGetPrimary(myself)->numslots > 0;
+
     /* Range fields are argv[range_start_arg] through argv[argc-1]. */
     for (int i = info.range_start_arg; i < argc; i++) {
         int start, end;
@@ -4139,6 +4153,8 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
             if (info.target_node) clusterAddSlot(info.target_node, j);
         }
     }
+
+    clusterRaftCheckLostLastSlot(my_shard_had_slots, info.target_node);
     goto done;
 
 reject:
@@ -4147,6 +4163,32 @@ reject:
 done:
     if (argv) sdsfreesplitres(argv, argc);
     return result;
+}
+
+/* Make node a replica of primary, in primary's shard. */
+static void clusterRaftSetNodePrimary(clusterNode *node, clusterNode *primary) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (memcmp(node->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) {
+        /* A replica that moves to another shard has none of the new shard's
+         * data, so its offset no longer counts. Every node applies this, so
+         * all nodes see the zero offset at once, e.g. for failover ranking. */
+        node->repl_offset = 0;
+        /* Our data belongs to the shard we leave, so the new primary must
+         * not treat it as a partial copy of its own. */
+        if (node == myself) rs->todo_full_sync = 1;
+    }
+    if (node->replicaof) clusterNodeRemoveReplica(node->replicaof, node);
+    node->flags &= ~CLUSTER_NODE_PRIMARY;
+    node->flags |= CLUSTER_NODE_REPLICA;
+    node->replicaof = primary;
+    clusterNodeAddReplica(primary, node);
+    clusterRemoveNodeFromShard(node);
+    memcpy(node->shard_id, primary->shard_id, CLUSTER_NAMELEN);
+    clusterAddNodeToShard(primary->shard_id, node);
+    if (node == myself) {
+        rs->todo_save_config = 1;
+        rs->todo_update_replication = 1;
+    }
 }
 
 /* Apply (or validate) a SET_REPLICA_OF entry.
@@ -4176,17 +4218,28 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         goto reject;
     }
 
-    /* Guard: if a primary is specified, its shard must match target-shard. */
-    if (sdslen(argv[3]) == CLUSTER_NAMELEN) {
-        clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
-        if (primary && memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
+    /* The primary, or "-" to promote. If it has become a replica since this
+     * was proposed, follow it to its primary, so that a replica's primary is
+     * always a primary. Both must be in the target shard, so a node doesn't
+     * implicitly switch to another shard. */
+    clusterNode *primary = NULL;
+    if (sdslen(argv[3]) != 1 || argv[3][0] != '-') {
+        clusterNode *requested = clusterLookupNode(argv[3], sdslen(argv[3]));
+        if (!requested) goto reject;
+        if (memcmp(requested->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
+        primary = clusterNodeGetPrimary(requested);
+        if (primary == replica) goto reject;
+        if (!validate_only && primary != requested && replica == myself) {
+            serverLog(LL_NOTICE, "Node %.40s (%s) became a replica. Replicating its primary %.40s (%s) instead.",
+                      requested->name, humanNodename(requested), primary->name, humanNodename(primary));
+        }
     }
 
     if (validate_only) goto done;
 
     if (replica == myself) rs->todo_save_config = 1;
 
-    if (sdslen(argv[3]) == 1 && argv[3][0] == '-') {
+    if (!primary) {
         /* Promote to primary with the target-shard from the entry. */
         if (nodeIsReplica(replica)) {
             if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
@@ -4199,36 +4252,20 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         memcpy(replica->shard_id, target_shard, CLUSTER_NAMELEN);
         clusterAddNodeToShard(target_shard, replica);
     } else {
-        clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
-        if (!primary) goto reject;
-        if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
-        /* A replica that moves to another shard has none of the new shard's
-         * data, so its offset no longer counts. Every node applies this, so
-         * all nodes see the zero offset at once, e.g. for failover ranking. */
-        if (memcmp(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) replica->repl_offset = 0;
-        if (replica == myself) {
-            if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
-            myself->flags &= ~CLUSTER_NODE_PRIMARY;
-            myself->flags |= CLUSTER_NODE_REPLICA;
-            myself->replicaof = primary;
-            clusterNodeAddReplica(primary, myself);
-            /* Our data belongs to the shard we leave, so the new primary
-             * must not treat it as a partial copy of its own. */
-            if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) != 0) rs->todo_full_sync = 1;
-            clusterRemoveNodeFromShard(myself);
-            memcpy(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN);
-            clusterAddNodeToShard(primary->shard_id, myself);
-            rs->todo_update_replication = 1;
-        } else {
-            if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
-            replica->flags &= ~CLUSTER_NODE_PRIMARY;
-            replica->flags |= CLUSTER_NODE_REPLICA;
-            replica->replicaof = primary;
-            clusterNodeAddReplica(primary, replica);
-            clusterRemoveNodeFromShard(replica);
-            memcpy(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN);
-            clusterAddNodeToShard(primary->shard_id, replica);
+        /* A primary that becomes a replica takes its replicas along, like a
+         * FAILOVER does, so they never replicate a replica. */
+        while (clusterNodeNumReplicas(replica) > 0) {
+            clusterNode *r = clusterNodeGetReplica(replica, 0);
+            clusterRaftSetNodePrimary(r, primary);
+            if (r == myself) {
+                serverLog(LL_NOTICE,
+                          "My primary %.40s (%s) became a replica. "
+                          "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
+                          replica->name, humanNodename(replica), primary->name, humanNodename(primary),
+                          primary->shard_id);
+            }
         }
+        clusterRaftSetNodePrimary(replica, primary);
     }
 
     /* Bump both shard epochs after successful apply. */

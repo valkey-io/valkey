@@ -1043,6 +1043,64 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
     }
 }
 
+# The shard id of a node, from CLUSTER SHARDS on server id.
+proc shard_of {id node_id} {
+    foreach shard [R $id cluster shards] {
+        foreach node [dict get $shard nodes] {
+            if {[dict get $node id] eq $node_id} {return [dict get $shard id]}
+        }
+    }
+}
+
+test "Raft proto: SET_REPLICA_OF follows a target that became a replica in its shard" {
+    # Entries applied in this order by a follower: the target X of a
+    # SET_REPLICA_OF fails over before it's applied, so the node replicates
+    # X's new primary. Later X moves to another shard, so a SET_REPLICA_OF
+    # with X's old shard is rejected.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "1" 40]
+        set a_addr "127.0.0.1:9991@19991,,tls-port=0,shard-id=[string repeat b 40]"
+        # Fake learners, each in its own shard: X in shard sx, and so on.
+        foreach n {x y z w q} id {7 8 6 5 4} sh {c d e f 9} port {9992 9993 9994 9995 9996} {
+            set ${n}_id [string repeat $id 40]
+            set s$n [string repeat $sh 40]
+            set ${n}_addr "127.0.0.1:$port@1$port,,tls-port=0,shard-id=[set s$n]"
+        }
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set entries [list \
+            "1 NODE_JOIN $a_id $a_addr voter" \
+            "1 NODE_JOIN $node_id $node_addr voter"]
+        foreach n {x y z w q} {
+            lappend entries "1 NODE_JOIN [set ${n}_id] [set ${n}_addr] learner"
+        }
+        lappend entries \
+            "1 SET_REPLICA_OF $y_id $sy 0 $x_id $sx 0" \
+            "1 FAILOVER $y_id $x_id $sx 1" \
+            "1 SET_REPLICA_OF $z_id $sz 0 $x_id $sx 2" \
+            "1 SET_REPLICA_OF $x_id $sx 3 $w_id $sw 0" \
+            "1 SET_REPLICA_OF $q_id $sq 0 $x_id $sx 4"
+        set n [llength $entries]
+        raft_send $fd "AE $a_id 1 0 0 $n $n\n[join $entries \n]"
+        assert_match "AE_ACK *" [raft_recv $fd]
+
+        # Z replicates Y, which took over from X in shard sx.
+        assert_equal $y_id [dict get [cluster_get_node_by_id 0 $z_id] slaveof]
+        assert_equal $sx [shard_of 0 $z_id]
+        # Q is still a primary in its own shard: X moved to shard sw.
+        assert_equal $w_id [dict get [cluster_get_node_by_id 0 $x_id] slaveof]
+        assert_equal $sw [shard_of 0 $x_id]
+        assert_equal - [dict get [cluster_get_node_by_id 0 $q_id] slaveof]
+        assert_equal $sq [shard_of 0 $q_id]
+        close $fd
+    }
+}
+
 # --------------------------------------------------------------------------
 # Shard epoch: stale proposal rejection tests (parameterized).
 # These verify that the leader rejects stale proposals BEFORE appending

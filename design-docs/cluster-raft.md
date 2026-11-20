@@ -174,7 +174,9 @@ SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
     primary means promote to primary. It carries two epochs because it
     involves two shards (source and target) and bumps the epoch of both
-    shards on apply.
+    shards on apply. A primary that becomes a replica takes its replicas
+    along. If the target has become a replica, its primary is used
+    instead, if it's still in the target shard.
 
 FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
     The replica takes over the primary's slots and becomes primary.

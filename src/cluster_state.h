@@ -97,7 +97,8 @@ struct clusterState {
     unsigned long long stat_cluster_links_established_inbound;   /* Total inbound links established via accept. */
     unsigned long long stat_cluster_links_established_outbound;  /* Total outbound links established via connect. */
     int before_sleep_handle_slot_migration;
-    void *protocol_data; /* Protocol-specific state (e.g. clusterLegacyState) */
+    int replica_migration_in_progress; /* Our replica migration hasn't taken effect yet */
+    void *protocol_data;               /* Protocol-specific state (e.g. clusterLegacyState) */
 };
 
 /* Default cluster bus port offset from the client port. */

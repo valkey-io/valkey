@@ -854,7 +854,7 @@ tags {"aof cluster external:skip singledb"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    start_server {overrides {appendonly yes}} {
+    start_server {overrides {appendonly yes appendfsync always}} {
         test {AOF stays enabled after a failed DEBUG LOADAOF} {
             r set before_load 1
             set incr_path [get_last_incr_aof_path r]

@@ -1,7 +1,5 @@
 # Test Raft log snapshot (InstallSnapshot) behavior.
 
-source tests/support/cluster_raft.tcl
-
 tags {external:skip cluster singledb} {
 
 # The node IDs in each shard of CLUSTER SHARDS, sorted, for comparing the
@@ -20,8 +18,6 @@ proc shard_members {id} {
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters.
-    raft_promote_start_cluster_voters 3
     test "Raft snapshot: follower catches up via snapshot after leader trims log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
 
@@ -146,10 +142,6 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make the primaries voters. The test takes R0
-    # and its replica R4 down, which leaves a majority whether or not R4 is
-    # a voter.
-    raft_promote_start_cluster_voters 4
     test "Raft snapshot: replica fails over after learning from a snapshot that its primary failed" {
         # R4 is down while its primary R0 fails, so it skips the NODE_FAIL
         # entry and learns about the failure from a snapshot.
@@ -161,7 +153,8 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         # snapshot when it comes back.
         catch {R 0 shutdown}
         wait_for_condition 100 100 {
-            [string match "*fail*" [lindex [raft_cluster_nodes_line [srv -1 client] $r0_id] 2]]
+            [llength [set n [cluster_get_node_by_id 1 $r0_id]]] > 0 &&
+            [cluster_has_flag $n fail]
         } else {
             fail "R0 was not marked as failed"
         }
@@ -205,8 +198,6 @@ start_cluster 4 1 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters.
-    raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins leader with compacted log (via restart)" {
         assert_equal "leader" [CI 0 cluster_raft_role]
         set leader_port [srv 0 port]
@@ -254,8 +245,6 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters.
-    raft_promote_start_cluster_voters 3
     test "Raft snapshot: new node joins when leader has trimmed log" {
         assert_equal "leader" [CI 0 cluster_raft_role]
         set leader_port [srv 0 port]
@@ -349,23 +338,22 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         set r1_id [R 1 cluster myid]
         set r2_id [R 2 cluster myid]
 
-        # Leave R0 alone. Demote the replicas first if they are voters, so
-        # that R0 can commit the forgets on its own.
-        foreach id [list $r1_id $r2_id] {
-            catch {R 0 cluster delvoter $id}
-        }
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 1
-        } else {
-            fail "replicas were not demoted (size=[CI 0 cluster_size])"
-        }
-        # Pause the replicas while they are forgotten, so that R0 still has
-        # links to them, and check that the links are freed.
-        pause_process [srv -1 pid]
-        pause_process [srv -2 pid]
-        assert_equal OK [R 0 cluster forget $r1_id]
+        # Forget each replica while another voter can still ack, then pause
+        # it so it cannot open a new link.
         assert_equal OK [R 0 cluster forget $r2_id]
-        assert_equal 1 [CI 0 cluster_known_nodes]
+        pause_process [srv -2 pid]
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 2
+        } else {
+            fail "first replica was not forgotten (size=[CI 0 cluster_size])"
+        }
+        assert_equal OK [R 0 cluster forget $r1_id]
+        pause_process [srv -1 pid]
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 1 && [CI 0 cluster_known_nodes] == 1
+        } else {
+            fail "size=[CI 0 cluster_size] known=[CI 0 cluster_known_nodes]"
+        }
         assert_morethan [CI 0 cluster_raft_last_applied] 0
         assert_equal 0 [s 0 mem_cluster_links]
         resume_process [srv -1 pid]
@@ -383,7 +371,6 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         assert_morethan [CI 0 cluster_raft_current_term] $term
         assert_equal 1 [CI 0 cluster_size]
 
-        # A node joining it as a voter is counted in the size.
         # A reset node has an empty log, so its last log term must be 0.
         # Otherwise it would claim a newer log than it has in elections.
         restart_server -1 true false
@@ -394,14 +381,8 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         } else {
             fail "snapshotTerm was not reset: [exec grep vars $nodes_conf]"
         }
-        set r1_id [R 1 cluster myid]
         R 0 cluster meet 127.0.0.1 [srv -1 port]
-        raft_add_voter [srv 0 client] $r1_id
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 2
-        } else {
-            fail "joined voter not counted (size=[CI 0 cluster_size])"
-        }
+        wait_for_raft_cluster_size 2
     }
 }
 

@@ -87,6 +87,7 @@ typedef enum {
     af_announce_client_tls_port,
     af_availability_zone,
     af_replica_priority,
+    af_voter,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -290,6 +291,26 @@ int auxReplicaPriorityPresent(clusterNode *n) {
     return n->replica_priority != 0;
 }
 
+/* cluster-voter wish. auto is the default and is not stored. */
+static int auxVoterSetter(clusterNode *n, void *value, size_t length) {
+    if (length == 3 && !memcmp(value, "yes", 3)) {
+        n->voter_policy = CLUSTER_VOTER_YES;
+    } else if (length == 2 && !memcmp(value, "no", 2)) {
+        n->voter_policy = CLUSTER_VOTER_NO;
+    } else {
+        return C_ERR;
+    }
+    return C_OK;
+}
+
+static sds auxVoterGetter(clusterNode *n, sds s) {
+    return sdscat(s, n->voter_policy == CLUSTER_VOTER_YES ? "yes" : "no");
+}
+
+static int auxVoterPresent(clusterNode *n) {
+    return n->voter_policy != CLUSTER_VOTER_AUTO;
+}
+
 /* Note that
  * 1. the order of the elements below must match that of their
  *    indices as defined in auxFieldIndex
@@ -305,6 +326,7 @@ auxFieldHandler auxFieldHandlers[] = {
     {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
     {"availability-zone", auxAvailabilityZoneSetter, auxAvailabilityZoneGetter, auxAvailabilityZonePresent},
     {"replica-priority", auxReplicaPrioritySetter, auxReplicaPriorityGetter, auxReplicaPriorityPresent},
+    {"voter", auxVoterSetter, auxVoterGetter, auxVoterPresent},
 };
 
 struct clusterNodeFlags {

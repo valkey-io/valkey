@@ -542,6 +542,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     node->replica_priority = 0;
+    node->voter_policy = CLUSTER_VOTER_AUTO;
     node->protocol_data = NULL;
     if (clusterCurrentBus->initNodeData)
         clusterCurrentBus->initNodeData(node);

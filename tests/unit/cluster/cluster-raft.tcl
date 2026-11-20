@@ -3,14 +3,16 @@
 
 source tests/support/cluster_raft.tcl
 
-# Form a cluster led by node 0, with nodes 1..num_voters-1 as voters and the
-# rest as learners.
+# MEET everyone and let auto-promotion form the voting set. start_cluster is
+# not used: it assigns slots, and NODE_FORGET rejects a primary that still
+# owns them. Extra nodes (num_voters..num_nodes-1) keep cluster-voter no so
+# they stay learners.
 proc raft_form_cluster {num_voters num_nodes} {
     for {set i 1} {$i < $num_nodes} {incr i} {
         R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
     }
-    for {set i 1} {$i < $num_voters} {incr i} {
-        raft_add_voter [srv 0 client] [R $i CLUSTER MYID]
+    for {set i $num_voters} {$i < $num_nodes} {incr i} {
+        raft_set_voter $i no
     }
     wait_for_condition 100 100 {
         [raft_cluster_formed $num_voters $num_nodes]
@@ -30,44 +32,23 @@ proc raft_cluster_formed {num_voters num_nodes} {
 
 tags {external:skip cluster singledb} {
 
-test "Raft: leader steps down after losing quorum freshness" {
-    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
-        set r0 [srv 0 client]
-        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
-        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
-        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
-
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 3 &&
-            [CI 1 cluster_size] == 3 &&
-            [CI 2 cluster_size] == 3
-        } else {
-            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
-        }
-
+start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
+    test "Raft: leader steps down after losing quorum freshness" {
         assert_equal [CI 0 cluster_raft_role] "leader"
-        set leader_idx 0
 
-        set paused [list]
-        foreach idx {0 1 2} {
-            if {$idx == $leader_idx} continue
-            pause_process [srv [expr {-$idx}] pid]
-            lappend paused $idx
-        }
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
 
         wait_for_condition 100 50 {
-            [CI $leader_idx cluster_raft_role] eq "follower"
+            [CI 0 cluster_raft_role] eq "follower"
         } else {
-            foreach idx $paused {
-                resume_process [srv [expr {-$idx}] pid]
-            }
-            fail "Leader did not step down after losing quorum freshness: role=[CI $leader_idx cluster_raft_role] leader=[CI $leader_idx cluster_raft_leader]"
+            resume_process [srv -1 pid]
+            resume_process [srv -2 pid]
+            fail "Leader did not step down after losing quorum freshness: role=[CI 0 cluster_raft_role] leader=[CI 0 cluster_raft_leader]"
         }
 
-        foreach idx $paused {
-            resume_process [srv [expr {-$idx}] pid]
-        }
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
     }
 }
 
@@ -186,30 +167,17 @@ test "Raft: CLUSTER FORGET of a leader with slots fails without a leader transfe
 # the other follower's ACK; the commit AE must still be delivered.
 test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
     start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        raft_form_cluster 3 3
         set r0 [srv 0 client]
-        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
-        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
-        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
-
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 3 &&
-            [CI 1 cluster_size] == 3 &&
-            [CI 2 cluster_size] == 3
-        } else {
-            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
-        }
-
-        assert_equal [CI 0 cluster_raft_role] "leader"
         set forgotten_id [R 1 CLUSTER MYID]
         pause_process [srv -1 pid]
         if {[catch {
             assert_equal "OK" [$r0 CLUSTER FORGET $forgotten_id]
             wait_for_condition 50 100 {
-                ![raft_node_visible $r0 $forgotten_id] &&
+                [cluster_get_node_by_id 0 $forgotten_id] eq {} &&
                 [CI 0 cluster_size] == 2
             } else {
-                fail "NODE_FORGET did not drop the paused node on the leader: visible=[raft_node_visible $r0 $forgotten_id] size=[CI 0 cluster_size] nodes={[R 0 CLUSTER NODES]}"
+                fail "NODE_FORGET did not drop the paused node on the leader: size=[CI 0 cluster_size] nodes={[R 0 CLUSTER NODES]}"
             }
         } err]} {
             resume_process [srv -1 pid]
@@ -226,7 +194,7 @@ test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
             fail "forgotten node still a voter size=[CI 1 cluster_size] role=[CI 1 cluster_raft_role]"
         }
         wait_for_condition 100 100 {
-            ![raft_node_visible $r0 $forgotten_id] &&
+            [cluster_get_node_by_id 0 $forgotten_id] eq {} &&
             [CI 0 cluster_known_nodes] == 2
         } else {
             fail "reappeared via HELLO known_nodes=[CI 0 cluster_known_nodes] nodes={[R 0 CLUSTER NODES]}"

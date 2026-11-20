@@ -85,6 +85,18 @@ proc wait_for_migration {node_idx slot {maxtries 100}} {
         fail "Cluster node $target_id did not get slot $slot within [expr {$maxtries * 100}] ms (current $nodes)"
     }
     wait_for_cluster_propagation
+
+    # Raft ownership can converge before the source finishes its export and
+    # cleans up the old keys. Wait for that job before checking source data.
+    if {$::cluster_raft} {
+        set jobname [get_job_name $node_idx $slot]
+        for {set i 0} {$i < [llength $::servers]} {incr i} {
+            set job [get_migration_by_name $i $jobname]
+            if {$job ne "" && [dict get $job operation] eq "EXPORT"} {
+                wait_for_migration_field $i $jobname state success
+            }
+        }
+    }
 }
 
 # Ensure that a given hash slot is served by the specified node.
@@ -190,7 +202,7 @@ proc do_node_restart {idx} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster network cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -1470,7 +1482,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network cluster-ra
             assert_match "OK" [R 0 CLUSTER SETSLOT 0 NODE $node0_id]
             wait_for_migration 0 0
         }
-    }
+    } {} {cluster-raft:skip} ;# CLUSTER BUMPEPOCH is a Raft no-op; slot takeover uses gossip epochs
 
     test "Export unpauses itself even if slot failover doesn't occur" {
         assert_does_not_resync {
@@ -2534,7 +2546,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster network cluster-raft:skip}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2588,7 +2600,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network cluster-ra
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network cluster-raft:skip}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2654,7 +2666,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network cluster-ra
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster cluster-raft:skip aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2801,7 +2813,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster cluster-raft:skip 
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
         assert_equal $slots_start [R 0 CLUSTER SLOTS]
         assert_match "OK" [R 2 FLUSHDB SYNC]
-    } {} {cluster-raft:skip} ;# TODO: investigate AOF + migration with raft
+    }
 }
 
 start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {

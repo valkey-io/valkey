@@ -38,6 +38,7 @@
 #include "server.h"
 #include "hotkeys.h"
 #include "cluster.h"
+#include "cluster_migrateslots.h"
 #include "cluster_bus.h"
 #include "cluster_state.h"
 #include "cluster_link.h"
@@ -193,6 +194,9 @@ typedef struct {
     list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
     list *deferred_meets; /* Names (sds) of nodes whose MEET we answer once we're in a multi-member cluster */
 
+    /* Slots whose old keys must remain until their export stream is closed. */
+    list *pending_slot_cleanup;
+
     clusterLink *processing_link; /* Link whose message is being processed, or NULL */
 
     /* Deferred work for beforeSleep. */
@@ -209,6 +213,7 @@ typedef struct {
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
+    unsigned int slot_migration_pause : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -446,6 +451,64 @@ static void clusterRaftRandomizeElectionTimeout(void) {
 
 static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
+}
+
+static void clusterRaftHoldSlotMigrationPause(void) {
+    pauseActions(PAUSE_DURING_SLOT_MIGRATION, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
+}
+
+static void clusterRaftDropSlotMigrationPause(void) {
+    RAFT_STATE()->slot_migration_pause = 0;
+    /* Another export may still be in FAILOVER_PAUSED with mf_end set. */
+    slotExportTryUnpause();
+}
+
+/* Isolated leader: peer cluster-bus links are gone, so SLOT_CHANGE can
+ * commit in the remaining quorum while we still ACK writes. */
+static bool clusterRaftLeaderHasQuorumLinks(void) {
+    int reachable = 1;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself || !nodeIsVoter(node)) continue;
+        if (node->link || node->inbound_link) reachable++;
+    }
+    dictReleaseIterator(di);
+    return reachable >= clusterRaftQuorum();
+}
+
+static int clusterRaftLogFullyApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->last_applied >= raftLogLastIndex();
+}
+
+/* The migration job clears this pause after 2s. Keep it until SLOT_CHANGE
+ * is applied, so a partitioned source cannot ACK a write that apply drops.
+ * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
+ * proposal, and a sibling still snapshotting is not a granted handoff. */
+static void clusterRaftSyncSlotMigrationPause(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_migration_pause && clusterIsAnySlotExportFailoverGranted()) rs->slot_migration_pause = 1;
+    if (!rs->slot_migration_pause) return;
+    if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
+        clusterRaftLeaderHasQuorumLinks()) {
+        clusterRaftDropSlotMigrationPause();
+        return;
+    }
+    clusterRaftHoldSlotMigrationPause();
+}
+
+static void clusterRaftOnSlotOwnershipApplied(void) {
+    if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
+        clusterRaftDropSlotMigrationPause();
+}
+
+static void clusterRaftReleaseSlotMigrationPauseIfCaughtUp(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_migration_pause || clusterIsAnySlotExportFailoverGranted()) return;
+    if (!clusterRaftLogFullyApplied()) return;
+    clusterRaftDropSlotMigrationPause();
 }
 
 /* True if there are any nodes other than myself without the JOINING flag. */
@@ -1672,6 +1735,7 @@ static void raftLogApply(raftLogEntry *e) {
         if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
             clearCachedClusterSlotsResponse();
+            clusterRaftOnSlotOwnershipApplied();
         }
         serverLog(LL_NOTICE, "%s SLOT_CHANGE (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -2012,6 +2076,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
     raftApplyCommitted();
+    clusterRaftReleaseSlotMigrationPauseIfCaughtUp();
 
     /* Forgotten: this link is unbound. Do not ACK. */
     if (!link->node) {
@@ -2351,6 +2416,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
     clearCachedClusterSlotsResponse();
+    clusterRaftOnSlotOwnershipApplied();
     /* If our primary is failed, schedule a failover, as applying its
      * NODE_FAIL would have done. */
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
@@ -2643,6 +2709,7 @@ static void clusterRaftInit(void) {
     rs->pending_meets = listCreate();
     rs->deferred_meets = listCreate();
     listSetFreeMethod(rs->deferred_meets, sdsfreeVoid);
+    rs->pending_slot_cleanup = listCreate();
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
@@ -2862,6 +2929,9 @@ static void clusterRaftCron(void) {
     mstime_t now = monotonicMs();
 
     clusterRaftAssertLearnerRole();
+    /* clusterCron runs slot-migration timeout first; re-arm before we return
+     * so a postponed SET cannot run in the next file-event batch. */
+    clusterRaftSyncSlotMigrationPause();
 
     clusterRaftReapJoiningStubs();
 
@@ -3079,9 +3149,29 @@ static void clusterRaftCheckSlotCoverage(void) {
     server.cluster->state = all_slots_covered ? CLUSTER_OK : CLUSTER_FAIL;
 }
 
+/* Cleanup must not feed DELs back into an export that the target is still
+ * consuming. Keep the existing migration handshake responsible for closing it. */
+static void clusterRaftCleanupSlots(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_slot_cleanup, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        int slot = (int)(uintptr_t)listNodeValue(ln);
+        if (clusterIsSlotExporting(slot) || clusterIsSlotImporting(slot)) continue;
+        clusterNode *owner = server.cluster->slots[slot];
+        if (nodeIsPrimary(myself) && owner && memcmp(owner->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
+            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
+            delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+        }
+        listDelNode(rs->pending_slot_cleanup, ln);
+    }
+}
+
 static void clusterRaftBeforeSleep(bool blocked) {
     UNUSED(blocked);
     clusterRaftState *rs = RAFT_STATE();
+    clusterRaftSyncSlotMigrationPause();
 
     if (rs->todo_connect_nodes) {
         rs->todo_connect_nodes = 0;
@@ -3225,6 +3315,8 @@ static void clusterRaftBeforeSleep(bool blocked) {
                       myself->replicaof->name, (long long)delay, rank, my_offset, myself->replica_priority);
         }
     }
+
+    clusterRaftCleanupSlots();
 }
 
 static void clusterRaftPrepareShutdown(void) {
@@ -3268,6 +3360,7 @@ static void clusterRaftHandleServerShutdown(void) {
     }
     listRelease(rs->pending_meets);
     listRelease(rs->deferred_meets);
+    listRelease(rs->pending_slot_cleanup);
     /* Free raft log. */
     for (uint64_t i = 0; i < rs->log_count; i++) {
         sdsfree(rs->log[i]->data);
@@ -4076,8 +4169,12 @@ static void clusterRaftUpdateLocalSlotState(int slot, clusterNode *old_owner, cl
     /* Only while still bound, like gossip. A slot that moves to another node
      * in our shard, e.g. our replica that took over, keeps its keys. */
     if (old_owner == myself && memcmp(new_owner->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) {
-        serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
-        delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+        if (clusterIsSlotExporting(slot)) {
+            listAddNodeTail(RAFT_STATE()->pending_slot_cleanup, (void *)(uintptr_t)slot);
+        } else {
+            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s", slot, myself->name);
+            delKeysInSlot(slot, server.lazyfree_lazy_server_del, true, false);
+        }
     }
 
     /* Target is this shard, not necessarily myself. */
@@ -4767,6 +4864,7 @@ static void clusterRaftResetCluster(int hard) {
         listDelNode(rs->pending_meets, ln);
     }
     listEmpty(rs->deferred_meets);
+    listEmpty(rs->pending_slot_cleanup);
     rs->current_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);

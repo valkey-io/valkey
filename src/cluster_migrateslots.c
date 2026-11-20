@@ -121,7 +121,6 @@ static void finishSlotMigrationJob(slotMigrationJob *job,
                                    char *message);
 static void freeSlotMigrationJob(void *o);
 static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNode *other_node);
-static void slotExportTryUnpause(void);
 static slotMigrationJob *clusterLookupMigrationJob(sds name);
 static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
 static void clusterCleanupSlotMigrationLog(size_t max_len);
@@ -1965,6 +1964,22 @@ bool clusterIsAnySlotExporting(void) {
         if (!isSlotMigrationJobFinished(job)) {
             return true;
         }
+    }
+    return false;
+}
+
+/* True if any in-progress export has granted failover to the target. */
+bool clusterIsAnySlotExportFailoverGranted(void) {
+    if (!server.cluster_enabled || !server.cluster) return false;
+    if (!server.cluster->slot_migration_jobs) return false;
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = ln->value;
+        if (job->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!isSlotMigrationJobInProgress(job)) continue;
+        if (job->state == SLOT_EXPORT_FAILOVER_GRANTED) return true;
     }
     return false;
 }

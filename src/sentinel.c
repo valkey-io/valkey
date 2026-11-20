@@ -1945,7 +1945,9 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         /* leader-epoch <name> <epoch> */
         ri = sentinelGetPrimaryByName(argv[1]);
         if (!ri) return "No such master with specified name.";
-        ri->leader_epoch = strtoull(argv[2], NULL, 10);
+        unsigned long long leader_epoch;
+        if (!string2ull(argv[2], strlen(argv[2]), &leader_epoch)) return "Invalid leader-epoch.";
+        ri->leader_epoch = leader_epoch;
     } else if ((!strcasecmp(argv[0], "known-slave") || !strcasecmp(argv[0], "known-replica")) && argc == 4) {
         sentinelValkeyInstance *replica;
 

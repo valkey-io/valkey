@@ -158,11 +158,21 @@ TEST_F(UtilTest, TestString2ull) {
     valkey_strlcpy(buf, "-18446744073709551615", sizeof(buf));
     ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
 
-    valkey_strlcpy(buf, "+18446744073709551615", sizeof(buf));
+    valkey_strlcpy(buf, " -18446744073709551615", sizeof(buf));
     ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
 
-    valkey_strlcpy(buf, " 18446744073709551615", sizeof(buf));
-    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 0);
+    /* A leading '+' or whitespace is still accepted via strtoull(). */
+    valkey_strlcpy(buf, "+5", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, 5ULL);
+
+    valkey_strlcpy(buf, "+18446744073709551615", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, ULLONG_MAX);
+
+    valkey_strlcpy(buf, " 5", sizeof(buf));
+    ASSERT_EQ(string2ull(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, 5ULL);
 }
 
 TEST_F(UtilTest, TestString2ullBase16AsyncSignalSafe) {

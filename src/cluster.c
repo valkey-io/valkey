@@ -564,6 +564,13 @@ static void clusterReplicaMigrationDone(void *ctx, const char *error) {
     server.cluster->replica_migration_in_progress = 0;
 }
 
+/* Start replicating target. Until it takes effect, don't decide on another
+ * replica migration. */
+static void clusterStartReplicaMigration(clusterNode *target) {
+    server.cluster->replica_migration_in_progress = 1;
+    clusterCurrentBus->setReplicaOf(target, NULL, clusterReplicaMigrationDone);
+}
+
 /* Called by cluster internals when a node has lost its last slot. Triggers
  * replica migration. */
 void clusterHandleLostLastSlot(clusterNode *target) {
@@ -574,8 +581,7 @@ void clusterHandleLostLastSlot(clusterNode *target) {
                   "Lost my last slot during slot migration. "
                   "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
                   target->name, humanNodename(target), target->shard_id);
-        server.cluster->replica_migration_in_progress = 1;
-        clusterCurrentBus->setReplicaOf(target, NULL, clusterReplicaMigrationDone);
+        clusterStartReplicaMigration(target);
     } else if (nodeIsPrimary(myself)) {
         serverLog(LL_NOTICE,
                   "My last slot was migrated to node %.40s (%s) "
@@ -688,8 +694,7 @@ static void clusterHandleReplicaMigration(int max_replicas) {
         !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
         serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
                   humanNodename(target), target->shard_id);
-        server.cluster->replica_migration_in_progress = 1;
-        clusterCurrentBus->setReplicaOf(target, NULL, clusterReplicaMigrationDone);
+        clusterStartReplicaMigration(target);
     }
 }
 

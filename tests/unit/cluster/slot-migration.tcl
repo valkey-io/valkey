@@ -139,7 +139,7 @@ proc normalize_cluster {pairs} {
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
     set shard_pairs {0 3 1 4 2 5}
     set R0_id [R 0 CLUSTER MYID]
@@ -210,7 +210,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {clu
     test "Replica redirects key access in migrating slots" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -224,7 +224,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {clu
     test "Replica of migrating node returns ASK redirect after READONLY" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -241,7 +241,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {clu
     test "Replica of migrating node returns TRYAGAIN after READONLY" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -258,7 +258,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {clu
     test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states. Use wait_for_slot_state since the replicas
-        # (R3/R4) learn the migration state via gossip, which may still be
+        # (R3/R4) learn the migration state via the cluster bus, which may still be
         # propagating when this test starts.
         wait_for_slot_state 0 "\[609->-$R1_id\]"
         wait_for_slot_state 1 "\[609-<-$R0_id\]"
@@ -315,6 +315,9 @@ proc create_empty_shard {p r} {
     wait_for_role $p master
 }
 
+# TODO: Raft. After a soft CLUSTER RESET the node keeps its node ID, and on
+# CLUSTER MEET the log replay makes it a replica of its old primary again, so
+# create_empty_shard never gets an empty primary.
 start_cluster 3 5 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
     set R0_id [R 0 CLUSTER MYID]
@@ -387,7 +390,7 @@ start_cluster 3 5 {tags {external:skip cluster cluster-raft:skip} overrides {clu
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set R0_id [R 0 CLUSTER MYID]
     set R1_id [R 1 CLUSTER MYID]
@@ -433,7 +436,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {clu
 
 }
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
@@ -453,7 +456,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {clu
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with invalid timeouts" {
@@ -487,7 +490,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {clu
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with an explicit timeout" {
@@ -563,7 +566,7 @@ start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} } {
+start_cluster 3 3 {tags {external:skip cluster} } {
     test "Multi/Exec Validation During Slot Migration with Multiple Databases" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
@@ -660,7 +663,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} } {
 }
 
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} } {
+start_cluster 3 3 {tags {external:skip cluster} } {
     test "MOVE should not be allowed while migrating slots with multi databases" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
@@ -687,7 +690,7 @@ start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} } {
 }
 
 
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} } {
+start_cluster 3 3 {tags {external:skip cluster} } {
     test "Cross-DB COPY command should not be allow during slot migration" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]

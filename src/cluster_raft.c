@@ -454,13 +454,18 @@ static bool clusterRaftLeaderHasQuorumLinks(void) {
     return reachable >= clusterRaftQuorum();
 }
 
+static int clusterRaftLogFullyApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->last_applied >= raftLogLastIndex();
+}
+
 /* The migration job clears this pause after 2s. Keep it until SLOT_CHANGE
  * is applied, so a partitioned source cannot ACK a write that apply drops. */
 static void clusterRaftSyncSlotMigrationPause(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) rs->slot_migration_pause = 1;
     if (!rs->slot_migration_pause) return;
-    if (!clusterIsAnySlotExporting() && rs->role == RAFT_ROLE_LEADER && rs->last_applied >= rs->commit_index &&
+    if (!clusterIsAnySlotExporting() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
         clusterRaftLeaderHasQuorumLinks()) {
         clusterRaftDropSlotMigrationPause();
         return;
@@ -469,13 +474,14 @@ static void clusterRaftSyncSlotMigrationPause(void) {
 }
 
 static void clusterRaftOnSlotOwnershipApplied(void) {
-    if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExporting()) clusterRaftDropSlotMigrationPause();
+    if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExporting() && clusterRaftLogFullyApplied())
+        clusterRaftDropSlotMigrationPause();
 }
 
 static void clusterRaftReleaseSlotMigrationPauseIfCaughtUp(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (!rs->slot_migration_pause || clusterIsAnySlotExporting()) return;
-    if (rs->last_applied < rs->commit_index) return;
+    if (!clusterRaftLogFullyApplied()) return;
     clusterRaftDropSlotMigrationPause();
 }
 

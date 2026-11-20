@@ -853,4 +853,27 @@ tags {"aof cluster external:skip singledb"} {
         }
         clean_aof_persistence $aof_dirpath
     }
+
+    start_server {overrides {appendonly yes}} {
+        test {AOF stays enabled after a failed DEBUG LOADAOF} {
+            r set before_load 1
+            set incr_path [get_last_incr_aof_path r]
+            # Append a command the AOF load rejects, so DEBUG LOADAOF fails.
+            set fp [open $incr_path a]
+            puts -nonewline $fp [formatCommand not-a-command]
+            close $fp
+
+            catch {r debug loadaof} err
+            assert_match {*Error trying to load the AOF files*} $err
+            assert_equal {appendonly yes} [r config get appendonly]
+            assert_equal 1 [s aof_enabled]
+
+            # A write after the failed load must still reach the AOF.
+            r set after_load 1
+            set fp [open $incr_path r]
+            set content [read $fp]
+            close $fp
+            assert_match {*after_load*} $content
+        }
+    }
 }

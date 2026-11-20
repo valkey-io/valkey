@@ -45,8 +45,16 @@
             }
         ],
         "reply_schema": {
-            "description": "The idle time in seconds.",
-            "type": "integer"
+            "oneOf": [
+                {
+                    "description": "The idle time in seconds.",
+                    "type": "integer"
+                },
+                {
+                    "description": "The key does not exist.",
+                    "type": "null"
+                }
+            ]
         }
     }
 }

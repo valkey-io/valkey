@@ -591,6 +591,10 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert_equal {OK} [r test.malloc_api 0]
     }
 
+    test "TryCalloc fails when nmemb * size overflows" {
+        assert_equal 1 [r test.trycalloc_overflow]
+    }
+
     test "Cluster keyslot" {
         assert_equal 12182 [r test.keyslot foo]
     }
@@ -662,5 +666,16 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
 
     test "Unload the module - misc" {
         assert_equal {OK} [r module unload misc]
+    }
+}
+
+# Valgrind will complain that the process terminated by a signal, skip it.
+tags {"valgrind:skip"} {
+    start_server {tags {"modules external:skip"} overrides {crash-memcheck-enabled no}} {
+        r module load $testmodule
+        test "Calloc panics when nmemb * size overflows" {
+            catch {r test.calloc_overflow}
+            wait_for_log_messages 0 {"*ValkeyModule_Calloc(*, 2) overflows*"} 0 10 1000
+        }
     }
 }

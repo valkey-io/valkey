@@ -51,6 +51,16 @@ start_server {tags {"keyspace"}} {
         assert_equal {} [r keys *]
     }
 
+    test {KEYS on a flushed DB does not leak a rehashing pause} {
+        r set foo bar
+        r flushdb sync
+        # The pause counter is an int16_t, so 32768 leaked pauses wrap it.
+        r eval {for i = 1, 32768 do server.call('keys', '*') end} 0
+        r set foo bar
+        r del foo
+        assert_equal PONG [r ping]
+    }
+
     test "DEL against expired key" {
         r debug set-active-expire 0
         r setex keyExpire 1 valExpire

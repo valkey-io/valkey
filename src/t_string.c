@@ -722,13 +722,28 @@ void msetexCommand(client *c) {
     }
 
     /* Propagate as MSETEX numkeys key value PXAT millisecond-timestamp if there is
-     * EX/PX/EXAT flag. */
+     * EX/PX/EXAT flag. EX/PX/EXAT may be repeated and only the last one applies,
+     * so drop the earlier ones, which are a syntax error next to PXAT. */
     if (expire && !(flags & ARGS_PXAT)) {
         serverAssert(expire_idx != -1);
-        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-        rewriteClientCommandArgument(c, expire_idx, shared.pxat);
-        rewriteClientCommandArgument(c, expire_idx + 1, milliseconds_obj);
-        decrRefCount(milliseconds_obj);
+        robj **argv = zmalloc(sizeof(robj *) * c->argc);
+        int argc = 0;
+        for (int j = 0; j < c->argc; j++) {
+            /* Only options are matched, keys and values may be named EX and the
+             * values may be integer encoded by now. */
+            char *opt = j >= args_start_idx ? objectGetVal(c->argv[j]) : NULL;
+            if (opt && (!strcasecmp(opt, "EX") || !strcasecmp(opt, "PX") || !strcasecmp(opt, "EXAT"))) {
+                if (j == expire_idx) {
+                    argv[argc++] = shared.pxat;
+                    argv[argc++] = createStringObjectFromLongLong(milliseconds);
+                }
+                j++; /* Skip the original expire argument. */
+            } else {
+                argv[argc++] = c->argv[j];
+                incrRefCount(c->argv[j]);
+            }
+        }
+        replaceClientCommandVector(c, argc, argv);
     }
 
     addReply(c, shared.cone);

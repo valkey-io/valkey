@@ -255,7 +255,7 @@ proc wait_for_ofs_sync {r1 r2} {
 
 proc wait_done_loading r {
     wait_for_condition 50 100 {
-        [catch {$r ping} e] == 0
+        [catch {{*}$r ping} e] == 0
     } else {
         fail "Loading DB is taking too much time."
     }
@@ -528,6 +528,7 @@ proc formatCommand {args} {
 }
 
 proc csvdump r {
+    wait_done_loading $r
     set o {}
     if {$::singledb} {
         set maxdb 1
@@ -884,7 +885,7 @@ proc fuzzy_traffic_commands_by_type {} {
     set list_commands {LINDEX LINSERT LLEN LPOP LPOS LPUSH LPUSHX LRANGE LREM LSET LTRIM RPOP RPOPLPUSH RPUSH RPUSHX}
     set set_commands {SADD SCARD SDIFF SDIFFSTORE SINTER SINTERSTORE SISMEMBER SMEMBERS SMOVE SPOP SRANDMEMBER SREM SSCAN SUNION SUNIONSTORE}
     set stream_commands {XACK XADD XCLAIM XDEL XGROUP XINFO XLEN XPENDING XRANGE XREAD XREADGROUP XREVRANGE XTRIM}
-    set pathhash_commands {PHCARD PHDEL PHDELPREFIX PHEXISTS PHGET PHGETALL PHLONGEST PHMGET PHMSET PHPREFIXES PHSCAN PHSET}
+    set pathhash_commands {PHPATHCOUNT PHDEL PHPATHDEL PHPATHEXISTS PHGET PHGETALL PHMGET PHMSET PHPREFIXES PHSCAN PHPATHSCAN PHSET}
     return [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands pathhash $pathhash_commands]
 }
 
@@ -1252,7 +1253,7 @@ proc get_nonloopback_addr {} {
 }
 
 proc get_nonloopback_client {} {
-    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
+    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls {-servername localhost}]
 }
 
 # The following functions and variables are used only when running large-memory

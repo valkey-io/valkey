@@ -18,6 +18,7 @@
 
 #include "lauxlib.h"
 #include "lualib.h"
+#include "lstate.h"
 
 
 
@@ -516,6 +517,21 @@ static int luaB_costatus (lua_State *L) {
 }
 
 
+/*
+** Hooks are per thread, so without this every coroutine gets its own
+** instruction budget and a hook change made inside a coroutine (such as
+** the switch to a line hook on SCRIPT KILL) never reaches its resumer.
+** Only one thread runs at a time, so handing the hook back and forth on
+** resume makes all threads share one hook and one count.
+*/
+static void movehook (lua_State *from, lua_State *to) {
+  to->hook = from->hook;
+  to->hookmask = from->hookmask;
+  to->basehookcount = from->basehookcount;
+  to->hookcount = from->hookcount;
+}
+
+
 static int auxresume (lua_State *L, lua_State *co, int narg) {
   int status = costatus(L, co);
   if (!lua_checkstack(co, narg))
@@ -526,7 +542,9 @@ static int auxresume (lua_State *L, lua_State *co, int narg) {
   }
   lua_xmove(L, co, narg);
   lua_setlevel(L, co);
+  movehook(L, co);
   status = lua_resume(co, narg);
+  movehook(co, L);
   if (status == 0 || status == LUA_YIELD) {
     int nres = lua_gettop(co);
     if (!lua_checkstack(L, nres + 1))

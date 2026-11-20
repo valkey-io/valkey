@@ -76,13 +76,15 @@ $(LUA_TARGET): $(OBJS) $(LIBS)
 endif
 
 sha1.o: ../../sha1.c
-	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -MMD -c $< -o $@
 
 rand.o: ../../rand.c
-	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -MMD -c $< -o $@
 
 %.o: %.c
-	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -MMD -c $< -o $@
+
+-include $(OBJS:.o=.d)
 
 $(DEPS_DIR)/lua/src/liblua.a:
 	cd $(DEPS_DIR) && $(MAKE) lua
@@ -91,4 +93,4 @@ $(DEPS_DIR)/fpconv/libfpconv.a:
 	cd $(DEPS_DIR) && $(MAKE) fpconv
 
 clean:
-	rm -f *.so *.a $(OBJS)
+	rm -f *.so *.a *.d $(OBJS)

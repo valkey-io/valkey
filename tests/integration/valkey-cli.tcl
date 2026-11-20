@@ -354,6 +354,13 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal "foo\nbar" [run_cli lrange list 0 -1]
     }
 
+    test "Non-interactive non-TTY CLI: RESP3 attribute is skipped" {
+        set reply "Some real reply following the attribute"
+        assert_equal $reply [run_cli -3 debug protocol attrib]
+        assert_equal "\"$reply\"" [run_cli -3 --csv debug protocol attrib]
+        assert_equal "\"$reply\"" [run_cli -3 --json debug protocol attrib]
+    } {} {needs:debug}
+
     test_nontty_cli "--eval should not crash valkey-cli" {
         set scriptfile [write_tmpfile "return { 1 }"]
         assert_equal "1" [run_cli --eval $scriptfile]
@@ -614,6 +621,10 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_error "*tag not match*" {run_cli_with_input_pipe X "echo foo" set key wrong_tag}
     }
 
+    test "Option --hotkeys-count rejects a negative count" {
+        assert_error "*Invalid hotkeys count*" {run_cli --hotkeys-count -1}
+    }
+
     test "DUMP RESTORE with -x option" {
         set cmdline [valkeycli [srv host] [srv port]]
 
@@ -869,6 +880,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 
     test "valkey-cli make sure selected db survives connection drops" {    
         set fd [open_cli]
+        test_defer [list close_cli $fd]
                 
         # Select the database        
         assert_equal "OK" [run_command $fd "select $::dbnum"]

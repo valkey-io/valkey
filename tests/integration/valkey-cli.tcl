@@ -546,6 +546,30 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_equal {key:2} [split [run_cli --scan --quoted-pattern {"*:\x32"}]]
     }
 
+    test "Memkeys reports MEMORY USAGE for each sample count" {
+        set old_limit [config_get_set list-max-listpack-size 1]
+        test_defer [list config_set list-max-listpack-size $old_limit]
+        set key memkeys-list
+        test_defer [list r del $key]
+        r del $key
+        # One entry per node: the first sample misses the fifth entry, and
+        # the default five samples miss the much larger tail.
+        r rpush $key a b c d [string repeat e 128] [string repeat f 16384]
+        set one [r memory usage $key samples 1]
+        set default [r memory usage $key]
+        set all [r memory usage $key samples 0]
+        assert_morethan $default $one
+        assert_morethan $all $default
+
+        set reported {}
+        foreach options {--memkeys {--memkeys-samples 1} {--memkeys-samples 0}} {
+            set report [run_cli --pattern $key {*}$options]
+            assert {[regexp -line {^1 lists? with ([0-9]+) bytes } $report -> bytes]}
+            lappend reported $bytes
+        }
+        assert_equal $reported [list $default $one $all] "bytes for --memkeys, --memkeys-samples 1, --memkeys-samples 0"
+    }
+
     proc test_valkey_cli_repl {} {
         set fd [open_cli "--replica"]
         wait_for_condition 500 100 {

@@ -83,6 +83,7 @@
 #define OUTPUT_QUOTED_JSON 4
 #define CLI_KEEPALIVE_INTERVAL 15   /* seconds */
 #define CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
+#define MEMKEYS_SAMPLES_DEFAULT -1  /* Omit SAMPLES and use the server default. */
 #define CLI_HISTFILE_ENV "VALKEYCLI_HISTFILE"
 #define OLD_CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
 #define CLI_HISTFILE_DEFAULT ".valkeycli_history"
@@ -260,7 +261,7 @@ static struct config {
     char *rdb_filename;
     int bigkeys;
     int memkeys;
-    unsigned memkeys_samples;
+    long long memkeys_samples;
     int hotkeys;
     unsigned hotkeys_count;
     int stdin_lastarg;    /* get last arg from stdin. (-x option) */
@@ -2707,10 +2708,18 @@ static int parseOptions(int argc, char **argv) {
             config.bigkeys = 1;
         } else if (!strcmp(argv[i], "--memkeys")) {
             config.memkeys = 1;
-            config.memkeys_samples = 0; /* use the server default */
+            config.memkeys_samples = MEMKEYS_SAMPLES_DEFAULT;
         } else if (!strcmp(argv[i], "--memkeys-samples") && !lastarg) {
+            const char *arg = argv[++i];
+            char *endptr;
+            errno = 0;
+            long long samples = strtoll(arg, &endptr, 10);
+            if (endptr == arg || *endptr != '\0' || errno == ERANGE || arg[0] == '-' || isspace((unsigned char)arg[0])) {
+                fprintf(stderr, "Invalid memkeys sample count. Must be a non-negative integer.\n");
+                exit(1);
+            }
             config.memkeys = 1;
-            config.memkeys_samples = atoi(argv[++i]);
+            config.memkeys_samples = samples;
         } else if (!strcmp(argv[i], "--hotkeys")) {
             config.hotkeys = 1;
             config.hotkeys_count = HOTKEYS_COUNT;
@@ -3097,8 +3106,9 @@ static void usage(int err) {
     fprintf(target,
             "  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
             "  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
+            "                     Use the server's default sample count.\n"
             "  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
-            "                     And define number of key elements to sample\n"
+            "                     Set the number of key elements to sample (0 samples all).\n"
             "  --hotkeys          Sample keys looking for hot keys.\n"
             "                     Only works when maxmemory-policy is *lfu.\n"
             "                     This is equivalent to --hotkeys-count 16.\n"
@@ -9316,7 +9326,7 @@ static void getKeyTypes(dict *types_dict, valkeyReply *keys, typeinfo **types) {
 }
 
 static void
-getKeySizes(valkeyReply *keys, typeinfo **types, unsigned long long *sizes, int memkeys, unsigned memkeys_samples) {
+getKeySizes(valkeyReply *keys, typeinfo **types, unsigned long long *sizes, int memkeys, long long memkeys_samples) {
     valkeyReply *reply;
     unsigned int i;
 
@@ -9329,7 +9339,7 @@ getKeySizes(valkeyReply *keys, typeinfo **types, unsigned long long *sizes, int 
             const char *argv[] = {types[i]->sizecmd, keys->element[i]->str};
             size_t lens[] = {strlen(types[i]->sizecmd), keys->element[i]->len};
             valkeyAppendCommandArgv(context, 2, argv, lens);
-        } else if (memkeys_samples == 0) {
+        } else if (memkeys_samples == MEMKEYS_SAMPLES_DEFAULT) {
             const char *argv[] = {"MEMORY", "USAGE", keys->element[i]->str};
             size_t lens[] = {6, 5, keys->element[i]->len};
             valkeyAppendCommandArgv(context, 3, argv, lens);
@@ -9390,7 +9400,7 @@ static void sendReadOnly(void) {
     freeReplyObject(read_reply);
 }
 
-static void findBigKeys(int memkeys, unsigned memkeys_samples) {
+static void findBigKeys(int memkeys, long long memkeys_samples) {
     unsigned long long sampled = 0, total_keys, totlen = 0, *sizes = NULL, it = 0, scan_loops = 0;
     valkeyReply *reply, *keys;
     unsigned int arrsize = 0, i;
@@ -10255,7 +10265,7 @@ int main(int argc, char **argv) {
     /* Find big keys */
     if (config.bigkeys) {
         if (cliConnect(0) == VALKEY_ERR) exit(1);
-        findBigKeys(0, 0);
+        findBigKeys(0, MEMKEYS_SAMPLES_DEFAULT);
     }
 
     /* Find large keys */

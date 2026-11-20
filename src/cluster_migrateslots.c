@@ -121,7 +121,6 @@ static void finishSlotMigrationJob(slotMigrationJob *job,
                                    char *message);
 static void freeSlotMigrationJob(void *o);
 static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNode *other_node);
-static void slotExportTryUnpause(void);
 static slotMigrationJob *clusterLookupMigrationJob(sds name);
 static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
 static void clusterCleanupSlotMigrationLog(size_t max_len);

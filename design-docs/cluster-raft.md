@@ -55,6 +55,11 @@ AE_ACK <term> <success> <last-log-index> <repl-offset>
     follower's last log index for matchIndex tracking, and the
     node's replication offset.
 
+INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>
+    Sent by the leader instead of AE to a follower that needs entries
+    the leader has trimmed. Followed by the node lines of the leader's
+    state. See InstallSnapshot below.
+
 VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>
     RequestVote. Sent by candidates during elections.
 
@@ -73,6 +78,13 @@ PRE_VOTE <term> <granted>
 PROPOSE <entry>
     Forwards a proposal from a follower to the leader. The entry
     uses the same format as log entries (type followed by data).
+
+REJECT <reason> <entry>
+    Reply to PROPOSE when the leader's pre-validation fails. <reason> is
+    "conflict" (stale shard epoch; the proposer retries with fresh
+    epochs), "transfer" (the leader is handing off leadership; the
+    proposer retries with the new leader) or "rejected" (the client gets
+    an error). The entry is included so the proposer can match it.
 
 UNCHANGED <index> <entry>
     Reply to PROPOSE for an entry that wouldn't change anything, as found
@@ -965,7 +977,8 @@ Only `STALE_SHARD_EPOCH_REJECTION_MSG` triggers retry. Other errors
 
 When the leader rejects a forwarded proposal at pre-validation, it sends
 a `REJECT <reason> <type> <data...>` message back. The reason is a token:
-`conflict` (stale epoch, retryable) or `syntax` (permanent error).
+`conflict` (stale epoch, retryable), `transfer` (retried with the new
+leader) or `rejected` (permanent error).
 
 ### Entries that don't carry an epoch
 

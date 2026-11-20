@@ -969,8 +969,21 @@ immediately starts a real election (skipping pre-vote) without waiting
 for the election timeout.
 (See Ongaro dissertation §3.10.)
 
-Nodes in handshake or not yet in the raft log are excluded as
-transfer targets.
+When `CLUSTER FORGET` targets the leader, the `NODE_FORGET` proposal is
+forwarded to the leader like any other. The leader validates it, starts
+a leadership transfer instead of appending it, and replies `REJECT` with
+the reason `transfer`. Since the target skips pre-vote, the leader only
+sends `TIMEOUT_NOW` once the target's `match_index` has reached the
+leader's last log index. If that doesn't happen within the node timeout,
+the transfer is abandoned and the leader stays leader. After sending
+`TIMEOUT_NOW`, the leader doesn't append new entries until it steps down
+or the transfer times out, so the target's log stays complete for the
+election. The proposing node keeps the proposal pending. It is resent to
+the new leader after the leader change, or to the same leader on
+reconnect, which starts a new transfer. Otherwise it times out.
+
+Nodes in handshake, learners and nodes not yet in the raft log are
+excluded as transfer targets.
 
 ## Future Work
 
@@ -980,7 +993,6 @@ transfer targets.
   per-node availability-zone info to add/remove voters so that voters
   are spread across at least 3 zones, letting the cluster survive a
   single zone outage.
-- Leader transfer on CLUSTER FORGET where the target is the leader.
 - Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either

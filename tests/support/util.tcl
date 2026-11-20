@@ -299,6 +299,15 @@ proc verify_log_message {srv_idx pattern from_line} {
     }
 }
 
+# Like verify_log_message, but with a regular expression instead of a glob pattern
+proc verify_log_message_re {srv_idx re from_line} {
+    incr from_line
+    set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
+    if {![regexp -- $re $result]} {
+        fail "expected regexp found in srv $srv_idx log file: $re, but instead got: $result"
+    }
+}
+
 # verify pattern does not exists in server's stout after a certain line number
 proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line

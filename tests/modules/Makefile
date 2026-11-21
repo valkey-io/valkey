@@ -70,6 +70,7 @@ TEST_MODULES = \
     moduleauthtwo.so \
     rdbloadsave.so \
     crash.so \
+    loaderlock.so \
     cluster.so \
     hellovalkey.so \
     helloscripting.so \

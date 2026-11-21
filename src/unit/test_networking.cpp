@@ -972,3 +972,25 @@ TEST_F(NetworkingTest, TestReadDoneKeepsPostponeWhileWritePending) {
     zfree(c);
     connFreeFake(fc);
 }
+
+/* A close_asap client must lose its write handler and its write postpone after an IO write; fails if the check moves above connSetPostponeUpdateState(). */
+TEST_F(NetworkingTest, TestWriteDoneStopsWritesToCloseAsapClient) {
+    fakeConnection *fc = connCreateFake();
+    fc->conn.state = CONN_STATE_CONNECTED;
+    client *c = (client *)zcalloc(sizeof(client));
+    c->conn = &fc->conn;
+    c->flag.close_asap = 1;
+    c->io_write_state = CLIENT_COMPLETED_IO;
+    connSetWriteHandler(c->conn, sendReplyToClient);
+    connSetPostponeUpdateState(c->conn, CONN_POSTPONE_WRITE);
+
+    processClientIOWriteDone(c);
+
+    EXPECT_EQ(c->io_write_state, CLIENT_IDLE);
+    EXPECT_EQ(c->conn->write_handler, nullptr);
+    EXPECT_EQ(fc->postpone_state, 0);
+    EXPECT_FALSE(c->conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE);
+
+    zfree(c);
+    connFreeFake(fc);
+}

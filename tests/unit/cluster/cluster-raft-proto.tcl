@@ -1268,4 +1268,36 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     }
 }
 
+test "Raft proto: INSTALL_SNAPSHOT is not ACKed past the snapshot" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set l0_id [string repeat "c" 40]
+        set l0_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
+        set l1_id [string repeat "d" 40]
+        set l1_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+ 
+        # Leader in term 2 sends three noop entries and commits 1 of 3 entries in log
+        set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
+        raft_send $fd0 "AE $l0_id 2 0 0 1 3\n2 NOOP -\n2 NOOP -\n2 NOOP -"
+        assert_match "AE_ACK 2 1 3 *" [raft_recv_until $fd0 "AE_ACK *"]
+ 
+        # Leader in term 3 sends two snapshots that are not installed
+        set fd1 [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
+        
+        # First path: our state has been applied, install snapshot ignores this
+        raft_send $fd1 "INSTALL_SNAPSHOT $l1_id 3 1 2"
+        set ack1 [raft_recv_until $fd1 "AE_ACK 3 1 *"]
+        
+        # Second path: our state is committed up to entry 2, but we should not ack more
+        raft_send $fd1 "INSTALL_SNAPSHOT $l1_id 3 2 2"
+        set ack2 [raft_recv_until $fd1 "AE_ACK 3 1 *"]
+ 
+        # The last index in each ACK must not pass the snapshot.
+        assert_equal {1 2} [list [lindex $ack1 3] [lindex $ack2 3]]
+ 
+        close $fd0
+        close $fd1
+    }
+}
+
 } ;# tags

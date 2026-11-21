@@ -60,7 +60,14 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}} {
+# The tests below write to primary 0 right after start_cluster returns. A stall
+# longer than cluster-node-timeout there would let the other nodes fail it over,
+# and the write would get MOVED. Use a longer timeout so that stall cannot fail
+# the primary over, while the shutdown and dirty-slot race is still exercised.
+# The shutdown test relies on an automatic failover at the end, so the longer
+# timeout also delays that promotion (about 4.6 s -> 10.8 s). That is expected:
+# do not lower the timeout to speed the test up, or the flake comes back.
+start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100 cluster-node-timeout 10000}} {
     test "Primary lost a slot during the shutdown waiting" {
         R 0 set FOO 0
 
@@ -89,16 +96,18 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
         wait_for_log_messages 0 {"*Valkey is now ready to exit, bye bye*"} 0 1000 10
 
         # Make sure that the replica will become the new primary and does not own the key.
-        wait_for_condition 1000 50 {
+        # With cluster-node-timeout 10000 a failed election is retried only after 40 s,
+        # so leave room for one retry.
+        wait_for_condition 2000 50 {
             [s -3 role] eq {master}
         } else {
             fail "The replica was not converted into primary"
         }
-        assert_error {ERR no such key} {R 3 debug object foo}
+        assert_error {ERR no such key} {R 3 debug object FOO}
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 10000}} {
     test "Primary lost a slot during the manual failover pausing" {
         R 0 set FOO 0
 
@@ -125,7 +134,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 10000}} {
     test "Primary lost a slot during the client pause command" {
         R 0 set FOO 0
 

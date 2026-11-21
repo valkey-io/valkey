@@ -56,6 +56,9 @@
                         "sentinel-pass": {
                             "type": "string"
                         },
+                        "aclfile": {
+                            "type": "string"
+                        },
                         "loglevel": {
                             "oneOf": [
                                 {

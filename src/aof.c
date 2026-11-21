@@ -2772,6 +2772,16 @@ int rewriteAppendOnlyFileBackground(void) {
      * feedAppendOnlyFile() to issue a SELECT command. */
     server.aof_selected_db = -1;
     flushAppendOnlyFile(1);
+    /* Commands in the AOF buffer already ran, so they're in the dataset the rewrite
+     * saves. If they were written to the new INCR file after the new base, they
+     * would be applied twice when loading the AOF, and in database 0 if the buffer
+     * doesn't start with a SELECT. */
+    if (sdslen(server.aof_buf) > 0) {
+        serverLog(LL_WARNING, "Can't start AOF rewrite while pending AOF data could not be flushed");
+        server.aof_lastbgrewrite_status = C_ERR;
+        server.stat_aofrw_consecutive_failures++;
+        return C_ERR;
+    }
     if (openNewIncrAofForAppend() != C_OK) {
         server.aof_lastbgrewrite_status = C_ERR;
         return C_ERR;

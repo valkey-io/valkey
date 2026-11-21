@@ -8994,6 +8994,16 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
 
+        /* Can't replicate a node that is still in handshake or that has no
+         * known address. A handshake node's id is a placeholder until the
+         * first PONG, and the node is deleted if the handshake times out. A
+         * NOADDR node has an empty address, so the replication link can never
+         * be established. Both would leave us without a usable primary. */
+        if (clusterNodePending(n)) {
+            addReplyError(c, "Can't replicate a node that is still in handshake or has no known address.");
+            return 1;
+        }
+
         /* If the instance is currently a primary, it should have no assigned
          * slots nor keys to accept to replicate some other node.
          * Replicas can switch to another primary without issues. */

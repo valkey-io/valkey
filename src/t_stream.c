@@ -1426,8 +1426,8 @@ int streamIDEqZero(streamID *id) {
 int streamRangeHasTombstones(stream *s, streamID *start, streamID *end) {
     streamID start_id, end_id;
 
-    if (!s->length || streamIDEqZero(&s->max_deleted_entry_id)) {
-        /* The stream is empty or has no tombstones. */
+    if (streamIDEqZero(&s->max_deleted_entry_id)) {
+        /* The stream has no tombstones. */
         return 0;
     }
 
@@ -1455,6 +1455,12 @@ int streamRangeHasTombstones(stream *s, streamID *start, streamID *end) {
     return 0;
 }
 
+/* Returns non-zero if a tombstone exists strictly after 'id', meaning the
+ * range (id, +inf) is fragmented. */
+static int streamHasTombstonesAfter(stream *s, streamID *id) {
+    return streamRangeHasTombstones(s, id, NULL) && streamCompareID(&s->max_deleted_entry_id, id) > 0;
+}
+
 /* Replies with a consumer group's current lag, that is the number of messages
  * in the stream that are yet to be delivered. In case that the lag isn't
  * available due to fragmentation, the reply to the client is a null. */
@@ -1466,7 +1472,7 @@ void streamReplyWithCGLag(client *c, stream *s, streamCG *cg) {
         /* The lag of a newly-initialized stream is 0. */
         lag = 0;
         valid = 1;
-    } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
+    } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamHasTombstonesAfter(s, &cg->last_id)) {
         /* No fragmentation ahead means that the group's logical reads counter
          * is valid for performing the lag calculation. */
         if (!s->length || streamCompareID(&cg->last_id, &s->first_id) < 0) {
@@ -1523,15 +1529,15 @@ long long streamEstimateDistanceFromFirstEverEntry(stream *s, streamID *id) {
         return 0;
     }
 
+    if (!streamIDEqZero(id) && streamCompareID(id, &s->max_deleted_entry_id) < 0) {
+        /* The ID is before the last tombstone, so the counter is unknown. */
+        return SCG_INVALID_ENTRIES_READ;
+    }
+
     /* In the empty stream, if the ID is smaller or equal to the last ID,
      * it can set to the current added_entries value. */
     if (!s->length && streamCompareID(id, &s->last_id) < 1) {
         return s->entries_added;
-    }
-
-    if (!streamIDEqZero(id) && streamCompareID(id, &s->max_deleted_entry_id) < 0) {
-        /* The ID is before the last tombstone, so the counter is unknown. */
-        return SCG_INVALID_ENTRIES_READ;
     }
 
     int cmp_last = streamCompareID(id, &s->last_id);
@@ -1767,8 +1773,8 @@ size_t streamReplyWithRange(client *c,
         if (group && streamCompareID(&id, &group->last_id) > 0) {
             if (group->entries_read != SCG_INVALID_ENTRIES_READ &&
                 streamCompareID(&group->last_id, &s->first_id) >= 0 &&
-                !streamRangeHasTombstones(s, &group->last_id, NULL)) {
-                /* A valid counter and no tombstones in the group's last-delivered-id and the stream's last-generated-id,
+                !streamHasTombstonesAfter(s, &group->last_id)) {
+                /* A valid counter and no tombstones strictly after the group's last-delivered-id,
                  * we can increment the read counter to keep tracking the group's progress. */
                 group->entries_read++;
             } else if (s->entries_added) {

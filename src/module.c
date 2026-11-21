@@ -6434,6 +6434,8 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
     if (private_data) *private_data = promise->private_data;
     promise->private_data = NULL;
     promise->on_unblocked = NULL;
+    /* The aborted command is not recorded, so drop its in-flight duration. */
+    promise->c->duration = 0;
     unblockClient(promise->c, 0);
     moduleReleaseTempClient(promise->c);
     return VALKEYMODULE_OK;
@@ -6465,6 +6467,8 @@ int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle) {
     promise->resp_handlers = (ValkeyModuleReplyHandlers){0};
     promise->resp_handlers_ctx = NULL;
 
+    /* The aborted command is not recorded, so drop its in-flight duration. */
+    promise->c->duration = 0;
     unblockClient(promise->c, 0);
     moduleReleaseTempClient(promise->c);
     return VALKEYMODULE_OK;

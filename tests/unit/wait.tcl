@@ -107,6 +107,36 @@ start_server {} {
         $rd2 close
     }
 
+    test {WAIT is counted once in the command stats} {
+        $master config resetstat
+        set rd [valkey_deferring_client -1]
+        $rd client id
+        set id [$rd read]
+
+        # Unblocked by the replica ack.
+        pause_process $slave_pid
+        $rd incr foo
+        $rd read
+        $rd wait 1 0
+        wait_for_blocked_clients_count 1 100 10 -1
+        resume_process $slave_pid
+        assert_equal 1 [$rd read]
+        assert_match {calls=1,*,rejected_calls=0,failed_calls=0} [cmdrstat wait $master]
+
+        # Unblocked on timeout.
+        assert_equal 1 [$master wait 2 10]
+        assert_match {calls=2,*,rejected_calls=0,failed_calls=0} [cmdrstat wait $master]
+
+        # Unblocked with an error.
+        $rd wait 2 0
+        wait_for_blocked_clients_count 1 100 10 -1
+        assert_equal 1 [$master client unblock $id error]
+        assert_error {UNBLOCKED*} {$rd read}
+        assert_match {calls=3,*,rejected_calls=1,failed_calls=0} [cmdrstat wait $master]
+
+        $rd close
+    }
+
     start_server {} {
         test {Set up a new replica} {
             r replicaof $master_host $master_port

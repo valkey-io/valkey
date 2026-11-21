@@ -719,6 +719,14 @@ void debugCommand(client *c) {
             addReplyErrorObject(c, shared.nokeyerr);
             return;
         }
+        /* Same guard as DUMP: rdbSavedObjectLen() can't handle a missing rdb_save. */
+        if (!fast && objectGetType(val) == OBJ_MODULE) {
+            moduleValue *mv = objectGetVal(val);
+            if (mv->type->rdb_save == NULL) {
+                addReplyError(c, "module type has no rdb_save callback");
+                return;
+            }
+        }
         strenc = strEncoding(val->encoding);
 
         char extra[138] = {0};

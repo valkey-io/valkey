@@ -191,6 +191,17 @@ void dumpCommand(client *c) {
         return;
     }
 
+    /* createDumpPayload() can't fail and asserts on rdbSaveObject() errors, but
+     * a module may omit rdb_save. Reject such keys here so DUMP returns an error
+     * instead of sending a truncated payload or panicking. */
+    if (objectGetType(o) == OBJ_MODULE) {
+        moduleValue *mv = objectGetVal(o);
+        if (mv->type->rdb_save == NULL) {
+            addReplyError(c, "module type has no rdb_save callback");
+            return;
+        }
+    }
+
     /* Create the DUMP encoded representation. */
     createDumpPayload(&payload, o, c->argv[1], c->db->id);
 

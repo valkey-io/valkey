@@ -13,8 +13,8 @@ static ValkeyModuleType *datatype = NULL;
 static int load_encver = 0;
 
 /* used to test processing events during slow loading */
-static volatile int slow_loading = 0;
-static volatile int is_in_slow_loading = 0;
+static int slow_loading = 0;
+static int is_in_slow_loading = 0;
 
 #define DATATYPE_ENC_VER 1
 
@@ -35,14 +35,14 @@ static void *datatype_load(ValkeyModuleIO *io, int encver) {
     dt->intval = intval;
     dt->strval = strval;
 
-    if (slow_loading) {
+    if (__atomic_load_n(&slow_loading, __ATOMIC_SEQ_CST)) {
         ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(io);
-        is_in_slow_loading = 1;
-        while (slow_loading) {
+        __atomic_store_n(&is_in_slow_loading, 1, __ATOMIC_SEQ_CST);
+        while (__atomic_load_n(&slow_loading, __ATOMIC_SEQ_CST)) {
             ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "Slow module operation");
             usleep(1000);
         }
-        is_in_slow_loading = 0;
+        __atomic_store_n(&is_in_slow_loading, 0, __ATOMIC_SEQ_CST);
     }
 
     return dt;
@@ -217,7 +217,7 @@ static int datatype_slow_loading(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
         ValkeyModule_ReplyWithError(ctx, "Invalid integer value");
         return VALKEYMODULE_OK;
     }
-    slow_loading = ll;
+    __atomic_store_n(&slow_loading, ll, __ATOMIC_SEQ_CST);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return VALKEYMODULE_OK;
 }
@@ -230,7 +230,7 @@ static int datatype_is_in_slow_loading(ValkeyModuleCtx *ctx, ValkeyModuleString 
         return VALKEYMODULE_OK;
     }
 
-    ValkeyModule_ReplyWithLongLong(ctx, is_in_slow_loading);
+    ValkeyModule_ReplyWithLongLong(ctx, __atomic_load_n(&is_in_slow_loading, __ATOMIC_SEQ_CST));
     return VALKEYMODULE_OK;
 }
 

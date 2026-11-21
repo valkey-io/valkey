@@ -292,6 +292,17 @@ int module_test_acl_category(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     return VALKEYMODULE_OK;
 }
 
+/* SELECTDB <dbid>, replies with the DB returned by GetSelectedDb */
+int aclcheck_selectdb(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    long long dbid;
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    if (ValkeyModule_StringToLongLong(argv[1], &dbid) != VALKEYMODULE_OK ||
+        ValkeyModule_SelectDb(ctx, (int)dbid) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid dbid");
+    }
+    return ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_GetSelectedDb(ctx));
+}
+
 int commandBlockCheck(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -377,6 +388,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.check.permissions", aclcheck_check_permissions,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"aclcheck.selectdb", aclcheck_selectdb,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.rm_call.check.cmd", rm_call_aclcheck_cmd_default_user,"",0,0,0) == VALKEYMODULE_ERR)

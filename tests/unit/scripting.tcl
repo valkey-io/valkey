@@ -1829,6 +1829,63 @@ start_server {tags {"scripting external:skip tls:skip"}} {
     }
 }
 
+start_server {tags {"scripting needs:debug external:skip tls:skip"} overrides {appendonly yes}} {
+    test {Stopping AOF during a rewrite does not reap a forked scripting debug session} {
+        r set foo bar
+        r config set rdb-key-save-delay 10000000
+        r config set lua-time-limit 10
+
+        set dbg [valkey_deferring_client]
+        $dbg script debug yes
+        assert_equal OK [$dbg read]
+        $dbg eval {return 'hello'} 0
+        assert_match {*Stopped at*} [$dbg read]
+        set dbg_pid [get_child_pid 0]
+
+        # serverCron doesn't reap children while a script is running. Send the
+        # commands in a single write, so the rewrite is started and killed right
+        # after the script, before serverCron runs.
+        set rd [valkey_deferring_client]
+        $rd write [format_command eval {while true do end} 0]
+        $rd write [format_command bgrewriteaof]
+        $rd write [format_command config set appendonly no]
+        $rd flush
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+
+        # End the debug session. Its child exits and waits to be reaped.
+        $dbg write [format_command c]
+        $dbg flush
+        assert_equal {<endsession>} [$dbg read]
+        wait_for_condition 50 100 {
+            ![process_is_alive $dbg_pid]
+        } else {
+            fail "Debug session child did not exit"
+        }
+
+        r script kill
+        assert_error {*killed*} {$rd read}
+        assert_match {*rewriting started*} [$rd read]
+        assert_equal OK [$rd read]
+
+        # serverCron reaps the debug session child and stops tracking it. If
+        # killing the rewrite child reaped it instead, the server keeps tracking
+        # it and kills its pid on shutdown.
+        wait_for_condition 50 100 {
+            [catch {exec ps -p $dbg_pid}]
+        } else {
+            fail "Debug session child was not reaped"
+        }
+        $dbg close
+        $rd close
+        restart_server 0 true false
+        assert_equal 0 [count_log_message 0 "Killing debugging session"]
+    }
+}
+
 start_server {tags {"scripting needs:debug external:skip"}} {
     test {Test scripting debug protocol parsing} {
         r script debug sync

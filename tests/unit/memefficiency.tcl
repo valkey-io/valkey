@@ -445,23 +445,26 @@ run_solo {defrag} {
     proc test_defrag_later_type_change {type} {
         set key "{t}big"
         set src "{t}h"
-        foreach {kind how populate replace} {
-            set RENAME {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {r rename $src $key}
-            zset RENAME {for i=1,200000 do redis.call('zadd', KEYS[1], i, i) end} {r rename $src $key}
-            list RENAME {for i=1,200000 do redis.call('rpush', KEYS[1], i) end} {r rename $src $key}
-            set {DEL then HSET} {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {
+        foreach {kind with how populate replace} {
+            set hash RENAME {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {r rename $src $key}
+            zset hash RENAME {for i=1,200000 do redis.call('zadd', KEYS[1], i, i) end} {r rename $src $key}
+            list hash RENAME {for i=1,200000 do redis.call('rpush', KEYS[1], i) end} {r rename $src $key}
+            zset set RENAME {for i=1,200000 do redis.call('zadd', KEYS[1], i, i) end} {r rename $src $key}
+            list set RENAME {for i=1,200000 do redis.call('rpush', KEYS[1], i) end} {r rename $src $key}
+            set hash {DEL then HSET} {for i=1,200000 do redis.call('sadd', KEYS[1], i) end} {
                 r multi
                 r del $key
                 r hset $key a 1 b 2
                 r exec
             }
         } {
-            test "Active Defrag replaces a deferred $kind with a hash via $how: $type" {
+            test "Active Defrag replaces a deferred $kind with a $with via $how: $type" {
                 r flushall
                 r config set hash-max-listpack-entries 1
+                r config set set-max-listpack-entries 1
                 r config set list-max-listpack-size 3 ;# enough quicklist nodes to defer the list
                 r eval $populate 1 $key
-                r hset $src a 1 b 2
+                if {$with eq "hash"} {r hset $src a 1 b 2} else {r sadd $src a b}
                 assert_encoding hashtable $src
 
                 # Defrag regardless of fragmentation, slowly, so the key is
@@ -479,7 +482,7 @@ run_solo {defrag} {
                 }
 
                 # Replace the key while its scan is in progress. The next
-                # deferred step resumes on the hash with the old cursor.
+                # deferred step resumes on the $with with the old cursor.
                 eval $replace
                 assert_encoding hashtable $key
                 set steps [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
@@ -489,7 +492,45 @@ run_solo {defrag} {
                     fail "defrag did not move past the replaced key"
                 }
                 r config set activedefrag no
-                assert_equal {1 2} [r hmget $key a b]
+                if {$with eq "hash"} {
+                    assert_equal {1 2} [r hmget $key a b]
+                } else {
+                    assert_equal {a b} [lsort [r smembers $key]]
+                }
+            }
+        }
+    }
+
+    proc test_volatile_set {type} {
+        set title "Active Defrag big set with member TTLs: $type"
+        test $title {
+            set n 200000
+            # A distinct deadline per member, so a permuted or rewritten expiry index
+            # cannot pass the survivor check below.
+            set expiry_base [expr {[clock milliseconds] + 100000000}]
+            perform_defrag_test $title populate {
+                set rd [valkey_deferring_client]
+                $rd client reply off
+                set val [string repeat A 300]
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd saddex myset PXAT [expr {$expiry_base + $j}] MEMBERS 1 m$j:$val
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
+                }
+            } fragment {
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd srem myset m$j:$val
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
+                }
+                $rd close
+            }
+            for {set i 1} {$i < $n} {incr i 1000} {
+                set batch {}
+                set expected {}
+                for {set j $i} {$j < $i + 1000} {incr j 2} {
+                    lappend batch m$j:$val
+                    lappend expected [expr {$expiry_base + $j}]
+                }
+                assert_equal $expected [r spexpiretime myset MEMBERS [llength $batch] {*}$batch]
             }
         }
     }
@@ -723,6 +764,7 @@ run_solo {defrag} {
     lappend tests [list test_big_hash standalone $std_overrides]
     lappend tests [list test_big_list standalone $std_overrides]
     lappend tests [list test_big_set standalone $std_overrides]
+    lappend tests [list test_volatile_set standalone $std_overrides]
     lappend tests [list test_big_zset_random_score standalone $std_overrides]
     lappend tests [list test_big_zset_fixed_score standalone $std_overrides]
     lappend tests [list test_stream standalone $std_overrides]
@@ -735,6 +777,7 @@ run_solo {defrag} {
     lappend tests [list test_big_hash cluster $std_overrides]
     lappend tests [list test_big_list cluster $std_overrides]
     lappend tests [list test_big_set cluster $std_overrides]
+    lappend tests [list test_volatile_set cluster $std_overrides]
     lappend tests [list test_big_zset_random_score cluster $std_overrides]
     lappend tests [list test_big_zset_fixed_score cluster $std_overrides]
     lappend tests [list test_stream cluster $std_overrides]

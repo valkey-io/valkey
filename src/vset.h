@@ -57,6 +57,16 @@
  *     in order to remove up to max_count entries from the vset. The removed entries will all satisfy the condition that their expiration time is smaller than the provided now.
  *     Note that there are no guarantees about the order to the entries.
  *
+ * Live entries at a given time (an entry expiring before 'now' is hidden, one expiring at or after it is live):
+ *     bool vsetHasHidden(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) - whether any entry is hidden. Reads at most the earliest bucket.
+ *     bool vsetMayHaveHidden(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) - like vsetHasHidden, but answers true instead of reading a
+ *     hashtable bucket, so it never reads more than one vector of entries.
+ *     size_t vsetCountLive(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) - the exact number of live entries. Buckets whose key proves
+ *     them wholly live or wholly hidden are counted without reading an entry, so only one bucket is read.
+ *     size_t vsetCollectLive(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now, size_t cap, void **out) - stores the live entries in 'out'
+ *     when there are at most 'cap' of them and returns their number; returns cap + 1, leaving 'out' unspecified, as soon as more are live.
+ *     It walks the newest buckets first, so a set with many live entries is recognised after reading about 'cap' of them.
+ *
  * Utilities:
  *     bool vsetIsEmpty(vset *set) - used in order to check if a given set has any entries.
  *     size_t vsetSize(vset *set) - returns the number of entries in the set. O(1).
@@ -96,6 +106,10 @@ void vsetClear(vset *set);
 void vsetRelease(vset *set);
 bool vsetIsValid(vset *set);
 long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
+bool vsetHasHidden(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
+bool vsetMayHaveHidden(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
+size_t vsetCountLive(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now);
+size_t vsetCollectLive(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now, size_t cap, void **out);
 size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
 size_t vsetMemUsage(vset *set);
 size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *));

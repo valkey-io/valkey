@@ -1048,6 +1048,9 @@ int forklessSaveToSockets(int req, int rdbver) {
     currentForklessSave = saveInfo;
     iteratorOwnsIncomingReplication = true;
 
+    atomic_store_explicit(&server.stat_current_save_keys_total, dbTotalServerKeyCount(), memory_order_relaxed);
+    atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
+
     startBackgroundThread(saveInfo);
 
     return C_OK;
@@ -1075,7 +1078,7 @@ sds forkless_catInfo(sds info) {
     long long estimated_seconds_remaining = -1;
 
     if (onServerMainThread()) {
-        bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
+        bgIterator *iter = currentForklessSave ? currentForklessSave->iterator : NULL;
         if (iter != NULL) {
             bgIteratorStatus status = {0};
             bgIteratorGetStatus(iter, &status);
@@ -1101,7 +1104,7 @@ sds forkless_catDebugInfo(sds info) {
     long long current_item_ms = -1;
 
     if (onServerMainThread()) {
-        bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
+        bgIterator *iter = currentForklessSave ? currentForklessSave->iterator : NULL;
         if (iter != NULL) {
             bgIteratorGetStatus(iter, &status);
             current_item_ms = status.current_item_ms;

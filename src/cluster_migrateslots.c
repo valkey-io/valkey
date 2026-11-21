@@ -819,6 +819,10 @@ void clusterCommandSyncSlotsFinish(client *c) {
 
     addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    /* Avoid duplicate events when a replicated FLUSHALL has already failed the
+     * job. Still accept a different outcome from the primary, since a full sync
+     * may have failed the replica's tracking job locally. */
+    if (job->state == target_state) return;
     finishSlotMigrationJob(job, target_state, message);
 }
 
@@ -1780,6 +1784,9 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
             close(slot_migration_pipe_write);
             close(server.slot_migration_pipe_read);
             close(server.slot_migration_child_exit_pipe);
+            close(safe_to_exit_pipe);
+            server.slot_migration_pipe_read = -1;
+            server.slot_migration_child_exit_pipe = -1;
             server.slot_migration_pipe_conn = NULL;
             return C_ERR;
         }

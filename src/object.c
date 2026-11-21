@@ -1803,6 +1803,18 @@ uint8_t objectGetLFUFrequency(robj *o) {
     return freq;
 }
 
+/* Return the LFU frequency WITHOUT maintaining the value.
+ * In most cases, every time the LFU is read, the value should be maintained
+ * with the decay applied (objectGetLFUFrequency).  However in special cases
+ * where we want to avoid changing the memory (like a background thread or a
+ * forked save) use this instead. */
+uint8_t objectGetLFUFrequencyReadOnly(const robj *o) {
+    uint8_t freq;
+    lfu_getFrequency(objectGetLRU(o), &freq);
+    return freq;
+}
+
+
 /* Return the LRU idle time for an object. */
 uint32_t objectGetLRUIdleSecs(robj *o) {
     return lru_getIdleSecs(objectGetLRU(o));

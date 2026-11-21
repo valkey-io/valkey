@@ -213,6 +213,10 @@ make-prerequisites:
 
 # Read MALLOC / USE_JEMALLOC setting from parent Makefile
 JEMALLOC_CFLAGS := -DUSE_JEMALLOC -isystem../../deps/jemalloc/include
+ifeq ($(MALLOC),system-jemalloc)
+	JEMALLOC_CFLAGS := -DUSE_JEMALLOC -DJEMALLOC_NO_DEMANGLE
+	JEMALLOC_LIB := -ljemalloc
+endif
 ifeq ($(MALLOC),libc)
 	JEMALLOC_CFLAGS :=
 	JEMALLOC_LIB :=

@@ -44,6 +44,14 @@ proc simulate_bit_op {op args} {
     binary format b* $out
 }
 
+proc bitop_test_pattern {len pattern} {
+    set out {}
+    while {[string length $out] < $len} {
+        append out $pattern
+    }
+    string range $out 0 [expr {$len-1}]
+}
+
 start_server {tags {"bitops"}} {
     test {BITCOUNT against wrong type} {
         r del mylist
@@ -254,31 +262,142 @@ start_server {tags {"bitops"}} {
     } [list "\x01\x02\xff\x00" "\x01\x02\xff\xff" "\x00\x00\x00\xff"]
 
     foreach op {and or xor} {
-        test "BITOP $op fuzzing" {
-            for {set i 0} {$i < 10} {incr i} {
-                r flushall
+        test "BITOP $op command thresholds and mixed lengths" {
+            set cases {
+                {15 15}
+                {16 16}
+                {17 17}
+                {31 31}
+                {32 32}
+                {33 33}
+                {31 32}
+                {32 33}
+                {33 64}
+                {16 31 64}
+            }
+            set patterns [list "\xaa\x55\x0f\xf0" "\x33\xcc\x5a\xa5" "\xff\x00\x3c\xc3"]
+
+            foreach lengths $cases {
                 set vec {}
                 set veckeys {}
-                set numvec [expr {[randomInt 10]+1}]
-                for {set j 0} {$j < $numvec} {incr j} {
-                    set str [randstring 0 1000]
+                for {set j 0} {$j < [llength $lengths]} {incr j} {
+                    set key bitop-threshold-$op-$j{t}
+                    set pattern [lindex $patterns [expr {$j % [llength $patterns]}]]
+                    set str [bitop_test_pattern [lindex $lengths $j] $pattern]
                     lappend vec $str
-                    lappend veckeys vector_$j{t}
-                    r set vector_$j{t} $str
+                    lappend veckeys $key
+                    r set $key $str
                 }
-                r bitop $op target{t} {*}$veckeys
-                assert_equal [r get target{t}] [simulate_bit_op $op {*}$vec]
+                r bitop $op bitop-threshold-target{t} {*}$veckeys
+                assert_equal [r get bitop-threshold-target{t}] [simulate_bit_op $op {*}$vec]
+                r del bitop-threshold-target{t} {*}$veckeys
             }
         }
     }
 
-    test {BITOP NOT fuzzing} {
-        for {set i 0} {$i < 10} {incr i} {
-            r flushall
-            set str [randstring 0 1000]
-            r set str{t} $str
-            r bitop not target{t} str{t}
-            assert_equal [r get target{t}] [simulate_bit_op not $str]
+    test {BITOP NOT command thresholds} {
+        foreach len {15 16 17 31 32 33 64} {
+            set str [bitop_test_pattern $len "\x00\x55\xaa\xff"]
+            r set bitop-not-threshold-src{t} $str
+            r bitop not bitop-not-threshold-target{t} bitop-not-threshold-src{t}
+            assert_equal [r get bitop-not-threshold-target{t}] [simulate_bit_op not $str]
+        }
+    }
+
+    foreach op {and or xor} {
+        test "BITOP $op with 16, 17 and 33 sources" {
+            set patterns [list "\x0f\xf0\xaa\x55" "\x33\xcc\x5a\xa5" "\xff\x00\xc3\x3c"]
+
+            foreach numvec {16 17 33} {
+                set vec {}
+                set veckeys {}
+                for {set j 0} {$j < $numvec} {incr j} {
+                    set key bitop-numkeys-$op-$j{t}
+                    set pattern [lindex $patterns [expr {$j % [llength $patterns]}]]
+                    set str [bitop_test_pattern [expr {32 + (($j * 7) % 33)}] $pattern]
+                    lappend vec $str
+                    lappend veckeys $key
+                    r set $key $str
+                }
+                r bitop $op bitop-numkeys-target{t} {*}$veckeys
+                assert_equal [r get bitop-numkeys-target{t}] [simulate_bit_op $op {*}$vec]
+                r del bitop-numkeys-target{t} {*}$veckeys
+            }
+        }
+    }
+
+    test {BITOP AND/OR with more than 16 short-circuit-friendly sources} {
+        set patterns [list "\x0f\xf0\xaa\x55" "\x33\xcc\x5a\xa5" "\xff\x00\xc3\x3c"]
+
+        foreach {op first_pattern} [list and "\x00\x00\x00\xff" or "\xff\xff\xff\x00"] {
+            foreach numvec {17 32 64} {
+                set vec {}
+                set veckeys {}
+                for {set j 0} {$j < $numvec} {incr j} {
+                    set key bitop-shortcircuit-$op-$j{t}
+                    if {$j == 0} {
+                        set str [bitop_test_pattern 64 $first_pattern]
+                    } else {
+                        set pattern [lindex $patterns [expr {$j % [llength $patterns]}]]
+                        set str [bitop_test_pattern 64 $pattern]
+                    }
+                    lappend vec $str
+                    lappend veckeys $key
+                    r set $key $str
+                }
+                r bitop $op bitop-shortcircuit-target{t} {*}$veckeys
+                assert_equal [r get bitop-shortcircuit-target{t}] [simulate_bit_op $op {*}$vec]
+                r del bitop-shortcircuit-target{t} {*}$veckeys
+            }
+        }
+    }
+
+    foreach op {and or xor NOT} {
+        test "BITOP $op fuzzing" {
+            set seed 0x5eed
+            expr {srand($seed)}
+            set boundary_lengths {0 1 15 16 17 31 32 33 63 64 65 127 128 129 255 256 257 511 512 513 4095 4096 4097}
+            set source_counts {1 2 3 8 15 16 17 32 33 64}
+            set layouts {equal mixed random empty missing}
+            set iterations [expr {[llength $boundary_lengths] * [llength $layouts] * ($::accurate ? 10 : 1)}]
+            for {set i 0} {$i < $iterations} {incr i} {
+                set case [expr {$i / [llength $layouts]}]
+                set layout_index [expr {$i % [llength $layouts]}]
+                set layout [lindex $layouts $layout_index]
+                set minlen [lindex $boundary_lengths [expr {$case % [llength $boundary_lengths]}]]
+                set numvec [lindex $source_counts [expr {($case + $layout_index) % [llength $source_counts]}]]
+                if {$op eq {NOT}} {set numvec 1}
+                set special [randomInt $numvec]
+                set vec {}
+                set veckeys {}
+                set lengths {}
+                for {set j 0} {$j < $numvec} {incr j} {
+                    set len $minlen
+                    if {$layout eq {mixed} && $j != $special} {
+                        # Keep a common prefix so mixed lengths still exercise SIMD.
+                        incr len [expr {1 + [randomInt 256]}]
+                    } elseif {$layout eq {random}} {
+                        set len [randomInt 1001]
+                    } elseif {$layout in {empty missing} && $j == $special} {
+                        set len 0
+                    }
+                    set str [randstring $len $len]
+                    set key bitop-fuzz-$op-$j{t}
+                    lappend vec $str
+                    lappend veckeys $key
+                    lappend lengths $len
+                    if {$layout eq {missing} && $j == $special} {
+                        r del $key
+                    } else {
+                        r set $key $str
+                    }
+                }
+                set detail "op=$op seed=$seed iteration=$i layout=$layout lengths=$lengths"
+                set expected [simulate_bit_op [string tolower $op] {*}$vec]
+                assert_equal [string length $expected] [r bitop $op bitop-fuzz-target{t} {*}$veckeys] $detail
+                assert_equal $expected [r get bitop-fuzz-target{t}] $detail
+                r del bitop-fuzz-target{t} {*}$veckeys
+            }
         }
     }
 

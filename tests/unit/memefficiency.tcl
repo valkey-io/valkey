@@ -300,8 +300,11 @@ run_solo {defrag} {
                 r config set active-defrag-cycle-min 50
                 r config set active-defrag-cycle-max 50
                 r config set activedefrag yes
+                # MULTI/EXEC so no defrag cycle starts between the load and disabling defrag
+                r multi
                 r debug loadaof
                 r config set activedefrag no
+                r exec
                 after 50 ;# give defrag time to stop
 
                 log_frag "after AOF loading"
@@ -313,10 +316,17 @@ run_solo {defrag} {
                 # Added buffer of 300ms to accommodate for slow CI runners
                 validate_latency 500
 
-                # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
+                # Make sure defrag ran during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
-                # mid-cycle.  Just check that we are defragging by the number of hits.
-                assert {[s active_defrag_hits] > 80000}
+                # mid-cycle.  The absolute hit count is not a stable signal either: during loading
+                # defrag only runs from whileBlockedCron, about once per hz period, so the count
+                # depends on how many passes fit in the replay of the trailing DELs and varies by
+                # runner (#3954).  Just check that a defrag cycle ran and relocated allocations.
+                # config resetstat above zeroed these counters, and MULTI/EXEC turns defrag off
+                # before the event loop runs again, so they only cover the debug loadaof window.
+                assert {[s total_active_defrag_time] > 0}
+                assert {[s active_defrag_hits] > 0}
+                assert {[s active_defrag_key_hits] > 0}
             }
             } ;# Active defrag - AOF loading
         }

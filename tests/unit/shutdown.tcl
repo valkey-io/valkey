@@ -97,7 +97,10 @@ start_server {tags {"shutdown external:skip"} overrides {save {900 1}}} {
     test {SHUTDOWN will abort if rdb save failed on signal} {
         # trigger a shutdown which will save an rdb
         exec kill -SIGINT $pid
-        wait_for_log_messages 0 {"*Error trying to save the DB, can't exit*"} 0 100 10
+        # The final save is synchronous and its error is logged only after the
+        # temp file is written and fsynced, which can take a few seconds on a
+        # loaded runner.
+        wait_for_log_messages 0 {"*Error trying to save the DB, can't exit*"} 0 100 100
     }
     test {SHUTDOWN will abort if rdb save failed on shutdown command} {
         catch {[r shutdown]} err

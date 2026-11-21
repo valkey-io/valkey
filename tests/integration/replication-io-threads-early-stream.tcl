@@ -1,7 +1,7 @@
 # With io-threads, an on-empty-db replica must get no stream before its first ACK.
 foreach {forkless} {yes no} {
     set desc [expr {$forkless eq "yes" ? "forkless" : "fork-based"}]
-    start_server [list tags {"repl external:skip tls:skip needs:debug"} overrides [list save "" forkless-infrastructure-enabled $forkless forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0 io-threads 4]] {
+    start_server [list tags {"repl external:skip tls:skip needs:debug"} overrides [list save "" forkless-infrastructure-enabled yes forkless-policy [expr {$forkless eq "yes" ? "prefer-forkless" : "require-fork"}] repl-diskless-sync yes repl-diskless-sync-delay 0 io-threads 4]] {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
@@ -23,9 +23,8 @@ foreach {forkless} {yes no} {
                 }
                 after 1000
                 catch {exec /bin/kill -9 $bench}
-                after 3000
+                wait_for_ofs_sync $primary $replica
                 assert_equal [$primary debug digest] [$replica debug digest]
-                assert_equal [status $primary master_repl_offset] [status $replica master_repl_offset]
             }
         }
     }

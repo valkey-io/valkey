@@ -212,6 +212,8 @@ typedef struct {
     unsigned int todo_broadcast_vote_request : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
+    uint64_t ae_ack_index;
+    uint64_t ae_ack_term;
 
     /* The node that got our shard's last slot, for todo_lost_last_slot. */
     char lost_last_slot_target[CLUSTER_NAMELEN];
@@ -1944,6 +1946,23 @@ static void clusterRaftSetLeader(const char *leader_id) {
     if (listLength(rs->pending_proposals) > 0) rs->todo_retry_proposals = 1;
 }
 
+/* Set flag to send AE_ACK message when handling AE or INSTALL_SNAPSHOT. This
+ * may be called repeatedly before clusterRaftBeforeSleep() is called. We store
+ * the maximum commit that we have verified, and no more. It is the caller's
+ * responsibility to correctly provide the verified index. */
+static void raftSetVerifiedIndexToAck(int msg_term, int verified_index) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->ae_ack_term < msg_term) {
+        rs->ae_ack_term = msg_term;
+        rs->ae_ack_index = 0;
+    }
+    if (rs->ae_ack_index < verified_index) {
+        rs->ae_ack_index = verified_index;
+    }
+    rs->todo_send_ae_ack = 1;
+}
+
+
 static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *argv, sds *entry_lines, int entry_line_count) {
     /* argv: AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count> */
     if (argc < 7) return 1;
@@ -2029,6 +2048,8 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         freeClusterLink(link);
         return 0;
     }
+
+    // JL TODO: send the verified index (previous index + entries processed)
 
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
      * entries are on stable storage before the leader counts our ACK. */
@@ -2187,19 +2208,19 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->last_heartbeat = monotonicMs();
     clusterRaftSetLeader(argv[1]);
 
-    /* If we're already past the snapshot, ignore. */
+    /* If we're already past the snapshot, ignore. 
+     * We can ack up to our commit index as far as this function knows */
     if (snap_index <= rs->last_applied) {
-        rs->todo_send_ae_ack = 1;
+        raftSetVerifiedIndexToAck(msg_term, rs->commit_index);
         return 1;
     }
 
     /* If our log has the snapshot's last entry, keep the entries after it,
-     * which we may have acknowledged, and just commit up to the snapshot
-     * (Raft paper, section 7). */
+     * We can ack up to our commit index as far as this function knows */
     if (raftLogTermAt(snap_index) == snap_term) {
         if (snap_index > rs->commit_index) rs->commit_index = snap_index;
         raftApplyCommitted();
-        rs->todo_send_ae_ack = 1;
+        raftSetVerifiedIndexToAck(msg_term, rs->commit_index);
         return 1;
     }
 
@@ -2379,7 +2400,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         rs->todo_full_sync = 1;
         myself->repl_offset = 0; /* As when applying SET_REPLICA_OF. */
     }
-    rs->todo_send_ae_ack = 1;
+    /* We can ack up to our commit index as far as this function knows */
+    raftSetVerifiedIndexToAck(msg_term, rs->commit_index);
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
     clearCachedClusterSlotsResponse();

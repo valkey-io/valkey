@@ -1,5 +1,5 @@
-#ifndef __CLUSTER_H
-#define __CLUSTER_H
+#ifndef VALKEY_CLUSTER_H
+#define VALKEY_CLUSTER_H
 
 #include <stdbool.h>
 /*-----------------------------------------------------------------------------

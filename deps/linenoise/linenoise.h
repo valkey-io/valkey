@@ -36,8 +36,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __LINENOISE_H
-#define __LINENOISE_H
+#ifndef VALKEY_LINENOISE_H
+#define VALKEY_LINENOISE_H
 
 #ifdef __cplusplus
 extern "C" {

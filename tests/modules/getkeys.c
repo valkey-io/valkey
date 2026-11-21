@@ -4,8 +4,13 @@
 #include <assert.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 #define UNUSED(V) ((void) V)
+
+static pthread_t main_thread;
+static atomic_long off_main_thread_calls;
 
 /* A sample movable keys command that returns a list of all
  * arguments that follow a KEY argument, i.e.
@@ -17,6 +22,9 @@ int getkeys_command(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     /* Handle getkeys-api introspection */
     if (ValkeyModule_IsKeysPositionRequest(ctx)) {
+        if (!pthread_equal(pthread_self(), main_thread))
+            atomic_fetch_add(&off_main_thread_calls, 1);
+
         for (i = 0; i < argc; i++) {
             size_t len;
             const char *str = ValkeyModule_StringPtrLen(argv[i], &len);
@@ -156,9 +164,17 @@ int getkeys_introspect(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     return VALKEYMODULE_OK;
 }
 
+int getkeys_off_main_thread_calls(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+{
+    UNUSED(argv);
+    UNUSED(argc);
+    return ValkeyModule_ReplyWithLongLong(ctx, atomic_load(&off_main_thread_calls));
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
+    main_thread = pthread_self();
     if (ValkeyModule_Init(ctx,"getkeys",1,VALKEYMODULE_APIVER_1)== VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
@@ -172,6 +188,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"getkeys.introspect", getkeys_introspect,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"getkeys.off_main_thread_calls", getkeys_off_main_thread_calls,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

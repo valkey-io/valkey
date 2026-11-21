@@ -89,3 +89,47 @@ start_server {tags {"modules"}} {
         assert_equal {OK} [r module unload getkeys]
     }
 }
+
+tags {tls:skip external:skip cluster} {
+set modules [list loadmodule $testmodule]
+start_cluster 2 0 [list config_lines $modules overrides {io-threads 2 io-threads-always-active yes cluster-slot-stats-enabled yes}] {
+    set local_tag "{06S}"
+    set remote_tag "{6ZJ}"
+
+    test "getkeys-api key lookups run on the main thread with I/O threads" {
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 1000} {incr i} {
+            $rd getkeys.command key $local_tag$i
+        }
+        $rd flush
+        for {set i 0} {$i < 1000} {incr i} {
+            assert_equal [list $local_tag$i] [$rd read]
+        }
+        $rd close
+        assert_morethan [s io_threaded_reads_processed] 0
+        assert_equal 0 [R 0 getkeys.off_main_thread_calls]
+    }
+
+    test "getkeys-api commands are redirected with I/O threads" {
+        assert_equal [list ${local_tag}a] [R 0 getkeys.command key ${local_tag}a]
+        assert_error "MOVED 16383 *" {R 0 getkeys.command key ${remote_tag}a}
+        assert_error "CROSSSLOT *" {R 0 getkeys.command key ${local_tag}a key ${remote_tag}a}
+    }
+
+    test "CLUSTER SLOT-STATS counts ACL-rejected getkeys-api commands with I/O threads" {
+        R 0 ACL SETUSER limited on nopass +@all -getkeys.command
+        set c [valkey_client]
+        $c AUTH limited pass
+        set slot [R 0 CLUSTER KEYSLOT ${local_tag}k]
+
+        # *3\r\n$15\r\ngetkeys.command\r\n$3\r\nkey\r\n$6\r\n{06S}k\r\n --> 47 bytes.
+        R 0 CONFIG RESETSTAT
+        assert_error {*NOPERM*} {$c getkeys.command key ${local_tag}k}
+        set stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE $slot $slot]
+        assert_equal 47 [dict get [lindex $stats 0 1] network-bytes-in]
+
+        $c close
+        R 0 ACL DELUSER limited
+    }
+}
+}

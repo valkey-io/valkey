@@ -1314,8 +1314,7 @@ test "Raft proto: false AE_ACK success during message batching" {
         # L1 is the leader in term 3, carrying an existing tail in slot 1, term 1
         # We stuff both messages in the wire one after the other, same event loop pass
         # --------------------------------------------------------------------------
-        puts -nonewline $fd [raft_msg "AE $l0_id 2 0 0 0 1\n2 NOOP -"]
-        puts -nonewline $fd [raft_msg "AE $l1_id 3 1 1 0 0"]
+        puts -nonewline $fd "[raft_msg "AE $l0_id 2 0 0 0 1\n2 NOOP -"][raft_msg "AE $l1_id 3 1 1 0 0"]"
         flush $fd
 
         # --------------------------------------------------------------------------

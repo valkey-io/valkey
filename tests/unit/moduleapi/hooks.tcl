@@ -130,6 +130,12 @@ tags "modules" {
             r del hash
             assert_equal {2 deleted} [r hooks.is_key_removed hash]
 
+            # For a bitmap, its length in bytes.
+            r bitconvert bitmap bitmap
+            r setbit bitmap 100 1
+            r del bitmap
+            assert_equal {13 deleted} [r hooks.is_key_removed bitmap]
+
             r lpush list 1
             r lpop list
             assert_equal {0 deleted} [r hooks.is_key_removed list]

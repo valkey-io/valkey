@@ -65,6 +65,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/crccombine.c
     ${CMAKE_SOURCE_DIR}/src/crc64.c
     ${CMAKE_SOURCE_DIR}/src/bitops.c
+    ${CMAKE_SOURCE_DIR}/src/bitmap_roaring.c
     ${CMAKE_SOURCE_DIR}/src/sentinel.c
     ${CMAKE_SOURCE_DIR}/src/notify.c
     ${CMAKE_SOURCE_DIR}/src/setproctitle.c

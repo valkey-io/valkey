@@ -1,0 +1,75 @@
+{
+    "BITCONVERT": {
+        "summary": "Converts a string to a bitmap, or a bitmap to a string. Creates an empty bitmap for a missing key.",
+        "complexity": "O(N) where N is the length of the string, or the size of the bitmap plus the length of the string it converts to.",
+        "group": "bitmap",
+        "since": "9.3.0",
+        "arity": 3,
+        "function": "bitconvertCommand",
+        "command_flags": [
+            "WRITE",
+            "DENYOOM"
+        ],
+        "acl_categories": [
+            "BITMAP",
+            "WRITE",
+            "SLOW"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "The key was created (as an empty bitmap) or converted.",
+                    "const": 1
+                },
+                {
+                    "description": "Nothing changed: the key already has the target type, or it is missing and the target is STRING.",
+                    "const": 0
+                }
+            ]
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "target",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "bitmap",
+                        "type": "pure-token",
+                        "token": "BITMAP"
+                    },
+                    {
+                        "name": "string",
+                        "type": "pure-token",
+                        "token": "STRING"
+                    }
+                ]
+            }
+        ]
+    }
+}

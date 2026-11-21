@@ -715,6 +715,8 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         defragStream(ob);
     } else if (ob->type == OBJ_PATH_HASH) {
         /* Path hash payload defragmentation is intentionally deferred. */
+    } else if (ob->type == OBJ_BITMAP) {
+        /* Defragmentation of the Roaring containers is not implemented yet. */
     } else if (ob->type == OBJ_MODULE) {
         defragModule(db, ob);
     } else {

@@ -886,7 +886,8 @@ proc fuzzy_traffic_commands_by_type {} {
     set set_commands {SADD SCARD SDIFF SDIFFSTORE SINTER SINTERSTORE SISMEMBER SMEMBERS SMOVE SPOP SRANDMEMBER SREM SSCAN SUNION SUNIONSTORE}
     set stream_commands {XACK XADD XCLAIM XDEL XGROUP XINFO XLEN XPENDING XRANGE XREAD XREADGROUP XREVRANGE XTRIM}
     set pathhash_commands {PHPATHCOUNT PHDEL PHPATHDEL PHPATHEXISTS PHGET PHGETALL PHMGET PHMSET PHPREFIXES PHSCAN PHPATHSCAN PHSET}
-    return [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands pathhash $pathhash_commands]
+    set bitmap_commands {BITCONVERT BITCOUNT BITFIELD BITFIELD_RO BITOP BITPOS GETBIT R.EXPORT R.IMPORT SETBIT}
+    return [dict create string $string_commands hash $hash_commands zset $zset_commands list $list_commands set $set_commands stream $stream_commands pathhash $pathhash_commands bitmap $bitmap_commands]
 }
 
 proc generate_fuzzy_traffic_on_key {key duration} {

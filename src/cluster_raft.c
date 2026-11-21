@@ -1982,7 +1982,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     int entry_count = atoi(argv[6]);
 
     if (msg_term < rs->current_term) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -1997,7 +1997,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
      * term >= 1, so 0 means we don't know the entry and never matches. */
     uint64_t local_prev_term = raftLogTermAt(prev_log_index);
     if (prev_log_index > 0 && (local_prev_term == 0 || local_prev_term != prev_log_term)) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -2253,14 +2253,14 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid node line: %s",
                       argv[1], config_lines[i]);
             dictRelease(seen);
-            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
+            clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
             return 1;
         }
     }
     if (!sender_included) {
         serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
         dictRelease(seen);
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 

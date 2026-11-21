@@ -1,10 +1,10 @@
 {
     "LIST": {
-        "summary": "Dumps the effective rules in ACL file format.",
-        "complexity": "O(N). Where N is the number of configured users.",
+        "summary": "Dumps the effective rules in ACL file format, optionally filtered by type.",
+        "complexity": "O(N). Where N is the number of configured users and roles.",
         "group": "server",
         "since": "6.0.0",
-        "arity": 2,
+        "arity": -2,
         "container": "ACL",
         "function": "aclCommand",
         "command_flags": [
@@ -21,6 +21,14 @@
                 "type": "string"
             }
         },
+        "arguments": [
+            {
+                "name": "filter",
+                "type": "string",
+                "optional": true,
+                "display": "filter"
+            }
+        ],
         "acl_categories": [
             "ADMIN",
             "DANGEROUS",

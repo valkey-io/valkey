@@ -1278,9 +1278,7 @@ void hincrbyCommand(client *c) {
      * when hash has volatile item, since we do not know what will the field state be when the command reach the replica.
      * HSET is used to override the resulting value and HSETEX is used in order to maintain the expiration time on the target. */
     if (has_volatile_fields) {
-        char buf[MAX_LONG_DOUBLE_CHARS];
-        int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
-        robj *newobj = createRawStringObject(buf, len);
+        robj *newobj = createStringObjectFromLongLong(value);
         if (expiry == EXPIRY_NONE) {
             rewriteClientCommandArgument(c, 0, shared.hset);
             rewriteClientCommandArgument(c, 3, newobj);

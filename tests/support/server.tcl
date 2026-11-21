@@ -31,6 +31,11 @@ proc check_sanitizer_errors srv {
         if {$::dump_logs} {
             dump_server_log $srv
         }
+    } elseif {[sanitizer_ptrace_warning_in_file [dict get $srv stderr]]} {
+        # The probe only warns; the leak scan still runs after it. A server
+        # that did not finish exiting is reported by kill_server instead.
+        # Non-fatal, but keep each occurrence countable in the output.
+        puts [format "LeakSanitizer ptrace probe warning (pid %d), non-fatal" [dict get $srv pid]]
     }
 }
 
@@ -105,18 +110,26 @@ proc kill_server config {
     # kill server and wait for the process to be totally exited
     send_data_packet $::test_server_fd server-killing $pid
     catch {exec kill $pid}
-    # Node might have been stopped in the test
-    catch {exec kill -SIGCONT $pid}
+    # Node might have been stopped in the test. Only resume it in that case:
+    # a SIGCONT sent to a process that is already exiting discards the
+    # SIGSTOPs that LeakSanitizer's stop-the-world tracer relies on to
+    # suspend threads for the exit-time leak scan, and that scan then never
+    # completes.
+    if {[process_is_stopped $pid]} {
+        catch {exec kill -SIGCONT $pid}
+    }
     if {$::valgrind} {
         set max_wait 120000
     } else {
         set max_wait 10000
     }
+    set forced 0
     while {[is_alive $pid]} {
         incr wait 10
 
         if {$wait == $max_wait} {
             puts "Forcing process $pid to crash..."
+            set forced 1
             catch {exec kill -SEGV $pid}
         } elseif {$wait >= $max_wait * 2} {
             puts "Forcing process $pid to exit..."
@@ -125,6 +138,16 @@ proc kill_server config {
             puts "Waiting for process $pid to exit..."
         }
         after 10
+    }
+
+    # A server that had to be forced out never finished its own exit, so
+    # whatever runs at exit (the sanitizer leak scan in particular) did not
+    # run for it. Report it rather than let the run pass without that check.
+    if {$forced} {
+        send_data_packet $::test_server_fd err "Server (pid $pid) did not exit within [expr {$max_wait / 1000}]s of SIGTERM and was forced to crash; exit-time checks did not run\n"
+        if {$::dump_logs} {
+            dump_server_log $config
+        }
     }
 
     # Check valgrind errors if needed

@@ -1826,10 +1826,13 @@ void closeDirectLogFiledes(int fd) {
 }
 
 #if defined(HAVE_BACKTRACE) && defined(__linux__)
-static int stacktrace_pipe[2] = {0};
+/* {-1, -1} until setupStacktracePipe() runs from initServer(). The checkers and
+ * a crash before initServer() never create it, so it must not be read then. */
+static int stacktrace_pipe[2] = {-1, -1};
 static void setupStacktracePipe(void) {
     if (-1 == anetPipe(stacktrace_pipe, O_CLOEXEC | O_NONBLOCK, O_CLOEXEC | O_NONBLOCK)) {
         serverLog(LL_WARNING, "setupStacktracePipe failed: %s", strerror(errno));
+        stacktrace_pipe[0] = stacktrace_pipe[1] = -1;
     }
 }
 #else
@@ -2139,7 +2142,9 @@ __attribute__((noinline)) void logStackTrace(void *eip, int uplevel, int current
     /* Write symbols to log file */
     ++uplevel;
 #ifdef __linux__
-    if (current_thread) {
+    /* Without the pipe, writeStacktraces() would read fd 0 and signal the other
+     * threads with no SIGUSR2 handler installed. Trace the current thread only. */
+    if (current_thread || stacktrace_pipe[0] == -1) {
         writeCurrentThreadsStackTrace(fd, uplevel);
     } else {
         writeStacktraces(fd, uplevel);
@@ -2545,6 +2550,9 @@ void removeSigSegvHandlers(void) {
 
 void printCrashReport(void) {
     server.crashed = 1;
+    /* initServer() has not run (a checker, or a crash during startup), so
+     * there is no server state to log. */
+    if (!server.initialized) return;
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 

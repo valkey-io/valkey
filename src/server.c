@@ -3325,6 +3325,9 @@ void initServer(void) {
     if (updatePrioritySubnets(server.priority_subnets) != C_OK) {
         serverPanic("Failed parsing priority-subnets on startup, check the server logs.");
     }
+
+    /* Crash reports from here on can log the full server state. */
+    server.initialized = 1;
 }
 
 void initListeners(void) {

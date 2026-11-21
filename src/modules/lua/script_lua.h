@@ -57,6 +57,7 @@ typedef struct lua_State lua_State;
 
 #define REGISTRY_RUN_CTX_NAME "__RUN_CTX__"
 #define REGISTRY_MODULE_CTX_NAME "__MODULE_CTX__"
+#define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 #define REDIS_API_NAME "redis"
 #define SERVER_API_NAME "server"
 

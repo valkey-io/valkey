@@ -376,6 +376,37 @@ void mp_encode_lua_number(lua_State *L, mp_buf *buf) {
     }
 }
 
+/* Hook set by the host (Valkey) so a long cmsgpack.pack of a script-built
+ * value can be interrupted. It returns non-zero when the running script was
+ * killed with SCRIPT KILL / FUNCTION KILL, after pushing the error value to
+ * raise onto the Lua stack, and it also lets the host process events so
+ * other clients get BUSY replies. It stays NULL in the standalone Lua build,
+ * where packing keeps its old behavior. Packing runs in a single C call, so
+ * the Lua instruction-count hook never fires while it runs; this check is
+ * what gives the host a chance to act. */
+int (*lua_cmsgpack_encode_interrupt)(lua_State *L) = NULL;
+
+/* Call the interrupt hook once every CMSGPACK_ENCODE_INTERRUPT_STEP units of
+ * work. One unit is one encoded value or one scanned table entry (scanned
+ * entries are added in batches of CMSGPACK_ENCODE_INTERRUPT_SCAN_BATCH), so
+ * every long loop of the encoder is covered (strings are copied with memcpy
+ * and need no poll). A normal pack stays well under one step, so it sees no
+ * change. If the hook reports a kill, free the work buffer and raise the
+ * error the hook pushed, which aborts the pack. */
+#define CMSGPACK_ENCODE_INTERRUPT_STEP 100000
+#define CMSGPACK_ENCODE_INTERRUPT_SCAN_BATCH 64
+static unsigned long cmsgpack_encode_work;
+static void mp_encode_check_interrupt(lua_State *L, mp_buf *buf, unsigned long units) {
+    if (lua_cmsgpack_encode_interrupt == NULL) return;
+    cmsgpack_encode_work += units;
+    if (cmsgpack_encode_work < CMSGPACK_ENCODE_INTERRUPT_STEP) return;
+    cmsgpack_encode_work = 0;
+    if (lua_cmsgpack_encode_interrupt(L)) {
+        mp_buf_free(L, buf);
+        lua_error(L);
+    }
+}
+
 void mp_encode_lua_type(lua_State *L, mp_buf *buf, int level);
 
 /* Convert a lua table into a message pack list. */
@@ -408,6 +439,8 @@ void mp_encode_lua_table_as_map(lua_State *L, mp_buf *buf, int level) {
     while(lua_next(L,-2)) {
         lua_pop(L,1); /* remove value, keep key for next iteration. */
         len++;
+        if ((len & (CMSGPACK_ENCODE_INTERRUPT_SCAN_BATCH-1)) == 0)
+            mp_encode_check_interrupt(L,buf,CMSGPACK_ENCODE_INTERRUPT_SCAN_BATCH);
     }
 
     /* Step two: actually encoding of the map. */
@@ -424,7 +457,7 @@ void mp_encode_lua_table_as_map(lua_State *L, mp_buf *buf, int level) {
 /* Returns true if the Lua table on top of the stack is exclusively composed
  * of keys from numerical keys from 1 up to N, with N being the total number
  * of elements, without any hole in the middle. */
-int table_is_an_array(lua_State *L) {
+int table_is_an_array(lua_State *L, mp_buf *buf) {
     int count = 0, max = 0;
 #if LUA_VERSION_NUM < 503
     lua_Number n;
@@ -442,6 +475,8 @@ int table_is_an_array(lua_State *L) {
     while(lua_next(L,-2)) {
         /* Stack: ... key value */
         lua_pop(L,1); /* Stack: ... key */
+        if (((count+1) & (CMSGPACK_ENCODE_INTERRUPT_SCAN_BATCH-1)) == 0)
+            mp_encode_check_interrupt(L,buf,CMSGPACK_ENCODE_INTERRUPT_SCAN_BATCH);
         /* The <= 0 check is valid here because we're comparing indexes. */
 #if LUA_VERSION_NUM < 503
         if ((LUA_TNUMBER != lua_type(L,-1)) || (n = lua_tonumber(L, -1)) <= 0 ||
@@ -469,7 +504,7 @@ int table_is_an_array(lua_State *L) {
  * an object at key '1', we serialize to message pack list. Otherwise
  * we use a map. */
 void mp_encode_lua_table(lua_State *L, mp_buf *buf, int level) {
-    if (table_is_an_array(L))
+    if (table_is_an_array(L,buf))
         mp_encode_lua_table_as_array(L,buf,level);
     else
         mp_encode_lua_table_as_map(L,buf,level);
@@ -484,6 +519,8 @@ void mp_encode_lua_null(lua_State *L, mp_buf *buf) {
 
 void mp_encode_lua_type(lua_State *L, mp_buf *buf, int level) {
     int t = lua_type(L,-1);
+
+    mp_encode_check_interrupt(L,buf,1);
 
     /* Limit the encoding of nested tables to a specified maximum depth, so that
      * we survive when called against circular references in tables. */
@@ -524,6 +561,7 @@ int mp_pack(lua_State *L) {
         return luaL_argerror(L, 0, "Too many arguments for MessagePack pack.");
 
     buf = mp_buf_new(L);
+    cmsgpack_encode_work = 0;
     for(i = 1; i <= nargs; i++) {
         /* Copy argument i to top of stack for _encode processing;
          * the encode function pops it from the stack when complete. */

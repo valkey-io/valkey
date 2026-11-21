@@ -20,7 +20,6 @@
 
 
 #define LUA_ENGINE_NAME "LUA"
-#define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 
 static int isLuaInsecureAPIEnabled(ValkeyModuleCtx *module_ctx);
 

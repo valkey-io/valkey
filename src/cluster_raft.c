@@ -2131,6 +2131,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         }
         /* This ACK made progress and the peer is still behind: don't wait for a heartbeat. */
         if (rs->role == RAFT_ROLE_LEADER && !rs->todo_broadcast_ae &&
+            !(node->flags & CLUSTER_NODE_JOINING) &&
             follower_last_index > prev_match &&
             rd->next_index <= raftLogLastIndex()) {
             clusterRaftSendAppendEntries(node->link, node);

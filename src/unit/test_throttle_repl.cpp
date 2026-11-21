@@ -175,7 +175,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleIncreasingTrend) {
     EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
-    EXPECT_TRUE(verifyThrottleEvent(1, 0, 0)); // Throttler activated, no more/less events yets
+    EXPECT_TRUE(verifyThrottleEvent(1, 0, 0)); // Throttler activated, no more/less events yet
 
     EXPECT_CALL(mock, throttle_adjustRate(_, 0.95)).WillOnce(Return(1.0));
     throttleRepl_adjustThrottling();
@@ -203,7 +203,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleDecreasingTrend) {
     EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
-    EXPECT_TRUE(verifyThrottleEvent(1, 0, 0)); // Throttler activated, no more/less events yets
+    EXPECT_TRUE(verifyThrottleEvent(1, 0, 0)); // Throttler activated, no more/less events yet
 
     EXPECT_CALL(mock, throttle_adjustRate(_, 0.95)).WillOnce(Return(1.0));
     throttleRepl_adjustThrottling();

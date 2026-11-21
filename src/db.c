@@ -780,7 +780,7 @@ long long dbTotalServerKeyCount(void) {
  * Every time a key in the database is modified the function
  * signalModifiedKey() is called.
  *
- * Every time a DB is flushed the function signalFlushDb() is called.
+ * Every time a DB is flushed the function signalFlushedDb() is called.
  *----------------------------------------------------------------------------*/
 
 /* Note that the 'c' argument may be NULL if the key was modified out of

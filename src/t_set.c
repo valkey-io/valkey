@@ -61,7 +61,7 @@ robj *setTypeCreate(sds value, size_t size_hint) {
 }
 
 /* Check if the existing set should be converted to another encoding based off the
- * the size hint. */
+ * size hint. */
 void setTypeMaybeConvert(robj *set, size_t size_hint) {
     if ((set->encoding == OBJ_ENCODING_LISTPACK && size_hint > server.set_max_listpack_entries) ||
         (set->encoding == OBJ_ENCODING_INTSET && size_hint > server.set_max_intset_entries)) {

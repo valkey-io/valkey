@@ -310,7 +310,7 @@ proc test_replica_config_epoch_failover {type drop_nack} {
             fail "Failover does not happen"
         }
 
-        # Restore the old primary, make sure it can covert
+        # Restore the old primary, make sure it can convert
         resume_process [srv 0 pid]
         wait_for_condition 1000 50 {
             [s 0 role] == "slave" &&

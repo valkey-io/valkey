@@ -523,7 +523,7 @@ ustime_t activeExpireCycle(int type) {
  * anything about such a key.
  *
  * In order to do so, we track keys created in the replica side with an expire
- * set, and call the expirereplicaKeys() function from time to time in order to
+ * set, and call the expireReplicaKeys() function from time to time in order to
  * reclaim the keys if they already expired.
  *
  * Note that the use case we are trying to cover here, is a popular one where
@@ -539,7 +539,7 @@ ustime_t activeExpireCycle(int type) {
 /* The dictionary where we remember key names and database ID of keys we may
  * want to expire from the replica. Since this function is not often used we
  * don't even care to initialize the database at startup. We'll do it once
- * the feature is used the first time, that is, when rememberreplicaKeyWithExpire()
+ * the feature is used the first time, that is, when rememberReplicaKeyWithExpire()
  * is called.
  *
  * The dictionary has an SDS string representing the key as the hash table

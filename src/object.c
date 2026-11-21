@@ -1640,7 +1640,7 @@ void inputCatSds(void *result, const char *str) {
     *info = sdscat(*info, str);
 }
 
-/* This implements MEMORY DOCTOR. An human readable analysis of the server
+/* This implements MEMORY DOCTOR. A human readable analysis of the server
  * memory condition. */
 sds getMemoryDoctorReport(void) {
     int empty = 0;           /* Instance is empty or almost empty. */

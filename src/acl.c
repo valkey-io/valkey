@@ -2497,7 +2497,7 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
 
 /* Lower level API that checks if a specified user is able to execute a given command.
  *
- * If the command fails an ACL check, idxptr will be to set to the first argv entry that
+ * If the command fails an ACL check, idxptr will be set to the first argv entry that
  * causes the failure, either 0 if the command itself fails or the idx of the key/channel
  * that causes the failure */
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr) {

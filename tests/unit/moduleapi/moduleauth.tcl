@@ -391,7 +391,7 @@ start_server {tags {"modules"}} {
         assert_match {*calls=1,*,rejected_calls=0,failed_calls=0} [cmdstat auth]
 
         # Validate that unloading the moduleauthtwo module does not unregister module auth cbs of
-        # of the testacl module. Module based auth should succeed.
+        # the testacl module. Module based auth should succeed.
         assert_equal {OK} [r AUTH foo allow]
 
         # Validate that the testacl module can be unloaded since blocking module auth is done.

@@ -1,0 +1,87 @@
+{
+    "MGETPXT": {
+        "summary": "Atomically returns the string values of one or more keys and their millisecond expiration, if available.",
+        "complexity": "O(N) where N is the number of keys to retrieve.",
+        "group": "string",
+        "since": "9.2.0",
+        "arity": -2,
+        "function": "mgetpxtCommand",
+        "command_flags": [
+            "READONLY",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "READ",
+            "STRING"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:MULTI_SHARD"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RO",
+                    "ACCESS"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": -1,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "Values and expiration timestamps at the specified keys.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "items": [
+                            {
+                                "description": "The value of the key.",
+                                "type": "string"
+                            },
+                            {
+                                "oneOf": [
+                                    {
+                                        "type": "integer",
+                                        "description": "Expiration Unix timestamp in milliseconds.",
+                                        "minimum": 0
+                                    },
+                                    {
+                                        "const": -1,
+                                        "description": "The key exists but has no associated expiration time."
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "description": "Key does not exist or does not hold a string value.",
+                        "type": "null"
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0,
+                "multiple": true
+            }
+        ]
+    }
+}

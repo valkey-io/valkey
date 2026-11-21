@@ -3847,6 +3847,51 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
+    test {ZPOP drains both ends of a full listpack-encoded set} {
+        with_config zset-max-listpack-entries 128 {
+            r del zset
+            # Mix integer-encoded, string and binary members.
+            set binary "bin\x00member"
+            r zadd zset -1 $binary
+            for {set i 0} {$i < 63} {incr i} {
+                r zadd zset $i $i
+            }
+            for {set i 63} {$i < 127} {incr i} {
+                r zadd zset $i "m[format %03d $i]"
+            }
+            assert_encoding listpack zset
+            assert_equal 128 [r zcard zset]
+
+            set expected {}
+            for {set i 126} {$i >= 63} {incr i -1} {
+                lappend expected "m[format %03d $i]" $i
+            }
+            assert_equal $expected [r zpopmax zset 64]
+            assert_encoding listpack zset
+            assert_equal {} [r zscore zset m126]
+            assert_equal {} [r zscore zset m063]
+
+            set expected {}
+            for {set i 62} {$i >= 31} {incr i -1} {
+                lappend expected [list $i $i]
+            }
+            assert_equal [list zset $expected] [r zmpop 1 zset MAX COUNT 32]
+
+            assert_equal [list $binary -1 0 0] [r zpopmin zset 2]
+            assert_equal {30 30} [r zpopmax zset]
+            assert_equal 29 [r zcard zset]
+            assert_equal {1 2 3} [r zrange zset 0 2]
+            assert_equal {29 28} [r zrevrange zset 0 1]
+
+            set expected {}
+            for {set i 29} {$i >= 1} {incr i -1} {
+                lappend expected $i $i
+            }
+            assert_equal $expected [r zpopmax zset 100]
+            assert_equal 0 [r exists zset]
+        }
+    }
+
     test {ZPOPMIN on btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 

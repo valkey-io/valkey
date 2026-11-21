@@ -3304,17 +3304,13 @@ static int isSensitiveCommand(int argc, char **argv) {
         }
         return 0;
         /* HELLO [protover [AUTH username password] [SETNAME clientname]] */
-    } else if (argc > 4 && !strcasecmp(argv[0], "hello")) {
-        for (int j = 2; j < argc; j++) {
-            int moreargs = argc - 1 - j;
-            if (!strcasecmp(argv[j], "AUTH") && moreargs >= 2) {
-                return 1;
-            } else if (!strcasecmp(argv[j], "SETNAME") && moreargs) {
-                j++;
-            } else {
-                return 0;
-            }
+    } else if (argc > 2 && !strcasecmp(argv[0], "hello")) {
+        /* any AUTH with an argument after it carries credentials, same as
+         * the redaction helloCommand() does before validating */
+        for (int j = 1; j < argc; j++) {
+            if (!strcasecmp(argv[j], "AUTH") && argc - 1 - j >= 1) return 1;
         }
+        return 0;
         /* MIGRATE host port key|"" destination-db timeout [COPY] [REPLACE]
          * [AUTH password] [AUTH2 username password] [KEYS key [key ...]] */
     } else if (argc > 7 && !strcasecmp(argv[0], "migrate")) {

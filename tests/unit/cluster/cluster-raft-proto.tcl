@@ -1300,4 +1300,42 @@ test "Raft proto: INSTALL_SNAPSHOT is not ACKed past the snapshot" {
     }
 }
 
+test "Raft proto: false AE_ACK success during message batching" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        
+        set l0_id [string repeat "c" 40]
+        set l1_id [string repeat "d" 40]
+        set l1_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
+ 
+        # --------------------------------------------------------------------------
+        # L0 is the leader in term 2, appending a NOOP to slot 1, term 2
+        # L1 is the leader in term 3, carrying an existing tail in slot 1, term 1
+        # We stuff both messages in the wire one after the other, same event loop pass
+        # --------------------------------------------------------------------------
+        puts -nonewline $fd [raft_msg "AE $l0_id 2 0 0 0 1\n2 NOOP -"]
+        puts -nonewline $fd [raft_msg "AE $l1_id 3 1 1 0 0"]
+        flush $fd
+
+        # --------------------------------------------------------------------------
+        # When the follower sees term 3, it bumps its term and sets leader to l1
+        # The log entry doesn't match so it should return false to leader
+        # This check ensures that the false AE_ACK response is sent first
+        # --------------------------------------------------------------------------
+        assert_match "AE_ACK 3 0 1 *" [raft_recv_until $fd "AE_ACK *"]
+        assert_equal $l1_id [CI 0 cluster_raft_leader]
+ 
+        # --------------------------------------------------------------------------
+        # If the follower has set the todo_send_ae_ack we may get a second response
+        # We probe it by sending a message we know should be rejected
+        # If we get a true AE_ACK in term 3, we have a problem
+        # --------------------------------------------------------------------------
+        raft_send $fd "AE $l1_id 3 1000 3 0 0"
+        assert_match "AE_ACK 3 0 *" [raft_recv_until $fd "AE_ACK *"]
+ 
+        close $fd
+    }
+}
+
 } ;# tags

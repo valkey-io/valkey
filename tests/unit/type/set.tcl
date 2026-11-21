@@ -382,6 +382,14 @@ foreach type {single multiple single_multiple} {
             assert_equal $expected [lsort [r sunion set1{t} set2{t}]]
         }
 
+        test "SUNION with one distinct existing set - $type" {
+            r del missing1{t} missing2{t}
+            set expected [lsort [r smembers set1{t}]]
+            assert_equal $expected [lsort [r sunion set1{t}]]
+            assert_equal $expected [lsort [r sunion missing1{t} set1{t} set1{t} missing2{t}]]
+            assert_equal {} [r sunion missing1{t} missing2{t}]
+        }
+
         test "SUNIONSTORE with two sets - $type" {
             r sunionstore setres{t} set1{t} set2{t}
             assert_encoding $bigenc setres{t}
@@ -416,6 +424,36 @@ foreach type {single multiple single_multiple} {
 
         test "SDIFF with three sets - $type" {
             assert_equal {1 2 3 4} [lsort [r sdiff set1{t} set4{t} set5{t}]]
+        }
+
+        test "SDIFF with a known result - $type" {
+            r del missing1{t} missing2{t}
+            set expected [lsort [r smembers set1{t}]]
+            assert_equal $expected [lsort [r sdiff set1{t}]]
+            assert_equal $expected [lsort [r sdiff set1{t} missing1{t} missing2{t}]]
+            assert_equal {} [r sdiff missing1{t} set1{t}]
+            assert_equal {} [r sdiff set1{t} missing1{t} set1{t}]
+        }
+
+        test "SDIFF streams filtered members - $type" {
+            assert_equal {1000 2000} [lsort [r sdiff set3{t} set1{t}]]
+            assert_equal {} [r sdiff set5{t} set1{t}]
+        }
+
+        test "SDIFF algorithm 2 with small subtractors - $type" {
+            set expected {}
+            for {set i 1} {$i <= 198} {incr i} {
+                if {$i != 195} {lappend expected $i}
+            }
+            assert_equal [lsort $expected] [lsort [r sdiff set1{t} set3{t} set5{t}]]
+        }
+
+        test "SUNION and SDIFF check all input types - $type" {
+            r set wrongtype{t} value
+            assert_error "WRONGTYPE*" {r sunion missing1{t} set1{t} wrongtype{t}}
+            assert_error "WRONGTYPE*" {r sdiff missing1{t} wrongtype{t}}
+            assert_error "WRONGTYPE*" {r sdiff set1{t} set1{t} wrongtype{t}}
+            r del wrongtype{t}
         }
 
         test "SDIFFSTORE with three sets - $type" {

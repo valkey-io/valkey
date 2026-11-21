@@ -139,6 +139,7 @@ typedef long long ustime_t;
 #define VALKEYMODULE_HASH_CFIELDS (1 << 2)
 #define VALKEYMODULE_HASH_EXISTS (1 << 3)
 #define VALKEYMODULE_HASH_COUNT_ALL (1 << 4)
+#define VALKEYMODULE_HASH_KEEPTTL (1 << 5)
 
 #define VALKEYMODULE_CONFIG_DEFAULT 0                /* This is the default for a module config. */
 #define VALKEYMODULE_CONFIG_IMMUTABLE (1ULL << 0)    /* Can this value only be set at startup? */

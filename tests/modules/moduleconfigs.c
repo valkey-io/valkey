@@ -5,6 +5,7 @@ int mutable_bool_val;
 int immutable_bool_val;
 long long longval;
 long long memval;
+long long sensitive_val;
 unsigned long long mutable_ull_val;
 unsigned long long immutable_ull_val;
 ValkeyModuleString *strval = NULL;
@@ -194,6 +195,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     }
     if (ValkeyModule_RegisterNumericConfig(ctx, "numeric", -1, VALKEYMODULE_CONFIG_DEFAULT, -5, 2000, getNumericConfigCommand, setNumericConfigCommand, longlongApplyFunc, &longval) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+    if (ValkeyModule_RegisterNumericConfig(ctx, "sensitive_numeric", 0, VALKEYMODULE_CONFIG_DEFAULT | VALKEYMODULE_CONFIG_SENSITIVE, 0, LLONG_MAX, getNumericConfigCommand, setNumericConfigCommand, NULL, &sensitive_val) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
     if (ValkeyModule_RegisterUnsignedNumericConfig(ctx, "unsigned_numeric", 1, VALKEYMODULE_CONFIG_DEFAULT | VALKEYMODULE_CONFIG_UNSIGNED, 0, LLONG_MAX * 1ULL + 1000, getUnsignedNumericConfigCommand, setUnsignedNumericConfigCommand, NULL, &mutable_ull_val) == VALKEYMODULE_ERR) {

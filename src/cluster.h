@@ -54,6 +54,8 @@ void clusterBeforeSleep(void);
 int verifyClusterConfigWithData(void);
 void clusterHandleServerShutdown(bool auto_failover);
 
+int clusterModuleMessageLengthValid(uint32_t len);
+
 int clusterSendModuleMessageToTarget(const char *target,
                                      uint64_t module_id,
                                      uint8_t type,

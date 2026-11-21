@@ -289,6 +289,15 @@ start_cluster 3 0 [list config_lines $modules] {
     set node2 [srv -1 client]
     set node3 [srv -2 client]
 
+    test "VM_SendClusterMessage rejects oversized payloads before reading them" {
+        R 0 CONFIG RESETSTAT
+        assert_equal {REJECTED} [$node1 test.send_oversized_msg]
+        set module_sent 0
+        regexp {cluster_stats_messages_module_sent:([0-9]+)} [$node1 CLUSTER INFO] -> module_sent
+        assert_equal {0} $module_sent
+        assert_equal {PONG} [$node1 PING]
+    }
+
     test "VM_CALL with cluster slots" {
         assert_equal [lsort [$node1 cluster slots]] [lsort [$node1 test.cluster_slots]]
         assert_equal [lsort [$node2 cluster slots]] [lsort [$node2 test.cluster_slots]]

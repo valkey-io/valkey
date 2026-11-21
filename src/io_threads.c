@@ -710,9 +710,12 @@ int trySendReadToIOThreads(client *c) {
     /* For simplicity let the main-thread handle the blocked clients */
     if (c->flag.blocked || c->flag.unblocked) return C_ERR;
     if (c->flag.close_asap) return C_ERR;
-    /* Avoid offloading reads to IO thread for the slot migration export job while snapshotting.
-     * During this phase, the main thread writes snapshot data directly via connWrite(). */
-    if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
+    /* Don't offload reads for slot migration export clients. While snapshotting, the main thread
+     * writes snapshot data directly via connWrite(). And while a script is busy, their commands must
+     * be held back (see canParseCommand()), which is only decided right before execution on the main
+     * thread. A read parsed by an IO thread before the script became busy would get -BUSY instead.
+     * Read traffic from the target is negligible (mostly ACKs). */
+    if (getClientType(c) == CLIENT_TYPE_SLOT_EXPORT) return C_ERR;
 
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;

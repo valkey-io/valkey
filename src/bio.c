@@ -28,6 +28,12 @@
  * Every thread waits for new jobs in its queue, and processes every job
  * sequentially.
  *
+ * BIO_USER_WORK jobs are different: they run on a pool of
+ * server.bio_pool_threads threads that share a single queue. These jobs have
+ * no order guarantee, and jobs may run in parallel. The pool is created on
+ * the first bioCreateTask() call, so a server that never uses it has no pool
+ * threads.
+ *
  * Jobs handled by the same worker are guaranteed to be processed from the
  * least-recently-inserted to the most-recently-inserted (older jobs processed
  * first).
@@ -110,6 +116,13 @@ static size_t bioWorkerNum(const bio_worker_data *const bwd) {
 static _Atomic unsigned long bio_jobs_counter[BIO_NUM_OPS] = {0};
 static _Thread_local size_t bio_worker_num = 0;
 
+/* Pool of threads for BIO_USER_WORK jobs. All the threads pop jobs from the
+ * same queue. */
+static mutexQueue *bio_pool_jobs = NULL;
+static pthread_t *bio_pool_threads = NULL;
+static _Thread_local bool bio_in_pool_thread = false;
+static pthread_once_t bio_pool_once = PTHREAD_ONCE_INIT;
+
 /* This structure represents a background Job. It is only used locally to this
  * file as the API does not expose the internals at all. */
 typedef union bio_job {
@@ -150,9 +163,16 @@ typedef union bio_job {
         sds content;   /* Cluster config file content. */
         bool do_fsync; /* A flag to indicate that a fsync is required. */
     } cluster_save_args;
+
+    struct {
+        int type;
+        bioFunctionPtr callback; /* Function to run in a pool thread */
+        void *context;           /* Argument passed to the callback */
+    } user_task;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
+void *bioProcessPoolJobs(void *arg);
 
 /* Allocate a bio_job. Marked noinline so that it appears as a distinct frame in valgrind
  * stack traces, allowing a targeted Valgrind suppression for BIO job leaks */
@@ -186,11 +206,34 @@ void bioInit(void) {
     pthread_attr_destroy(&attr);
 }
 
+/* Create the BIO_USER_WORK queue and threads. Called once, through
+ * pthread_once(), on the first bioCreateTask() call. */
+static void bioPoolInit(void) {
+    pthread_attr_t attr;
+
+    serverInitThreadAttribute(&attr);
+    bio_pool_jobs = mutexQueueCreate();
+    bio_pool_threads = zcalloc(sizeof(pthread_t) * server.bio_pool_threads);
+    for (int i = 0; i < server.bio_pool_threads; i++) {
+        int err = pthread_create(&bio_pool_threads[i], &attr, bioProcessPoolJobs, (void *)(intptr_t)(i + 1));
+        if (err) {
+            serverLog(LL_WARNING, "Fatal: Can't initialize Background Jobs pool. Error message: %s", strerror(err));
+            exit(1);
+        }
+    }
+    pthread_attr_destroy(&attr);
+}
+
 void bioSubmitJob(int type, bio_job *job) {
     job->header.type = type;
+    /* Increment before the push, so a worker can't decrement the counter first. */
+    atomic_fetch_add(&bio_jobs_counter[type], 1);
+    if (type == BIO_USER_WORK) {
+        mutexQueueAdd(bio_pool_jobs, job);
+        return;
+    }
     bio_worker_data *const bwd = &bio_workers[bio_job_to_worker[type]];
     mutexQueueAdd(bwd->bio_jobs, job);
-    atomic_fetch_add(&bio_jobs_counter[type], 1);
 }
 
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
@@ -256,12 +299,19 @@ void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
     bioSubmitJob(BIO_CLUSTER_SAVE, job);
 }
 
-#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
-void *bioProcessBackgroundJobs(void *arg) {
-    bio_worker_data *const bwd = arg;
+void bioCreateTask(bioFunctionPtr func, void *context) {
+    pthread_once(&bio_pool_once, bioPoolInit);
+    bio_job *job = allocBioJob(0);
+    job->user_task.callback = func;
+    job->user_task.context = context;
+    bioSubmitJob(BIO_USER_WORK, job);
+}
+
+/* Common setup for every bio thread. */
+static void bioThreadSetup(const char *title) {
     sigset_t sigset;
 
-    valkey_set_thread_title(bwd->bio_worker_title);
+    valkey_set_thread_title(title);
 
     serverSetCpuAffinity(server.bio_cpulist);
 
@@ -274,6 +324,30 @@ void *bioProcessBackgroundJobs(void *arg) {
     int err = pthread_sigmask(SIG_BLOCK, &sigset, NULL);
     if (err)
         serverLog(LL_WARNING, "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(err));
+}
+
+/* Thread entry point for the BIO_USER_WORK pool. */
+void *bioProcessPoolJobs(void *arg) {
+    /* arg is the 1-based thread number, used in the thread title. */
+    char title[16];
+    snprintf(title, sizeof(title), "bio_pool-%d", (int)(intptr_t)arg);
+    bioThreadSetup(title);
+    bio_in_pool_thread = true;
+
+    while (1) {
+        bio_job *job = mutexQueuePop(bio_pool_jobs, true);
+        serverAssert(job->header.type == BIO_USER_WORK);
+        job->user_task.callback(job->user_task.context);
+        zfree(job);
+        atomic_fetch_sub(&bio_jobs_counter[BIO_USER_WORK], 1);
+    }
+}
+
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
+void *bioProcessBackgroundJobs(void *arg) {
+    bio_worker_data *const bwd = arg;
+
+    bioThreadSetup(bwd->bio_worker_title);
 
     bio_worker_num = bioWorkerNum(bwd);
 
@@ -357,6 +431,8 @@ unsigned long bioPendingJobsOfType(int type) {
 
 /* Wait for the job queue of the worker for jobs of specified type to become empty. */
 void bioDrainWorker(int type) {
+    /* The pending count includes the running task, so this would never end. */
+    serverAssert(!(type == BIO_USER_WORK && bio_in_pool_thread));
     while (bioPendingJobsOfType(type) > 0) {
         usleep(100);
     }
@@ -379,8 +455,20 @@ void bioKillThreads(void) {
             }
         }
     }
+
+    for (int i = 0; bio_pool_threads && i < server.bio_pool_threads; i++) {
+        pthread_t tid = bio_pool_threads[i];
+        if (pthread_equal(tid, pthread_self())) continue;
+        if (tid && pthread_cancel(tid) == 0) {
+            if ((err = pthread_join(tid, NULL)) != 0) {
+                serverLog(LL_WARNING, "Bio pool thread #%d cannot be joined: %s", i, strerror(err));
+            } else {
+                serverLog(LL_WARNING, "Bio pool thread #%d terminated", i);
+            }
+        }
+    }
 }
 
 int inBioThread(void) {
-    return bio_worker_num != 0;
+    return bio_worker_num != 0 || bio_in_pool_thread;
 }

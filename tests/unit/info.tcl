@@ -796,3 +796,11 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         waitForBgsave r
     }
 }
+
+start_server {tags {"info" "external:skip"} overrides {bio-pool-threads 3}} {
+    test {bio pool threads config and pending jobs counter} {
+        assert_equal {bio-pool-threads 3} [r config get bio-pool-threads]
+        assert_error {*immutable*} {r config set bio-pool-threads 4}
+        assert_equal 0 [s bio_pool_pending_jobs]
+    }
+}

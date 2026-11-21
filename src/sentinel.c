@@ -3916,6 +3916,12 @@ void sentinelCommand(client *c) {
         if (getLongFromObjectOrReply(c, c->argv[3], &port, NULL) != C_OK ||
             getLongLongFromObjectOrReply(c, c->argv[4], &req_epoch, NULL) != C_OK)
             return;
+        /* Epochs are unsigned: a negative value would be taken as a huge
+         * epoch by sentinelVoteLeader() and become our current epoch. */
+        if (req_epoch < 0) {
+            addReplyError(c, "Invalid epoch");
+            return;
+        }
         ri = getSentinelValkeyInstanceByAddrAndRunID(sentinel.primaries, objectGetVal(c->argv[2]), port, NULL);
 
         /* It exists? Is actually a primary? Is subjectively down? It's down.

@@ -4162,6 +4162,20 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
     return slot;
 }
 
+/* Returns 1 if `target` is on the replicaof chain starting at `node`. Making
+ * `target` the replica of `node` would then close a cycle in our view. The
+ * walk is bounded by the node count because the chain may already contain a
+ * cycle that does not include `target`. */
+static int clusterReplicaChainReaches(clusterNode *node, clusterNode *target) {
+    unsigned long hops = dictSize(server.cluster->nodes);
+    clusterNode *n = node;
+    while (n != NULL && hops-- > 0) {
+        if (n == target) return 1;
+        n = n->replicaof;
+    }
+    return 0;
+}
+
 /* When this function is called, there is a packet to process starting
  * at link->rcvbuf. Releasing the buffer is up to the caller, so this
  * function should just handle the higher level stuff of processing the
@@ -4649,8 +4663,22 @@ int clusterProcessPacket(clusterLink *link) {
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 }
 
-                /* Primary node changed for this replica? */
-                if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
+                /* Primary node changed for this replica?
+                 *
+                 * Skip the update if the claimed primary is still a replica of
+                 * `sender` in our view. That view is stale, because `sender` now
+                 * claims it as its primary. Adopting the claim would close a
+                 * replicaof cycle and trip the assertion in clusterNodeGetPrimary().
+                 * We keep the current link and let the claimed primary's own
+                 * packet, which announces its primary role, correct our view. */
+                int primary_changed = sender_claimed_primary && sender->replicaof != sender_claimed_primary;
+                if (primary_changed && clusterReplicaChainReaches(sender_claimed_primary, sender)) {
+                    serverLog(LL_NOTICE,
+                              "Ignoring claim of node %.40s (%s) that it replicates node %.40s (%s): in our view the claimed "
+                              "primary replicates it, directly or through a chain, so adopting the claim would close a replicaof cycle",
+                              sender->name, humanNodename(sender), sender_claimed_primary->name,
+                              humanNodename(sender_claimed_primary));
+                } else if (primary_changed) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, humanNodename(sender), sender_claimed_primary->name,

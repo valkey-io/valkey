@@ -1954,7 +1954,7 @@ static void clusterRaftSetLeader(const char *leader_id) {
  * may be called repeatedly before clusterRaftBeforeSleep() is called. We store
  * the maximum commit that we have verified, and no more. It is the caller's
  * responsibility to correctly provide the verified index. */
-static void raftSetVerifiedIndexToAck(int msg_term, int verified_index) {
+static void raftSetVerifiedIndexToAck(uint64_t msg_term, uint64_t verified_index) {
     clusterRaftState *rs = RAFT_STATE();
     if (rs->ae_ack_term < msg_term) {
         rs->ae_ack_term = msg_term;

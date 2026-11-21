@@ -1820,3 +1820,104 @@ foreach compression {no lz4} {
         }
     }
 }
+
+# Return the number of times the REPLCONF command has been processed by the server.
+proc replconf_calls {client} {
+    set stats [$client info commandstats]
+    if {[regexp {cmdstat_replconf:calls=(\d+)} $stats -> calls]} {
+        return $calls
+    }
+    return 0
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set repl-backlog-size [expr {10 ** 6}]
+    $primary config set loglevel notice
+
+    test "Dual channel: freed rdb client is removed from replicas_waiting_psync after REPLCONF rdb-channel 0" {
+        # freeReplicaReferencedReplBuffer() must remove the rdb client from
+        # replicas_waiting_psync unconditionally. Gating it on repl_rdb_channel
+        # leaves a dangling pointer when a client clears that flag (REPLCONF
+        # rdb-channel 0) while still tracked. Follow-up actions may dereference the
+        # dangling pointer.
+
+        # Drive the real dual-channel rdb-channel handshake:
+        set rdb_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer { catch {$rdb_chan close} }
+        assert_equal "+OK" [$rdb_chan REPLCONF capa eof rdb-only 1 rdb-channel 1 listening-port 0]
+
+        # SYNC returns the $ENDOFF line once the fork has admitted this client.
+        # The 4th field is the rdb client id we need.
+        set endoff_line [$rdb_chan SYNC]
+        assert_match {$ENDOFF:*} $endoff_line
+        set rdb_client_id [lindex [split $endoff_line " "] 3]
+        assert {$rdb_client_id ne ""}
+
+        # The fork admits this client to the wait set. Wait for it to appear.
+        wait_for_condition 50 100 {
+            [string match {*replicas_waiting_psync:1*} [$primary info replication]]
+        } else {
+            fail "rdb-channel client was not added to replicas_waiting_psync"
+        }
+
+        # Clear repl_rdb_channel on this client while it is still tracked in replicas_waiting_psync.
+        # To observe that this change took effect we check for changes on `cmdstat_replconf`.
+        set replconf_before [replconf_calls $primary]
+        # Deferred. The reply would sit behind the RDB payload on this socket, so it cannot be read here.
+        $rdb_chan deferred 1
+        $rdb_chan REPLCONF rdb-channel 0
+        wait_for_condition 50 100 {
+            [replconf_calls $primary] > $replconf_before
+        } else {
+            fail "primary did not process REPLCONF rdb-channel 0 on the waiting rdb client"
+        }
+        # Skip the default grace period
+        $primary debug delay-rdb-client-free-seconds 0
+        $rdb_chan close
+
+        # Wait until the RDB client is unregistered. The "Freeing RDB client" log
+        # line is written before a free that can still be deferred by pending I/O.
+        wait_for_condition 100 200 {
+            [$primary client list id $rdb_client_id] eq ""
+        } else {
+            fail "primary did not free the disconnected rdb client within the grace period"
+        }
+
+        # Trigger the use-after-free. set-rdb-client-id only does a rax lookup, so
+        # it cannot crash by itself. The dereference happens in PSYNC and on the next
+        # propagated write. PSYNC needs the real replid and an offset inside the backlog range,
+        # so write a few keys first.
+        set replid [status $primary master_replid]
+        for {set i 0} {$i < 100} {incr i} { $primary set key-$i $i }
+        set offset [status $primary repl_backlog_first_byte_offset]
+
+        set main_chan [valkey $primary_host $primary_port 0 $::tls {} 1]
+        test_defer { catch {$main_chan close} }
+        assert_equal "+OK" [$main_chan REPLCONF capa eof capa psync2]
+
+        # With the fix, the freed id was removed from the rax on free, so
+        # set-rdb-client-id returns an error here and we never reach PSYNC. Without
+        # the fix, it is accepted and the PSYNC below dereferences freed memory.
+        set idreply [$main_chan REPLCONF set-rdb-client-id $rdb_client_id]
+        if {[string match "+OK*" $idreply]} {
+            # Deferred: the PSYNC reply is not needed. The dereference happens
+            # while the primary processes this command, and a read could hang or
+            # fail if the primary has already aborted.
+            $main_chan deferred 1
+            catch {$main_chan PSYNC $replid $offset}
+        }
+
+        # Validate server is still responsive with correct info stats
+        assert_match "-ERR Unrecognized RDB client id*" $idreply
+        assert_match {*replicas_waiting_psync:0*} [$primary info replication]
+
+        $main_chan close
+    }
+}

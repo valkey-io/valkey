@@ -680,8 +680,18 @@ start_server {} {
         $rdB flush
         assert_equal OK [$rdB read]
         while {[client_field blpop_b tot-mem] < 2000000} {
+            set expected_commands [expr {[client_field blpop_b tot-cmds] + 1}]
             $rdB get fat
             $rdB flush
+            # CLIENT LIST runs on another connection and can observe B before its
+            # queued GETs execute. Wait for each GET so setup cannot overshoot the
+            # 100MB limit and evict B before the intended 128KiB trigger.
+            # Keep replies unread to retain the output-buffer pressure.
+            wait_for_condition 100 10 {
+                [client_field blpop_b tot-cmds] >= $expected_commands
+            } else {
+                fail "GET was not processed while preparing the blocked successor"
+            }
         }
         # Leave GET replies unread so tot-mem stays large while blocked.
         $rdB blpop mylist 0

@@ -293,24 +293,92 @@ foreach call_type {nested normal} {
     }
 
     test {Unblock by timer} {
-        # When the client is unlock, we will get the OK reply.
+        # When the client is unlocked by the timer, we get the OK reply.
         assert_match "OK" [r unblock_by_timer 100 0]
     }
 
-    test {block time is shorter than timer period} {
-        # This command does not have the reply.
+    test {block time is shorter than timer period with NULL timeout callback} {
+        # Preserve the no-timeout-callback crash regression: do not read a reply.
         set rd [valkey_deferring_client]
+        test_defer {$rd close}
         $rd unblock_by_timer 100 10
-        # Wait for the client to unlock.
         after 120
-        $rd close
     }
 
-    test {block time is equal to timer period} {
-        # These time is equal, they will be unlocked in the same event loop,
-        # when the client is unlock, we will get the OK reply from timer.
-        assert_match "OK" [r unblock_by_timer 100 100]
+    test {block naturally times out with NULL timeout callback} {
+        # PING is queued behind the block and can only run after natural timeout.
+        # No timeout reply is expected from a NULL callback.
+        set rd [valkey_deferring_client]
+        test_defer {$rd close}
+        $rd unblock_by_timer 0 100
+        test_defer {catch {r release_held_blocked_client}}
+        $rd ping
+        assert_equal PONG [$rd read]
+        assert_equal OK [r release_held_blocked_client]
     }
+
+    test {timeout reply precedes the late timer callback} {
+        set rd [valkey_deferring_client]
+        test_defer {$rd close}
+        # No timer is scheduled: the blocking timeout must reply first.
+        $rd unblock_by_timer 0 100 1
+        test_defer {catch {r release_held_blocked_client}}
+        assert_equal TIMEOUT [$rd read]
+        # Now invoke the real timer callback after the client was detached.
+        assert_equal OK [r release_held_blocked_client 1]
+        # An obsolete timer reply must not leak into subsequent commands.
+        $rd ping
+        assert_equal PONG [$rd read]
+    }
+
+    test {real module timer and blocked timeout may expire together} {
+        # Exercise the collision scenario from redis/redis#13015 using a real
+        # module timer. This bounded test allows both completion orders.
+        set rd [valkey_deferring_client]
+        test_defer {$rd close}
+        test_defer {catch {r module load $testmodule}}
+        for {set i 0} {$i < 12} {incr i} {
+            $rd unblock_by_timer 100 100 1
+            set reply [$rd read]
+            assert {$reply eq "OK" || $reply eq "TIMEOUT"}
+        }
+        # If timeout won, a real timer may still hold the blocked-client
+        # handle. Poll until all callbacks have completed and the module can
+        # be unloaded; this also prevents stale replies reaching a new command.
+        wait_for_condition 50 50 {
+            [catch {r module unload blockedclient} unload_err] == 0
+        } else {
+            fail "real timer did not release blocked clients: $unload_err"
+        }
+        assert_equal OK [r module load $testmodule]
+        $rd ping
+        assert_equal PONG [$rd read]
+    }
+
+    test {CLIENT UNBLOCK invokes the module timeout callback} {
+        set rd [valkey_deferring_client]
+        test_defer {$rd close}
+        $rd client id
+        set id [$rd read]
+        # period 0 keeps the handle until we explicitly release it.
+        $rd unblock_by_timer 0 0 1
+        test_defer {catch {r release_held_blocked_client}}
+        wait_for_blocked_clients_count 1
+        assert_equal 1 [r client unblock $id timeout]
+        assert_equal TIMEOUT [$rd read]
+        assert_equal OK [r release_held_blocked_client]
+        # MODULE UNLOAD rejects modules retaining blocked-client handles.
+        # This checks actual cleanup even when only this test is selected.
+        wait_for_condition 50 50 {
+            [catch {r module unload blockedclient} unload_err] == 0
+        } else {
+            fail "blocked-client handle was not released: $unload_err"
+        }
+        assert_equal OK [r module load $testmodule]
+        $rd ping
+        assert_equal PONG [$rd read]
+    }
+
     
     test {Unmatched POSTPONED_LEN reply from a thread safe context does not crash the server} {
         assert_equal {} [r postponed_unmatched_thread]

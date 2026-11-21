@@ -610,11 +610,23 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 i++;
             } else if (!strcasecmp(arg, "store") && (i + 1) < remaining && !(flags & RADIUS_NOSTORE) &&
                        !(flags & GEOSEARCH)) {
+                /* Only a single STORE destination is allowed. */
+                if (storekey != NULL) {
+                    addReplyErrorObject(c, shared.syntaxerr);
+                    geoPolygonPointsFree(&shape);
+                    return;
+                }
                 storekey = c->argv[base_args + i + 1];
                 storedist = 0;
                 i++;
             } else if (!strcasecmp(arg, "storedist") && (i + 1) < remaining && !(flags & RADIUS_NOSTORE) &&
                        !(flags & GEOSEARCH)) {
+                /* Only a single STOREDIST destination is allowed. */
+                if (storekey != NULL) {
+                    addReplyErrorObject(c, shared.syntaxerr);
+                    geoPolygonPointsFree(&shape);
+                    return;
+                }
                 storekey = c->argv[base_args + i + 1];
                 storedist = 1;
                 i++;

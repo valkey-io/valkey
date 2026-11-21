@@ -2058,7 +2058,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
      * have no entries sent, we have verified our prev_log_index and term.
      * Otherwise, we can verify up to the new index applied */
     if (entry_line_count == 0) {
-        raftSetVerifiedIndexToAck(msg_term, prev_log_index);   
+        raftSetVerifiedIndexToAck(msg_term, prev_log_index);
     } else {
         raftSetVerifiedIndexToAck(msg_term, new_index - 1);
     }
@@ -2216,7 +2216,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->last_heartbeat = monotonicMs();
     clusterRaftSetLeader(argv[1]);
 
-    /* If we're already past the snapshot, ignore. 
+    /* If we're already past the snapshot, ignore.
      * We can ack up to our commit index as far as this function knows */
     if (snap_index <= rs->last_applied) {
         raftSetVerifiedIndexToAck(msg_term, rs->commit_index);

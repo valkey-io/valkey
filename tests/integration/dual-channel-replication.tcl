@@ -1757,8 +1757,10 @@ foreach compression {no lz4} {
         # Each SUNIONSTORE of this set takes a while to apply, so streaming the
         # buffered ones takes long enough to break the link in the middle of it.
         # SUNIONSTORE is idempotent, so the result doesn't depend on where the
-        # resync resumes.
-        for {set i 0} {$i < 10000} {incr i} {lappend members m$i}
+        # resync resumes. Valgrind runs each union ~100x slower, so a smaller
+        # set keeps both the flood and the gaps between link checks short.
+        set bigset_members [expr {$::valgrind ? 1000 : 10000}]
+        for {set i 0} {$i < $bigset_members} {incr i} {lappend members m$i}
         $primary sadd bigset {*}$members
 
         start_server {} {
@@ -1780,13 +1782,16 @@ foreach compression {no lz4} {
                 wait_for_log_messages 0 {"*Loading RDB produced by*"} $loglines 1000 10
 
                 # Buffer slow commands on the replica while it is still loading.
-                # The long name of a missing key adds ~16 MB of easily compressed
-                # bytes, so the buffer streams in many blocks (and, with lz4, many
-                # decode rounds), each followed by a link check.
+                # Streaming them takes ~3 s natively (~5 s under valgrind), long
+                # enough for the kill below to land mid-stream. The long name of
+                # a missing key adds easily compressed bytes to each. With lz4 a
+                # link check runs once per 1 MB decoded, so under valgrind, where
+                # each union is slow, a longer name keeps that to ~16 commands.
                 set rd [valkey_deferring_client -1]
-                set pad [string repeat x 4000]
-                for {set i 0} {$i < 4000} {incr i} {$rd sunionstore dst bigset $pad}
-                for {set i 0} {$i < 4000} {incr i} {$rd read}
+                set pad [string repeat x [expr {$::valgrind ? 64000 : 4000}]]
+                set n [expr {$::valgrind ? 150 : 3000}]
+                for {set i 0} {$i < $n} {incr i} {$rd sunionstore dst bigset $pad}
+                for {set i 0} {$i < $n} {incr i} {$rd read}
                 $rd close
                 assert_equal 1 [s 0 loading]
                 set syncs [expr {[s -1 sync_full] + [s -1 sync_partial_ok]}]

@@ -65,6 +65,7 @@ int clusterSlotStatsEnabled(int slot);
 /* Wrapper functions for static functions in networking.c */
 void testOnlyPostWriteToReplica(client *c);
 void testOnlyWriteToReplica(client *c);
+int testOnlyWritevToClient(client *c);
 void testOnlyBackupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv);
 size_t testOnlyUpsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available);
 int testOnlyIsCopyAvoidPreferred(client *c, robj *obj);
@@ -712,6 +713,54 @@ static clientReplyBlock *makePlainReplyBlock(size_t size, size_t used, char fill
     blk->last_header = NULL;
     memset(blk->buf, fill, used);
     return blk;
+}
+
+TEST_F(NetworkingTest, TestWritevToClientWithReplyList) {
+    int io_threads_num = server.io_threads_num;
+    int min_io_threads_copy_avoid = server.min_io_threads_copy_avoid;
+    user *default_user = DefaultUser;
+    server.io_threads_num = 1;
+    server.min_io_threads_copy_avoid = 1;
+
+    user u;
+    DefaultUser = &u;
+    DefaultUser->flags = USER_FLAG_NOPASS;
+
+    const char *fragments[] = {"$3\r\n", "foo", "\r\n", "$3\r\n", "bar", "\r\n"};
+    const char *expected = "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
+    size_t expected_len = strlen(expected);
+
+    client *c = createTestClient();
+    fakeConnection *fake_conn = connCreateFake(expected_len);
+    c->conn = (connection *)fake_conn;
+    c->slot = -1;
+
+    // Simulate addReplyDeferredLen
+    listAddNodeTail(c->reply, NULL); /* NULL is placeholder. */
+    listNode *deferred_len = listLast(c->reply);
+
+    for (size_t i = 0; i < sizeof(fragments) / sizeof(fragments[0]); i++) {
+        _addReplyToBufferOrList(c, fragments[i], strlen(fragments[i]));
+    }
+
+    setDeferredReply(c, deferred_len, "*2\r\n", 4);
+
+    EXPECT_EQ(c->bufpos, 0u);
+    EXPECT_FALSE(c->flag.buf_encoded);
+    EXPECT_EQ(listLength(c->reply), 2u);
+    clientReplyBlock *payload_block = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+    EXPECT_TRUE(payload_block->flag.buf_encoded);
+
+    EXPECT_EQ(testOnlyWritevToClient(c), C_OK);
+    EXPECT_EQ(c->nwritten, (ssize_t)expected_len);
+    EXPECT_EQ(fake_conn->written, expected_len);
+    EXPECT_EQ(memcmp(fake_conn->buffer, expected, expected_len), 0);
+
+    freeReplyOffloadClient(c);
+    connFreeFake(fake_conn);
+    server.io_threads_num = io_threads_num;
+    server.min_io_threads_copy_avoid = min_io_threads_copy_avoid;
+    DefaultUser = default_user;
 }
 
 /* trimReplyUnusedTailSpace must not realloc the tail when the write bookmark

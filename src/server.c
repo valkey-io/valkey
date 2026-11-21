@@ -2191,6 +2191,8 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
      * refresh here since afterSleep() runs on every event-loop wakeup. */
     updateCachedTime(0);
 
+    if (server.cluster_enabled) clusterCheckStall();
+
     /* Update command time snapshot in case it'll be required without a command
      * e.g. somehow used by module timers. Don't update it while yielding to a
      * blocked command, call() will handle that and restore the original time. */
@@ -4797,9 +4799,15 @@ int processCommand(client *c) {
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
     int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
-    if (server.cluster_enabled && !obey_client && !is_keyless) {
-        int error_code;
-        clusterNode *n = getNodeByQuery(c, &error_code);
+    /* After a stall the cluster may have failed this primary over. A write
+     * without keys, or an EXEC of such writes, never reaches the cluster state
+     * check in getNodeByQuery(), so refuse it here with the error that a keyed
+     * write gets while the cluster is down. */
+    int stall_refused = server.cluster_enabled && !obey_client && clusterCheckCommandStall() &&
+                        is_write_command && (is_keyless || is_exec);
+    if (server.cluster_enabled && !obey_client && (!is_keyless || stall_refused)) {
+        int error_code = server.cluster_allow_reads_when_down ? CLUSTER_REDIR_DOWN_RO_STATE : CLUSTER_REDIR_DOWN_STATE;
+        clusterNode *n = stall_refused ? NULL : getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);

@@ -140,6 +140,12 @@ void rdbReportError(int corruption_error, int linenum, char *reason, ...) {
     vsnprintf(msg + len, sizeof(msg) - len, reason, ap);
     va_end(ap);
 
+    if (server.loading_rio && rioGetAsyncCloseError(server.loading_rio)) {
+        /* The load was cancelled on purpose (rioCloseASAP): the read failed
+         * because of that, the input is not truncated or corrupt. */
+        serverLog(LL_WARNING, "%s. RDB load aborted because the replication link was lost.", msg);
+        return;
+    }
     if (isRestoreContext()) {
         /* If we're in the context of a RESTORE command, just propagate the error. */
         /* log in VERBOSE, and return (don't exit). */
@@ -4241,6 +4247,10 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         }
     }
 
+    /* The progress callback runs after each read, so a cancel can land on the
+     * last read of the load, which then succeeds. The load is still cancelled. */
+    if (rioGetAsyncCloseError(rdb)) goto eoferr;
+
     if (empty_keys_skipped) {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld, all fields expired hashes: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped, rdb_last_load_all_fields_expired);
@@ -4271,6 +4281,13 @@ inlineoomerr:
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
     ret = RDB_FAILED;
+    if (rioGetAsyncCloseError(rdb)) {
+        /* The load was cancelled on purpose (rioCloseASAP), for example because
+         * the replication link was lost. The input is not truncated or corrupt,
+         * so return the failure to the caller without reporting it. */
+        serverLog(LL_WARNING, "RDB load aborted because the replication link was lost.");
+        goto cleanup;
+    }
     if (rdbRioHasInternalStreamReaderError(rdb)) {
         serverLog(LL_WARNING, "Internal error while decoding streaming-compressed RDB input. Aborting now.");
         rdbReportReadError("Internal error decoding compressed RDB stream");

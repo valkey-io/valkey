@@ -31,6 +31,10 @@ typedef struct {
             int rdbver;
             sds header_buf;
             sds footer_buf;
+            /* Under reply blocking, the replication offset at the end of the
+             * keyspace scan; -1 otherwise. The RDB carries every write up to
+             * it, so the EOF marker is held back until it is durable. */
+            long long durable_cut_offset;
         } repl;
     } u;
 } forklessSaveInfo;
@@ -255,6 +259,31 @@ static int writeSyncPreamble(forklessSaveInfo *saveInfo) {
  *  - The RDB header has been written (magic, aux fields, functions)
  *  - The DB size hints have been written
  * This function is responsible for writing all of the dictionary entries. */
+/* Under reply blocking, wait until the writes the RDB carries are durable before
+ * ending the stream: the replica must not load data the primary could still
+ * lose on a crash. The main thread publishes the durable offset; this thread
+ * only reads it. Returns C_OK to go on, or C_ERR if every replica went away.
+ * Sets *terminated if the save is cancelled while waiting. */
+static int waitForDurableCutOffset(forklessSaveInfo *saveInfo, bool *terminated) {
+    long long cut = saveInfo->u.repl.durable_cut_offset;
+    if (cut < 0 || replyBlockingDurableOffsetForThreads() >= cut) return C_OK;
+
+    serverLog(LL_NOTICE, "forkless-save: waiting for offset %lld to be durable before the RDB EOF", cut);
+    while (replyBlockingDurableOffsetForThreads() < cut) {
+        if (forklessSaveShouldAbort(&saveInfo->save_rio)) {
+            *terminated = true;
+            return C_OK;
+        }
+        handleClosingClients(saveInfo);
+        if (listLength(saveInfo->u.repl.clients) == 0) {
+            serverLog(LL_WARNING, "forkless-save: all replicas disconnected while waiting for durability");
+            return C_ERR;
+        }
+        usleep(1000);
+    }
+    return C_OK;
+}
+
 static void *forklessSaveProcessor(void *arg) {
     serverAssert(!onServerMainThread());
     forklessSaveInfo *saveInfo = arg;
@@ -379,6 +408,7 @@ static void *forklessSaveProcessor(void *arg) {
      * tail (repl aux + module AFTER_RDB aux), then emit the EOF opcode + checksum
      * and the EOF end marker here. */
     if (saveInfo->write_target == RDB_WRITE_TARGET_SOCKET) {
+        if (!terminated && err == C_OK) err = waitForDurableCutOffset(saveInfo, &terminated);
         if (!terminated && err == C_OK) {
             sds footer = saveInfo->u.repl.footer_buf;
             if (footer == NULL) {
@@ -943,6 +973,18 @@ static bool forklessDoneIteratingKeyspace(void *privdata) {
 
     serverLog(LL_NOTICE, "forkless-save: replication done - primary_repl_offset: %lld",
               server.primary_repl_offset);
+
+    /* Writes made during the scan were inlined into the RDB and the keyspace
+     * reflects them, so the replica must not finish loading it before they are
+     * durable on this node. Record the offset the bg thread waits for, and
+     * publish the current durable offset so the wait does not start from a
+     * value left over from before reply blocking was enabled. */
+    if (isPrimaryReplyBlockingEnabled()) {
+        saveInfo->u.repl.durable_cut_offset = server.primary_repl_offset;
+        replyBlockingPublishDurableOffset();
+    } else {
+        saveInfo->u.repl.durable_cut_offset = -1;
+    }
 
     /* Stage the RDB tail for the bg thread. On failure, footer_buf stays NULL
      * and the bg thread fails the save cleanly when it finds no tail to write. */

@@ -1,0 +1,2661 @@
+# Tests for reply blocking durability feature
+# This test suite covers the synchronous replication functionality
+# that blocks client responses until durability providers acknowledge writes.
+#
+# Tests are parameterized over provider_mode:
+#   replica - TODO
+#   aof     - unblock via AOF appendfsync=always (automatic in beforeSleep)
+
+foreach provider_mode {aof} {
+
+    if {$provider_mode eq "replica"} {
+        set server_overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}
+    } else {
+        # Durability is implied by appendonly + appendfsync always.
+        # We use DEBUG reply-blocking-pause/resume to control blocking
+        # instead of toggling appendfsync, which avoids the issue where the
+        # provider reports as disabled when appendfsync != always.
+        set server_overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}
+    }
+
+    start_server [list tags {"repl durability external:skip"} overrides $server_overrides] {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        start_server {} {
+            set replica [srv 0 client]
+            set replica_host [srv 0 host]
+            set replica_port [srv 0 port]
+
+            # Helper: put the provider into a state where writes will block.
+            #   replica mode: ensure no replica is connected (so no one acks writes)
+            #   aof mode: pause the AOF provider so fsynced offsets are not advanced
+            proc pause_provider {} {
+                upvar provider_mode provider_mode
+                upvar primary primary
+                upvar replica replica
+
+                if {$provider_mode eq "replica"} {
+                    # Disconnect any existing replica so the next write has no one to ack it
+                    $replica replicaof no one
+                    wait_for_condition 50 100 {
+                        [llength [$primary client list type replica]] == 0
+                    } else {
+                        fail "Primary didn't notice replica disconnect"
+                    }
+                } else {
+                    # Pause the AOF provider so the next write will block
+                    $primary DEBUG reply-blocking-pause aof
+                }
+            }
+
+            # Helper: trigger durability acknowledgement, unblocking pending replies.
+            #   replica mode: connect replica and wait for replication ack
+            #   aof mode: resume the AOF provider and ping to force a beforeSleep fsync
+            proc unblock_with_provider {} {
+                upvar provider_mode provider_mode
+                upvar primary primary
+                upvar primary_host primary_host
+                upvar primary_port primary_port
+                upvar replica replica
+                upvar replica_host replica_host
+                upvar replica_port replica_port
+
+                if {$provider_mode eq "replica"} {
+                    $replica replicaof $primary_host $primary_port
+                    wait_replica_online $primary
+                    wait_replica_acked_ofs $primary $replica $replica_host $replica_port
+                } else {
+                    # Resume the AOF provider so it reports real fsynced offsets
+                    $primary DEBUG reply-blocking-resume aof
+                    # Issue a PING to force a beforeSleep cycle that fsyncs the AOF
+                    $primary ping
+                }
+            }
+
+            # ==================== bio-aof-offload-enabled config tests ====================
+
+            test "bio-aof-offload-enabled can be toggled at runtime - $provider_mode" {
+                # Server started with bio-aof-offload-enabled yes
+                assert_equal [lindex [$primary config get bio-aof-offload-enabled] 1] "yes"
+
+                $primary set key1 value1
+                assert_equal [$primary get key1] "value1"
+
+                $primary config set bio-aof-offload-enabled no
+                assert_equal [lindex [$primary config get bio-aof-offload-enabled] 1] "no"
+
+                $primary set key2 value2
+                assert_equal [$primary get key2] "value2"
+
+                # Re-enable for remaining tests
+                $primary config set bio-aof-offload-enabled yes
+                assert_equal [lindex [$primary config get bio-aof-offload-enabled] 1] "yes"
+            }
+
+            # ==================== Write blocking tests ====================
+
+            test "($provider_mode) Sync replication blocks replies until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                puts "durability blocks"
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:blocked value
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Sync replication blocks EXEC replies until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                puts "durability blocks"
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd multi
+                $rd set durable:multi value
+
+                assert_equal "OK" [$rd read]
+                assert_equal "QUEUED" [$rd read]
+
+                $rd exec
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+                assert_equal {OK} [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Sync replication blocks only written keys in EXEC" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                puts "durability only written keys in EXEC"
+
+                # Pre-populate with durability off so the SET doesn't block
+                assert_equal "OK" [$primary set durable:multi-clean clean]
+                # Verify the pre-populated value is readable on the primary before EXEC
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd multi
+                $rd set durable:multi-dirty value
+                $rd get durable:multi-clean
+
+                assert_equal "OK" [$rd read]
+                assert_equal "QUEUED" [$rd read]
+                assert_equal "QUEUED" [$rd read]
+                assert_equal {clean} [$primary get durable:multi-clean]
+
+
+                $rd exec
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal {OK clean} [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Lua script write blocks replies until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Pre-populate with sync-repl off so the SET doesn't block
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "OK" [$primary set durable:lua-clean clean]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd eval {redis.call('set', KEYS[1], ARGV[1]); return redis.call('get', KEYS[2])} 2 durable:lua-dirty durable:lua-clean value
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                set reader [valkey_client -1]
+                assert_equal {clean} [$reader get durable:lua-clean]
+
+                unblock_with_provider
+
+                assert_equal {clean} [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Lua script error after partial write still blocks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd eval {redis.call('set', KEYS[1], 'written'); error('deliberate error')} 1 durable:lua-error-key
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                catch {$rd read} err
+                assert_match "*deliberate error*" $err
+                $rd close
+            }
+
+            test "($provider_mode) Sync replication blocks reply held in the reply list until provider acks" {
+                # Force the reply into the c->reply overflow list (not the static
+                # buf) and use a ~100KB allowed prefix so it spans multiple blocks.
+                set bigval [string repeat A 100000]
+                $primary debug client-enforce-reply-list 1
+                $primary set durable:committed2 $bigval
+                unblock_with_provider
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                # One write, so the multi-block GET reply and the blocked SET reply
+                # are built into the same reply list before the first flush.
+                $rd write "[format_command get durable:committed2][format_command set durable:pending2 y]"
+                $rd flush
+
+                # Allowed prefix (the multi-block GET reply) must be released in full.
+                assert_equal $bigval [$rd read]
+
+                # Blocked suffix (SET reply) must still be withheld.
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                $rd close
+                $primary debug client-enforce-reply-list 0
+            }
+
+            test "($provider_mode) Blocked reply stays withheld during re-entrant event processing (busy script)" {
+                # Regression test for the re-entrant beforeSleep branch guarded by
+                # ProcessingEventsWhileBlocked. A busy Lua script drives the server
+                # into processEventsWhileBlocked(), which re-enters beforeSleep and
+                # calls handleClientsWithPendingWrites(). This test proves a
+                # not-yet-durable write reply is NOT flushed on that path: durability
+                # is enforced solely by the per-client reply-blocking boundary, not by
+                # skipping the flush entirely.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Lower the busy threshold so the spinning script re-enters the event
+                # loop quickly, then restore it at the end.
+                set saved_limit [lindex [$primary config get busy-reply-threshold] 1]
+                $primary config set busy-reply-threshold 10
+
+                pause_provider
+
+                # Writer issues a command whose reply must block until durable.
+                set writer [valkey_deferring_client -1]
+                $writer set durable:reentrant pending
+
+                # Wait until the write is registered as blocked (waiting for ack),
+                # so it is queued for flushing when the re-entrant path runs.
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "Writer's reply never entered the blocked state"
+                }
+
+                # Busy read-only script forces the server into processEventsWhileBlocked.
+                set busy [valkey_deferring_client -1]
+                $busy eval {while true do end} 0
+
+                # Confirm the re-entrant event loop is actually running: while busy,
+                # the server answers other clients with -BUSY from beforeSleep re-entry.
+                wait_for_condition 50 100 {
+                    [catch {$primary ping} e] == 1 && [string match "BUSY*" $e]
+                } else {
+                    fail "Busy script did not enter processEventsWhileBlocked"
+                }
+
+                # Give the re-entrant beforeSleep several iterations to (not) flush it.
+                after 200
+
+                # The blocked reply must not have leaked out during the busy period.
+                set fd [$writer channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                # Stop the busy script (read-only, so SCRIPT KILL is permitted).
+                $primary script kill
+                wait_for_condition 50 100 {
+                    [catch {$primary ping} e] == 0
+                } else {
+                    fail "Could not kill the busy script"
+                }
+                catch {$busy read} _
+                $busy close
+
+                # Once durability advances, the previously-blocked reply is released.
+                unblock_with_provider
+                assert_equal "OK" [$writer read]
+                $writer close
+
+                $primary config set busy-reply-threshold $saved_limit
+            }
+
+            test "($provider_mode) MONITOR output for a busy script is withheld during the yield" {
+                # A MONITOR client's position is recorded when the command begins.
+                # While the script yields, the monitor must not be sent the script's
+                # own lines (no boundary exists for them yet), and writes that drain
+                # its older output must not free the block the position points at.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                set saved_limit [lindex [$primary config get busy-reply-threshold] 1]
+                $primary config set busy-reply-threshold 10
+
+                set mon [valkey_deferring_client -1]
+                $mon monitor
+                assert_equal OK [$mon read]
+
+                # Leave several MB of monitor output unsent, more than the socket
+                # buffers hold, so the server still has reply blocks queued.
+                set big [string repeat x 1000000]
+                for {set i 0} {$i < 20} {incr i} {
+                    $primary set durable:mon:filler $big
+                }
+
+                pause_provider
+
+                # A script that writes, then spins for ~1s so it yields repeatedly.
+                set script {
+                    redis.call('set', KEYS[1], 'monitored-write')
+                    local t = redis.call('time')
+                    while true do
+                        local n = redis.call('time')
+                        if (n[1] - t[1]) * 1000000 + (n[2] - t[2]) > 1000000 then break end
+                    end
+                    return 1
+                }
+                set busy [valkey_deferring_client -1]
+                $busy eval $script 1 durable:mon:busy
+
+                # Drain the monitor while the script runs, so the server writes to
+                # it from the re-entrant event loop.
+                set fd [$mon channel]
+                fconfigure $fd -blocking 0 -translation binary
+                set seen ""
+                set deadline [expr {[clock milliseconds] + 800}]
+                while {[clock milliseconds] < $deadline} {
+                    append seen [read $fd]
+                    after 5
+                }
+
+                # The script's own monitor lines must not have leaked.
+                assert_equal -1 [string first "monitored-write" $seen]
+
+                # The script wrote, so its own reply is held until the write is durable.
+                wait_for_condition 100 50 {
+                    [catch {$primary ping} e] == 0
+                } else {
+                    fail "busy script did not finish"
+                }
+                unblock_with_provider
+                assert_equal 1 [$busy read]
+                $busy close
+
+                # Once durable, the monitor gets the script's lines and the server is alive.
+                wait_for_condition 100 50 {
+                    [string first "monitored-write" [append seen [read $fd]]] != -1
+                } else {
+                    fail "monitor never received the script's lines"
+                }
+                fconfigure $fd -blocking 1
+                assert_equal PONG [$primary ping]
+                $mon close
+                $primary del durable:mon:filler
+                $primary config set busy-reply-threshold $saved_limit
+            }
+
+            test "($provider_mode) Key-targeting reads block per-key, not on the global dirty offset" {
+                # KEYSPACE_GLOBAL narrowing: commands that carry a key argument
+                # (EXISTS/TYPE/TTL/...) must block only on their own key's offset,
+                # not on the global offset just because some unrelated key is dirty.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # A committed, clean key to read later (written while blocking is off).
+                $primary config set appendfsync everysec
+                $primary set durable:kt-clean cleanval
+                $primary config set appendfsync always
+
+                pause_provider
+
+                # Dirty an unrelated key so the keyspace has uncommitted data.
+                set rd [valkey_deferring_client -1]
+                $rd set durable:kt-dirty pending
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "writer's reply never entered the blocked state"
+                }
+
+                # Reads of the clean key must return immediately despite the dirty key.
+                set reader [valkey_client -1]
+                assert_equal 1 [$reader exists durable:kt-clean]
+                assert_equal "string" [$reader type durable:kt-clean]
+                assert_equal -1 [$reader ttl durable:kt-clean]
+                $reader close
+
+                # A read of the dirty key itself must still block until durable.
+                set rd2 [valkey_deferring_client -1]
+                $rd2 exists durable:kt-dirty
+                set fd [$rd2 channel]
+                fconfigure $fd -blocking 0
+                assert_equal "" [read $fd]
+                fconfigure $fd -blocking 1
+
+                unblock_with_provider
+                assert_equal 1 [$rd2 read]
+                assert_equal "OK" [$rd read]
+                $rd2 close
+                $rd close
+            }
+
+            test "($provider_mode) Whole-keyspace commands still block while any data is dirty" {
+                # KEYS/SCAN/RANDOMKEY have no key argument, so a not-yet-durable
+                # write can add/remove a key they would report: they must block on the
+                # global offset whenever anything is dirty.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:global-dirty pending
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "writer's reply never entered the blocked state"
+                }
+
+                set rk [valkey_deferring_client -1]
+                $rk keys *
+                set fd [$rk channel]
+                fconfigure $fd -blocking 0
+                assert_equal "" [read $fd]
+                fconfigure $fd -blocking 1
+
+                unblock_with_provider
+                assert_morethan [llength [$rk read]] 0
+                assert_equal "OK" [$rd read]
+                $rk close
+                $rd close
+            }
+
+            test "($provider_mode) OBJECT HELP is never blocked" {
+                # OBJECT HELP is static help text touching no keys; it must never block.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:oh-dirty pending
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "writer's reply never entered the blocked state"
+                }
+
+                set reader [valkey_client -1]
+                assert_match "*ENCODING*" [$reader object help]
+                $reader close
+
+                unblock_with_provider
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Lazy-expired key deletion is tracked and blocks later reads until durable" {
+                # A key deleted by lazy expiry is a background write (signalModifiedKey
+                # with a NULL client). It must be tracked as uncommitted with no
+                # per-function hook, so a later read blocks until the deletion is durable.
+                # The read that triggers the expiry propagates the DEL, so it is held
+                # at the post-propagation offset too.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                $primary debug set-active-expire 0
+
+                # Commit a key, then make it logically expired (provider still acking).
+                $primary set durable:lazyexp v
+                $primary pexpire durable:lazyexp 1
+                after 10
+
+                pause_provider
+
+                # Trigger lazy expiry: deletes the key and marks the deletion dirty.
+                # The triggering read propagated the DEL, so its reply waits too.
+                set trigger [valkey_deferring_client -1]
+                $trigger get durable:lazyexp
+                wait_for_condition 50 100 {
+                    [catch {$primary debug object durable:lazyexp}] == 1
+                } else {
+                    fail "lazy expiry did not delete the key"
+                }
+
+                # A later read of the now-deleted key must block until durable.
+                set rd [valkey_deferring_client -1]
+                $rd exists durable:lazyexp
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:2*" [$primary info debug]]
+                } else {
+                    fail "lazy-expiry deletion was not tracked as uncommitted"
+                }
+
+                foreach client [list $trigger $rd] {
+                    set fd [$client channel]
+                    fconfigure $fd -blocking 0
+                    assert_equal "" [read $fd]
+                    fconfigure $fd -blocking 1
+                }
+
+                unblock_with_provider
+                assert_equal {} [$trigger read]
+                assert_equal 0 [$rd read]
+                $trigger close
+                $rd close
+                $primary debug set-active-expire 1
+            }
+
+            test "($provider_mode) Read that lazily expires a key still waits for other dirty keys it reads" {
+                # Lazy expiry propagates a DEL during a read, so the read counts
+                # as having propagated something. It must still be held for the
+                # dirty sibling key it returns.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                $primary debug set-active-expire 0
+
+                $primary set durable:mget:exp v
+                $primary pexpire durable:mget:exp 1
+                after 10
+
+                pause_provider
+
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer set durable:mget:dirty dirty
+                wait_for_condition 50 10 {
+                    [catch {$primary debug object durable:mget:dirty}] == 0
+                } else {
+                    fail "Writer's SET was not processed in time"
+                }
+
+                set rd [valkey_deferring_client -1]
+                $rd mget durable:mget:exp durable:mget:dirty
+                after 100
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+                assert_equal {{} dirty} [$rd read]
+                $rd close
+                $writer close
+                $primary debug set-active-expire 1
+            }
+
+            test "($provider_mode) Expired keyspace event waits until the active-expiry DEL is durable" {
+                # Active expiry fires the 'expired' event before it propagates the
+                # DEL, so the event must not be released at the pre-DEL offset.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                set saved_events [lindex [$primary config get notify-keyspace-events] 1]
+                $primary config set notify-keyspace-events Ex
+                $primary debug set-active-expire 0
+
+                set sub [valkey_deferring_client -1]
+                $sub subscribe __keyevent@9__:expired
+                assert_equal {subscribe __keyevent@9__:expired 1} [$sub read]
+
+                $primary set durable:expev v
+                $primary pexpire durable:expev 1
+                after 10
+
+                pause_provider
+                $primary debug set-active-expire 1
+                wait_for_condition 50 100 {
+                    [catch {$primary debug object durable:expev}] == 1
+                } else {
+                    fail "Key was not actively expired"
+                }
+                after 100
+
+                set fd [$sub channel]
+                fconfigure $fd -blocking 0
+                set early_event [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_event
+
+                unblock_with_provider
+                assert_equal {message __keyevent@9__:expired durable:expev} [$sub read]
+                $sub close
+                $primary config set notify-keyspace-events $saved_events
+            }
+
+            # ==================== Non-blocking tests ====================
+
+            test "($provider_mode) EVAL_RO should not block replies" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Pre-populate with sync-repl off so the SET doesn't block
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "OK" [$primary set durable:eval-ro-key hello]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                set rd [valkey_deferring_client -1]
+                $rd eval_ro {return redis.call('get', KEYS[1])} 1 durable:eval-ro-key
+
+                assert_equal "hello" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) MULTI/EXEC with DISCARD does not block" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                set rd [valkey_deferring_client -1]
+                $rd multi
+                assert_equal "OK" [$rd read]
+
+                $rd set durable:discard-key value
+                assert_equal "QUEUED" [$rd read]
+
+                $rd discard
+                assert_equal "OK" [$rd read]
+
+                $rd get durable:discard-key
+                assert_equal "" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) MULTI/EXEC with no writes does not block" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Pre-populate with sync-repl off so the SET doesn't block
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "OK" [$primary set durable:nowrite-key existing]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                set rd [valkey_deferring_client -1]
+                $rd multi
+                assert_equal "OK" [$rd read]
+
+                $rd get durable:nowrite-key
+                assert_equal "QUEUED" [$rd read]
+
+                $rd ping
+                assert_equal "QUEUED" [$rd read]
+
+                $rd exec
+                assert_equal {existing PONG} [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Admin commands are never blocked" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                set rd [valkey_deferring_client -1]
+
+                $rd ping
+                assert_equal "PONG" [$rd read]
+
+                $rd info server
+                set info [$rd read]
+                assert_match "*valkey_version*" $info
+
+                $rd dbsize
+                set dbsize [$rd read]
+                assert {[string is integer $dbsize]}
+
+                $rd close
+            }
+
+            test "($provider_mode) Read-only commands on clean keys are not blocked" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "OK" [$primary set durable:clean-key cleanvalue]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                set rd [valkey_deferring_client -1]
+                $rd get durable:clean-key
+                assert_equal "cleanvalue" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Sync replication disabled - writes return immediately (regression)" {
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "everysec" [lindex [$primary config get appendfsync] 1]
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:norep-key value
+                assert_equal "OK" [$rd read]
+
+                $rd get durable:norep-key
+                assert_equal "value" [$rd read]
+
+                $rd multi
+                assert_equal "OK" [$rd read]
+                $rd set durable:norep-key2 value2
+                assert_equal "QUEUED" [$rd read]
+                $rd exec
+                assert_equal {OK} [$rd read]
+
+                $rd close
+                assert_equal "OK" [$primary config set appendfsync always]
+            }
+
+            # ==================== Multiple clients ====================
+
+            test "($provider_mode) Multiple concurrent writers block independently" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set wr1 [valkey_deferring_client -1]
+                set wr2 [valkey_deferring_client -1]
+
+                $wr1 set durable:concurrent-1 val1
+                $wr2 set durable:concurrent-2 val2
+
+                set fd1 [$wr1 channel]
+                set fd2 [$wr2 channel]
+                fconfigure $fd1 -blocking 0
+                fconfigure $fd2 -blocking 0
+                set early1 [read $fd1]
+                set early2 [read $fd2]
+                fconfigure $fd1 -blocking 1
+                fconfigure $fd2 -blocking 1
+                assert_equal "" $early1
+                assert_equal "" $early2
+
+                unblock_with_provider
+
+                assert_equal "OK" [$wr1 read]
+                assert_equal "OK" [$wr2 read]
+
+                $wr1 close
+                $wr2 close
+            }
+
+            test "($provider_mode) Write then read on same client preserves reply ordering" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:ordering-key orderval
+                $rd get durable:ordering-key
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                assert_equal "orderval" [$rd read]
+                $rd close
+            }
+
+            # ==================== Database-level commands ====================
+
+            test "($provider_mode) FLUSHDB inside MULTI/EXEC blocks entire database" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "OK" [$primary set durable:flush-pre existing]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd multi
+                assert_equal "OK" [$rd read]
+
+                $rd flushdb
+                assert_equal "QUEUED" [$rd read]
+
+                $rd exec
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal {OK} [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) FLUSHALL blocks write reply until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                assert_equal "OK" [$primary set durable:flushall-key value]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd flushall
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) FLUSHALL inside MULTI/EXEC blocks all databases" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "OK" [$primary set durable:flushall-multi-key value]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd multi
+                assert_equal "OK" [$rd read]
+
+                $rd flushall
+                assert_equal "QUEUED" [$rd read]
+
+                $rd exec
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal {OK} [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) COPY cross-database blocks write reply" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "OK" [$primary set durable:copy-src srcvalue]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd copy durable:copy-src durable:copy-dst db 1
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal 1 [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) SWAPDB blocks write reply until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                assert_equal "OK" [$primary set durable:swap-db0 db0val]
+                $primary select 1
+                assert_equal "OK" [$primary set durable:swap-db1 db1val]
+                $primary select 0
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd swapdb 0 1
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                $rd close
+
+                # Swap back to restore state (with sync-repl off so it doesn't block)
+                $primary config set appendfsync everysec
+                $primary swapdb 0 1
+                $primary config set appendfsync always
+            }
+
+            test "($provider_mode) MOVE blocks write reply until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                $primary select 2
+                $primary del durable:move-key
+                $primary select 9
+                assert_equal "OK" [$primary set durable:move-key moveval]
+                assert_equal "OK" [$primary config set appendfsync always]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd move durable:move-key 2
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal 1 [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) MOVE/COPY to out-of-range destination DB does not crash" {
+                # MOVE/COPY to an out-of-range DB is rejected but still reaches the
+                # reply-blocking offset path; dbnum and -1 hit ASan's server.db redzone.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                set dbnum [lindex [$primary config get databases] 1]
+                $primary select 9
+                assert_equal "OK" [$primary set durable:oob-move-key v]
+
+                foreach idx [list $dbnum -1 100000] {
+                    assert_error "*out of range*" {$primary move durable:oob-move-key $idx}
+                    assert_equal "PONG" [$primary ping]
+                    assert_error "*out of range*" {$primary copy durable:oob-move-key dst db $idx}
+                    assert_equal "PONG" [$primary ping]
+                }
+
+                # Key untouched in its original DB after all rejected MOVEs/COPYs.
+                assert_equal "v" [$primary get durable:oob-move-key]
+                $primary del durable:oob-move-key
+            }
+
+            test "($provider_mode) MULTI/EXEC with SELECT writes to multiple databases blocks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd multi
+                assert_equal "OK" [$rd read]
+
+                $rd set durable:multidb-key0 val0
+                assert_equal "QUEUED" [$rd read]
+
+                $rd select 1
+                assert_equal "QUEUED" [$rd read]
+
+                $rd set durable:multidb-key1 val1
+                assert_equal "QUEUED" [$rd read]
+
+                $rd select 0
+                assert_equal "QUEUED" [$rd read]
+
+                $rd exec
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal {OK OK OK OK} [$rd read]
+                $rd close
+            }
+
+            # ==================== Function store ====================
+
+            test "($provider_mode) FUNCTION LOAD blocks reply until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd function load "#!lua name=durtest\nserver.register_function('durfunc', function() return 'hello' end)"
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "durtest" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) FUNCTION DELETE blocks reply until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd function delete durtest
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            # ==================== Dirty key reads ====================
+
+            test "($provider_mode) Sync replication blocks reads on dirty keys" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer set durable:blocked dirty
+
+                # Barrier: ensure the writer's SET is processed before the reader's GET.
+                # Different TCP connections have no ordering guarantee.
+                wait_for_condition 50 10 {
+                    [catch {$primary debug object durable:blocked}] == 0
+                } else {
+                    fail "Writer's SET was not processed in time"
+                }
+
+                set rd [valkey_deferring_client -1]
+                $rd get durable:blocked
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "dirty" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Pipelined non-blocking then blocking command does not leak blocked reply" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # Pipeline a non-blocking command (PING) followed by a blocking write (SET).
+                # The PING reply is allowed to be sent, but the SET reply must be held.
+                # Without proper write boundary capping, _writeToClient would send
+                # both replies since they share the same c->buf.
+                # Send both commands in ONE write so they are always processed from
+                # the same read and their replies land in the same c->buf, regardless
+                # of how the loopback happens to coalesce packets on this platform.
+                set rd [valkey_deferring_client -1]
+                $rd write "[format_command ping][format_command set pipe:boundary-key val1]"
+                $rd flush
+
+                # Give the server time to process both commands and attempt the write
+                after 100
+
+                # Read whatever the server has sent — should be ONLY the PING reply
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set partial [read $fd]
+                fconfigure $fd -blocking 1
+
+                # Exactly one "+PONG\r\n": no "+OK\r\n" from SET, and no re-sent PONG
+                # (the write cursor must survive the capped write).
+                assert_equal "+PONG\r\n" $partial
+
+                unblock_with_provider
+
+                # Now the SET reply should arrive
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Pipelined QUIT behind a held reply closes only after all replies are sent" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # PING is sendable, SET is held, QUIT sets close_after_reply.
+                # The connection must stay open until the held replies are sent.
+                set rd [valkey_deferring_client -1]
+                $rd write "[format_command ping][format_command set pipe:quit-key val1][format_command quit]"
+                $rd flush
+
+                after 100
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set partial [read $fd]
+                # A second read is needed to observe EOF if the server has closed
+                read $fd
+                set closed [eof $fd]
+                fconfigure $fd -blocking 1
+
+                assert_equal "+PONG\r\n" $partial
+                assert_equal 0 $closed
+
+                unblock_with_provider
+
+                # SET and QUIT replies arrive, then the server closes the connection
+                assert_equal "OK" [$rd read]
+                assert_equal "OK" [$rd read]
+                catch {$rd read} err
+                assert_match {*I/O error*} $err
+                $rd close
+            }
+
+            test "($provider_mode) PSYNC is refused while a reply is held for durability" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # A held reply is unsent output: PSYNC must be refused, otherwise
+                # the client becomes a replica with a non-empty reply buffer.
+                set rd [valkey_deferring_client -1]
+                $rd write "[format_command set pipe:psync-key val1][format_command psync ? -1]"
+                $rd flush
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                assert_error {*invalid with pending output*} {$rd read}
+                $rd close
+
+                assert_equal "PONG" [$primary ping]
+            }
+
+            test "($provider_mode) SCRIPT DEBUG is refused while a reply is held for durability" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # A held reply still counts as being in a pipeline.
+                set rd [valkey_deferring_client -1]
+                $rd write "[format_command set pipe:ldb-key val1][format_command script debug yes]"
+                $rd flush
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                assert_error {*must be called outside a pipeline*} {$rd read}
+                $rd close
+            }
+
+            # ==================== Client disconnect stats ====================
+
+            test "($provider_mode) Client disconnect while blocked updates stats" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:disconnect-test value
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                assert_equal "" $early_reply
+
+                $rd close
+
+                after 200
+
+                set info [$primary info debug]
+                assert_match "*reply_blocking_clients_waiting_ack:0*" $info
+
+                # Resume the provider so subsequent tests aren't affected
+                unblock_with_provider
+            }
+
+            # ==================== Toggle / config changes ====================
+
+            test "($provider_mode) Sync replication toggling disables reply blocking" {
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "everysec" [lindex [$primary config get appendfsync] 1]
+
+                set writer [valkey_deferring_client -1]
+                $writer set durable:toggle value
+                # Durability is off (everysec), so SET reply arrives immediately.
+                # Reading it also serves as a barrier ensuring the key exists.
+                assert_equal "OK" [$writer read]
+
+                set rd [valkey_deferring_client -1]
+                $rd get durable:toggle
+                assert_equal "value" [$rd read]
+
+                $rd close
+                $writer close
+                assert_equal "OK" [$primary config set appendfsync always]
+            }
+
+            test "($provider_mode) Disabling sync replication unblocks pending replies" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:toggle-blocked value
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                assert_equal "" $early_reply
+
+                assert_equal "OK" [$primary config set appendfsync everysec]
+
+                set raw_reply ""
+                set got_reply 0
+                for {set i 0} {$i < 50} {incr i} {
+                    append raw_reply [read $fd]
+                    if {[string match "*\r\n" $raw_reply]} {
+                        set got_reply 1
+                        break
+                    }
+                    after 100
+                }
+                if {!$got_reply} {
+                    fail "Reply didn't unblock after disabling sync replication"
+                }
+                fconfigure $fd -blocking 1
+                assert_match "+OK*" $raw_reply
+
+                # Resume the provider so subsequent tests aren't affected
+                # (disabling sync-replication unblocked the client but didn't resume the provider)
+                $primary DEBUG reply-blocking-resume aof
+
+                assert_equal "OK" [$primary config set appendfsync always]
+            }
+
+            test "($provider_mode) INFO reports sync replication stats" {
+                set info [$primary info debug]
+                assert_match "*reply_blocking_enabled:1*" $info
+                assert_match "*reply_blocking_primary_repl_offset:*" $info
+                assert_match "*reply_blocking_previous_acked_offset:*" $info
+            }
+
+            # ==================== Client tracking invalidation (deferred tasks) ====================
+
+            test "($provider_mode) Key invalidation is deferred until provider acks - signalModifiedKey" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                puts "running key invalidation"
+                # Set up a RESP3 tracking client that will receive invalidation messages
+                set tracker [valkey_deferring_client -1]
+                $tracker HELLO 3
+                $tracker read ;# consume HELLO reply
+                $tracker CLIENT TRACKING on
+                $tracker read ;# consume TRACKING reply
+
+                # Populate a key and cache it via GET on the tracking client
+                $primary config set appendfsync everysec
+                $primary set durable:track-key original
+                $primary config set appendfsync always
+
+                $tracker GET durable:track-key
+                $tracker read ;# consume "original" — key is now tracked
+
+                # Pause the provider so the next write's invalidation is deferred
+                pause_provider
+
+                # Write to the tracked key from a different client (fire-and-forget)
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer set durable:track-key modified
+
+                # Give the server a moment to process the write
+                after 100
+
+                # The tracking client should NOT have received an invalidation yet
+                set tracker_fd [$tracker channel]
+                fconfigure $tracker_fd -blocking 0
+                set early_inval [read $tracker_fd]
+                fconfigure $tracker_fd -blocking 1
+                # No invalidation push should appear while provider is paused
+                assert_equal "" $early_inval
+
+                # Now unblock — this should trigger the deferred invalidation
+                unblock_with_provider
+
+                # Read the invalidation message from the tracking client
+                # RESP3 push: [invalidate [key1 key2 ...]]
+                set inval_msg [$tracker read]
+                assert_match "*durable:track-key*" $inval_msg
+
+                $tracker CLIENT TRACKING off
+                $tracker read ;# consume reply
+                $tracker close
+                $writer close
+            }
+
+            test "($provider_mode) Flush invalidation is deferred until provider acks - signalFlushedDb" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                puts "running flush invalidation"
+
+                # Set up a RESP3 BCAST tracking client to catch FLUSHDB invalidations
+                set tracker [valkey_deferring_client -1]
+                $tracker HELLO 3
+                $tracker read ;# consume HELLO reply
+                $tracker CLIENT TRACKING on BCAST
+                $tracker read ;# consume TRACKING reply
+
+                # Populate some keys so there's something to flush
+                $primary config set appendfsync everysec
+                $primary set durable:flush-track-a val_a
+                $primary set durable:flush-track-b val_b
+                $primary config set appendfsync always
+
+                # Drain setup-SET invalidations. BCAST broadcasts them
+                # asynchronously in beforeSleep, so poll until quiet instead of
+                # using a racy fixed wait.
+                set tracker_fd [$tracker channel]
+                fconfigure $tracker_fd -blocking 0
+                set quiet 0
+                for {set i 0} {$i < 100} {incr i} {
+                    if {[read $tracker_fd] eq ""} {
+                        if {[incr quiet] >= 3} break
+                    } else {
+                        set quiet 0
+                    }
+                    after 20
+                }
+                fconfigure $tracker_fd -blocking 1
+
+                # Pause the provider so the FLUSHDB invalidation is deferred
+                pause_provider
+
+                # Issue FLUSHDB from a fire-and-forget writer
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer flushdb
+
+                # Give the server time to process the command
+                after 100
+
+                # The tracking client should NOT have received flush invalidation yet
+                fconfigure $tracker_fd -blocking 0
+                set early_inval [read $tracker_fd]
+                fconfigure $tracker_fd -blocking 1
+                assert_equal "" $early_inval
+
+                # Unblock — this triggers the deferred flush invalidation
+                unblock_with_provider
+
+                # The tracking client should now receive an invalidation
+                # For FLUSHDB, the invalidation message contains NULL to indicate all keys
+                # Use a polling read with timeout to avoid hanging if message doesn't arrive
+                set inval_msg ""
+                set got_inval 0
+                fconfigure $tracker_fd -blocking 0
+                for {set i 0} {$i < 50} {incr i} {
+                    append inval_msg [read $tracker_fd]
+                    if {[string match "*invalidate*" $inval_msg]} {
+                        set got_inval 1
+                        break
+                    }
+                    after 100
+                }
+                fconfigure $tracker_fd -blocking 1
+                if {!$got_inval} {
+                    fail "Flush invalidation message not received within timeout"
+                }
+                assert_match "*invalidate*" $inval_msg
+
+                $tracker CLIENT TRACKING off
+                $tracker read ;# consume reply
+                $tracker close
+                $writer close
+            }
+
+            # ==================== Keyspace notification deferral (deferred tasks) ====================
+
+            test "($provider_mode) Keyspace notification is deferred until provider acks" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Enable keyspace notifications for all events
+                $primary config set notify-keyspace-events KA
+
+                # Subscribe to keyspace notifications
+                set rd1 [valkey_deferring_client -1]
+                assert_equal {1} [psubscribe $rd1 "__keyspace@*__:*"]
+
+                # Pause the provider so keyspace notifications are deferred
+                pause_provider
+
+                # Write to a key from a fire-and-forget writer
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer set durable:keyspace-deferred-key val
+
+                # Give the server time to process the command
+                after 100
+
+                # The subscriber should NOT have received the notification yet
+                set rd1_fd [$rd1 channel]
+                fconfigure $rd1_fd -blocking 0
+                set early_notif [read $rd1_fd]
+                fconfigure $rd1_fd -blocking 1
+                # No keyspace notification should appear while provider is paused
+                assert_equal "" $early_notif
+
+                # Now unblock — this should trigger the deferred keyspace notification
+                unblock_with_provider
+
+                # Read the keyspace notification
+                set notif_msg [$rd1 read]
+                assert_match "*set*" $notif_msg
+
+                $rd1 close
+                $writer close
+                $primary config set notify-keyspace-events ""
+            }
+
+            test "($provider_mode) Keyspace notification fires immediately when sync replication disabled" {
+                # Verify that without sync replication, keyspace events are NOT deferred
+                $primary config set appendfsync everysec
+                $primary config set notify-keyspace-events KA
+
+                set rd1 [valkey_deferring_client]
+                assert_equal {1} [psubscribe $rd1 *]
+                r set foo bar
+                assert_match "*set*" [$rd1 read]
+                $rd1 close
+
+                $primary config set notify-keyspace-events ""
+                $primary config set appendfsync always
+            }
+
+            # ==================== Client tracking invalidation (existing) ====================
+
+            test "($provider_mode) Key invalidation fires immediately when sync replication disabled" {
+                # Verify that without sync replication, invalidations are NOT deferred
+                $primary config set appendfsync everysec
+
+                set tracker [valkey_deferring_client -1]
+                $tracker HELLO 3
+                $tracker read ;# consume HELLO reply
+                $tracker CLIENT TRACKING on
+                $tracker read ;# consume TRACKING reply
+
+                $primary set durable:track-nodefer original
+
+                $tracker GET durable:track-nodefer
+                $tracker read ;# consume "original" — key is now tracked
+
+                # Write to the tracked key — invalidation should fire immediately
+                $primary set durable:track-nodefer changed
+
+                # Should get the invalidation right away (no provider pause needed)
+                set inval_msg [$tracker read]
+                assert_match "*durable:track-nodefer*" $inval_msg
+
+                $tracker CLIENT TRACKING off
+                $tracker read ;# consume reply
+                $tracker close
+
+                $primary config set appendfsync always
+            }
+
+            # ==================== Durability provider edge cases ====================
+
+            test "($provider_mode) Pause unknown provider returns error" {
+                catch {$primary DEBUG reply-blocking-pause nonexistent} err
+                assert_match "*No such reply-blocking provider*" $err
+            }
+
+            test "($provider_mode) Resume unknown provider returns error" {
+                catch {$primary DEBUG reply-blocking-resume nonexistent} err
+                assert_match "*No such reply-blocking provider*" $err
+            }
+
+            test "($provider_mode) Double pause is idempotent - writes still block" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Pause twice
+                $primary DEBUG reply-blocking-pause aof
+                $primary DEBUG reply-blocking-pause aof
+
+                # Write should still block
+                set rd [valkey_deferring_client -1]
+                $rd set durable:double-pause-key val
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                # Resume once should unblock
+                $primary DEBUG reply-blocking-resume aof
+                $primary ping
+
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Resume while not paused is harmless" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Resume when not paused should succeed without issue
+                assert_equal "OK" [$primary DEBUG reply-blocking-resume aof]
+
+                # Writes should still work normally
+                set rd [valkey_deferring_client -1]
+                $rd set durable:resume-noop-key val
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            test "($provider_mode) Multiple writes while paused all unblock on resume" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:multi-write-1 val1
+                $rd set durable:multi-write-2 val2
+                $rd set durable:multi-write-3 val3
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                # All three replies should come through
+                assert_equal "OK" [$rd read]
+                assert_equal "OK" [$rd read]
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
+            # ==================== Copy avoidance compatibility ====================
+
+            test "($provider_mode) Blocked reply not released when io_last_written.data_len exceeds encoded boundary" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # Write a dirty key (fire-and-forget) so the next GET is blocked
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer set durable:inject-key value
+
+                # Barrier: ensure the writer's SET is processed before the reader's GET.
+                wait_for_condition 50 10 {
+                    [catch {$primary debug object durable:inject-key}] == 0
+                } else {
+                    fail "Writer's SET was not processed in time"
+                }
+
+                # Reader: issue GET on the dirty key — reply will be blocked
+                set rd [valkey_deferring_client -1]
+
+                # Get the reader's client ID for the DEBUG command
+                $rd client id
+                set reader_id [$rd read]
+
+                $rd get durable:inject-key
+
+                # Give server time to process and block the reply
+                after 100
+
+                # Inject the post-partial-write state using DEBUG.
+                # This simulates what happens after IO threads write an
+                # encoded (copy-avoided) buffer: data_len (decoded RESP bytes)
+                # is much larger than bufpos (encoded buffer position).
+                # bufpos=0 means "buffer not fully consumed" (incomplete write).
+                # data_len=999999 is a large decoded byte count.
+                #
+                # The disallowed_byte_offset for the blocked reply is a small
+                # number in encoded-buffer coordinates (~30 bytes).
+                #
+                # Bug (data_len):  999999 < ~30 → false → "no pending" →
+                #   server thinks all data sent, removes write handler,
+                #   reply leaks through!
+                # Fix (bufpos):    0 < ~30 → true → "still pending" →
+                #   reply stays blocked.
+                $primary DEBUG set-io-last-written $reader_id 0 999999
+
+                # Check: the reply must NOT leak through
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                after 200
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                # Reset the injected state so normal writes work after unblock
+                $primary DEBUG set-io-last-written $reader_id 0 0
+
+                unblock_with_provider
+
+                # Now the reply should come through
+                assert_equal "value" [$rd read]
+                $rd close
+                $writer close
+            }
+
+            # ==================== Failover tests (must be last  changes roles) ====================
+
+            test "($provider_mode) Failover disconnects clients waiting for ack" {
+                # Ensure replica is in clean state for deterministic failover behavior.
+                # In replica mode, earlier tests connected the replica and replicated data;
+                # we flush it here so the demoted primary's dirty key tracking is preserved
+                # correctly after failover (not overwritten by a full sync).
+                $replica flushall
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd client setname durability-waiter
+                $rd read
+                $rd set durable:failover value
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                assert_equal "" $early_reply
+                fconfigure $fd -blocking 1
+
+                set before [getInfoProperty [$primary info debug] reply_blocking_clients_disconnected_before_unblocking]
+                $primary replicaof $replica_host $replica_port
+
+                catch {$rd read} err
+                assert_match {*I/O error*} $err
+                # Counted once when the role changed, not again on the deferred free.
+                $primary ping
+                assert_equal [expr {$before + 1}] [getInfoProperty [$primary info debug] reply_blocking_clients_disconnected_before_unblocking]
+            }
+
+        }
+    }
+}
+
+# ==================== Lifecycle regressions ====================
+# Each block starts its own server because the scenarios change roles or
+# toggle the feature at runtime.
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    test "REPLICAOF from a client whose own reply is held does not crash" {
+        r set warm 1
+        r DEBUG reply-blocking-pause aof
+
+        # The SET reply is held waiting for the fsync; the same connection then
+        # demotes the node, which frees every client on clients_waiting_ack
+        # while this client's command is still executing.
+        set rd [valkey_deferring_client]
+        $rd set held:key value
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        assert_equal "" [read $fd]
+        fconfigure $fd -blocking 1
+        set before [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+        $rd replicaof 127.0.0.1 1
+
+        # The held client is disconnected, the server survives and is a replica.
+        catch {$rd read} err
+        assert_match {*I/O error*} $err
+        assert_equal PONG [r ping]
+        assert_equal slave [lindex [r role] 0]
+        $rd close
+        # Counted once when the role changed, not again on the deferred free.
+        assert_equal [expr {$before + 1}] [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+
+        r replicaof no one
+        r DEBUG reply-blocking-resume aof
+    }
+
+    test "Client disconnected by a role change is not re-armed when the node is promoted again" {
+        r DEBUG reply-blocking-pause aof
+
+        # The SET reply is held. The transaction demotes the node (which
+        # schedules this client for close), promotes it again and writes: the
+        # write must not put the dying client back on clients_waiting_ack.
+        set rd [valkey_deferring_client]
+        $rd set held:key value
+        wait_for_condition 50 100 {
+            [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack] == 1
+        } else {
+            fail "SET reply was not held"
+        }
+        set before [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+
+        $rd multi
+        $rd replicaof 127.0.0.1 1
+        $rd replicaof no one
+        $rd set held:again value
+        $rd exec
+
+        catch {$rd read} err
+        assert_match {*I/O error*} $err
+        $rd close
+        assert_equal master [lindex [r role] 0]
+        r ping
+        assert_equal [expr {$before + 1}] [getInfoProperty [r info debug] reply_blocking_clients_disconnected_before_unblocking]
+        assert_equal 0 [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack]
+
+        r DEBUG reply-blocking-resume aof
+    } undefined {logreqres:skip} ;# The client is closed mid-EXEC, so its EXEC reply is truncated in the req-res log.
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes repl-diskless-load disabled}} {
+    set node [srv 0 client]
+    start_server {tags {"repl"}} {
+        set other [srv 0 client]
+        set other_host [srv 0 host]
+        set other_port [srv 0 port]
+
+        # Read on a fresh connection and fail if the reply does not arrive.
+        proc assert_read_not_held {client db cmd expected} {
+            set rd [valkey_deferring_client -1]
+            $rd select $db
+            assert_equal OK [$rd read]
+            $rd {*}$cmd
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set got ""
+            wait_for_condition 50 20 {
+                [string length [append got [read $fd]]] > 0
+            } else {
+                fconfigure $fd -blocking 1
+                $rd close
+                fail "'$cmd' in db $db was held after the full sync"
+            }
+            fconfigure $fd -blocking 1
+            assert_equal $expected $got
+            $rd close
+        }
+
+        test "Tracking of not-yet-durable writes does not survive a full sync" {
+            # Push this node's offset well past the other node's, so the stale
+            # offsets would stay ahead of the new history after the resync.
+            for {set i 0} {$i < 200} {incr i} {
+                $node set rb:filler:$i [string repeat x 1000]
+            }
+
+            $node debug reply-blocking-pause aof
+            set rd_key [valkey_deferring_client -1]
+            $rd_key select 9
+            assert_equal OK [$rd_key read]
+            $rd_key set rb:stale v
+            set rd_db [valkey_deferring_client -1]
+            $rd_db select 10
+            assert_equal OK [$rd_db read]
+            $rd_db flushdb
+            wait_for_condition 50 100 {
+                [getInfoProperty [$node info debug] reply_blocking_clients_waiting_ack] == 2
+            } else {
+                fail "writes were not held"
+            }
+
+            # Demote: a full, disk-based sync replaces the dataset.
+            $node replicaof $other_host $other_port
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$node info replication]]
+            } else {
+                fail "full sync did not complete"
+            }
+            catch {$rd_key read}
+            catch {$rd_db read}
+            $rd_key close
+            $rd_db close
+            $node debug reply-blocking-resume aof
+
+            # Promote again. Nothing from the old dataset may hold reads.
+            $node replicaof no one
+            assert_equal 0 [getInfoProperty [$node info debug] reply_blocking_uncommitted_keys]
+            assert_read_not_held $node 9 {get rb:stale} "\$-1\r\n"
+            assert_read_not_held $node 10 {get rb:other} "\$-1\r\n"
+        }
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly no appendfsync always bio-aof-offload-enabled yes save ""}} {
+    test "Replies are held while the initial AOF rewrite after enabling appendonly runs" {
+        # Until the rewrite completes, fsyncs go to an INCR file the manifest
+        # does not reference yet, so a write is not durable before then.
+        r debug populate 1000
+        r config set rdb-key-save-delay 2000
+        r config set appendonly yes
+        assert_equal 1 [getInfoProperty [r info persistence] aof_rewrite_in_progress]
+
+        set rd [valkey_deferring_client]
+        $rd set rewrite:key v
+        after 300
+        assert_equal 1 [getInfoProperty [r info persistence] aof_rewrite_in_progress]
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        assert_equal "" [read $fd]
+        fconfigure $fd -blocking 1
+
+        # The child keeps the delay it forked with (~2s for 1000 keys).
+        wait_for_condition 100 100 {
+            [getInfoProperty [r info persistence] aof_rewrite_in_progress] == 0
+        } else {
+            fail "AOF rewrite did not finish"
+        }
+        assert_equal OK [$rd read]
+        $rd close
+        r config set rdb-key-save-delay 0
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes notify-keyspace-events KEA}} {
+    # A tracking client caches the key, a subscriber listens for its events, and a
+    # writer modifies it with the AOF paused and then disconnects, so nothing but
+    # the deferred tasks can deliver the invalidation and the event.
+    proc setup_deferred_tasks {key} {
+        set tracker [valkey_deferring_client]
+        $tracker HELLO 3
+        $tracker read
+        $tracker CLIENT TRACKING on
+        $tracker read
+        r set $key original
+        $tracker GET $key
+        assert_equal original [$tracker read]
+
+        set sub [valkey_deferring_client]
+        $sub subscribe __keyspace@9__:$key
+        $sub read
+
+        r DEBUG reply-blocking-pause aof
+        set writer [valkey_deferring_client]
+        $writer set $key modified
+        wait_for_condition 50 100 {
+            [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack] == 1
+        } else {
+            fail "write was not held"
+        }
+        $writer close
+        wait_for_condition 50 100 {
+            [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack] == 0
+        } else {
+            fail "writer was not freed"
+        }
+        return [list $tracker $sub]
+    }
+
+    # True if the client receives a message matching pattern within ~1s.
+    proc received {client pattern} {
+        set fd [$client channel]
+        fconfigure $fd -blocking 0
+        set got ""
+        for {set i 0} {$i < 50} {incr i} {
+            append got [read $fd]
+            if {[string match $pattern $got]} break
+            after 20
+        }
+        fconfigure $fd -blocking 1
+        return [string match $pattern $got]
+    }
+
+    foreach {name disable enable} {
+        "appendfsync everysec" {config set appendfsync everysec} {config set appendfsync always}
+        "bio-aof-offload-enabled no" {config set bio-aof-offload-enabled no} {config set bio-aof-offload-enabled yes}
+    } {
+        test "Turning reply blocking off ($name) delivers deferred invalidations and events" {
+            lassign [setup_deferred_tasks rb:task:off] tracker sub
+            assert_equal 0 [received $tracker *rb:task:off*]
+
+            r {*}$disable
+            assert_equal 1 [received $tracker *invalidate*rb:task:off*]
+            assert_equal 1 [received $sub *message*rb:task:off*set*]
+
+            $tracker close
+            $sub close
+            r DEBUG reply-blocking-resume aof
+            r {*}$enable
+        }
+    }
+
+    test "Demotion delivers deferred invalidations and drops events for writes not known durable" {
+        lassign [setup_deferred_tasks rb:task:demote] tracker sub
+
+        r replicaof 127.0.0.1 1
+        # A spurious invalidation is harmless; a stale cache is not.
+        assert_equal 1 [received $tracker *invalidate*rb:task:demote*]
+        # The write may not survive, so its event is not published.
+        assert_equal 0 [received $sub *message*rb:task:demote*set*]
+
+        r replicaof no one
+        r DEBUG reply-blocking-resume aof
+        $tracker close
+        $sub close
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes loglevel debug}} {
+    test "A held write with a MONITOR client and debug logging does not crash" {
+        # The monitor is held on the write's offset too, and it has no command
+        # of its own, which the debug log of the hold must tolerate.
+        set mon [valkey_deferring_client]
+        $mon monitor
+        assert_equal OK [$mon read]
+        r set rb:monitor:debug v
+        assert_match {*rb:monitor:debug*} [$mon read]
+        assert_equal PONG [r ping]
+        $mon close
+    }
+}
+
+start_server {tags {"repl durability external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    $primary debug populate 2000
+    start_server {overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes repl-diskless-load disabled loading-process-events-interval-bytes 1024 key-load-delay 500}} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+
+        test "A client that connected while the AOF was off for a sync load can FLUSHDB after promotion" {
+            # The replica stops its AOF to load the primary's RDB and restarts it
+            # afterwards. A client that connects during the load is created while
+            # reply blocking is off, so it has no per-client reply-blocking state.
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [getInfoProperty [$replica info persistence] loading] == 1
+            } else {
+                fail "replica did not start loading the sync RDB"
+            }
+            assert_equal 0 [getInfoProperty [$replica info persistence] aof_enabled]
+            set fd [socket $replica_host $replica_port]
+            fconfigure $fd -translation binary -buffering none
+
+            $replica config set key-load-delay 0
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "sync did not complete"
+            }
+            $replica replicaof no one
+
+            # FLUSHDB registers no task for this client, so nothing else sets up
+            # its reply-blocking state before the reply is held (a SET would,
+            # through the key invalidation task).
+            puts -nonewline $fd "*2\r\n\$7\r\nFLUSHDB\r\n\$4\r\nSYNC\r\n"
+            fconfigure $fd -blocking 0
+            set got ""
+            wait_for_condition 50 20 {
+                [string match "*\r\n" [append got [read $fd]]]
+            } else {
+                fail "no reply from the promoted replica"
+            }
+            close $fd
+            assert_equal "+OK\r\n" $got
+            assert_equal PONG [$replica ping]
+        }
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0 save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {} {
+        set replica [srv 0 client]
+
+        test "Forkless sync holds back the EOF marker until the writes it carries are durable" {
+            # A forkless socket sync inlines writes made during the sync into
+            # the RDB stream, and the RDB's repl-offset covers everything up to
+            # the end of the keyspace scan. The replica must not finish loading
+            # it while that offset is not durable on the primary.
+            $primary debug populate 1000
+            $primary debug reply-blocking-pause aof
+            set writer [valkey_deferring_client -1]
+            $writer set rb:forkless:dirty v
+            wait_for_condition 50 100 {
+                [getInfoProperty [$primary info debug] reply_blocking_clients_waiting_ack] == 1
+            } else {
+                fail "write was not held"
+            }
+
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*method: forkless*"} 0 100 50
+            after 1000
+            assert_match {*master_link_status:down*} [$replica info replication]
+
+            $primary debug reply-blocking-resume aof
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "forkless sync did not complete once the writes were durable"
+            }
+            assert_equal OK [$writer read]
+            $writer close
+            wait_for_ofs_sync $primary $replica
+            assert_equal v [$replica get rb:forkless:dirty]
+        }
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly no}} {
+    test "Enabling reply blocking at runtime initializes fake clients created earlier" {
+        # A Lua write pools a module temp client with no reply-blocking state.
+        assert_equal 1 [r eval {redis.call('set', 'k1', 'v') return 1} 0]
+
+        r config set appendfsync always
+        r config set bio-aof-offload-enabled yes
+        r config set appendonly yes
+        wait_for_condition 100 50 {
+            [s aof_rewrite_in_progress] == 0 && [s aof_rewrite_scheduled] == 0
+        } else {
+            fail "AOF rewrite did not finish"
+        }
+
+        # The next script write reuses the pooled client and defers a key
+        # invalidation task tracked on that client.
+        assert_equal 1 [r eval {redis.call('set', 'k2', 'v') return 1} 0]
+        assert_equal v [r get k2]
+        assert_equal 1 [r eval {redis.call('hset', 'h', 'f', 'v') return 1} 0]
+        assert_equal PONG [r ping]
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes forkless-infrastructure-enabled yes save ""}} {
+    test "Forkless consistent save with in-place writes under reply blocking" {
+        r hset h f 0
+        r debug populate 2000
+        r config set rdb-key-save-delay 1000
+        r config set forkless-policy prefer-forkless
+        r bgsave
+        assert_equal 1 [s rdb_bgsave_in_progress]
+        assert_equal forkless [s rdb_current_bgsave_type]
+
+        # In-place writes to an existing key must reach the background
+        # iterator's modification bookkeeping even though the tracking
+        # invalidation is deferred by reply blocking.
+        r hset h f 1
+        r hset h f 2
+        assert_equal 2 [r hget h f]
+
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal ok [s rdb_last_bgsave_status]
+
+        # The snapshot holds the value from before the writes.
+        r debug reload nosave
+        assert_equal 0 [r hget h f]
+    }
+}
+
+# ==================== Tracking edge cases ====================
+# Writes are tracked in signalModifiedKey() whatever their origin and stamped
+# with the replication offset once their execution unit has been propagated;
+# reads are tracked in lookupKey() and through the command's key specs. Each
+# test checks that a reply is held while the AOF provider is paused and is
+# released once it resumes. Replies are read raw (RESP2) with a deadline so a
+# reply that is wrongly held fails the test instead of hanging it.
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    proc rb_waiting_ack {} {
+        getInfoProperty [r info debug] reply_blocking_clients_waiting_ack
+    }
+
+    # Resume the provider and wait until every held reply is released and every
+    # uncommitted key is drained: a placeholder offset that was never stamped
+    # would stay behind and fail here.
+    proc rb_resume {} {
+        r DEBUG reply-blocking-resume aof
+        wait_for_condition 100 20 {
+            [r ping] eq {PONG} && [rb_waiting_ack] == 0 &&
+            [getInfoProperty [r info debug] reply_blocking_uncommitted_keys] == 0
+        } else {
+            fail "held replies or uncommitted keys were not released"
+        }
+    }
+
+    # Start from an empty, durable keyspace, run the setup body with the
+    # provider running, then pause the provider.
+    proc rb_prepare {body} {
+        rb_resume
+        r flushall
+        uplevel 1 $body
+        rb_resume
+        r DEBUG reply-blocking-pause aof
+    }
+
+    proc rb_client {{db 9}} {
+        set rd [valkey_deferring_client]
+        if {$db != 9} {
+            $rd select $db
+            assert_equal OK [$rd read]
+        }
+        return $rd
+    }
+
+    # Read whatever reply bytes arrive within the deadline, never blocking.
+    proc rb_raw_reply {rd {timeout_ms 2000}} {
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        set data ""
+        set deadline [expr {[clock milliseconds] + $timeout_ms}]
+        while {[clock milliseconds] < $deadline} {
+            append data [read $fd]
+            if {[string match "*\r\n" $data]} break
+            after 10
+        }
+        fconfigure $fd -blocking 1
+        return $data
+    }
+
+    # The command sent on rd is held: wait until n clients wait for the ack
+    # (so it has been processed), then check nothing was sent.
+    proc rb_assert_held {rd n} {
+        wait_for_condition 50 20 {
+            [rb_waiting_ack] >= $n
+        } else {
+            fail "reply was not held: [rb_raw_reply $rd 100]"
+        }
+        assert_equal "" [rb_raw_reply $rd 50]
+    }
+
+    # Send MULTI, queue each command, then EXEC (whose reply is not read).
+    proc rb_queue {rd args} {
+        $rd multi
+        assert_equal OK [$rd read]
+        foreach cmd $args {
+            $rd {*}$cmd
+            assert_equal QUEUED [$rd read]
+        }
+        $rd exec
+    }
+
+    test "MGET of a lazily expired key and a dirty key is held" {
+        rb_prepare {
+            r debug set-active-expire 0
+            r set k1 v
+            r pexpire k1 1
+            r set k2 old
+            after 10
+        }
+        set w [rb_client]
+        $w set k2 dirty
+        rb_assert_held $w 1
+        # Lazily expiring k1 propagates a DEL, which used to skip the read check.
+        set rd [rb_client]
+        $rd mget k1 k2
+        rb_assert_held $rd 2
+        # Control: a read of a clean key is not held.
+        set c [rb_client]
+        $c get k3
+        assert_equal "\$-1\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal "*2\r\n\$-1\r\n\$5\r\ndirty\r\n" [rb_raw_reply $rd]
+        r debug set-active-expire 1
+    }
+
+    test "MULTI/EXEC: SET then GET of the same key holds EXEC and later readers" {
+        rb_prepare {}
+        set rd [rb_client]
+        rb_queue $rd {set mk v} {get mk}
+        rb_assert_held $rd 1
+        set r2 [rb_client]
+        $r2 get mk
+        rb_assert_held $r2 2
+
+        rb_resume
+        assert_equal "*2\r\n+OK\r\n\$1\r\nv\r\n" [rb_raw_reply $rd]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $r2]
+    }
+
+    test "MULTI/EXEC: keys written in a transaction hold reads in later commands" {
+        rb_prepare {r set clean c}
+        set rd [rb_client]
+        rb_queue $rd {set tk1 v} {incr tk2}
+        rb_assert_held $rd 1
+        set r1 [rb_client]
+        $r1 get tk1
+        rb_assert_held $r1 2
+        set r2 [rb_client]
+        $r2 get tk2
+        rb_assert_held $r2 3
+        set c [rb_client]
+        $c get clean
+        assert_equal "\$1\r\nc\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "*2\r\n+OK\r\n:1\r\n" [rb_raw_reply $rd]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $r1]
+        assert_equal "\$1\r\n1\r\n" [rb_raw_reply $r2]
+    }
+
+    test "MULTI/EXEC: SWAPDB holds reads in both databases" {
+        rb_prepare {
+            r set a v9
+            r select 10
+            r set a v10
+            r select 11
+            r set other o
+            r select 9
+        }
+        set rd [rb_client]
+        rb_queue $rd {set before x} {swapdb 9 10} {set after y}
+        rb_assert_held $rd 1
+        set r9 [rb_client]
+        $r9 get a
+        rb_assert_held $r9 2
+        set r10 [rb_client 10]
+        $r10 get a
+        rb_assert_held $r10 3
+        # 'before' was written in db 9, then moved to db 10 by the swap.
+        set rbefore [rb_client 10]
+        $rbefore get before
+        rb_assert_held $rbefore 4
+        set c [rb_client 11]
+        $c get other
+        assert_equal "\$1\r\no\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "*3\r\n+OK\r\n+OK\r\n+OK\r\n" [rb_raw_reply $rd]
+        assert_equal "\$3\r\nv10\r\n" [rb_raw_reply $r9]
+        assert_equal "\$2\r\nv9\r\n" [rb_raw_reply $r10]
+        assert_equal "\$1\r\nx\r\n" [rb_raw_reply $rbefore]
+
+        # Once durable, neither database stays dirty.
+        r DEBUG reply-blocking-pause aof
+        set r9 [rb_client]
+        $r9 get a
+        assert_equal "\$3\r\nv10\r\n" [rb_raw_reply $r9]
+        set r10 [rb_client 10]
+        $r10 get a
+        assert_equal "\$2\r\nv9\r\n" [rb_raw_reply $r10]
+    }
+
+    test "MULTI/EXEC: FLUSHALL holds reads in every database" {
+        rb_prepare {
+            r set x 1
+            r select 10
+            r set y 1
+            r select 9
+        }
+        set rd [rb_client]
+        rb_queue $rd {set pre 1} {flushall} {set post 1}
+        rb_assert_held $rd 1
+        set rx [rb_client]
+        $rx get x
+        rb_assert_held $rx 2
+        set ry [rb_client 10]
+        $ry get y
+        rb_assert_held $ry 3
+        set rp [rb_client]
+        $rp get post
+        rb_assert_held $rp 4
+
+        rb_resume
+        assert_equal "*3\r\n+OK\r\n+OK\r\n+OK\r\n" [rb_raw_reply $rd]
+        assert_equal "\$-1\r\n" [rb_raw_reply $rx]
+        assert_equal "\$-1\r\n" [rb_raw_reply $ry]
+        assert_equal "\$1\r\n1\r\n" [rb_raw_reply $rp]
+
+        # Once durable, no database stays dirty.
+        r DEBUG reply-blocking-pause aof
+        set c [rb_client 10]
+        $c get y
+        assert_equal "\$-1\r\n" [rb_raw_reply $c]
+    }
+
+    test "MULTI/EXEC: lazy expiry inside a transaction holds EXEC and later readers" {
+        rb_prepare {
+            r debug set-active-expire 0
+            r set e1 v
+            r pexpire e1 1
+            r set e2 clean
+            after 10
+        }
+        set rd [rb_client]
+        rb_queue $rd {get e1} {get e2}
+        rb_assert_held $rd 1
+        set re [rb_client]
+        $re exists e1
+        rb_assert_held $re 2
+
+        rb_resume
+        assert_equal "*2\r\n\$-1\r\n\$5\r\nclean\r\n" [rb_raw_reply $rd]
+        assert_equal ":0\r\n" [rb_raw_reply $re]
+        r debug set-active-expire 1
+    }
+
+    test "EVAL: keys built inside the script, not declared in KEYS, are tracked" {
+        rb_prepare {}
+        set rd [rb_client]
+        $rd eval {redis.call('set', ARGV[1], 'v'); redis.call('set', 'lit:' .. ARGV[1], 'w'); return 1} 0 evk
+        rb_assert_held $rd 1
+        set r1 [rb_client]
+        $r1 get evk
+        rb_assert_held $r1 2
+        set r2 [rb_client]
+        $r2 get lit:evk
+        rb_assert_held $r2 3
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $rd]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $r1]
+        assert_equal "\$1\r\nw\r\n" [rb_raw_reply $r2]
+    }
+
+    test "RENAME and RENAMENX hold reads of both source and destination" {
+        rb_prepare {
+            r set src v
+            r set src2 v2
+        }
+        set a [rb_client]
+        $a rename src dst
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b renamenx src2 dst2
+        rb_assert_held $b 2
+        set n 2
+        set readers {}
+        foreach k {src dst src2 dst2} {
+            set c [rb_client]
+            $c exists $k
+            rb_assert_held $c [incr n]
+            lappend readers $c
+        }
+
+        rb_resume
+        assert_equal "+OK\r\n" [rb_raw_reply $a]
+        assert_equal ":1\r\n" [rb_raw_reply $b]
+        foreach c $readers expected [list ":0\r\n" ":1\r\n" ":0\r\n" ":1\r\n"] {
+            assert_equal $expected [rb_raw_reply $c]
+        }
+    }
+
+    test "COPY to another database holds reads of the destination, also when it fails" {
+        rb_prepare {
+            r set cs v
+            r set cs2 v2
+        }
+        set a [rb_client]
+        $a copy cs cd db 10
+        rb_assert_held $a 1
+        set b [rb_client 10]
+        $b get cd
+        rb_assert_held $b 2
+        # The destination of this COPY exists and is dirty: the COPY fails and
+        # propagates nothing, but its reply depends on that write.
+        set w [rb_client 10]
+        $w set cd2 dirty
+        rb_assert_held $w 3
+        set f [rb_client]
+        $f copy cs2 cd2 db 10
+        rb_assert_held $f 4
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $a]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $b]
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal ":0\r\n" [rb_raw_reply $f]
+    }
+
+    test "MOVE holds reads in both databases, also when it fails" {
+        rb_prepare {
+            r set mk v
+            r set mk2 v2
+        }
+        set a [rb_client]
+        $a move mk 10
+        rb_assert_held $a 1
+        set b [rb_client 10]
+        $b get mk
+        rb_assert_held $b 2
+        set c [rb_client]
+        $c exists mk
+        rb_assert_held $c 3
+        # The key exists, dirty, in the destination: the MOVE fails.
+        set w [rb_client 10]
+        $w set mk2 dirty
+        rb_assert_held $w 4
+        set f [rb_client]
+        $f move mk2 10
+        rb_assert_held $f 5
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $a]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $b]
+        assert_equal ":0\r\n" [rb_raw_reply $c]
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal ":0\r\n" [rb_raw_reply $f]
+    }
+
+    test "SORT ... STORE holds reads of the destination" {
+        rb_prepare {r rpush l 3 1 2}
+        set a [rb_client]
+        $a sort l store out
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b lrange out 0 -1
+        rb_assert_held $b 2
+
+        rb_resume
+        assert_equal ":3\r\n" [rb_raw_reply $a]
+        assert_equal "*3\r\n\$1\r\n1\r\n\$1\r\n2\r\n\$1\r\n3\r\n" [rb_raw_reply $b]
+    }
+
+    test "SORT ... BY/GET reading a dirty key outside the key specs is held" {
+        rb_prepare {
+            r rpush l2 1 2
+            r set obj_1 a
+            r set obj_2 b
+            r set wt_1 1
+            r set wt_2 2
+        }
+        set w [rb_client]
+        $w set obj_1 dirty
+        rb_assert_held $w 1
+        set g [rb_client]
+        $g sort l2 get obj_*
+        rb_assert_held $g 2
+        set w2 [rb_client]
+        $w2 set wt_2 0
+        rb_assert_held $w2 3
+        set by [rb_client]
+        $by sort l2 by wt_*
+        rb_assert_held $by 4
+        # Control: sorting the clean list alone is not held.
+        set c [rb_client]
+        $c sort l2
+        assert_equal "*2\r\n\$1\r\n1\r\n\$1\r\n2\r\n" [rb_raw_reply $c]
+
+        rb_resume
+        assert_equal "*2\r\n\$5\r\ndirty\r\n\$1\r\nb\r\n" [rb_raw_reply $g]
+        assert_equal "*2\r\n\$1\r\n2\r\n\$1\r\n1\r\n" [rb_raw_reply $by]
+    }
+
+    test "A blocking command served by a later write is held, and so are reads of its destination" {
+        rb_prepare {}
+        set b [rb_client]
+        $b blmove bsrc bdst left right 0
+        wait_for_blocked_clients_count 1
+        set p [rb_client]
+        $p lpush bsrc x
+        rb_assert_held $p 1
+        # The BLMOVE runs inside an execution unit of its own and is finalized
+        # before its LMOVE is propagated, so it is held at the offset of the
+        # LPUSH it read, not at its own write.
+        rb_assert_held $b 2
+        set c [rb_client]
+        $c lrange bdst 0 -1
+        rb_assert_held $c 3
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $p]
+        assert_equal "\$1\r\nx\r\n" [rb_raw_reply $b]
+        assert_equal "*1\r\n\$1\r\nx\r\n" [rb_raw_reply $c]
+    }
+
+    test "A key evicted by maxmemory holds later reads until the eviction is durable" {
+        rb_prepare {r set ev [string repeat x 200000]}
+        r config set maxmemory-policy allkeys-random
+        set before [s evicted_keys]
+        r config set maxmemory [expr {[s used_memory] - 100000}]
+        wait_for_condition 50 20 {
+            [s evicted_keys] > $before
+        } else {
+            fail "key was not evicted"
+        }
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
+        set rd [rb_client]
+        $rd get ev
+        rb_assert_held $rd 1
+
+        rb_resume
+        assert_equal "\$-1\r\n" [rb_raw_reply $rd]
+    }
+
+    test "HMGET of a lazily expired field and a dirty field is held" {
+        rb_prepare {
+            r debug set-active-expire 0
+            r hset h f1 v1 f2 old
+            r hpexpire h 200 fields 1 f1
+        }
+        set w [rb_client]
+        $w hset h f2 dirty
+        rb_assert_held $w 1
+        after 250
+        set rd [rb_client]
+        $rd hmget h f1 f2
+        rb_assert_held $rd 2
+
+        rb_resume
+        assert_equal ":0\r\n" [rb_raw_reply $w]
+        assert_equal "*2\r\n\$-1\r\n\$5\r\ndirty\r\n" [rb_raw_reply $rd]
+        r debug set-active-expire 1
+    }
+
+    test "SET ... GET, GETDEL and GETEX hold the writer and later readers" {
+        rb_prepare {
+            r set g1 old
+            r set g2 v
+            r set g3 v
+            r set g4 v
+        }
+        set a [rb_client]
+        $a set g1 new get
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b getdel g2
+        rb_assert_held $b 2
+        set c [rb_client]
+        $c getex g3 ex 100
+        rb_assert_held $c 3
+        set r1 [rb_client]
+        $r1 get g1
+        rb_assert_held $r1 4
+        set r2 [rb_client]
+        $r2 exists g2
+        rb_assert_held $r2 5
+        set r3 [rb_client]
+        $r3 ttl g3
+        rb_assert_held $r3 6
+        # Control: GETEX without options writes nothing and g4 is clean.
+        set d [rb_client]
+        $d getex g4
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $d]
+
+        rb_resume
+        assert_equal "\$3\r\nold\r\n" [rb_raw_reply $a]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $b]
+        assert_equal "\$1\r\nv\r\n" [rb_raw_reply $c]
+        assert_equal "\$3\r\nnew\r\n" [rb_raw_reply $r1]
+        assert_equal ":0\r\n" [rb_raw_reply $r2]
+        assert_match ":*\r\n" [rb_raw_reply $r3]
+    }
+
+    test "DEL of a key whose deletion is not durable yet is held" {
+        rb_prepare {r set dk v}
+        set w [rb_client]
+        $w del dk
+        rb_assert_held $w 1
+        # Nothing is deleted or propagated and DEL never looks the key up, but
+        # its reply depends on the first DEL.
+        set a [rb_client]
+        $a del dk
+        rb_assert_held $a 2
+
+        rb_resume
+        assert_equal ":1\r\n" [rb_raw_reply $w]
+        assert_equal ":0\r\n" [rb_raw_reply $a]
+    }
+
+    test "FUNCTION LOAD inside MULTI holds FCALL from another client" {
+        rb_prepare {r function flush}
+        set code "#!lua name=rbtest\nserver.register_function('rbfunc', function() return 'hi' end)"
+        set a [rb_client]
+        rb_queue $a [list function load $code]
+        rb_assert_held $a 1
+        set b [rb_client]
+        $b fcall rbfunc 0
+        rb_assert_held $b 2
+
+        rb_resume
+        assert_equal "*1\r\n\$6\r\nrbtest\r\n" [rb_raw_reply $a]
+        assert_equal "\$2\r\nhi\r\n" [rb_raw_reply $b]
+
+        # Once durable, the function store is clean again.
+        r DEBUG reply-blocking-pause aof
+        set c [rb_client]
+        $c fcall rbfunc 0
+        assert_equal "\$2\r\nhi\r\n" [rb_raw_reply $c]
+        rb_resume
+        r function flush
+    }
+
+    test "Commands that read nothing dirty are not held while other data is dirty" {
+        rb_prepare {r set clean c}
+        set w [rb_client]
+        $w set dirty d
+        rb_assert_held $w 1
+
+        set c [rb_client]
+        $c eval_ro {return redis.call('get', KEYS[1])} 1 clean
+        assert_equal "\$1\r\nc\r\n" [rb_raw_reply $c]
+        # EVAL_RO is judged by what it reads, not by its declared keys.
+        $c eval_ro {return 1} 1 dirty
+        assert_equal ":1\r\n" [rb_raw_reply $c]
+        set oh [rb_client]
+        $oh object help
+        assert_match "*ENCODING*" [rb_raw_reply $oh]
+        $c ping
+        assert_equal "+PONG\r\n" [rb_raw_reply $c]
+        # PUBLISH propagates, but is not tracked for reply blocking.
+        $c publish rbchannel msg
+        assert_equal ":0\r\n" [rb_raw_reply $c]
+        $c get clean
+        assert_equal "\$1\r\nc\r\n" [rb_raw_reply $c]
+        assert_equal 1 [rb_waiting_ack]
+
+        # A read-only script reading the dirty key is held.
+        set e [rb_client]
+        $e eval_ro {return redis.call('get', KEYS[1])} 1 dirty
+        rb_assert_held $e 2
+
+        rb_resume
+        assert_equal "+OK\r\n" [rb_raw_reply $w]
+        assert_equal "\$1\r\nd\r\n" [rb_raw_reply $e]
+    }
+
+    rb_resume
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    test "Shutdown with reply blocking enabled exits cleanly" {
+        # Module unload during shutdown runs post-execution-unit work after
+        # the reply-blocking state has been freed.
+        r set k v
+        catch {r shutdown nosave}
+        wait_for_log_messages 0 {"*ready to exit, bye bye*"} 0 100 50
+        verify_no_log_message 0 "*crashed by signal*" 0
+    }
+}

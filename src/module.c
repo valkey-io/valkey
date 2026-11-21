@@ -7107,6 +7107,15 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
+
+    /* Module commands may observe dirty (not-yet-durably-committed) reads.
+     * When reply-blocking is enabled we withhold user-facing replies in the
+     * COB until the write is acked, but a module consumes a VM_Call reply
+     * synchronously here in C, so there is nothing left to hold once call()
+     * returns. This matches stock Valkey under `appendfsync always`, where a
+     * module's VM_Call reply is likewise returned before the fsync, so we
+     * neither reject nor block here. */
+
     /* Mirror processInputBuffer: set pending_command so that if the command
      * blocks on keys, unblockClientOnKey will reprocess it on unblock. */
     c->flag.pending_command = 1;

@@ -3343,6 +3343,7 @@ int allowProtectedAction(int config, client *c) {
 static int
 setConfigLatencyTrackingInfoPercentilesOutputOption(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
+    freeLatencyTrackingInfoPercentilesLabels();
     zfree(server.latency_tracking_info_percentiles);
     server.latency_tracking_info_percentiles = NULL;
     server.latency_tracking_info_percentiles_len = argc;
@@ -3366,6 +3367,7 @@ setConfigLatencyTrackingInfoPercentilesOutputOption(standardConfig *config, sds 
         server.latency_tracking_info_percentiles[j] = percentile;
     }
 
+    createLatencyTrackingInfoPercentilesLabels();
     return 1;
 configerr:
     zfree(server.latency_tracking_info_percentiles);

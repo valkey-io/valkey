@@ -748,6 +748,9 @@ int trySendWriteToIOThreads(client *c) {
     if (!clientHasPendingReplies(c)) return C_ERR;
     /* For simplicity, avoid offloading non-online replicas */
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
+    /* A replica that loads the RDB from the socket must not get stream bytes before its first
+     * REPLCONF ACK, same as in putClientInPendingWriteQueue() and the replica write loop. */
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_start_cmd_stream_on_ack) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
     /* Avoid offloading writes to IO thread for the slot migration export job while snapshotting.

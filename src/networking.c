@@ -2896,6 +2896,7 @@ static void writeToReplicaCompressed(client *c) {
 
 static void writeToReplica(client *c) {
     serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
+    debugServerAssert(!c->repl_data->repl_start_cmd_stream_on_ack);
 
     /* Compressed replicas use the framed write path; the decision lives here so
      * callers do not branch on the per-replica compression state. */

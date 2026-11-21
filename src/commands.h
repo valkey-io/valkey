@@ -60,6 +60,7 @@ typedef enum {
 #define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
 #define CMD_ALL_DBS (1ULL << 29)
 #define CMD_WRITE_FIRSTKEY_ONLY (1ULL << 30)
+#define CMD_CURRENT_DB (1ULL << 31)
 /* Command flags. Please don't forget to add command flag documentation in struct
  * serverCommand in server.h file. */
 

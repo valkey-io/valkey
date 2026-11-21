@@ -91,6 +91,8 @@ ssize_t compressionLz4CompressFeed(streamCompressor *compressor,
         prefs.frameInfo.contentChecksumFlag = compressor->checksum_flags & STREAM_CHECKSUM_CONTENT
                                                   ? LZ4F_contentChecksumEnabled
                                                   : LZ4F_noContentChecksum;
+        prefs.frameInfo.blockMode = compressor->feed_uncompressed ? LZ4F_blockIndependent : LZ4F_blockLinked;
+        compressor->frame_feed_uncompressed = compressor->feed_uncompressed;
         size_t r = LZ4F_compressBegin(cctx, output, output_capacity, &prefs);
         if (LZ4F_isError(r)) return -1;
         offset = r;
@@ -99,7 +101,15 @@ ssize_t compressionLz4CompressFeed(streamCompressor *compressor,
 
     if (input_len > 0) {
         if (offset >= output_capacity) return -1;
-        size_t r = LZ4F_compressUpdate(cctx, output + offset, output_capacity - offset, input, input_len, NULL);
+        /* LZ4F_uncompressedUpdate requires an independent-block frame, and
+         * release builds of LZ4 do not reject it on a linked frame. */
+        assert(compressor->feed_uncompressed == compressor->frame_feed_uncompressed);
+        size_t r;
+        if (compressor->feed_uncompressed) {
+            r = LZ4F_uncompressedUpdate(cctx, output + offset, output_capacity - offset, input, input_len, NULL);
+        } else {
+            r = LZ4F_compressUpdate(cctx, output + offset, output_capacity - offset, input, input_len, NULL);
+        }
         if (LZ4F_isError(r)) return -1;
         offset += r;
     }

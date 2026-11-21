@@ -31,6 +31,8 @@ bool streamCodecIsSupported(compressionAlgo algo);
 /* Codec facts used by callers that request periodic stream integrity. */
 uint8_t streamCodecIntegrityChecksumFlags(compressionAlgo algo);
 bool streamCodecNeedsBoundedFramesForIntegrity(compressionAlgo algo);
+/* True when the codec can store input uncompressed inside its own framing. */
+bool streamCodecSupportsUncompressedBlocks(compressionAlgo algo);
 
 /* ===== Compressor ===== */
 
@@ -44,6 +46,8 @@ typedef struct {
     size_t ctx_memory; /* Bytes held by ctx via the codec's custom allocator, for memory accounting. */
     bool stream_started;
     uint8_t checksum_flags;
+    bool feed_uncompressed;       /* Store input as-is instead of compressing it. Change only between frames. */
+    bool frame_feed_uncompressed; /* feed_uncompressed when the open frame began, to catch mid-frame changes. */
 } streamCompressor;
 
 int streamCompressorInit(streamCompressor *compressor, compressionAlgo algo, int level, uint8_t checksum_flags);

@@ -59,5 +59,6 @@ cmake-build-debug/
 cmake-build-release/
 __pycache__
 src/unit/.flags
+src/unit/valgrind-logs/
 valkey-unit-tests
 src/.idea/*

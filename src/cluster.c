@@ -877,8 +877,11 @@ void clusterCommandHelp(client *c) {
         "SLOTS",
         "    Return information about slots range mappings. Each range is made of:",
         "    start, end, primary and replicas IP addresses, ports and ids",
-        "SLOT-STATS",
-        "    Return an array of slot usage statistics for slots assigned to the current node.",
+        "SLOT-STATS SLOTSRANGE <start-slot> <end-slot>",
+        "    Return an array of slot usage statistics for the slots in the range assigned to the current node.",
+        "SLOT-STATS ORDERBY <metric> [LIMIT <limit>] [ASC|DESC]",
+        "    Return an array of slot usage statistics for slots assigned to the current node, sorted by <metric>.",
+        "    <metric> is key-count, cpu-usec, network-bytes-in or network-bytes-out (all but key-count need cluster-slot-stats-enabled).",
         "SHARDS",
         "    Return information about slot range mappings and the nodes associated with them.",
         NULL};

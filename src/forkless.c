@@ -760,6 +760,15 @@ int forklessSaveToDisk(const char *filename) {
     char tmpfile[256];
     snprintf(tmpfile, sizeof(tmpfile), "temp-forkless-%d-%lld.rdb", (int)getpid(), (long long)server.stat_rdb_saves);
 
+    /* The rename and unlink run later on a BIO thread, after CONFIG SET dir may
+     * have changed the cwd. Resolve both paths now so the snapshot lands in the
+     * dir the save started in, as it does for a fork-based save. */
+    char cwd[MAXPATHLEN];
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        serverLog(LL_WARNING, "forkless-save: failed to get current directory: %s", strerror(errno));
+        return C_ERR;
+    }
+
     FILE *file = fopen(tmpfile, "wb");
     if (file == NULL) {
         serverLog(LL_WARNING, "forkless-save: failed to open temp file [%s] for forkless save: %s",
@@ -768,8 +777,8 @@ int forklessSaveToDisk(const char *filename) {
     }
 
     forklessSaveInfo *saveInfo = zcalloc(sizeof(forklessSaveInfo));
-    saveInfo->u.file.temp_file = sdsnew(tmpfile);
-    saveInfo->u.file.final_file = sdsnew(filename);
+    saveInfo->u.file.temp_file = sdscatfmt(sdsempty(), "%s/%s", cwd, tmpfile);
+    saveInfo->u.file.final_file = sdscatfmt(sdsempty(), "%s/%s", cwd, filename);
     saveInfo->write_target = RDB_WRITE_TARGET_DISK;
 
     rioInitWithFile(&saveInfo->save_rio, file);

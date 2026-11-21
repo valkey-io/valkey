@@ -2050,14 +2050,27 @@ static sds jsonStringOutput(sds out, const char *p, int len, int mode) {
     } else if (mode == OUTPUT_QUOTED_JSON) {
         /* Need to double-quote backslashes */
         sds tmp = sdscatrepr(sdsempty(), p, len);
-        int tmplen = sdslen(tmp);
-        char *n = tmp;
-        while (tmplen--) {
-            if (*n == '\\')
-                out = sdscatlen(out, "\\\\", 2);
-            else
-                out = sdscatlen(out, n, 1);
-            n++;
+        size_t tmplen = sdslen(tmp);
+        size_t pos = 0;
+        while (pos < tmplen) {
+            size_t run = 0;
+            while (pos + run < tmplen && tmp[pos + run] != '\\') run++;
+            if (run) out = sdscatlen(out, tmp + pos, run);
+            pos += run;
+            if (pos < tmplen) {
+                char slashes[64];
+                memset(slashes, '\\', sizeof(slashes));
+                size_t count = 0;
+                while (pos < tmplen && tmp[pos] == '\\') {
+                    pos++;
+                    count++;
+                }
+                while (count >= sizeof(slashes) / 2) {
+                    out = sdscatlen(out, slashes, sizeof(slashes));
+                    count -= sizeof(slashes) / 2;
+                }
+                if (count) out = sdscatlen(out, slashes, count * 2);
+            }
         }
 
         sdsfree(tmp);

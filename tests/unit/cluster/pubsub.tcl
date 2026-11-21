@@ -58,6 +58,36 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         assert_morethan $sender_pubsub_bytes 0
         assert_equal $sender_pubsub_bytes $receiver_pubsub_bytes
     }
+
+    test "Publish from another node during a busy script follows the script reply" {
+        set rd [valkey_deferring_client]
+        test_defer {$rd close}
+        set observer [valkey_deferring_client]
+        test_defer {$observer close}
+        $rd hello 3
+        $rd read
+        $rd subscribe busych
+        $rd read
+        $observer subscribe busych
+        $observer read
+        test_config_set {R 0} busy-reply-threshold 10
+
+        $rd eval {while true do end} 0
+        test_defer {catch {R 0 script kill}}
+        wait_for_condition 50 100 {
+            [catch {R 0 ping} e] == 1
+        } else {
+            fail "Can't wait for script to start running"
+        }
+
+        # The observer gets the message while the script is still running.
+        R 1 publish busych hi
+        assert_equal {message busych hi} [$observer read]
+        R 0 script kill
+
+        assert_error {*killed*} {$rd read}
+        assert_equal {message busych hi} [$rd read]
+    }
 }
 
 start_cluster 2 0 {tags {external:skip cluster}} {

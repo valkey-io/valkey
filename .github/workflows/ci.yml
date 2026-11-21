@@ -203,6 +203,58 @@ jobs:
       - name: test-tls-builtin
         run: ./runtest --verbose --single unit/tls --dump-logs --tls
 
+  test-valgrind-modified-tests:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'unstable'
+    timeout-minutes: 1440
+    steps:
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Collect modified test files
+        id: collect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          files=$(git diff --name-only --diff-filter=d "$BASE_SHA...$HEAD_SHA" -- \
+            'tests/unit/**.tcl' 'tests/integration/**.tcl' \
+            ':(exclude)tests/unit/moduleapi/**' | tr '\n' ' ')
+          echo "files=$files"
+          echo "files=$files" >> $GITHUB_OUTPUT
+      - name: make
+        if: steps.collect.outputs.files != ''
+        run: |
+          sudo apt-get update && sudo apt-get install -y libzstd-dev
+          make valgrind SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes
+      - name: testprep
+        if: steps.collect.outputs.files != ''
+        run: sudo apt-get install -y tcl8.6 tclx valgrind
+      - name: test
+        if: steps.collect.outputs.files != ''
+        env:
+          FILES: ${{ steps.collect.outputs.files }}
+        run: |
+          single_args=()
+          for f in $FILES; do
+            single_args+=(--single "$f")
+          done
+          # Never fall through to a bare ./runtest: with no --single it would run
+          # the whole suite under valgrind instead of just the modified files.
+          if [ ${#single_args[@]} -eq 0 ]; then
+            echo "No modified test files resolved; refusing to run the full suite." >&2
+            exit 1
+          fi
+          ./runtest --valgrind --no-latency \
+            --failures-output test-failures/valkey.json \
+            --verbose --clients 1 --timeout 2400 --dump-logs "${single_args[@]}"
+      - name: Upload test failures
+        if: always() && steps.collect.outputs.files != ''
+        uses: ./.github/actions/upload-test-failures
+        with:
+          job-name: ${{ github.job }}
+
   build-debian-old:
     runs-on: ubuntu-latest
     container: debian:bookworm

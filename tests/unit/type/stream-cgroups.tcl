@@ -896,6 +896,77 @@ start_server {
         assert_equal [lindex $reply 1 0 1] {e 5}
     }
 
+    test {XAUTOCLAIM handles sparse PEL and mixed listpack fields} {
+        set old_max_entries [config_get_set stream-node-max-entries 3]
+        r DEL x
+        r XADD x 1-0 f one
+        r XADD x 2-0 f two
+        r XADD x 3-0 other three
+        r XADD x 4-0 f four
+        r XADD x 5-0 f five
+        r XADD x 6-0 f six
+        r XADD x 7-0 f seven
+        r XADD x 8-0 other eight extra value
+        r XGROUP CREATE x grp 0
+        r XREADGROUP GROUP grp Alice COUNT 8 STREAMS x >
+        r XACK x grp 2-0 4-0 7-0
+        r XDEL x 6-0
+
+        assert_equal {0-0 {{1-0 {f one}} {3-0 {other three}} {5-0 {f five}} {8-0 {other eight extra value}}} 6-0} \
+            [r XAUTOCLAIM x grp Bob 0 0-0 COUNT 5]
+        assert_equal {0-0 {1-0 3-0 5-0 8-0} {}} \
+            [r XAUTOCLAIM x grp Charlie 0 0-0 COUNT 4 JUSTID]
+
+        r CONFIG SET stream-node-max-entries $old_max_entries
+    }
+
+    test {XAUTOCLAIM skips unread fields when an entry is not idle enough} {
+        r DEL x
+        r XADD x 1-0 f one
+        r XADD x 2-0 other two extra value
+        r XADD x 3-0 f three
+        r XGROUP CREATE x grp 0
+        r XREADGROUP GROUP grp Alice COUNT 3 STREAMS x >
+        r XCLAIM x grp Alice 0 1-0 3-0 IDLE 2000000 JUSTID
+
+        assert_equal {0-0 {{1-0 {f one}} {3-0 {f three}}} {}} \
+            [r XAUTOCLAIM x grp Bob 1000000 0-0 COUNT 3]
+        set pending [r XPENDING x grp - + 3 Alice]
+        assert_equal 1 [llength $pending]
+        assert_equal 2-0 [lindex $pending 0 0]
+    }
+
+    test {XAUTOCLAIM skips nodes with wide last entries} {
+        set old_max_entries [config_get_set stream-node-max-entries 2]
+        set old_max_bytes [config_get_set stream-node-max-bytes 0]
+        r DEL x
+        set fields {}
+        for {set i 0} {$i < 40} {incr i} {
+            lappend fields f$i v
+        }
+        r XADD x 1-0 f one
+        r XADD x 2-0 {*}$fields
+        r XADD x 3-0 f three
+        r XADD x 4-0 {*}$fields
+        r XADD x 5-0 f five
+        r XADD x 6-0 {*}$fields
+        r XADD x 7-0 f seven
+        r XADD x 8-0 {*}$fields
+        r XGROUP CREATE x grp 0
+        r XREADGROUP GROUP grp Alice COUNT 8 STREAMS x >
+        r XACK x grp 2-0 4-0 6-0
+        r XDEL x 5-0 6-0
+
+        assert_equal {8-0 {1-0 3-0 7-0} 5-0} \
+            [r XAUTOCLAIM x grp Bob 0 0-0 COUNT 4 JUSTID]
+        set wide_reply [list 0-0 [list [list 1-0 {f one}] [list 3-0 {f three}] [list 7-0 {f seven}] [list 8-0 $fields]] {}]
+        assert_equal $wide_reply \
+            [r XAUTOCLAIM x grp Charlie 0 0-0 COUNT 4]
+
+        r CONFIG SET stream-node-max-entries $old_max_entries
+        r CONFIG SET stream-node-max-bytes $old_max_bytes
+    }
+
     test {XAUTOCLAIM COUNT must be > 0} {
        assert_error "ERR COUNT must be > 0" {r XAUTOCLAIM key group consumer 1 1 COUNT 0}
     }
@@ -1105,6 +1176,36 @@ start_server {
     }
 
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no appendfsync always}} {
+        test {XAUTOCLAIM reply IDs and ownership survive AOF reload} {
+            set ids {1-0 9223372036854775808-0 18446744073709551615-18446744073709551615}
+            foreach justid {0 1} {
+                r del claim-id-reuse
+                set entries {}
+                foreach id $ids {
+                    r XADD claim-id-reuse $id f v
+                    lappend entries [list $id {f v}]
+                }
+                r XGROUP CREATE claim-id-reuse grp 0
+                r XREADGROUP GROUP grp Alice STREAMS claim-id-reuse >
+                if {$justid} {
+                    assert_equal [r XAUTOCLAIM claim-id-reuse grp Bob 0 0-0 JUSTID] [list 0-0 $ids {}]
+                } else {
+                    assert_equal [r XAUTOCLAIM claim-id-reuse grp Bob 0 0-0] [list 0-0 $entries {}]
+                }
+
+                r debug loadaof
+                assert_equal [r XRANGE claim-id-reuse - +] $entries
+                set pending [r XPENDING claim-id-reuse grp - + 10]
+                assert_equal [llength $pending] [llength $ids]
+                foreach item $pending id $ids {
+                    assert_equal [lindex $item 0] $id
+                    assert_equal [lindex $item 1] Bob
+                    assert_equal [lindex $item 3] [expr {$justid ? 1 : 2}]
+                }
+            }
+            r del claim-id-reuse
+        }
+
         test {XREADGROUP with NOACK creates consumer} {
             r del mystream
             r XGROUP CREATE mystream mygroup $ MKSTREAM

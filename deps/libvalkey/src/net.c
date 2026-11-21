@@ -298,8 +298,11 @@ int valkeyCheckConnectDone(valkeyContext *c, int *completed) {
         return VALKEY_OK;
     }
     int error = errno;
-    if (error == EINPROGRESS) {
-        /* must check error to see if connect failed.  Get the socket error */
+    if (error == EINPROGRESS || error == EISCONN) {
+        /* Must check the error to see if connect failed. Get the socket error.
+         * Some systems, notably macOS, return EISCONN on a repeated connect()
+         * even when the connection failed, so SO_ERROR is the only reliable
+         * source of the real result in that case. */
         int fail, so_error;
         socklen_t optlen = sizeof(so_error);
         fail = getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &so_error, &optlen);

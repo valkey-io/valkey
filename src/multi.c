@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "module.h"
 
 /* ================================ MULTI/EXEC ============================== */
 
@@ -426,6 +427,9 @@ void execCommand(client *c) {
     discardTransaction(c);
 
     server.in_exec = 0;
+    /* Fire after in_exec is cleared, so the callback runs outside the
+     * transaction and its own writes are not seen as part of it. */
+    moduleFireServerEvent(VALKEYMODULE_EVENT_EXEC_END, 0, NULL);
 }
 
 /* ===================== WATCH (CAS alike for MULTI/EXEC) ===================

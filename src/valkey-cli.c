@@ -9246,6 +9246,7 @@ typeinfo type_set = {"set", "SCARD", "members"};
 typeinfo type_hash = {"hash", "HLEN", "fields"};
 typeinfo type_zset = {"zset", "ZCARD", "members"};
 typeinfo type_stream = {"stream", "XLEN", "entries"};
+typeinfo type_pathhash = {"pathhash", "PHPATHCOUNT", "paths"};
 typeinfo type_other = {"other", NULL, "?"};
 
 static typeinfo *typeinfo_add(dict *types, char *name, typeinfo *type_template) {
@@ -9406,6 +9407,7 @@ static void findBigKeys(int memkeys, unsigned memkeys_samples) {
     typeinfo_add(types_dict, "hash", &type_hash);
     typeinfo_add(types_dict, "zset", &type_zset);
     typeinfo_add(types_dict, "stream", &type_stream);
+    typeinfo_add(types_dict, "pathhash", &type_pathhash);
 
     signal(SIGINT, longStatLoopModeStop);
     /* Total keys pre scanning */

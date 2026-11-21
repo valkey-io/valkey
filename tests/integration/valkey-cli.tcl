@@ -625,6 +625,16 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_error "*Invalid hotkeys count*" {run_cli --hotkeys-count -1}
     }
 
+    test "--bigkeys reports the number of paths in path hash keys" {
+        r flushdb
+        r phset ph /a FIELDS 1 f v
+        r phset ph /a/b FIELDS 2 f v g w
+        r phset ph /c FIELDS 1 f v
+        set output [run_cli --bigkeys]
+        assert_match "*Biggest pathhash found '\"ph\"' has 3 paths*" $output
+        assert_match "*1 pathhashs with 3 paths (100.00% of keys, avg size 3.00)*" $output
+    }
+
     test "DUMP RESTORE with -x option" {
         set cmdline [valkeycli [srv host] [srv port]]
 

@@ -320,6 +320,10 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal \"\\xf0e\" [run_cli hget eth test]
         assert_equal \"\u00f0e\" [run_cli --json hget eth test]
         assert_equal \"\\\\xf0e\" [run_cli --quoted-json hget eth test]
+        # double quotes
+        r hset quote test "a\"b"
+        assert_equal \"a\\\"b\" [run_cli --json hget quote test]
+        assert_equal \"a\\\\\\\"b\" [run_cli --quoted-json hget quote test]
         # control characters
         r hset control test "Hello\x00\x01\x02\x03World"
         assert_equal \"Hello\\u0000\\u0001\\u0002\\u0003World" [run_cli --json hget control test]

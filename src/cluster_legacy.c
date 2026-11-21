@@ -3339,11 +3339,11 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * possible the epoch on the target after bumping is <= our epoch.
              * This would normally cause our node to prevent the topology change
              * from being accepted. To counter this, if our node is aware of the
-             * migration, we will accept the topology update regardless of the
-             * epoch. */
+             * migration, we will accept the topology update from the target
+             * regardless of the epoch. */
             if (isSlotUnclaimed(j) ||
                 server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
-                clusterSlotFailoverGranted(j)) {
+                clusterSlotFailoverGranted(j, sender)) {
                 if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
                     if (first_migrated_slot == -1) {
                         /* Delay-initialize the range of migrated slots. */

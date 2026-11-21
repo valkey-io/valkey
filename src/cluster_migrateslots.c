@@ -1185,9 +1185,9 @@ bool clusterIsSlotExporting(int slot) {
     return false;
 }
 
-/* Returns the name of the slot export target for the given slot, or NULL if the
- * slot is not being exported. */
-bool clusterSlotFailoverGranted(int slot) {
+/* Returns true if the given slot is being exported to the given node, and we
+ * already granted the failover to it. */
+bool clusterSlotFailoverGranted(int slot, clusterNode *sender) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -1196,7 +1196,8 @@ bool clusterSlotFailoverGranted(int slot) {
         if (job->type != SLOT_MIGRATION_EXPORT) continue;
         if (!isSlotMigrationJobInProgress(job)) continue;
         if (!isSlotInSlotRanges(slot, job->slot_ranges)) continue;
-        return job->state == SLOT_EXPORT_FAILOVER_GRANTED;
+        return job->state == SLOT_EXPORT_FAILOVER_GRANTED &&
+               !memcmp(sender->name, job->target_node_name, CLUSTER_NAMELEN);
     }
     return false;
 }

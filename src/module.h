@@ -48,6 +48,12 @@ typedef size_t (*moduleTypeFreeEffortFunc2)(struct ValkeyModuleKeyOptCtx *ctx, c
 typedef void (*moduleTypeUnlinkFunc2)(struct ValkeyModuleKeyOptCtx *ctx, void *value);
 typedef void *(*moduleTypeCopyFunc2)(struct ValkeyModuleKeyOptCtx *ctx, const void *value);
 typedef int (*moduleTypeAuthCallback)(struct ValkeyModuleCtx *ctx, void *username, void *password, const char **err);
+/* Supply borrowed replication credentials from the selected module provider.
+ * A successful callback must return a password; username may be NULL. The
+ * caller copies both strings before releasing the temporary module context. */
+typedef int (*moduleReplicationCredentialsCallback)(struct ValkeyModuleCtx *ctx,
+                                                    struct serverObject **username,
+                                                    struct serverObject **password);
 
 
 /* The module type, which is referenced in each value of a given type, defines
@@ -122,6 +128,9 @@ typedef struct ValkeyModule {
     int onload;                           /* Flag to identify if the call is being made from Onload (0 or 1) */
     size_t num_acl_categories_added;      /* Number of acl categories added by this module. */
     int is_static_module;                 /* 1 if this is a static module, 0 otherwise */
+
+    moduleReplicationCredentialsCallback replication_credentials_cb;
+    int in_replication_credentials_cb; /* Protect the provider from reentrant unload. */
 } ValkeyModule;
 
 /* This is a wrapper for the 'rio' streams used inside rdb.c in the server, so that
@@ -183,6 +192,9 @@ void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       int add_script_execution_flag,
                                       client *client);
 void moduleFreeContext(ValkeyModuleCtx *ctx);
+/* Return owned credential copies from the latest provider, or C_ERR on failure.
+ * C_OK with NULL outputs means no provider is loaded and permits static auth. */
+int moduleGetReplicationCredentials(sds *username, sds *password);
 void moduleInitModulesSystem(void);
 void moduleInitModulesSystemLast(void);
 void modulesCron(void);

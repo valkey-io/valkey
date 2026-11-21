@@ -39,6 +39,7 @@ TEST_MODULES = \
     datatype.so \
     datatype2.so \
     auth.so \
+    replicationauth.so \
     keyspace_events.so \
     pathhash_notifications.so \
     block_keyspace_notification.so \

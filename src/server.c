@@ -2524,6 +2524,8 @@ void initServerConfig(void) {
     server.primary_initial_offset = -1;
     server.primary_initial_offset_in_rdb = false;
     server.repl_state = REPL_STATE_NONE;
+    server.repl_auth_sent = 0;
+    server.repl_rdb_auth_sent = 0;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;

@@ -167,7 +167,7 @@ static int ldbDelBreakpoint(int line) {
     for (j = 0; j < ldb.bpcount; j++) {
         if (ldb.bp[j] == line) {
             ldb.bpcount--;
-            memmove(ldb.bp + j, ldb.bp + j + 1, ldb.bpcount - j);
+            memmove(ldb.bp + j, ldb.bp + j + 1, (ldb.bpcount - j) * sizeof(*ldb.bp));
             return 1;
         }
     }

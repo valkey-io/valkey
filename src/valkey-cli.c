@@ -2804,7 +2804,15 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--cluster-timeout") && !lastarg) {
             config.cluster_manager_command.timeout = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--cluster-pipeline") && !lastarg) {
-            config.cluster_manager_command.pipeline = atoi(argv[++i]);
+            const char *arg = argv[++i];
+            char *end;
+            errno = 0;
+            long pipeline = strtol(arg, &end, 10);
+            if (arg == end || *end != '\0' || errno == ERANGE || pipeline < 1 || pipeline > INT_MAX) {
+                fprintf(stderr, "Invalid --cluster-pipeline: expected a positive integer.\n");
+                exit(1);
+            }
+            config.cluster_manager_command.pipeline = (int)pipeline;
         } else if (!strcmp(argv[i], "--cluster-threshold") && !lastarg) {
             config.cluster_manager_command.threshold = atof(argv[++i]);
         } else if (!strcmp(argv[i], "--cluster-yes")) {

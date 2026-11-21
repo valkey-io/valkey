@@ -619,8 +619,14 @@ void debugCommand(client *c) {
         }
 
         /* The default behavior is to save the RDB file before loading
-         * it back. */
+         * it back. Like SAVE, refuse while a background save is running:
+         * it would otherwise rename its older snapshot over the file
+         * written here. */
         if (save) {
+            if (isSaveInProgress()) {
+                addReplyError(c, "Background save already in progress");
+                return;
+            }
             rdbSaveInfo rsi, *rsiptr;
             rsiptr = rdbPopulateSaveInfo(&rsi);
             if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) != C_OK) {

@@ -2767,15 +2767,17 @@ int genericGetKeys(int storeKeyOfs,
                    int argc,
                    getKeysResult *result) {
     int i, num;
+    long long ll;
     keyReference *keys;
+    sds numstr = objectGetVal(argv[keyCountOfs]);
 
-    num = atoi(objectGetVal(argv[keyCountOfs]));
     /* Sanity check. Don't return any key if the command is going to
-     * reply with syntax error. (no input keys). */
-    if (num < 1 || num > (argc - firstKeyOfs) / keyStep) {
+     * reply with an error: a key count it can't parse, or no input keys. */
+    if (!string2ll(numstr, sdslen(numstr), &ll) || ll < 1 || ll > (argc - firstKeyOfs) / keyStep) {
         result->numkeys = 0;
         return 0;
     }
+    num = (int)ll;
 
     int numkeys = storeKeyOfs ? num + 1 : num;
     keys = getKeysPrepareResult(result, numkeys);

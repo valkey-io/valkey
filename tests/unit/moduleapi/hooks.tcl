@@ -7,6 +7,11 @@ tags "modules" {
             assert {[r hooks.event_count persistence-syncaof-start] == 1}
         }
 
+        test {Test slot importing API without cluster} {
+            assert_equal [r hooks.cluster_is_slot_importing 0] 0
+            assert_error "ERR invalid slot" {r hooks.cluster_is_slot_importing 4294967296}
+        }
+
         test {Test clients connection / disconnection hooks} {
             for {set j 0} {$j < 2} {incr j} {
                 set rd1 [valkey_deferring_client]
@@ -390,6 +395,8 @@ tags "modules" {
             assert_match "OK" [R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1]
             set node0_id [R 0 CLUSTER MYID]
             set node2_id [R 2 CLUSTER MYID]
+            assert_equal [R 0 hooks.cluster_is_slot_importing 16383] 0
+            assert_equal [R 0 hooks.cluster_is_slot_importing 16384] 0
 
             # Start a migration
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
@@ -409,6 +416,10 @@ tags "modules" {
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-slotranges] "16383-16383"
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-numslotranges] "1"
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-slotranges] "16383-16383"
+            assert_equal [R 0 hooks.cluster_is_slot_importing 16383] 1
+            assert_equal [R 3 hooks.cluster_is_slot_importing 16383] 1
+            assert_equal [R 2 hooks.cluster_is_slot_importing 16383] 0
+            assert_equal [R 0 hooks.cluster_is_slot_importing 16382] 0
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-start-numslotranges] "1"
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-start-slotranges] "16383-16383"
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-jobname] $job_name
@@ -434,6 +445,8 @@ tags "modules" {
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-slotranges] "16383-16383"
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-numslotranges] "1"
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-slotranges] "16383-16383"
+            assert_equal [R 0 hooks.cluster_is_slot_importing 16383] 0
+            assert_equal [R 3 hooks.cluster_is_slot_importing 16383] 0
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-jobname] $job_name
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-jobname] $job_name
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-jobname] $job_name
@@ -461,6 +474,8 @@ tags "modules" {
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-slotranges] "16383-16383"
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-numslotranges] "1"
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-slotranges] "16383-16383"
+            assert_equal [R 0 hooks.cluster_is_slot_importing 16383] 0
+            assert_equal [R 3 hooks.cluster_is_slot_importing 16383] 0
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
             assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-jobname] $job_name

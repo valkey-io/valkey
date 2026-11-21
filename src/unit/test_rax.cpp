@@ -50,7 +50,7 @@ extern "C" {
 
 extern bool accurate;
 extern bool large_memory;
-uint16_t crc16(const char *buf, int len); /* From crc16.c */
+uint16_t crc16(const char *buf, size_t len); /* From crc16.c */
 }
 
 typedef struct PrefixResult {

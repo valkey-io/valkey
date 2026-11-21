@@ -346,7 +346,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
         if (server.cluster_enabled && type.shard) {
             /* Using keyHashSlot directly because we can't rely on the current_client's slot via getCachedKeySlot() here,
              * as it might differ from the channel's slot. */
-            slot = keyHashSlot(objectGetVal(channel), (int)sdslen(objectGetVal(channel)));
+            slot = keyHashSlot(objectGetVal(channel), sdslen(objectGetVal(channel)));
         }
         void *found = NULL;
         kvstoreHashtableFind(*type.serverPubSubChannels, slot, channel, &found);
@@ -727,7 +727,7 @@ void pubsubCommand(client *c) {
         addReplyArrayLen(c, (c->argc - 2) * 2);
         for (j = 2; j < c->argc; j++) {
             sds key = objectGetVal(c->argv[j]);
-            unsigned int slot = server.cluster_enabled ? keyHashSlot(key, (int)sdslen(key)) : 0;
+            unsigned int slot = server.cluster_enabled ? keyHashSlot(key, sdslen(key)) : 0;
             void *found = NULL;
             kvstoreHashtableFind(server.pubsubshard_channels, slot, c->argv[j], &found);
             hashtable *clients = found;

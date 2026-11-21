@@ -53,7 +53,7 @@ void hotkeysCron(void) {
  * name on demand, only when a slot-scoped purge asks for it. */
 static int hotkeysItemInSlot(sds key, int dbid, void *arg) {
     UNUSED(dbid);
-    return (int)keyHashSlot(key, (int)sdslen(key)) == *(int *)arg;
+    return (int)keyHashSlot(key, sdslen(key)) == *(int *)arg;
 }
 
 static int hotkeysItemInDb(sds key, int dbid, void *arg) {

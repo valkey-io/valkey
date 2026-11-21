@@ -1322,7 +1322,7 @@ test "Raft proto: false AE_ACK success during message batching" {
         # The log entry doesn't match so it should return false to leader
         # This check ensures that the first item we see is a rejection
         # --------------------------------------------------------------------------
-        assert_match "AE_ACK 3 0 0 *" [raft_recv_until $fd "AE_ACK *"]
+        assert_match "AE_ACK 3 0 1 *" [raft_recv_until $fd "AE_ACK *"]
         assert_equal $l1_id [CI 0 cluster_raft_leader]
  
         # --------------------------------------------------------------------------

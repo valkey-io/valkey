@@ -2060,7 +2060,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     if (entry_line_count == 0) {
         raftSetVerifiedIndexToAck(msg_term, prev_log_index);   
     } else {
-        raftSetVerifiedIndexToAck(msg_term, new_index);
+        raftSetVerifiedIndexToAck(msg_term, new_index - 1);
     }
     return 1;
 }

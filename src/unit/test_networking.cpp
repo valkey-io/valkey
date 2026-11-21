@@ -28,12 +28,11 @@ typedef struct bulkStrRef {
 
 typedef struct __attribute__((__packed__)) payloadHeader {
     size_t payload_len;
-    size_t reply_len;
-    int16_t slot;
+    uint64_t reply_len;
+    uint16_t slot_and_flags;
     uint8_t payload_type : 1;
     uint8_t track_bytes : 1;
     uint8_t reserved : 6;
-    _Atomic(uint8_t) tracked_for_cob;
 } payloadHeader;
 
 typedef struct bufWriteMetadata {
@@ -64,6 +63,7 @@ int clusterSlotStatsEnabled(int slot);
 
 /* Wrapper functions for static functions in networking.c */
 void testOnlyPostWriteToReplica(client *c);
+void testOnlyPostWriteToClient(client *c);
 void testOnlyWriteToReplica(client *c);
 void testOnlyBackupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv);
 size_t testOnlyUpsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available);
@@ -84,15 +84,22 @@ void testOnlyTrimReplyUnusedTailSpace(client *c);
 void setDeferredReply(client *c, void *node, const char *s, size_t length);
 }
 
-/* Test fixture for networking tests - minimal fixture with no setup/teardown.
+/* Test fixture for networking tests.
  * The fake connection itself lives in fake_connection.hpp, shared with the
  * other unit tests that need one. */
 class NetworkingTest : public ::testing::Test {
   protected:
+    user *saved_default_user;
+
     void SetUp() override {
+        saved_default_user = DefaultUser;
         /* Initialize server fields that are accessed by networking functions */
         server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = -1; /* Disable tracking */
         server.debug_client_enforce_reply_list = 0;
+    }
+
+    void TearDown() override {
+        DefaultUser = saved_default_user;
     }
 };
 
@@ -624,6 +631,292 @@ TEST_F(NetworkingTest, TestAddRepliesWithOffloadsToList) {
     /* Restore modified values */
     server.io_threads_num = io_threads_num;
     server.min_io_threads_copy_avoid = min_io_threads_for_copy_avoid;
+}
+
+/* RESP size of a bulk string reply: $<len>\r\n<data>\r\n */
+static size_t bulkReplyLogicalLen(size_t str_len) {
+    return digits10(str_len) + 3 + str_len + 2;
+}
+
+static sds makeSStr(char c, size_t len) {
+    sds s = sdsnewlen(NULL, len);
+    memset(s, c, len);
+    return s;
+}
+
+TEST_F(NetworkingTest, TestCopyAvoidedReplyLenAccountedAtEnqueue) {
+    client *c = createTestClient();
+    /* Mock ACL: the fixture restores DefaultUser after fatal assertions too. */
+    user u = {};
+    u.flags = USER_FLAG_NOPASS;
+    DefaultUser = &u;
+
+    /* Bulk offload in the static buffer: accounted immediately. */
+    robj *obj = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test"));
+    size_t expected = bulkReplyLogicalLen(4);
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->io_tracked_reply_len, expected);
+    ASSERT_NE(c->last_header, nullptr);
+    EXPECT_EQ(c->last_header->reply_len, expected);
+
+    /* Extending the same header accumulates the logical length. */
+    robj *obj2 = createObject(OBJ_STRING, makeSStr('x', 100));
+    expected += bulkReplyLogicalLen(100);
+    testOnlyAddBulkStrRefToBufferOrList(c, obj2);
+    payloadHeader *bulk_header = c->last_header;
+    EXPECT_EQ(c->io_tracked_reply_len, expected);
+    EXPECT_EQ(bulk_header->reply_len, expected);
+
+    /* Plain replies are not part of the logical tracking. */
+    _addReplyToBufferOrList(c, "+OK\r\n", 5);
+    EXPECT_EQ(c->io_tracked_reply_len, expected);
+
+    /* Fill the static buffer so the next offload must spill to the list. */
+    size_t fill_len = c->buf_usable_size - c->bufpos - 8;
+    char *fill = (char *)zmalloc(fill_len);
+    memset(fill, 'f', fill_len);
+    _addReplyToBufferOrList(c, fill, fill_len);
+    zfree(fill);
+    EXPECT_EQ(c->bufpos, c->buf_usable_size - 8);
+
+    robj *big = createObject(OBJ_STRING, makeSStr('y', 16 * 1024));
+    expected += bulkReplyLogicalLen(16 * 1024);
+    testOnlyAddBulkStrRefToBufferOrList(c, big);
+    EXPECT_EQ(listLength(c->reply), 1u);
+    EXPECT_EQ(c->io_tracked_reply_len, expected);
+
+    /* Releasing everything brings the tracked length back to zero. */
+    releaseReplyReferences(c);
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+
+    decrRefCount(obj);
+    decrRefCount(obj2);
+    decrRefCount(big);
+    freeReplyOffloadClient(c);
+}
+
+TEST_F(NetworkingTest, TestDemandBulkReplyLenTransitions) {
+    client *c = createTestClient();
+    c->flag.ever_authenticated = 1;
+    clientBufferLimitsConfig saved_limits = server.client_obuf_limits[CLIENT_TYPE_NORMAL];
+    memset(&server.client_obuf_limits[CLIENT_TYPE_NORMAL], 0, sizeof(saved_limits));
+    robj *obj = createObject(OBJ_STRING, makeSStr('x', 128));
+    size_t logical = bulkReplyLogicalLen(128);
+    size_t output_usage;
+
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    getClientMemoryUsage(c, &output_usage);
+    EXPECT_GE(output_usage, logical);
+    EXPECT_EQ(c->io_tracked_reply_len, logical);
+    EXPECT_EQ(c->pending_bulk_header, nullptr);
+
+    /* An observed header and all future appends stay exact. */
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->io_tracked_reply_len, 2 * logical);
+    _addReplyToBufferOrList(c, "+OK\r\n", 5);
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    payloadHeader *header = c->last_header;
+    EXPECT_EQ(c->io_tracked_reply_len, 2 * logical);
+
+    /* Limits change without changing track_bytes: finalize the pending
+     * header before the immediately accounted append reuses it. */
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL].hard_limit_bytes = 1ULL << 30;
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->last_header, header);
+    EXPECT_EQ(c->pending_bulk_header, nullptr);
+    getClientMemoryUsage(c, &output_usage);
+    EXPECT_EQ(c->io_tracked_reply_len, 4 * logical);
+    EXPECT_EQ(header->reply_len, 2 * logical);
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL].hard_limit_bytes = 0;
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->io_tracked_reply_len, 5 * logical);
+
+    _addReplyToBufferOrList(c, "+OK\r\n", 5);
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    unsigned long long net_before = c->net_output_bytes_curr_cmd;
+    server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = 1048576;
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->io_tracked_reply_len, 7 * logical);
+    EXPECT_EQ(c->net_output_bytes_curr_cmd, net_before + logical);
+
+    server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = -1;
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    c->obuf_soft_limit_reached_time = 1;
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->pending_bulk_header, nullptr);
+    EXPECT_EQ(c->io_tracked_reply_len, 9 * logical);
+    c->obuf_soft_limit_reached_time = 0;
+
+    /* A fresh unobserved header can be released without computing its size. */
+    _addReplyToBufferOrList(c, "+OK\r\n", 5);
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    header = c->last_header;
+    EXPECT_EQ(header->reply_len, 0u);
+    releaseReplyReferences(c);
+    EXPECT_EQ(header->reply_len, 0u);
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    EXPECT_EQ(c->pending_bulk_header, nullptr);
+    EXPECT_EQ(c->pending_bulk_node, nullptr);
+    decrRefCount(obj);
+    freeReplyOffloadClient(c);
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL] = saved_limits;
+}
+
+TEST_F(NetworkingTest, TestDemandBulkReplyLenAdvancesAfterStaticWrite) {
+    client *c = createTestClient();
+    c->flag.ever_authenticated = 1;
+    clientBufferLimitsConfig saved_limits = server.client_obuf_limits[CLIENT_TYPE_NORMAL];
+    memset(&server.client_obuf_limits[CLIENT_TYPE_NORMAL], 0, sizeof(saved_limits));
+    robj *obj = createObject(OBJ_STRING, makeSStr('x', 128));
+    size_t logical = bulkReplyLogicalLen(128);
+    size_t count = c->buf_usable_size / sizeof(bulkStrRef) + 5;
+    for (size_t i = 0; i < count; i++) testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->pending_bulk_node, nullptr);
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    clientReplyBlock *tail = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+    size_t tail_count = tail->last_header->payload_len / sizeof(bulkStrRef);
+
+    /* The static buffer finishes, while the list tail is partially written. */
+    c->nwritten = 1;
+    c->io_last_written.buf = tail->buf;
+    c->io_last_written.bufpos = 0;
+    testOnlyPostWriteToClient(c);
+    EXPECT_EQ(c->bufpos, 0u);
+    EXPECT_EQ(c->pending_bulk_node, listFirst(c->reply));
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    size_t output_usage;
+    getClientMemoryUsage(c, &output_usage);
+    EXPECT_EQ(c->io_tracked_reply_len, tail_count * logical);
+    EXPECT_EQ(c->pending_bulk_header, nullptr);
+
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    EXPECT_EQ(c->io_tracked_reply_len, (tail_count + 1) * logical);
+    c->io_last_written.bufpos = tail->used;
+    testOnlyPostWriteToClient(c);
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    EXPECT_EQ(listLength(c->reply), 0u);
+    decrRefCount(obj);
+    freeReplyOffloadClient(c);
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL] = saved_limits;
+}
+
+TEST_F(NetworkingTest, TestDemandBulkReplyLenAdvancesThroughListWrites) {
+    client *c = createTestClient();
+    c->flag.ever_authenticated = 1;
+    clientBufferLimitsConfig saved_limits = server.client_obuf_limits[CLIENT_TYPE_NORMAL];
+    memset(&server.client_obuf_limits[CLIENT_TYPE_NORMAL], 0, sizeof(saved_limits));
+    server.debug_client_enforce_reply_list = 1;
+    robj *obj = createObject(OBJ_STRING, makeSStr('x', 128));
+    size_t logical = bulkReplyLogicalLen(128);
+    size_t count = 3 * c->buf_usable_size / sizeof(bulkStrRef) + 5;
+    for (size_t i = 0; i < count; i++) testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    clientReplyBlock *tail = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+    c->nwritten = 1;
+    c->io_last_written.buf = tail->buf;
+    c->io_last_written.bufpos = 0;
+    testOnlyPostWriteToClient(c);
+    EXPECT_EQ(listLength(c->reply), 1u);
+    EXPECT_EQ(c->pending_bulk_node, listFirst(c->reply));
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+
+    size_t output_usage;
+    getClientMemoryUsage(c, &output_usage);
+    EXPECT_EQ(c->io_tracked_reply_len, tail->last_header->payload_len / sizeof(bulkStrRef) * logical);
+    /* The observed tail stays exact until full; the next node is unobserved. */
+    count = tail->size / sizeof(bulkStrRef) + 5;
+    for (size_t i = 0; i < count; i++) testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    tail = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+    listNode *pending = c->pending_bulk_node;
+    c->io_last_written.buf = tail->buf;
+    c->io_last_written.bufpos = 0;
+    testOnlyPostWriteToClient(c);
+    EXPECT_EQ(listLength(c->reply), 1u);
+    EXPECT_EQ(c->pending_bulk_node, pending);
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    c->io_last_written.bufpos = tail->used;
+    testOnlyPostWriteToClient(c);
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    EXPECT_EQ(c->pending_bulk_header, nullptr);
+    EXPECT_EQ(c->pending_bulk_node, nullptr);
+    EXPECT_EQ(listLength(c->reply), 0u);
+    decrRefCount(obj);
+    freeReplyOffloadClient(c);
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL] = saved_limits;
+    server.debug_client_enforce_reply_list = 0;
+}
+
+TEST_F(NetworkingTest, TestPreparedBulkAdmission) {
+    client *c = createTestClient();
+    c->flag.ever_authenticated = 1;
+    clientBufferLimitsConfig saved_limits = server.client_obuf_limits[CLIENT_TYPE_NORMAL];
+    memset(&server.client_obuf_limits[CLIENT_TYPE_NORMAL], 0, sizeof(saved_limits));
+    int saved_io_threads = server.io_threads_num;
+    int saved_copy_threads = server.min_io_threads_copy_avoid;
+    server.io_threads_num = 1;
+    server.min_io_threads_copy_avoid = 1;
+    robj *obj = createObject(OBJ_STRING, makeSStr('x', 128));
+    /* A pending reply avoids requiring the event-loop queue in this fixture. */
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    int exempt = 0;
+    writePreparedClient *wpc = prepareClientForBulk(c, &exempt);
+    EXPECT_NE(wpc, nullptr);
+    EXPECT_EQ(exempt, 1);
+    if (wpc) addWritePreparedBulkExempt(wpc, obj);
+    EXPECT_EQ(c->last_header->payload_len, 2 * sizeof(bulkStrRef));
+    size_t output_usage;
+    getClientMemoryUsage(c, &output_usage);
+    EXPECT_EQ(c->io_tracked_reply_len, 2 * bulkReplyLogicalLen(128));
+    server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = 1048576;
+    wpc = prepareClientForBulk(c, &exempt);
+    EXPECT_NE(wpc, nullptr);
+    EXPECT_EQ(exempt, 1);
+    unsigned long long logged_bytes = c->net_output_bytes_curr_cmd;
+    if (wpc) addWritePreparedBulkExempt(wpc, obj);
+    /* An observer during the command must finalize logged bytes too. */
+    getClientMemoryUsage(c, &output_usage);
+    EXPECT_EQ(c->net_output_bytes_curr_cmd, logged_bytes + bulkReplyLogicalLen(128));
+    if (wpc) finishWritePreparedBulk(wpc);
+    EXPECT_EQ(c->net_output_bytes_curr_cmd, logged_bytes + bulkReplyLogicalLen(128));
+    /* Start a new bulk header and let command completion be its first observer. */
+    addReplyNull(c);
+    logged_bytes = c->net_output_bytes_curr_cmd;
+    if (wpc) addWritePreparedBulkExempt(wpc, obj);
+    EXPECT_EQ(c->net_output_bytes_curr_cmd, logged_bytes);
+    if (wpc) finishWritePreparedBulk(wpc);
+    EXPECT_EQ(c->net_output_bytes_curr_cmd, logged_bytes + bulkReplyLogicalLen(128));
+    server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = -1;
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL].hard_limit_bytes = 1ULL << 30;
+    wpc = prepareClientForBulk(c, &exempt);
+    EXPECT_NE(wpc, nullptr);
+    EXPECT_EQ(exempt, 0);
+    if (wpc) addWritePreparedBulk(wpc, obj);
+    EXPECT_EQ(c->io_tracked_reply_len, 5 * bulkReplyLogicalLen(128));
+    releaseReplyReferences(c);
+    decrRefCount(obj);
+    freeReplyOffloadClient(c);
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL] = saved_limits;
+    server.io_threads_num = saved_io_threads;
+    server.min_io_threads_copy_avoid = saved_copy_threads;
+}
+
+TEST_F(NetworkingTest, TestDemandBulkReplyLenResolvesSlotAtRelease) {
+    client *c = createTestClient();
+    c->flag.ever_authenticated = 1;
+    clientBufferLimitsConfig saved_limits = server.client_obuf_limits[CLIENT_TYPE_NORMAL];
+    memset(&server.client_obuf_limits[CLIENT_TYPE_NORMAL], 0, sizeof(saved_limits));
+    robj *obj = createObject(OBJ_STRING, makeSStr('x', 128));
+    testOnlyAddBulkStrRefToBufferOrList(c, obj);
+    payloadHeader *header = c->last_header;
+    /* Slot zero is encoded as one, with the accounted marker still clear. */
+    header->slot_and_flags = 1;
+    releaseReplyReferences(c);
+    EXPECT_EQ(header->reply_len, bulkReplyLogicalLen(128));
+    EXPECT_EQ(c->io_tracked_reply_len, 0u);
+    EXPECT_EQ(c->pending_bulk_header, nullptr);
+    decrRefCount(obj);
+    freeReplyOffloadClient(c);
+    server.client_obuf_limits[CLIENT_TYPE_NORMAL] = saved_limits;
 }
 
 TEST_F(NetworkingTest, TestAddBufferToReplyIOV) {

@@ -239,6 +239,86 @@ start_server {tags {"string"}} {
         r mget foo{t} baazz{t} bar{t} myset{t}
     } {BAR {} FOO {}}
 
+    test {MGET expiry snapshot across encoded reply buffers} {
+        set old_logging [lindex [r config get commandlog-reply-larger-than] 1]
+        set old_limits [lindex [r config get client-output-buffer-limit] 1]
+        r config set commandlog-reply-larger-than -1
+        r config set client-output-buffer-limit {normal 0 0 0}
+        set old_prefetch [lindex [r config get prefetch-batch-max-size] 1]
+        set old_copy_threads [lindex [r config get min-io-threads-avoid-copy-reply] 1]
+        r config set prefetch-batch-max-size 16
+        r config set min-io-threads-avoid-copy-reply 1
+        set value [string repeat e 128]
+        set keys [lrepeat 20000 mget_expiring{t}]
+        foreach limit {{normal 0 0 0} {normal 1gb 0 0}} {
+            r config set client-output-buffer-limit $limit
+            r multi
+            r set mget_expiring{t} $value px 1
+            r mget {*}$keys
+            set replies [r exec]
+            assert_equal OK [lindex $replies 0]
+            assert_equal [lrepeat 20000 $value] [lindex $replies 1]
+        }
+        r config set commandlog-reply-larger-than $old_logging
+        r config set client-output-buffer-limit $old_limits
+        r config set prefetch-batch-max-size $old_prefetch
+        r config set min-io-threads-avoid-copy-reply $old_copy_threads
+        r del mget_expiring{t}
+    }
+
+    test {MGET mixed replies across encoded reply buffers} {
+        set old_logging [lindex [r config get commandlog-reply-larger-than] 1]
+        set old_limits [lindex [r config get client-output-buffer-limit] 1]
+        r config set commandlog-reply-larger-than -1
+        r config set client-output-buffer-limit {normal 0 0 0}
+        set old_prefetch [lindex [r config get prefetch-batch-max-size] 1]
+        set old_copy_threads [lindex [r config get min-io-threads-avoid-copy-reply] 1]
+        r config set min-io-threads-avoid-copy-reply 1
+        set raw [string repeat r 256]
+        r set mget_raw{t} $raw
+        r set mget_emb{t} small
+        r set mget_int{t} 123
+        r lpush mget_list{t} item
+        set keys {}
+        set expected {}
+        for {set i 0} {$i < 300} {incr i} {
+            lappend keys mget_raw{t} mget_emb{t} mget_int{t} mget_missing{t} mget_list{t}
+            lappend expected $raw small 123 {} {}
+        }
+        foreach logging {-1 1048576} {
+            r config set commandlog-reply-larger-than $logging
+            foreach limit {{normal 0 0 0} {normal 1gb 0 0}} {
+                r config set client-output-buffer-limit $limit
+                foreach batch_size {0 1 2 16 128} {
+                    r config set prefetch-batch-max-size $batch_size
+                    assert_equal $expected [r mget {*}$keys]
+                }
+            }
+        }
+        wait_for_condition 50 10 {
+            [r object refcount mget_raw{t}] == 1
+        } else {
+            fail "MGET retained a temporary reference after replies drained"
+        }
+        r config set commandlog-reply-larger-than -1
+        r config set client-output-buffer-limit {normal 0 0 0}
+
+        set rd [valkey_deferring_client]
+        $rd client reply off
+        $rd mget {*}$keys
+        $rd client reply on
+        assert_equal OK [$rd read]
+        $rd ping
+        assert_equal PONG [$rd read]
+        $rd close
+
+        r config set commandlog-reply-larger-than $old_logging
+        r config set client-output-buffer-limit $old_limits
+        r config set prefetch-batch-max-size $old_prefetch
+        r config set min-io-threads-avoid-copy-reply $old_copy_threads
+        r del mget_raw{t} mget_emb{t} mget_int{t} mget_list{t}
+    }
+
     test {GETSET (set new value)} {
         r del foo
         list [r getset foo xyz] [r get foo]

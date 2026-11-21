@@ -46,14 +46,14 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
             if (clientCommandArgShouldBeRedacted(c, j)) {
                 ce->argv[j] = shared.redacted;
                 /* Trim too long strings as well... */
-            } else if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
+            } else if (objectGetType(argv[j]) == OBJ_STRING && sdsEncodedObject(argv[j]) &&
                        sdslen(objectGetVal(argv[j])) > COMMANDLOG_ENTRY_MAX_STRING) {
                 sds s = sdsnewlen(objectGetVal(argv[j]), COMMANDLOG_ENTRY_MAX_STRING);
 
                 s = sdscatprintf(s, "... (%lu more bytes)",
                                  (unsigned long)sdslen(objectGetVal(argv[j])) - COMMANDLOG_ENTRY_MAX_STRING);
                 ce->argv[j] = createObject(OBJ_STRING, s);
-            } else if (argv[j]->refcount == OBJ_SHARED_REFCOUNT) {
+            } else if (objectGetRefcount(argv[j]) == OBJ_SHARED_REFCOUNT) {
                 ce->argv[j] = argv[j];
             } else {
                 /* Here we need to duplicate the string objects composing the

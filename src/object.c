@@ -29,7 +29,7 @@
  */
 
 #include "hashtable.h"
-#include "server.h"
+#include "object_internals.h"
 #include "ordered_index.h"
 #include "serverassert.h"
 #include "functions.h"
@@ -71,6 +71,10 @@ void objectSetEncoding(robj *o, int encoding) {
 
 unsigned int objectGetRefcount(const robj *o) {
     return o->refcount;
+}
+
+void objectSetRefcount(robj *o, unsigned int refcount) {
+    o->refcount = refcount;
 }
 
 unsigned int objectGetLRU(const robj *o) {
@@ -171,6 +175,29 @@ void objectCopyMetadata(robj *dst, const robj *src) {
     void *dst_md = objectGetMetadata(dst);
     if (src_md == NULL || dst_md == NULL) return;
     memcpy(dst_md, src_md, object_metadata_size);
+}
+
+/* The cast from robjStatic to robj is aliasing-safe because this function
+ * writes the memory through the correct type (struct serverObject). Callers
+ * only use the returned robj pointer, never the robjStatic buffer itself. */
+robj *initStaticStringObject(robjStatic *buf, void *ptr) {
+    robj *o = (robj *)buf;
+    o->refcount = OBJ_STATIC_REFCOUNT;
+    o->type = OBJ_STRING;
+    o->encoding = OBJ_ENCODING_RAW;
+    o->hasexpire = 0;
+    o->hasembkey = 0;
+    o->hasembval = 0;
+    o->val_ptr = ptr;
+    return o;
+}
+
+size_t objectGetStructSize(void) {
+    return sizeof(robj);
+}
+
+int objectHasEmbeddedKey(const robj *o) {
+    return o->hasembkey;
 }
 
 /* ===================== Creation and parsing of objects ==================== */

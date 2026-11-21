@@ -141,8 +141,8 @@ static void initBatchInfo(hashtable **tables) {
 /* A key is eligible for nested prefetch when its command supplied a member and the
  * value is backed by a hashtable we can look the member up in. */
 static inline int canNestedPrefetch(KeyPrefetchInfo *info, robj *val) {
-    return info->member != NULL && (val->encoding == OBJ_ENCODING_HASHTABLE ||
-                                    (val->type == OBJ_ZSET && val->encoding == OBJ_ENCODING_BTREE));
+    return info->member != NULL && (objectGetEncoding(val) == OBJ_ENCODING_HASHTABLE ||
+                                    (objectGetType(val) == OBJ_ZSET && objectGetEncoding(val) == OBJ_ENCODING_BTREE));
 }
 
 /* Advance the main-hashtable find and pick the next state once the entry is found. */
@@ -167,7 +167,7 @@ static void prefetchValue(KeyPrefetchInfo *info) {
             moveToNextKey();
             return;
         }
-        if (server.io_threads_num < server.min_io_threads_copy_avoid && val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
+        if (server.io_threads_num < server.min_io_threads_copy_avoid && objectGetEncoding(val) == OBJ_ENCODING_RAW && objectGetType(val) == OBJ_STRING) {
             valkey_prefetch(objectGetVal(val));
         }
     }
@@ -191,9 +191,9 @@ static void prefetchValueNested(KeyPrefetchInfo *info) {
     case NESTED_PREFETCH_INIT: {
         /* The header is warm now, so the inner hashtable pointer can be read. */
         hashtable *inner_ht = NULL;
-        if (val->encoding == OBJ_ENCODING_HASHTABLE) {
+        if (objectGetEncoding(val) == OBJ_ENCODING_HASHTABLE) {
             inner_ht = objectGetVal(val);
-        } else if (val->type == OBJ_ZSET && val->encoding == OBJ_ENCODING_BTREE) {
+        } else if (objectGetType(val) == OBJ_ZSET && objectGetEncoding(val) == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(val);
             inner_ht = zs->ht;
             info->inner_is_zset = 1;
@@ -225,7 +225,7 @@ static void prefetchValueNested(KeyPrefetchInfo *info) {
         }
         /* Only non-embedded hash values have a separate value pointer worth
          * prefetching; embedded values and zset/set skip the VALUE phase. */
-        if (val->type == OBJ_HASH) {
+        if (objectGetType(val) == OBJ_HASH) {
             void *inner_entry;
             if (hashtableIncrementalFindGetResult(&info->inner_hashtab_state, &inner_entry) && inner_entry &&
                 !entryHasEmbeddedValue(inner_entry)) {
@@ -301,7 +301,7 @@ static void prefetchCommands(void) {
         client *c = batch->clients[i];
         if (!c || c->argc <= 1) continue;
         for (int j = 1; j < c->argc; j++) {
-            if (c->argv[j]->encoding == OBJ_ENCODING_RAW) {
+            if (objectGetEncoding(c->argv[j]) == OBJ_ENCODING_RAW) {
                 valkey_prefetch(objectGetVal(c->argv[j]));
             }
         }

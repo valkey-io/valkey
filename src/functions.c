@@ -287,8 +287,8 @@ void functionsAddEngineStats(sds engine_name) {
 static int functionLibCreateFunction(compiledFunction *function,
                                      functionLibInfo *li,
                                      sds *err) {
-    serverAssert(function->name->type == OBJ_STRING);
-    serverAssert(function->desc == NULL || function->desc->type == OBJ_STRING);
+    serverAssert(objectGetType(function->name) == OBJ_STRING);
+    serverAssert(function->desc == NULL || objectGetType(function->desc) == OBJ_STRING);
 
     if (functionsVerifyName(objectGetVal(function->name)) != C_OK) {
         *err = sdsnew("Function names can only contain letters, numbers, or "

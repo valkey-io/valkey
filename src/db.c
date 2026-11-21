@@ -128,8 +128,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
 
-    /* Charge this lookup to hot-key detection. All the policy (whether detection
-     * is on, which lookups count, and sampling) lives in hotkeys.c. */
+    /* Charge this lookup to hot-key detection. It sits after the hit/miss branch
+     * on purpose, so misses are counted by design: a repeatedly-probed key that
+     * isn't there is still real load, and is what makes key creation visible.
+     * HOTKEYS GET can therefore list a key that does not exist. */
     hotkeysRecordLookup(key, db->id, flags);
 
     return val;
@@ -535,6 +537,10 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
 
         return 1;
     } else {
+        /* Delete miss: the key wasn't there, so nothing was removed. Charged
+         * anyway — a client DEL/UNLINK is activity on the key name whether or
+         * not it resolves, exactly as a lookup miss is counted (lookupKey). */
+        hotkeysRecordDelete(key, db->id, flags);
         return 0;
     }
 }
@@ -913,7 +919,14 @@ void delGenericCommand(client *c, int lazy) {
     int numdel = 0, j;
 
     for (j = 1; j < c->argc; j++) {
-        if (expireIfNeeded(c->db, c->argv[j], NULL, 0) == KEY_DELETED) continue;
+        if (expireIfNeeded(c->db, c->argv[j], NULL, 0) == KEY_DELETED) {
+            /* The key was logically expired, so it was removed by the
+             * expire path and never reached the DB delete: without this
+             * the client's own DEL would be classified as passive expiry
+             * and counted as nothing. */
+            hotkeysRecordDelete(c->argv[j], c->db->id, DB_FLAG_KEY_DELETED);
+            continue;
+        }
         int deleted = lazy ? dbAsyncDelete(c->db, c->argv[j]) : dbSyncDelete(c->db, c->argv[j]);
         if (deleted) {
             signalModifiedKey(c, c->db, c->argv[j]);

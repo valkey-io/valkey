@@ -4858,6 +4858,8 @@ static void clusterRaftResetCluster(int hard) {
     }
     listEmpty(rs->deferred_meets);
     rs->current_term = 0;
+    rs->ae_ack_index = 0;
+    rs->ae_ack_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     rs->commit_index = 0;

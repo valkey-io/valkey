@@ -621,6 +621,7 @@ ENGINE_SERVER_OBJ = \
     strl.o \
     syncio.o \
     syscheck.o \
+    cgroup.o \
     t_hash.o \
     t_list.o \
     t_path_hash.o \

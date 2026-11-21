@@ -964,6 +964,207 @@ start_server {tags {pathhash}} {
         assert_equal OK [r debug set-skip-checksum-validation 0]
     } {} {needs:debug}
 
+    test {RESTORE rejects duplicate path hash fields around Listpack conversion boundaries} {
+        test_defer {r debug set-skip-checksum-validation 0}
+        r debug set-skip-checksum-validation 1
+
+        # A long value after a unique short pair converts the payload from
+        # Listpack while loading; the converting pair is still duplicate-checked.
+        r del dup-value-src
+        r del dup-value-dst
+        set long_value [string repeat Zc 40]
+        r phset dup-value-src p fields 2 aa ww bb $long_value
+        set dumped [r dump dup-value-src]
+        assert_equal OK [r restore dup-value-dst 0 $dumped]
+        assert_equal [list ww $long_value] [r phget dup-value-dst p aa bb]
+        r del dup-value-dst
+        set idx [string first bb [string range $dumped 0 end-10]]
+        set duplicate [string replace $dumped $idx [expr {$idx + 1}] aa]
+        assert_error {*Bad data format*} {r restore dup-value-dst 0 $duplicate}
+        assert_equal 0 [r exists dup-value-dst]
+
+        # A larger Listpack payload rejects duplicates before and after its
+        # count-based conversion to a hash table.
+        test_config_set r hash-max-listpack-entries 512
+        r del dup-direct-src
+        r del dup-direct-dst
+        set pairs {}
+        for {set i 1} {$i <= 32} {incr i} {lappend pairs d:$i v:$i}
+        r phset dup-direct-src p fields 32 {*}$pairs
+        set dumped [r dump dup-direct-src]
+        set idx [string first d:32 [string range $dumped 0 end-10]]
+        foreach entries {512 16} {
+            test_config_set r hash-max-listpack-entries $entries
+            assert_equal OK [r restore dup-direct-dst 0 $dumped]
+            assert_equal [list v:1 v:32] [r phget dup-direct-dst p d:1 d:32]
+            r del dup-direct-dst
+            set duplicate [string replace $dumped $idx [expr {$idx + 2}] d:1]
+            assert_error {*Bad data format*} {r restore dup-direct-dst 0 $duplicate}
+            assert_equal 0 [r exists dup-direct-dst]
+        }
+
+        # A duplicate is also rejected on the pair that itself crosses
+        # hash-max-listpack-entries, before the crossing converts the payload.
+        test_config_set r hash-max-listpack-entries 17
+        assert_equal OK [r restore dup-direct-dst 0 $dumped]
+        r del dup-direct-dst
+        set idx [string first d:18 [string range $dumped 0 end-10]]
+        set duplicate [string replace $dumped $idx [expr {$idx + 3}] d:10]
+        assert_error {*Bad data format*} {r restore dup-direct-dst 0 $duplicate}
+        assert_equal 0 [r exists dup-direct-dst]
+
+        # A duplicate is rejected on the pair that would cross
+        # hash-max-listpack-entries and on the first pair after the crossing.
+        test_config_set r hash-max-listpack-entries 4
+        r del dup-count-src
+        r del dup-count-dst
+        set pairs {}
+        for {set i 1} {$i <= 6} {incr i} {lappend pairs g:$i v:$i}
+        r phset dup-count-src p fields 6 {*}$pairs
+        set dumped [r dump dup-count-src]
+        assert_equal OK [r restore dup-count-dst 0 $dumped]
+        assert_equal [list v:1 v:6] [r phget dup-count-dst p g:1 g:6]
+        foreach field {g:5 g:6} {
+            r del dup-count-dst
+            set idx [string first $field [string range $dumped 0 end-10]]
+            set duplicate [string replace $dumped $idx [expr {$idx + 2}] g:1]
+            assert_error {*Bad data format*} {r restore dup-count-dst 0 $duplicate}
+            assert_equal 0 [r exists dup-count-dst]
+        }
+
+        # Forced HashTable loading rejects a duplicate after the first pair converts.
+        test_config_set r hash-max-listpack-entries 0
+        r del dup-ht-src
+        r del dup-ht-dst
+        r phset dup-ht-src p fields 2 q1 w1 q2 w2
+        set dumped [r dump dup-ht-src]
+        set idx [string first q2 [string range $dumped 0 end-10]]
+        set duplicate [string replace $dumped $idx [expr {$idx + 1}] q1]
+        assert_error {*Bad data format*} {r restore dup-ht-dst 0 $duplicate}
+        assert_equal 0 [r exists dup-ht-dst]
+
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
+
+    test {RESTORE rejects truncated path hash payloads after earlier pairs load} {
+        test_defer {r debug set-skip-checksum-validation 0}
+        r debug set-skip-checksum-validation 1
+
+        r del trunc-src
+        r del trunc-dst
+        r phset trunc-src p fields 3 f1 v1 f2 v2 f3 v3
+        set dumped [r dump trunc-src]
+        set payload [string range $dumped 0 end-10]
+        set footer [string range $dumped end-9 end]
+        set idx [string first f3 $payload]
+
+        # Cut between pairs: two pairs load before the third field fails.
+        set truncated "[string range $dumped 0 [expr {$idx - 2}]]$footer"
+        assert_error {*Bad data format*} {r restore trunc-dst 0 $truncated}
+        assert_equal 0 [r exists trunc-dst]
+
+        # Cut between the last field and its value: the field loads, the value does not.
+        set truncated "[string range $dumped 0 [expr {$idx + 1}]]$footer"
+        assert_error {*Bad data format*} {r restore trunc-dst 0 $truncated}
+        assert_equal 0 [r exists trunc-dst]
+
+        # A field count larger than the payload supplies fails once the real
+        # pairs are exhausted, including after the payload has converted.
+        set inflated [string replace $dumped 4 4 "\x32"]
+        assert_error {*Bad data format*} {r restore trunc-dst 0 $inflated}
+        assert_equal 0 [r exists trunc-dst]
+        test_config_set r hash-max-listpack-entries 2
+        assert_error {*Bad data format*} {r restore trunc-dst 0 $inflated}
+        assert_equal 0 [r exists trunc-dst]
+
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
+
+    test {RESTORE converts each path payload against its own field count} {
+        test_config_set r hash-max-listpack-entries 64
+        r del per-path-src
+        r del per-path-dst
+        set pairs {}
+        for {set i 1} {$i <= 64} {incr i} {lappend pairs f:$i w:$i}
+        r phset per-path-src p1 fields 64 {*}$pairs
+        set pairs {}
+        for {set i 1} {$i <= 32} {incr i} {lappend pairs g:$i u:$i}
+        r phset per-path-src p2 fields 32 {*}$pairs
+        set dumped [r dump per-path-src]
+        assert_equal OK [r restore per-path-dst 0 $dumped]
+        assert_equal [list w:1 w:64] [r phget per-path-dst p1 f:1 f:64]
+        assert_equal [list u:1 u:32] [r phget per-path-dst p2 g:1 g:32]
+        # p2 must still be a Listpack payload: its fields reply in insertion
+        # order. Converting it against a cumulative field count during loading
+        # would turn it into a hash table and reorder the reply.
+        set expected {}
+        for {set i 1} {$i <= 32} {incr i} {lappend expected g:$i u:$i}
+        assert_equal $expected [r phgetall per-path-dst p2]
+    }
+
+    test {RESTORE converts a large path payload on a long value and rejects a duplicate on that pair} {
+        test_defer {r debug set-skip-checksum-validation 0}
+        r debug set-skip-checksum-validation 1
+        test_config_set r hash-max-listpack-entries 512
+        test_config_set r hash-max-listpack-value 64
+        r del long-src
+        r del long-dst
+        set pairs {}
+        for {set i 1} {$i <= 18} {incr i} {
+            if {$i == 17} {
+                lappend pairs f:$i [string repeat x 80]
+            } else {
+                lappend pairs f:$i v:$i
+            }
+        }
+        r phset long-src p fields 18 {*}$pairs
+        set dumped [r dump long-src]
+
+        # The long value must convert the payload while loading. OBJECT
+        # ENCODING only reports pathhash, so compare memory usage against the
+        # same payload kept as a Listpack under a larger value limit.
+        assert_equal OK [r restore long-dst 0 $dumped]
+        assert_equal [string repeat x 80] [r phget long-dst p f:17]
+        set converted [r memory usage long-dst samples 0]
+        r del long-dst
+        test_config_set r hash-max-listpack-value 128
+        assert_equal OK [r restore long-dst 0 $dumped]
+        set listpack [r memory usage long-dst samples 0]
+        assert_morethan $converted $listpack
+        r del long-dst
+        test_config_set r hash-max-listpack-value 64
+
+        # A duplicate on the converting pair is still rejected.
+        set idx [string first f:17 [string range $dumped 0 end-10]]
+        set duplicate [string replace $dumped $idx [expr {$idx + 3}] f:10]
+        assert_error {*Bad data format*} {r restore long-dst 0 $duplicate}
+        assert_equal 0 [r exists long-dst]
+        assert_equal PONG [r ping]
+    } {} {needs:debug}
+
+    test {RESTORE converts a large path payload once it exceeds hash-max-listpack-entries} {
+        test_config_set r hash-max-listpack-entries 512
+        r del count-src
+        r del count-dst
+        set pairs {}
+        for {set i 1} {$i <= 32} {incr i} {lappend pairs d:$i v:$i}
+        r phset count-src p fields 32 {*}$pairs
+        set dumped [r dump count-src]
+
+        # Under the limit the payload stays a Listpack: PHGETALL replies in
+        # insertion order.
+        assert_equal OK [r restore count-dst 0 $dumped]
+        assert_equal $pairs [r phgetall count-dst p]
+        r del count-dst
+
+        # Over the limit it converts to a hash table while loading: the same
+        # payload no longer replies in insertion order.
+        test_config_set r hash-max-listpack-entries 16
+        assert_equal OK [r restore count-dst 0 $dumped]
+        assert_equal [list v:1 v:32] [r phget count-dst p d:1 d:32]
+        assert {[r phgetall count-dst p] ne $pairs}
+    }
+
     test {Large per-path payload promotes and survives RDB round trip} {
         r del tree
         for {set i 0} {$i < 600} {incr i} {

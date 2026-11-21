@@ -23,6 +23,15 @@ foreach {forkless} {yes no} {
                 }
                 after 1000
                 catch {exec /bin/kill -9 $bench}
+                catch {exec kill -9 $bench}
+                # Drain benchmark commands and confirm all benchmark clients have disconnected
+                wait_for_condition 100 50 {
+                    [string length [string trim [$primary client list type normal]]] > 0 &&
+                    [llength [split [string trim [$primary client list type normal]] "\n"]] == 1
+                } else {
+                    $primary client kill type normal skipme yes
+                }
+                $primary ping
                 wait_for_ofs_sync $primary $replica
                 assert_equal [$primary debug digest] [$replica debug digest]
             }

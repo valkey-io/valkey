@@ -562,7 +562,7 @@ void functionListCommand(client *c) {
             library_name = objectGetVal(c->argv[++i]);
             continue;
         }
-        addReplyErrorSds(c, sdscatfmt(sdsempty(), "Unknown argument %s", objectGetVal(next_arg)));
+        addReplyErrorSdsSafe(c, sdscatfmt(sdsempty(), "Unknown argument %s", objectGetVal(next_arg)));
         return;
     }
     size_t reply_len = 0;

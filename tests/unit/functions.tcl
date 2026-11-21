@@ -1089,6 +1089,15 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*Unknown argument bad_argument*}
 
+    test {FUNCTION - sanitize function list errors} {
+        set rd [valkey_client]
+        test_defer {$rd close}
+        assert_error {*Unknown argument bad  +FAKE*} {
+            $rd function list "bad\r\n+FAKE"
+        }
+        assert_equal PONG [$rd ping]
+    }
+
     test {FUNCTION - test function list with bad argument to library name} {
         catch {r function list libraryname} e
         set _ $e
